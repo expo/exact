@@ -7,6 +7,10 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# Its own workspace, outside the root one: Cargo then builds it with the
+# committed Cargo.lock and this release profile.
+[workspace]
+
 [dependencies]
 dioxus = { version = "=0.8.0-alpha.1" }
 serde = { version = "1", features = ["derive"] }

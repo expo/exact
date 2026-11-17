@@ -18,6 +18,11 @@ use crate::host::Host;
 use exact_runner::{DataSource, Event};
 use std::cell::RefCell;
 
+/// Whether the baked plan calls `setScheme`, for the shell's before-paint restore.
+pub fn chooses_scheme(plan: &[u8]) -> bool {
+    exact_plan::Plan::decode(plan).is_ok_and(|plan| exact_runner::uses::chooses_scheme(&plan))
+}
+
 /// The buffers and the host behind the exports.
 pub struct Bridge<D: DataSource> {
     host: Option<Host<D>>,
@@ -59,6 +64,8 @@ mod requests;
 
 #[cfg(test)]
 mod refusal_tests;
+#[cfg(test)]
+mod store_tests;
 
 impl<D: DataSource> Bridge<D> {
     /// Empty; `boot` fills it.
@@ -95,7 +102,8 @@ impl<D: DataSource> Bridge<D> {
 
     /// The page's snapshot of the app's kept secrets (LLP 1018 D6): the
     /// input buffer's first `len` bytes (`page_snapshot`), taken by the next
-    /// `boot` (a `boot_plan` carries the running store instead).
+    /// `boot` or `boot_plan` (a `boot_plan` beside a running host carries its
+    /// store instead).
     pub fn store(&mut self, len: usize) {
         self.snapshot = page_snapshot(&self.input[..len.min(self.input.len())]);
     }
@@ -117,11 +125,21 @@ impl<D: DataSource> Bridge<D> {
     /// `env(viewport-segment-*)` lengths itself; the runner answers the
     /// three `exactViewport` fields. Bit 25 is reserved. Bits 26–27 carry
     /// gamut, 28 HDR, and 29–31 display mode; unpack these above the low
-    /// byte for the runner.
+    /// byte for the runner. `update` has no room here and keeps what
+    /// [`Bridge::set_update`] last said.
     pub fn set_preferences(&mut self, bits: u32) {
-        self.preferences =
-            exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8));
+        self.preferences = exact_runner::Preferences {
+            update: self.preferences.update,
+            ..exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8))
+        };
         self.fold = fold_bits(bits);
+    }
+
+    /// The page's `update` media feature (LLP 1101.003 D6): 0 `fast`, 1
+    /// `slow`, 2 `none`, as the native wire's bits 15–16 hold it. Taken by
+    /// the next boot or resize, which the page sends after this.
+    pub fn set_update(&mut self, code: u32) {
+        self.preferences.update = exact_runner::Preferences::from_bits((code & 3) << 15).update;
     }
 
     /// UTF-8 launch location carried after optional plan bytes.
@@ -281,6 +299,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let (checkpoint, launch_facts) = (self.checkpoint.take(), self.launch());
         let booted = exact_runner::time::launching_with(launch_facts, || match checkpoint {
@@ -323,11 +342,15 @@ impl<D: DataSource> Bridge<D> {
     pub fn boot_plan(&mut self, len: usize, data: D, width: f64, height: f64, launch: &str) -> u32 {
         let plan = self.input[..len.min(self.input.len())].to_vec();
         let carried = self.host.as_ref().map(Host::carry);
+        // A page's first dev boot has no host to carry from: it reads the
+        // store the page handed in, as `boot` does.
+        let snapshot = std::mem::take(&mut self.snapshot);
         let viewport = exact_runner::Viewport {
             width,
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let booted = exact_runner::time::launching_with(self.launch(), || {
             Host::boot_linked(
@@ -335,7 +358,7 @@ impl<D: DataSource> Bridge<D> {
                 &plan,
                 data,
                 carried.as_ref(),
-                Vec::new(),
+                snapshot,
                 self.compat,
                 viewport,
                 launch,
@@ -470,11 +493,13 @@ impl<D: DataSource> Bridge<D> {
         let last = String::from_utf8_lossy(&bytes[first_len..]);
         let range = (first_len != 0).then_some((
             exact_runner::ListTextPosition {
+                fixed: None,
                 key: &first,
                 paragraph: first_paragraph,
                 offset: first_offset,
             },
             exact_runner::ListTextPosition {
+                fixed: None,
                 key: &last,
                 paragraph: last_paragraph,
                 offset: last_offset,
@@ -656,6 +681,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let out = self.host.as_mut().map_or_else(
             || exact_runner::agent::error("not booted"),
@@ -896,7 +922,10 @@ impl<D: DataSource> Bridge<D> {
                     None => Ok("{\"accepted\":false}".into()),
                 };
             }
+            // A held spring's ready time (x), and the deadline's release (LLP 1003.001 D9).
             let batch = match op {
+                15 => Ok(Property::ALL.get(property as usize).and_then(|p| host.present_curve(view, *p, value.x, now))),
+                16 => Ok(Some(host.release_overdue(now))),
                 1 => host.update_hold(serial, value, now),
                 2 => host.end_hold(serial, HoldEnd::Release { velocity: value }, now),
                 3 => host.end_hold(serial, HoldEnd::Cancel, now),
@@ -1072,6 +1101,12 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow_mut().checkpoint(len as usize))
         }
 
+        /// Whether the shell can restore a stored scheme before paint.
+        #[no_mangle]
+        pub extern "C" fn exact_chooses_scheme() -> u32 {
+            u32::from($crate::abi::chooses_scheme($plan))
+        }
+
         /// The locations the baked plan renders at build (LLP 1048.000 D7),
         /// as a JSON array, for the web build.
         #[no_mangle]
@@ -1211,14 +1246,22 @@ macro_rules! host {
             EXACT_BRIDGE.with(|b| b.borrow().request_active(ticket))
         }
 
+        /// The page's `update` media feature, for the next boot or resize
+        /// (`Bridge::set_update`).
+        #[no_mangle]
+        pub extern "C" fn exact_set_update(code: u32) {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().set_update(code))
+        }
+
         /// The viewport or the page's facts (bit 0 reduced motion, bit 1
         /// reduced transparency, bit 2 contrast more, bit 3 contrast less,
         /// bit 4 a dark system; bit 8 folded, bits 9–16 and 17–24 the
-        /// viewport segment columns and rows, LLP 1078 D6) changed; returns
-        /// the batch length.
+        /// viewport segment columns and rows, LLP 1078 D6) changed, with the
+        /// page's geometry in `geometry` bytes of the input buffer (none for
+        /// 0, LLP 1039 D9); returns the batch length.
         #[no_mangle]
-        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().resize(width, height, preferences, now_ms))
+        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32, geometry: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().resize_with(width, height, preferences, now_ms, geometry as usize))
         }
 
         /// The date: Unix ms at clock zero and minutes east of UTC.
@@ -1246,6 +1289,23 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_set_display_scale(scale: f64) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_display_scale(scale))
+        }
+
+        /// The browser's document insets and segment rectangles in the input buffer.
+        #[no_mangle]
+        pub extern "C" fn exact_set_viewport_geometry(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().viewport_geometry(len as usize))
+        }
+
+        /// Whether this canvas name is read by a performance resource.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_requested(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow().canvas_performance_requested(len as usize))
+        }
+        /// Publish or clear a canvas's performance record.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_record(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_performance_record(len as usize))
         }
 
         /// The aborts a realm heard between batches.
@@ -1385,51 +1445,6 @@ macro_rules! list_exports {
         #[no_mangle]
         pub extern "C" fn exact_into_view(view: u32, len: u32) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow_mut().into_view(view, len as usize))
-        }
-    };
-}
-
-/// GPU surfaces' export group (LLP 1047 D3), beside [`host!`]: the generated
-/// entry invokes it when the plan has a canvas with a surface, and the glue
-/// calls it only for one.
-#[macro_export]
-macro_rules! surface_exports {
-    () => {
-        /// A 2D canvas's content box and device scale (LLP 1056 D4), from
-        /// the page's `ResizeObserver`; returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_geometry(
-            view: u32,
-            width: f64,
-            height: f64,
-            scale: f64,
-        ) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_geometry(view, width, height, scale))
-        }
-
-        /// A Canvas 2D image handle loaded or failed (LLP 1056 D9); the
-        /// payload is in the input buffer. Returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_image(len: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_image(len as usize))
-        }
-
-        /// A font finished loading (LLP 1056 D8); returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_canvas_fonts() -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_fonts())
-        }
-
-        /// Publish or clear a named surface record; returns the batch length.
-        #[no_mangle]
-        pub extern "C" fn exact_surface_record(len: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| {
-                let Ok(mut bridge) = b.try_borrow_mut() else {
-                    eprintln!("exact_surface_record refused: nested bridge export");
-                    return 0;
-                };
-                bridge.surface_record(len as usize)
-            })
         }
     };
 }

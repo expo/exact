@@ -9,7 +9,7 @@
 //! [`denied`] is the one checker, the whole rule for one `(row, value)`: the
 //! compiler asks it of each chain row's every folded value, and the design
 //! server asks it of a candidate fold's (stage 12 D) from the chain the
-//! Tamber IR records ([`chain`]): the same rows, the same values, a value
+//! Forma IR records ([`chain`]): the same rows, the same values, a value
 //! no literal says written [`UNFOLDED`].
 
 use crate::{tags, LowerError};
@@ -427,7 +427,7 @@ pub(crate) fn check(
     out
 }
 
-/// The slot's chain as the Tamber IR records it ([`super::Described`]):
+/// The slot's chain as the Forma IR records it ([`super::Described`]):
 /// each node's tag and its rows, `(row, value)` as written, for the server
 /// to fold and ask [`denied`] of.
 pub(crate) fn chain(c: &Component, file: &File) -> Vec<(String, Vec<(String, String)>)> {
@@ -438,7 +438,7 @@ pub(crate) fn chain(c: &Component, file: &File) -> Vec<(String, Vec<(String, Str
         .collect()
 }
 
-/// One exported library component's slot chain, as the Tamber IR records
+/// One exported library component's slot chain, as the Forma IR records
 /// it ([`chain`]): what the design server re-checks on a write.
 #[derive(Debug, Clone, Default)]
 pub struct SlotChain {
@@ -457,7 +457,7 @@ pub struct SlotChains {
 }
 
 impl SlotChains {
-    /// From the Tamber IR file's `library` block: each entry `library:
+    /// From the Forma IR file's `library` block: each entry `library:
     /// true` with its `chain` (`tag`, `rows`, `tokens`).
     pub fn from_ir(library: &serde_json::Value) -> SlotChains {
         let mut out = SlotChains::default();
@@ -512,11 +512,11 @@ impl SlotChains {
 /// line in the candidate (a write that removed the app's override) is
 /// said at the line it had there. Pure: no I/O.
 pub fn check_slots(
-    folding: &exact_tamber::Folding,
-    before: Option<&exact_tamber::Folding>,
+    folding: &exact_forma::Folding,
+    before: Option<&exact_forma::Folding>,
     chains: &SlotChains,
     touched: &[&str],
-) -> Vec<exact_tamber::Diagnostic> {
+) -> Vec<exact_forma::Diagnostic> {
     // Closed over references (theme2's D2 condition): a chain is touched
     // when a token its rows name reaches a touched name through any chain
     // of tokens, a base name among them (`cards.pad = space.md` and a write
@@ -574,7 +574,7 @@ pub fn check_slots(
                         false => format!("{w} (`{value}` is `{v}` in some tuple or column)"),
                     })
                 }) {
-                    out.push(exact_tamber::Diagnostic {
+                    out.push(exact_forma::Diagnostic {
                         id: "lower-anatomy-slot",
                         message: format!("a `{tag}` on the slot's chain in `{}`: {why}, and the slot's fill would not show (LLP 1139 D4)", chain.component),
                         line: at.0,
@@ -594,13 +594,13 @@ pub fn check_slots(
 /// expression's first token's, or the first app line a package token it
 /// names reaches; else the design's start.
 fn line(
-    folding: &exact_tamber::Folding,
-    before: Option<&exact_tamber::Folding>,
+    folding: &exact_forma::Folding,
+    before: Option<&exact_forma::Folding>,
     value: &str,
 ) -> (u32, u32) {
     // The app design's lines only: a package's are banded past them
     // (`theme::packages::LINE`), no line of the app's file.
-    let at = |f: &exact_tamber::Folding, name: &str| {
+    let at = |f: &exact_forma::Folding, name: &str| {
         f.design
             .tokens
             .iter()
@@ -636,7 +636,7 @@ fn line(
 /// Every token and base name `name` reaches through `folding`'s tokens:
 /// the names its values name, theirs in turn, and the unset base names
 /// each reads.
-pub fn reach(folding: &exact_tamber::Folding, name: &str) -> Vec<String> {
+pub fn reach(folding: &exact_forma::Folding, name: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut todo = vec![name.to_string()];
     while let Some(n) = todo.pop() {

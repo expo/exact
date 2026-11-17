@@ -191,9 +191,14 @@
         body.input = seam.toBase64(bytes);
       }
     } catch (e) { return Promise.reject(e); }
+    // Output crosses as base64 in either encoding, within this ceiling
     var ceiling = Math.min(67108864, 2 * (4 * Math.ceil(body.maxBuffer / 3)) + 65536);
     return once("execFile", body, ceiling, o.signal).then(function (r) {
-      var text = function (v) { return body.encoding === "utf8" ? v : Uint8Array.from(global.atob(v), function (c) { return c.charCodeAt(0); }).buffer; };
+      var text = function (v) {
+        var bytes = Uint8Array.from(global.atob(v), function (c) { return c.charCodeAt(0); });
+        // As Node's `buffer.toString("utf8")`: invalid sequences replaced, a BOM kept
+        return body.encoding === "utf8" ? new global.TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes) : bytes.buffer;
+      };
       var out = { stdout: text(r.stdout), stderr: text(r.stderr), code: r.code, signal: r.signal };
       if (r.code === 0 && !r.signal && !r.timedOut && !r.overflow) return out;
       var why = r.overflow ? r.overflow + " maxBuffer length exceeded" : "Command failed: " + [file].concat(args).join(" ") + (body.encoding === "utf8" && out.stderr ? "\n" + out.stderr : "");

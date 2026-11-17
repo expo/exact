@@ -4,6 +4,7 @@
 //! reading the state the action started with. LLP 1017 §11's tail call (the
 //! Signal Clone's photo viewer) is one case of it, and keeps its tests.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropValue};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Event, Runner};
@@ -1084,8 +1085,7 @@ component Viewer
     button press=swiped testId="swipe"
       text "x"
 "#;
-    let dir = std::env::temp_dir().join(format!("contract-ambiguous-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-ambiguous-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, src).unwrap();
     let all = contract::compile_path_all(&path, false)
@@ -1199,8 +1199,7 @@ component Leaf
         "cannot infer the type of what `note` carries from this binding into `spare`, which calls it: bind `spare` to a handler or call it from one"
     );
     assert_eq!((e.span.line, e.span.col), (15, 23), "{e}");
-    let dir = std::env::temp_dir().join(format!("contract-capture-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-capture-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, &unbound).unwrap();
     let all = contract::compile_path_all(&path, false)

@@ -91,7 +91,7 @@ pub fn parse(text: &str) -> Option<f32> {
 }
 
 /// The row's value in pixels when `value` is in cells, refused where the row
-/// admits no length.
+/// admits no length or no negative one.
 pub(crate) fn of(
     id: StyleId,
     value: &StyleValue,
@@ -105,7 +105,17 @@ pub(crate) fn of(
     if !admits_relative(id) {
         return Err(StyleValueError::WrongKind {
             style: id,
-            expected: "no length: `ch` and `lh` are lengths",
+            expected: if super::relative::pixels_only(id) {
+                "px: `ch` and `lh` are not built on this row"
+            } else {
+                "no length: `ch` and `lh` are lengths"
+            },
+        });
+    }
+    if px < 0.0 && crate::style::calc::nonnegative_row(id) {
+        return Err(StyleValueError::WrongKind {
+            style: id,
+            expected: "a nonnegative length",
         });
     }
     Ok(Some(if id.codec() == StyleCodec::LineHeight {

@@ -97,14 +97,15 @@ enum FrameHealthCardDrawing {
     /// `rect`, with `lines` up to their newest mark. Without them, the plots are left to the card's
     /// layers (`FrameHealthChart`).
     static func charts(_ ctx: CGContext, _ rect: CGRect, _ input: Input, expanded: Int?, palette: Palette,
-                       lines: (columns: [FrameHealthChart.Column], latest: Double)? = nil) {
+                       lines: (columns: [FrameHealthChart.Column], latest: Double)? = nil, within outline: CGPath? = nil) {
         ctx.setFillColor(palette.background)
         ctx.fill(rect)
         for (chart, area, plot) in plots(rect, input, expanded: expanded) {
             text(ctx, chart == 0 ? "Frame rate" : input.screen ? "Work" : "Frame time", x: area.minX, y: area.minY + 7, titleFont,
                 palette.label, .left)
+            // Where a bottom corner rounds, the value and time labels beside it keep within the card's outline
             for (label, value, _) in plot.labels {
-                text(ctx, label, x: plot.left - 4, y: plot.y(value), labelFont, palette.secondary, .right)
+                text(ctx, label, x: plot.left - 4, y: plot.y(value), labelFont, palette.secondary, .right, within: outline)
             }
             if chart == 0 {
                 text(ctx, "FPS (last 30s)", x: area.maxX, y: area.minY + 7, labelFont, palette.secondary, .right)
@@ -118,8 +119,8 @@ enum FrameHealthCardDrawing {
                         color: color, width: dotted ? 1 : 1.25, dotted: dotted)
                     x -= 26
                 }
-                text(ctx, "30s ago", x: plot.left, y: area.maxY - 6, labelFont, palette.secondary, .left)
-                text(ctx, "now", x: plot.right, y: area.maxY - 6, labelFont, palette.secondary, .right)
+                text(ctx, "30s ago", x: plot.left, y: area.maxY - 6, labelFont, palette.secondary, .left, within: outline)
+                text(ctx, "now", x: plot.right, y: area.maxY - 6, labelFont, palette.secondary, .right, within: outline)
             }
             if let lines {
                 var plot = plot
@@ -337,14 +338,56 @@ enum FrameHealthCardDrawing {
         CornerShape.continuous.outline(rect, radii.map { CGSize(width: $0, height: $0) })
     }
 
+    /// The box `text` draws `string` in at the font's own size: from its ascent to its descent, its middle at `y`
+    static func box(_ string: String, x: CGFloat, y: CGFloat, _ font: CTFont, _ align: Align) -> CGRect {
+        var ascent: CGFloat = 0, descent: CGFloat = 0
+        let width = CGFloat(CTLineGetTypographicBounds(line(string, font), &ascent, &descent, nil))
+        return box(x: x, y: y, width: width, ascent: ascent, descent: descent, align)
+    }
+
+    private static func box(x: CGFloat, y: CGFloat, width: CGFloat, ascent: CGFloat, descent: CGFloat, _ align: Align) -> CGRect {
+        CGRect(x: align == .right ? x - width : x, y: y - (ascent + descent) / 2, width: width, height: ascent + descent)
+    }
+
+    /// Where a line of text in `line`, placed by its `align` end and no wider than `limit`, starts or ends, and how wide
+    /// it may be, for its bottom corners to lie within `outline`: the end it is placed by moves in, in half points, then
+    /// its other end, which narrows it. An empty line stays where it is.
+    static func fit(_ line: CGRect, _ align: Align, limit: CGFloat, within outline: CGPath) -> (x: CGFloat, limit: CGFloat) {
+        let (start, toward): (CGFloat, CGFloat) = align == .left ? (line.minX, 1) : (line.maxX, -1)
+        guard !line.isEmpty else { return (start, limit) }
+        let inward = { (x: CGFloat, direction: CGFloat) in
+            search(to: outline.boundingBox.width / 2) { outline.contains(CGPoint(x: x + direction * $0, y: line.maxY)) }
+        }
+        let x = start + toward * inward(start, toward), reach = min(line.width, limit - abs(x - start))
+        return (x, reach - inward(x + toward * reach, -toward))
+    }
+
+    /// How far a line of text in `line` rises, in half points, so that its bottom corners lie within `outline`
+    static func rise(_ line: CGRect, within outline: CGPath) -> CGFloat {
+        search(to: line.maxY) { distance in
+            [line.minX, line.maxX].allSatisfy { outline.contains(CGPoint(x: $0, y: line.maxY - distance)) }
+        }
+    }
+
+    /// The least of 0, ½, 1 and so on at which `fits` holds, stopping at `limit`
+    private static func search(to limit: CGFloat, _ fits: (CGFloat) -> Bool) -> CGFloat {
+        var distance: CGFloat = 0
+        while distance < limit, !fits(distance) { distance += 0.5 }
+        return distance
+    }
+
     /// Draw `string` with its middle at `y`, starting or ending at `x`. Wider than `limit`, it shrinks
-    /// to fit, as a label that adjusts its font size to its width does.
+    /// to fit, as a label that adjusts its font size to its width does. Given an outline, it keeps within it (`fit`).
     static func text(_ ctx: CGContext, _ string: String, x: CGFloat, y: CGFloat, _ font: CTFont, _ color: CGColor, _ align: Align,
-                     limit: CGFloat = .infinity) {
+                     limit: CGFloat = .infinity, within outline: CGPath? = nil) {
         guard !string.isEmpty else { return }
         var line = line(string, font, color)
         var ascent: CGFloat = 0, descent: CGFloat = 0
         var width = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, nil))
+        var (x, limit) = (x, limit)
+        if let outline {
+            (x, limit) = fit(box(x: x, y: y, width: width, ascent: ascent, descent: descent, align), align, limit: limit, within: outline)
+        }
         // A font's metrics do not scale exactly with its size, so each smaller size is measured again
         var size = CTFontGetSize(font)
         for _ in 0..<4 where width > limit {

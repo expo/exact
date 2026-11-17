@@ -93,6 +93,14 @@ pub enum Trap {
     IterationLimit {
         pc: usize,
     },
+    /// Executable derive calls exceed 65,536 in one evaluation.
+    CallLimit {
+        pc: usize,
+    },
+    /// Executable derives nest beyond 64 calls.
+    CallDepth {
+        pc: usize,
+    },
 }
 
 /// One decoded instruction: its opcode and operands in declared order,

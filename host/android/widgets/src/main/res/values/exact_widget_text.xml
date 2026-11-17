@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A text run's weight, style and tabular digits as a TextAppearanceSpan (LLP 1126.003 D2): the span crosses to the
+     launcher by value, where a Typeface would not. Named ExactWidgetText.W<weight>[.Italic][.Tabular]. -->
+<resources>
+    <style name="ExactWidgetText.W100" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">100</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W100.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">100</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W100.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">100</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W100.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">100</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W200" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">200</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W200.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">200</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W200.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">200</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W200.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">200</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W300" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">300</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W300.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">300</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W300.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">300</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W300.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">300</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W400" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W400.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W400.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W400.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">400</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W500" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W500.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W500.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W500.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">500</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W600" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W600.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W600.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W600.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">600</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W700" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W700.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W700.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W700.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">700</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W800" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">800</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W800.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">800</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W800.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">800</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W800.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">800</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W900" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">900</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ExactWidgetText.W900.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">900</item>
+        <item name="android:textStyle">normal</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+    <style name="ExactWidgetText.W900.Italic" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">900</item>
+        <item name="android:textStyle">italic</item>
+    </style>
+    <style name="ExactWidgetText.W900.Italic.Tabular" parent="">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textFontWeight">900</item>
+        <item name="android:textStyle">italic</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+</resources>

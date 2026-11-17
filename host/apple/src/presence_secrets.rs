@@ -1,7 +1,7 @@
 //! The presence backend's vaults (LLP 1133.010 D4, D6, §7). Outside the
 //! agent, the platform's keychain: locked items in the data-protection
-//! keychain, reached through the hook ExactKit installs
-//! (`exact_on_presence_keychain`, `Sources/ExactKit/Presence.swift`).
+//! keychain, reached through the hook ExactPresence installs
+//! (`exact_on_presence_keychain`, `Sources/ExactPresence/Presence.swift`).
 //! Under the agent, the agent's own stores, never a real keychain item: a
 //! presence name's plain copy is the drive's secret store's (memory, or the
 //! named drive's scratch tree; the Keychain under `EXACT_STORE=real`), its
@@ -113,7 +113,7 @@ pub fn scopes() -> String {
 }
 
 /// The platform's keychain for locked items (LLP 1133.010 D6), reached
-/// through the hook ExactKit installs (`exact_on_presence_keychain`): one
+/// through the hook ExactPresence installs (`exact_on_presence_keychain`): one
 /// generic-password item per name and generation in the data-protection
 /// keychain, `kSecAttrService` the app's id and `.presence`,
 /// `kSecAttrAccount` `<name>#<generation>`, its access control the line's
@@ -363,3 +363,18 @@ fn first_launch_at(
 #[cfg(test)]
 #[path = "presence_secrets_tests.rs"]
 mod tests;
+
+/// The presence capability's keychain hook (LLP 1133.010 D16), emitted
+/// only by an entry whose composition links it.
+#[macro_export]
+macro_rules! presence_exports {
+    () => {
+        /// Install the keychain for locked items before the first boot.
+        #[no_mangle]
+        pub extern "C" fn exact_on_presence_keychain(
+            keychain: Option<$crate::presence_secrets::KeychainFn>,
+        ) {
+            $crate::presence_secrets::on_keychain(keychain);
+        }
+    };
+}

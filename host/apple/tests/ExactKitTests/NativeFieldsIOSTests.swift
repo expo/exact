@@ -437,8 +437,8 @@ final class NativeFieldsIOSTests: XCTestCase {
         XCTAssertGreaterThan(ink, 100, "native value draws; checking text alone misses a misplaced UIKit editor")
     }
 
-    /// A textarea whose authored padding leaves its content box shorter
-    /// than a line draws its placeholder at the content box's first line,
+    /// An unscrolled textarea whose authored padding leaves its content box
+    /// shorter than a line draws its placeholder at the content box's first line,
     /// clipped by the view, as the web clips it; it drew a sliver. The box is
     /// the kernel's for `rows=1 padding-top=13` in a 34 pt row: UIKit's 8 pt
     /// inset and the padding above it, 5 pt of content. Its text starts where
@@ -462,6 +462,12 @@ final class NativeFieldsIOSTests: XCTestCase {
             node.applyStyle(["font_size": .number(17)])
             node.applyFieldContent(["rect": rect])
             window.layoutIfNeeded()
+            if let area = node.textArea {
+                area.layoutIfNeeded()
+                area.contentOffset = .zero
+                area.setNeedsDisplay()
+                area.layer.displayIfNeeded()
+            }
             CATransaction.flush()
             let format = UIGraphicsImageRendererFormat()
             format.scale = 2
@@ -492,6 +498,72 @@ final class NativeFieldsIOSTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plain.top, 8, "below UIKit's inset")
         XCTAssertEqual(short.top - 21, plain.top - 8, accuracy: 1, "at the first line's place in each content box")
         XCTAssertEqual(short.left, plain.left, accuracy: 0.5, "at the same inline start")
+    }
+
+    func testAScrolledPaddedTextareasPlaceholderStaysOnItsFirstTypedLine() throws {
+        let session = ExactApp.shared.makeSession(label: "scrolled-placeholder")
+        defer { session.destroy() }
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        window.overrideUserInterfaceStyle = .light
+        window.backgroundColor = .white
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for (direction, value) in [("ltr", "Comment"), ("rtl", "שלום")] {
+            let node = NodeView(id: 1, kind: "textarea", presenter: session.presenter)
+            node.frame = CGRect(x: 10, y: 10, width: 240, height: 160)
+            window.addSubview(node)
+            defer { node.removeFromSuperview() }
+            let black: BatchValue = .array([.number(0), .number(0), .number(0), .number(255)])
+            node.applyProps(set: ["value": "", "placeholder": value], clear: [])
+            node.applyStyle(["font_size": .number(17), "direction": .string(direction),
+                             "text_color": black, "placeholder_color": black])
+            node.applyFieldContent(["rect": [24.0, 64.0, 184.0, 0.0]])
+            let area = try XCTUnwrap(node.textArea)
+            func ink() throws -> CGRect {
+                area.layer.displayIfNeeded()
+                CATransaction.flush()
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 2
+                let image = UIGraphicsImageRenderer(bounds: node.bounds, format: format).image { ctx in
+                    UIColor.white.setFill(); ctx.fill(node.bounds)
+                    node.layer.render(in: ctx.cgContext)
+                }
+                let cg = try XCTUnwrap(image.cgImage), bytes = CapturePixels.bytes(cg)
+                var bounds = CGRect.null
+                for y in 8..<(cg.height - 8) {
+                    for x in 8..<(cg.width - 8) {
+                        let at = (y * cg.width + x) * 4
+                        if CapturePixels.painted(bytes, at: at), bytes[at] < 100, bytes[at + 1] < 100, bytes[at + 2] < 100 {
+                            bounds = bounds.union(CGRect(x: CGFloat(x) / 2, y: CGFloat(y) / 2, width: 0.5, height: 0.5))
+                        }
+                    }
+                }
+                XCTAssertFalse(bounds.isNull, "\(direction): \(area.text.isEmpty ? "placeholder" : "typed text") draws")
+                return bounds
+            }
+            let offsets = [CGPoint.zero, CGPoint(x: 0, y: 24), CGPoint.zero]
+            var placeholders: [CGRect] = []
+            for text in ["", value] {
+                node.applyProps(set: ["value": text], clear: [])
+                window.layoutIfNeeded()
+                area.layoutIfNeeded()
+                for (index, offset) in offsets.enumerated() {
+                    area.contentOffset = offset
+                    let bounds = try ink()
+                    XCTAssertEqual(area.contentOffset, offset, "\(direction): capture at the requested scroll offset")
+                    if text.isEmpty {
+                        placeholders.append(bounds)
+                    } else {
+                        let placeholder = placeholders[index]
+                        XCTAssertEqual(placeholder.minY, bounds.minY, accuracy: 0.5, "\(direction), \(offset): the same first line")
+                        XCTAssertEqual(placeholder.minX, bounds.minX, accuracy: 0.5, "\(direction), \(offset): the same inline start")
+                        XCTAssertEqual(placeholder.maxX, bounds.maxX, accuracy: 0.5, "\(direction), \(offset): the same available width")
+                    }
+                }
+            }
+            XCTAssertEqual(placeholders[1].minY, placeholders[0].minY - 24, accuracy: 0.5, "\(direction): scrolling moves the painted placeholder")
+            XCTAssertEqual(placeholders[2], placeholders[0], "\(direction): scrolling back restores its position")
+        }
     }
 
     /// LLP 1104 D3: an authored `::placeholder` colour is the placeholder's

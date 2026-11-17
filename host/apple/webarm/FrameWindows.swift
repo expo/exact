@@ -712,8 +712,9 @@ extension FramePopup: UIAdaptivePresentationControllerDelegate {
 /// `DownloadItem` states.
 final class FrameDownloads: NSObject, WKDownloadDelegate {
     /// `temp` is where WebKit writes, beside `path`, until the download is
-    /// in and is renamed over it.
-    struct Item { var url: String; var name = ""; var path: URL?; var temp: URL?; var shown = ""; weak var web: WKWebView? }
+    /// in and is renamed over it. `exports`: `path` is iOS's temporary place,
+    /// from which the export picker moves the file where the person chooses.
+    struct Item { var url: String; var name = ""; var path: URL?; var temp: URL?; var shown = ""; var exports = false; weak var web: WKWebView? }
     weak var ui: FrameUI?
     var items: [ObjectIdentifier: Item] = [:]
     #if os(iOS)
@@ -791,6 +792,7 @@ final class FrameDownloads: NSObject, WKDownloadDelegate {
         #else
         // The file comes in first, then the person chooses where it goes.
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("exact-downloads/\(UUID().uuidString)", isDirectory: true)
+        items[key]?.exports = true
         accept(folder.appendingPathComponent(item.name), nil)
         #endif
     }
@@ -819,7 +821,15 @@ final class FrameDownloads: NSObject, WKDownloadDelegate {
             return report(item, "interrupted")
         }
         #if os(iOS)
-        if !(ui?.arm?.agent ?? true), let path = item.path, let web = item.web, let presenter = FrameUI.presenter(web) {
+        if item.exports, let path = item.path {
+            // The person never chose a place: with no export picker to ask,
+            // the download is cancelled, as the Mac's is in no window.
+            guard let web = item.web, let presenter = FrameUI.presenter(web) else {
+                items[key] = nil
+                try? FileManager.default.removeItem(at: path.deletingLastPathComponent())
+                ui?.log("a download of \(item.name) is cancelled: the frame is in no window")
+                return report(item, "cancelled")
+            }
             let picker = UIDocumentPickerViewController(forExporting: [path], asCopy: false)
             picker.delegate = self
             exporting[ObjectIdentifier(picker)] = key

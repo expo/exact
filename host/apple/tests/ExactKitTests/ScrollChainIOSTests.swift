@@ -11,6 +11,47 @@ import XCTest
 /// velocity and the geometry, checked without a finger:
 ///   bun host/apple/build.mjs --test --ios
 final class ScrollChainIOSTests: XCTestCase {
+    func testRemovingAScrollBackendRestoresItsZoomedChild() throws {
+        for material in [false, true] {
+            let p = Presenter()
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "view",
+                 "props": material ? ["backgroundMaterial": "regular"] : [:],
+                 "style": ["overflow_x": "scroll", "overflow_y": "scroll", "min_zoom": 1, "max_zoom": 4]],
+                ["op": "create", "id": 2, "kind": "view"],
+                ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+                ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 300],
+                ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 300, "h": 600],
+                ["op": "content", "id": 1, "w": 300, "h": 600],
+                ["op": "props", "id": 1, "set": ["scrollZoom": "2"]],
+            ]))
+            let node = try XCTUnwrap(p.views[1]), child = try XCTUnwrap(p.views[2])
+            let scroll = try XCTUnwrap(node.scroll), zoom = try XCTUnwrap(node.extras?.zoom)
+            XCTAssertEqual(node.materialView != nil, material)
+            XCTAssertEqual(scroll.zoomScale, 2)
+            XCTAssertEqual(child.zoomFactor, 2)
+            XCTAssertNotEqual(child.transform, .identity)
+            XCTAssertNil(node.pendingScrollTop)
+            XCTAssertNil(node.pendingScrollLeft)
+            p.apply(wireBatch([
+                ["op": "style", "id": 1, "style": ["overflow_x": "visible", "overflow_y": "visible", "min_zoom": 1, "max_zoom": 4]],
+            ]))
+            XCTAssertNil(node.scroll)
+            XCTAssertFalse(p.scrollers.contains(node.id))
+            XCTAssertNil(node.extras?.zoom)
+            XCTAssertNil(zoom.proxy.superview)
+            XCTAssertEqual(child.zoomFactor, 1)
+            XCTAssertEqual(child.zoomShift, .zero)
+            XCTAssertEqual(child.transform, .identity)
+            XCTAssertEqual(child.laidOutFrame, CGRect(x: 0, y: 0, width: 300, height: 600))
+            XCTAssertTrue(child.superview === node.container)
+            XCTAssertEqual(scroll.zoomScale, 1)
+            XCTAssertEqual(scroll.minimumZoomScale, 1)
+            XCTAssertEqual(scroll.maximumZoomScale, 1)
+            if let tap = zoom.doubleTap { XCTAssertFalse(scroll.gestureRecognizers?.contains(tap) == true) }
+        }
+    }
+
     /// A page that scrolls vertically (it holds the rest: keep it alive), holding a node whose scroller scrolls
     /// on `horizontal`'s axis, 1,000 points of content in a 300-point port.
     private func nested(horizontal: Bool, behavior: String? = nil) -> (ScrollView, ScrollView) {

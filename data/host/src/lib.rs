@@ -208,6 +208,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.set_document_owner(owner);
     }
 
+    fn render_web(&mut self) {
+        self.source.render_web();
+    }
+
     fn preload(&self) -> Result<bool, DataError> {
         self.source.preload()
     }
@@ -279,6 +283,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
     fn app_id(&self) -> &str {
         self.source.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.source.launch()
+    }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.source.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.source.grants()
     }
@@ -535,10 +546,31 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.module_landed(store, token, outcome)
     }
 
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.source.take_reports()
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         let mut lines = std::mem::take(&mut self.logs);
         lines.extend(self.source.take_logs());
         lines
+    }
+
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.source
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.source.module_identity(source)
     }
 
     fn take_aborted(&mut self) -> Vec<u64> {

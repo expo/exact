@@ -4,7 +4,7 @@
 //! with what its platform needs (`lower-library-control`); nothing in a
 //! library package reads the host (`lower-library-platform`); a style one
 //! component alone applies reads its params (D3); and a library's names are
-//! its API (`tamber-package-unknown`, `tamber-param-short-library`).
+//! its API (`forma-package-unknown`, `forma-param-short-library`).
 
 use contract::CompileError;
 use std::path::{Path, PathBuf};
@@ -31,7 +31,7 @@ impl Drop for Dir {
     }
 }
 
-const DESIGN: &str = "tamber lib\n\ntheme\n  lib.pad = 4px\n  lib.ink = #111111\n";
+const DESIGN: &str = "forma lib\n\ntheme\n  lib.pad = 4px\n  lib.ink = #111111\n";
 
 /// The errors of an app whose `app` view uses the library package
 /// `@acme/lib`, its entry `index`, its app design `design`.
@@ -58,8 +58,8 @@ fn build_as(
         &format!(r#"{{"name":"{package}","version":"1.0.0","private":true,"exports":{{".":"./index.contract"}}}}"#),
     );
     dir.write(&format!("{at}/index.contract"), index);
-    dir.write(&format!("{at}/{ns}.tamber"), lib_design);
-    dir.write("app/app.tamber", design);
+    dir.write(&format!("{at}/{ns}.forma"), lib_design);
+    dir.write("app/app.forma", design);
     let path = dir.write("app/app.contract", app);
     let src = std::fs::read_to_string(&path).unwrap();
     match contract::compile_path_source_all(Path::new(&path), &src, false) {
@@ -69,7 +69,7 @@ fn build_as(
 }
 
 const APP: &str = "use Card from \"@acme/lib\"\n\ncomponent App\n  view\n    Card()\n";
-const PLAIN: &str = "tamber app\n";
+const PLAIN: &str = "forma app\n";
 
 fn ids<'e>(all: &'e [CompileError], id: &str) -> Vec<&'e CompileError> {
     all.iter().filter(|e| e.id == id).collect()
@@ -463,11 +463,11 @@ fn a_style_one_component_alone_applies_reads_its_params() {
     let shared =
         card.to_string() + "\ncomponent Other\n  view\n    column class=Plain\n      text \"b\"\n";
     let all = build("shared", &shared, app, PLAIN);
-    assert!(!ids(&all, "tamber-param-scope").is_empty(), "{all:?}");
+    assert!(!ids(&all, "forma-param-scope").is_empty(), "{all:?}");
     // A param its component doesn't declare.
     let unknown = card.replace("param.quiet", "param.dim");
     let all = build("unknown", &unknown, app, PLAIN);
-    assert!(!ids(&all, "tamber-param-unknown").is_empty(), "{all:?}");
+    assert!(!ids(&all, "forma-param-unknown").is_empty(), "{all:?}");
 }
 
 #[test]
@@ -478,7 +478,7 @@ fn a_librarys_names_are_its_api() {
         "override",
         card,
         APP,
-        "tamber app\n\ntheme\n  lib.pad = 8px\n",
+        "forma app\n\ntheme\n  lib.pad = 8px\n",
     );
     assert!(all.is_empty(), "{all:?}");
     // One it doesn't define.
@@ -486,26 +486,26 @@ fn a_librarys_names_are_its_api() {
         "unknown-token",
         card,
         APP,
-        "tamber app\n\ntheme\n  lib.gap = 8px\n",
+        "forma app\n\ntheme\n  lib.gap = 8px\n",
     );
-    assert!(!ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(!ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // A param line under the package with no such param.
     let all = build(
         "unknown-param",
         card,
         APP,
-        "tamber app\n\nparams\n  @acme/lib/index.contract#Card.gap = 8px\n",
+        "forma app\n\nparams\n  @acme/lib/index.contract#Card.gap = 8px\n",
     );
-    assert!(!ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(!ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // A library param by its short name.
     let all = build(
         "short",
         card,
         APP,
-        "tamber app\n\nparams\n  Card.pad = 8px\n",
+        "forma app\n\nparams\n  Card.pad = 8px\n",
     );
     assert!(
-        ids(&all, "tamber-param-short-library")
+        ids(&all, "forma-param-short-library")
             .iter()
             .any(|e| e.message.contains("@acme/lib/index.contract#Card.pad")),
         "{all:?}"
@@ -516,13 +516,13 @@ fn a_librarys_names_are_its_api() {
         "short-gone",
         card,
         APP,
-        "tamber app\n\nparams\n  Card.gap = 8px\n",
+        "forma app\n\nparams\n  Card.gap = 8px\n",
     );
     assert!(
-        !ids(&all, "tamber-param-short-library").is_empty(),
+        !ids(&all, "forma-param-short-library").is_empty(),
         "{all:?}"
     );
-    assert!(ids(&all, "tamber-param-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-param-unknown").is_empty(), "{all:?}");
     // A family name in quotes and an SVG fragment name no token; a
     // template no value fills is read as a string is.
     let ok = card.replace(
@@ -530,7 +530,7 @@ fn a_librarys_names_are_its_api() {
         "padding=\"param.pad\" font-family=\"'lib.custom', system-ui\"",
     );
     let all = build("row-quoted", &ok, APP, PLAIN);
-    assert!(ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     let all = build(
         "row-template",
         &card.replace(
@@ -541,7 +541,7 @@ fn a_librarys_names_are_its_api() {
         PLAIN,
     );
     assert!(
-        ids(&all, "tamber-package-unknown")
+        ids(&all, "forma-package-unknown")
             .iter()
             .any(|e| e.message.contains("lib.gone")),
         "{all:?}"
@@ -554,7 +554,7 @@ fn a_librarys_names_are_its_api() {
         APP,
         PLAIN,
     );
-    assert!(ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // A choice inside a concatenation is spelled out.
     let all = build(
         "row-concat",
@@ -568,7 +568,7 @@ fn a_librarys_names_are_its_api() {
         PLAIN,
     );
     assert!(
-        ids(&all, "tamber-package-unknown")
+        ids(&all, "forma-package-unknown")
             .iter()
             .any(|e| e.message.contains("lib.gone")),
         "{all:?}"
@@ -585,7 +585,7 @@ fn a_librarys_names_are_its_api() {
         APP,
         PLAIN,
     );
-    assert!(ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // An empty side passes on its neighbour's glue; a quote opened in one
     // side closes in another.
     let all = build(
@@ -594,7 +594,7 @@ fn a_librarys_names_are_its_api() {
         APP,
         PLAIN,
     );
-    assert!(ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // A template's text around its holes is read too.
     let all = build(
         "row-hole",
@@ -603,7 +603,7 @@ fn a_librarys_names_are_its_api() {
         PLAIN,
     );
     assert!(
-        ids(&all, "tamber-package-unknown")
+        ids(&all, "forma-package-unknown")
             .iter()
             .any(|e| e.message.contains("lib.gone")),
         "{all:?}"
@@ -615,7 +615,7 @@ fn a_librarys_names_are_its_api() {
     );
     let all = build("unknown-row", &row, APP, PLAIN);
     assert!(
-        ids(&all, "tamber-package-unknown")
+        ids(&all, "forma-package-unknown")
             .iter()
             .any(|e| e.message.contains("lib.gap")),
         "{all:?}"
@@ -629,9 +629,9 @@ fn a_librarys_names_are_its_api() {
         ("icon-override", "lib.star", false),
         ("icon-unknown", "lib.gone", true),
     ] {
-        let design = format!("tamber app\n\nicons\n  {app_icons} = icon(sf \"heart\")\n");
+        let design = format!("forma app\n\nicons\n  {app_icons} = icon(sf \"heart\")\n");
         let all = build_as(name, "@acme/lib", "@acme/lib", &icons, &drawn, APP, &design);
-        let unknown = ids(&all, "tamber-package-unknown");
+        let unknown = ids(&all, "forma-package-unknown");
         assert_eq!(!unknown.is_empty(), refused, "{name}: {all:?}");
         assert!(
             unknown.iter().all(|e| e.message.contains("lib.gone")),
@@ -652,10 +652,10 @@ fn a_package_is_its_own_name_and_base_names_are_no_packages() {
         DESIGN,
         card,
         alias,
-        "tamber app\n\ntheme\n  lib.gap = 8px\n",
+        "forma app\n\ntheme\n  lib.gap = 8px\n",
     );
     assert!(!ids(&all, "lower-library-literal").is_empty(), "{all:?}");
-    assert!(!ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(!ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
     // A package named `space`: `space.md` stays the app's base override.
     let space = "use Card from \"@acme/space\"\n\ncomponent App\n  view\n    Card()\n";
     let card = "component Card\n  view\n    column padding=\"space.pad\"\n      text \"a\"\n";
@@ -663,12 +663,12 @@ fn a_package_is_its_own_name_and_base_names_are_no_packages() {
         "space",
         "@acme/space",
         "@acme/space",
-        "tamber space\n\ntheme\n  space.pad = 4px\n",
+        "forma space\n\ntheme\n  space.pad = 4px\n",
         card,
         space,
-        "tamber app\n\ntheme\n  space.md = 20px\n",
+        "forma app\n\ntheme\n  space.md = 20px\n",
     );
-    assert!(ids(&all, "tamber-package-unknown").is_empty(), "{all:?}");
+    assert!(ids(&all, "forma-package-unknown").is_empty(), "{all:?}");
 }
 
 /// A library view's buttons stand in for platform controls (LLP 1139 D9's

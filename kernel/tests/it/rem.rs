@@ -97,6 +97,186 @@ fn font(kernel: &Kernel, id: u32) -> f32 {
     }
 }
 
+#[test]
+fn scalar_viewport_lengths_resolve_on_resize_and_keep_inherited_fonts() {
+    let mut kernel = Kernel::with_monospace();
+    kernel
+        .apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::SetStyle {
+                    id: 1,
+                    patch: style(&[
+                        (StyleId::FontSize, "5vw"),
+                        (StyleId::RowGap, "2vh"),
+                        (StyleId::ColumnGap, "3vmin"),
+                        (StyleId::BorderWidthTop, "1vmax"),
+                        (StyleId::LetterSpacing, "0.5vw"),
+                        (StyleId::TextIndent, "-1vw"),
+                        (StyleId::BorderSpacing, "1svw"),
+                    ]),
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::View,
+                },
+                Op::SetStyle {
+                    id: 2,
+                    patch: style(&[(StyleId::Width, "2em")]),
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2],
+                },
+                Op::AttachRoot { id: 1 },
+            ],
+        )
+        .unwrap();
+    for (w, h) in [(400.0, 600.0), (800.0, 300.0), (400.0, 600.0)] {
+        kernel.compute_layout(1, Offer::definite(w, h)).unwrap();
+        assert_eq!(font(&kernel, 1), w * 0.05);
+        assert_eq!(font(&kernel, 2), w * 0.05);
+        assert_eq!(kernel.node(2).unwrap().frame.width, w * 0.1);
+        let s = kernel.node(1).unwrap().style;
+        assert_eq!(s.row_gap, h * 0.02);
+        assert_eq!(s.column_gap, w.min(h) * 0.03);
+        assert_eq!(s.border_width_top, w.max(h) * 0.01);
+        assert_eq!(s.letter_spacing, w * 0.005);
+        assert_eq!(s.text_indent, -w * 0.01);
+        assert_eq!(s.rare.border_spacing, w * 0.01);
+    }
+}
+
+#[test]
+fn scalar_viewport_units_round_trip_and_follow_the_window_outside_a_smaller_sheet() {
+    use exact_kernel::{wire, Env, ViewportUnit};
+    for unit in ViewportUnit::ALL {
+        let text = format!("2{}", unit.name());
+        let rows = [
+            StyleId::FontSize,
+            StyleId::LineHeight,
+            StyleId::RowGap,
+            StyleId::ColumnGap,
+            StyleId::LetterSpacing,
+            StyleId::TextIndent,
+            StyleId::BorderSpacing,
+            StyleId::BorderWidthTop,
+            StyleId::BorderWidthRight,
+            StyleId::BorderWidthBottom,
+            StyleId::BorderWidthLeft,
+            StyleId::ShapeMargin,
+        ];
+        let patch = style(&rows.map(|id| (id, text.as_str())));
+        let ops = [
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle { id: 1, patch },
+            Op::AttachRoot { id: 1 },
+        ];
+        let encoded = wire::encode(1, 0, &ops);
+        assert_eq!(wire::decode(&encoded).unwrap().ops, ops, "{text}");
+        let mut kernel = Kernel::with_monospace();
+        kernel.apply_frame(&encoded).unwrap();
+        for (w, h) in [(800.0, 600.0), (500.0, 900.0)] {
+            kernel
+                .set_env(Env::default().with_screen(Some((w, h))))
+                .unwrap();
+            kernel
+                .compute_layout(1, Offer::definite(200.0, 300.0))
+                .unwrap();
+            let env = kernel.env();
+            let expected = f64::from(unit.basis(&env) / 100.0 * 2.0);
+            for id in rows {
+                let value = kernel.node(1).unwrap().style.get(id);
+                if id == StyleId::LineHeight {
+                    assert_eq!(
+                        value,
+                        RowValue::LineHeight(exact_kernel::LineHeight::Length(expected as f32))
+                    );
+                } else {
+                    assert_eq!(value, RowValue::Number(expected), "{id:?}: {text}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn viewport_fonts_remeasure_text_and_a_pixel_binding_stops_following_resize() {
+    let mut kernel = Kernel::with_monospace();
+    kernel
+        .apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::SetStyle {
+                    id: 1,
+                    patch: style(&[(StyleId::FontSize, "5vw")]),
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::Text,
+                },
+                Op::SetProp {
+                    id: 2,
+                    prop: exact_kernel::PropId::Text,
+                    value: "Viewport text".into(),
+                },
+                Op::SetStyle {
+                    id: 2,
+                    patch: style(&[
+                        (StyleId::FontSize, "2em"),
+                        (StyleId::LetterSpacing, "0.5vw"),
+                    ]),
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2],
+                },
+                Op::AttachRoot { id: 1 },
+            ],
+        )
+        .unwrap();
+    kernel
+        .compute_layout(1, Offer::definite(400.0, 600.0))
+        .unwrap();
+    let before = kernel.node(2).unwrap().paragraph_stamp();
+    let height = kernel.node(2).unwrap().frame.height;
+    kernel
+        .compute_layout(1, Offer::definite(800.0, 600.0))
+        .unwrap();
+    assert_ne!(before, kernel.node(2).unwrap().paragraph_stamp());
+    assert_eq!(kernel.node(2).unwrap().frame.height, height * 2.0);
+    kernel
+        .apply(
+            0,
+            2,
+            &[Op::SetStyle {
+                id: 1,
+                patch: style(&[(StyleId::FontSize, "12px")]),
+            }],
+        )
+        .unwrap();
+    for width in [400.0, 800.0] {
+        kernel
+            .compute_layout(1, Offer::definite(width, 600.0))
+            .unwrap();
+        assert_eq!(font(&kernel, 2), 24.0);
+        assert_eq!(kernel.node(2).unwrap().style.letter_spacing, width * 0.005);
+    }
+}
+
 fn layout(kernel: &mut Kernel) -> ((f32, f32), (f32, f32, f32), f32) {
     kernel
         .compute_layout(1, Offer::definite(390.0, 844.0))

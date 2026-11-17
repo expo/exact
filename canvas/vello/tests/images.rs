@@ -43,7 +43,7 @@ fn hundreds_of_images_replay_past_the_atlas_capacity_without_growing_at_rest() {
     let pixels: Vec<_> = (0..400)
         .map(|i| {
             let mut bytes = vec![(i % 251) as u8; 512 * 512 * 4];
-            for pixel in bytes.chunks_exact_mut(4) {
+            for pixel in bytes.as_chunks_mut::<4>().0 {
                 pixel[3] = 255;
             }
             bytes

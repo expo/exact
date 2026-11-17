@@ -33,8 +33,9 @@ public final class TranslationModule: ExactPackage {
     private var translations: [[String: Any]] = [], detections: [[String: Any]] = [], sheet = "accept"
     private var seen = (translations: "", detections: "")
     private var removed: Set<String> = []
-    /// Downloads in flight by pair key, and under the agent the creates waiting on each.
-    private var downloads: [String: [(Bool) -> Void]] = [:]
+    /// Downloads in flight by pair key, and the creates waiting on each: one sheet a pair, whose
+    /// answer (nil, or the error each create fails with) every create waiting hears.
+    private var downloads: [String: [([String: Any]?) -> Void]] = [:]
 
     public init(context: ExactPackageContext) { self.context = context }
 
@@ -163,8 +164,7 @@ public final class TranslationModule: ExactPackage {
             case "unavailable": return reply(["error": "NotSupportedError", "message": a["reason"] as? String ?? "unsupported-options"])
             default:
                 guard sheet != "decline" else { say("\(p.key): the download sheet was declined (agent)"); return reply(["error": "NotAllowedError", "message": "declined"]) }
-                let first = downloads[p.key] == nil
-                downloads[p.key, default: []].append { ok in ok ? made(nil) : reply(["error": "NotSupportedError"]) }
+                let first = join(p.key) { error in error == nil ? made(nil) : reply(error!) }
                 if first { say("\(p.key): download started (agent)"); context.changed(Self.pairTopic) }
                 return
             }
@@ -197,16 +197,14 @@ public final class TranslationModule: ExactPackage {
     @available(iOS 18.0, macOS 15.0, *)
     @MainActor
     private func download(_ p: Pair, _ done: @escaping ([String: Any]?) -> Void) {
-        guard let hosted = Platform.host(p, context) else { return done(["error": "OperationError", "message": "the session is in no window"]) }
-        downloads[p.key] = []
+        guard join(p.key, done) else { return say("\(p.key): a create waits on the download sheet already up") }
+        guard let hosted = Platform.host(p, context) else { return settle(p.key, ["error": "OperationError", "message": "the session is in no window"]) }
         context.changed(Self.pairTopic)
         say("\(p.key): download asked")
         let finish = { [self] (error: [String: Any]?) in
             hosted.remove()
-            downloads[p.key] = nil
-            context.changed(Self.pairTopic)
             say("\(p.key): download \(error == nil ? "finished" : "ended: \(error?["message"] ?? "")")")
-            done(error)
+            settle(p.key, error)
         }
         hosted.submit(.init(run: { session in
             do { try await session.prepareTranslation(); finish(nil) } catch {
@@ -216,6 +214,20 @@ public final class TranslationModule: ExactPackage {
         }, failed: { finish(["error": "AbortError"]) }))
     }
     #endif
+
+    /// `done` waits on the pair's download: true when none was in flight, so the caller starts it.
+    private func join(_ key: String, _ done: @escaping ([String: Any]?) -> Void) -> Bool {
+        let first = downloads[key] == nil
+        downloads[key, default: []].append(done)
+        return first
+    }
+
+    /// The pair's download ended: each create waiting hears `error`, nil when it finished.
+    private func settle(_ key: String, _ error: [String: Any]?) {
+        guard let waiting = downloads.removeValue(forKey: key) else { return }
+        context.changed(Self.pairTopic)
+        waiting.forEach { $0(error) }
+    }
 
     private func translate(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
         guard let id = args["translator"] as? String, let h = translators[id] else { return reply(["error": "InvalidStateError"]) }
@@ -326,11 +338,9 @@ public final class TranslationModule: ExactPackage {
         // The drive completes or fails an agent's download by the availability it lays over (§9).
         switch pairOverlay["availability"] as? String {
         case "available":
-            for (key, waiting) in downloads { removed.remove(key); say("\(key): download finished (agent)"); waiting.forEach { $0(true) } }
-            if !downloads.isEmpty { downloads = [:]; context.changed(Self.pairTopic) }
+            for key in downloads.keys { removed.remove(key); say("\(key): download finished (agent)"); settle(key, nil) }
         case "unavailable":
-            for waiting in downloads.values { waiting.forEach { $0(false) } }
-            if !downloads.isEmpty { downloads = [:]; context.changed(Self.pairTopic) }
+            for key in downloads.keys { settle(key, ["error": "NotSupportedError"]) }
         default: break
         }
     }

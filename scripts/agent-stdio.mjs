@@ -1,54 +1,84 @@
 // Native desktop and phone carriers over the agent JSON-lines wire.
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
-import { phone, phoneBridge, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
+import { phone, phoneBridge, phoneStartupFailure, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
-import { linuxRebuild, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
-import { refuseStale, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, bakedSettingChanges } from './agent-launch.mjs';
+import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
+import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
 import { nativeKey, mouseContact } from './agent-keys.mjs';
 import { jsonLines, hangup, waitAtMost, bootRefusal, REPLY_MS } from './agent-wire.mjs';
 import { platformWheel } from './agent-wheel.mjs';
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
-/** The command that builds what an Android drive runs: the APK (`reader`), else the Linux host for Android. */
-const androidRebuild = (a, reader) => ownVerb(a, reader ? 'android' : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ' --apk' : ''}`;
-/** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): the library's
- * inputs by its Cargo dep-info (the Rust, and the plan's and the module's sources the bake watched), and the Kotlin. */
-export function apkChanges(a, apk) {
-  const record = apkRecord(a, apk);
-  if (!record) return [`${apk} (no build record beside it: built before drives checked one)`];
-  const since = Date.parse(record.started);
-  return [...depInfoNewer(since, record.library, record.library.replace(/\.so$/, '.d'), record.workspace), ...newerThan(since, record.sources)];
+// A descendant can retain the pipes after its carrier exits, even after the parent kills the carrier.
+export async function closeStdio(child, closed, cleanup) {
+  await waitAtMost(closed, 2000);
+  if (child.exitCode === null && child.signalCode === null) { try { child.kill('SIGKILL'); } catch {} }
+  await waitAtMost(closed, 2000, () => {
+    try { cleanup?.(); }
+    finally { for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy(); }
+  });
 }
 
-/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. */
-export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, onProcess }) {
+/** The command that builds what an Android drive runs: the APK (`reader`), else the Linux host for Android. */
+export function androidRebuild(a, reader) {
+  const selected = reader && apkRecord(a)?.abis, abis = selected?.length ? ` --abis ${selected.join(',')}` : '';
+  return ownVerb(a, reader ? `android${abis}` : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ` --apk${abis}` : ''}`;
+}
+/** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): each library's
+ * inputs by its Cargo dep-info (the Rust, and the plan's and the module's sources the bake watched), the Kotlin by
+ * time, and the icons by digest, so a deleted icon is a change too. */
+export function apkChanges(a, apk) {
+  const record = apkRecord(a, apk);
+  if (!record?.libraries?.length) return [`${apk} (no complete ABI build record beside it: build it again)`];
+  const since = Date.parse(record.started), digest = (file) => { try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; } };
+  return [...new Set(record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))),
+    ...newerThan(since, record.sources.filter((root) => !root.sha256)),
+    ...record.sources.filter((root) => root.sha256 && digest(root.file) !== root.sha256).map((root) => shown(root.file))];
+}
+
+/** One JSON-lines protocol over stdio on desktop hosts, or a phone's outbound socket. `reader`: on Android, the app
+ * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
+ * that opens a drive says it). */
+export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
   const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
   const sample = host === 'host';
   const artifacts = portable ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
   const deviceBundle = artifacts?.bundle;
-  const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(a.dir, 'dist-windows', `${executableName(a)}.exe`))
-    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
+  const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))
+    : android ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader)) : linux ? (process.env.EXACT_LINUX_BIN ?? linuxBinary(a)) : (process.env.EXACT_MAC_BIN ?? appleRunBinary(a, sample));
   // The macOS build by its own record (agent-build.mjs, which an app's exact.mjs runs first to build it, or bakes its plan-only edit).
-  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED }) : null, macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
+  // What a desktop app is started with, where a launch gives a marked setting (LLP 1153.002 D2): what its freshness reads.
+  const childEnv = { ...process.env, ...extra };
+  const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
+  if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
+  const macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
-  if (!existsSync(device ? deviceBundle : bin)) throw new Error(device ? 'run bun host/apple/build.mjs --device first' : windows ? `run ${windowsRebuild()} first` : android ? `run ${androidRebuild(a, !!process.env.EXACT_ANDROID_READER)} first` : linux ? `run ${linuxRebuild(a)} first` : `EXACT_MAC_BIN names no file: ${bin}`);
+  const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
+  if (!existsSync(device ? deviceBundle : bin)) throw new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`);
+  if (!macBuild) {
+    const receipt = portable ? undefined : device ? resolve(deviceBundle, 'receipt.json')
+      : /\.app\/Contents\/MacOS\/[^/]+$/.test(resolve(bin)) ? resolve(bin, '../../Resources/receipt.json') : resolve(dirname(bin), 'receipt.json');
+    refuseBinaryBackend(bin, a, { receipt, packaged: windows, command: rebuild });
+  }
   if (!portable) assertAppleIdentity(a, device ? resolve(deviceBundle, artifacts.executable) : bin);
   if (portable && process.env.EXACT_PROOF_PRODUCTS) refuseStale(host, bin, proofProductChanges(process.env.EXACT_PROOF_PRODUCTS, bin, a), 'rerun the proof'); else if (windows && process.env.EXACT_WINDOWS_BIN) unchecked('windows', 'EXACT_WINDOWS_BIN');
   else if (windows) {
     const receipt = resolve(bakeOutput(a), `windows-${bakeTarget('windows')}.build.json`);
-    refuseStale('windows', bin, packagedBuildChanges(receipt, dirname(bin), a), windowsRebuild());
+    refuseStale('windows', bin, packagedBuildChanges(receipt, dirname(bin), a, { launch: childEnv }), windowsRebuild());
   }
   else if ((linux && process.env.EXACT_LINUX_BIN) || (android && process.env.EXACT_ANDROID_BIN)) unchecked(host, android ? 'EXACT_ANDROID_BIN' : 'EXACT_LINUX_BIN');
   else if (android && bin.endsWith('.apk')) refuseStale(host, bin, [...apkChanges(a, bin), ...bakedSettingChanges(bin, a)], androidRebuild(a, true));
-  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin), ...bakedSettingChanges(bin, a)], android ? androidRebuild(a, false) : linuxRebuild(a));
+  else if (linux || android) refuseStale(host, bin, [...depInfoChanges(bin, a), ...bakedSettingChanges(bin, a, { launch: linux ? childEnv : null })], android ? androidRebuild(a, false) : linuxRebuild(a));
   else if (!device && process.env.EXACT_MAC_BIN) unchecked(host, 'EXACT_MAC_BIN');
   if (device && (plan || extra.EXACT_PLAN || extra.EXACT_ASSETS)) throw new Error('a phone cannot read host-local plan/assets paths; use --url or its embedded app');
   const ph = device ? phone(pick) : null;
@@ -91,16 +121,41 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     : droid ? droid.spawn(env.EXACT_LAUNCH_URL ? [env.EXACT_LAUNCH_URL] : []) : spawn(bin, portable && env.EXACT_LAUNCH_URL ? [env.EXACT_LAUNCH_URL] : documents, { env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide:true });
   onProcess?.(child);
   const hostLines = [];
-  child.stderr.on('data', (d) => { for (const l of String(d).split('\n')) if (l) hostLines.push('app: ' + l); });
+  // hostLines takes each chunk as it arrives, so a diagnostic with no newline yet still reaches a timeout or exit
+  // message; the Android startup lines are forwarded to the driver's stderr only once complete.
+  let partial = '';
+  child.stderr.on('data', (d) => {
+    const text = String(d);
+    for (const l of text.split('\n')) if (l) hostLines.push('app: ' + l);
+    if (!droid) return;
+    const parts = (partial + text).split('\n');
+    partial = parts.pop();
+    for (const line of parts) if (/^Android (?:before launch|focused activity):/.test(line)) console.error(line);
+  });
   if (device) child.stdout.on('data', (d) => { for (const l of String(d).split('\n')) if (l) hostLines.push('app: ' + l); });
   let lines = device ? null : jsonLines(child.stdout, child.stdin, hostLines);
   const fail = (why) => { lines?.fail(why); bridge?.fail(new Error(why)); };
-  const exited = new Promise((r) => {
-    // A failed spawn may emit error without exit, so cleanup must finish on either.
-    child.on('error', (e) => { fail(`launch failed: ${e.message}`); r(); });
-    child.on('exit', (code, signal) => { r(code ?? signal); fail(closing ? 'the app was closed' : hangup({ what: 'the app exited', exit: { code, signal }, hostLines, reports: device || droid ? [] : crashReports(basename(bin), launched) })); });
+  const closed = new Promise(resolve => {
+    child.once('close', resolve);
+    child.once('error', resolve);
   });
-  const close = async () => { closing = true; bridge?.close(); try { child.stdin.end(); if (device) child.kill('SIGTERM'); } catch {} await waitAtMost(exited, 2000); if (child.exitCode === null && child.signalCode === null) { try { child.kill('SIGKILL'); } catch {} } await exited; };
+  let closingPromise;
+  const close = () => {
+    if (closingPromise) return closingPromise;
+    closing = true; bridge?.close();
+    // Ending the stdin of a process that has exited raises EPIPE on the stream, which would end the driver.
+    if (child.exitCode === null && child.signalCode === null) {
+      child.stdin.on('error', () => {});
+      try { child.stdin.end(); if (device) child.kill('SIGTERM'); } catch {}
+    }
+    return closingPromise = closeStdio(child, closed, droid?.cleanup);
+  };
+  const cleanupAfterExit = () => { if (!closing) void close().catch(error => console.error(`app cleanup: ${error.message}`)); };
+  child.on('error', error => { fail(`launch failed: ${error.message}`); cleanupAfterExit(); });
+  child.on('exit', (code, signal) => {
+    fail(closing ? 'the app was closed' : hangup({ what: 'the app exited', exit: { code, signal }, hostLines, reports: device || droid ? [] : crashReports(basename(bin), launched) }));
+    cleanupAfterExit();
+  });
   let readyTimeout;
   try {
     const readyLine = device ? bridge.ready.then(({ socket, announcement }) => {
@@ -111,7 +166,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     }) : lines.next();
     // An Android launch is adb's round trips (about a second each to an emulator through a tunnel) and the app's cold start.
     const ready = await Promise.race([readyLine, new Promise((_, reject) => {
-      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + hostLines.join('\n'))), android ? 60000 : 20000);
+      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + (hostLines.join('\n') || 'the app printed nothing'))), android ? 60000 : 20000);
     })]);
     clearTimeout(readyTimeout);
     if (!ready.ready) throw new Error('unexpected first line: ' + JSON.stringify(ready));
@@ -128,7 +183,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
       throw new Error(why);
     });
     return {
-      host, boot: ready.boot, hostLines, gpuMs: () => null, sessions: ready.sessions ?? null, state, plan,
+      host, reader: android && bin.endsWith('.apk'), boot: ready.boot, hostLines, gpuMs: () => null, sessions: ready.sessions ?? null, state, plan,
       ask, reveal: (id) => ask({ op: 'reveal', id }),
       async input(id, kind, opts) {
         if (kind === 'key') {
@@ -141,15 +196,18 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
         // A contact that went down with `mouse` (a drag's) holds the left button through its phases (review A1).
         // A button's point and the modifiers held, as the request says them (#107).
         const at = opts.at !== undefined ? { at: opts.at } : {}, held = opts.modifiers ? { modifiers: opts.modifiers } : {};
-        const r = phase ? await heldButton.ask(kind, opts, (button) => ask({ op: 'tap', phase: kind, ...(id != null ? { id } : {}), x: opts.x, y: opts.y, dx: opts.dx, dy: opts.dy, ms: opts.ms, ...(opts.virtual ? { virtual: true } : {}), ...held, ...button })) : ['contextmenu', 'dblclick', 'mouse', 'auxclick'].includes(kind) ? await ask({ op: 'tap', id, [kind]: true, ...at, ...held }) : kind === 'clicks' ? await ask({ op: 'tap', id, clicks: opts.clicks, ...at, ...held }) : kind === 'pinch' ? await ask({ op: 'tap', id, pinch: opts.pinch, at: opts.at }) : kind === 'wheel' && (opts.fling || opts.hold || opts.release) ? await platformWheel(ask, id, opts, heldWheel) : kind === 'wheel' ? await ask({ op: 'tap', id, wheel: opts.wheel, ...(opts.gesture ? { gesture: true } : {}), ...at, ...held }) : kind === 'drop' ? await ask({ op: 'tap', id, drop: opts.drop }) : kind === 'dragenter' || kind === 'dragleave' ? await ask({ op: 'tap', id, [kind]: opts[kind] }) : kind === 'hover' ? await ask({ op: 'tap', id, hover: true }) : kind === 'press' ? await ask({ op: 'tap', id, ...guest, ...at, ...(opts.modifiers ? { modifiers: opts.modifiers } : {}) }) : kind === 'mediasession' ? await ask({ op: 'tap', id, mediaSession: opts.mediaSession, ...(opts.seconds != null ? { seconds: opts.seconds } : {}) }) : await ask({ op: 'type', id, text: opts.text, ...(opts.clipboard ? { clipboard: opts.clipboard } : {}), ...(opts.files ? { files: opts.files } : {}), ...(opts.image ? { image: opts.image } : {}), ...guest });
+        const r = phase ? await heldButton.ask(kind, opts, (button) => ask({ op: 'tap', phase: kind, ...(id != null ? { id } : {}), x: opts.x, y: opts.y, dx: opts.dx, dy: opts.dy, ms: opts.ms, ...(opts.virtual ? { virtual: true } : {}), ...held, ...button })) : ['contextmenu', 'dblclick', 'mouse', 'auxclick'].includes(kind) ? await ask({ op: 'tap', id, [kind]: true, ...(kind === 'dblclick' && opts.touch ? { touch: true } : {}), ...at, ...held }) : kind === 'clicks' ? await ask({ op: 'tap', id, clicks: opts.clicks, ...at, ...held }) : kind === 'pinch' ? await ask({ op: 'tap', id, pinch: opts.pinch, at: opts.at }) : kind === 'wheel' && (opts.fling || opts.hold || opts.release) ? await platformWheel(ask, id, opts, heldWheel) : kind === 'wheel' ? await ask({ op: 'tap', id, wheel: opts.wheel, ...(opts.gesture ? { gesture: true } : {}), ...at, ...held }) : kind === 'drop' ? await ask({ op: 'tap', id, drop: opts.drop }) : kind === 'dragenter' || kind === 'dragleave' ? await ask({ op: 'tap', id, [kind]: opts[kind] }) : kind === 'hover' ? await ask({ op: 'tap', id, hover: true }) : kind === 'press' ? await ask({ op: 'tap', id, ...guest, ...at, ...(opts.modifiers ? { modifiers: opts.modifiers } : {}) }) : kind === 'mediasession' ? await ask({ op: 'tap', id, mediaSession: opts.mediaSession, ...(opts.seconds != null ? { seconds: opts.seconds } : {}) }) : await ask({ op: 'type', id, text: opts.text, ...(opts.clipboard ? { clipboard: opts.clipboard } : {}), ...(opts.files ? { files: opts.files } : {}), ...(opts.image ? { image: opts.image } : {}), ...guest });
         if (r.error) throw new Error(r.error);
         return r;
       },
       async screenshot(path, window = false, film = false) {
-        const remote = device ? `${ready.container}/tmp/exact-agent.png` : droid ? droid.shot : path;
+        // A sandboxed Mac app writes only in its container (`mac --sandbox`, LLP 1030.005 D4); the driver moves the file out.
+        const contained = macBuild && macSandboxed(a) ? resolve(homedir(), 'Library/Containers', a.id, 'Data/tmp', `exact-agent-${process.pid}${extname(path)}`) : null;
+        const remote = device ? `${ready.container}/tmp/exact-agent.png` : droid ? droid.shot : contained ?? path;
         const r = await ask({ op: 'screenshot', path: remote, window, ...(film ? { film } : {}) });
         if (r.error) throw new Error(r.error);
         if (droid) { droid.pull(path); r.screenshot = path; }
+        if (contained) { mkdirSync(dirname(resolve(path)), { recursive: true }); copyFileSync(contained, path); rmSync(contained, { force: true }); r.screenshot = path; }
         if (device) {
           const copied = spawnSync('xcrun', ['devicectl', 'device', 'copy', 'from', '--quiet', '--device', ph.udid,
             '--domain-type', 'appDataContainer', '--domain-identifier', a.id, '--source', 'tmp/exact-agent.png', '--destination', resolve(path)], { encoding: 'utf8', timeout: 20000 });
@@ -163,6 +221,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     };
   } catch (e) {
     await close();
+    if (device) throw new Error(phoneStartupFailure(e.message, hostLines), { cause: e });
     throw e;
   } finally {
     clearTimeout(readyTimeout);

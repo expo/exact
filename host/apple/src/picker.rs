@@ -242,6 +242,11 @@ pub(super) fn roots() -> [PathBuf; 3] {
     let mut held = ROOTS.lock().unwrap_or_else(|e| e.into_inner());
     held.get_or_insert_with(|| {
         let base = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
+        // The process's own directory goes at its exit.
+        ibex2::process::wait_at_exit(|| {
+            let dir = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(dir);
+        });
         [
             base.join("data"),
             base.join("cache"),
@@ -285,51 +290,33 @@ pub fn roots_reply() -> String {
     s
 }
 
-/// The agent's `appFile` ([`app_file`]) and `shareFile` ([`share_copy`],
-/// through the roots of the asking session's own app, `data`'s).
-pub fn file_op<D: exact_runner::DataSource>(op: &str, request: &str, data: &D) -> String {
-    match op {
-        "appFile" => app_file(&exact_runner::agent::field_str(request, "path").unwrap_or_default()),
-        _ => {
-            let roots = app_dirs(data.app_id())
-                .ok()
-                .flatten()
-                .map(|(roots, _)| roots);
-            share_copy(request, data.grants(), roots.as_ref())
+/// The app-file roots and their policy, from the same directory decision.
+pub(crate) fn app_roots_reply<D: exact_runner::DataSource>(data: &D) -> String {
+    let app_id = data.app_id();
+    let agent = std::env::var_os("EXACT_AGENT").is_some();
+    let reply = match app_dirs(app_id) {
+        Ok(Some(_)) => serde_json::json!({"available": true, "store": if agent {
+            std::env::var("EXACT_AGENT_STORAGE").unwrap_or_default()
+        } else { "real".into() }}),
+        Ok(None) => {
+            serde_json::json!({"available": false, "code": if agent { "agent" } else { "unavailable" },
+            "message": "app files need an app identity and, in a drive, a scratch store (--storage <name>)"})
         }
-    }
+        Err(error) => {
+            serde_json::json!({"available": false, "code": "storage", "message": format!("{error:?}")})
+        }
+    };
+    format!("{{\"storage\":{},{}", reply, &roots_reply()[1..])
 }
 
-/// `{"file":"/…"}`: the file behind an `app:/data|cache|tmp/…` path, which
-/// an export copies out (LLP 1069.010 D3); an error for anything else.
-pub fn app_file(path: &str) -> String {
-    let [data, cache, temporary] = roots();
-    let resolved = path.strip_prefix("app:/").and_then(|rest| {
-        let (dir, rest) = rest.split_once('/')?;
-        let root = match dir {
-            "data" => data,
-            "cache" => cache,
-            "tmp" => temporary,
-            _ => return None,
-        };
-        let parts: Vec<&str> = rest.split('/').collect();
-        if parts
-            .iter()
-            .any(|p| p.is_empty() || *p == "." || *p == ".." || p.contains('\0'))
-        {
-            return None;
-        }
-        Some(parts.iter().fold(root, |p, part| p.join(part)))
-    });
-    match resolved {
-        Some(file) => {
-            let mut s = String::from("{\"file\":");
-            exact_runner::agent::quote(&file.to_string_lossy(), &mut s);
-            s.push('}');
-            s
-        }
-        None => exact_runner::agent::error(&format!("{path} names no app file")),
-    }
+/// The agent's `shareFile` ([`share_copy`]), through the asking session's
+/// own app's roots.
+pub fn share_file<D: exact_runner::DataSource>(request: &str, data: &D) -> String {
+    let roots = app_dirs(data.app_id())
+        .ok()
+        .flatten()
+        .map(|(roots, _)| roots);
+    share_copy(request, data.grants(), roots.as_ref())
 }
 
 /// Each app's directories as its storage opened them, by their paths, pinned
@@ -459,8 +446,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_reset_refuses_a_scratch_tree_reached_through_a_link() {
-        let base =
-            std::env::temp_dir().join(format!("exact-apple-unlinked-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-unlinked-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let real = base.join("real-data");
         std::fs::create_dir_all(real.join("s1")).unwrap();
@@ -489,8 +477,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn landings_are_not_emptied_through_a_link() {
-        let base =
-            std::env::temp_dir().join(format!("exact-apple-landings-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-landings-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let app = base.join("cache/exact/app.id");
         let temporary = app.join("temporary");
@@ -530,7 +519,7 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     /// A fresh tree: `data`, `cache`, `tmp`, an outside file, and the copy's place.
-    fn tree(name: &str) -> (PathBuf, [PathBuf; 3]) {
+    fn tree(name: &str) -> (crate::TempDir, [PathBuf; 3]) {
         let base =
             std::env::temp_dir().join(format!("exact-share-copy-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
@@ -543,7 +532,7 @@ mod tests {
         std::fs::create_dir_all(base.join("outside/backups")).unwrap();
         std::fs::write(base.join("outside/secret"), b"secret").unwrap();
         std::fs::write(base.join("outside/backups/notes.json"), b"other").unwrap();
-        (base, roots)
+        (crate::TempDir(base), roots)
     }
 
     const GRANTS: &str = "fs.read app:/data\n";

@@ -5,6 +5,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { withLook } from '../look.mjs';
+import { drivable } from '../../../scripts/coverage.mjs';
 import { chromium as browserPath } from '../../../scripts/agent-launch.mjs';
 
 const web = new URL('../', import.meta.url);
@@ -33,7 +34,7 @@ test('a control selects no text; prose, a field, the Markdown editor and an auth
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } }) });
   const playwright = await import('playwright-core');
   try {
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const browser = await playwright[engine].launch({ headless: true, ...(engine === 'chromium' ? { executablePath: browserPath().executable } : {}) });
       try {
         const page = await browser.newPage();

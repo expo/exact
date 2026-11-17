@@ -2,7 +2,7 @@ import {test, expect} from 'bun:test';
 import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
-import {gameDefaults, gameShells} from './shells.mjs';
+import {gameDefaults, gameShells, sharesAppleEntry} from './shells.mjs';
 
 test('external shells use the SDK toolchain and refresh stale generated pins', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-shell-toolchain-'));
@@ -43,7 +43,7 @@ test('a level-only game bakes its declared type without an art directory', () =>
     expect(readFileSync(resolve(dir, '.shells/gpu/Cargo.toml'), 'utf8')).not.toContain('exact-game-bake.workspace = true');
     expect(readFileSync(resolve(dir, '.shells/web/Cargo.toml'), 'utf8')).not.toContain('exact-data-host');
     const windows = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/windows/Cargo.toml'), 'utf8'));
-    expect(windows.dependencies['exact-linux'].workspace).toBe(true);
+    expect(windows.dependencies['exact-painted'].workspace).toBe(true);
     expect(windows.dependencies['ibex2-sqlite'].workspace).toBe(true);
     for (const kind of ['apple', 'linux', 'windows', 'android']) {
       const shell = Bun.TOML.parse(readFileSync(resolve(dir, `.shells/${kind}/Cargo.toml`), 'utf8'));
@@ -52,6 +52,37 @@ test('a level-only game bakes its declared type without an art directory', () =>
     }
     const web = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/web/Cargo.toml'), 'utf8'));
     expect(web.dependencies['ibex2-sqlite']).toBeUndefined();
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test('Linux integration tests run beside the generated shell', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-linux-tests-'));
+  try {
+    mkdirSync(resolve(dir, 'logic/src'), {recursive:true});
+    mkdirSync(resolve(dir, 'linux/tests'), {recursive:true});
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'impl Game for Island { const ID: &\'static str = "island"; }');
+    const source = '#[test]\nfn pads() {}\n';
+    writeFileSync(resolve(dir, 'linux/tests/pads.rs'), source);
+    const other = '#[test]\nfn controls() {}\n';
+    writeFileSync(resolve(dir, 'linux/tests/controls.rs'), other);
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/pads.rs'), 'utf8')).toBe(source);
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/controls.rs'), 'utf8')).toBe(other);
+    const manifestText = readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8');
+    const manifest = Bun.TOML.parse(manifestText);
+    expect(manifest.bin[0].test).not.toBe(false);
+    expect(manifest['dev-dependencies']['exact-update'].path).toBeDefined();
+    rmSync(resolve(dir, 'linux/tests/pads.rs'));
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(existsSync(resolve(dir, '.shells/linux/tests/pads.rs'))).toBe(false);
+    expect(readFileSync(resolve(dir, '.shells/linux/tests/controls.rs'), 'utf8')).toBe(other);
+    expect(readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8')).toBe(manifestText);
+    rmSync(resolve(dir, 'linux/tests/controls.rs'));
+    gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+    expect(existsSync(resolve(dir, '.shells/linux/tests/controls.rs'))).toBe(false);
+    const bare = Bun.TOML.parse(readFileSync(resolve(dir, '.shells/linux/Cargo.toml'), 'utf8'));
+    expect(bare.bin[0].test).toBe(false);
+    expect(bare['dev-dependencies']).toBeUndefined();
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
@@ -83,6 +114,23 @@ test('a declared app data crate is linked into generated game hosts', () => {
     writeFileSync(resolve(dir, 'data/Cargo.toml'), '[package]\nname = "island-data"\nversion = "0.1.0"\nworkspace = ".."\n');
     expect(() => gameShells(dir, game, resolve(import.meta.dir, '..')))
       .toThrow('set package.workspace = "../.shells"');
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test('a game with an update store is refused before its shells are generated', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-store-shell-'));
+  const shells = () => gameShells(dir, gameDefaults(dir).game, resolve(import.meta.dir, '..'));
+  try {
+    mkdirSync(resolve(dir, 'logic/src'), {recursive:true});
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'impl Game for Island { const ID: &\'static str = "island"; }');
+    for (const platform of ['android', 'ios', 'macos', 'linux', 'windows', 'web']) {
+      writeFileSync(resolve(dir, 'app.json'), JSON.stringify({deploy:{store:{[platform]:'A'}}}));
+      expect(shells).toThrow(`deploy.store.${platform} is "A", but games take no over-the-air updates today`);
+      expect(existsSync(resolve(dir, '.shells'))).toBe(false);
+    }
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({deploy:{store:{android:'0', ios:'0'}}}));
+    shells();
+    expect(existsSync(resolve(dir, '.shells/android/Cargo.toml'))).toBe(true);
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 
@@ -198,4 +246,47 @@ test('starter and Beacons retarget glow through the row handle', () => {
     expect(source).toContain('beacon.name()');
     expect(source).not.toMatch(/require_mut::<Glow>|\.0\.to\(|tick_end\(/);
   }
+});
+
+test('a game shares the Apple host only when the build will bake the shared entry (#559)', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-shared-entry-'));
+  try {
+    mkdirSync(resolve(dir, 'logic/src'), {recursive:true});
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({game:{}}));
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'impl Game for Island { const ID: &\'static str = "island"; }');
+    const game = gameDefaults(dir).game, sdk = resolve(import.meta.dir, '..');
+    const shell = () => readFileSync(resolve(dir, '.shells/apple/Cargo.toml'), 'utf8') + readFileSync(resolve(dir, '.shells/apple/build.rs'), 'utf8');
+    const shares = env => {
+      gameShells(dir, game, sdk, {env});
+      const text = shell();
+      // The dependency and the build script's call are one decision.
+      expect(text.includes('exact-game-apple.workspace = true')).toBe(text.includes('bake_shared_declaration('));
+      return text.includes('bake_shared_declaration(');
+    };
+    expect(shares({})).toBe(true);
+    expect(shares({EXACT_APPLE_LINK:'all', EXACT_UPDATE_TRUST:'production'})).toBe(true);
+    expect(shares({EXACT_UPDATE_TRUST:'production'})).toBe(false);
+    expect(shares({EXACT_APPLE_LINK:'plan'})).toBe(false);
+    expect(shares({EXACT_NATIVE_SOURCE:'0'.repeat(64)})).toBe(false);
+    expect(shares({EXACT_RUST_BUNDLE:dir})).toBe(false);
+    expect(sharesAppleEntry({link:['sqlite']}, {EXACT_APPLE_LINK:'plan'})).toBe(true);
+    expect(sharesAppleEntry({preload:{feed:{url:'https://example.com/feed'}}}, {})).toBe(false);
+    expect(sharesAppleEntry({preload:{}}, {})).toBe(true);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test('a lock captured before the shared Apple host keeps the game on its own host until the lock is refreshed (#559)', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-shared-apple-'));
+  try {
+    mkdirSync(resolve(dir, 'logic/src'), {recursive:true});
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({game:{}}));
+    writeFileSync(resolve(dir, 'logic/src/lib.rs'), 'impl Game for Island { const ID: &\'static str = "island"; }');
+    writeFileSync(resolve(dir, 'Cargo.lock'), 'version = 4\n\n[[package]]\nname = "exact-runner"\nversion = "0.1.0"\n');
+    const game = gameDefaults(dir).game, sdk = resolve(import.meta.dir, '..');
+    const sharesHost = () => /^exact-game-apple\.workspace = true$/m.test(readFileSync(resolve(dir, '.shells/apple/Cargo.toml'), 'utf8'));
+    gameShells(dir, game, sdk, {env:{}});
+    expect(sharesHost()).toBe(false);
+    gameShells(dir, game, sdk, {env:{}, updateLock:true});
+    expect(sharesHost()).toBe(true);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
 });

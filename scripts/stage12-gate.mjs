@@ -20,10 +20,11 @@ import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, realp
 import { homedir, release, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { decodePng } from './png.mjs';
-import { WASM_IMAGE_NOISE, bindingShape, bindingsCheck, componentIR, imageBoxes, irShape, namedCrops, namedOf, namedReport, pixelDiff, sameImageBoxes, unionNamed } from './stage12-named.mjs';
+import { bindingShape, bindingsCheck, componentIR, irShape, namedCrops, namedOf, namedReport, pixelDiff, unionNamed } from './stage12-named.mjs';
 import { s15b2Stage } from './stage12-s15b2.mjs';
-import { baseLength, cellsOf, drive as scaleDrive, overridesOf, pageTop } from './scale-check.mjs';
-import { webDist } from './app.mjs';
+import { baseLength, cellsOf, overridesOf, pageTop } from './scale-check.mjs';
+import { LIBRARY_GATE, buildPlan, drivePlan } from './stage12-drive.mjs';
+export { drivePlan } from './stage12-drive.mjs';
 import { jsTargetBuild } from '../host/web/serve.mjs';
 import { placements } from './library-gate.mjs';
 import { KEYBOARD_UP, keyboardRedrive } from './stage12-keyboard.mjs';
@@ -209,7 +210,7 @@ function driveScreens(copy, host, dir, env) {
       // iOS's Dynamic Island, the capture's, where it meets no library box (theme2 15:32 (a)).
       const allow = r.ok ? allowOf(screen, r.out)?.concat(islandAllow(host, r.out)) ?? null : [];
       const shown = r.ok ? renderedIds(r.out) : null;
-      rows.push({ host, scheme, screen, png, ok: r.ok && existsSync(png) && !refused.length && allow !== null && shown !== null && !kb.down, sha: existsSync(png) ? sha(readFileSync(png)) : null, allow: allow ?? [], shown: shown ?? [], named: r.ok ? namedOf(NAMED, screen, r.out, host) : [], images: r.ok && host === 'web-wasm' ? imageBoxes(r.out) : [], components: r.ok ? renderedComponents(r.out) : [], appComponents: r.ok ? renderedComponents(r.out, true) : [], ...(retried ? { retried } : {}), ...(kb.keyboard ? { keyboard: kb.keyboard } : {}), said: kb.down ? 'the software keyboard never came up (three drives)' : allow === null ? `no layout for ${ALLOW[screen].target}` : shown === null ? 'no layout' : said });
+      rows.push({ host, scheme, screen, png, ok: r.ok && existsSync(png) && !refused.length && allow !== null && shown !== null && !kb.down, sha: existsSync(png) ? sha(readFileSync(png)) : null, allow: allow ?? [], shown: shown ?? [], named: r.ok ? namedOf(NAMED, screen, r.out, host) : [], components: r.ok ? renderedComponents(r.out) : [], appComponents: r.ok ? renderedComponents(r.out, true) : [], ...(retried ? { retried } : {}), ...(kb.keyboard ? { keyboard: kb.keyboard } : {}), said: kb.down ? 'the software keyboard never came up (three drives)' : allow === null ? `no layout for ${ALLOW[screen].target}` : shown === null ? 'no layout' : said });
     }
   }
   return rows;
@@ -288,8 +289,8 @@ export function comparePixels(before, after) {
     if (!b.ok || !a?.ok) return { shot: key(b), ok: false, said: !a ? 'no after shot' : `not shot: ${(b.ok ? a : b).said}` };
     const allow = [...b.allow ?? [], ...a.allow ?? []];
     const named = unionNamed(b.named, a.named);
-    const d = pixelDiff(readFileSync(b.png), readFileSync(a.png), allow.map(r => r.rect), b.host.startsWith('web') ? WEB_NOISE : null, named, b.host === 'web-wasm' ? sameImageBoxes(b.images, a.images) : []), imageNoise = (d.images ?? []).filter(i => i.count);
-    return { shot: key(b), ok: d.differ === 0, differ: d.differ, total: d.total, allow, ...(imageNoise.length ? { imageNoise } : {}), ...(d.names || imageNoise.length ? { names: d.names ?? [], png: [b.png, a.png] } : {}) };
+    const d = pixelDiff(readFileSync(b.png), readFileSync(a.png), allow.map(r => r.rect), b.host.startsWith('web') ? WEB_NOISE : null, named);
+    return { shot: key(b), ok: d.differ === 0, differ: d.differ, total: d.total, allow, ...(d.names ? { names: d.names, png: [b.png, a.png] } : {}) };
   });
 }
 
@@ -516,7 +517,7 @@ export function consumerPixels(opts) {
   const bad = r.filter(x => !x.ok);
   // Named changes: each name's pixels and box, and both sides' crops of every named box on every shot, for theme2 to read.
   const crops = join(ROOT, 'target', 'stage12-gate', 'named-crops');
-  const report = namedReport(NAMED, r), cropped = r.flatMap(x => (x.names ? namedCrops(x.png[0], x.png[1], [...x.names, ...(x.imageNoise ?? []).map(i => ({ target: `image-noise-${i.rect.join('-')}`, rect: i.rect }))], crops, x.shot) : []));
+  const report = namedReport(NAMED, r), cropped = r.flatMap(x => (x.names ? namedCrops(x.png[0], x.png[1], x.names, crops, x.shot) : []));
   const missingNames = report.filter(n => n.status === 'MISSING');
   // Rendered: each library component shown on the screens shot (a testId
   // only its package's view writes, which the copy's own sources don't),
@@ -554,7 +555,6 @@ export function consumerPixels(opts) {
       // For theme2's reading (10:47 (7)): each named box's rect (pad included) and its two crops, shot by shot.
       'each named box, shot by shot: its rect [x, y, w, h] and its crops (before, after) in the directory above:',
       ...r.flatMap(x => (x.names ?? []).map(m => `  ${x.shot} ${m.target}: [${m.rect.join(', ')}] ${m.differ} px; ${cropped.filter(f => f.includes(`${x.shot.replace(/[^\w.-]+/g, '-')}-${m.target.replace(/[^\w.-]+/g, '-')}-`)).map(f => f.split('/').pop()).join(', ')}`))] : []),
-    ...(r.some(x => x.imageNoise) ? [`web-wasm image-raster noise (theme2 22:01: at most ${WASM_IMAGE_NOISE} levels inside an Image box laid out alike on both sides), box by box: its rect, count, largest difference and crops (before, after) in the directory above:`, ...r.filter(x => x.imageNoise).flatMap(x => x.imageNoise.map(i => `  ${x.shot}: [${i.rect.join(', ')}] ${i.count} px, at most ${i.max} levels; ${cropped.filter(f => f.includes(`${x.shot.replace(/[^\w.-]+/g, '-')}-image-noise-${i.rect.join('-')}-`)).map(f => f.split('/').pop()).join(', ')}`))] : []),
     ...(r.some(x => x.allow?.length) ? ['the allowlist, shot by shot (the caret strips and the iOS keyboard band):', ...r.filter(x => x.allow?.length).map(x => `  ${x.shot}: ${x.allow.map(a => `[${a.rect.join(', ')}] ${a.reason.split(',')[0]}`).join('; ')}`)] : []),
     ...conformEvidence(conform)];
   return missingNames.length || bad.length || !r.length || !conformSame(conform) || unseen.length || own.length || shownEarly.length || notShown.length || shownBefore.length || appNotShown.length ? fail(...evidence) : pass(...evidence);
@@ -568,44 +568,15 @@ export const SLOT_HOSTS = ['web-js', 'web-wasm', 'linux', 'macos', 'ios', 'andro
 export const OPTIONAL_HOSTS = ['windows', 'tvos'];
 const skipped = OPTIONAL_HOSTS.map(h => `  ${h}: skipped (no runner on this machine)`);
 
-/** The web's wasm build of the agent's app (`bun host/web/build.mjs
- * <app> --wasm`, into this dist: EXACT_WASM_DIST, or the gate's own). */
-const wasmDist = () => resolve(process.env.EXACT_WASM_DIST ?? join(ROOT, 'target', 'stage12-gate', 'web-wasm-dist'));
-
-/** scale-check's drive on `host`, the web's two targets told apart: each
- * from a dist built for it, refused when the dist is the other's. */
-export function drivePlan(host, plan, png, steps = [], app = null, driver = scaleDrive) {
-  if (host === 'web-js') {
-    if (!jsTargetBuild(webDist())) throw new Error(`the web dist ${webDist()} is not a JS-target build (bun host/web/build.mjs <app>)`);
-    return driver('web', plan, png, steps, app);
-  }
-  if (host === 'web-wasm') {
-    // library-gate's own artifact (apps/library-gate/web, theme2 13:47): a
-    // wasm links what its own plan uses, so another app's refuses a cell
-    // using what that app doesn't (Unlinked).
-    const dist = wasmDist(), build = `EXACT_APP_DIR=${LIBRARY_GATE} EXACT_WEB_DIST=${dist} bun host/web/build.mjs library-gate --wasm`;
-    if (!existsSync(join(dist, '.exact-build.json')) || jsTargetBuild(dist)) throw new Error(`${dist} is not a wasm build (${build})`);
-    if (JSON.parse(readFileSync(join(dist, '.exact-build.json'), 'utf8')).app?.id !== 'com.exact.library-gate') throw new Error(`${dist} is not library-gate's wasm build (${build})`);
-    const was = { dist: process.env.EXACT_WEB_DIST, app: process.env.EXACT_APP_DIR };
-    Object.assign(process.env, { EXACT_WEB_DIST: dist, EXACT_APP_DIR: LIBRARY_GATE });
-    try { return driver('web', plan, png, steps, app); } finally {
-      for (const [k, v] of [['EXACT_WEB_DIST', was.dist], ['EXACT_APP_DIR', was.app]]) if (v === undefined) delete process.env[k]; else process.env[k] = v;
-    }
-  }
-  return driver(host, plan, png, steps, app);
-}
-const LIBRARY_GATE = join(ROOT, 'apps/library-gate');
-
 /** apps/library-gate's plan, compiled from a copy without its app.json (a
  * host takes a plan of its own app's id, or of none), inside the checkout so
  * `@exact/*` resolves through its node_modules, as stage 11's gate does. */
 function libraryPlan(dir) {
   const app = join(dir, 'app');
   mkdirSync(app, { recursive: true });
-  for (const f of ['app.contract', 'app.tamber']) writeFileSync(join(app, f), readFileSync(join(LIBRARY_GATE, f)));
+  for (const f of ['app.contract', 'app.forma']) writeFileSync(join(app, f), readFileSync(join(LIBRARY_GATE, f)));
   const plan = join(dir, 'library-gate.plan');
-  const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', plan]);
-  return compiled(r, plan);
+  return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
 
 /** The last compile's errors, which a line that needed the plan says. */
@@ -794,7 +765,7 @@ const box = (L, id) => {
 };
 const right = (L, id) => { const n = box(L, id); return n.x + n.w; };
 
-/** A design server for `dir` (`contract tamber serve --stdio`, as the dev
+/** A design server for `dir` (`contract forma serve --stdio`, as the dev
  * loops run it), asked one request at a time. A request it doesn't answer
  * in `deadline` ms, an answer it can't tie to a request, or the server's
  * exit or failure ends every request still waiting, and every later one,
@@ -802,7 +773,7 @@ const right = (L, id) => { const n = box(L, id); return n.x + n.w; };
 function designServer(dir, deadline = 300_000) {
   // Its own process group, so closing it ends cargo's child too, which
   // holds the design's lock.
-  const child = spawn('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'serve', '--stdio', dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+  const child = spawn('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'serve', '--stdio', dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
   const waiting = new Map();
   let buf = '', next = 0, err = '', closed = null;
   const end = why => {
@@ -850,10 +821,9 @@ function restylePlan(dir, design = null) {
   const app = join(dir, 'app');
   mkdirSync(app, { recursive: true });
   writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
-  writeFileSync(join(app, 'app.tamber'), design ?? readFileSync(join(LIBRARY_GATE, 'app.tamber')));
+  writeFileSync(join(app, 'app.forma'), design ?? readFileSync(join(LIBRARY_GATE, 'app.forma')));
   const plan = join(dir, 'library-gate.plan');
-  const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', plan]);
-  return compiled(r, plan);
+  return compiled(buildPlan(join(app, 'app.contract'), plan), plan);
 }
 
 /** Each case through the design server on a copy of library-gate: `propose`
@@ -863,7 +833,7 @@ function restylePlan(dir, design = null) {
 export async function restyleWrites(dir, list = RESTYLE) {
   const work = join(dir, 'server');
   restylePlan(work);
-  const design = join(work, 'app', 'app.tamber'), original = readFileSync(design, 'utf8');
+  const design = join(work, 'app', 'app.forma'), original = readFileSync(design, 'utf8');
   const server = designServer(join(work, 'app'));
   const client = 'agent:stage12-gate';
   try {
@@ -920,8 +890,8 @@ export async function restyle(opts) {
   const broken = Object.entries(plans).filter(([, p]) => !p).map(([k]) => k);
   if (broken.length) return fail(`library-gate did not compile: ${broken.join(', ')}`, compileSaid);
   const schema = JSON.parse(readFileSync(join(ROOT, 'kernel/tables/schema.json'), 'utf8'));
-  const irFile = join(dir, 'base', 'tamber.json');
-  if (!run('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'ir', join(dir, 'base', 'app'), '-o', irFile]).ok) return fail('library-gate\'s design did not read (contract tamber ir)');
+  const irFile = join(dir, 'base', 'forma.json');
+  if (!run('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'ir', join(dir, 'base', 'app'), '-o', irFile]).ok) return fail('library-gate\'s design did not read (contract forma ir)');
   const ir = JSON.parse(readFileSync(irFile, 'utf8'));
   const overrides = overridesOf(ir, []);
   // A name's length on a host: a px token's, or the base name a package
@@ -1073,7 +1043,7 @@ export function readExact(host, exact, plans, app, drive = (plan, ids) => driveP
  * design), built inside this checkout so the packages resolve. */
 export function s13cPlan(name) {
   const c = exactCases().find(x => x.name === name);
-  const design = readFileSync(join(LIBRARY_GATE, 'app.tamber'), 'utf8').trimEnd();
+  const design = readFileSync(join(LIBRARY_GATE, 'app.forma'), 'utf8').trimEnd();
   const lines = c.set.map(t => (c.param ? null : `  ${t.name}${t.kind === 'color' ? '' : `: ${t.kind}`} = ${t.value}`)).filter(Boolean);
   return restylePlan(join(ROOT, 'target', 'stage12-gate', 'boot', name.replace(/\W+/g, '-')), `${design}\n${lines.join('\n')}\n`);
 }
@@ -1086,15 +1056,15 @@ export function mutationFails(dir, host = 'linux', drive = undefined) {
   if (!text.includes(MUTATION.from)) throw new Error(`${MUTATION.file} no longer says ${MUTATION.from}: the mutation needs another use`);
   writeFileSync(file, text.replace(MUTATION.from, MUTATION.to));
   const c = exactCases().find(x => x.name === MUTATION.case);
-  const design = readFileSync(join(LIBRARY_GATE, 'app.tamber'), 'utf8').trimEnd();
+  const design = readFileSync(join(LIBRARY_GATE, 'app.forma'), 'utf8').trimEnd();
   const lines = c.set.map(t => `  ${t.name}${t.kind === 'color' ? '' : `: ${t.kind}`} = ${t.value}`);
-  const plan = (name, tamber) => {
+  const plan = (name, forma) => {
     const app = join(dir, name, 'app');
     mkdirSync(app, { recursive: true });
     writeFileSync(join(app, 'app.contract'), readFileSync(join(LIBRARY_GATE, 'app.contract')));
-    writeFileSync(join(app, 'app.tamber'), tamber);
+    writeFileSync(join(app, 'app.forma'), forma);
     const out = join(dir, name, 'library-gate.plan');
-    const r = run('cargo', ['run', '-q', '-p', 'contract', '--', 'build', join(app, 'app.contract'), '-o', out]);
+    const r = buildPlan(join(app, 'app.contract'), out);
     if (!r.ok) throw new Error(`the mutated library-gate did not compile (${name}): ${r.out.slice(-400)}`);
     return out;
   };
@@ -1289,7 +1259,7 @@ export function durationMs(text) {
 }
 
 /** The slot check's time (the lead's 10:15Z ask; rt1's stage 12 D2 tests in
- * tamber_serve_slots.rs): the clone's design alone, and with the real
+ * forma_serve_slots.rs): the clone's design alone, and with the real
  * @exact/cards and @exact/actions (an ignored test, which needs this
  * checkout's node_modules), each a touched name's check and every chain's,
  * under 10 ms. */
@@ -1410,11 +1380,11 @@ export function lines(opts) {
     ['anatomy', 'C\'s compiler tests: every anatomy, slot, library-literal, library-platform and library-control refusal with its span', () => {
       // C's own suites (reload1's stage 12 C), run by name.
       // And a library package's params held in range in every scale column,
-      // the terminal's included (tamber_base_expression's column ranges).
-      const r = run('cargo', ['test', '-q', '-p', 'contract', '--test', 'it', '--', 'anatomy::', 'anatomy_slot::', 'library_rules::', 'library_packages::', 'tamber_base_expression::']);
+      // the terminal's included (forma_base_expression's column ranges).
+      const r = run('cargo', ['test', '-q', '-p', 'contract', '--test', 'it', '--', 'anatomy::', 'anatomy_slot::', 'library_rules::', 'library_packages::', 'forma_base_expression::']);
       const counts = [...r.out.matchAll(/test result: (\w+)\. (\d+) passed; (\d+) failed/g)];
       const passed = counts.reduce((n, m) => n + Number(m[2]), 0), failed = counts.reduce((n, m) => n + Number(m[3]), 0);
-      const said = `contract tests anatomy::, anatomy_slot::, library_rules::, library_packages::, tamber_base_expression::: ${passed} passed, ${failed} failed`;
+      const said = `contract tests anatomy::, anatomy_slot::, library_rules::, library_packages::, forma_base_expression::: ${passed} passed, ${failed} failed`;
       return r.ok && passed > 0 && failed === 0 ? pass(said) : fail(said, r.out.trim().split('\n').slice(-4).join(' / ').slice(0, 400));
     }],
     ['slot-rendered', 'Every variant cell of apps/library-gate renders its slot\'s marker, both glyphs, on every required host', () => slotRendered(opts)],

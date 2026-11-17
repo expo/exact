@@ -60,10 +60,13 @@ final class AgentLibrary {
 
     func asset(_ id: String) -> Asset? { visible.contains(id) ? assets.first { $0.id == id } : nil }
 
-    /// The newest `limit` the app may read.
-    func newest(_ limit: Int) -> [Asset] {
+    /// Of what the app may read, newest first with the id ordering one
+    /// date, at most `limit` that sort after `after`, and whether more do.
+    func page(_ limit: Int, after: PageCursor.Key?) -> (assets: [Asset], more: Bool) {
         let seen = visible
-        return Array(assets.filter { seen.contains($0.id) }.sorted { $0.created > $1.created }.prefix(limit))
+        var rest = assets.filter { seen.contains($0.id) }.sorted { ($0.created, $0.id) > ($1.created, $1.id) }
+        if let after { rest = rest.filter { ($0.created, $0.id) < (after.date ?? -.infinity, after.id) } }
+        return (Array(rest.prefix(limit)), rest.count > limit)
     }
 
     /// An add: the file, kept in `directory`, joins the library at the

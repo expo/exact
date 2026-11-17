@@ -74,6 +74,32 @@ final class ScrollAnchoringMacTests: XCTestCase {
         XCTAssertEqual(clip.bounds.minY, 500, "the end, followed")
     }
 
+    /// An authored scroll owns a follower until it settles (LLP 1070.000 §15,
+    /// expo/exact#370). Turning the follow on in the batch that writes a smooth
+    /// `scrollTop` does not put the port at the end first, and the write holds
+    /// the scroller until its animation lands.
+    func testTurningTheFollowOnWithASmoothWriteDoesNotJumpToTheEndFirst() {
+        let (p, clip) = fixture(top: 200)
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll", "scroll_behavior": "smooth"]]]))
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["scrollFollowEnd": "true", "scrollTop": "100"]]]))
+        XCTAssertEqual(clip.bounds.minY, 200, "no jump to the end ahead of the write")
+        XCTAssertNotNil(p.views[1]!.scrollEnd?.elementAnimation, "the write owns the scroller")
+    }
+
+    /// While a reveal runs, rows arriving at a followed end are not followed.
+    func testARunningRevealOwnsAFollowedScroller() {
+        let (p, clip) = fixture(top: 448, followEnd: true)
+        let end = ScrollEnd()
+        p.views[1]!.scrollEnd = end
+        end.elementAnimation = UUID()
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["height": 100.0]]] + rows(header: 100)))
+        XCTAssertEqual(clip.bounds.minY, 448, "the reveal's, not the follow's")
+        end.elementAnimation = nil
+        clip.scroll(to: NSPoint(x: 0, y: 500))
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["height": 148.0]]] + rows(header: 148)))
+        XCTAssertEqual(clip.bounds.minY, 548, "rested at the end: followed again")
+    }
+
     /// Past an edge, a correction that asks for no more than that edge is left
     /// to AppKit's rubber band, which settles there (a chat's end jittered as
     /// each batch clamped the bounce); one that moves the content is written.

@@ -627,6 +627,25 @@ pub struct Input {
     pointers: Vec<PointerContact>,
     #[data(skip)]
     pointer_edges: Vec<PointerEdge>,
+    // Whether the game has called `pad` (`reads_pads`).
+    #[data(skip)]
+    pads_read: PadsRead,
+}
+/// Set by `Input::pad`; never saved, never part of the world.
+#[derive(Default)]
+struct PadsRead(std::sync::atomic::AtomicBool);
+impl Clone for PadsRead {
+    fn clone(&self) -> Self {
+        Self(self.get().into())
+    }
+}
+impl PadsRead {
+    fn get(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn set(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 impl Input {
     /// Events produced by the preceding tick, in emission order for this type.
@@ -794,6 +813,19 @@ impl Input {
         self.keys.binary_search_by(|k| k.as_str().cmp(code)).is_ok()
             || pad::pad_index(code).is_some_and(|b| self.pads.iter().any(|p| p.down(b)))
     }
+    /// Whether the world reads pads: an action or a rebinding names a pad
+    /// button or a stick, or the game has called `pad`.
+    pub(crate) fn reads_pads(&self) -> bool {
+        let pad = |keys: &[String]| keys.iter().any(|k| pad::pad_index(k).is_some());
+        self.pads_read.get()
+            || self.bindings.iter().any(|b| pad(&b.keys))
+            || self.actions().entries.iter().any(|a| {
+                pad(&a.keys)
+                    || a.stick
+                        .as_ref()
+                        .is_some_and(|s| !s.pads.is_empty() || s.keys.iter().any(|k| pad(k)))
+            })
+    }
     /// The action's keys after `World::rebind` (a stick's are never rebound).
     fn keys_of<'a>(&'a self, a: &'a Action) -> &'a [String] {
         self.bindings
@@ -912,6 +944,11 @@ impl Input {
     }
     /// A connected pad's state as the host last reported it.
     pub fn pad(&self, index: u32) -> Option<PadState> {
+        self.pads_read.set();
+        self.pad_state(index)
+    }
+    /// `pad` for the host and the agent, which are not the world reading it.
+    pub(crate) fn pad_state(&self, index: u32) -> Option<PadState> {
         self.pads.iter().find(|p| p.index == index).copied()
     }
     /// The agent's `state` input record: the declarations, the devices held

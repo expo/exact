@@ -2,7 +2,7 @@
 
 use exact_kernel::StyleId;
 use exact_plan::{Opcode, Plan};
-use exact_runner::vm::instructions;
+use exact_runner::vm::transitive_instructions;
 
 /// Source literals parsed by the kernel for a bound presence declaration.
 /// A held value may write no CSS (`none`); an unset value clears its row.
@@ -21,7 +21,7 @@ fn named_values(
         held: Default::default(),
         unsets: Vec::new(),
     };
-    let strings = instructions(code)
+    let strings = transitive_instructions(plan, code)
         .filter_map(|i| i.ok().filter(|i| i.op == Opcode::Str))
         .map(|i| plan.str(exact_plan::StrId(i.args[0] as u32)));
     for value in strings {
@@ -34,8 +34,9 @@ fn named_values(
     out
 }
 
-pub fn layout_transitions(plan: &Plan, code: &[u8]) -> PresenceValues {
-    named_values(plan, code, StyleId::LayoutTransition, layout_transition)
+/// Map a runtime value through the transition grammar, journaling invalid values.
+pub fn layout_transition_map(parser: &str, view: &str, say: &str) -> String {
+    format!("v=>{{const t=({parser})(v);if(t)return t.css;{say}(`view ${{{view}}}: invalid layout-transition value ${{JSON.stringify(v)}}; unset`);return null}}")
 }
 
 pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues {
@@ -57,7 +58,36 @@ pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues 
     })
 }
 
+/// The custom property a route's part is carried in (LLP 1013.001 D1).
+pub fn route_part_property(row: StyleId) -> &'static str {
+    match row {
+        StyleId::ViewTransitionNew => "--exact-view-transition-new",
+        _ => "--exact-view-transition-old",
+    }
+}
+
+/// A bound route part's values: each literal's animations as CSS, `none`
+/// written as itself (the author's cut, which the platform's transition is
+/// not).
+pub fn route_parts(plan: &Plan, code: &[u8], row: StyleId) -> PresenceValues {
+    named_values(plan, code, row, |value| {
+        let mut style = exact_kernel::StyleProps::default();
+        style
+            .set_dynamic(row, &exact_kernel::StyleValue::Text(value.into()))
+            .ok()?;
+        let animations = match row {
+            StyleId::ViewTransitionNew => &style.rare.view_transition_new,
+            _ => &style.rare.view_transition_old,
+        };
+        Some(Some(match animations.0.is_empty() {
+            true => "none".to_string(),
+            false => exact_web::css::animations_css(animations, false),
+        }))
+    })
+}
+
 /// The kernel's CSS for a bound layout transition, or no declaration.
+#[cfg(test)]
 pub fn layout_transition(value: &str) -> Option<Option<String>> {
     let mut style = exact_kernel::StyleProps::default();
     style
@@ -74,9 +104,8 @@ pub fn layout_transition(value: &str) -> Option<Option<String>> {
     )
 }
 
-/// The JS function that maps a bound `-exact-{name}` value to the kernel's
-/// declaration. A value the binding's code does not name clears the row with a
-/// diagnostic, so the target needs no CSS parser of its own.
+/// Resolve a bound exit through the plan's named keyframes. An unlisted value
+/// clears the row with a diagnostic.
 pub fn declaration_map(values: &PresenceValues, view: &str, say: &str, name: &str) -> String {
     let held = values
         .held

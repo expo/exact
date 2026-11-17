@@ -95,7 +95,7 @@ impl Engine {
             .validate()
             .map_err(|_| EngineError::InvalidAnimation)?;
         let now = self.sample_time();
-        let pend = self.start_on_frame.then_some(now);
+        let pend = self.holds().then_some(now);
         // A timeline-bound play keeps its held time: the timeline, not the
         // row's play state, holds it (LLP 1057.003 D2).
         let bound = self.timeline_bound(node);
@@ -334,7 +334,7 @@ impl Engine {
         exit.validate_ending()
             .map_err(|_| EngineError::InvalidAnimation)?;
         let (now, dark) = (self.sample_time(), self.dark_of(node));
-        let pending = self.start_on_frame.then_some(now);
+        let pending = self.holds().then_some(now);
         for a in &exit.0 {
             for p in a.keyframes.properties() {
                 self.dirty.insert((node, p));

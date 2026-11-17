@@ -13,7 +13,9 @@ type HostData =
 /// The Rust half, placed (LLP 1027.002 D1): built on its owner from a fresh
 /// `app_data()` when placed on a worker, the instance itself on `main`.
 fn placed_rust() -> update_lab_data::Placed<AppData> {
-    update_lab_data::Placed::built(app_data(), RUST_PLACEMENT, |_| Box::new(|| Ok(app_data())))
+    update_lab_data::Placed::built(app_data(), RUST_PLACEMENT, |_, _| {
+        Box::new(|| Ok(app_data()))
+    })
 }
 fn lab_data() -> HostData {
     update_lab_data::compose(

@@ -20,7 +20,8 @@ game/.shells/
 
 # Declarations the dev producer writes beside each app.ts for an editor.
 apps/*/app.contract.d.ts
-# The design server's lock and journal (contract tamber serve, LLP 1121 D13).
+scripts/fixtures/*/app.contract.d.ts
+# The design server's lock and journal (contract forma serve, LLP 1121 D13).
 apps/*/.exact/
 scripts/fixtures/*/.exact/
 # The Windows package host/windows/build.mjs writes (game/ ignores its own).
@@ -68,6 +69,7 @@ apps/expose/local.ts
 
 # The private LLP corpus (expo/exact-llp), cloned here where someone has it.
 /llp
+/host/apple/Sources/ExactCore/GeneratedBatch.swift
 # The Snapback client and Harmony, which links it, and Excord are kept outside this repository.
 /snapback4/
 /apps/harmony/

@@ -22,9 +22,22 @@ pub(super) fn place(
     if images.is_empty() {
         return;
     }
-    let left = l.padding.left + l.border.left;
-    let top = l.padding.top + l.border.top;
-    let width = (l.size.width - left - l.padding.right - l.border.right).max(0.0);
+    let mut left = l.padding.left + l.border.left;
+    let mut top = l.padding.top + l.border.top;
+    let mut width = (l.size.width - left - l.padding.right - l.border.right).max(0.0);
+    // A flex or grid text's lines are its anonymous item's: they wrap at
+    // the item's width and stand where the item went, as its host draws them
+    // (`Kernel::text_line_offset`, `Kernel::text_item_box`). A fragmented
+    // paragraph's fragments carry the vertical placement instead.
+    if let Some(inset) = arena.inset(slot) {
+        if !arena.frag.fragments.contains_key(&slot) {
+            top += inset.text_offset;
+        }
+        if let Some(item) = inset.text_item {
+            left += item.x;
+            width = item.width;
+        }
+    }
     let mut origins = Vec::with_capacity(images.len());
     // Columns and text flowed around exclusions lay its lines out apart:
     // where a box went there is not asked, and its image shows nothing
@@ -70,6 +83,8 @@ pub(super) fn place(
         arena.set_content(image, geometry.size);
         let (padding, border) = geometry.inset;
         let inset = Some(crate::id::BoxInset {
+            text_offset: 0.0,
+            text_item: None,
             padding,
             border,
             cover: [0.0; 4],

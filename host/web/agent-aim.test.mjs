@@ -1,8 +1,8 @@
 // @ref LLP 1012 §1 `tap` — a tap addressed by id presses what it names (scripts/agent-aim.mjs): a row with a press of
 // its own is clicked beside the link card at its middle, a box without one never presses the control inside it, and
 // `tap <target> at <x> <y>` keeps a point's semantics (the Bluesky clone's likes on real people's posts, 2026-10-09).
-import { test, expect } from 'bun:test';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -75,10 +75,13 @@ const SHEET = `component SheetFixture
             button "Gentler" press=gentle testId="gentler"
 `;
 
-const fixtures = new Map();
+const fixtures = new Map(), dirs = [];
+afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
 const built = (source = CONTRACT) => {
   if (!fixtures.has(source)) fixtures.set(source, (async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'exact-aim-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+    const dir = mkdtempSync(join(tmpdir(), 'exact-aim-'));
+    dirs.push(dir);
+    const contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
     writeFileSync(contract, source);
     const compile = spawnSync(compiler, ['build', contract, '-o', plan], { encoding: 'utf8' });
     if (compile.status !== 0) throw new Error(compile.stderr);

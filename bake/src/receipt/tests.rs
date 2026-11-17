@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 #[test]
 fn package_extensions_follow_placed_library_components() {
-    let dir = std::env::temp_dir().join(format!("exact-library-extensions-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-library-extensions-{}", std::process::id())),
+    );
     let put = |path: &str, text: &str| {
         let path = dir.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -90,10 +92,10 @@ fn package_extensions_follow_placed_library_components() {
 }
 
 fn check_package_selection(name: &str, source: &str, expected: Result<Value, &str>) {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-package-selection-{name}-{}",
         std::process::id()
-    ));
+    )));
     let put = |path: &str, value: &str| {
         let path = dir.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -166,7 +168,9 @@ fn package_selection_keeps_event_only_packages() {
 #[test]
 #[cfg(unix)]
 fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
-    let dir = std::env::temp_dir().join(format!("exact-plist-sources-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-plist-sources-{}", std::process::id())),
+    );
     let put = |path: &str, text: &str| {
         let path = dir.join(path);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -204,8 +208,9 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         channel: String::new(),
         origin: None,
         activate: "next-launch".into(),
+        check_interval: None,
         target: String::new(),
-        embedded: Value::Null,
+        embedded: json!({"version":"2.3.4","buildNumber":"56"}),
         reach: Value::Null,
         painter: None,
         game: false,
@@ -220,6 +225,8 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         &Default::default(),
     )
     .unwrap();
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     let result = crate::bun()
         .args([
             "--eval",
@@ -238,7 +245,7 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         assert.ok(graph.contractSources.every(p => p.endsWith('.contract')));
     "#,
         ])
-        .arg(&dir)
+        .arg(&*dir)
         .current_dir(repo)
         .output()
         .unwrap();
@@ -260,7 +267,7 @@ fn a_plan_graph_names_the_plans_own_format() {
         .unwrap()
         .encode();
     let inputs = json!({"formatVersion": 1, "formatDigest": "0000000000000001", "kernelSchema": "0000000000000002"});
-    let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin").unwrap();
+    let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin", Path::new("")).unwrap();
     let requires = &graph["artifacts"][0]["requires"];
     assert_eq!(requires["formatVersion"], json!(exact_plan::FORMAT_VERSION));
     assert_eq!(
@@ -268,6 +275,89 @@ fn a_plan_graph_names_the_plans_own_format() {
         json!(format!("{:016x}", exact_plan::FORMAT_DIGEST))
     );
     assert_eq!(requires["kernelSchema"], json!("0000000000000007"));
+}
+
+/// A source's signature names an enum's members, in parameters and nested
+/// results alike, so an installed source that answers the old vocabulary is
+/// not admitted under a plan that refuses it. Their order and an unrelated
+/// declaration do not change it.
+#[test]
+fn a_source_signature_names_its_enum_members() {
+    let sources = |members: &[&str], unrelated: bool| {
+        let mut builder = exact_plan::builder::PlanBuilder::new(0, 0);
+        if unrelated {
+            let number = builder.primitive(exact_plan::TypeKind::Number);
+            builder.record("Other", &[("n", number)]);
+        }
+        let members: Vec<String> = members.iter().map(|m| m.to_string()).collect();
+        let state = builder.string_enum(&members);
+        let list = builder.list(state);
+        let result = builder.record("Result", &[("state", state), ("seen", list)]);
+        builder.source("read", &[state], result);
+        let plan = builder.finish().unwrap().encode();
+        plan_graph(&plan, &json!({}), "aarch64-apple-darwin", Path::new("")).unwrap()["sources"]
+            ["read"]
+            .clone()
+    };
+    let old = sources(&["old", "common"], false);
+    assert_eq!(
+        old["params"][0],
+        json!({"kind":"String","members":["common","old"]})
+    );
+    assert_eq!(
+        old["result"]["fields"][1]["type"]["item"],
+        json!({"kind":"String","members":["common","old"]})
+    );
+    assert_ne!(old, sources(&["new", "common"], false));
+    assert_eq!(old, sources(&["common", "old"], true));
+    let mut plain = exact_plan::builder::PlanBuilder::new(0, 0);
+    let string = plain.primitive(exact_plan::TypeKind::String);
+    plain.source("read", &[string], string);
+    let plain = plain.finish().unwrap().encode();
+    let plain = plan_graph(&plain, &json!({}), "aarch64-apple-darwin", Path::new("")).unwrap();
+    assert_eq!(plain["sources"]["read"]["params"][0], json!("String"));
+}
+
+#[test]
+fn rust_plan_receipts_require_the_baked_wasmi_executor() {
+    let mut builder = exact_plan::builder::PlanBuilder::new(0, 0);
+    let number = builder.primitive(exact_plan::TypeKind::Number);
+    builder.source("count", &[], number);
+    let plan = builder.finish().unwrap();
+    let (root, _, _) = rust_fixture(&plan.encode());
+    std::fs::create_dir_all(root.join("linux/src")).unwrap();
+    let target = "x86_64-unknown-linux-gnu";
+    for (mode, host, expected) in [
+        ("off", "Swappable<App>\n", json!(["native", "wasmi"])),
+        ("wasm", "", json!(["native", "wasmi"])),
+        (
+            "tiered",
+            "Swappable<App>\n",
+            json!(["native", "native-dylib", "wasmi"]),
+        ),
+    ] {
+        std::fs::write(root.join("linux/src/lib.rs"), host).unwrap();
+        std::fs::write(
+            root.join("app.json"),
+            json!({"app":{"id":"com.exact.caltrain","name":"Test"},
+                "rust":{"mode":mode,"module":{"package":"test-logic"}}})
+            .to_string(),
+        )
+        .unwrap();
+        let manifest = Manifest::read(&root).unwrap();
+        let compat =
+            crate::compat::compatibility_id(&root, "linux", target, &manifest, Some("")).unwrap();
+        let graph = artifact_graph(&plan, &compat.inputs, &[], false, target).unwrap();
+        assert_eq!(
+            graph["artifacts"][0]["requires"]["executors"], expected,
+            "{mode}"
+        );
+        assert_eq!(
+            compat.inputs["store"]["acceptedKinds"],
+            json!(["plan", "assets", "wasm"])
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -282,7 +372,7 @@ fn loopback_callback_ports_retain_the_listener() {
         "http://[::1]:1455/auth/callback",
     ] {
         let inputs = json!({"grantCeiling": format!("auth.callback {callback}")});
-        let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin").unwrap();
+        let graph = plan_graph(&plan, &inputs, "aarch64-apple-darwin", Path::new("")).unwrap();
         assert!(
             graph["loads"]
                 .as_array()
@@ -301,7 +391,8 @@ fn loopback_callback_ports_retain_the_listener() {
 /// plan whose nodes the contract no longer compiles to gets none.
 #[test]
 fn a_development_bake_leaves_its_plans_source_map() {
-    let root = std::env::temp_dir().join(format!("exact-map-{}", std::process::id()));
+    let root =
+        crate::TempDir(std::env::temp_dir().join(format!("exact-map-{}", std::process::id())));
     let (app, out) = (root.join("app"), root.join("out"));
     std::fs::create_dir_all(&app).unwrap();
     std::fs::create_dir_all(&out).unwrap();
@@ -407,6 +498,46 @@ fn a_plan_requires_the_typescript_runtime_its_inputs_carry() {
         json!(crate::compat::TYPESCRIPT_RUNTIME)
     );
     assert_eq!(requires(json!({})), Value::Null);
+}
+
+/// A plan requires the purposes and the languages the installed Info.plist
+/// names, so a bundle that changes either waits for a binary that has them.
+#[test]
+fn a_plan_requires_the_plist_strings_its_inputs_carry() {
+    let plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    let requires = |inputs: Value| {
+        let graph = artifact_graph(&plan, &inputs, &[], false, "aarch64-apple-ios").unwrap();
+        graph["artifacts"][0]["requires"].clone()
+    };
+    let languages = json!({"base": "en", "locales": ["en", "fr"]});
+    let both = requires(json!({"grantPurposes": "ab", "localizations": languages}));
+    assert_eq!(both["grantPurposes"], "ab");
+    assert_eq!(both["localizations"], languages);
+    let neither = requires(json!({}));
+    assert_eq!(neither["grantPurposes"], Value::Null);
+    assert_eq!(neither["localizations"], Value::Null);
+}
+
+/// A TypeScript module pair requires exactly the binary's TypeScript grants
+/// and its prelude's runtime, as a Rust module requires its own.
+#[test]
+fn a_typescript_pair_requires_its_grants_and_runtime() {
+    let plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    let inputs = json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2});
+    let assets = ["typescript/app.hbc", "typescript/app.module.json"]
+        .map(|name| json!({"name": name, "sha256": "00", "bytes": 1}));
+    let graph = artifact_graph(&plan, &inputs, &assets, false, "aarch64-apple-ios").unwrap();
+    for row in &graph["artifacts"].as_array().unwrap()[1..] {
+        assert_eq!(
+            row["requires"],
+            json!({"javascriptGrants": "net.fetch https://x/", "typescriptRuntime": 2}),
+            "{row}"
+        );
+    }
 }
 
 /// LLP 1098 D8: the receipt says whether a node claims the media session.
@@ -532,9 +663,9 @@ fn a_no_delivery_development_bake_names_its_gpu_dev_module() {
     .is_none());
 }
 
-fn rust_fixture(plan: &[u8]) -> (PathBuf, Value, Value) {
+fn rust_fixture(plan: &[u8]) -> (crate::TempDir, Value, Value) {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-rust-bake-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
@@ -542,13 +673,14 @@ fn rust_fixture(plan: &[u8]) -> (PathBuf, Value, Value) {
             .unwrap()
             .as_nanos(),
         NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    )));
     // Parallel tests can observe the same clock tick. Each fixture owns
     // its directory exclusively, including cleanup after staging.
     std::fs::create_dir(&root).unwrap();
     std::fs::create_dir(root.join("input")).unwrap();
-    let inputs =
-        json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"","rustMode":"wasm"});
+    // The inputs a Rust cohort's compatibility gives (`compat.rs`).
+    let inputs = json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"",
+        "rustMode":"wasm","rustAbi":crate::compat::RUST_ABI});
     let module = b"\0asm\x01\0\0\0";
     let receipt = json!({"version":1,"kind":"rust","abi":crate::compat::RUST_ABI,"appId":inputs["app"],"grants":"",
             "target":"wasm32-unknown-unknown","executor":"wasm",
@@ -583,7 +715,7 @@ fn supplemental_rust_is_real_paired_bytes_with_executor_requirements() {
     }
     let graph = artifact_graph(&plan, &inputs, &cards, false, "aarch64-apple-ios").unwrap();
     for row in graph["artifacts"].as_array().unwrap() {
-        assert_eq!(row["requires"]["rustAbi"], 8);
+        assert_eq!(row["requires"]["rustAbi"], inputs["rustAbi"]);
         assert_eq!(row["requires"]["rustMode"], "wasm");
         assert_eq!(row["requires"]["rustTarget"], "wasm32-unknown-unknown");
     }
@@ -756,13 +888,19 @@ fn signed_release_requires_the_complete_real_supplemental_roster() {
     )
     .unwrap();
     for card in &cards {
-        receipt["envelope"]["assets"]
+        receipt["assets"]["assets"]
             .as_array_mut()
             .unwrap()
             .push(json!({
                 "name":card["name"],"sha256":card["sha256"],"bytes":card["bytes"],
-                "url":format!("../../blobs/{}",card["sha256"].as_str().unwrap())}));
+                "url":format!("./{}",card["sha256"].as_str().unwrap())}));
     }
+    // The head names the grown index by its canonical bytes.
+    let index = exact_update::canonical_bytes(&receipt["assets"].to_string()).unwrap();
+    receipt["envelope"]["assets"] = json!({
+        "url": format!("../../blobs/{}", exact_update::sha256_hex(&index)),
+        "sha256": exact_update::sha256_hex(&index), "bytes": index.len(),
+        "count": receipt["assets"]["assets"].as_array().unwrap().len()});
     // A fresh process-local test key: no publisher's private key is stored.
     let canonical = exact_update::canonical_bytes(&receipt["envelope"].to_string()).unwrap();
     let output = crate::bun().args(["-e", r#"
@@ -797,14 +935,14 @@ fn signed_release_requires_the_complete_real_supplemental_roster() {
 #[test]
 #[cfg(unix)]
 fn a_masked_svg_image_loads_the_svg_island_module() {
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-bake-svg-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
-    ));
+    )));
     std::fs::create_dir_all(root.join("assets/sponsors")).unwrap();
     let art = "<path d=\"M0 0H5V5H0Z\" fill=\"#F2545B\"/>";
     let masked = format!(
@@ -821,7 +959,9 @@ fn a_masked_svg_image_loads_the_svg_island_module() {
         .unwrap();
     let manifest = Manifest::read(&root).unwrap();
     let loads = |root: &Path| {
-        let cards = asset_cards(root, &root.join("out"), &manifest).unwrap();
+        let cards = asset_cards(root, &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0;
         let pictures = asset_islands(root, &cards);
         artifact_graph(&plan, &json!({}), &cards, pictures, "aarch64-apple-ios").unwrap()["loads"]
             .clone()
@@ -839,14 +979,14 @@ fn a_masked_svg_image_loads_the_svg_island_module() {
 #[test]
 #[cfg(unix)]
 fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
-    let root = std::env::temp_dir().join(format!(
+    let root = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-bake-assets-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
-    ));
+    )));
     std::fs::create_dir_all(root.join("assets")).unwrap();
     std::fs::create_dir_all(root.join("deck/nested")).unwrap();
     std::fs::write(root.join("assets/image.png"), b"image").unwrap();
@@ -855,7 +995,9 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
         std::fs::write(root.join(folder).join(".DS_Store"), b"Bud1").unwrap();
     }
     let manifest = Manifest::read(&root).unwrap();
-    let cards = asset_cards(&root, &root.join("out"), &manifest).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios")
+        .unwrap()
+        .0;
     assert_eq!(
         cards,
         vec![
@@ -863,26 +1005,147 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
             json!({"name":"deck/nested/index.html","sha256":hash(b"deck"),"bytes":4}),
         ]
     );
+    assert_eq!(
+        asset_cards(&root.join("absent/.."), &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0,
+        cards
+    );
     std::fs::write(root.join("assets/two words.png"), b"space").unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate: the asset name assets/two words.png is not portable"));
     std::fs::remove_file(root.join("assets/two words.png")).unwrap();
     std::fs::write(root.join("outside"), b"must not be embedded").unwrap();
     std::os::unix::fs::symlink("../outside", root.join("assets/escape")).unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate"));
+    std::fs::remove_file(root.join("assets/escape")).unwrap();
+    std::fs::create_dir(root.join("outside-dir")).unwrap();
+    std::fs::write(root.join("outside-dir/file"), b"outside").unwrap();
+    for target in ["../outside-dir", "../missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets/nested")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets/nested")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("assets")).unwrap();
+    for target in ["outside-dir", "missing"] {
+        std::os::unix::fs::symlink(target, root.join("assets")).unwrap();
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+            .unwrap_err()
+            .contains("bake asset gate"));
+        std::fs::remove_file(root.join("assets")).unwrap();
+    }
+    std::fs::remove_dir_all(root.join("deck")).unwrap();
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
+        .unwrap()
+        .0
+        .is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "async lane: inventories a 392 MiB asset tree"]
+fn a_large_embedded_roster_hashes_each_file_without_a_tree_reply() {
+    let root = crate::TempDir(std::env::temp_dir().join(format!(
+        "exact-bake-large-assets-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )));
+    std::fs::create_dir_all(root.join("assets")).unwrap();
+    let mut expected = Vec::new();
+    // Base64 for this tree exceeds the helper's 512 MiB reply buffer.
+    for index in 0..7 {
+        let bytes = vec![index as u8; 56 << 20];
+        let name = format!("assets/{index}.bin");
+        std::fs::write(root.join(&name), &bytes).unwrap();
+        expected.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios");
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(cards.unwrap().0, expected);
+}
+
+/// A baked texture's three files: a Mac's roster holds its BC payload, an
+/// iPhone's its ASTC payload, the web's all three. An authored `.tex` with no
+/// payloads stays everywhere. A roster that left a file out names the family
+/// it kept, which joins the cohort's inputs; one that left none out names none.
+#[test]
+fn a_native_roster_holds_only_its_platforms_texture_family() {
+    let root = crate::TempDir(std::env::temp_dir().join(format!(
+        "exact-bake-textures-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )));
+    std::fs::create_dir_all(root.join("assets/fox")).unwrap();
+    for name in [
+        "fox/0.tex",
+        "fox/0.bc.tex",
+        "fox/0.astc.tex",
+        "hand.tex",
+        "fox.model",
+    ] {
+        std::fs::write(root.join("assets").join(name), name).unwrap();
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let names = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .0
+            .iter()
+            .map(|card| card["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let family = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .1
+    };
+    assert_eq!(family("macos").as_deref(), Some("bc"));
+    assert_eq!(family("ios").as_deref(), Some("astc"));
+    assert_eq!(family("web"), None);
+    assert_eq!(
+        names("macos"),
+        ["assets/fox.model", "assets/fox/0.bc.tex", "assets/hand.tex"]
+    );
+    assert_eq!(
+        names("ios"),
+        [
+            "assets/fox.model",
+            "assets/fox/0.astc.tex",
+            "assets/hand.tex"
+        ]
+    );
+    for platform in ["web", "linux", "windows", "android"] {
+        assert_eq!(names(platform).len(), 5, "{platform}");
+    }
+    for name in ["fox/0.tex", "fox/0.bc.tex", "fox/0.astc.tex"] {
+        std::fs::remove_file(root.join("assets").join(name)).unwrap();
+    }
+    assert_eq!(family("ios"), None, "nothing left out: an older cohort's");
     std::fs::remove_dir_all(root).unwrap();
 }
 
 fn signed_fixture() -> (Compat, Value, Vec<u8>) {
     let raw = include_bytes!("../../../update/tests/it/fixtures/publisher/exact.json");
-    let head = Envelope::parse(raw).unwrap();
+    let index = include_bytes!("../../../update/tests/it/fixtures/publisher/assets.json");
+    let mut head = Envelope::parse(raw).unwrap();
+    head.read_index(index).unwrap();
     let plan = include_bytes!("../../../update/tests/it/fixtures/publisher/app.plan").to_vec();
     let key = include_str!("../../../update/tests/it/fixtures/publisher/caltrain-2026.pub").trim();
     let mut assets = head
-        .assets
+        .assets()
+        .unwrap()
         .iter()
         .map(|a| json!({"name":a.name,"sha256":a.sha256,"bytes":a.bytes}))
         .collect::<Vec<_>>();
@@ -893,6 +1156,7 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
         channel: head.stream.channel.clone(),
         origin: None,
         activate: "next-launch".into(),
+        check_interval: None,
         target: "aarch64-apple-ios".into(),
         reach: Value::Null,
         painter: None,
@@ -901,7 +1165,8 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
     };
     (
         compat,
-        json!({"envelope":serde_json::from_slice::<Value>(raw).unwrap()}),
+        json!({"envelope":serde_json::from_slice::<Value>(raw).unwrap(),
+            "assets":serde_json::from_slice::<Value>(index).unwrap()}),
         plan,
     )
 }
@@ -909,8 +1174,12 @@ fn signed_fixture() -> (Compat, Value, Vec<u8>) {
 #[test]
 fn a_production_sequence_is_bound_to_a_signed_matching_complete_bundle() {
     let (mut compat, receipt, plan) = signed_fixture();
+    compat.embedded["version"] = json!("2.3.4");
+    compat.embedded["buildNumber"] = json!("56");
     apply_release(&mut compat, &serde_json::to_vec(&receipt).unwrap(), &plan).unwrap();
     assert_eq!(compat.embedded["seq"], 1);
+    assert_eq!(compat.embedded["version"], "2.3.4");
+    assert_eq!(compat.embedded["buildNumber"], "56");
     assert_eq!(compat.embedded["genesis"], false);
     assert_eq!(compat.embedded["entryDigest"].as_str().unwrap().len(), 64);
     let baked = Baked::from_compat(&compat.to_json(), &plan).unwrap();
@@ -934,6 +1203,14 @@ fn a_production_sequence_is_bound_to_a_signed_matching_complete_bundle() {
     let (mut wrong, mut forged, _) = signed_fixture();
     forged["envelope"]["stream"]["seq"] = json!(41);
     assert!(apply_release(&mut wrong, &serde_json::to_vec(&forged).unwrap(), &plan).is_err());
+    // An index that is not the bytes the signed head names is refused.
+    let (mut wrong, mut forged, _) = signed_fixture();
+    forged["assets"]["assets"][0]["bytes"] = json!(1);
+    assert!(
+        apply_release(&mut wrong, &serde_json::to_vec(&forged).unwrap(), &plan)
+            .unwrap_err()
+            .contains("asset index")
+    );
     let (mut wrong, _, _) = signed_fixture();
     wrong.channel = "another".into();
     assert!(apply_release(&mut wrong, &serde_json::to_vec(&receipt).unwrap(), &plan).is_err());
@@ -944,7 +1221,9 @@ fn a_canvas_argument_the_gpu_product_does_not_declare_refuses_the_bake() {
     use exact_plan::surface_arguments::{record, record_len};
     const FIELDS: &[(&str, ())] = &[("count", ())];
     static RECORD: [u8; record_len("dice", FIELDS)] = record("dice", FIELDS);
-    let dir = std::env::temp_dir().join(format!("exact-surface-arguments-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-surface-arguments-{}", std::process::id())),
+    );
     std::fs::create_dir_all(&dir).unwrap();
     let product = dir.join("libdice_gpu.dylib");
     std::fs::write(
@@ -989,4 +1268,97 @@ fn a_canvas_argument_the_gpu_product_does_not_declare_refuses_the_bake() {
     gpu_product(&product, &mut none).unwrap();
     assert_eq!(surface_arguments(b.plan(), &none), Ok(()));
     std::fs::remove_dir_all(dir).unwrap();
+}
+#[test]
+fn apple_raster_icons_exclude_template_paths_and_sf_sources() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    b.icon("icon.two", "", "10 20 40 20", "", "two.svg");
+    b.icon("icon.sf", "heart", "0 0 24 24", "", "two.svg");
+    b.icon("icon.path", "", "0 0 24 24", "M0 0h24v24Z", "one.svg");
+    let plan = b.finish().unwrap();
+    assert_eq!(
+        super::apple_icons(&plan).unwrap(),
+        vec![serde_json::json!({"svg":"two.svg","viewBox":"10 20 40 20"})]
+    );
+}
+
+#[test]
+fn an_apple_raster_icon_requires_its_catalog_rendition() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    b.icon("icon.two", "", "10 20 40 20", "", "two.svg");
+    let plan = b.finish().unwrap();
+    let inputs = json!({"platform":"ios", "appleRasterIcons":{"two.svg":{"sha256":"red-blue","viewBox":"10 20 40 20"}}});
+    let graph = super::artifact_graph(&plan, &inputs, &[], false, "aarch64-apple-ios").unwrap();
+    assert_eq!(
+        graph["appleIcons"],
+        json!([{"svg":"two.svg","viewBox":"10 20 40 20"}])
+    );
+    assert_eq!(
+        graph["artifacts"][0]["requires"]["appleRasterIcons"],
+        inputs["appleRasterIcons"]
+    );
+}
+
+#[test]
+fn apple_raster_icons_include_literal_sources_and_nested_baked_values() {
+    use exact_runner::{DataError, DataSource, Value};
+    struct Glyph;
+    impl DataSource for Glyph {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::record(vec![Value::list(vec![Value::str(
+                "symbol:icon||0 0 24 24||baked.svg",
+            )])]))
+        }
+    }
+    let plan = contract::compile("shape Glyph\n  srcs: string[]\ncomponent App\n  resource glyph = glyph() as shape Glyph\n  view\n    column\n      image \"symbol:icon||0 0 24 24||literal.svg\"\n").unwrap();
+    assert!(plan.icons.is_empty());
+    let mut baked = contract::bake(plan, Glyph).unwrap();
+    let icons = super::apple_icons(&baked).unwrap();
+    assert_eq!(
+        icons,
+        vec![
+            json!({"svg":"baked.svg","viewBox":"0 0 24 24"}),
+            json!({"svg":"literal.svg","viewBox":"0 0 24 24"})
+        ]
+    );
+    let inputs = json!({"platform":"ios", "appleRasterIcons":{
+        "literal.svg":{"sha256":"literal"},"baked.svg":{"sha256":"baked"}
+    }});
+    let graph = super::artifact_graph(&baked, &inputs, &[], false, "aarch64-apple-ios").unwrap();
+    assert_eq!(graph["appleIcons"], json!(icons));
+    assert_eq!(
+        graph["artifacts"][0]["requires"]["appleRasterIcons"],
+        inputs["appleRasterIcons"]
+    );
+    let placeholder = Value::some(Value::str("symbol:icon||0 0 24 24||baked.svg")).to_bytes();
+    let offset = baked.data.len() as u32;
+    baked.data.to_mut().extend_from_slice(&placeholder);
+    baked.resources[0].placeholder_value = exact_plan::Bytes {
+        offset,
+        len: placeholder.len() as u32,
+    };
+    baked.resources[0].initial = exact_plan::Bytes { offset: 0, len: 0 };
+    assert_eq!(super::apple_icons(&baked).unwrap(), icons);
+}
+
+#[test]
+fn a_plan_requires_its_watch_policy_including_removal() {
+    let plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    for policy in [
+        json!({"state":[],"secrets":[]}),
+        json!({"state":["liked"],"secrets":["seed"]}),
+        json!({"state":["liked"],"secrets":[],"types":{"liked":"Bool"}}),
+    ] {
+        let graph = artifact_graph(
+            &plan,
+            &json!({"watchSync": policy}),
+            &[],
+            false,
+            "aarch64-apple-ios",
+        )
+        .unwrap();
+        assert_eq!(graph["artifacts"][0]["requires"]["watchSync"], policy);
+    }
 }

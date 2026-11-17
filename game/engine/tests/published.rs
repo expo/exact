@@ -265,3 +265,20 @@ fn status_change_beside_a_whole_backpack() {
     let per = start.elapsed().as_secs_f64() * 1e3 / rounds as f64;
     println!("record {bytes} bytes: {per:.2} ms per status change");
 }
+
+/// `presented` is the host's member of the canvas's record (LLP 1009 D9).
+#[test]
+#[should_panic(expected = "`presented` is the host's field")]
+fn presented_is_the_hosts_name() {
+    World::new(60, 0).publish("presented", true);
+}
+
+#[test]
+#[should_panic(expected = "`presented` is the host's field")]
+fn a_record_cannot_carry_presented_either() {
+    #[derive(Default, Data)]
+    struct Shown {
+        presented: bool,
+    }
+    World::new(60, 0).publish_record(&Shown::default());
+}

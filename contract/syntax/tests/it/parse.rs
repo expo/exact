@@ -265,6 +265,18 @@ fn a_template_expression_balances_match_braces_and_string_braces() {
 }
 
 #[test]
+fn a_template_literal_ends_on_its_own_line() {
+    // A `${…}` fragment never holds a line break: the literal that would
+    // carry one is refused before its expression is parsed.
+    let error = parse(
+        "component A\n  state count = 1\n  state extra = 2\n  view\n    text `total ${count\n+ extra}`\n",
+    )
+    .unwrap_err();
+    assert_eq!(error.id, "syntax-unterminated-template", "{error}");
+    assert_eq!(error.span.line, 5, "{error}");
+}
+
+#[test]
 fn if_when_and_their_explicit_else_need_non_empty_blocks() {
     let cases = [
         (
@@ -361,7 +373,7 @@ fn unknown_declarations_name_atom_among_expected_forms() {
         err.message,
         concat!(
             "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, ",
-            "`keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `use`, ",
+            "`keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `source`, `use`, ",
             "`component`, or `members`, found `banana`"
         )
     );
@@ -1000,5 +1012,20 @@ fn midi_bytes_keep_leading_zeroes() {
             parse(&format!("test \"MIDI\"\n  {step}\n")).unwrap_err().id,
             "syntax-bad-number",
         );
+    }
+}
+
+#[test]
+fn test_preference_error_names_supported_facts_and_drive_only_forms() {
+    let e = contract_syntax::parse("test \"size\"\n  prefer root-font-size 24\n").unwrap_err();
+    assert_eq!(e.id, "syntax-expected-step");
+    for form in [
+        "media feature",
+        "page fact",
+        "module permission",
+        "Quote numbers",
+        "Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now",
+    ] {
+        assert!(e.message.contains(form), "{} lacks {form}", e.message);
     }
 }

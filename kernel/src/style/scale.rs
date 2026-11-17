@@ -12,7 +12,7 @@
 //!   the build resolves. This is
 //!   the one table every reader of the base takes (theme2's condition (c)):
 //!   the design server's `describe`, `resolve` and `explain` read it under
-//!   `tamber/1.14` (rt1's stage 10 D), never a copy.
+//!   `forma/1.14` (rt1's stage 10 D), never a copy.
 //! - Units are px (points), never scaled by Dynamic Type (ruling 6; QUEUE
 //!   holds the opt-in). radius.full is [`RADIUS_FULL`], one oversized length
 //!   every host clamps into a pill by CSS's corner-overlap rule (theme2's C

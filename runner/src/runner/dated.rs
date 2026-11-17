@@ -90,7 +90,7 @@ impl<D: DataSource> Runner<D> {
             .actions
             .iter()
             .map(|a| {
-                crate::vm::instructions(plan.code(a.body))
+                crate::vm::instructions(plan.read_code(plan.code(a.body)).0)
                     .map_while(Result::ok)
                     .collect()
             })

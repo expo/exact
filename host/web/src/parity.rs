@@ -27,6 +27,13 @@
 //! [`GEOMETRY_SOURCE`]'s `frame` and `measure` reads, and `parity.mjs
 //! --geometry` holds them to [`GEOMETRY_EXPECTED`], which fixed boxes make
 //! exact.
+//!
+//! Scroll and view timelines have the browser as their oracle too, on a
+//! laid-out app rather than one value: [`timelines`].
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "parity_timelines.rs"]
+pub mod timelines;
 
 use crate::css::transition_css;
 use exact_motion::{Animations, Change, Engine, Property, TimingFunction, Transitions, Value};

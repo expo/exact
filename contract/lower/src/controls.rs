@@ -47,8 +47,54 @@ fn canonical_type_expr(value: &Expr) -> Option<Expr> {
             Box::new(canonical_type_expr(no)?),
             *span,
         )),
+        Expr::Let {
+            name,
+            value,
+            body,
+            span,
+        } => Some(Expr::Let {
+            name: name.clone(),
+            value: value.clone(),
+            body: Box::new(canonical_type_expr(body)?),
+            span: *span,
+        }),
         _ => None,
     }
+}
+
+/// @ref LLP 1141.002 D1 — `rel` has HTML's meaning on a `link` or `form`,
+/// and on a tab, where `search` names the app's search tab; anywhere else it
+/// is refused. `role="search"` on a tab (a control that names a panel) is
+/// refused with the reason, so the tab keeps its role.
+fn search_tab_words(tag: &str, attrs: &[contract_syntax::Attr]) -> Result<(), LowerError> {
+    let role = attrs
+        .iter()
+        .find(|a| a.name == "role")
+        .and_then(|a| match &a.value {
+            Expr::Str(s, _) => Some(s.as_str()),
+            _ => None,
+        });
+    if role == Some("search") && attrs.iter().any(|a| a.name == "aria-controls") {
+        let a = attrs
+            .iter()
+            .find(|a| a.name == "role")
+            .expect("found above");
+        return err(
+            "lower-attr-value",
+            "a tablist owns only tabs (WAI-ARIA), so keep `role=\"tab\"`; write `rel=\"search\"` to make this the app's search tab",
+            a.span,
+        );
+    }
+    if let Some(a) = attrs.iter().find(|a| a.name == "rel") {
+        if !matches!(tag, "link" | "form") && role != Some("tab") {
+            return err(
+                "lower-attr-tag",
+                "`rel` belongs to `link` and `form` (HTML's link types), or to a `role=\"tab\"` of the root tablist, where `rel=\"search\"` makes it the app's search tab",
+                a.span,
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The form control an element is (LLP 1069.001 D1), refusing a bound
@@ -60,6 +106,7 @@ pub(crate) fn control(
     attrs: &[contract_syntax::Attr],
     native_button: bool,
 ) -> Result<Option<&'static str>, LowerError> {
+    search_tab_words(tag, attrs)?;
     if tag != "textarea" {
         if let Some(a) = attrs.iter().find(|a| a.name == "rows") {
             return err("lower-attr-tag", "HTML rows belongs to textarea", a.span);
@@ -276,6 +323,9 @@ pub fn media_accept(token: &str) -> bool {
 /// falls back to its intrinsic size: 129 for a range, `10em` by `1em` for a
 /// progress (`kernel/src/control.rs`). No host widens either itself.
 pub(crate) const FULL_WIDTH: &[(StyleId, &str)] = &[(StyleId::Width, "100%")];
+
+/// A `select` is no wider than what holds it (LLP 1115.000 D10.4).
+pub(crate) const CONTAINED: &[(StyleId, &str)] = &[(StyleId::MaxWidth, "100%")];
 
 /// The tag an `input` control lowers with (a `select` keeps its own).
 pub(crate) fn tag(kind: &str, t: Tag) -> Tag {
@@ -603,6 +653,7 @@ const NATIVE_ROWS: &[StyleId] = &[
     StyleId::Opacity,
     StyleId::Visibility,
     StyleId::Translate,
+    StyleId::TranslateVelocity,
     StyleId::TranslatePercent,
     StyleId::TranslateZ,
     StyleId::Scale,
@@ -618,6 +669,8 @@ const NATIVE_ROWS: &[StyleId] = &[
     StyleId::Animation,
     StyleId::ExitAnimation,
     StyleId::PressScale,
+    StyleId::PressTranslate,
+    StyleId::PressTranslatePercent,
     StyleId::PressOpacity,
     StyleId::PressOpacityTo,
     StyleId::PressBackgroundColor,
@@ -643,7 +696,7 @@ fn may_be_empty(e: &Expr) -> bool {
         Expr::Str(s, _) => s.trim().is_empty(),
         Expr::None(_) => true,
         Expr::Ternary(_, a, b, _) => may_be_empty(a) || may_be_empty(b),
-        Expr::Typed(x, _, _) => may_be_empty(x),
+        Expr::Typed(x, _, _) | Expr::Let { body: x, .. } => may_be_empty(x),
         _ => false,
     }
 }
@@ -654,7 +707,7 @@ fn always_empty(e: &Expr) -> bool {
         Expr::Str(s, _) => s.trim().is_empty(),
         Expr::None(_) => true,
         Expr::Ternary(_, a, b, _) => always_empty(a) && always_empty(b),
-        Expr::Typed(x, _, _) => always_empty(x),
+        Expr::Typed(x, _, _) | Expr::Let { body: x, .. } => always_empty(x),
         _ => false,
     }
 }
@@ -668,6 +721,7 @@ fn literals(e: &Expr) -> Option<Vec<&str>> {
             out.extend(literals(b)?);
             Some(out)
         }
+        Expr::Let { body, .. } => literals(body),
         _ => None,
     }
 }
@@ -816,6 +870,12 @@ impl Lowerer<'_> {
                         format!("a native button draws its own `{name}`: {alternative}"),
                     );
                 }
+                // Nothing fires `toggle` at a button: say that, not that a native one refuses it.
+                Some(crate::tags::AttrTarget::Handler("toggle")) => {
+                    if let Some(e) = crate::handlers::unheard_toggle("button", attrs, a) {
+                        return Err(e);
+                    }
+                }
                 Some(crate::tags::AttrTarget::Handler(h))
                     if !matches!(
                         h,
@@ -841,7 +901,22 @@ impl Lowerer<'_> {
         let labelled = attrs
             .iter()
             .any(|a| a.name == "aria-label" && !may_be_empty(&a.value));
-        let faces = face_counts(self, children)?;
+        // A tab that names its panel may hold its badge beside its face (LLP 1075.003 §9.9).
+        let panel_tab = attrs.iter().any(|a| a.name == "aria-controls")
+            && attrs
+                .iter()
+                .rev()
+                .find(|a| a.name == "role")
+                .and_then(|a| literals(&a.value))
+                .is_some_and(|roles| roles == ["tab"]);
+        if panel_tab && badges(children) > 1 {
+            return err(
+                "lower-button-style-attr",
+                "a tab shows one badge: a filled box holding one `text`; write a custom `button` for more",
+                span,
+            );
+        }
+        let faces = face_counts(self, children, panel_tab)?;
         if faces.contains(&(0, 0)) {
             return err(
                 "lower-button-content",
@@ -912,7 +987,7 @@ impl Lowerer<'_> {
                     || self
                         .keyframes
                         .get(&anim.name)
-                        .is_some_and(|ps| ps.iter().all(|p| native_motion(*p)));
+                        .is_some_and(|frames| frames.properties().into_iter().all(native_motion));
                 if !ok {
                     return err(
                         "lower-button-style-attr",
@@ -936,12 +1011,44 @@ fn symbol_source(source: &Expr) -> bool {
     }
 }
 
+/// A tab's badge (LLP 1075.003 §9.9): a box, not a text, an image or a
+/// control, whose only child is one `text` with nothing inside it. It stands
+/// beside the tab's face: UIKit's tab bar item shows its text as the item's
+/// badge, and the web paints the box on the tab.
+pub(crate) fn is_badge(node: &contract_syntax::Node) -> bool {
+    use contract_syntax::Node;
+    let Node::Element { tag, children, .. } = node else {
+        return false;
+    };
+    !matches!(
+        tag.as_str(),
+        "text" | "image" | "button" | "link" | "input" | "select" | "textarea"
+    ) && matches!(children.as_slice(), [Node::Element { tag, children, .. }] if tag == "text" && children.is_empty())
+}
+
+/// The most badges any arm of `nodes` shows.
+fn badges(nodes: &[contract_syntax::Node]) -> usize {
+    use contract_syntax::Node;
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::When {
+                then, otherwise, ..
+            } => badges(then).max(badges(otherwise)),
+            Node::Match { some, none, .. } => badges(&some.1).max(badges(none)),
+            node => usize::from(is_badge(node)),
+        })
+        .sum()
+}
+
 /// Every face a native button's children can show, as (texts, images),
 /// saturated above two texts/one image; refusing what a face cannot hold (LLP 1069.011.001 D3, D12): repeated/arbitrary children and non-face
-/// rows, after each child's class merge.
+/// rows, after each child's class merge. A tab that names its panel
+/// (`badge`) may also hold a badge, which is no part of its face.
 fn face_counts(
     lower: &Lowerer<'_>,
     nodes: &[contract_syntax::Node],
+    badge: bool,
 ) -> Result<Vec<(u8, u8)>, LowerError> {
     use contract_syntax::Node;
     let mut faces = vec![(0u8, 0u8)];
@@ -959,6 +1066,7 @@ fn face_counts(
     };
     for node in nodes {
         let here: Vec<(u8, u8)> = match node {
+            node if badge && is_badge(node) => vec![(0, 0)],
             Node::Element {
                 tag,
                 positional,
@@ -982,7 +1090,7 @@ fn face_counts(
                             if tag == "text" {
                                 matches!(r, StyleId::FontSize | StyleId::FontWeight | StyleId::TextColor | StyleId::WhiteSpace | StyleId::LineClamp | StyleId::TextAlign)
                             } else {
-                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight)
+                                matches!(r, StyleId::TintColor | StyleId::FontSize | StyleId::FontWeight | StyleId::SymbolRendering)
                             }
                         }),
                         _ => false,
@@ -1072,8 +1180,8 @@ fn face_counts(
             Node::When {
                 then, otherwise, ..
             } => {
-                let mut out = face_counts(lower, then)?;
-                for f in face_counts(lower, otherwise)? {
+                let mut out = face_counts(lower, then, badge)?;
+                for f in face_counts(lower, otherwise, badge)? {
                     if !out.contains(&f) {
                         out.push(f);
                     }
@@ -1081,8 +1189,8 @@ fn face_counts(
                 out
             }
             Node::Match { some, none, .. } => {
-                let mut out = face_counts(lower, &some.1)?;
-                for f in face_counts(lower, none)? {
+                let mut out = face_counts(lower, &some.1, badge)?;
+                for f in face_counts(lower, none, badge)? {
                     if !out.contains(&f) {
                         out.push(f);
                     }

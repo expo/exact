@@ -28,7 +28,7 @@ test('authored edits during a build refuse the proof and force the next build', 
   try {
     mkdirSync(dirname(receipt), {recursive:true});
     for (const file of ['game/games/sample/logic/src/lib.rs', 'game/games/sample/art/crate.gltf',
-      'game/games/sample/assets/authored.bin', 'host/linux/src/lib.rs']) {
+      'game/games/sample/assets/authored.bin', 'host/painted/src/lib.rs']) {
       writeFixtureFile(dir, file, 'v1');
       let product = 'old', builds = 0;
       writeFileSync(receipt, 'old receipt');
@@ -311,7 +311,7 @@ test('E11 clean Git blobs and stat-cached dirty inputs have stable identities', 
   const write=(file,text)=>writeFixtureFile(dir,file,text);
   const git=(...args)=>{const r=spawnSync('git',args,{cwd:dir,encoding:'utf8'});expect(r.status).toBe(0);};
   try {
-    write('game/games/sample/logic/src/lib.rs','logic');write('host/linux/src/lib.rs','host');
+    write('game/games/sample/logic/src/lib.rs','logic');write('host/painted/src/lib.rs','host');
     write('game/games/sample/app.contract','plan');git('init','-q');git('add','.');
     const cache=resolve(dir,'cache'), read=()=>proofInputs(dir,app,cache);
     const a=read(); expect(a.reads).toBe(0);

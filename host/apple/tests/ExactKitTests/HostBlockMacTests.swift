@@ -29,20 +29,22 @@ final class HostBlockMacTests: XCTestCase {
         s.holdFillForTests()
         p.blocks.show(node, in: container, block: .size(CGSize(width: 200, height: 300)),
                       placement: BlockPlacement(rect: CGRect(x: 10, y: 20, width: 200, height: 300), within: 2))
-        let generation = s.generation
+        let lease = s.runtime.completionLease
         s.commitForTests()
         p.reset()
         let replacement = NodeView(id: 1, kind: "view", presenter: p)
         p.views[1] = replacement; p.root.addSubview(replacement)
         let before = s.appliedBatches
-        s.publishFillForTests(1, wireBatch([]), generation: generation)
+        s.publishFillForTests(1, wireBatch([]), lease: lease)
         s.drainFill()
         let released = expectation(description: "captured reports released")
         DispatchQueue.main.async { released.fulfill() }
         wait(for: [released], timeout: 5)
         XCTAssertEqual(s.appliedBatches, before, "the old block and placement never reach the replacement runtime")
         p.blocks.show(replacement, in: container, block: .size(CGSize(width: 400, height: 500)))
-        XCTAssertEqual(s.appliedBatches, before + 1, "the current view still reports")
+        // Two batches: an owner's show tells its local insets first (`tellInsets`, 2edecbfc4, "A route's content reads
+        // its own safe area ... as var(--exact-safe-area-inset-*)"), then its block.
+        XCTAssertEqual(s.appliedBatches, before + 2, "the current view still reports")
     }
 
     private func plan(_ source: String) throws -> Data {
@@ -201,7 +203,9 @@ final class HostBlockMacTests: XCTestCase {
         XCTAssertEqual(detail.frame, NSRect(origin: .zero, size: right.bounds.size))
         XCTAssertEqual(p.blocks.used[list.id], left.bounds.size)
         // A percentage and an absolutely positioned child are the pane's.
-        XCTAssertEqual(half.frame, NSRect(x: 0, y: 0, width: right.bounds.width / 2, height: 100))
+        // Half the pane, on the window's device pixels: exact at 2x, a whole point on a 1x display (a headless Mac's).
+        let device = { (v: CGFloat) in (v * window.backingScaleFactor).rounded() / window.backingScaleFactor }
+        XCTAssertEqual(half.frame, NSRect(x: 0, y: 0, width: device(right.bounds.width / 2), height: 100))
         XCTAssertEqual(badge.frame, NSRect(x: right.bounds.width - 50, y: 350, width: 40, height: 40))
         XCTAssertEqual(scroller.frame.width, 280)
         XCTAssertEqual(behind.map(\.frame), pageFrames, "the page around them is laid out as it was")
@@ -217,7 +221,7 @@ final class HostBlockMacTests: XCTestCase {
         XCTAssertEqual(left.bounds.width, 200)
         XCTAssertEqual(list.frame, NSRect(origin: .zero, size: left.bounds.size))
         XCTAssertEqual(detail.frame, NSRect(origin: .zero, size: right.bounds.size))
-        XCTAssertEqual(half.frame.width, right.bounds.width / 2)
+        XCTAssertEqual(half.frame.width, device(right.bounds.width / 2))
         XCTAssertEqual(badge.frame.origin.x, right.bounds.width - 50)
         XCTAssertEqual(scroller.frame.width, 200)
         XCTAssertTrue(try node("field").field === field)

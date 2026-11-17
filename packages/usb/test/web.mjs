@@ -1,13 +1,14 @@
 // @exact/usb's web conformance suite in Chromium (LLP 1133.037 §16 stage 1), over a fake `navigator.usb`
 // (`packages/serial/test/chromium.mjs`): the chooser asked with the app's filters, the record's configurations, a
 // lease per open on one shared open, a claim held by another connection refused `NetworkError`, control and bulk
-// transfers in both directions with their status, the device closing with its last lease, and `forget`.
+// transfers in both directions with their status, another connection's transfers to a claimed interface refused, the
+// device closing with its last lease, and `forget`.
 //
 // usage: bun packages/usb/test/web.mjs
 import { checker, open } from '../../serial/test/chromium.mjs';
 
 const fake = () => {
-  const alternate = { alternateSetting: 0, interfaceClass: 0xfe, interfaceSubclass: 1, interfaceProtocol: 2, interfaceName: '@Internal Flash  /0x08000000/04*016Kg', endpoints: [{ endpointNumber: 1, direction: 'in', type: 'bulk', packetSize: 64 }] };
+  const alternate = { alternateSetting: 0, interfaceClass: 0xfe, interfaceSubclass: 1, interfaceProtocol: 2, interfaceName: '@Internal Flash  /0x08000000/04*016Kg', endpoints: [{ endpointNumber: 1, direction: 'in', type: 'bulk', packetSize: 64 }, { endpointNumber: 2, direction: 'out', type: 'bulk', packetSize: 64 }] };
   const configuration = { configurationValue: 1, configurationName: null, interfaces: [{ interfaceNumber: 0, alternates: [alternate], alternate, claimed: false }] };
   const device = {
     usbVersionMajor: 2, usbVersionMinor: 0, usbVersionSubminor: 0, deviceClass: 0, deviceSubclass: 0, deviceProtocol: 0,
@@ -49,7 +50,9 @@ check('the chooser takes the filter without its empty fields', JSON.stringify((a
 check('the record carries the configurations and the DFU alternate', board.productName === 'STM32 BOOTLOADER' && board.configurations[0].interfaces[0].alternates[0].interfaceSubclass === 1 && board.configuration === 1, JSON.stringify(board).slice(0, 300));
 const a = await u.call('open', { device: board.id }), b = await u.call('open', { device: board.id });
 check('two opens are two leases on one open', a.connection !== b.connection && (await u.eval(() => __device.opens)) === 1);
-await u.call('claimInterface', { connection: a.connection, interfaceNumber: 0 });
+// Two claims at once: the second is checked after the first has claimed, not beside it.
+const claims = await u.eval(([a, b]) => Promise.all([a, b].map((connection) => __impl.claimInterface({ connection, interfaceNumber: 0 }))), [a.connection, b.connection]);
+check('of two claims at once, the second fails NetworkError', claims[0] === null && claims[1]?.error === 'NetworkError', JSON.stringify(claims));
 check('a claim another connection holds fails NetworkError', (await u.call('claimInterface', { connection: b.connection, interfaceNumber: 0 })).error === 'NetworkError');
 check('an alternate on an unclaimed interface fails InvalidStateError', (await u.call('selectAlternateInterface', { connection: b.connection, interfaceNumber: 0, alternateSetting: 0 })).error === 'InvalidStateError');
 await u.call('selectAlternateInterface', { connection: a.connection, interfaceNumber: 0, alternateSetting: 0 });
@@ -60,6 +63,24 @@ check('a stall answers stall', (await u.call('controlTransferIn', { connection: 
 check('a control transfer out answers the bytes written', (await u.call('controlTransferOut', { connection: a.connection, setup: { ...setup, request: 1 }, data: b64([0x21, 0, 0, 0, 8]) })).bytesWritten === 5);
 check('bulk in and out', (await u.call('transferIn', { connection: a.connection, endpointNumber: 1, length: 64 })).data === b64([7, 8]) && (await u.call('transferOut', { connection: a.connection, endpointNumber: 2, data: b64([1, 2, 3]) })).bytesWritten === 3);
 check('the connection reads its claims', JSON.stringify((await u.call('usbConnection', { connection: a.connection })).claimed) === '[0]');
+
+// The device is claimed for both connections, so the interface's owner is checked before the device is asked.
+const logged = await u.eval(() => __device.log.length);
+const theirs = [
+  await u.call('controlTransferOut', { connection: b.connection, setup: { ...setup, request: 1 }, data: b64([0x42]) }),
+  await u.call('controlTransferIn', { connection: b.connection, setup: { ...setup, recipient: 'endpoint', index: 0x81 }, length: 2 }),
+  await u.call('transferIn', { connection: b.connection, endpointNumber: 1, length: 64 }),
+  await u.call('transferOut', { connection: b.connection, endpointNumber: 2, data: b64([1]) }),
+  await u.call('clearHalt', { connection: b.connection, direction: 'in', endpointNumber: 1 }),
+];
+check('another connection\'s transfers to the claimed interface fail InvalidStateError before the device', theirs.every((r) => r?.error === 'InvalidStateError') && (await u.eval(() => __device.log.length)) === logged, JSON.stringify(theirs));
+check('an endpoint the configuration lacks fails NotFoundError', (await u.call('transferIn', { connection: a.connection, endpointNumber: 5, length: 1 })).error === 'NotFoundError');
+await u.call('releaseInterface', { connection: a.connection, interfaceNumber: 0 });
+check('after release the former owner is refused', (await u.call('transferIn', { connection: a.connection, endpointNumber: 1, length: 64 })).error === 'InvalidStateError');
+const moved = await u.call('claimInterface', { connection: b.connection, interfaceNumber: 0 });
+check('after release another connection claims and transfers', moved === null && (await u.call('transferIn', { connection: b.connection, endpointNumber: 1, length: 64 })).data === b64([7, 8]), JSON.stringify(moved));
+await u.call('releaseInterface', { connection: b.connection, interfaceNumber: 0 });
+await u.call('claimInterface', { connection: a.connection, interfaceNumber: 0 });
 await u.call('close', { connection: a.connection });
 check('closing releases its claims; the device stays open for the other lease', (await u.eval(() => __device.log.some((l) => l[0] === 'release'))) && (await u.eval(() => __device.closes)) === 0);
 await u.call('close', { connection: b.connection });

@@ -129,7 +129,7 @@ final class HiddenInlineAccessibilityIOSTests: XCTestCase {
         }
         func unavailable() throws -> Bool {
             let node = try XCTUnwrap(p.views[2])
-            let link = try XCTUnwrap((node.textAccessibilityChildren() ?? []).first { ($0 as? AgentOwned)?.agentViewId == 3 })
+            let link = try XCTUnwrap((node.textAccessibilityChildren() ?? []).first { ($0 as? InspectionOwned)?.inspectionViewId == 3 })
             #if os(macOS)
             return (link as? NSAccessibilityElement)?.accessibilityAttributeValue(.enabled) as? Bool == false
             #else

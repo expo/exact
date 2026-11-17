@@ -53,7 +53,9 @@ pub fn css(kind: Kind, value: &str) -> String {
             let medium = relative::MEDIUM;
             format!(
                 "{}rem",
-                exact_web::css::num(n * unit.basis(medium, medium, 1.0) / medium)
+                exact_web::css::num(
+                    n * unit.basis(medium, medium, 1.0, &exact_kernel::Env::default()) / medium
+                )
             )
         }
         Some((unit @ Unit::TextStyleAtMost(_), n)) => unit.capped_css(n),
@@ -227,7 +229,7 @@ pub fn part_css(plan: &Plan, kind: Kind, id: StyleId, value: &str) -> Option<Str
 /// axis, and in a development build every one; `(name, row, property)`. A
 /// family token's one row is its name's property, `--x-<name>`; a type
 /// token's `--x-<name>-<part>`. Every tuple writes the same rows
-/// (`tamber-type-longhands`), so the default tuple's say which.
+/// (`forma-type-longhands`), so the default tuple's say which.
 pub fn type_properties(plan: &Plan, every: bool) -> Vec<(String, StyleId, String)> {
     let mut out: Vec<(String, StyleId, String)> = Vec::new();
     let taken = crate::modes::properties(plan);

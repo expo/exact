@@ -49,6 +49,11 @@ extension CALayer {
         layer.shadowOffset = shadowOffset; layer.shadowRadius = shadowRadius
         layer.shadowOpacity = shadowOpacity
         layer.allowsGroupOpacity = allowsGroupOpacity
+        // A template image (an SF Symbol in an image view) is its alpha in
+        // the view's tint: AppKit sets these on the layer, not the pixels.
+        for key in ["contentsMultiplyColor", "contentsSwizzle"] {
+            if let value = value(forKey: key) { layer.setValue(value, forKey: key) }
+        }
         return layer
     }
 }

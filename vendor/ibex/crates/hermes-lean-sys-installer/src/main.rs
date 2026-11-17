@@ -6,7 +6,7 @@ mod build_support;
 // offline consumer builds while sharing the resolver's trust implementation.
 use build_support::{
     acquire_validated_host_bundle, acquire_validated_target_bundle, download_options_from_env,
-    installer_command, pin_for_target, BundlePin, RELEASE_TAG,
+    installer_command, pin_for_target, validate_target_bundle, BundlePin, RELEASE_TAG,
 };
 use std::collections::BTreeSet;
 use std::env;
@@ -15,12 +15,15 @@ use std::process::Command;
 
 const USAGE: &str = "Install the pinned Hermes release bundles into Cargo's verified cache.\n\n\
 Usage:\n  hermes-lean-sys-installer [--check] [--target <rust-triple>]...\n\n\
-The host bundle is always installed. Each --target adds a cross-compilation\n\
+  hermes-lean-sys-installer --check-dir <directory> <rust-triple>\n\n\
+Installation always includes the host bundle. Each --target adds a cross-compilation\n\
 target; its host bundle supplies the executable hermesc.\n\n\
 --check installs nothing and never uses the network: it runs the build\n\
 resolver's own validation on the cached bundles (receipt schema, digests,\n\
 target, compiler and bytecode version) and exits non-zero, naming the\n\
-install command, if any is missing or invalid.";
+install command, if any is missing or invalid.\n\n\
+--check-dir validates a local cross bundle before publication, including its\n\
+lean VM, against the cached host compiler. It installs nothing and is offline.";
 
 fn main() {
     if let Err(error) = run(env::args_os().skip(1)) {
@@ -37,6 +40,20 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     {
         println!("{USAGE}");
         return Ok(());
+    }
+
+    if arguments.first().is_some_and(|arg| arg == "--check-dir") {
+        if arguments.len() != 3 {
+            return Err("--check-dir requires a directory and a Rust target triple".into());
+        }
+        let host = rustc_host()?;
+        let target = arguments[2].to_str().ok_or("target must be UTF-8")?;
+        let mut options =
+            download_options_from_env(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))?;
+        options.offline = true;
+        let validated_host =
+            acquire_validated_host_bundle(pin_for_target(&host)?, &options, &host, false)?;
+        return validate_target_bundle((&arguments[1]).into(), target, &validated_host, true);
     }
 
     let (requested, test_pin, check) = parse_arguments(arguments)?;

@@ -668,7 +668,7 @@ fn an_asset_already_in_the_store_is_reused_by_digest() {
     let mut origin = Origin::of(&first);
     let mut store = open(&temp);
     assert!(matches!(origin.check(&mut store), Ok(Check::Staged { .. })));
-    assert_eq!(origin.asked.len(), 3, "head, plan, asset");
+    assert_eq!(origin.asked.len(), 4, "head, index, plan, asset");
 
     let second = Bundle::new(5, b"plan five").asset("mark.png", b"a mark");
     origin.serving(&second);
@@ -683,7 +683,7 @@ fn an_asset_already_in_the_store_is_reused_by_digest() {
             format!("{ORIGIN}/.exact/release/{COHORT}/exact.json"),
             format!("{ORIGIN}/.exact/release/{COHORT}/app.plan"),
         ],
-        "the asset was reused, not fetched"
+        "the index and the asset were reused, not fetched"
     );
     assert_eq!(
         std::fs::read(
@@ -993,7 +993,13 @@ fn a_head_naming_the_embedded_plan_and_assets_is_current_and_downloads_nothing()
         origin.check_embedding(&mut store, &[("mark.png", b"a mark")]),
         Ok(Check::Current { sunset: None })
     ));
-    assert_eq!(origin.asked.len(), 1, "only the head is fetched");
+    assert_eq!(origin.asked.len(), 2, "only the head and its asset index");
+    // The witness keeps the index's blob: the same head again reads it from disk.
+    assert!(matches!(
+        origin.check_embedding(&mut store, &[("mark.png", b"a mark")]),
+        Ok(Check::Current { sunset: None })
+    ));
+    assert_eq!(origin.asked.len(), 1, "only the head");
     let witnesses = entry_names(&temp);
     assert_eq!(witnesses.len(), 1);
     assert!(temp
@@ -1048,8 +1054,15 @@ fn every_asset_url_is_admitted_before_embedded_current_advances_the_floor() {
     let head_url = exact_update::head_url(ORIGIN, "release", COHORT);
     let mut head: serde_json::Value =
         serde_json::from_slice(origin.files.get(&head_url).unwrap()).unwrap();
-    head["assets"][1]["url"] =
+    let index_url = head_url.replace("exact.json", "assets.json");
+    let mut index: serde_json::Value =
+        serde_json::from_slice(origin.files.get(&index_url).unwrap()).unwrap();
+    index["assets"][1]["url"] =
         serde_json::Value::String("https://attacker.example/second.png".into());
+    let index = serde_json::to_vec(&index).unwrap();
+    head["assets"]["sha256"] = sha256_hex(&index).into();
+    head["assets"]["bytes"] = index.len().into();
+    origin.files.insert(index_url, index);
     origin.files.insert(
         head_url,
         serde_json::to_vec(&head).expect("the edited head is JSON"),
@@ -1068,7 +1081,7 @@ fn every_asset_url_is_admitted_before_embedded_current_advances_the_floor() {
         )
         .unwrap_err();
     assert!(refusal.contains("cross-origin"), "unexpected: {refusal}");
-    assert_eq!(origin.asked.len(), 1, "no card URL was fetched");
+    assert_eq!(origin.asked.len(), 2, "no card URL but the index's");
     assert_eq!(
         std::fs::read(record).unwrap(),
         before,
@@ -1103,11 +1116,12 @@ fn a_plan_url_is_admitted_before_a_whole_old_entry_is_reused() {
     std::fs::create_dir_all(entry.join("assets")).unwrap();
     std::fs::write(entry.join("exact.json"), raw).unwrap();
     std::fs::write(entry.join("app.plan"), b"plan four").unwrap();
+    std::fs::write(entry.join("assets.json"), bundle.index()).unwrap();
     std::fs::write(entry.join("assets/mark.png"), b"a mark").unwrap();
 
     let refusal = origin.check(&mut store).unwrap_err();
     assert!(refusal.contains("cross-origin"), "unexpected: {refusal}");
-    assert_eq!(origin.asked.len(), 1, "the whole entry was not reused");
+    assert_eq!(origin.asked.len(), 2, "the whole entry was not reused");
     assert_eq!(store.select().entry, None);
     assert_eq!(
         std::fs::read(record).unwrap(),

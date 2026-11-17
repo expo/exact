@@ -2,6 +2,7 @@
 //! `send`, a request the host runs and brings back through `fulfill`,
 //! `pending(x)` in the view, `refresh` on a resource, and what bake refuses.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{
     Answer, DataError, DataSource, Event, FailureKind, Outcome, Request, Response, Runner,
@@ -716,7 +717,10 @@ fn poison_leaks_no_effects_from_the_failed_commit() {
     assert!(matches!(
         r.act("go", vec![]),
         Err(RunnerError::Instance(
-            exact_runner::instance::InstanceError::Trap(exact_runner::Trap::StringTooLong { .. })
+            exact_runner::instance::InstanceError::Evaluation {
+                trap: exact_runner::Trap::StringTooLong { .. },
+                ..
+            }
         ))
     ));
     assert!(r.is_poisoned());
@@ -1221,8 +1225,7 @@ fn a_send_twice_is_found_through_a_tail_call_once() {
     let src = |body: &str| {
         format!("shape Ack\n  op: string\ncomponent App\n  mutation edited as shape Ack\n  action save(why: string)\n{body}  view\n    Editor(done=save)\ncomponent Editor\n  props\n    done: action\n  state n = 0\n  action commit\n    n = n + 1\n    done(\"x\")\n  view\n    button \"s\" press=commit\n")
     };
-    let dir = std::env::temp_dir().join(format!("exact-send-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-send-tail-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(
         &path,

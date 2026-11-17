@@ -8,7 +8,7 @@ use exact_update::{gpu_code_digest as code_digest, Baked, Envelope};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-mod watch;
+pub(crate) mod watch;
 
 /// A development bake's map from plan node to Contract source (LLP 1035.002
 /// D6; LLP 1012.001.000 D6), `OUT_DIR/app.plan.map.json`: beside the plan,
@@ -78,7 +78,15 @@ pub(crate) fn emit(
     }
     source_map(trust, app, out, &plan, &plan_bytes);
     let plan_card = json!({"sha256": hash(&plan_bytes), "bytes": plan_bytes.len()});
-    let mut assets = asset_cards(app, out, manifest)?;
+    let (mut assets, thinned) = asset_cards(app, out, manifest, platform)?;
+    // A binary whose roster holds one texture family has a renderer that
+    // chooses among what its bundle holds; an older one falls back to files
+    // a thinned update leaves out. So thinning is a new cohort, and an update
+    // is thinned only for a cohort that says it was (`scripts/push.mjs`).
+    if let Some(family) = thinned {
+        compat.inputs["textureFamily"] = Value::String(family);
+        compat.id = crate::compat::compatibility_digest(&compat.inputs);
+    }
     let pictures = asset_islands(app, &assets);
     let (widget_assets, plans) = crate::widgets::emit(
         out,
@@ -106,6 +114,29 @@ pub(crate) fn emit(
     assets.extend(rust_assets);
     assets.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     let mut graph = artifact_graph(&plan, &compat.inputs, &assets, pictures, target)?;
+    if matches!(platform, "ios" | "macos") {
+        let mut icons = apple_icons(&plan)?;
+        for entry in entries.values() {
+            icons.extend(apple_icons(&entry.plan)?);
+        }
+        icons.sort_by_key(|i| i["svg"].as_str().unwrap_or("").to_owned());
+        icons.dedup();
+        graph["appleIcons"] = json!(icons);
+    }
+    for (kind, entry) in entries {
+        let entry_graph = artifact_graph(&entry.plan, &compat.inputs, &[], false, target)?;
+        let raster = &entry_graph["artifacts"][0]["requires"]["appleRasterIcons"];
+        if raster.is_null() {
+            continue;
+        }
+        if let Some(card) = graph["artifacts"].as_array_mut().and_then(|cards| {
+            cards
+                .iter_mut()
+                .find(|card| card["name"] == format!("plans/{kind}.plan"))
+        }) {
+            card["requires"]["appleRasterIcons"] = raster.clone();
+        }
+    }
     graph["contractSources"] = json!(contract::source_graph(&app.join("app.contract"))
         .sources
         .into_iter()
@@ -115,7 +146,8 @@ pub(crate) fn emit(
     std::fs::write(out.join("artifacts.json"), graph.to_string()).map_err(|e| e.to_string())?;
     compat.target = target.into();
     compat.embedded = json!({"seq":0,"plan":plan_card,"assets":assets,"entryDigest":null,
-        "genesis":true,"trust":trust});
+        "genesis":true,"trust":trust,
+        "version":compat.embedded["version"],"buildNumber":compat.embedded["buildNumber"]});
     if plans.as_object().is_some_and(|p| !p.is_empty()) {
         compat.embedded["plans"] = plans;
     }
@@ -228,32 +260,46 @@ fn gpu_card(
 // The same directory-owned gate used by copying, including direct Cargo
 // bakes. This tooling process does not link Unix filesystem code into a wasm
 // consumer of `contract`; its Cargo cache is distinct from the calling build.
-fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>, String> {
+// A native platform's roster leaves out the texture families its devices do
+// not read (`scripts/texture-families.mjs`), and its bundle holds the roster;
+// the family it kept, when it left any file out.
+fn asset_cards(
+    app: &Path,
+    out: &Path,
+    manifest: &Manifest,
+    platform: &str,
+) -> Result<(Vec<Value>, Option<String>), String> {
     let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/filesystem.mjs");
     println!("cargo:rerun-if-changed={}", gate.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        gate.with_file_name("texture-families.mjs").display()
+    );
     let code = r#"
         import {pathToFileURL} from 'node:url';
         import {resolve} from 'node:path';
         import {createHash} from 'node:crypto';
         const {filesystem} = await import(pathToFileURL(process.argv[1]));
         const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(resolve(process.argv[1],'../app.mjs')));
+        const {bundledFamily,unbundledTextures} = await import(pathToFileURL(resolve(process.argv[1],'../texture-families.mjs')));
         const app={dir:process.argv[2],manifest:JSON.parse(process.argv[3])};
-        const cards=[];
+        let cards=[];
         for (const [source,prefix] of [['assets','assets'],['deck','deck']]) {
-            const tree=filesystem({op:'tree',root:resolve(process.argv[2],source),optionalRoot:true});
-            for (const [name,base64] of Object.entries(tree??{})) {
-                const bytes=Buffer.from(base64,'base64');
-                cards.push({name:`${prefix}/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-            }
+            const tree=filesystem({op:'inventory',root:resolve(process.argv[2],source),optionalRoot:true});
+            for (const [name,card] of Object.entries(tree??{})) cards.push({name:`${prefix}/${name}`,...card});
         }
+        const held=bundledFamily(process.argv[4]), unbundled=unbundledTextures(cards.map(c=>c.name),held);
+        cards=cards.filter(c=>!unbundled.has(c.name));
         for (const [name,bytes] of shaderFiles(app)) cards.push({name:`shaders/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
+        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)],
+            family:unbundled.size?held:null}));
     "#;
     let output = crate::bun()
         .args(["--input-type=module", "-e", code])
         .arg(gate)
         .arg(app)
         .arg(manifest.json.to_string())
+        .arg(platform)
         .output()
         .map_err(|e| format!("bake asset gate: {}", crate::bun_error(e)))?;
     if !output.status.success() {
@@ -309,7 +355,8 @@ fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>
     for path in paths {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    Ok(cards)
+    let family = inventory["family"].as_str().map(str::to_owned);
+    Ok((cards, family))
 }
 
 /// Whether an asset of `cards` is an SVG whose picture can show an island
@@ -490,16 +537,51 @@ fn shape(plan: &exact_plan::Plan, ty: exact_plan::TypesId, depth: usize) -> Resu
             }).collect::<Result<Vec<Value>, String>>()?;
             json!({"kind":"Record","fields":fields})
         }
+        // An enum is a string row whose field names are its members. An
+        // installed source may answer only those, so a changed vocabulary is
+        // a different shape; the members are sorted, as their order means
+        // nothing. A receipt from before this recorded a bare "String" for
+        // an enum, which differs from this, so it is refused, not trusted.
+        TypeKind::String if !row.fields.is_empty() => {
+            let mut members: Vec<&str> = row
+                .fields
+                .iter()
+                .map(|id| plan.str(plan.field(id).name))
+                .collect();
+            members.sort_unstable();
+            json!({"kind":"String","members":members})
+        }
         _ => json!(format!("{:?}", row.kind)),
     })
+}
+
+/// Files that need raster renditions in an Apple asset catalog. Template
+/// paths and SF Symbols keep their vector presentation.
+pub(crate) fn apple_icons(plan: &exact_plan::Plan) -> Result<Vec<Value>, String> {
+    let mut icons = std::collections::BTreeMap::new();
+    crate::icon_rules::visit(plan, |icon| {
+        if let Some(svg) = icon.apple_asset() {
+            icons.insert(svg.to_owned(), json!({"svg":svg,"viewBox":icon.view_box}));
+        }
+    })?;
+    Ok(icons.into_values().collect())
 }
 
 /// The plan's requirement graph against a cohort's compatibility inputs
 /// (`exact-bake graph`): what a publisher that starts from a signed stream
 /// head, not a native bake, checks a new plan against.
-pub fn plan_graph(plan_bytes: &[u8], inputs: &Value, target: &str) -> Result<Value, String> {
+pub fn plan_graph(
+    plan_bytes: &[u8],
+    inputs: &Value,
+    target: &str,
+    app: &Path,
+) -> Result<Value, String> {
     let plan = exact_plan::Plan::decode(plan_bytes).map_err(|e| format!("the plan: {e:?}"))?;
-    let mut graph = artifact_graph(&plan, inputs, &[], false, target)?;
+    let mut inputs = inputs.clone();
+    if !target.contains("watchos") {
+        crate::icon_rules::raster_inputs(app, &mut inputs, [&plan])?;
+    }
+    let mut graph = artifact_graph(&plan, &inputs, &[], false, target)?;
     let node = &mut graph["artifacts"][0];
     node["sha256"] = json!(hash(plan_bytes));
     node["bytes"] = json!(plan_bytes.len());
@@ -551,6 +633,24 @@ fn artifact_graph(
         }
     }
     let mut requires = serde_json::Map::new();
+    let apple =
+        matches!(inputs["platform"].as_str(), Some("ios" | "macos")) && !target.contains("watchos");
+    let icons = if apple {
+        apple_icons(plan)?
+    } else {
+        Vec::new()
+    };
+    if !icons.is_empty() {
+        let roster = icons
+            .iter()
+            .map(|icon| {
+                let svg = icon["svg"].as_str().expect("icon source");
+                (svg.to_owned(), inputs["appleRasterIcons"][svg].clone())
+            })
+            .collect::<serde_json::Map<_, _>>();
+        requires.insert("appleRasterIcons".into(), json!(roster));
+    }
+
     requires.insert("surfaceCalls".into(), Value::Object(calls.clone()));
     for key in ["app", "kernelSchema", "formatVersion", "formatDigest"] {
         requires.insert(key.into(), inputs[key].clone());
@@ -587,8 +687,19 @@ fn artifact_graph(
     if !marked.is_empty() {
         requires.insert("hatches".into(), json!(marked));
     }
-    // A purpose's text is in the installed binary's Info.plist: a bundle
-    // whose purposes differ is a binary release (LLP 1069.008 D5).
+    // What the APK was composed from (LLP 1030.006 D4a): a plan that uses a
+    // capability or a package extension the installed APK did not link is a
+    // new APK. The classifier compares these as subsets of `androidLinked`.
+    if inputs.get("androidLinked").is_some() {
+        requires.insert(
+            "androidUses".into(),
+            json!(crate::compat::android_uses(plan)),
+        );
+        requires.insert(
+            "androidExtensions".into(),
+            json!(crate::compat::plan_extensions(plan)),
+        );
+    }
     // What a TypeScript module may ask of the binary's prelude (compat.rs
     // `TYPESCRIPT_RUNTIME`): an older cohort's prelude would ignore it
     // silently (`exactBodyFrom` sent as an empty body), so it takes no bundle.
@@ -598,8 +709,13 @@ fn artifact_graph(
             inputs["typescriptRuntime"].clone(),
         );
     }
-    if inputs.get("grantPurposes").is_some() {
-        requires.insert("grantPurposes".into(), inputs["grantPurposes"].clone());
+    // A purpose's text and the bundle's languages are in the installed
+    // binary's Info.plist: a bundle whose purposes or tables differ is a
+    // binary release (LLP 1069.008 D5).
+    for key in ["grantPurposes", "localizations", "watchSync"] {
+        if inputs.get(key).is_some() {
+            requires.insert(key.into(), inputs[key].clone());
+        }
     }
     let rust = assets
         .iter()
@@ -632,6 +748,24 @@ fn artifact_graph(
             .is_some_and(|name| name.starts_with("rust/"))
         {
             requires.extend(rust_requirements.as_object().unwrap().clone());
+        }
+        // The module pair runs only on a binary whose TypeScript source holds
+        // exactly its grants (js/src/paired.rs refuses any other) and has its
+        // prelude's runtime.
+        if asset["name"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("typescript/"))
+        {
+            requires.insert(
+                "javascriptGrants".into(),
+                inputs["javascriptGrants"].clone(),
+            );
+            if inputs.get("typescriptRuntime").is_some() {
+                requires.insert(
+                    "typescriptRuntime".into(),
+                    inputs["typescriptRuntime"].clone(),
+                );
+            }
         }
         if let Some(stem) = asset["name"]
             .as_str()
@@ -713,7 +847,7 @@ fn artifact_graph(
         }
     }
     Ok(
-        json!({"version":1,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
+        json!({"version":1,"appleIcons":icons,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
     )
 }
 
@@ -816,8 +950,15 @@ pub fn write_development_artifacts(plan: &exact_plan::Plan) -> Result<(), String
 fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), String> {
     let receipt: Value =
         serde_json::from_slice(bytes).map_err(|e| format!("publisher receipt is not JSON: {e}"))?;
-    let envelope =
+    let mut envelope =
         Envelope::parse(&serde_json::to_vec(&receipt["envelope"]).map_err(|e| e.to_string())?)?;
+    if envelope.index.is_some() {
+        // The record carries the asset index as JSON; its blob is that
+        // value's canonical bytes, which the signed head names by digest.
+        let index = exact_update::canonical_bytes(&receipt["assets"].to_string())
+            .map_err(|e| format!("publisher receipt's asset index: {e}"))?;
+        envelope.read_index(&index)?;
+    }
     let baked = Baked::from_compat(&compat.to_json(), plan)?;
     envelope.verify(&baked.embedded.verification_keys)?;
     if envelope.app_id != baked.embedded.app_id
@@ -842,7 +983,7 @@ fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), S
         return Err("publisher receipt does not name the exact embedded plan bytes".into());
     }
     let mut named = envelope
-        .assets
+        .assets()?
         .iter()
         .map(|a| json!({"name":a.name,"sha256":a.sha256,"bytes":a.bytes}))
         .collect::<Vec<_>>();

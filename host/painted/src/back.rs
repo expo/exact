@@ -1,0 +1,52 @@
+//! The platform's own Back and Forward on the host (LLP 1115 D5; LLP
+//! 1115.001 D6; LLP 1115.000 D5.5): the router's `back` or `go`, written by
+//! the runner as one commit.
+use super::*;
+
+impl<D: DataSource> Host<D> {
+    /// The platform's own Back from the selected visit `id`, at `now_ms`:
+    /// what a route with no authored Back control gets under a navigation
+    /// root with no `navigate` handler ([`Runner::host_back`]). Whether the
+    /// router popped: `false` when `id` is not the selected top, or is its
+    /// stack's root. A refused commit is the error, and the tree is
+    /// untouched.
+    pub fn host_back(&mut self, id: u64, now_ms: f64) -> Result<bool, String> {
+        self.now_ms = now_ms.max(self.now_ms);
+        match self.runner.host_back(id) {
+            Ok(Some(receipt)) => {
+                let at_ms = self.now_ms;
+                match self.commit(&[Timed { at_ms, receipt }], None) {
+                    None => Ok(true),
+                    Some(error) => Err(error),
+                }
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(format!("host back: {e:?}")),
+        }
+    }
+
+    /// The router as a boot at `location` makes it ([`Runner::host_launch`]),
+    /// at `now_ms`. `false` when no route matches the location.
+    pub fn host_launch(&mut self, location: &str, now_ms: f64) -> Result<bool, String> {
+        self.now_ms = now_ms.max(self.now_ms);
+        match self.runner.host_launch(location) {
+            Ok(Some(receipt)) => {
+                let at_ms = self.now_ms;
+                match self.commit(&[Timed { at_ms, receipt }], None) {
+                    None => Ok(true),
+                    Some(error) => Err(error),
+                }
+            }
+            Ok(None) => Ok(false),
+            Err(e) => Err(format!("host launch: {e:?}")),
+        }
+    }
+
+    /// Native Forward through the root's handler or the runner's own `go`.
+    /// Timers run before the delivery acquires its Forward direction.
+    pub fn host_forward(&mut self, root: ViewId, now_ms: f64) -> Option<String> {
+        self.now_ms = now_ms.max(self.now_ms);
+        let a = self.runner.host_forward_at(root, self.now_ms);
+        self.commit(&a.receipts, a.error.map(|e| format!("host forward: {e:?}")))
+    }
+}

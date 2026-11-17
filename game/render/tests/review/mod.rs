@@ -45,9 +45,9 @@ fn assert_finite_half_output(gpu: &Gpu, texture: &wgpu::Texture) {
     rx.recv().unwrap().unwrap();
     let data = buffer.slice(..).get_mapped_range().unwrap();
     for row in data.chunks_exact(row as usize) {
-        for pixel in row[..texture.width() as usize * 8].chunks_exact(8) {
-            for channel in pixel[..6].chunks_exact(2) {
-                let half = u16::from_le_bytes(channel.try_into().unwrap());
+        for pixel in row[..texture.width() as usize * 8].as_chunks::<8>().0 {
+            for channel in pixel[..6].as_chunks::<2>().0 {
+                let half = u16::from_le_bytes(*channel);
                 assert_ne!(half & 0x7c00, 0x7c00, "non-finite tonemapped RGB: {half:x}");
                 assert!(half <= 0x3c00, "RGB outside [0, 1]: {half:x}");
             }

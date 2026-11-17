@@ -3,13 +3,11 @@
 mod build_support;
 
 use build_support::{
-    digest_file, hermesc_bytecode_version, prepare_apple_simulator_link_archives, rerun_paths,
-    resolve_engine_directory, LinkArchive, PreparedLinkArchive,
+    digest_file, hermesc_bytecode_version, native_link_lines,
+    prepare_apple_simulator_link_archives, rerun_paths, resolve_engine_directory, LinkArchive,
 };
 use std::path::{Path, PathBuf};
 
-const LINUX_ICU_I18N: &str = "icui18n";
-const LINUX_ICU_UC: &str = "icuuc";
 const LINUX_ICU_DATA: &str = "icudata";
 const LINUX_ICU_EN_DATA: &str = "icudata-en";
 const LINUX_ICU_FULL_DATA: &str = "icudata-full";
@@ -111,6 +109,14 @@ fn main() {
     });
     let bytecode_version = hermesc_bytecode_version(&install.hermesc)
         .unwrap_or_else(|error| panic!("cannot inspect selected Hermes compiler: {error}"));
+    metadata(
+        "android_intl",
+        if target_os == "android" && install.icu_en_data_archive.is_some() {
+            "1"
+        } else {
+            "0"
+        },
+    );
     metadata("include_dir", &install.include_dir.display().to_string());
     metadata("hermesc_path", &install.hermesc.display().to_string());
     // @ref LLP 0068.002#2-patch-disposition — consumers use the compiler from
@@ -194,10 +200,11 @@ fn main() {
     } else {
         None
     };
+    let mut prepared = Vec::new();
     if let Some((archive, digest)) = linked {
         let link_archives = static_link_archives(&target_os, &install.lib_root, archive);
         let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-        let prepared =
+        prepared =
             prepare_apple_simulator_link_archives(&install, &target, &out_dir, &link_archives)
                 .unwrap_or_else(|error| panic!("cannot prepare Hermes link archives: {error}"));
         let linked_vm = prepared
@@ -229,43 +236,40 @@ fn main() {
                 "cargo:rustc-env=HERMES_LEAN_LINKED_ENGINE_DERIVATIVE_DIGEST={derivative_digest}"
             );
         }
-        emit_link_lines(&target_os, &target_vendor, &prepared);
     }
-    if links_icu && target_os == "linux" {
+    let mut icu = None;
+    if links_icu && matches!(target_os.as_str(), "linux" | "android") {
         // @ref LLP 0057.000#l1--the-bindings-door — the ICU-data identity is
         // separate from the VM identity so R-e names the exact selected data
         // archive while the common ICU code remains receipt-bound.
-        let (archive, digest, library) = if links_full_icu_data {
+        let (archive, digest, library) = if let Some(archive) = install
+            .icu_full_data_archive
+            .as_ref()
+            .filter(|_| links_full_icu_data)
+        {
             (
-                install
-                    .icu_full_data_archive
-                    .as_ref()
-                    .expect("Linux install has full ICU data"),
+                archive,
                 icu_full_data_digest
                     .as_deref()
-                    .expect("Linux install has a full ICU data digest"),
+                    .expect("full ICU data digest"),
                 LINUX_ICU_FULL_DATA,
             )
-        } else if links_en_icu_data {
+        } else if let Some(archive) = install
+            .icu_en_data_archive
+            .as_ref()
+            .filter(|_| links_en_icu_data)
+        {
             (
-                install
-                    .icu_en_data_archive
-                    .as_ref()
-                    .expect("Linux install has English-Intl ICU data"),
+                archive,
                 icu_en_data_digest
                     .as_deref()
-                    .expect("Linux install has an English-Intl ICU data digest"),
+                    .expect("English ICU data digest"),
                 LINUX_ICU_EN_DATA,
             )
         } else {
             (
-                install
-                    .icu_data_archive
-                    .as_ref()
-                    .expect("Linux install has base ICU data"),
-                icu_data_digest
-                    .as_deref()
-                    .expect("Linux install has a base ICU data digest"),
+                install.icu_data_archive.as_ref().expect("base ICU data"),
+                icu_data_digest.as_deref().expect("base ICU data digest"),
                 LINUX_ICU_DATA,
             )
         };
@@ -276,7 +280,10 @@ fn main() {
             archive.display()
         );
         println!("cargo:rustc-env=HERMES_LEAN_LINKED_ICU_DATA_DIGEST={digest}");
-        emit_linux_icu_link_lines(&install.lib_root, library);
+        icu = Some((install.lib_root.as_path(), library));
+    }
+    for line in native_link_lines(&target_os, &target_vendor, &prepared, icu) {
+        println!("cargo:{line}");
     }
     if links_icu && target_os == "windows" {
         // @ref LLP 0057.000#511-windows-intl-uses-the-os-icu — Windows has no
@@ -349,66 +356,4 @@ fn warn_on_low_tvos_deployment_target(target_os: &str) {
             "cargo:warning=hermes-lean-sys: the tvOS Hermes bundles target tvOS {BUNDLE_TVOS_MINIMUM}.0; set TVOS_DEPLOYMENT_TARGET={BUNDLE_TVOS_MINIMUM}.0 or later, or the final link fails (___chkstk_darwin undefined)"
         );
     }
-}
-
-fn emit_link_lines(target_os: &str, target_vendor: &str, archives: &[PreparedLinkArchive]) {
-    let mut search_paths = Vec::new();
-    // Apple Simulator preparation places the complete current closure in one
-    // fresh content-addressed directory, so no stale derivative can shadow a
-    // member that changed from fat to thin.
-    for archive in archives {
-        let parent = archive
-            .linked
-            .parent()
-            .expect("native link archive has a parent directory");
-        if !search_paths.contains(&parent) {
-            search_paths.push(parent);
-            println!("cargo:rustc-link-search=native={}", parent.display());
-        }
-    }
-    // Do not use `static:-bundle`: exact2's Xcode-facing product is itself a
-    // Rust staticlib, so these native archives must remain bundled through the
-    // intermediate rlibs. Universal archives are made rustc-readable instead.
-    for archive in archives {
-        println!("cargo:rustc-link-lib=static={}", archive.library);
-    }
-    if target_vendor == "apple" {
-        println!("cargo:rustc-link-lib=c++");
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
-        println!("cargo:rustc-link-lib=framework=Foundation");
-    } else if target_os == "android" {
-        // The bundle's static ICU (Hermes's Unicode backend: case mapping,
-        // normalization, collation; no Intl), then the NDK's static libc++ (the
-        // bundle is built with ANDROID_STL=c++_static) and liblog. No JNI.
-        println!("cargo:rustc-link-lib=static=icui18n");
-        println!("cargo:rustc-link-lib=static=icuuc");
-        println!("cargo:rustc-link-lib=static=icudata");
-        println!("cargo:rustc-link-lib=c++_static");
-        println!("cargo:rustc-link-lib=c++abi");
-        println!("cargo:rustc-link-lib=log");
-        println!("cargo:rustc-link-lib=dl");
-        println!("cargo:rustc-link-lib=m");
-    } else if target_os == "windows" {
-        println!("cargo:rustc-link-lib=icuuc");
-        println!("cargo:rustc-link-lib=icuin");
-        println!("cargo:rustc-link-lib=dbghelp");
-        println!("cargo:rustc-link-lib=version");
-        println!("cargo:rustc-link-lib=psapi");
-        println!("cargo:rustc-link-lib=winmm");
-    } else {
-        // ICU comes from the `icu` feature selected by either Linux VM link
-        // feature. Full Intl support independently swaps the data archive.
-        println!("cargo:rustc-link-lib=static=tinfo");
-        println!("cargo:rustc-link-lib=stdc++");
-        println!("cargo:rustc-link-lib=dl");
-        println!("cargo:rustc-link-lib=pthread");
-        println!("cargo:rustc-link-lib=m");
-    }
-}
-
-fn emit_linux_icu_link_lines(lib_root: &Path, data_library: &str) {
-    println!("cargo:rustc-link-search=native={}", lib_root.display());
-    println!("cargo:rustc-link-lib=static={LINUX_ICU_I18N}");
-    println!("cargo:rustc-link-lib=static={LINUX_ICU_UC}");
-    println!("cargo:rustc-link-lib=static={data_library}");
 }

@@ -164,6 +164,8 @@ theorem cmono_aux : ∀ n,
           refine ⟨C, hC, ?_⟩
           revert h
           split
+          · split <;> exact fun h => h
+          split
           · split
             · exact ihP hm
             · exact fun h => h

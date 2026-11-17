@@ -186,10 +186,12 @@ try {
   await evaluate('globalThis.__gaps.on=false');
   console.log(JSON.stringify({ frame_gaps: report }));
   // The app permits this much stored text even though a backup is capped at
-  // 4 MiB. Seed via the real browser SQLite service, then reopen through UI.
+  // 4 MiB. Seed via the real browser SQLite service, under the grant set the
+  // host admitted from the app's declaration (a parsed set, never its text),
+  // then reopen through UI.
   await evaluate(`(async()=>{
     const {createSqlite}=await import('/storage-sqlite.js');
-    const sql=createSqlite('com.exact.fieldnotes','sqlite.open app:/data/fieldnotes.db');
+    const sql=createSqlite('com.exact.fieldnotes',(await import('/glue.js')).host.grantSet);
     const db=await sql.open('app:/data/fieldnotes.db');
     try {await db.execute('UPDATE notes SET body=?',['🌿'.repeat(9998)+'ÉΣKx']);}
     finally {await db.close();sql.dispose();}
@@ -230,7 +232,7 @@ try {
   // and the following whitespace must collapse before the visible suffix.
   await evaluate(`(async()=>{
     const {createSqlite}=await import('/storage-sqlite.js');
-    const sql=createSqlite('com.exact.fieldnotes','sqlite.open app:/data/fieldnotes.db');
+    const sql=createSqlite('com.exact.fieldnotes',(await import('/glue.js')).host.grantSet);
     const db=await sql.open('app:/data/fieldnotes.db');
     try {await db.execute('UPDATE notes SET body=?',[String.fromCharCode(0)+'\u2003'.repeat(19998)+'x']);}
     finally {await db.close();sql.dispose();}

@@ -86,6 +86,24 @@ shape Run
 shape Cell
   id: string
   runs: Run[]
+  align: string
+shape TableGroup
+  id: string
+  start: number
+  end: number
+// One sizing line refers to cells of its table block's `cells` by index:
+// `cells`, single-run cells of one style that the reader joins with
+// newlines, or `cell`, one cell of several runs (`-1` when `cells` is used).
+shape SizerLine
+  id: string
+  cells: number[]
+  cell: number
+  weight: number
+  slant: string
+  mono: bool
+shape TableSizer
+  id: string
+  lines: SizerLine[]
 shape Block
   id: string
   kind: string
@@ -100,6 +118,8 @@ shape Block
   width: number
   height: number
   align: string
+  tableGroups: TableGroup[]
+  tableSizers: TableSizer[]
 shape Runbook
   title: string
   sourceBytes: number
@@ -135,7 +155,7 @@ shape JobLog
 
 component ExactLive
   resource viewport = exactViewport() as shape Viewport
-  resource theme = theme() as shape Theme
+  derive theme = Theme(page="-exact-background", card="-exact-secondary-background", edge="-exact-separator", ink="-exact-label", muted="-exact-secondary-label", wash="-exact-secondary-fill", accent="AccentColor")
   resource initial = gallery() as shape GalleryState
   mutation changed as shape GalleryState
   derive gallery = match changed { case some(value) => value, case none => initial }
@@ -426,7 +446,7 @@ component ExactLive
     theme
     k
   view
-    main testId="exact-live" width="100%" height="100%" min-height=0 display="flex" flex-direction="column" overflow="hidden" box-sizing="border-box" viewport-fit="cover" interactive-widget="resizes-content" padding-top="env(safe-area-inset-top)" padding-left="env(safe-area-inset-left)" padding-right="env(safe-area-inset-right)" padding-bottom="env(safe-area-inset-bottom)" background-color=theme.page color=theme.ink
+    main testId="exact-live" width="100%" height="100%" min-height=0 display="flex" flex-direction="column" overflow="hidden" box-sizing="border-box" viewport-fit="cover" interactive-widget="resizes-content" padding-top="env(safe-area-inset-top)" padding-left="env(safe-area-inset-left)" padding-right="env(safe-area-inset-right)" padding-bottom="env(safe-area-inset-bottom)" background-color=theme.page color=theme.ink accent-color="light-dark(#225b4c, #cce8d3)"
       column flex-shrink=0 padding=16 gap=12 border-bottom-width=1 border-color=theme.edge
         row align-items="center" gap=10
           text "exact / live" font-size=(22 * k) font-weight=700 letter-spacing=-0.8 color=theme.accent
@@ -439,7 +459,7 @@ component ExactLive
               text "Pause" font-size=(12 * k) color=theme.accent
           else
             button press=startLive testId="start-live" min-height=44 padding=10 border-width=0 border-radius=8 background-color=theme.accent
-              text "Go live" font-size=(12 * k) color=theme.page
+              text "Go live" font-size=(12 * k) color="light-dark(#ffffff, #000000)"
           button press=toggleInspector testId="toggle-load" aria-label="Workload controls" min-width=44 min-height=44 padding=10 border-width=0 border-radius=8 background-color=theme.card
             text "•••" color=theme.ink
         row align-items="center" gap=6
@@ -561,7 +581,7 @@ component LoadButton
     choose: action
   view
     button press=choose(n) padding=8 min-height=44 border-width=0 border-radius=6 background-color=(selected == n ? theme.accent : theme.card)
-      text label font-size=(12 * k) color=(selected == n ? theme.card : theme.ink)
+      text label font-size=(12 * k) color=(selected == n ? "light-dark(#ffffff, #000000)" : theme.ink)
 
 component RundownPanel
   inject
@@ -622,13 +642,13 @@ component CrewPanel
       list appearance="none" virtualized=true scrollFollowEnd=true testId="crew-transcript" flex=1 min-height=60 width="100%" overflow-x="hidden" overscroll-behavior="contain" background-color=theme.page
         for m in history.rows key=m.id
           column width="100%" box-sizing="border-box" padding-left=12 padding-right=12 padding-top=7 padding-bottom=7
-            box swiperight=reply(m.id) testId=`crew-swipe-${m.id}` touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="#00000000" text-align="left"
+            box swiperight=reply(m.id) testId=`crew-swipe-${m.id}` touch-action="pan-y" retainFocus=true transition="translate -exact-spring(300, 30, 1)" width="100%" padding=0 border-width=0 background-color="transparent" text-align="left"
               column testId=`message-${m.id}` width="100%" align-items=(m.outgoing ? "flex-end" : "flex-start") gap=5
                 text m.sender font-size=(11 * k) font-weight=600 color=theme.muted
                 column max-width="95%" padding=11 gap=6 box-sizing="border-box" border-radius=10 background-color=(m.outgoing ? theme.wash : theme.card)
                   text m.body font-size=(14 * k) line-height=1.45 white-space="pre-wrap" color=theme.ink
                   text m.meta font-size=(10 * k) color=theme.muted
-            button tabindex=0 press=reply(m.id) retainFocus=true align-self="flex-end" padding=5 border-width=0 background-color="#00000000" aria-label=`Reply to ${m.sender}`
+            button tabindex=0 press=reply(m.id) retainFocus=true align-self="flex-end" padding=5 border-width=0 background-color="transparent" aria-label=`Reply to ${m.sender}`
               text "Reply" font-size=(10 * k) color=theme.accent
       column padding=12 gap=6 width="100%" box-sizing="border-box" flex-shrink=0
         if replying != ""
@@ -639,7 +659,7 @@ component CrewPanel
         row gap=8 align-items="center"
           input appearance="none" value=draft input=edit submit=post testId="crew-input" aria-label="Write a local crew note" placeholder="Leave a note for this scene…" flex=1 min-width=0 min-height=44 padding=10 border-width=1 border-color=theme.edge border-radius=8 background-color=theme.page color=theme.ink font-size=(14 * k)
           button press=post testId="send-note" padding=10 min-height=44 border-width=0 border-radius=8 background-color=theme.accent
-            text "Post" font-size=(12 * k) color=theme.card
+            text "Post" font-size=(12 * k) color="light-dark(#ffffff, #000000)"
         text "Device-local · latest note retained" font-size=(10 * k) color=theme.muted
         if tooLong
           text "Keep the note within512 characters. Your previous draft is retained." testId="draft-error" font-size=(11 * k) color=theme.accent
@@ -738,7 +758,7 @@ component Viewer
             text "2×" font-size=(12 * k) color=theme.ink
           button press=resetPhoto testId="viewer-reset" aria-label="Reset photo position and zoom" padding=8 border-width=0 border-radius=6 background-color=theme.card
             text "Center and fit" font-size=(12 * k) color=theme.ink
-        box testId="viewer-clip" width="100%" height=410 flex-shrink=0 position="relative" overflow="hidden" padding=0 border-width=0 box-sizing="border-box" border-radius=12 background-color="#172521"
+        box testId="viewer-clip" width="100%" height=410 flex-shrink=0 position="relative" overflow="hidden" padding=0 border-width=0 box-sizing="border-box" border-radius=12 background-color="-exact-tertiary-background"
           box id="viewer-transform" testId="viewer-transform" width="100%" height="100%" position="relative" padding=0 border-width=0 margin=0 box-sizing="border-box" translate=`${panX}px ${panY}px` scale=zoom transition="translate -exact-spring(300, 30, 1), scale -exact-spring(300, 30, 1)"
             image viewer.photo.asset aria-label=viewer.photo.alt position="absolute" left=0 top=0 width="100%" height="100%" object-fit="contain" testId="viewer-image"
             box transformDragFor="viewer-transform" transformgeometry=photoGeometry transformrelease=releasePhoto touch-action="none" position="absolute" left=0 top=0 width="100%" height="100%" testId="viewer-handle" aria-label=`Pan ${viewer.photo.title}`
@@ -833,16 +853,20 @@ component Blocks
               if block.kind == "rule"
                 view width="100%" height=1 background-color=theme.edge margin-top=22 margin-bottom=22 testId=`block-${block.id}`
               else
-                if block.kind == "table-row"
-                  row width="100%" border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge testId=`block-${block.id}`
-                    for c in block.cells key=c.id
-                      view flex=1 padding=8
-                        if block.header
-                          text color=theme.ink line-height="20px"
-                            Runs(runs=c.runs, size=(13 * k), weight=700)
-                        else
-                          text color=theme.ink line-height="20px"
-                            Runs(runs=c.runs, size=(13 * k), weight=400)
+                if block.kind == "table"
+                  view width="100%" testId=`block-${block.id}`
+                    scroll testId=`table-${block.id}` width="100%" overflow-x="auto" overflow-y="hidden"
+                      for g in block.tableGroups key=g.id
+                        view display="grid" grid-template-columns=`repeat(${block.depth}, minmax(min-content, auto))`
+                          for s in block.tableSizers key=s.id
+                            ColumnSizer(sizer=s, cells=block.cells, size=(13 * k))
+                          for c, i in block.cells.slice(g.start, g.end) key=c.id
+                            if g.start + i < block.depth
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge color=theme.ink line-height="20px"
+                                Runs(runs=c.runs, size=(13 * k), weight=700)
+                            else
+                              text text-align=(c.align == "" ? "start" : c.align) padding=8 border-bottom-style="solid" border-bottom-width=1 border-color=theme.edge color=theme.ink line-height="20px"
+                                Runs(runs=c.runs, size=(13 * k), weight=400)
                 else
                   if block.kind == "image"
                     column width="100%" padding-top=10 padding-bottom=10 gap=6 testId=`block-${block.id}`
@@ -853,6 +877,34 @@ component Blocks
                     // Raw HTML: shown, never interpreted.
                     view width="100%" padding-top=4 padding-bottom=4 testId=`block-${block.id}`
                       text block.text font-family="ui-monospace" font-size=(12 * k) color=theme.muted
+
+// The text of a sizing line's cells, one cell a line.
+fn sizerText(cells: Cell[], refs: number[]): string = refs.map(n => match cells.at(n) { case some(c) => match first(c.runs) { case some(r) => r.text, case none => "" }, case none => "" }).join("\n")
+
+// One column's invisible grid item in each group of a long table: it gives
+// every group the whole table's intrinsic column widths. It draws no links,
+// which hidden text must not take focus with.
+component ColumnSizer
+  props
+    sizer: TableSizer
+    cells: Cell[]
+    size: number
+  view
+    view height=0 overflow="hidden" opacity=0 aria-hidden=true padding-left=8 padding-right=8
+      for l in sizer.lines key=l.id
+        if l.cell < 0
+          if l.mono
+            text sizerText(cells, l.cells) white-space="pre-line" line-height="20px" font-family="ui-monospace" font-size=(size * 0.92) font-weight=l.weight font-style=l.slant
+          else
+            text sizerText(cells, l.cells) white-space="pre-line" line-height="20px" font-size=size font-weight=l.weight font-style=l.slant
+        else
+          for c in cells.slice(l.cell, l.cell + 1) key=c.id
+            text line-height="20px"
+              for r in c.runs key=r.id
+                if r.mono
+                  text r.text font-family="ui-monospace" font-size=(size * 0.92) font-weight=(r.weight > l.weight ? r.weight : l.weight) font-style=r.slant
+                else
+                  text r.text font-size=size font-weight=(r.weight > l.weight ? r.weight : l.weight) font-style=r.slant
 
 // The styled spans of one paragraph, as the inline `text` children the
 // kernel measures as one paragraph and CoreText paints as one typeset run.

@@ -1,0 +1,21 @@
+test "phone headers keep compose, cancel and start reachable"
+  size 402x874
+  tap "new"
+  clock settle
+  tap "new-cancel"
+  clock settle
+  expect tree has "search"
+  tap "new"
+  clock settle
+  tap "new-start"
+  clock data
+  clock settle
+  expect text "chat-title" == "New Conversation"
+  expect tree has "composer"
+
+test "the phone header keeps search editable"
+  size 402x874
+  type "search" "No matches"
+  clock data
+  clock settle
+  expect state query == "No matches"

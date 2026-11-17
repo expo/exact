@@ -1,5 +1,5 @@
 ```prompt Keep a setting across launches
-Make the Exact app in this folder remember a setting across launches. Use https://github.com/expo/exact/blob/main/docs/recipes/persisted-setting.md as the source for each step. The exact2 checkout has the same page at docs/recipes/persisted-setting.md.
+Make the Exact app in this folder remember a setting across launches. Use https://github.com/expo/exact/blob/main/docs/recipes/persisted-setting.md as the source for each step. The Exact checkout has the same page at docs/recipes/persisted-setting.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which setting to keep, list the choices the app already has and ask me which ones. A setting is a choice the person makes (a filter, a sort order, units, a toggle), not text they are typing or a draft.

@@ -2,6 +2,9 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 test('intersection matches Chrome for margins, scroll, clipping, zero area and removal', async () => {
   const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
@@ -234,7 +237,7 @@ test('intersection geometry follows Chrome for rotated roots and sticky targets'
 }, 120000);
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`intersection roots preserve margin and clipping semantics in ${engine}`, async function () {
+  engineTest[engine](`intersection roots preserve margin and clipping semantics in ${engine}`, async function () {
     const source = readFileSync(new URL('../intersect-glue.js', import.meta.url), 'utf8');
     const browser = await suiteBrowser(engine);
     const scrollportStyle = 'position:relative;width:300px;height:500px;overflow:auto';

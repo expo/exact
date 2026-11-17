@@ -8,13 +8,9 @@
 use super::*;
 use crate::instance::collection::{
     IntoView, ReorderBinding, ReorderEnding, ReorderGeometry, ReorderPhase, ReorderProgress,
-    ReorderStart, ReorderStep, ReorderToken,
+    ReorderStart, ReorderStep, ReorderToken, HOLD_MS,
 };
 use exact_kernel::{NodeKey, NodeType, Op, PropId};
-
-/// How long a drop's hold waits for its move, on the session clock (LLP
-/// 1094 D8; §9 Q1).
-pub(super) const HOLD_MS: f64 = 1000.0;
 
 /// One gesture's session; `group` is `None` for a list without one, whose
 /// reorder stays within it (LLP 1041 §8.5).
@@ -276,7 +272,8 @@ impl<D: DataSource> Runner<D> {
         }
         let source = token.list;
         let (item, before) = if target == source {
-            let (drop, _) = self.edit_reorder(source, |c, _, _| c.hold_drop(&geometry))?;
+            let (drop, _) =
+                self.edit_reorder(source, |c, u, _| c.hold_drop(&geometry, u.env.now_ms))?;
             let Some(Some((item, before))) = drop else {
                 return Ok(None);
             };

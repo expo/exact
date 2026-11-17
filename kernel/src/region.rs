@@ -71,12 +71,13 @@ impl RegionLeases {
     }
 }
 // Stamp/source/catalog provenance is stored once in the set/source table.
-// No native payload or per-fact Arc; two typed axes and optional baseline stay exact.
-#[derive(Clone, Copy)]
+// Ordinary facts allocate no geometry; flowed facts share the request snapshot.
+#[derive(Clone)]
 struct ScalarFact {
     source: u16,
     offer: Offer,
     metrics: TextMetrics,
+    exclusions: Option<Arc<Vec<crate::FlowShape>>>,
 }
 const _: () = assert!(std::mem::size_of::<ScalarFact>() <= 48);
 #[derive(Default)]
@@ -93,9 +94,18 @@ impl FactSet {
     /// the same width answers every height, as the ordinary path's
     /// measurement cache does: an intrinsic width probe under a definite,
     /// min-content or max-content height is one measurement, not three.
-    fn find(&self, stamp: &ParagraphStamp, offer: Offer) -> Option<usize> {
+    fn find(
+        &self,
+        stamp: &ParagraphStamp,
+        offer: Offer,
+        exclusions: &[crate::FlowShape],
+    ) -> Option<usize> {
         self.entries.iter().position(|f| {
             self.sources[f.source as usize].stamp == *stamp
+                && crate::flow::shapes_eq(
+                    f.exclusions.as_deref().map_or(&[], Vec::as_slice),
+                    exclusions,
+                )
                 && if self.height_free {
                     same_axis(f.offer.width, offer.width)
                 } else {
@@ -127,6 +137,7 @@ fn same_metrics(a: TextMetrics, b: TextMetrics) -> bool {
     a.width.to_bits() == b.width.to_bits()
         && a.height.to_bits() == b.height.to_bits()
         && a.first_baseline.map(f32::to_bits) == b.first_baseline.map(f32::to_bits)
+        && a.pending == b.pending
 }
 
 /// Explicit direct children of an independently sized, clipped View.
@@ -157,15 +168,35 @@ impl PartialEq for RegionTicket {
 }
 impl Eq for RegionTicket {}
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct TextKey {
     stamp: ParagraphStamp,
     offer: Offer,
+    exclusions: Option<Arc<Vec<crate::FlowShape>>>,
+}
+impl TextKey {
+    fn exclusions(&self) -> &[crate::FlowShape] {
+        self.exclusions.as_deref().map_or(&[], Vec::as_slice)
+    }
+}
+impl PartialEq for TextKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.stamp == other.stamp
+            && same_offer(self.offer, other.offer)
+            && crate::flow::shapes_eq(self.exclusions(), other.exclusions())
+    }
 }
 /// One immutable first-missing request. Cloning shares its snapshot; no worker
 /// sees the arena or computes geometry. Only the current request may complete.
+/// Equality identifies that private request; cloning preserves its identity.
 #[derive(Clone)]
 pub struct RegionTextRequest(Arc<RequestData>);
+impl PartialEq for RegionTextRequest {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl Eq for RegionTextRequest {}
 struct RequestData {
     ticket: RegionTicket,
     key: TextKey,
@@ -214,6 +245,10 @@ impl RegionTextRequest {
     pub fn offer(&self) -> Offer {
         self.0.key.offer
     }
+    /// Resolved exclusions in this paragraph's content coordinates, owned by this offer.
+    pub fn exclusions(&self) -> &[crate::FlowShape] {
+        self.0.key.exclusions()
+    }
     /// Font/catalog identity that must select the worker's shaping context.
     pub fn catalog(&self) -> u64 {
         self.0.catalog
@@ -232,12 +267,13 @@ impl RegionTextRequest {
             .map(|(text, style)| TextRun {
                 text: (&**text).into(),
                 style: *style,
+                edges: Default::default(),
                 inline: None,
             })
             .collect();
         f(&TextMeasureRequest {
             atoms: Default::default(),
-            exclusions: &[],
+            exclusions: self.exclusions(),
             runs: &runs,
             paragraph: self.0.source.paragraph,
             width: self.offer().width,
@@ -422,6 +458,34 @@ impl RegionPublication {
     pub fn field_content_rect(&self, node: NodeKey) -> Option<Frame> {
         self.geometry.facts.field_content.get(&node).copied()
     }
+    /// Origin-zero content box from the accepted pass, including its resolved
+    /// padding and border. It never reads the live candidate's style.
+    pub fn content_rect(&self, node: NodeKey) -> Option<Frame> {
+        let frame = self.frames().iter().find(|f| f.node == node)?.frame;
+        let inset = self
+            .geometry
+            .facts
+            .insets
+            .get(&node)
+            .copied()
+            .unwrap_or_default();
+        Some(Frame {
+            x: frame.x + inset.padding[0] + inset.border[0],
+            y: frame.y + inset.padding[1] + inset.border[1],
+            width: (frame.width
+                - inset.padding[0]
+                - inset.padding[2]
+                - inset.border[0]
+                - inset.border[2])
+                .max(0.),
+            height: (frame.height
+                - inset.padding[1]
+                - inset.padding[3]
+                - inset.border[1]
+                - inset.border[3])
+                .max(0.),
+        })
+    }
     /// Default: all retained offers. Split profile: final paint owners only.
     pub fn artifacts(&self) -> &[RegionArtifact] {
         &self.artifacts
@@ -527,18 +591,19 @@ mod split_storage_tests {
                 source: 0,
                 offer: Offer::definite(1., 1.),
                 metrics: TextMetrics::default(),
+                exclusions: None,
             });
         }
         assert_eq!(facts.entries.len(), 768);
         assert_eq!(facts.entries.capacity(), 768);
-        assert_eq!(std::mem::size_of::<ScalarFact>(), 36);
+        assert_eq!(std::mem::size_of::<ScalarFact>(), 48);
         assert_eq!(
             facts.entries.capacity() * std::mem::size_of::<ScalarFact>(),
-            27_648
+            36_864
         );
         assert_eq!(
             2 * facts.entries.capacity() * std::mem::size_of::<ScalarFact>(),
-            55_296
+            73_728
         );
         assert!(facts.entries.capacity() * std::mem::size_of::<ScalarFact>() <= 36 * 1024);
         facts.sources.reserve_exact(SPLIT_PAINTS);

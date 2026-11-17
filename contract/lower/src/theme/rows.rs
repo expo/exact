@@ -1,7 +1,7 @@
 //! The design server's write check of the rows a write reaches (LLP 1121
 //! D3 and D7; QUEUE's "the server's write check doesn't see a Contract
 //! row's kind", theme2's 14:19 ruling). The retention build's walk
-//! (`scan::Said::of`) keeps each style row whose value is literal
+//! (`scan::Read::of`) keeps each style row whose value is literal
 //! ([`kept`]), and the design server keeps that map beside the
 //! retention. On a write, [`check`] runs the compiler's own check of a row
 //! (`values::check_style_value`) on just the rows that name a token the
@@ -46,18 +46,17 @@
 //! shorthand or `flex`; a state part's row; a style's row any element
 //! applying it leaves to the build (lowering rewrites its class rows first,
 //! it chooses between styles, or the `for` or `match` around it isn't typed:
-//! `scan::Said::of`); and refusals outside a style row (an SVG attribute, a
-//! canvas). Where the build would refuse one of those first, the first
-//! refusal the check says is the build's second: every refusal said is
-//! still the build's, in its words and place, and none is false (theme2's
-//! limit, accepted at the style rows' sign-off and again for stage 14 E's
-//! rows the check can't type; pinned by `tamber_rows_bound`'s
-//! `a_row_left_to_the_build_before_a_judged_one_is_the_stated_limit`).
+//! `scan::Read::of`); and refusals outside a style row (an SVG attribute, a
+//! canvas). A newly failing row is the design server's trigger: the first
+//! diagnostic of the proposed design's build is the refusal, which
+//! [`first_failing`] says when every use the write reaches is a row judged
+//! here ([`Left`]) and the build before it passed, and only a build
+//! otherwise.
 
 use super::{bind, fold, profiles, scan, Origin, Refusals, Sink, ThemeEntry};
 use crate::{DeclaredFont, LowerError};
 use contract_syntax::{Attr, Expr, Span};
-use exact_tamber as tamber;
+use exact_forma as forma;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -65,6 +64,40 @@ use std::sync::Arc;
 thread_local! {
     /// The literal rows the last design lowered on this thread names.
     static ROWS: RefCell<Vec<Row>> = const { RefCell::new(Vec::new()) };
+    /// What those rows leave to the build.
+    static LEFT: RefCell<Left> = RefCell::new(Left::default());
+}
+
+/// The design's uses the row map leaves to the build: every word a literal
+/// writes outside a judged row (a role's other name inside one too), each
+/// role such a word names, and whether a style row it leaves is computed,
+/// where a string from data may name any token.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Left {
+    pub(crate) words: std::collections::BTreeSet<String>,
+    pub(crate) roles: std::collections::BTreeSet<String>,
+    pub(crate) computed: bool,
+}
+
+impl Left {
+    /// Whether a write to `touched`, folded as `folded`, reaches a use the
+    /// row map leaves to the build, whose refusal only a build can place.
+    pub fn reaches(&self, touched: &[&str], folded: &forma::Folding) -> bool {
+        self.computed
+            || reach(touched, folded)
+                .iter()
+                .any(|h| self.words.contains(h) || self.roles.contains(h))
+    }
+}
+
+/// Leave `left` for [`left`] beside the rows.
+pub(crate) fn note_left(left: Left) {
+    LEFT.with(|l| *l.borrow_mut() = left);
+}
+
+/// What the last build's rows on this thread leave to the build, taken.
+pub fn left() -> Left {
+    LEFT.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
 /// A literal row, and every place it is written alike (one name, one
@@ -250,7 +283,7 @@ impl Place {
 /// `attrs` as [`Row`]s: each literal a row may write (every arm of a `?:`
 /// or `match`, which the build checks each of, whatever the condition), as
 /// a row of its own; those alike, with alike fonts, as one.
-fn grouped(attrs: Vec<Said>) -> Vec<Row> {
+pub(crate) fn grouped(attrs: Vec<Said>) -> Vec<Row> {
     let mut out: Vec<Row> = Vec::new();
     let mut at: std::collections::HashMap<(String, bool, String, usize), usize> =
         Default::default();
@@ -489,7 +522,7 @@ pub(crate) fn typed(v: &Expr, typing: &Typing) -> Option<contract_types::Ty> {
     // `for`, a `match` or a `let` around it binds): a root prop or an action
     // as a value is lowering's refusal of its own (Grok's D2 round 2).
     let mut loads = true;
-    scan::exprs(v, &mut |e| {
+    v.walk().for_each(|e| {
         if let Expr::Ident(name, _) = e {
             loads &= matches!(
                 scope.lookup(name),
@@ -540,18 +573,14 @@ fn shape(
 /// [`kept`]'s rows, whatever the value.
 fn style_row(a: &Attr) -> bool {
     let n = a.name.as_str();
-    if n.contains("transition")
+    !(n.contains("transition")
         || n.contains("animation")
         || crate::tags::rows(a).is_empty()
         || (n != "font"
             && matches!(
                 crate::tags::attr_valued(n, &a.value),
                 Some(crate::tags::AttrTarget::Shorthand | crate::tags::AttrTarget::Flex)
-            ))
-    {
-        return false;
-    }
-    true
+            )))
 }
 
 /// Each literal `v` writes as written, into `out`: a string or number, or
@@ -573,8 +602,9 @@ fn written<'e>(v: &'e Expr, out: &mut Vec<&'e Expr>) -> bool {
     }
 }
 
-/// A row the retention build's walk keeps ([`scan::Said::of`]): the row,
+/// A row the retention build's walk keeps ([`scan::Read::of`]): the row,
 /// a font row's node's fonts, and a computed row's type ([`Row`]'s).
+#[derive(Clone)]
 pub(crate) struct Said {
     pub attr: Attr,
     pub fonts: Option<Fonts>,
@@ -591,6 +621,10 @@ pub(crate) struct Said {
 /// Leave `rows` for [`rows`] (the design server's build reads it).
 pub(crate) fn note(rows: Vec<Said>) {
     ROWS.with(|r| *r.borrow_mut() = grouped(rows));
+}
+
+pub(crate) fn note_grouped(rows: Vec<Row>) {
+    ROWS.with(|r| *r.borrow_mut() = rows);
 }
 
 /// The literal rows the last build on this thread names, taken: the map
@@ -618,29 +652,115 @@ pub struct Broken {
 pub fn check(
     rows: &[Row],
     touched: &[&str],
-    after: &tamber::Design,
-    folded: &tamber::Folding,
-    before: impl FnOnce() -> Option<tamber::Design>,
+    after: &forma::Design,
+    folded: &forma::Folding,
+    before: impl FnOnce() -> Option<forma::Design>,
     exprs: &[(String, bool)],
     params: &[crate::params::ParamToken],
 ) -> Vec<Broken> {
-    // Every name that is touched or reaches one: back from the touched
-    // names over who names whom, once.
+    let (reached, _) = reached(rows, &reach(touched, folded));
+    if reached.is_empty() {
+        return Vec::new();
+    }
+    let Some(failing) = judged(after, Some(folded), &reached, exprs, params) else {
+        return Vec::new();
+    };
+    let failing: Vec<(&Row, LowerError)> = reached
+        .into_iter()
+        .zip(failing)
+        .filter_map(|(a, r)| r.err().map(|e| (a, e)))
+        .collect();
+    if failing.is_empty() {
+        return Vec::new();
+    }
+    // Only the authored rows that passed before are the write's: every
+    // literal of the row judged under `before`, not the failing one alone
+    // (theme2's Q1, a row's own).
+    let Some(before) = before() else {
+        return Vec::new();
+    };
+    // A place is its authored row and, for a style's row, the element
+    // applying it (theme2's 02:08 Q1): passes before, fails after, per key.
+    let key = |p: &Place| (p.row, p.element);
+    let authored: std::collections::HashSet<(Span, usize)> = failing
+        .iter()
+        .flat_map(|(r, _)| r.places.iter().map(key))
+        .collect();
+    let theirs: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.places.iter().any(|p| authored.contains(&key(p))))
+        .collect();
+    let Some(was) = judged(&before, None, &theirs, exprs, params) else {
+        return Vec::new();
+    };
+    let failed_before: std::collections::HashSet<(Span, usize)> = theirs
+        .iter()
+        .zip(&was)
+        // Failing, or not judged here (a `font` naming no type token, the
+        // build's to judge another way): not known to have passed.
+        .filter(|(_, w)| !matches!(w, Ok(true)))
+        .flat_map(|(r, _)| r.places.iter().map(key))
+        .collect();
+    in_order(failing, |p| failed_before.contains(&key(p)))
+}
+
+/// The build's first refusal of a row `touched` reaches, when a whole build
+/// under the design before the write passed: every row reached, judged
+/// under `after`, the first failing in the build's order. `None` when the
+/// check cannot say it: a reached row it does not judge, a font file read
+/// since changed, or a design that does not fold.
+pub fn first_failing(
+    rows: &[Row],
+    touched: &[&str],
+    after: &forma::Design,
+    folded: &forma::Folding,
+    exprs: &[(String, bool)],
+    params: &[crate::params::ParamToken],
+) -> Option<Broken> {
+    let (reached, stale) = reached(rows, &reach(touched, folded));
+    if stale {
+        return None;
+    }
+    let verdicts = judged(after, Some(folded), &reached, exprs, params)?;
+    if verdicts.iter().any(|v| matches!(v, Ok(false))) {
+        return None;
+    }
+    let failing = reached
+        .into_iter()
+        .zip(verdicts)
+        .filter_map(|(a, r)| r.err().map(|e| (a, e)))
+        .collect();
+    in_order(failing, |_| false).into_iter().next()
+}
+
+/// Every name that is touched or reaches one: back from the touched names
+/// over who names whom, once.
+pub(crate) fn reach(
+    touched: &[&str],
+    folded: &forma::Folding,
+) -> std::collections::HashSet<String> {
     let mut named_by: std::collections::HashMap<&str, Vec<&str>> = Default::default();
     for t in &folded.tokens {
         for r in t.names.iter().chain(&t.bases) {
             named_by.entry(r.as_str()).or_default().push(&t.name);
         }
     }
-    let mut hit: std::collections::HashSet<&str> = touched.iter().copied().collect();
+    let mut hit: std::collections::HashSet<String> =
+        touched.iter().map(|t| t.to_string()).collect();
     let mut todo: Vec<&str> = touched.to_vec();
     while let Some(n) = todo.pop() {
         for &by in named_by.get(n).map_or(&[][..], Vec::as_slice) {
-            if hit.insert(by) {
+            if hit.insert(by.to_string()) {
                 todo.push(by);
             }
         }
     }
+    hit
+}
+
+/// The rows `hit` reaches, and whether a font file the build read has
+/// changed since: font rows are then the build's, and left out.
+fn reached<'r>(rows: &'r [Row], hit: &std::collections::HashSet<String>) -> (Vec<&'r Row>, bool) {
     let reaches = |w: &str| hit.contains(w);
     // A font file the build read has changed: font rows are the build's.
     let stale = rows
@@ -686,48 +806,11 @@ pub fn check(
             })
         })
         .collect();
-    if reached.is_empty() {
-        return Vec::new();
-    }
-    let Some(failing) = judged(after, Some(folded), &reached, exprs, params) else {
-        return Vec::new();
-    };
-    let failing: Vec<(&Row, LowerError)> = reached
-        .into_iter()
-        .zip(failing)
-        .filter_map(|(a, r)| r.err().map(|e| (a, e)))
-        .collect();
-    if failing.is_empty() {
-        return Vec::new();
-    }
-    // Only the authored rows that passed before are the write's: every
-    // literal of the row judged under `before`, not the failing one alone
-    // (theme2's Q1, a row's own).
-    let Some(before) = before() else {
-        return Vec::new();
-    };
-    // A place is its authored row and, for a style's row, the element
-    // applying it (theme2's 02:08 Q1): passes before, fails after, per key.
-    let key = |p: &Place| (p.row, p.element);
-    let authored: std::collections::HashSet<(Span, usize)> = failing
-        .iter()
-        .flat_map(|(r, _)| r.places.iter().map(key))
-        .collect();
-    let theirs: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.places.iter().any(|p| authored.contains(&key(p))))
-        .collect();
-    let Some(was) = judged(&before, None, &theirs, exprs, params) else {
-        return Vec::new();
-    };
-    let failed_before: std::collections::HashSet<(Span, usize)> = theirs
-        .iter()
-        .zip(&was)
-        // Failing, or not judged here (a `font` naming no type token, the
-        // build's to judge another way): not known to have passed.
-        .filter(|(_, w)| !matches!(w, Ok(true)))
-        .flat_map(|(r, _)| r.places.iter().map(key))
-        .collect();
+    (reached, stale)
+}
+
+/// Each place of each failing row not `skipped`, as the build reaches it.
+fn in_order(failing: Vec<(&Row, LowerError)>, skipped: impl Fn(&Place) -> bool) -> Vec<Broken> {
     // Each place the row is written whose authored row passed, refused
     // there: where the representative's refusal was, moved alike. A style's
     // row newly failing at several elements is one refusal, the build's
@@ -738,11 +821,7 @@ pub fn check(
     let mut style: BTreeMap<(u32, u32, u32, u32), (Reached, Broken)> = BTreeMap::new();
     for (row, error) in failing {
         let first = row.places[0];
-        for p in row
-            .places
-            .iter()
-            .filter(|p| !failed_before.contains(&key(p)))
-        {
+        for p in row.places.iter().filter(|p| !skipped(p)) {
             let at = if error.span == first.literal {
                 p.literal
             } else if error.span == first.at {
@@ -818,7 +897,7 @@ impl Sink for Quiet {
     fn said(&self, _: Span, _: &str) -> bool {
         false
     }
-    fn plan(&mut self, _: &[ThemeEntry], _: &tamber::Folding) {}
+    fn plan(&mut self, _: &[ThemeEntry], _: &forma::Folding) {}
     fn stacks(&mut self, entries: &[ThemeEntry]) -> Vec<String> {
         entries.iter().map(|e| e.value.clone()).collect()
     }
@@ -830,8 +909,8 @@ impl Sink for Quiet {
 /// says the design). `Ok(true)` a row that passes, `Ok(false)` one not
 /// judged here ([`judge`]).
 fn judged(
-    design: &tamber::Design,
-    folded: Option<&tamber::Folding>,
+    design: &forma::Design,
+    folded: Option<&forma::Folding>,
     rows: &[&Row],
     exprs: &[(String, bool)],
     params: &[crate::params::ParamToken],
@@ -899,8 +978,8 @@ fn judge(
         None => Vec::new(),
     };
     let kind = match a.name.as_str() {
-        "font" => Some((tamber::Kind::Type, &uses[..])),
-        "font-family" => Some((tamber::Kind::Family, &[][..])),
+        "font" => Some((forma::Kind::Type, &uses[..])),
+        "font-family" => Some((forma::Kind::Family, &[][..])),
         _ => None,
     };
     if let (Some((kind, uses)), Some(f)) = (kind, fonts) {
@@ -929,7 +1008,7 @@ fn judge(
 struct Kept {
     shown: Vec<crate::params::ParamToken>,
     params: Vec<crate::params::ParamToken>,
-    measures: Vec<(String, tamber::Kind, Vec<String>)>,
+    measures: Vec<(String, forma::Kind, Vec<String>)>,
     motion: Vec<(String, String)>,
     axes: Vec<(String, Vec<String>)>,
     roles: Vec<(String, Span)>,
@@ -972,14 +1051,14 @@ mod tests {
     fn a_check_puts_the_threads_tables_back() {
         let sentinel = vec![(
             "kept".to_string(),
-            tamber::Kind::Length,
+            forma::Kind::Length,
             vec!["1px".to_string()],
         )];
         super::super::MEASURES.with(|m| *m.borrow_mut() = sentinel.clone());
         super::super::ROLES.with(|r| *r.borrow_mut() = vec![("label".into(), Span::default())]);
         crate::scale::declare(vec!["kept".into()]);
-        let design = tamber::parse("tamber t\n\ntheme\n  gap = 10px\n").unwrap();
-        let folded = tamber::check_design(design.clone(), &super::super::vocab()).unwrap();
+        let design = forma::parse("forma t\n\ntheme\n  gap = 10px\n").unwrap();
+        let folded = forma::check_design(design.clone(), &super::super::vocab()).unwrap();
         let row = Row {
             attr: Attr {
                 name: "padding".into(),
@@ -1032,13 +1111,13 @@ mod tests {
             within: None,
         };
         let design = |gap: &str| {
-            tamber::parse(&format!(
-                "tamber t\n\ntheme\n  gap = {gap}\n  wide = {gap}\n  bad = #222222\n"
+            forma::parse(&format!(
+                "forma t\n\ntheme\n  gap = {gap}\n  wide = {gap}\n  bad = #222222\n"
             ))
             .unwrap()
         };
         let after = design("#333333");
-        let folded = tamber::check_design(after.clone(), &super::super::vocab()).unwrap();
+        let folded = forma::check_design(after.clone(), &super::super::vocab()).unwrap();
         // `bad` fails before and after at one element; `gap` passes before at
         // the other and fails after: refused, by its element's key.
         let rows = [at(6, "bad"), at(8, "gap")];
@@ -1094,6 +1173,7 @@ mod tests {
     #[test]
     fn a_changed_font_file_leaves_font_rows_to_the_build() {
         let file = std::env::temp_dir().join(format!("exact-rows-font-{}", std::process::id()));
+        let _cleanup = crate::TestPath(file.clone());
         std::fs::write(&file, b"static").unwrap();
         let m = std::fs::metadata(&file).unwrap();
         let fonts = [(
@@ -1112,10 +1192,10 @@ mod tests {
                 m.modified().ok(),
             )],
         ));
-        let parse = |t: &str| tamber::parse(t).unwrap();
-        let before = "tamber t\n\ntheme\n  body = 400 1rem \"F\"\n";
-        let after = parse("tamber t\n\ntheme\n  body = 700 1rem \"F\"\n");
-        let folded = tamber::check_design(after.clone(), &super::super::vocab()).unwrap();
+        let parse = |t: &str| forma::parse(t).unwrap();
+        let before = "forma t\n\ntheme\n  body = 400 1rem \"F\"\n";
+        let after = parse("forma t\n\ntheme\n  body = 700 1rem \"F\"\n");
+        let folded = forma::check_design(after.clone(), &super::super::vocab()).unwrap();
         let row = Row {
             attr: Attr {
                 name: "font".into(),
@@ -1159,6 +1239,7 @@ mod tests {
     #[test]
     fn a_retargeted_font_link_leaves_font_rows_to_the_build() {
         let dir = std::env::temp_dir().join(format!("exact-rows-link-{}", std::process::id()));
+        let _cleanup = crate::TestPath(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let (old, new, link) = (
@@ -1192,10 +1273,10 @@ mod tests {
     /// token a write makes a family, is not the write's to refuse.
     #[test]
     fn a_font_row_not_judged_here_never_passed() {
-        let parse = |t: &str| tamber::parse(t).unwrap();
-        let before = "tamber t\n\ntheme\n  choice = 1\n";
-        let after = parse("tamber t\n\ntheme\n  choice: family = Georgia\n");
-        let folded = tamber::check_design(after.clone(), &super::super::vocab()).unwrap();
+        let parse = |t: &str| forma::parse(t).unwrap();
+        let before = "forma t\n\ntheme\n  choice = 1\n";
+        let after = parse("forma t\n\ntheme\n  choice: family = Georgia\n");
+        let folded = forma::check_design(after.clone(), &super::super::vocab()).unwrap();
         let row = Row {
             attr: Attr {
                 name: "font".into(),

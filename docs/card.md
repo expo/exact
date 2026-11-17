@@ -17,11 +17,11 @@ functions: call -> result
   first(xs) -> option<T>
   xs.flat() -> T[]
   floor(n) -> number
-  formatDate(ms, offsetMinutes, "medium"|"month-year"|"iso") -> string
-  formatDay(then, now, offsetMinutes, "day"|"day-time"|"list") -> string  (Today, Monday)
+  formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
+  formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
-  formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
-  formatTime(ms, offsetMinutes, "short") -> string  ("2:13 PM"; minutes east of UTC)
+  formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD"|digits) -> string  (1,234.5; 26%)
+  formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
   fragment(entry) -> string
   frame(id) -> Geometry  (action)
   go(router, location) -> Router
@@ -77,7 +77,7 @@ tags: attributes; on events. Every tag also takes CSS style attributes and colou
   time: datetime format
   progress: value max start end
   list: listStyle appearance virtualized refreshing scroll-start; on reachstart reachend refresh
-  scroll: scrollTop navigationScroll keyboardDismissMode; on scroll scrollend
+  scroll: scrollTop scrollZoom navigationScroll keyboardDismissMode; on scroll scrollend
   dialog: closedby; on cancel close
 
 parts: use X from "exact:content"; an option is none or some(…)
@@ -95,10 +95,11 @@ test steps (app.test.contract; every other form: docs/contract-grammar.md)
   tap "id" (… contextmenu)
   type "id" "text", type "id" key "Enter"
   expect text "id" == "…"
-  expect tree has "id" (missing) · expect disabled "id" (enabled) · expect state groceries.0 .title == "Eggs"
+  expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
   back
   fail fetch "<prefix>", pass fetch …
+  answer fetch "<prefix>" with 200 {"text":"Hello"}
   request POST "/items" {…} as grace expect 409
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
@@ -112,7 +113,7 @@ ops: a target is a testId, else a view's exact text or label
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)
-a second screen, a sheet: A screen is a route, not an `if`; a sheet's root adds `navigationPresentation="modal"`, its Cancel the `id` `navigationBack` names (`pattern list-detail`).
+a second screen, a sheet: Use a route for a screen. A sheet has `navigationPresentation="modal"`; Cancel has the `navigationBack` id (`pattern list-detail`).
   routes nav
     home "/"
       edit "/edit"
@@ -138,7 +139,7 @@ a second screen, a sheet: A screen is a route, not an `if`; a sheet's root adds 
             text "New" role="heading"
             button press=save buttonStyle="bordered-prominent" aria-label="Save"
               image "symbol:checkmark"
-a confirmation: What can't be undone (Delete) asks first. `aria-label` is the question; actions run their `press` and close (`command="close"`); Cancel has no `press`. Open it with `command="show-modal"` or `showModal(id)`.
+a confirmation: Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. Open: `command="show-modal"` or `showModal(id)`.
   state n = 1
   action remove
     n = 0
@@ -149,21 +150,21 @@ a confirmation: What can't be undone (Delete) asks first. `aria-label` is the qu
       text "Delete"
     button commandfor="remove" command="close"
       text "Cancel"
-a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. See `contract vocab timers`.
+a timer: `every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. More: `vocab timers`.
   state now = 0
   task tick mount
     every(1000, step)
   action step
     now = performanceNow()
   text `${now}`
-keeping a value: Root `state` only: a number, string or bool (or an option or list of one) up to 16 KB. Records belong in a source (`files-and-grants`).
+keeping a value: Root `state` only: a number, string or bool (or an option or list of one) up to 16 KB. Records go in a source (`files-and-grants`).
   state units = "C" persist
-colour: Leave the accent unsaid (a brand is an app.tamber) and controls unpainted; elsewhere a role (follows the scheme): text `label`, `secondary-label`; a card `secondary-background`; a fill `secondary-fill`; a hue `system-red`…. No hex.
+colour: Leave the accent unsaid (a brand is an app.forma) and controls unpainted; elsewhere a role (follows the scheme): text `label`, `secondary-label`; a card `secondary-background`; a fill `secondary-fill`; a hue `system-red`…. No hex.
   main
     text "Total" color="-exact-secondary-label"
     view padding=12 background-color="-exact-secondary-background"
       text "Over" color="-exact-system-red"
-reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their shape; a refusal is a reply (`ok: false, error`), not a throw. `then act` after `refreshes` clears the field on ok; `pending(added)` stops a second send, `parallel` runs both.
+reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their shape; a refusal is a reply (`ok: false`), not a throw. `then act` after `refreshes` clears the field on ok; `pending(added)` stops a second send, `parallel` runs both.
   shape Reply
     ok: bool
   resource items = loadItems() as shape string[] else empty()
@@ -171,7 +172,7 @@ reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their s
   action add
     send added = addItem("Milk")
   text items.join(", ")
-a dated record: The write reads the clock, not a ticked `now`, and stores `at`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
+a dated record: The write reads the clock, not a ticked `now`; `performanceNow()` alone restarts at 0. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
   shape Time
     epochAtZero: number
     utcOffset: number
@@ -180,7 +181,7 @@ a dated record: The write reads the clock, not a ticked `now`, and stores `at`; 
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Tests start with empty storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps screenshots. It runs `contract verify` too; keep its receipt.
+a test, and verify: Tests start with no storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps shots. It runs `contract verify`; keep its receipt.
   test "a pick survives a relaunch"
     tap "pick"
     clock data
@@ -194,24 +195,24 @@ composing a screen: One focal point. Emphasis is a part, not paint on a `button`
       text "Log today"
 
 rules
-- An event hands its action its payload after the captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; nothing for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
-  state name = ""
+  state low = ""
   state on = false
-  action setName(v: string)
-    name = v
+  action setLow(v: string)
+    low = v
   action setOn(b: bool)
     on = b
   view
     column
-      input value=name input=setName inputmode="decimal" min=-40
-      input type="checkbox" checked=on change=setOn
+      input value=low input=setLow inputmode="decimal" min=-40 aria-label="Low"
+      input type="checkbox" checked=on change=setOn aria-label="On"
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
-- A number field's `min`, `max`, `step` are numbers (`min=-40`); with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
 - Symbols: `"symbol:<role>"` (below); `symbol:sf/<name>` is Apple-only.
-- Not in Contract (`vocab <name>` says what instead): abs pow sqrt sort reduce find some every contains padStart parseInt.
-idioms with code (vocab <name>): scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder glass bar-buttons haptics status-bar toast titlebar share use members svg safe-area var media css cache
-symbol roles: back close compose add microphone send search copy select-text more delete forward home person messages notifications settings repeat activity bookmark bookmark-fill document select select-fill reorder list cart sort filter heart heart-fill reply share ellipsis home-fill notifications-fill person-fill photo play play-fill pause pause-fill skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop stop-fill circle alert minus-circle pencil waveform info camera star star-fill minus chart sparkles refresh menu adjust alert-fill info-fill chooser download install open-app download-pending package mail emoji translate
+- Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
+idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics status-bar toast titlebar share use members svg env safe-area var media css cache rtl :active
+symbol roles: back close compose add microphone send search copy select-text more delete forward home person messages notifications settings repeat activity bookmark document select reorder list cart sort filter heart reply share ellipsis photo play pause skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop circle alert minus-circle pencil waveform info camera star minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag phone smartphone article radio; with a <role>-fill: bookmark select heart home notifications person play pause stop star alert info bag

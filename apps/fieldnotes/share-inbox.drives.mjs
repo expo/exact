@@ -4,9 +4,12 @@
 // extension writes it (`host/apple/share/ShareInbox.swift`): a directory of
 // counter-named files and `share.json` last.
 //
-// On the iOS simulator the inbox is the App Group's real container, which
-// `simctl get_app_container … groups` names. A Mac drive build is ad hoc
-// and has no group, so the claim reads `EXACT_AGENT_SHARE_INBOX` instead.
+// The app claims from a directory the run makes, named to it by
+// `EXACT_AGENT_SHARE_INBOX`, so shares a person left in the installed app's
+// inbox, or that its extension writes during the drive, are never claimed or
+// removed. On the iOS simulator that directory is in the App Group's
+// container, which `simctl get_app_container … groups` names; a Mac drive
+// build is ad hoc and has no group, so it is a scratch directory.
 //
 // usage: bun apps/fieldnotes/share-inbox.drives.mjs <macos|ios> [--sim <udid>]
 //   (Fieldnotes built for that host first: host/apple/build.mjs [--ios] fieldnotes-apple)
@@ -40,17 +43,17 @@ const udid = () => {
   return found.udid;
 };
 
-/** The inbox: the simulator's group container (the app installed by its build), or a scratch directory on the Mac. */
-let inbox, env = {};
+/** The run's inbox: a new directory in the simulator's group container (the app installed by its build), or a scratch directory on the Mac. */
+let inbox;
 if (host === 'ios') {
   const containers = sh('xcrun', ['simctl', 'get_app_container', udid(), appId, 'groups']);
   const line = containers.split('\n').find(l => l.startsWith(`${group}\t`) || l.startsWith(`${group} `));
   if (!line) throw new Error(`the app has no ${group} container (is the build entitled to it?): ${containers}`);
-  inbox = join(line.slice(group.length).trim(), 'shares');
+  inbox = mkdtempSync(join(line.slice(group.length).trim(), 'drive-shares-'));
 } else {
   inbox = mkdtempSync(join(tmpdir(), 'fieldnotes-inbox-'));
-  env = { EXACT_AGENT_SHARE_INBOX: inbox };
 }
+const env = { EXACT_AGENT_SHARE_INBOX: inbox };
 /** The extension's ping. The simulator has no `notifyutil`, and the Mac's
  * notifications do not reach it, so a three-line `notify_post` is built for
  * the simulator and run inside it. */
@@ -83,8 +86,6 @@ const shown = (tree, id) => (tree?.nodes ?? []).filter(n => n.props?.testId === 
 const until = async (s, ok, tries = 20) => { for (let i = 0; i < tries; i++) { const t = await s.tree(); if (ok(t)) return t; await s.clock('+250 real'); } return s.tree(); };
 const left = () => existsSync(inbox) ? readdirSync(inbox).filter(n => !n.startsWith('.')) : [];
 
-mkdirSync(inbox, { recursive: true });
-for (const n of left()) rmSync(join(inbox, n), { recursive: true, force: true });
 try {
   // 1: cold. The oldest complete share is the launch location; its file lands; a share still being written stays.
   const partial = write({ text: 'Not yet', complete: false });
@@ -114,7 +115,7 @@ try {
   await empty.close();
   console.log(`boot: ${s.boot} ms with a cold share, ${empty.boot} ms with an empty inbox`);
 } finally {
-  if (host === 'macos') rmSync(inbox, { recursive: true, force: true });
+  rmSync(inbox, { recursive: true, force: true });
 }
 console.log(`${failed()} failed`);
 process.exit(failed() ? 1 : 0);

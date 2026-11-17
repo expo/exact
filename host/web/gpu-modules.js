@@ -116,6 +116,7 @@ const router = {
   deviceLost: () => each("deviceLost"),
   finishRestart: () => each("finishRestart"),
   drainRecords: () => each("drainRecords"),
+  syncPerformance: () => each("syncPerformance"),
   layout: () => each("layout"),
   schedule: () => each("schedule"),
   retier: tier => each("retier", tier),

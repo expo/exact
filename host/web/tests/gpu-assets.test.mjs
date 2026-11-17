@@ -62,6 +62,7 @@ test('a final paused frame delivers submitted output once without another render
     const requestAnimationFrame = () => 1;
   ` + source.slice(source.indexOf('function flush('), source.indexOf('// The live frame clock'))
     + source.slice(source.indexOf('function frame(now)'), source.indexOf('// An editable element'))
+    + source.slice(source.indexOf('function performanceRecord(entry)'), source.indexOf('function schedulePerformance()'))
     + source.slice(source.indexOf('function messages(entry'), source.indexOf('function listen(entry)'));
   const api = new Function('globalThis','gpu','surfaces','entry','delivered','records',body + 'return {frame,flush};')(
     {exact:{}},gpu,surfaces,entry,delivered,records);
@@ -261,4 +262,32 @@ test('surface asset delivery keeps the live instance and commits only accepted b
   accepted = false;
   await expect(api.reloadAssets(new Map([['assets/tuning.json',old]]),['assets/tuning.json'])).rejects.toThrow('invalid tuning field');
   expect(exact.devAssets.get('assets/tuning.json')).toBe(next);
+});
+
+// A dev card that reads its bytes when asked (dev.js `later`).
+const lazy = bytes => { const held = {bytes:null, reading:null}; let reads = 0;
+  return {held, get reads() { return reads; }, get bytes() { return held.bytes; },
+    read: async () => { reads++; return held.bytes = bytes; }}; };
+test('a dev card that reads when asked is read for the request alone', async () => {
+  const asked = lazy(new Uint8Array([7])), unused = lazy(new Uint8Array([8]));
+  const api = harness({names:['asked.tex'], exact:{devAssets:new Map([['assets/asked.tex',asked],['assets/unused.tex',unused]])}});
+  api.assets(api.entry);
+  await Promise.all([...api.assetFlights].map(f=>f.promise));
+  expect(api.delivered).toEqual([['asked.tex',new Uint8Array([7])]]);
+  expect([asked.reads, unused.reads]).toEqual([1, 0]);
+});
+test('an asset swap reads only the files surfaces asked for', async () => {
+  const start = source.indexOf('  async reloadAssets('), end = source.indexOf('\n  // Dev only;', start);
+  const entry = {id:7,view:3}, read = lazy(new Uint8Array([1])), unread = lazy(new Uint8Array([2]));
+  await read.read();
+  const exact = {mutate:fn=>fn(),devAssets:new Map([['assets/read.tex',read],['assets/unread.tex',unread]])}, calls = [];
+  const gpu = {gpu_asset:(id,name,bytes)=>{calls.push([name,bytes]);return true;}};
+  const api = new Function('ready','exact','surfaces','gpu','cancelAssets','messages','schedule',`return {${source.slice(start,end)}}`)(
+    Promise.resolve(),exact,new Map([[3,entry]]),gpu,()=>{},()=>{},()=>{});
+  const nextRead = lazy(new Uint8Array([3])), nextUnread = lazy(new Uint8Array([4]));
+  const cards = new Map([['assets/read.tex',nextRead],['assets/unread.tex',nextUnread]]);
+  expect(await api.reloadAssets(cards,['assets/read.tex','assets/unread.tex'])).toBe(true);
+  expect(calls).toEqual([['read.tex',new Uint8Array([3])]]);
+  expect([nextRead.reads, nextUnread.reads]).toEqual([1, 0]);
+  expect(exact.devAssets.get('assets/unread.tex')).toBe(nextUnread);
 });

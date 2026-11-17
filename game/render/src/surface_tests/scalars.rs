@@ -18,6 +18,9 @@ struct Look {
     #[live]
     enabled: bool,
     pair: bool,
+    /// The die's override: 0 every factor, 1 a coat alone, 2 a zero coat, 3 none.
+    #[live]
+    coat: u32,
 }
 struct Die;
 impl Game for Die {
@@ -98,21 +101,28 @@ impl Game for Die {
                     continue;
                 };
                 let [roughness, metallic, clearcoat, clearcoat_roughness] = FACTORS[case as usize];
-                p.insert(
-                    entity,
-                    MaterialOverrides(vec![MaterialOverride {
+                let coat = |clearcoat| MaterialOverride {
+                    clearcoat: Some(clearcoat),
+                    ..Default::default()
+                };
+                let look = match (name, a.coat) {
+                    ("die", 1) => coat(0.8),
+                    ("die", 2) => coat(0.),
+                    ("die", 3) => continue,
+                    _ => MaterialOverride {
                         roughness: Some(roughness),
                         metallic: Some(metallic),
                         clearcoat: Some(clearcoat),
                         clearcoat_roughness: Some(clearcoat_roughness),
                         ..Default::default()
-                    }]),
-                );
+                    },
+                };
+                p.insert(entity, MaterialOverrides(vec![look]));
             }
         }
     }
 }
-fn values(baked: bool, coated: bool, mapped: bool, case: u32, enabled: bool) -> [Value; 6] {
+fn values(baked: bool, coated: bool, mapped: bool, case: u32, enabled: bool) -> [Value; 7] {
     [
         Value::Bool(baked),
         Value::Bool(coated),
@@ -120,9 +130,10 @@ fn values(baked: bool, coated: bool, mapped: bool, case: u32, enabled: bool) -> 
         Value::Number(case.into()),
         Value::Bool(enabled),
         Value::Bool(false),
+        Value::Number(0.into()),
     ]
 }
-fn surface(args: [Value; 6]) -> WorldSurface<Die, crate::ModelExecutor, true> {
+fn surface(args: [Value; 7]) -> WorldSurface<Die, crate::ModelExecutor, true> {
     let mut s = WorldSurface::default();
     s.device_ready(exact_gpu::wgpu::Features::empty());
     s.bind(&args, None).unwrap();
@@ -147,6 +158,26 @@ fn draw(
     let pixels = fixture::render(gpu, s, &frame(now)).unwrap().0;
     assert!(s.error().is_none(), "{:?}", s.error());
     pixels
+}
+/// One half of a 64-pixel-wide frame: the die draws left, the other instance right.
+fn half(p: &fixture::Pixels, right: bool) -> Vec<[u8; 4]> {
+    p.data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| (*i % 64 >= 32) == right)
+        .map(|(_, rgba)| *rgba)
+        .collect()
+}
+/// The largest byte difference between two pixel lists.
+fn apart(a: &[[u8; 4]], b: &[[u8; 4]]) -> u8 {
+    a.iter()
+        .flatten()
+        .zip(b.iter().flatten())
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap()
 }
 #[test]
 fn scalar_overrides_match_baked_factors_with_and_without_textures_or_a_coat() {
@@ -213,16 +244,6 @@ fn scalar_animation_reuses_the_layered_variant_and_patches_in_place() {
     }
     let after = draw(&gpu, &mut s, 420.);
     let renderer = s.renderer_for_test().unwrap();
-    let half = |p: &fixture::Pixels, right| {
-        p.data
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (*i % 64 >= 32) == right)
-            .map(|(_, rgba)| *rgba)
-            .collect::<Vec<_>>()
-    };
     assert_ne!(half(&before, false), half(&after, false));
     assert_eq!(
         half(&before, true),
@@ -237,4 +258,59 @@ fn scalar_animation_reuses_the_layered_variant_and_patches_in_place() {
         renderer.residency_work().texture_uploads,
         uploads.texture_uploads
     );
+}
+#[test]
+fn a_coat_override_set_zeroed_removed_and_set_again_restores_its_pixels() {
+    let Some(gpu) = gpu() else { return };
+    for coated in [false, true] {
+        let step = |coat: u32| {
+            let mut args = values(false, coated, false, 0, true);
+            args[5] = Value::Bool(true);
+            args[6] = Value::Number(coat.into());
+            args
+        };
+        let mut s = surface(step(1));
+        let mut now = 0.;
+        // Each step draws until its program is compiled, then is read.
+        let mut shown = |coat| {
+            s.bind(&step(coat), None).unwrap();
+            for _ in 0..3 {
+                draw(&gpu, &mut s, now);
+                now += 20.;
+            }
+            s.renderer_for_test()
+                .unwrap()
+                .pipelines
+                .wait_specializations();
+            now += 20.;
+            draw(&gpu, &mut s, now)
+        };
+        let [set, zeroed, removed, again] = [1, 2, 3, 1].map(&mut shown);
+        let die = |p| half(p, false);
+        assert_ne!(
+            die(&set),
+            die(&zeroed),
+            "coated {coated}: a zero coat shows"
+        );
+        assert_eq!(die(&set), die(&again), "coated {coated}: the coat returns");
+        // The bare and layered programs can round one byte apart.
+        if coated {
+            // The override names the authored coat, and a zero coat is not it.
+            assert!(apart(&die(&removed), &die(&set)) <= 1);
+            assert_ne!(die(&removed), die(&zeroed), "the authored coat returns");
+        } else {
+            assert!(apart(&die(&removed), &die(&zeroed)) <= 1);
+        }
+        for (step, pixels) in [
+            ("zeroed", &zeroed),
+            ("removed", &removed),
+            ("again", &again),
+        ] {
+            assert_eq!(
+                half(&set, true),
+                half(pixels, true),
+                "coated {coated}, {step}: the other instance keeps its coat"
+            );
+        }
+    }
 }

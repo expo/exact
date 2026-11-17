@@ -20,11 +20,16 @@ impl NodeArena {
     }
 
     /// Whether a change to these rows of `slot` measures its paragraph
-    /// again: a text row, or any layout row of an image in the text, whose
-    /// box is the paragraph's measurement.
+    /// again: a text row, any layout row of an image in the text, whose
+    /// box is the paragraph's measurement, or an inline run's inline-axis
+    /// padding, border or margin (`TextRun::edges`).
     pub(crate) fn remeasures(&self, slot: u32, mask: StyleMask) -> bool {
         mask.intersects(StyleMask::TEXT)
             || mask.intersects(StyleMask::LAYOUT) && self.is_inline_image(slot)
+            || crate::text::inline_box::EDGE_ROWS
+                .iter()
+                .any(|row| mask.has(*row))
+                && self.is_inline_run(slot)
     }
 
     /// Whether this slot is measured with its paragraph and has no layout

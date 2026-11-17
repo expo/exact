@@ -2,7 +2,7 @@
 //! (CSS Values 4 §10.8–§10.10). `cssparser` handles CSS tokenization; numeric
 //! values are read from the source as `f64` because its tokens store `f32`.
 //!
-//! Unsupported: `em`/`rem` (font resolution happens after commit) and unit
+//! Unsupported: `em` (font resolution happens after commit) and unit
 //! algebra beyond multiplying or dividing a length by a number.
 
 use super::super::env::{self, EnvRefusal};
@@ -19,9 +19,14 @@ pub(crate) mod refusal {
     pub(crate) const RELATIVE: &str =
         "em is not supported inside calc(), min(), max() or clamp(); write rem or px";
     pub(crate) const UNITLESS: &str = "a number where a length goes inside calc(), min(), max() or clamp() takes a unit, as CSS requires, zero too: 0px, 15px";
-    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
+    pub(crate) const NOT_A_LENGTH: &str = "calc(), min(), max() and clamp() take px (or rem, in, cm, mm, q, pt, pc, ch, lh) lengths, percentages, env(safe-area-inset-*), env(viewport-segment-* x y), env(titlebar-area-*), var(--name) of a custom property a node declares, var(--exact-safe-area-inset-*), viewport lengths (vw, vh, vmin, vmax, svh, lvh, dvh, …), numbers and e, pi, infinity and NaN";
     pub(crate) const FUNCTION: &str =
-        "inside a length the functions are calc(), min(), max(), clamp() and env()";
+        "inside a length the functions are calc(), min(), max(), clamp(), env() and var()";
+    pub(crate) const VAR: &str = "a length's var() reads a custom property a node declares (var(--name)) or the content owner's safe-area inset (var(--exact-safe-area-inset-top), -right, -bottom or -left); other --exact- names are the host's and none is defined";
+    pub(crate) const VAR_LENGTH: &str =
+        "a custom property here is a length, so its fallback is a length too";
+    pub(crate) const VAR_FALLBACK: &str =
+        "var(--exact-safe-area-inset-*) takes no fallback: every host defines it";
     pub(crate) const NONE: &str =
         "`none` is clamp()'s first or third argument only: clamp(none, 20px, 50px)";
     pub(crate) const CLAMP_ARITY: &str =
@@ -88,7 +93,7 @@ fn top_function(text: &str) -> Option<String> {
 /// Whether a length text is a math function or `env()` at its top, so a
 /// refusal of it says why.
 pub(crate) fn names_math(text: &str) -> bool {
-    top_function(text).is_some_and(|f| f == "env" || FUNCTIONS.contains(&f.as_str()))
+    top_function(text).is_some_and(|f| f == "env" || f == "var" || FUNCTIONS.contains(&f.as_str()))
 }
 
 /// Whether a length text is `env()` at its top, a substitution rather than
@@ -329,6 +334,7 @@ impl Calc {
                 match name.as_str() {
                     // `env()` substitutes a length: no level of the calculation
                     "env" if !self.grid => p.parse_nested_block(|p| self.env(p, depth)),
+                    "var" if !self.grid => p.parse_nested_block(|p| self.var(p, depth)),
                     "calc" => {
                         let depth = self.deeper(p, depth)?;
                         p.parse_nested_block(|p| self.whole(p, depth))
@@ -469,6 +475,46 @@ impl Calc {
             }
         };
         Ok((node, ty))
+    }
+
+    /// `var(--exact-safe-area-inset-<edge>)`, the local inset (LLP 1123 D9),
+    /// without a fallback; or `var(--name, <fallback>)`, an author's custom
+    /// property, a length (D5). A name is matched as written, as a custom
+    /// property's is.
+    fn var<'i>(&mut self, p: &mut Parser<'i, '_>, depth: usize) -> Parsed<'i, (Node, Ty)> {
+        self.count(p)?;
+        let name = match p.expect_ident_cloned() {
+            Ok(name) => name,
+            Err(_) => return why(p, refusal::VAR),
+        };
+        if let Some(edge) = name
+            .strip_prefix(env::LOCAL_PREFIX)
+            .and_then(env::Edge::from_name)
+        {
+            if !p.is_exhausted() {
+                return why(p, refusal::VAR_FALLBACK);
+            }
+            return Ok((Node::Env(EnvTerm::Local(edge)), Ty::Length));
+        }
+        if !crate::style::safe_area_properties::is_author_name(&name) {
+            return why(p, refusal::VAR);
+        }
+        let fallback = match p.is_exhausted() {
+            true => None,
+            false => {
+                p.expect_comma()?;
+                // One value, a tree's operand wherever the call stands: CSS substitutes a
+                // fallback's tokens, so a sum written bare would group differently
+                let (fallback, ty) = self.value(p, depth)?;
+                p.expect_exhausted()?;
+                if ty != Ty::Length {
+                    return why(p, refusal::VAR_LENGTH);
+                }
+                Some(Box::new(fallback))
+            }
+        };
+        let name = name.as_ref().into();
+        Ok((Node::Var(super::Var { name, fallback }), Ty::Length))
     }
 
     /// `env(<name> <index>*)`: the variable. One with a fallback makes the
@@ -714,9 +760,10 @@ fn number(text: &str) -> Option<(f64, usize)> {
     Some((n.clamp(f64::MIN, f64::MAX), end))
 }
 
-/// Whether CSS gives the row no negative values: a negative literal there is
-/// invalid, and a negative math function is clamped to zero (CSS Values 4
-/// §9.1).
+/// Whether CSS gives the row no negative values: a negative number, length or
+/// literal there is invalid however it is spelled (`-4`, `"-4px"`, `"-1rem"`,
+/// `"-1ch"`), and a negative math function is clamped to zero (CSS Values 4
+/// §9.1). The one list every reader of a sign takes.
 pub fn nonnegative_row(style: crate::StyleId) -> bool {
     use crate::StyleId::*;
     matches!(
@@ -742,6 +789,15 @@ pub fn nonnegative_row(style: crate::StyleId) -> bool {
             | BorderWidthRight
             | BorderWidthBottom
             | BorderWidthLeft
+            | BorderRadiusTopLeft
+            | BorderRadiusTopRight
+            | BorderRadiusBottomRight
+            | BorderRadiusBottomLeft
+            | BorderSpacing
+            | FontSize
+            | LineHeight
+            | ShapeMargin
+            | StrokeWidth
             | HitSlopTop
             | HitSlopRight
             | HitSlopBottom
@@ -770,7 +826,7 @@ pub(crate) fn signed(
         value,
         Dimension::Points(n) | Dimension::Percent(n) | Dimension::Viewport(_, n) if n < 0.0
     );
-    if negative && math && super::no_negative_lengths(style) {
+    if negative && math && nonnegative_row(style) {
         return Ok(match value {
             Dimension::Percent(_) => Dimension::Percent(0.0),
             Dimension::Viewport(unit, _) => Dimension::Viewport(unit, 0.0),

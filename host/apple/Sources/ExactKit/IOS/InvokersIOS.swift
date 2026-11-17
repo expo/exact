@@ -13,6 +13,15 @@ import UIKit
 /// Its highlight is one holder of the invoker's press look, as a UIButton's
 /// content dims while a finger holds it; a press contact is the other.
 class InvokerButton: UIButton {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     weak var invoker: NodeView? { didSet { if pressing !== invoker { releasePress() } } }
     /// The node this button's highlight pressed, until it lets go.
     private(set) weak var pressing: NodeView?

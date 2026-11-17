@@ -3,15 +3,22 @@
 use exact_kernel::ViewId;
 use exact_plan::bytes::{Reader, Writer};
 
-/// A mounted wrapper's measured border-box size on the list's main axis,
-/// using its published epoch.
+/// Candidates from one accepted geometry report. The second edge may run only
+/// after a pure no-op first action. State changes defer it until settlement.
+pub(crate) struct CollectionEdges {
+    pub first: exact_plan::EventKind,
+    pub end_after_noop: bool,
+}
+
+/// A mounted item's measured main-axis extent: a data wrapper's border
+/// box, or a fixed item's occupied flow extent, using its published epoch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RowMeasurement {
-    /// Wrapper view, not the authored child root.
+    /// Data wrapper view or fixed measurement identity, never a data key.
     pub view: ViewId,
     /// Epoch copied from the snapshot used for this layout.
     pub epoch: u64,
-    /// Finite nonnegative border-box size along the main axis.
+    /// Finite nonnegative measured extent along the main axis.
     pub size: f64,
 }
 /// Facts from the actual nested scrollport. Never use the window's size instead.
@@ -23,8 +30,8 @@ pub struct CollectionFeedback {
     pub revision: u64,
     /// Monotonically increasing host scroll/layout sequence.
     pub scroll_sequence: u64,
-    /// Actual offset on the main axis from the first row's start, clamped
-    /// past rubber-banding: `scrollTop` less the padding before the rows for
+    /// Actual offset from the content origin after authored padding, before
+    /// any fixed lead, clamped past rubber-banding: `scrollTop` less that padding for
     /// a vertical list. Negative while the port is in that padding, down to
     /// it (`scrollTop` 0, LLP 1010 §6.9).
     pub offset: f64,
@@ -39,7 +46,7 @@ pub struct CollectionFeedback {
     /// the host laid it out: the room `offset` counts past and the scroll
     /// range runs into (LLP 1010 §6.9).
     pub padding: [f64; 2],
-    /// Only currently mounted row wrappers may be measured.
+    /// Mounted data wrappers and both fixed items, when present.
     pub measurements: Vec<RowMeasurement>,
     /// Focused authored descendant; pins at most its containing row.
     pub focus_view: Option<ViewId>,
@@ -100,6 +107,10 @@ pub struct CollectionFill {
     /// where the animation is headed (LLP 1070.000 §11), so a request is not
     /// done until it has landed. Flag bit 7.
     pub animating: bool,
+    /// Actual port offset for first-reveal animations when `offset` plans
+    /// the window at a smooth scroll's destination (LLP 1055 D13).
+    /// `None` uses the report's offset and subsequent anchor corrections.
+    pub view_offset: Option<f64>,
 }
 /// A mounted row; unmounted keys and records never cross the host seam.
 #[derive(Debug, Clone, PartialEq)]
@@ -119,6 +130,19 @@ pub struct CollectionRow {
     pub epoch: u64,
     /// Whether the estimate has been confirmed in this epoch.
     pub measured: bool,
+}
+/// An always-mounted item around the data rows. Its identity is for
+/// measurement and anchoring only; its authored roots remain list children.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionFixed {
+    /// Measurement identity, outside the kernel view tree.
+    pub view: ViewId,
+    /// Authored root views, in sibling order, without a wrapper.
+    pub roots: Vec<ViewId>,
+    /// Excluded from accessibility until the window reaches the last data row.
+    pub hidden: bool,
+    /// Indexed extent along the main axis.
+    pub size: f64,
 }
 /// Apply only if the host has not advanced beyond `scroll_sequence`, unless
 /// it is relative (`from`).
@@ -163,6 +187,27 @@ impl ListAxis {
         }
     }
 }
+/// Measured coverage and edge bands for quiet host travel (LLP 1171 D21).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionWindow {
+    /// Contiguous measured coverage containing the last reported port.
+    pub built: [f64; 2],
+    /// End of the earliest unpinned row and start of the latest.
+    pub retire: [f64; 2],
+    /// A port crossing these bounds overlaps a row awaiting first reveal.
+    pub reveal: [f64; 2],
+    /// End of the first item and start of the last, including item gaps.
+    pub edges: [f64; 2],
+    /// Resolved reach margins, before the velocity lead.
+    pub margin: [f64; 2],
+    /// Handler bits 0/1 and armed bits 2/3, start then end.
+    pub mask: u8,
+    /// Seconds of travel added to the edge band.
+    pub lead_seconds: f64,
+    /// Maximum additional edge lead, in points.
+    pub max_lead: f64,
+}
+
 /// Current O(mounted rows) host metadata, separate from the ordinary kernel ops.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollectionSnapshot {
@@ -204,11 +249,15 @@ pub struct CollectionSnapshot {
     /// rows and, where rows are rebound, the few held past the window for
     /// the rows it needs next (LLP 1078).
     pub rows: Vec<CollectionRow>,
+    /// Lead then trail, or empty for a list without fixed content.
+    pub fixed: Vec<CollectionFixed>,
     /// Optional anchor correction; consume at most once per revision.
     pub correction: Option<AnchorCorrection>,
     /// A limited report left window rows unbuilt or rows past the window
     /// mounted: the host owes another report, even with unchanged facts.
     pub pending: bool,
+    /// None while geometry or an unmeasured row prevents quiet travel.
+    pub window: Option<CollectionWindow>,
 }
 /// Malformed or nonfinite host feedback. Stale valid feedback is ignored instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,11 +274,18 @@ impl CollectionFeedback {
     /// focus and interaction (zero means none), f64 velocity, u32 limit
     /// (`u32::MAX` means none), u32 flags (bit 0: an ancestor list is
     /// moving; bit 1: build only; bit 2: retire only; bit 3: lean; bit 4: a glimpse; bit 5: the reader is scrolling;
-    /// bit 6: a gesture since the request; bit 7: a smooth correction animates), u32 count, then count × (u32 wrapper, u64 epoch, f64 size).
+    /// bit 6: a gesture since the request; bit 7: a smooth correction animates; bit 8: a view offset follows the rows),
+    /// u32 count, then count × (u32 wrapper, u64 epoch, f64 size), then
+    /// the optional f64 actual view offset.
     /// Main and cross are the list's axes. No keys, strings, or JSON parsing.
     pub fn encode_with(&self, fill: CollectionFill) -> Result<Vec<u8>, FeedbackError> {
         self.validate()?;
-        if !fill.velocity.is_finite() || fill.limit == Some(u32::MAX) {
+        if !fill.velocity.is_finite()
+            || fill
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+            || fill.limit == Some(u32::MAX)
+        {
             return Err(FeedbackError);
         }
         let mut w = Writer::default();
@@ -259,7 +315,8 @@ impl CollectionFeedback {
                 | u32::from(fill.glimpse) << 4
                 | u32::from(fill.scrolling) << 5
                 | u32::from(fill.gesture) << 6
-                | u32::from(fill.animating) << 7,
+                | u32::from(fill.animating) << 7
+                | u32::from(fill.view_offset.is_some()) << 8,
         );
         w.u32(
             self.measurements
@@ -271,6 +328,9 @@ impl CollectionFeedback {
             w.u32(row.view);
             w.u64(row.epoch);
             w.f64(row.size);
+        }
+        if let Some(offset) = fill.view_offset {
+            w.f64(offset);
         }
         Ok(w.into_vec())
     }
@@ -300,13 +360,13 @@ impl CollectionFeedback {
             let limit = r.u32()?;
             let flags = r.u32()?;
             // A glimpse is built where it applies, and bounded.
-            if flags > 255
+            if flags > 511
                 || flags & 6 == 6
                 || (flags & 16 != 0 && (flags & 2 != 0 || limit == u32::MAX))
             {
                 return Err(exact_plan::PlanError::BadCount(flags));
             }
-            let fill = CollectionFill {
+            let mut fill = CollectionFill {
                 velocity,
                 limit: (limit != u32::MAX).then_some(limit),
                 ancestor_moving: flags & 1 != 0,
@@ -317,9 +377,14 @@ impl CollectionFeedback {
                 scrolling: flags & 32 != 0,
                 gesture: flags & 64 != 0,
                 animating: flags & 128 != 0,
+                view_offset: None,
             };
             let count = r.u32()? as usize;
-            if count.checked_mul(20) != Some(r.remaining()) {
+            if count
+                .checked_mul(20)
+                .and_then(|n| n.checked_add(if flags & 256 != 0 { 8 } else { 0 }))
+                != Some(r.remaining())
+            {
                 return Err(exact_plan::PlanError::BadCount(count as u32));
             }
             let mut measurements = Vec::with_capacity(count);
@@ -329,6 +394,9 @@ impl CollectionFeedback {
                     epoch: r.u64()?,
                     size: r.f64()?,
                 });
+            }
+            if flags & 256 != 0 {
+                fill.view_offset = Some(r.f64()?);
             }
             let facts = Self {
                 view,
@@ -347,7 +415,12 @@ impl CollectionFeedback {
         })()
         .map_err(|_| FeedbackError)?;
         out.0.validate()?;
-        if !out.1.velocity.is_finite() {
+        if !out.1.velocity.is_finite()
+            || out
+                .1
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+        {
             return Err(FeedbackError);
         }
         Ok(out)
@@ -408,6 +481,33 @@ pub fn snapshots_json(snapshots: &[CollectionSnapshot]) -> String {
         }
         if c.request > 0 {
             write!(out, "\"lastRequest\":{},", c.request).unwrap();
+        }
+        if let Some(w) = &c.window {
+            write!(out, "\"window\":{{\"built\":[{},{}],\"retire\":[{},{}],\"reveal\":[{},{}],\"edges\":[{},{}],\"margin\":[{},{}],\"mask\":{},\"leadSeconds\":{},\"maxLead\":{}}},",
+                exact_num::Shortest(w.built[0]), exact_num::Shortest(w.built[1]),
+                exact_num::Shortest(w.retire[0]), exact_num::Shortest(w.retire[1]),
+                exact_num::Shortest(w.reveal[0]), exact_num::Shortest(w.reveal[1]),
+                exact_num::Shortest(w.edges[0]), exact_num::Shortest(w.edges[1]),
+                exact_num::Shortest(w.margin[0]), exact_num::Shortest(w.margin[1]),
+                w.mask, exact_num::Shortest(w.lead_seconds), exact_num::Shortest(w.max_lead)).unwrap();
+        }
+        if !c.fixed.is_empty() {
+            out.push_str("\"fixed\":[");
+            for (i, fixed) in c.fixed.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write!(
+                    out,
+                    "{{\"view\":{},\"roots\":{:?},\"size\":{},\"epoch\":\"1\",\"hidden\":{}}}",
+                    fixed.view,
+                    fixed.roots,
+                    exact_num::Shortest(fixed.size),
+                    fixed.hidden
+                )
+                .unwrap();
+            }
+            out.push_str("],");
         }
         write!(out, "\"revision\":\"{}\",\"scrollSequence\":\"{}\",\"count\":{},\"totalExtent\":{},\"rows\":[", c.revision, c.scroll_sequence, c.count, exact_num::Shortest(c.total_extent)).unwrap();
         for (i, row) in c.rows.iter().enumerate() {
@@ -470,6 +570,7 @@ impl super::Collection {
             revision: self.revision,
             scroll_sequence: self.geometry.as_ref().map_or(0, |g| g.scroll_sequence),
             count: self.index.len(),
+            fixed: self.fixed_snapshot(),
             total_extent: self.index.total_height(),
             rows: self
                 .mounted
@@ -480,13 +581,15 @@ impl super::Collection {
                     root: super::super::first_root(&row.row.roots).expect("a row has a root"),
                     index: row.position,
                     start: self.index.prefix(row.position).unwrap(),
-                    size: self.index.height(row.position).unwrap(),
+                    size: (self.index.height(row.position).unwrap() - self.index.item_gap())
+                        .max(0.0),
                     epoch: row.epoch,
                     measured: self.index.is_measured_at(row.position),
                 })
                 .collect(),
             correction: self.correction,
             pending: self.asks_report(),
+            window: self.built_window(),
         }
     }
 }

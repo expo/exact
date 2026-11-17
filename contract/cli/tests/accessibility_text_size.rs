@@ -6,6 +6,10 @@
 use exact_kernel::style::metrics::{set_column, Column};
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{DataError, DataSource, Runner, Value};
+#[path = "it/scratch.rs"]
+#[allow(dead_code)]
+mod scratch;
+use scratch::Scratch;
 
 struct NoData;
 
@@ -47,8 +51,7 @@ fn boot() -> Runner<NoData> {
 /// Booted on a kernel the host primed with `size` before the runner, as the
 /// Apple host does.
 fn boot_at(size: Option<f32>) -> Runner<NoData> {
-    let dir = std::env::temp_dir().join(format!("exact2-ax-text-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-ax-text-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, SOURCE).unwrap();
     let plan = contract::bake(contract::compile_path(&path).unwrap(), NoData).unwrap();

@@ -70,11 +70,15 @@ fn map_depth(gpu: &exact_gpu::Gpu, r: &Renderer) -> Vec<f32> {
         .collect()
 }
 
-#[test]
-fn cached_casters_match_redrawing_after_scene_changes() {
-    let Some(gpu) = crate::test_device::device_or_skip(fixture::device()) else {
-        return;
-    };
+struct Scene {
+    w: World,
+    r: Renderer,
+    feed: crate::Feed,
+    target: wgpu::Texture,
+    frame: FrameInput<'static>,
+}
+
+fn scene(gpu: &exact_gpu::Gpu) -> Scene {
     let mut w = World::new(60, 1);
     let (vertices, indices) = crate::shapes::cube();
     let model = Model {
@@ -115,8 +119,6 @@ fn cached_casters_match_redrawing_after_scene_changes() {
         w.spawn_named(name, (transform, mesh));
         r.prepare_model(name, &model).unwrap();
     }
-    let cube = w.named("box.model").unwrap();
-    let mut feed = crate::Feed::default();
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
@@ -131,8 +133,7 @@ fn cached_casters_match_redrawing_after_scene_changes() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = target.create_view(&Default::default());
-    let mut f = FrameInput {
+    let frame = FrameInput {
         view: glam::camera::rh::view::look_at_mat4(Vec3::new(4., 6., 8.), Vec3::ZERO, Vec3::Y),
         proj: glam::camera::rh::proj::directx::orthographic(-5., 5., -5., 5., 0.1, 40.),
         camera_position: Vec3::new(4., 6., 8.),
@@ -158,6 +159,252 @@ fn cached_casters_match_redrawing_after_scene_changes() {
         },
         ..Default::default()
     };
+    Scene {
+        w,
+        r,
+        feed: Default::default(),
+        target,
+        frame,
+    }
+}
+
+fn look(
+    gpu: &exact_gpu::Gpu,
+    r: &mut Renderer,
+    target: &wgpu::Texture,
+    frame: &FrameInput<'_>,
+) -> (Vec<u8>, crate::tells::Drawn) {
+    let state = |r: &Renderer| {
+        r.shadows.as_ref().and_then(|s| s.cached.as_ref()).map(|c| {
+            (
+                c.signature.clone(),
+                c.scratch.clone(),
+                c.groups.clone(),
+                c.valid,
+                c.dirty,
+                c.encoded.get(),
+            )
+        })
+    };
+    let saved = state(r);
+    let view = target.create_view(&Default::default());
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    r.arm_probe(true);
+    r.encode_hooked(
+        &mut encoder,
+        &view,
+        (128, 128),
+        frame,
+        &mut (),
+        None,
+        Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    let records = r.probe.as_ref().unwrap().records.take();
+    let facts = r.probe_facts();
+    let readback = r.probe_copies(&mut encoder, target, &facts);
+    gpu.queue.submit([encoder.finish()]);
+    r.submitted();
+    r.end_look();
+    readback.map();
+    assert!(readback.ready(&gpu.device).unwrap());
+    let read = readback.read().unwrap();
+    assert_eq!(state(r), saved, "a look must leave cache state unchanged");
+    let drawn = crate::look::drawn(&records, &facts, &read);
+    (read.rgba, drawn)
+}
+
+fn observed_live(
+    gpu: &exact_gpu::Gpu,
+    r: &mut Renderer,
+    target: &wgpu::Texture,
+    frame: &FrameInput<'_>,
+) -> (Vec<u8>, u64) {
+    let view = target.create_view(&Default::default());
+    r.draw(&view, (128, 128), frame);
+    let live = fixture::read(gpu, target).unwrap();
+    let texels = map_depth(gpu, r).iter().filter(|&&d| d < 1.).count() as u64;
+    let (pixels, drawn) = look(gpu, r, target, frame);
+    assert_eq!(
+        drawn.sun_texels,
+        crate::tells::Measure::Taken(texels),
+        "the oracle must count the maps the live frame used"
+    );
+    assert!(pixels == live.data, "the look must show the live shadows");
+    let judged = crate::tells::judge(&crate::tells::FrameStats::of(&pixels), &drawn);
+    assert_eq!(
+        judged.tells.iter().any(|t| t.name == "no-shadow-casters"),
+        texels == 0
+    );
+    (pixels, texels)
+}
+
+#[test]
+fn look_observes_missing_and_stale_cached_casters() {
+    let Some(gpu) = crate::test_device::device_or_skip(fixture::device()) else {
+        return;
+    };
+    for seed in [true, false] {
+        let Scene {
+            mut w,
+            mut r,
+            mut feed,
+            target,
+            frame,
+        } = scene(&gpu);
+        w.propagate();
+        feed.feed(&w, &mut r).unwrap();
+        // The floor receives the box's shadow without masking its texel count.
+        let floor = r.models.loaded["floor.model"].meshes.clone();
+        for batch in &mut r.batches {
+            if floor.contains(&batch.mesh) {
+                batch.casts_shadows = false;
+            }
+        }
+        let view = target.create_view(&Default::default());
+        r.draw(&view, (128, 128), &frame);
+        r.shadows.as_mut().unwrap().seed = seed;
+        r.shadows.as_mut().unwrap().cached = None;
+        let (healthy, n) = observed_live(&gpu, &mut r, &target, &frame);
+        assert!(n > 0);
+
+        // Omit the cached caster while keeping its signature and validity.
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        for layer in &r.shadows.as_ref().unwrap().cached.as_ref().unwrap().layers {
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: layer,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+        }
+        gpu.queue.submit([encoder.finish()]);
+        let (missing, n) = observed_live(&gpu, &mut r, &target, &frame);
+        assert_eq!(n, 0);
+        assert!(healthy != missing);
+
+        r.shadows.as_mut().unwrap().cached.as_mut().unwrap().valid = false;
+        let (repaired, _) = observed_live(&gpu, &mut r, &target, &frame);
+        assert!(healthy == repaired);
+
+        let mut stale = r.shadows.as_mut().unwrap().cached.take().unwrap();
+        let cube = w.named("box.model").unwrap();
+        w.get_mut::<Transform>(cube).unwrap().position.x = 50.;
+        w.propagate();
+        feed.feed(&w, &mut r).unwrap();
+        r.draw(&view, (128, 128), &frame);
+        let cache = r.shadows.as_mut().unwrap().cached.as_mut().unwrap();
+        // Keep the old depth under the new signature, as a failed refresh would.
+        std::mem::swap(&mut cache.texture, &mut stale.texture);
+        std::mem::swap(&mut cache.layers, &mut stale.layers);
+        std::mem::swap(&mut cache.seed, &mut stale.seed);
+        let (ghost, n) = observed_live(&gpu, &mut r, &target, &frame);
+        assert!(n > 0, "the oracle must expose the retained stale caster");
+        r.shadows.as_mut().unwrap().cached.as_mut().unwrap().valid = false;
+        let (repaired, n) = observed_live(&gpu, &mut r, &target, &frame);
+        assert_eq!(n, 0);
+        assert!(ghost != repaired, "the stale shadow must be visible");
+    }
+}
+
+#[test]
+fn look_preserves_unbuilt_invalid_and_incompatible_caches() {
+    let Some(gpu) = crate::test_device::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let Scene {
+        mut w,
+        mut r,
+        mut feed,
+        target,
+        frame: mut f,
+    } = scene(&gpu);
+    w.propagate();
+    feed.feed(&w, &mut r).unwrap();
+    // A look before the first live frame must neither build nor validate a cache.
+    let (uncached, _) = look(&gpu, &mut r, &target, &f);
+    let (cached, _) = observed_live(&gpu, &mut r, &target, &f);
+    assert!(uncached == cached);
+    assert!(r.shadows.as_ref().unwrap().cached.as_ref().unwrap().dirty);
+    let (_, drawn) = look(&gpu, &mut r, &target, &f);
+    assert_eq!(drawn.sun_casters, None, "reused depth has no caster count");
+
+    // A camera-dependent sun map cannot reuse depth from another look camera.
+    f.sun.as_mut().unwrap().shadows.as_mut().unwrap().fixed_box = None;
+    let view = target.create_view(&Default::default());
+    r.draw(&view, (128, 128), &f);
+    r.draw(&view, (128, 128), &f);
+    let live_view = f.view;
+    let live_position = f.camera_position;
+    f.camera_position.x += 5.;
+    f.view = glam::camera::rh::view::look_at_mat4(f.camera_position, Vec3::ZERO, Vec3::Y);
+    let (other_view, _) = look(&gpu, &mut r, &target, &f);
+    let cache = r.shadows.as_mut().unwrap().cached.take();
+    let (redrawn, _) = look(&gpu, &mut r, &target, &f);
+    assert!(other_view == redrawn);
+    r.shadows.as_mut().unwrap().cached = cache;
+    f.view = live_view;
+    f.camera_position = live_position;
+    observed_live(&gpu, &mut r, &target, &f);
+
+    // Discarded live work must not become valid when a look is submitted.
+    let cube = w.named("box.model").unwrap();
+    w.get_mut::<Transform>(cube).unwrap().position.x = 2.;
+    w.propagate();
+    feed.feed(&w, &mut r).unwrap();
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    r.encode_hooked(
+        &mut encoder,
+        &view,
+        (128, 128),
+        &f,
+        &mut (),
+        None,
+        Default::default(),
+        &Default::default(),
+    )
+    .unwrap();
+    drop(encoder);
+    assert!(!r.shadows.as_ref().unwrap().cached.as_ref().unwrap().valid);
+    look(&gpu, &mut r, &target, &f);
+    r.draw(&view, (128, 128), &f);
+    assert!(r.shadows.as_ref().unwrap().cached.as_ref().unwrap().dirty);
+
+    let cache = r.shadows.as_mut().unwrap().cached.take();
+    r.shadows.as_mut().unwrap().cache_enabled = false;
+    f.sun
+        .as_mut()
+        .unwrap()
+        .shadows
+        .as_mut()
+        .unwrap()
+        .cache_static = false;
+    let (disabled, _) = observed_live(&gpu, &mut r, &target, &f);
+    assert!(r.shadows.as_ref().unwrap().cached.is_none());
+    assert!(cache.is_some());
+    assert!(!disabled.is_empty());
+}
+
+#[test]
+fn cached_casters_match_redrawing_after_scene_changes() {
+    let Some(gpu) = crate::test_device::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let Scene {
+        mut w,
+        mut r,
+        mut feed,
+        target,
+        frame: mut f,
+    } = scene(&gpu);
+    let cube = w.named("box.model").unwrap();
+    let view = target.create_view(&Default::default());
     for step in 0..8 {
         match step {
             1 => {
@@ -218,6 +465,7 @@ fn cached_casters_match_redrawing_after_scene_changes() {
             );
             assert!(!r.shadows.as_ref().unwrap().cached.as_ref().unwrap().dirty);
         }
+        observed_live(&gpu, &mut r, &target, &f);
         let cached = fixture::read(&gpu, &target).unwrap();
         // The cache copied into the map where a device cannot seed it: the
         // same depth, to the bit, and the same image.

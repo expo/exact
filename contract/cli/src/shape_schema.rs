@@ -6,9 +6,83 @@
 //! written in place.
 
 use crate::CompileError;
-use contract_syntax::{Expr, ShapeDecl, Span, TypeExpr};
+use contract_syntax::{Expr, File, ModuleDecl, ShapeDecl, Span, Stmt, TypeExpr};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+
+/// Keep literal tool inputs on their module row for the data module's type check (LLP 1133.016 D9).
+pub(crate) fn tool_inputs(file: &mut File, shapes: &HashMap<String, ShapeDecl>) {
+    fn walk(
+        body: &[Stmt],
+        module: &ModuleDecl,
+        shapes: &HashMap<String, ShapeDecl>,
+        out: &mut Vec<Value>,
+    ) {
+        for stmt in body {
+            let args = match stmt {
+                Stmt::Send { source, args, .. } if source == &module.name => args,
+                Stmt::If {
+                    then, otherwise, ..
+                } => {
+                    walk(then, module, shapes, out);
+                    walk(otherwise, module, shapes, out);
+                    continue;
+                }
+                Stmt::Match { some, none, .. } => {
+                    walk(&some.1, module, shapes, out);
+                    walk(none, module, shapes, out);
+                    continue;
+                }
+                Stmt::Call { body, .. } => {
+                    walk(body, module, shapes, out);
+                    continue;
+                }
+                _ => continue,
+            };
+            let named = |args: &[Expr], name: &str| {
+                args.iter().find_map(|arg| match arg {
+                    Expr::NamedArg(n, value, _) if n == name => Some(value.as_ref().clone()),
+                    _ => None,
+                })
+            };
+            let Some(Expr::List(tools, _)) = named(args, "tools") else {
+                continue;
+            };
+            for tool in tools {
+                let Expr::Call(_, fields, _) = tool else {
+                    continue;
+                };
+                let Some(Expr::Str(name, _)) = named(&fields, "name") else {
+                    continue;
+                };
+                let input = match named(&fields, "inputSchema") {
+                    Some(Expr::Str(name, _)) => schema(&name, shapes).ok(),
+                    _ => None,
+                };
+                let tool = json!({ "name": name, "inputSchema": input });
+                if !out.contains(&tool) {
+                    out.push(tool);
+                }
+            }
+        }
+    }
+    for module in &mut file.modules {
+        let mut sub: Value = serde_json::from_str(&module.substitute).unwrap_or_default();
+        if module.package != "@exact/language-model" || sub["handlers"] != "tools[].name" {
+            continue;
+        }
+        let mut inputs = Vec::new();
+        for component in &file.components {
+            for action in &component.actions {
+                walk(&action.body, module, shapes, &mut inputs);
+            }
+        }
+        if !inputs.is_empty() {
+            sub["toolInputs"] = Value::Array(inputs);
+            module.substitute = sub.to_string();
+        }
+    }
+}
 
 /// The JSON Schema of shape `name`, or why there is none.
 pub(crate) fn schema(name: &str, shapes: &HashMap<String, ShapeDecl>) -> Result<Value, String> {

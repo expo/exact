@@ -56,6 +56,20 @@ final class Canvas2DRecordTests: XCTestCase {
         return px
     }
 
+    /// What a canvas the GPU gave up continues from on Core Graphics.
+    func testACanvasContinuesFromPixelsDrawnElsewhere() throws {
+        let first = Canvas2DReplayer(width: 300, height: 200, scale: 2, lifetime: 1, generation: 0)
+        XCTAssertTrue(first.apply(list([(.fillColor, [255, 0, 0, 1]), (.fillRect, [0, 0, 150, 50]), (.save, []), (.fillColor, [0, 0, 255, 1])])))
+        let next = Canvas2DReplayer(width: 300, height: 200, scale: 2, lifetime: 1, generation: 0)
+        next.continue(from: first.image(), state: first.snapshot())
+        XCTAssertTrue(next.apply(list([(.fillRect, [0, 50, 150, 50]), (.restore, []), (.fillRect, [75, 75, 75, 25])])))
+        let px = pixels(try XCTUnwrap(next.image()))
+        func at(_ x: Int, _ y: Int) -> [UInt8] { Array(px[(y * 300 + x) * 4..<(y * 300 + x) * 4 + 4]) }
+        XCTAssertEqual(at(10, 10), [255, 0, 0, 255], "the earlier pixels, upright")
+        XCTAssertEqual(at(10, 150), [0, 0, 255, 255], "the fill style carried over")
+        XCTAssertEqual(at(250, 190), [255, 0, 0, 255], "the saved level carried over")
+    }
+
     func testAnEmptyDrawingIsRejected() throws {
         let image = try XCTUnwrap(CapturePixelsTests.clearedContext(width: 300, height: 200).makeImage())
         XCTExpectFailure("matching transparent pictures do not establish a drawing") { _ = pixels(image) }

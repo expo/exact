@@ -25,13 +25,22 @@ typealias GlassPlatformView = NSView
 final class GlassGroups {
     let groups = NSHashTable<NodeView>.weakObjects()
     let glass = NSHashTable<NodeView>.weakObjects()
+    #if os(iOS) || os(tvOS)
+    /// Glass this batch added to a group, which may grow out of a neighbour
+    /// at its end, when its box is laid out (`GlassMorphIOS.swift`).
+    let joining = NSHashTable<NodeView>.weakObjects()
+    /// Glass this batch removed from a group, as it was drawn, to be drawn
+    /// back into a neighbour at its end.
+    var departed: [GlassDeparture] = []
+    #endif
     private var active = false
     private static var noted = Set<String>()
 
     /// Each glass, joined to its group or isolated by its path. A glass
     /// inside another glass answers to that one's isolation, so the pass
     /// repeats while anything changed (a few rounds at most). Nothing to do
-    /// in a presenter that has never had a group.
+    /// in a presenter that has never had a group. Then the batch's joins
+    /// and departures move, from the boxes it laid out.
     func reconcile() {
         let live = groups.count > 0
         guard live || active else { return }
@@ -41,8 +50,11 @@ final class GlassGroups {
             for node in glass.allObjects {
                 if node.reconcileGlass() { changed = true }
             }
-            if !changed { return }
+            if !changed { break }
         }
+        #if os(iOS) || os(tvOS)
+        morph()
+        #endif
     }
 
     /// Says once why a `glassGroup` draws no group (D6).
@@ -144,7 +156,7 @@ extension NodeView {
             if v.layer?.mask != nil { note("mask") }
             if v !== self, v is NSClipView || v.clipsToBounds || v.layer?.masksToBounds == true { note("clip") }
             #endif
-            if v !== self, (v.superview as? NodeView)?.overlay === v { note("canvas") }
+            if v !== self, v.canvasOverlayOwner != nil { note("canvas") }
             view = v.superview
         }
         return (nil, [])
@@ -190,16 +202,6 @@ extension NodeView {
 
 #if os(iOS) || os(tvOS)
 extension NodeView {
-    /// A glass that a person's input adds to a group already in the window
-    /// (a badge a press makes) materializes: its effect is set in an
-    /// animation, which in the group's container grows it out of the glass
-    /// it merges with, as SwiftUI's `glassEffectID` shapes appear in
-    /// `withAnimation`, and its content fades in. A glass that arrives with
-    /// its group (a screen shown), or that data or a timer adds, is drawn at
-    /// once, as UIKit draws glass set outside an animation, and so is every
-    /// one under Reduce Motion. So is one under an `animation` its author
-    /// wrote, on it or on a box between it and the group: the author says
-    /// how it moves (`"written"` names an authored `animation`).
     /// Sets the material's effect: a glass that had none appears (a box's
     /// material made glass, a `visibility: hidden` lifted), and materializes
     /// as one that joins its group does.
@@ -222,23 +224,11 @@ extension NodeView {
         }
     }
 
+    /// A glass that may have joined its group: it moves at the batch's end,
+    /// once laid out (`GlassGroups.morph`).
     func materializeJoiningGlass() {
-        guard let started = presenter?.inputStarted, #available(iOS 26.0, tvOS 26.0, *), window != nil, !ExactEnv.agentFreezes,
-              !UIAccessibility.isReduceMotionEnabled, Materials.glass(materialKind), let view = materialView, let effect = view.effect,
-              let group = sequence(first: superview, next: { $0?.superview }).lazy.compactMap({ $0 as? GlassGroupView }).first,
-              let since = group.shownSince, since < started else { return }
-        var below: UIView? = self
-        while let v = below, v !== group {
-            if let node = v as? NodeView, node.wrote("animation") { return }
-            below = v.superview
-        }
-        view.effect = nil
-        view.contentView.alpha = 0
-        // UIKit's default spring, its timing as given
-        UIView.animate(options: [.allowUserInteraction]) {
-            view.effect = effect
-            view.contentView.alpha = 1
-        }
+        guard let presenter, presenter.inputStarted != nil else { return }
+        presenter.glassGroups.joining.add(self)
     }
 }
 #endif
@@ -287,9 +277,11 @@ final class GlassSlot: UIVisualEffectView {
 }
 
 extension NodeView {
-    /// What `container` names without a group: the scroll, the canvas
-    /// overlay, a glass's content view, the clip box, or the node.
-    var baseContainer: UIView { scroll ?? overlay ?? (Materials.glass(materialKind) || blurHostsChildren ? materialView?.contentView : nil) ?? clipBox ?? self }
+    /// A one-axis clip holds children outside the material's rounded mask.
+    var baseContainer: UIView {
+        scroll ?? overlay ?? (clipsOneAxis ? clipBox : nil)
+            ?? (Materials.glass(materialKind) || blurHostsChildren ? materialView?.contentView : nil) ?? clipBox ?? self
+    }
 
     /// The group view's place and spacing, or its absence (D2, D6).
     func syncGlassGroup() {
@@ -348,6 +340,8 @@ extension NodeView {
     /// node in the same batch.
     func syncGlassSlot() {
         let glass = glassBody != nil
+        // A native glass button joins as a material does when its effect is set.
+        if glass, nativeGlassBody != nil, presenter?.glassGroups.glass.contains(self) == false { materializeJoiningGlass() }
         if glass { presenter?.glassGroups.glass.add(self) } else { presenter?.glassGroups.glass.remove(self) }
         guard !glass, let slot = glassSlot else { return }
         glassSlot = nil
@@ -411,9 +405,8 @@ private final class GlassContent: NSView {
 }
 
 extension NodeView {
-    /// What `container` names without a group: the scroll's document, the
-    /// canvas overlay, a material's content, the clip box, or the node.
-    var baseContainer: NSView { scroll?.documentView ?? overlay ?? materialContent ?? clipBox ?? self }
+    /// A one-axis clip holds children outside the material's rounded mask.
+    var baseContainer: NSView { scroll?.documentView ?? overlay ?? (clipsOneAxis ? clipBox : nil) ?? materialContent ?? clipBox ?? self }
 
     /// The group view's content, where the children are while it exists.
     var glassGroupContent: NSView? {

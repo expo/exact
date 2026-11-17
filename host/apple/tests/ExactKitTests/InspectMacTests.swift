@@ -89,7 +89,7 @@ final class InspectMacTests: XCTestCase {
     }
 }
 
-/// `select {up}` (tamber/1.17) over a real session, as on iOS (InspectIOSTests) and the web pages: walking out by
+/// `select {up}` (forma/1.17) over a real session, as on iOS (InspectIOSTests) and the web pages: walking out by
 /// the plan's copies, each new copy owning an ancestor a step (a slot's host among them), at step `up` that copy's
 /// outermost node, past the last the root, with `moved`; an ask for a selection that moved, or with no copies for its
 /// plan, is nil, the selection as it is now. The fixture is apps/select-walk-fixture's; its copies come from the
@@ -205,7 +205,7 @@ final class InspectSelectUpMacTests: XCTestCase {
         var moved = ask(selected, 1); moved["from"] = -1
         XCTAssertNil(Inspect.selectUp(session, moved), "asked of a selection at another site")
         XCTAssertEqual(Inspect.selected?.id, try view("glyph"), "a stale ask leaves the selection")
-        // The wire's encoding, as scripts/tamber-inspect.mjs writes it: runs [0, 2], [1, 1].
+        // The wire's encoding, as scripts/forma-inspect.mjs writes it: runs [0, 2], [1, 1].
         XCTAssertEqual(Inspect.decodeCopies("r1:AAIBAQ=="), [0, 0, 1])
         // Bounded, as the pages are: a run past 2^20 sites, a varint past 4 bytes, one cut off, half a pair.
         for bad in ["r1:AICAgIAQ", "r1:gICAgICAgICA", "r1:AIA=", "r1:AA=="] { XCTAssertNil(Inspect.decodeCopies(bad), bad) }

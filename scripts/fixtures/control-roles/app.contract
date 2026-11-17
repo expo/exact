@@ -1,5 +1,5 @@
 // The control-roles fixture (LLP 1121 D9, stage 8 C): each native control
-// once, on, under an authored accent and authored field roles (app.tamber),
+// once, on, under an authored accent and authored field roles (app.forma),
 // for scripts/measure-controls.mjs, which builds it again with neither and
 // compares the two. Colours far from every platform's default.
 component App

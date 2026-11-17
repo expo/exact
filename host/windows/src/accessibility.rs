@@ -5,7 +5,7 @@ use accesskit::{
 };
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
 use exact_kernel::PropId;
-use exact_linux::{
+use exact_painted::{
     presenter::access::{act, flag, role, Node as Source},
     Presenter,
 };
@@ -21,6 +21,10 @@ use winit::{
 pub(super) enum Event {
     Wake,
     Close,
+    /// The app's bare `focus()`.
+    Focus,
+    /// The app's `hideWindow()`.
+    Hide,
     ModalWake,
     Timer(std::sync::Arc<crate::timers::Fired>),
     Access(accesskit_winit::Event),
@@ -359,7 +363,10 @@ fn map_node(
         role::SWITCH => Role::Switch,
         role::RADIO => Role::RadioButton,
         role::SLIDER => Role::Slider,
+        // UI Automation's Spinner, with RangeValue below.
+        role::SPIN_BUTTON => Role::SpinButton,
         role::IMAGE => Role::Image,
+        role::MEDIA => Role::Video,
         role::TAB => Role::Tab,
         role::SCROLLER => Role::ScrollView,
         role::PROGRESS => Role::ProgressIndicator,
@@ -461,7 +468,7 @@ fn map_node(
         node.set_min_numeric_value(source.range[0].into());
         node.set_max_numeric_value(source.range[1].into());
         node.set_numeric_value(source.range[2].into());
-        if source.role == role::SLIDER {
+        if flags & flag::SETTABLE != 0 {
             node.add_action(Action::SetValue);
         }
     }
@@ -493,7 +500,7 @@ fn map_node(
                 Action::ScrollUp
             });
         }
-    } else if source.role == role::SLIDER {
+    } else if flags & flag::RANGE != 0 {
         if flags & flag::FORWARD != 0 {
             node.add_action(Action::Increment);
         }
@@ -518,10 +525,31 @@ mod tests {
             rect: [10., 20., 100., 40.],
             range: [0.; 3],
             set: (0, 0),
+            grid: [0; 4],
             name: "Message".into(),
             value: "a🦀e\u{301}".into(),
             hint: "Draft".into(),
         }
+    }
+
+    #[test]
+    fn accessibility_a_drawn_range_steps_and_only_a_native_one_takes_a_value() {
+        let mut slider = source(role::SLIDER);
+        slider.flags = flag::RANGE | flag::FORWARD;
+        let drawn = map_node(&slider, (0., 0.), false, false, false);
+        assert!(drawn.supports_action(Action::Increment));
+        assert!(!drawn.supports_action(Action::Decrement));
+        assert!(!drawn.supports_action(Action::SetValue));
+        slider.flags = flag::RANGE | flag::SETTABLE | flag::FORWARD | flag::BACKWARD;
+        let native = map_node(&slider, (0., 0.), false, false, false);
+        assert!(native.supports_action(Action::Decrement));
+        assert!(native.supports_action(Action::SetValue));
+        let mut spin = source(role::SPIN_BUTTON);
+        spin.flags = flag::RANGE | flag::BACKWARD;
+        let spin = map_node(&spin, (0., 0.), false, false, false);
+        assert_eq!(spin.role(), Role::SpinButton);
+        assert!(spin.supports_action(Action::Decrement));
+        assert!(!spin.supports_action(Action::SetValue));
     }
 
     #[test]

@@ -24,5 +24,6 @@
   },
   "deploy": {
     "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" }
-  }
+  },
+  "rust": { "data": { "crate": "orientation-fixture-data", "type": "orientation_fixture_data::Fixture", "source": "orientation_fixture_data::Fixture" } }
 }

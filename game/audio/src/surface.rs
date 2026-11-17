@@ -208,6 +208,39 @@ impl SurfacePlayer {
         }
         let _ = (world, generation, playing, self.unlocked, self.epoch);
     }
+    /// The output's state, for a HUD: `running` while it plays, `suspended`
+    /// while the canvas is hidden or the output waits for a gesture, and
+    /// `closed` with no device (the agent's virtual clock, a device not yet
+    /// opened or failed). `None` on a target with no player.
+    #[cfg(any(
+        windows,
+        test,
+        target_arch = "wasm32",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos"
+    ))]
+    pub fn state(&self) -> Option<&'static str> {
+        // The output as it is now, not as the last frame's sync found it: a
+        // resting canvas runs no sync.
+        Some(match &self.device {
+            None => "closed",
+            Some(player) if player.output.failure().is_some() => "closed",
+            Some(player) if !self.suspended && player.output.ready() => "running",
+            Some(_) => "suspended",
+        })
+    }
+    #[cfg(not(any(
+        windows,
+        test,
+        target_arch = "wasm32",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos"
+    )))]
+    pub fn state(&self) -> Option<&'static str> {
+        None
+    }
     pub fn unlock(&mut self) {
         #[cfg(any(
             windows,
@@ -409,6 +442,37 @@ mod test_device {
         assert_eq!(world.save(), before);
         assert_eq!(SUSPENDS.get(), 1);
         assert_eq!(RESUMES.get(), 1);
+    }
+    #[test]
+    fn state_names_the_output_running_suspended_or_closed() {
+        FAIL.set(false);
+        DEVICE_ERROR.set(false);
+        let mut surface = super::SurfacePlayer::default();
+        let world = exact_game::World::new(60, 0);
+        assert_eq!(
+            surface.state(),
+            Some("closed"),
+            "a virtual clock opens none"
+        );
+        surface.sync(&world, 0, true, false);
+        assert_eq!(surface.state(), Some("running"));
+        let _ = surface.suspend(true);
+        assert_eq!(surface.state(), Some("suspended"));
+        let _ = surface.suspend(false);
+        assert_eq!(
+            surface.state(),
+            Some("running"),
+            "read now, not at the last sync"
+        );
+        DEVICE_ERROR.set(true);
+        assert_eq!(
+            surface.state(),
+            Some("closed"),
+            "a failed output plays nothing"
+        );
+        DEVICE_ERROR.set(false);
+        surface.clock(true);
+        assert_eq!(surface.state(), Some("closed"));
     }
     #[test]
     fn failed_device_creation_retries_at_bounded_frame_intervals() {

@@ -11,19 +11,34 @@ pub mod css;
 
 use crate::property::Value;
 
-/// A CSS colour [`css::parse`] admits, as a motion value. `None` for
-/// anything else, and for `currentColor`, which is the caller's to resolve.
+/// A CSS colour [`css::parse`] admits, as a motion value: a legacy colour in
+/// premultiplied sRGB, a modern one in premultiplied Oklab, unclipped (CSS
+/// Color 4 §12.1). `None` for anything else, and for `currentColor`, which
+/// is the caller's to resolve.
 pub fn parse(text: &str) -> Option<Value> {
-    let c = match css::parse_exact(text)? {
-        css::Parsed::Color(c) | css::Parsed::Wide(c, _) => c,
-        css::Parsed::Current => return None,
+    let c = match exact_color::parse(text)? {
+        exact_color::Parsed::Legacy(c, _) => c,
+        exact_color::Parsed::Wide(w) => return css::motion_value(w),
+        exact_color::Parsed::Current => return None,
     };
     let byte = |b: u8| b as f64 / 255.0;
     Some(Value::rgba(byte(c.r), byte(c.g), byte(c.b), c.a))
 }
 
-/// A colour value as CSS reads it: `rgba(r, g, b, a)`, straight alpha.
+/// A colour value as CSS reads it, straight alpha: `rgba(r, g, b, a)`, or
+/// `oklab(l a b / a)` for an Oklab one, which keeps its space and gamut.
 pub fn css(v: Value) -> String {
+    if v.oklab {
+        let a = v.w.clamp(0.0, 1.0);
+        let c = |x: f64| exact_num::Shortest(if a == 0.0 { 0.0 } else { x / a });
+        return format!(
+            "oklab({} {} {} / {})",
+            c(v.x),
+            c(v.y),
+            c(v.z),
+            exact_num::Shortest(a)
+        );
+    }
     let [r, g, b, _] = v.to_rgba8();
     let a = v.w.clamp(0.0, 1.0);
     format!("rgba({r}, {g}, {b}, {})", exact_num::Shortest(a))

@@ -8,7 +8,7 @@
   "theme_color": "#ffffff",
   "background_color": "#ffffff",
   "app": { "id": "dev.exact.heavybench.bounded", "name": "Heavy bounded" },
-  "rust": { "mode": "off" },
+  "rust": { "mode": "off", "data": { "crate": "exact-bounded-data", "type": "exact_bounded_data::Heavy" } },
   "host": {
     "ios": { "minimumOS": "17.0", "deviceFamily": ["iphone", "ipad"] },
     "macos": { "minimumOS": "14.0" },

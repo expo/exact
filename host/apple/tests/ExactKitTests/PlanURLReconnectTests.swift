@@ -9,7 +9,7 @@ import XCTest
 // against a loopback stand-in for host/web/dev.mjs: a dropped stream, or a
 // server restarted on the same port, is subscribed and registered again
 // under the build's id, and the pin the channel holds for it comes back on
-// the new stream; a `rebuilt` frame or a generation for another program
+// the new stream; a native rebuild or a generation for another native program
 // takes no generation, but the host keeps its stream and registration and
 // takes the next generation for its own program.
 final class PlanURLReconnectTests: XCTestCase {
@@ -72,6 +72,72 @@ final class PlanURLReconnectTests: XCTestCase {
         XCTAssertNil(host.connection?.terminal)
     }
 
+    func testAWebRebuildKeepsTheNativeProgramAcrossGenerationsAndReconnects() throws {
+        let server = try DevServerStub()
+        defer { server.stop() }
+        try server.start(program: Self.program, plan: Data("plan one".utf8))
+        let host = Host.open(server.page)
+        defer { host.close() }
+        settle { host.applied.count == 1 && server.opened(in: server.epoch) == 1 }
+
+        server.push(["rebuilt": 1, "nativePrograms": [DevServerStub.cohort: Self.program]])
+        let next = server.publish(program: Self.program, plan: Data("plan two".utf8), webProgram: Self.other)
+        settle { host.applied.count == 2 || host.connection?.terminal != nil }
+        XCTAssertEqual(host.applied, [server.identity(seq: 1), server.identity(seq: next)])
+        XCTAssertNil(host.connection?.terminal)
+
+        server.stop()
+        try server.start(program: Self.program, plan: Data("plan two".utf8), webProgram: Self.other)
+        settle { server.opened(in: server.epoch) == 1 }
+        XCTAssertEqual(host.applied.count, 2, "reconnecting to the running generation keeps its state")
+        XCTAssertNil(host.connection?.terminal)
+        _ = server.publish(program: Self.program, plan: Data("plan three".utf8), webProgram: Self.other)
+        settle { host.applied.count == 3 || host.connection?.terminal != nil }
+        XCTAssertEqual(host.applied.count, 3)
+        XCTAssertNil(host.connection?.terminal)
+        host.connect(server.page)
+        settle { server.opened(in: server.epoch) == 2 }
+        XCTAssertEqual(host.applied.count, 3)
+        XCTAssertNil(host.connection?.terminal)
+    }
+
+    /// A host whose first revision names no program for its cohort cannot
+    /// tell its own program returning from a rebuilt host's, so it pins none
+    /// that follows, from the same server or a restarted one, until Reload.
+    func testAHostThatFirstSeesNoNativeProgramPinsNoneUntilReload() throws {
+        for reconnect in [false, true] {
+            let server = try DevServerStub()
+            defer { server.stop() }
+            try server.start(program: "", plan: Data("plan one".utf8), webProgram: Self.program)
+            let host = Host.open(server.page)
+            defer { host.close() }
+            settle { host.connection?.terminal != nil && server.opened(in: server.epoch) == 1 }
+            XCTAssertTrue(host.applied.isEmpty)
+            if reconnect {
+                server.stop()
+                try server.start(program: Self.program, plan: Data("plan two".utf8))
+                // The envelope is judged before the stream opens.
+                settle { server.opened(in: server.epoch) == 1 }
+            } else {
+                _ = server.publish(program: Self.program, plan: Data("plan two".utf8))
+                // Frames are handled in order: the announcement before the error.
+                server.push(["error": "app.contract:1:1 expected a view"])
+                settle { host.connection?.refused != nil }
+            }
+            XCTAssertNil(host.program, "a program first named while waiting is not pinned")
+            XCTAssertNotNil(host.connection?.terminal)
+            XCTAssertFalse(server.requests(in: server.epoch).contains { $0.hasSuffix("/app.plan") })
+
+            host.connection?.reload()
+            settle { host.applied.count == 1 }
+            XCTAssertEqual(host.program, Self.program)
+            XCTAssertNil(host.connection?.terminal)
+            _ = server.publish(program: Self.other, plan: Data("foreign plan".utf8))
+            settle { host.connection?.terminal != nil }
+            XCTAssertEqual(host.applied.count, 1, "Reload pins the program it takes")
+        }
+    }
+
     func testAnotherProgramTakesNoGenerationAndTheHostStaysSubscribedAndRegistered() throws {
         try XCTSkipUnless(BuildChannel.enabled, "a production bake has no build channel")
         let server = try DevServerStub()
@@ -88,7 +154,7 @@ final class PlanURLReconnectTests: XCTestCase {
         // the same nonce: the stream stayed open and the host registered.
         server.push(["rebuilt": 1])
         settle { host.connection?.terminal != nil }
-        let foreign = server.publish(program: Self.other, plan: Data("plan two".utf8))
+        let foreign = server.publish(program: Self.other, plan: Data("plan two".utf8), webProgram: Self.program)
         let revision = server.pin(host.id, ["contrast": "more"])
         settle { host.pins(on: first.nonce).contains { $0["revision"] as? Int == revision } && server.statuses(on: first.nonce).last == revision }
         XCTAssertFalse(server.requests(in: server.epoch).contains { $0.contains("/\(server.epoch)/\(foreign)/") }, "a generation for another program is not fetched")
@@ -100,7 +166,7 @@ final class PlanURLReconnectTests: XCTestCase {
         // read and refused, nothing fetched, but the host subscribes and
         // registers again, and its pin is replayed.
         server.stop()
-        try server.start(program: Self.other, plan: Data("plan two".utf8))
+        try server.start(program: Self.other, plan: Data("plan two".utf8), webProgram: Self.program)
         settle { server.registers(in: server.epoch).count == 1 && replayed(host, server, on: server.registers(in: server.epoch)[0].nonce, revision: revision) }
         let again = try XCTUnwrap(server.registers(in: server.epoch).first)
         XCTAssertEqual(again.body["id"] as? String, host.id)
@@ -110,13 +176,18 @@ final class PlanURLReconnectTests: XCTestCase {
         XCTAssertEqual(host.applied.count, 1)
         XCTAssertNotNil(host.connection?.terminal)
 
+        host.connect(server.page)
+        settle { server.registers(in: server.epoch).count == 2 }
+        XCTAssertEqual(host.applied.count, 1)
+        XCTAssertNotNil(host.connection?.terminal)
+
         // Back on the host's program: its next generation is taken, on the
         // stream it kept, and the rebuild status clears.
         let own = server.publish(program: Self.program, plan: Data("plan three".utf8))
         settle { host.applied.count == 2 }
         XCTAssertEqual(host.applied.last, server.identity(seq: own))
         XCTAssertNil(host.connection?.terminal)
-        XCTAssertEqual(server.opened(in: server.epoch), 1)
+        XCTAssertEqual(server.opened(in: server.epoch), 2)
     }
 
     #endif
@@ -197,6 +268,25 @@ final class PlanURLReconnectTests: XCTestCase {
         XCTAssertEqual(PlanURL.brief(""), "the save did not build")
     }
 
+    /// An app with hundreds of assets loads: the envelope names its asset
+    /// index by digest and stays a small pointer card, the index's cards
+    /// resolve against the index's own URL, and every asset is fetched and
+    /// verified before the one apply (issue #91: 537 cards overran 64 KiB).
+    func testAGenerationWhoseIndexNamesSixHundredAssetsIsTakenWhole() throws {
+        let server = try DevServerStub()
+        defer { server.stop() }
+        let assets = (0..<600).map { ("assets/textures/die-\($0).png", Data("texture \($0)".utf8)) }
+        try server.start(program: Self.program, plan: Data("plan one".utf8), assets: assets)
+        let host = Host.open(server.page)
+        defer { host.close() }
+        settle { host.applied.count == 1 }
+        XCTAssertEqual(host.applied, [server.identity(seq: 1)])
+        let asked = server.requests(in: server.epoch)
+        XCTAssertTrue(asked.contains { $0.hasSuffix("/1/assets.json") }, "\(asked.prefix(8))")
+        XCTAssertEqual(asked.filter { $0.contains("/1/assets/textures/") }.count, 600)
+        XCTAssertLessThan(server.envelope(seq: 1).count, 1024)
+    }
+
     /// The pin `revision` replayed on stream `nonce`: a pin frame the host
     /// took on that stream itself, and the status it sent for it, after the
     /// one its hello sent (which names the revision it held already), taken
@@ -224,7 +314,7 @@ final class PlanURLReconnectTests: XCTestCase {
 private final class Host {
     let id = "macos-reconnect-test"
     var connection: PlanURL?
-    private var program: String?
+    private(set) var program: String?
     private var running: String?
     private(set) var applied: [String] = []
     /// Each pin frame taken, with the nonce of the stream it came on.
@@ -234,7 +324,15 @@ private final class Host {
 
     static func open(_ page: String, _ configure: (PlanURL) -> Void = { _ in }) -> Host {
         let host = Host()
-        host.connection = PlanURL.open(page, acceptProgram: { [weak host] program in
+        host.connect(page)
+        host.connection.map(configure)
+        return host
+    }
+
+    func connect(_ page: String) {
+        close()
+        let host = self
+        connection = PlanURL.open(page, program: program, acceptProgram: { [weak host] program in
             guard let host else { return false }
             if let old = host.program { return old == program }
             host.program = program
@@ -244,8 +342,6 @@ private final class Host {
             host?.applied.append(candidate.identity)
             return true
         })
-        host.connection.map(configure)
-        return host
     }
 
     func close() { connection?.close() }
@@ -267,7 +363,7 @@ private final class Host {
 /// reads it: the page and its envelope link, each generation's envelope and
 /// plan, the `/__dev` stream (a hello with a nonce, then announcements and
 /// commands), and `/__dev/report`, which answers a register with the pin it
-/// holds for the build's id, as scripts/tamber-builds.mjs does. `stop` drops
+/// holds for the build's id, as scripts/forma-builds.mjs does. `stop` drops
 /// every connection and the listener; `start` listens again on the same
 /// port as a new process: a new epoch, its sequence from 1. Its pins outlive
 /// a restart, as a channel kept by a process the restart does not take down.
@@ -276,7 +372,16 @@ final class DevServerStub: @unchecked Sendable {
         var kind: String? { body["kind"] as? String }
         var nonce: String { body["nonce"] as? String ?? "" }
     }
-    private struct Generation { let program: String; let plan: Data; let sha: String; let identity: String }
+    static var cohort: String {
+        let compat = BakedCompatibility.json
+        return "\(compat["target"] as! String)/\(compat["id"] as! String)"
+    }
+    private static func programs(_ program: String) -> [String: Any] {
+        [cohort: program.isEmpty ? NSNull() : program,
+         "other-target/\(BakedCompatibility.json["id"] as! String)": String(repeating: "f", count: 64),
+         "unbuilt-target/\(BakedCompatibility.json["id"] as! String)": NSNull()]
+    }
+    private struct Generation { let webProgram: String; let program: String; let plan: Data; let sha: String; let identity: String; let assets: [String: Data]; let index: Data? }
 
     private let lock = NSLock()
     private var listener: Int32 = -1
@@ -320,12 +425,12 @@ final class DevServerStub: @unchecked Sendable {
 
     init() throws {}
 
-    func start(program: String, plan: Data) throws {
+    func start(program: String, plan: Data, assets: [(String, Data)] = [], webProgram: String? = nil) throws {
         try listen(refusing: false) {
             currentEpoch = UUID().uuidString.lowercased()
             generations = []
         }
-        _ = add(program: program, plan: plan)
+        _ = add(program: program, plan: plan, assets: assets, webProgram: webProgram)
     }
 
     /// The port down, but watched: each connection is reset unanswered, as
@@ -436,8 +541,8 @@ final class DevServerStub: @unchecked Sendable {
     }
 
     /// A new generation, announced on every stream. Its sequence.
-    func publish(program: String, plan: Data) -> Int {
-        let seq = add(program: program, plan: plan)
+    func publish(program: String, plan: Data, webProgram: String? = nil) -> Int {
+        let seq = add(program: program, plan: plan, webProgram: webProgram)
         lock.lock()
         let frame = announcement(seq)
         lock.unlock()
@@ -445,21 +550,41 @@ final class DevServerStub: @unchecked Sendable {
         return seq
     }
 
-    private func add(program: String, plan: Data) -> Int {
-        let sha = SHA256.hash(data: plan).map { String(format: "%02x", $0) }.joined()
+    private func add(program: String, plan: Data, assets: [(String, Data)] = [], webProgram: String? = nil) -> Int {
+        func hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+        let sha = hex(plan)
         // The envelope's identity, as PlanURL and the server compute it: the
-        // canonical manifest of a plan with no assets.
-        let canonical = "{\"assets\":[],\"plan\":{\"bytes\":\(plan.count),\"sha256\":\"\(sha)\"}}"
-        let identity = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+        // canonical manifest of the plan and the assets, sorted by name.
+        let sorted = assets.sorted { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }
+        let cards = sorted.map { "{\"bytes\":\($0.1.count),\"name\":\"\($0.0)\",\"sha256\":\"\(hex($0.1))\"}" }
+        let canonical = "{\"assets\":[" + cards.joined(separator: ",") + "],\"plan\":{\"bytes\":\(plan.count),\"sha256\":\"\(sha)\"}}"
+        let identity = hex(Data(canonical.utf8))
+        // The index's cards resolve against its own URL, beside the envelope.
+        let rows = sorted.map { "{\"bytes\":\($0.1.count),\"name\":\"\($0.0)\",\"sha256\":\"\(hex($0.1))\",\"url\":\"./\($0.0)\"}" }
+        let index = assets.isEmpty ? nil : Data(("{\"assets\":[" + rows.joined(separator: ",") + "]}").utf8)
         lock.lock(); defer { lock.unlock() }
-        generations.append(Generation(program: program, plan: plan, sha: sha, identity: identity))
+        generations.append(Generation(webProgram: webProgram ?? program, program: program, plan: plan, sha: sha, identity: identity, assets: Dictionary(uniqueKeysWithValues: assets), index: index))
         return generations.count
+    }
+
+    /// Generation `seq`'s envelope, as served.
+    func envelope(seq: Int) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        let g = generations[seq - 1], dev = announcement(seq)
+        var envelope: [String: Any] = ["exact": 1,
+                                       "plan": ["url": "app.plan", "sha256": g.sha, "bytes": g.plan.count],
+                                       "dev": ["epoch": dev["epoch"]!, "program": g.webProgram, "nativePrograms": Self.programs(g.program), "seq": dev["seq"]!, "generation": g.identity, "events": "/__dev"]]
+        if let index = g.index {
+            let sha = SHA256.hash(data: index).map { String(format: "%02x", $0) }.joined()
+            envelope["assets"] = ["url": "assets.json", "sha256": sha, "bytes": index.count, "count": g.assets.count]
+        }
+        return try! JSONSerialization.data(withJSONObject: envelope)
     }
 
     /// The latest or `seq`'s announcement, as hello and the stream carry it.
     private func announcement(_ seq: Int) -> [String: Any] {
         let g = generations[seq - 1]
-        return ["epoch": currentEpoch, "program": g.program, "seq": seq, "generation": g.identity, "digest": g.sha,
+        return ["epoch": currentEpoch, "program": g.webProgram, "nativePrograms": Self.programs(g.program), "seq": seq, "generation": g.identity, "digest": g.sha,
                 "envelope": "/__dev/generation/\(currentEpoch)/\(seq)/exact.json"]
     }
 
@@ -497,19 +622,20 @@ final class DevServerStub: @unchecked Sendable {
             return
         case ("POST", "/__dev/report"):
             report(client, body)
-        case ("GET", _) where parts.count == 5 && parts[0] == "__dev" && parts[1] == "generation":
+        case ("GET", _) where parts.count >= 5 && parts[0] == "__dev" && parts[1] == "generation":
             lock.lock()
             let g = parts[2] == currentEpoch ? Int(parts[3]).flatMap { (1...generations.count).contains($0) ? generations[$0 - 1] : nil } : nil
-            let dev = g.map { _ in announcement(Int(parts[3])!) }
             lock.unlock()
-            guard let g, let dev else { respond(client, "404 Not Found", "text/plain", Data()); break }
-            if parts[4] == "exact.json" {
-                let envelope: [String: Any] = ["exact": 1, "assets": [] as [Any],
-                                               "plan": ["url": "app.plan", "sha256": g.sha, "bytes": g.plan.count],
-                                               "dev": ["epoch": dev["epoch"]!, "program": g.program, "seq": dev["seq"]!, "generation": g.identity, "events": "/__dev"]]
-                respond(client, "200 OK", PlanURL.envelopeType, try! JSONSerialization.data(withJSONObject: envelope))
-            } else if parts[4] == "app.plan" {
+            guard let g else { respond(client, "404 Not Found", "text/plain", Data()); break }
+            let name = parts[4...].joined(separator: "/")
+            if name == "exact.json" {
+                respond(client, "200 OK", PlanURL.envelopeType, envelope(seq: Int(parts[3])!))
+            } else if name == "app.plan" {
                 respond(client, "200 OK", "application/octet-stream", g.plan)
+            } else if name == "assets.json", let index = g.index {
+                respond(client, "200 OK", "application/json", index)
+            } else if let asset = g.assets[name] {
+                respond(client, "200 OK", "application/octet-stream", asset)
             } else {
                 respond(client, "404 Not Found", "text/plain", Data())
             }
@@ -520,7 +646,7 @@ final class DevServerStub: @unchecked Sendable {
         finish(client)
     }
 
-    /// As tamber-builds.mjs: a nonce no open stream holds is 403, a report
+    /// As forma-builds.mjs: a nonce no open stream holds is 403, a report
     /// before a register 409; a register is answered on its stream with the
     /// pin held for its id (revision 0 and null when there is none).
     private func report(_ client: Int32, _ data: Data) {

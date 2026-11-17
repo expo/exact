@@ -3,7 +3,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnOwned } from './test-children.mjs';
 import { DRIVEN, HEARTBEAT_RACE, ROOT, TOOL_ORIGIN, edit, lines, signals, stop, timed, toolTurns } from './design-tool-harness.mjs';
 
@@ -15,7 +15,7 @@ function framed(looked) {
   let done = false;
   const polling = (async () => {
     while (!done) {
-      const listed = await fetch(`${TOOL_ORIGIN}/__tamber/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
+      const listed = await fetch(`${TOOL_ORIGIN}/__forma/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
       if (listed?.ok?.builds?.some(b => b.host === 'web-js' && b.design && b.planDigest)) { looked.fire(0); return; }
       await Bun.sleep(100);
     }
@@ -38,7 +38,7 @@ const ready = looked => [looked.pause(4000, 0), 'clock +1', 'clock data', 'clock
  * copy can't run there: the natives' half is the clone's gate.) */
 async function kindsOnTheJsLoop() {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-kinds-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
   const contract = readFileSync(join(app, 'app.contract'), 'utf8');
   const card = contract
     .replace('transition="background-color 400ms" padding=12', 'transition="background-color duration.card" padding="space.card"')
@@ -46,7 +46,7 @@ async function kindsOnTheJsLoop() {
     .replace('text "A card" color="text.label"', 'text "A card" color="text.label" font-weight="weight.title"');
   expect(card.match(/space\.card|shadow\.card|weight\.title|duration\.card/g)?.length).toBe(4);
   writeFileSync(join(app, 'app.contract'), card);
-  writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('  AccentColor = #1d9bf0\n', [
+  writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('  AccentColor = #1d9bf0\n', [
     '  AccentColor = #1d9bf0',
     '  space.card = 12px',
     '  shadow.card: box-shadow = 0px 2px 8px border.hairline, inset 0px 0px 0px 1px border.hairline',
@@ -57,12 +57,13 @@ async function kindsOnTheJsLoop() {
     '  icon.star = icon(sf "star", material "star")',
     '',
   ].join('\n')));
-  const original = readFileSync(join(app, 'app.tamber'), 'utf8');
+  const original = readFileSync(join(app, 'app.forma'), 'utf8');
   const listener = (await import('node:http')).createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise(ok => listener.close(ok));
-  const dist = mkdtempSync(join(tmpdir(), 'exact-design-tool-kinds-dist-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-design-tool-kinds-dist-')), 'dist');
   const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--port', String(port)], { cwd: ROOT, env: { ...timed({ POLL: 3_000 }), EXACT_APP_DIR: app, EXACT_WEB_DIST: dist }, stdio: ['ignore', 'pipe', 'pipe'] });
   let tool;
   try {
@@ -71,8 +72,8 @@ async function kindsOnTheJsLoop() {
     await devSaid.until(l => l.includes(`127.0.0.1:${port}/`), 600_000);
     // Its design reader built: before it is, a live edit is proposed as a rebuild (theme2 10:01), and this test scrubs.
     await devSaid.until(l => l === 'design reader ready', 600_000);
-    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000);
+    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000);
     const seen = [];
     const connects = () => devSaid.seen.filter(l => l.startsWith('page connected')).length;
     // The frame's build and the file, once the frame runs the design the
@@ -82,12 +83,12 @@ async function kindsOnTheJsLoop() {
       for (;;) {
         const design = await fetch(`${base}/__dev/design`);
         const snapshot = design.status === 200 ? await design.json() : null;
-        const builds = (await (await fetch(`${TOOL_ORIGIN}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': (await (await fetch(`${TOOL_ORIGIN}/__tamber/token`)).json()).token }, body: '{"method":"hello"}' })).json()).ok.builds;
+        const builds = (await (await fetch(`${TOOL_ORIGIN}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': (await (await fetch(`${TOOL_ORIGIN}/__forma/token`)).json()).token }, body: '{"method":"hello"}' })).json()).ok.builds;
         const frame = builds.find(b => b.host === 'web-js');
         // Before any edit the loop has no snapshot to give (204): the frame runs the build's own design.
         const synced = !!frame && (snapshot ? frame.design === snapshot.design : design.status === 204 && !!frame.design);
         if (synced || Date.now() > end) {
-          seen.push({ synced, connects: connects(), snapshot, frame, file: readFileSync(join(app, 'app.tamber'), 'utf8') });
+          seen.push({ synced, connects: connects(), snapshot, frame, file: readFileSync(join(app, 'app.forma'), 'utf8') });
           return;
         }
         await Bun.sleep(100);
@@ -151,7 +152,7 @@ async function kindsOnTheJsLoop() {
     if (tool) await stop(tool);
     await stop(dev);
     rmSync(app, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }
 

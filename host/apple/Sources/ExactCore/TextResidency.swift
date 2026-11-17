@@ -21,12 +21,18 @@ package enum TextMetricKey {
         if r.indent != 0 || r.hang { h.combine(r.indent); h.combine(r.hang) }
         // An image's box (LLP 1011.002), as its request's hashes.
         if let b = r.box { h.combine(b) }
+        edges(Float(r.inlineStart), Float(r.inlineEnd), &h)
+    }
+    /// A run's inline edges, where it has any, as a request's hash them.
+    private static func edges(_ start: Float, _ end: Float, _ h: inout Hasher) {
+        if start != 0 || end != 0 { h.combine(start); h.combine(end) }
     }
     private static func fields(_ r: ExactTextRun, _ h: inout Hasher) {
         fields(CGFloat(r.font_size), Int(r.font_weight), Int(r.font_family), r.italic != 0,
                r.has_line_height != 0 ? CGFloat(r.line_height) : nil, CGFloat(r.letter_spacing),
                Int(r.font_variant_numeric), Int(r.font_variant_ligatures), CGFloat(r.font_stretch), FontAxis.of(r), FontFeature.of(r), &h)
         if let b = InlineBox(r) { h.combine(b) }
+        edges(r.inline_start, r.inline_end, &h)
     }
     package static func hash(_ spec: Spec) -> Int {
         var h = Hasher()
@@ -39,7 +45,7 @@ package enum TextMetricKey {
         h.combine(spec.strut != nil)
         if let strut = spec.strut { fields(strut, &h) }
         h.combine(spec.align); h.combine(spec.lineClamp); h.combine(spec.overflowWrap)
-        h.combine(spec.direction); h.combine(spec.whiteSpace)
+        h.combine(spec.direction); h.combine(spec.natural); h.combine(spec.whiteSpace)
         h.combine(spec.textIndent); h.combine(spec.hyphens)
         if spec.automaticHyphens { h.combine(spec.language) }
         if !spec.emergencyBreaks.isEmpty { h.combine(spec.emergencyBreaks) }
@@ -57,7 +63,7 @@ package enum TextMetricKey {
         h.combine(true) // The callback always constructs a strut, even for empty text.
         fields(request.strut, &h)
         h.combine(Int(request.align)); h.combine(Int(request.line_clamp)); h.combine(Int(request.overflow_wrap))
-        h.combine(Int(request.direction)); h.combine(Int(request.white_space))
+        h.combine(Int(request.direction)); h.combine(request.natural != 0); h.combine(Int(request.white_space))
         h.combine(CGFloat(request.text_indent)); h.combine(Int(request.hyphens))
         if Spec.insertsHyphens(Int(request.hyphens), wrap: Int(request.overflow_wrap)) {
             h.combine(String(decoding: UnsafeBufferPointer(start: request.lang, count: request.lang_len), as: UTF8.self))
@@ -85,6 +91,7 @@ package enum TextMetricKey {
             && FontAxis.of(raw) == owned.variations
             && FontFeature.of(raw) == owned.features
             && InlineBox(raw) == owned.box
+            && CGFloat(raw.inline_start) == owned.inlineStart && CGFloat(raw.inline_end) == owned.inlineEnd
     }
     package static func matches(_ request: ExactMeasureRequest, _ geometry: Spec) -> Bool {
         // An expanded Markdown request has more runs than its one source run;
@@ -93,7 +100,8 @@ package enum TextMetricKey {
         guard request.markup == 0, !Spec.insertsHyphens(Int(request.hyphens), wrap: Int(request.overflow_wrap)) else { return false }
         guard request.count == geometry.runs.count, Int(request.align) == geometry.align,
               Int(request.line_clamp) == geometry.lineClamp, Int(request.overflow_wrap) == geometry.overflowWrap,
-              Int(request.direction) == geometry.direction, Int(request.white_space) == geometry.whiteSpace,
+              Int(request.direction) == geometry.direction, (request.natural != 0) == geometry.natural,
+              Int(request.white_space) == geometry.whiteSpace,
               CGFloat(request.text_indent) == geometry.textIndent, Int(request.hyphens) == geometry.hyphens,
               Int(request.text_box_trim) == geometry.textBoxTrim, Int(request.text_box_over) == geometry.textBoxOver,
               Int(request.text_box_under) == geometry.textBoxUnder, (request.text_wrap_style == 1) == geometry.balance,
@@ -152,6 +160,8 @@ extension Spec {
         value.antialiased = false
         value.source = SourceMap()
         for i in value.runs.indices {
+            value.runs[i].opacity = []
+            value.runs[i].backgroundOpacity = []
             value.runs[i].hidden = false
             value.runs[i].fixedInk = false
             value.runs[i].color = nil
@@ -162,10 +172,18 @@ extension Spec {
             value.runs[i].background = nil
             value.runs[i].backgroundBox = 0
             value.runs[i].backgroundRadii = []
+            value.runs[i].backgroundBefore = 0
+            value.runs[i].backgroundAfter = 0
+            value.runs[i].backgroundAbove = 0
+            value.runs[i].backgroundBelow = 0
+            value.runs[i].border = nil
+            value.runs[i].outerBackgrounds = []
             value.runs[i].shadow = nil
             value.runs[i].stroke = nil
+            value.runs[i].atomIcon = nil
         }
         if var strut = value.strut {
+            strut.opacity = []; strut.backgroundOpacity = []
             strut.text = ""; strut.color = nil; strut.decoration = ""; strut.href = ""; strut.background = nil
             strut.shadow = nil; strut.stroke = nil
             value.strut = strut
@@ -186,21 +204,34 @@ package struct TextPaint: Hashable {
         let strikeColor: [Double]?
         let href: String
         let background: [Double]?
+        let opacity: [InlineOpacity]
+        let backgroundOpacity: [InlineOpacity]
         let backgroundBox: UInt32
         let backgroundRadii: [InlineRadius]
+        let backgroundReach: [CGFloat]
+        let border: InlineBorder?
+        let outerBackgrounds: [OuterBackground]
         let shadow: [Double]?
         let stroke: [Double]?
+        let atomIcon: AtomIconRun?
         init(_ r: Run) {
+            opacity = r.opacity; backgroundOpacity = r.backgroundOpacity
             hidden = r.hidden; fixedInk = r.fixedInk; color = r.color; decoration = r.decoration
             underlineColor = r.underlineColor; strikeColor = r.strikeColor; href = r.href
             background = r.background; backgroundBox = r.backgroundBox; backgroundRadii = r.backgroundRadii
-            shadow = r.shadow; stroke = r.stroke
+            backgroundReach = [r.backgroundBefore, r.backgroundAfter, r.backgroundAbove, r.backgroundBelow]; border = r.border
+            outerBackgrounds = r.outerBackgrounds
+            shadow = r.shadow; stroke = r.stroke; atomIcon = r.atomIcon
         }
         func apply(to run: inout Run) {
+            run.opacity = opacity; run.backgroundOpacity = backgroundOpacity
             run.hidden = hidden; run.fixedInk = fixedInk; run.color = color; run.decoration = decoration
             run.underlineColor = underlineColor; run.strikeColor = strikeColor; run.href = href
             run.background = background; run.backgroundBox = backgroundBox; run.backgroundRadii = backgroundRadii
-            run.shadow = shadow; run.stroke = stroke
+            (run.backgroundBefore, run.backgroundAfter) = (backgroundReach[0], backgroundReach[1])
+            (run.backgroundAbove, run.backgroundBelow) = (backgroundReach[2], backgroundReach[3])
+            run.border = border; run.outerBackgrounds = outerBackgrounds
+            run.shadow = shadow; run.stroke = stroke; run.atomIcon = atomIcon
         }
     }
     package let color: [Double]

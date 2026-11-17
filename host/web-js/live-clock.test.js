@@ -152,7 +152,7 @@ test('admission cancels a held instance when an earlier action changes its key',
   });
 });
 
-test('ordinary refusals retain the cutoff and finish due work before admitting waits', async () => {
+test('an ordinary refusal ends the turn, and the next finishes due work before admitting waits', async () => {
   const { rt } = await import('./rt-link.js');
   const { timerWaits } = await import('./timer-waits.js');
   withAdmissionHost(() => {
@@ -172,9 +172,11 @@ test('ordinary refusals retain the cutoff and finish due work before admitting w
       every(11, () => { fired.push('later'); return true; }, true, 'later');
       clock.agent = false; wall = 10;
       rt.timerWait.check();
-      expect(fired).toEqual(cancel ? ['ordinary'] : ['ordinary', 'waiting']);
-      advance(20, true);
-      expect(fired.at(-1)).toBe('later');
+      // The refusal ends the turn: nothing after it fires in it, and `drive` schedules the rest.
+      expect(fired).toEqual([]);
+      // The next turn, at the clock the refused callback left (20), finishes ordinary due work before admitting the wait.
+      rt.timerWait.check();
+      expect(fired).toEqual(cancel ? ['ordinary', 'later'] : ['ordinary', 'later', 'waiting']);
     }
   });
 });

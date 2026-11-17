@@ -326,3 +326,49 @@ fn an_authored_ratio_relates_the_border_box_under_border_box_sizing() {
         "{image:?}"
     );
 }
+
+/// A grid or flex `text` lays its lines out as one anonymous item (CSS Grid
+/// §6, Flexbox §4): its images take the item's wrapping width and stand
+/// where the item went, with its glyphs.
+#[test]
+fn an_image_stands_in_the_anonymous_item_with_its_lines() {
+    for (css, x, y) in [
+        // "abcd" fills most of the centred 50 px track, so the image wraps
+        // to the second line: 19.2 + 23.84 px of lines, centred in 100.
+        (
+            &[
+                (StyleId::Display, "grid"),
+                (StyleId::GridTemplateColumns, "50px"),
+                (StyleId::JustifyContent, "center"),
+                (StyleId::AlignItems, "center"),
+            ][..],
+            25.0,
+            (100.0 - 19.2 - 23.84) / 2.0 + 19.2,
+        ),
+        // One 23.84 px line, at the bottom of the box.
+        (
+            &[(StyleId::Display, "flex"), (StyleId::AlignItems, "end")][..],
+            4.0 * ADVANCE,
+            100.0 - 23.84,
+        ),
+    ] {
+        let mut k = paragraph(
+            &[(StyleId::Height, "20px"), (StyleId::Width, "20px")],
+            "abcd",
+        );
+        let mut style = vec![(StyleId::Width, "100px"), (StyleId::Height, "100px")];
+        style.extend_from_slice(css);
+        k.apply(
+            1,
+            2,
+            &[Op::SetStyle {
+                id: 2,
+                patch: rows(&style),
+            }],
+        )
+        .unwrap();
+        k.compute_layout(1, Offer::definite(400.0, 600.0)).unwrap();
+        let image = frame(&k, 4);
+        assert!(close(image.x, x) && close(image.y, y), "{css:?}: {image:?}");
+    }
+}

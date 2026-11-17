@@ -106,6 +106,8 @@ impl crate::Adapter for super::Adapter {
 
             Ok(crate::OpenDevice {
                 device: super::Device {
+                    // EXACT (EXACT-PATCHES.md, 15).
+                    binary_archive: Mutex::new(None),
                     shared: Arc::clone(&self.shared),
                     features,
                     counters: Default::default(),

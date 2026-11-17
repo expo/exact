@@ -1,6 +1,6 @@
 // Writes stub/dials.json, the stub server's canned replies, from the stub's
-// design (stub/dials.tamber) and app (stub/app.contract, its components'
-// params) through a real `contract tamber serve`: `describe`, and `resolve`
+// design (stub/dials.forma) and app (stub/app.contract, its components'
+// params) through a real `contract forma serve`: `describe`, and `resolve`
 // and `explain` for every token and param. Run after changing either:
 //   bun apps/design-tool/stub/regen.mjs   (CONTRACT=<binary> for another build)
 import { spawn } from 'node:child_process';
@@ -11,9 +11,9 @@ import { fileURLToPath } from 'node:url';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), 'design-tool-stub-'));
-copyFileSync(resolve(here, 'dials.tamber'), join(dir, 'app.tamber'));
+copyFileSync(resolve(here, 'dials.forma'), join(dir, 'app.forma'));
 copyFileSync(resolve(here, 'app.contract'), join(dir, 'app.contract'));
-const serve = spawn(process.env.CONTRACT ?? resolve(here, '../../../target/debug/contract'), ['tamber', 'serve', '--stdio', dir], { stdio: ['pipe', 'pipe', 'inherit'] });
+const serve = spawn(process.env.CONTRACT ?? resolve(here, '../../../target/debug/contract'), ['forma', 'serve', '--stdio', dir], { stdio: ['pipe', 'pipe', 'inherit'] });
 const waiting = new Map();
 let buf = '', id = 0;
 serve.stdout.on('data', d => { buf += d; const lines = buf.split('\n'); buf = lines.pop(); for (const l of lines) { const m = JSON.parse(l); waiting.get(m.id)?.(m); } });

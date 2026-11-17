@@ -268,6 +268,57 @@ final class AccessibilityClientMacTests: XCTestCase {
         XCTAssertEqual(p.views[21]?.props["inert"], "true", "naming is checked while suppression stays in force")
     }
 
+    func testProjectedSegmentsKeepTheirAuthoredIdentitiesAndSuppression() throws {
+        let p = try fixture([
+            ["op": "create", "id": 30, "kind": "view", "props": ["accessibilityRole": "tablist", "testId": "choices"]],
+            ["op": "create", "id": 31, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab", "testId": "one"]],
+            ["op": "create", "id": 32, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab", "testId": "two"]],
+            ["op": "create", "id": 33, "kind": "text", "props": ["text": "One"]],
+            ["op": "create", "id": 34, "kind": "text", "props": ["text": "Two"]],
+            ["op": "children", "id": 31, "ids": [33]], ["op": "children", "id": 32, "ids": [34]],
+            ["op": "children", "id": 30, "ids": [31, 32]], ["op": "children", "id": 1, "ids": [2, 30]],
+            ["op": "frame", "id": 30, "x": 0, "y": 50, "w": 250, "h": 40],
+        ])
+        let client = AXClient()
+        XCTAssertNotNil(client.element("page-button"))
+        XCTAssertNotNil(p.segments.control(of: 30))
+        for (name, id, label) in [("one", UInt32(31), "One"), ("two", UInt32(32), "Two")] {
+            let native = try XCTUnwrap(client.attributes(of: name, ["AXRole", "AXDescription"]))
+            XCTAssertEqual(native["AXRole"], "AXRadioButton")
+            XCTAssertEqual(native["AXDescription"], label)
+            let tree = p.axElements(roots: [p.viewport])
+            let element = try XCTUnwrap((tree["elements"] as? [[String: Any]])?.first { $0["testId"] as? String == name })
+            XCTAssertEqual(element["id"] as? UInt32, id)
+            XCTAssertEqual(element["name"] as? String, label)
+            XCTAssertEqual(element["via"] as? String, "owner")
+        }
+        for prop in ["accessibilityElementsHidden", "inert"] {
+            p.apply(wireBatch([["op": "props", "id": 30, "set": [prop: "true"]]]))
+            XCTAssertNil(client.element("one"))
+            XCTAssertNil(client.element("two"))
+            p.apply(wireBatch([["op": "props", "id": 30, "clear": [prop]]]))
+            XCTAssertNotNil(client.element("one"))
+            XCTAssertNotNil(client.element("two"))
+        }
+    }
+
+    func testProjectedToolbarObjectsKeepTheirAuthoredIdentities() throws {
+        let p = try fixture([
+            ["op": "create", "id": 40, "kind": "view", "props": ["accessibilityRole": "toolbar", "toolbarPlacement": "window", "testId": "commands"]],
+            ["op": "create", "id": 41, "kind": "button", "handlers": ["press"], "props": ["accessibilityLabel": "Compose", "testId": "compose"]],
+            ["op": "create", "id": 42, "kind": "image", "props": ["symbolName": "square.and.pencil"]],
+            ["op": "children", "id": 41, "ids": [42]], ["op": "children", "id": 40, "ids": [41]],
+            ["op": "children", "id": 1, "ids": [2, 40]],
+        ])
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        window.layoutIfNeeded()
+        let client = AXClient()
+        XCTAssertNotNil(client.element("page-button"))
+        let native = try XCTUnwrap(client.attributes(of: "compose", ["AXRole", "AXDescription", "AXTitle"]))
+        XCTAssertEqual(native["AXRole"], "AXButton")
+        XCTAssertTrue([native["AXDescription"], native["AXTitle"]].contains("Compose"))
+    }
+
     /// A `role="menu"` box is AppKit's menu and its rows (`menuitem`, a
     /// box's `menuitemcheckbox`) are menu items, as WebKit serves them
     /// (Core-AAM), so VoiceOver says "menu" and "menu item" where it said

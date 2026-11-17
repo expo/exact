@@ -206,13 +206,11 @@ fn contract_file(spec: &str, key: &Path, in_package: bool) -> Result<(), Refusal
     }
 }
 
-/// `@exact/<name>`'s directory in the checkout this compiler was built
-/// from, when it is one of its standard modules.
+/// `@exact/<name>`'s directory in the checkout in use, when it is one of its
+/// standard modules.
 fn standard_module(name: &str) -> Option<PathBuf> {
     let short = name.strip_prefix("@exact/")?;
-    let at = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../packages")
-        .join(short);
+    let at = crate::root::sdk_root().join("packages").join(short);
     let at = at.canonicalize().ok()?;
     at.join("exact.json").is_file().then_some(at)
 }
@@ -286,7 +284,7 @@ fn package(spec: &str, dir: &Path, consulted: &mut Vec<PathBuf>) -> Result<Resol
                     root.display()
                 ),
                 // One of the SDK's standard modules (LLP 1133.001 D8): by a
-                // path into the checkout this compiler was built from.
+                // path into the checkout in use.
                 None => match standard_module(&name) {
                     Some(at) => format!(
                         "no package `{name}` in a `node_modules` above {}: it is exact2's standard module; `exact add {}` (bun {}/scripts/exact.mjs add {} <app>) writes `\"{name}\": \"file:{}\"` into the app's `package.json` and installs it",
@@ -389,7 +387,7 @@ fn package(spec: &str, dir: &Path, consulted: &mut Vec<PathBuf>) -> Result<Resol
 }
 
 /// Where a package's design is (LLP 1121 D11): the file its
-/// `package.json`'s `"tamber"` names (`named`), else `<name>.tamber` beside
+/// `package.json`'s `"forma"` names (`named`), else `<name>.forma` beside
 /// its entry (what `exports` maps `.` to, or `index.contract`), where
 /// `<name>` is its namespace; and the package's own name (its
 /// `package.json`'s, whatever name a `use` installed it under). The file
@@ -404,7 +402,7 @@ pub(crate) fn package_design(root: &Path, manifest: &Path) -> Option<PackageDesi
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(manifest).ok()?).ok()?;
     let name = json["name"].as_str()?.to_owned();
-    if let Some(named) = json["tamber"].as_str() {
+    if let Some(named) = json["forma"].as_str() {
         return Some(PackageDesign {
             path: lexical(&root.join(named)),
             named: true,
@@ -415,7 +413,7 @@ pub(crate) fn package_design(root: &Path, manifest: &Path) -> Option<PackageDesi
     let dir = lexical(&root.join(entry.strip_prefix("./").unwrap_or(&entry)))
         .parent()?
         .to_path_buf();
-    let path = dir.join(format!("{}.tamber", namespace(&name)));
+    let path = dir.join(format!("{}.forma", namespace(&name)));
     Some(PackageDesign {
         path,
         named: false,

@@ -4757,7 +4757,7 @@ full run. The isolated asynchronous-core suite passes on rerun. Logs and exit co
 | `cargo check --workspace --all-targets --keep-going` | 0 | 148.20 |
 
 The first full run passed every check (`mac-checks-1.json`). The second
-failed wall-time assertions in SVG expansion, Tamber's multiply import
+failed wall-time assertions in SVG expansion, Forma's multiply import
 and Tailwind import; each passed its isolated rerun. The separate
 `exact-linux` full run failed the agent exit deadline and one image-height
 assertion; both isolated reruns passed. These retained failures are not
@@ -4766,9 +4766,9 @@ rewritten as green full runs. Verbatim isolated results:
 ```text
 mac-svg-2.log:
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 3.73s
-mac-tamber-import-2.log:
+mac-forma-import-2.log:
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 213 filtered out; finished in 1.90s
-mac-tamber-tailwind-2.log:
+mac-forma-tailwind-2.log:
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 213 filtered out; finished in 5.75s
 mac-linux-exit-2.log:
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1656 filtered out; finished in 1.02s

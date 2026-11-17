@@ -1,0 +1,140 @@
+// The window opens at the newest message, under its day's pill.
+test "opens at the newest message"
+  clock data
+  expect tree has "message-600"
+  expect state feed.hasLater == false
+  expect state cursor == ""
+
+// Flings toward the start page through the whole history and reach its first message.
+test "flings reach the first message"
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  expect state feed.hasEarlier == false
+  expect tree has "message-1"
+
+// A message that arrives while the reader is back in the history leaves the window as it is and
+// asks for nothing; it shows once they return.
+test "an arrival away from the end leaves the window alone"
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  clock settle
+  expect state feed.hasLater == true
+  expect state pendingStart == ""
+  // No feed request: the window (the cursor's answer) is as it was.
+  perf
+    clock +4000
+    clock data
+  expect perf query feed == 0
+  expect tree missing "message-601"
+  // It was stored: back at the end, it shows before the reader's own.
+  type "composer" "Back"
+  tap "send"
+  clock data
+  clock settle
+  expect tree has "message-601"
+  expect tree has "message-602"
+
+// Sending returns to the end, where the new message shows.
+test "a sent message returns to the end"
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  type "composer" "Yes, at noon"
+  tap "send"
+  clock data
+  clock settle
+  expect state cursor == ""
+  expect tree has "message-601"
+  expect text "composer" == ""
+
+// Flings back toward the end page forward and, once a window holds the end, follow it again: the
+// next arrival shows.
+test "flings back reach the end and follow it"
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  tap "transcript" drag 0 -3000
+  clock data
+  clock settle
+  expect state cursor == ""
+  expect tree has "message-600"
+  clock +4000
+  clock data
+  expect tree has "message-601"
+
+// A tall window (a desktop's, an iPad's in portrait) still opens at the end and stays there: the
+// window of messages is many of its ports tall, so neither edge reaches toward the start.
+test "a tall window opens and stays at the end"
+  size 1100x2000
+  clock data
+  clock settle
+  expect state cursor == ""
+  expect tree has "message-600"
+  type "composer" "Yes, at noon"
+  tap "send"
+  clock data
+  clock settle
+  expect state cursor == ""
+  expect tree has "message-601"
+
+// Flings right after a send page back toward the start: the return holds them off only until it
+// ends. (A gesture that cancels the return's scroll is bounded by a second; this test does not
+// cancel it.)
+test "flings right after a send page back"
+  clock data
+  type "composer" "On my way"
+  tap "send"
+  tap "transcript" drag 0 3000
+  clock +1500
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  tap "transcript" drag 0 3000
+  clock data
+  clock settle
+  expect state returning == false
+  expect state feed.hasLater == true

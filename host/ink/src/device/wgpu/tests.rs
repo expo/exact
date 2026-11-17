@@ -81,7 +81,9 @@ fn rounded_rectangles_ring_and_gaussian_shadow_at_two_times_scale() {
     );
     assert_eq!(pixel(&bytes, 200, 109, 145), [0; 4]);
     assert!(bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .all(|p| p[..3].iter().all(|c| *c <= p[3])));
 
     let mut times = Vec::new();
@@ -137,8 +139,8 @@ fn textures_brushes_clips_mips_and_retirement_reach_the_pixels() {
     device.generate_mips(image).unwrap();
     for level in 1..4 {
         let bytes = block_on(device.readback_async(image, level)).unwrap();
-        for p in bytes.chunks_exact(4) {
-            near(p.try_into().unwrap(), [64, 0, 64, 128], 1);
+        for p in bytes.as_chunks::<4>().0 {
+            near(*p, [64, 0, 64, 128], 1);
         }
     }
     let ramp = device.create_texture(TextureDesc::rgba(2, 1)).unwrap();
@@ -336,5 +338,37 @@ fn lost_device_refuses_readback_allocation_and_submission() {
     assert_eq!(
         device.submitted, submitted,
         "loss must not submit more work"
+    );
+}
+
+#[test]
+fn weak_adapter_limits_preserve_the_ink_abi_or_name_the_missing_capacity() {
+    // Mesa cdc6a0bf: v3dv_device.c:get_device_properties and v3d_limits.h.
+    // https://gitlab.freedesktop.org/mesa/mesa/-/tree/cdc6a0bfed71b22cfbb5ce7f6b778ee3fdedf409/src/broadcom
+    let mut available = ::wgpu::Limits {
+        max_texture_dimension_1d: 4096,
+        max_texture_dimension_2d: 4096,
+        max_color_attachments: 4,
+        max_inter_stage_shader_variables: 15, // wgpu: 64 / 4 - 1 for position
+        max_compute_workgroup_size_x: 256,
+        max_compute_workgroup_size_y: 256,
+        max_compute_workgroup_size_z: 256,
+        ..Default::default()
+    };
+    let requested = requested_limits(available.clone()).unwrap();
+    assert!(requested.check_limits(&available));
+    assert!(requested.max_vertex_attributes >= 12);
+    assert!(requested.max_inter_stage_shader_variables >= 13);
+    assert!(requested.max_sampled_textures_per_shader_stage >= 7);
+    available.max_inter_stage_shader_variables = 12;
+    assert_eq!(
+        requested_limits(available.clone()).unwrap_err().to_string(),
+        "device: Ink needs max_inter_stage_shader_variables >= 13, adapter offers 12"
+    );
+    available.max_inter_stage_shader_variables = 15;
+    available.max_color_attachment_bytes_per_sample = 4;
+    assert_eq!(
+        requested_limits(available).unwrap_err().to_string(),
+        "device: Ink needs max_color_attachment_bytes_per_sample >= 8, adapter offers 4"
     );
 }

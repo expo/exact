@@ -269,6 +269,7 @@ pub(crate) fn reserve(
         let runs = [TextRun {
             text: shown,
             style,
+            edges: Default::default(),
             inline: None,
         }];
         let request = TextMeasureRequest {
@@ -284,5 +285,6 @@ pub(crate) fn reserve(
         };
         metrics.width = metrics.width.max(candidate.width);
         metrics.height = metrics.height.max(candidate.height);
+        metrics.pending |= candidate.pending;
     }
 }

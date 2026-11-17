@@ -1,10 +1,10 @@
 import Foundation
 
 extension ExactSession {
-    /// Scrolling has settled (iOS: `ScrollPump.restDelay`): the decoded
-    /// images, shaped text and text pixels no view shows go, the tree's
-    /// storage comes back to its live nodes, and the allocator returns the
-    /// pages they leave. What shows keeps its own.
+    /// Scrolling has settled (iOS: `ScrollPump.restDelay`): cold pictures
+    /// keep a bounded cache, cold shaped text and text pixels go, and the
+    /// tree's storage comes back to its live nodes. The allocator returns
+    /// the pages they leave.
     func rest() {
         runtime.trim()
         rasters.trimCold()

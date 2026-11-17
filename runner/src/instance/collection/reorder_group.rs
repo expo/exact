@@ -231,6 +231,7 @@ impl Collection {
     pub(crate) fn hold_drop(
         &mut self,
         g: &ReorderGeometry,
+        now_ms: f64,
     ) -> Result<Option<(String, Option<String>)>, InstanceError> {
         let Some(p) = &self.preview else {
             return Ok(None);
@@ -253,8 +254,8 @@ impl Collection {
         let item = self.keys[source].as_str().unwrap().to_owned();
         let p = self.preview.as_mut().unwrap();
         p.holding = true;
-        p.dropped = true;
         p.certified = None;
+        self.remember_drop(now_ms);
         Ok(Some((item, before)))
     }
 
@@ -275,9 +276,10 @@ impl Collection {
     ) -> Result<(), InstanceError> {
         if let Some(p) = &mut self.preview {
             p.holding = false;
-            p.dropped = false;
             p.terminal = true;
             p.certified = None;
+            let token = p.token;
+            self.end_drop_anchor(token);
         }
         let was = std::mem::replace(&mut self.instant, instant);
         let result = self.emit_preview(u);

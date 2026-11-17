@@ -1,15 +1,29 @@
-const CODEC_PATHS: [&str; 8] = [
+const CODEC_PATHS: [&str; 11] = [
     "../vendor/taffy/src/style/grid.rs",
     "build.rs",
     "build/codec.rs",
     "src/style/calc/wire.rs",
     "src/style/calc/parse.rs",
+    "src/style/relative.rs",
+    "src/style/relative/wire.rs",
     "src/style/grid.rs",
     "src/style/grid/parse.rs",
     "src/wire/codec.rs",
+    "src/wire/ops.rs",
 ];
 const SCHEMA_PATH: &str = "tables/schema.json";
 const DIGEST_DOMAIN: &[u8] = b"exact-kernel-schema-v1\0";
+
+fn emit_style_capabilities(w: &mut String, schema: &Schema) {
+    w.push_str("    /// The parser family a bound row links, if any (LLP 1047 D2).\n");
+    w.push_str("    pub fn capability(self) -> Option<&'static str> {\n        match self {\n");
+    for row in &schema.styles {
+        if let Some(name) = &row.capability {
+            writeln!(w, "            StyleId::{} => Some({name:?}),", pascal(&row.field)).unwrap();
+        }
+    }
+    w.push_str("            _ => None,\n        }\n    }\n");
+}
 
 enum GridSeam {
     Decode,
@@ -73,6 +87,7 @@ enum Codec {
     U16,
     U32,
     I32,
+    AutoI32,
     ColorValue,
     KeywordColor(&'static str),
     Vec2,
@@ -96,6 +111,7 @@ fn parse_codec(s: &str) -> Codec {
         "u16" => Codec::U16,
         "u32" => Codec::U32,
         "i32" => Codec::I32,
+        "auto-i32" => Codec::AutoI32,
         "color" => Codec::ColorValue,
         "auto-color" => Codec::KeywordColor("auto"),
         "current-color" => Codec::KeywordColor("currentcolor"),
@@ -225,6 +241,17 @@ fn parse_codec(s: &str) -> Codec {
             variant: "AnimationRange",
             error: "BadAnimationRange",
         },
+        // @ref LLP 1057.003 D5 — scroll and view timelines, CSS's own rows.
+        "timeline-name" => Codec::CssValue {
+            path: "crate::timeline::TimelineName",
+            variant: "TimelineName",
+            error: "BadTimelineName",
+        },
+        "view-timeline-inset" => Codec::CssValue {
+            path: "crate::timeline::ViewTimelineInset",
+            variant: "ViewTimelineInset",
+            error: "BadViewTimelineInset",
+        },
         "position-try-fallbacks" => Codec::CssValue {
             path: "crate::position_try::PositionTryFallbacks",
             variant: "PositionTryFallbacks",
@@ -234,6 +261,12 @@ fn parse_codec(s: &str) -> Codec {
             path: "crate::timeline::TimelineScope",
             variant: "TimelineScope",
             error: "BadTimelineScope",
+        },
+        // @ref LLP 1123 D5 — runtime custom properties, CSS Variables 1.
+        "safe-area-properties" => Codec::CssValue {
+            path: "crate::style::safe_area_properties::SafeAreaProperties",
+            variant: "SafeAreaProperties",
+            error: "BadSafeAreaProperties",
         },
         other => match other.strip_prefix("enum:") {
             Some(name) => Codec::Enum(name.to_string()),
@@ -251,6 +284,7 @@ impl Codec {
             Codec::U16 => "u16".into(),
             Codec::U32 => "u32".into(),
             Codec::I32 => "i32".into(),
+            Codec::AutoI32 => "Option<i32>".into(),
             Codec::ColorValue => "ColorValue".into(),
             Codec::KeywordColor(_) => "Option<ColorValue>".into(),
             Codec::Vec2 => "Vec2".into(),
@@ -271,6 +305,7 @@ impl Codec {
             Codec::U16 => "U16",
             Codec::U32 => "U32",
             Codec::I32 => "I32",
+            Codec::AutoI32 => "AutoI32",
             Codec::ColorValue => "ColorValue",
             Codec::KeywordColor(_) => "KeywordColor",
             Codec::Vec2 => "Vec2",
@@ -314,6 +349,10 @@ impl Codec {
             Codec::U16 => format!("{}u16", int(value, 0.0, u16::MAX as f64)),
             Codec::U32 => format!("{}u32", int(value, 0.0, u32::MAX as f64)),
             Codec::I32 => format!("{}i32", int(value, i32::MIN as f64, i32::MAX as f64)),
+            Codec::AutoI32 => {
+                assert_eq!(value.as_str(), Some("auto"));
+                "None".into()
+            }
             Codec::ColorValue => format!(
                 "ColorValue::Fixed(Color({}u32))",
                 int(value, 0.0, u32::MAX as f64)
@@ -393,6 +432,7 @@ impl Codec {
             Codec::U16 => "r.u16()?".into(),
             Codec::U32 => "r.u32()?".into(),
             Codec::I32 => "r.i32()?".into(),
+            Codec::AutoI32 => "r.auto_i32()?".into(),
             Codec::ColorValue => "r.color_value()?".into(),
             Codec::KeywordColor(_) => "r.optional_color()?".into(),
             Codec::Vec2 => "r.vec2()?".into(),
@@ -415,6 +455,7 @@ impl Codec {
             Codec::U16 => format!("w.u16({access});"),
             Codec::U32 => format!("w.u32({access});"),
             Codec::I32 => format!("w.i32({access});"),
+            Codec::AutoI32 => format!("w.auto_i32({access});"),
             Codec::ColorValue => format!("w.color_value({access});"),
             Codec::KeywordColor(_) => format!("w.optional_color({access});"),
             Codec::Vec2 => format!("w.vec2({access});"),
@@ -449,23 +490,25 @@ impl Codec {
 
 /// A keyword row's vocabulary as bits (`schema.json` `keywords`), emitted into
 /// its enum's `impl`: the first value alone is the empty set, a `none` alone is
-/// every `no-` value (CSS `font-variant-ligatures`), and each other value is
+/// every `no-` value (CSS `font-variant-ligatures`), or every value where the
+/// vocabulary has no `no-` one (`-exact-safe-area`), and each other value is
 /// one bit in vocabulary order; repeats, a value with its `no-` form, unknown
 /// words and the empty list are `None`.
-const KEYWORD_BITS: &str = r#"    /// This value's bits: 0 for the first, every `no-` value's for `none`,
-    /// else its own bit. Bits are numbered in vocabulary order, skipping the
+const KEYWORD_BITS: &str = r#"    /// This value's bits: 0 for the first, every `no-` value's for `none`
+    /// (every value's where none is a `no-` one), else its own bit. Bits are numbered in vocabulary order, skipping the
     /// first value and `none`.
     pub fn keyword_bits(self) -> u8 {
         if self as u8 == 0 { return 0; }
-        let (mut bit, mut no) = (0u32, 0u8);
+        let (mut bit, mut no, mut all) = (0u32, 0u8, 0u8);
         for v in &Self::ALL[1..] {
             if v.name() == "none" { continue; }
             let own = 1u8 << bit;
             bit += 1;
             if *v == self { return own; }
             if v.name().starts_with("no-") { no |= own; }
+            all |= own;
         }
-        no
+        if no == 0 { all } else { no }
     }
     /// A space-separated keyword list as a row's bits: the first value and
     /// `none` stand alone; a repeat, a value with its `no-` form and an

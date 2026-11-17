@@ -9,8 +9,10 @@
 
 const STATUS = { available: false, state: 'unknown', access: 'unknown', editor: true, apple: null, android: null };
 
-/** RFC 5545 §3.3.11's TEXT escapes. */
-const text = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+/** RFC 5545 §3.3.11's TEXT escapes; any line break, a lone CR too, is `\n`. */
+const text = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n?|\n/g, '\\n');
+/** A value that is not TEXT on one content line: without CR and LF, as the URL Standard's parser drops them. */
+const line = s => String(s).replace(/[\r\n]/g, '');
 
 /** A content line folded at 75 octets (§3.1), each continuation led by a space. */
 function fold(line) {
@@ -60,13 +62,14 @@ export function ics(event, now = Date.now()) {
     : `DTSTART:${p[0]}${pad(p[1])}${pad(p[2])}T${pad(p[3])}${pad(p[4])}${pad(p[5])}`;
   const lines = [
     'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Exact//@exact/calendar//EN', 'BEGIN:VEVENT',
-    `UID:${event.uid ?? `${now.toString(36)}-${Math.random().toString(36).slice(2)}@exact`}`,
-    `DTSTAMP:${utc(now)}`, start, `DURATION:${event.duration || (event.showWithoutTime ? 'P1D' : 'PT1H')}`,
+    // UID is TEXT (§3.8.4.7).
+    `UID:${event.uid != null ? text(event.uid) : `${now.toString(36)}-${Math.random().toString(36).slice(2)}@exact`}`,
+    `DTSTAMP:${utc(now)}`, start, `DURATION:${line(event.duration || (event.showWithoutTime ? 'P1D' : 'PT1H'))}`,
     `SUMMARY:${text(event.title)}`,
   ];
   if (event.description) lines.push(`DESCRIPTION:${text(event.description)}`);
   if (event.location) lines.push(`LOCATION:${text(event.location)}`);
-  if (event.url) lines.push(`URL:${event.url}`);
+  if (event.url) lines.push(`URL:${line(event.url)}`);
   if (event.status) lines.push(`STATUS:${event.status.toUpperCase()}`);
   if (event.freeBusyStatus) lines.push(`TRANSP:${event.freeBusyStatus === 'free' ? 'TRANSPARENT' : 'OPAQUE'}`);
   lines.push('END:VEVENT', 'END:VCALENDAR');

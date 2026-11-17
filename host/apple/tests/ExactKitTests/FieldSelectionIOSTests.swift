@@ -32,6 +32,34 @@ final class FieldSelectionIOSTests: XCTestCase {
         return p
     }
 
+    /// The software keyboard's Return and Backspace in a textarea are keys
+    /// its `key` handlers hear first, as a field's are: prevented, the text
+    /// stays.
+    func testSoftwareReturnAndBackspaceReachATextareasKeyHandlers() throws {
+        let p = presenter()
+        let node = try XCTUnwrap(p.views[2])
+        node.handlers.insert("key")
+        var keys: [String] = [], prevent = true
+        p.onKey = { _, key in
+            guard !key.up else { return }
+            keys.append(key.chord)
+            if prevent { p.defaultPrevented = true }
+        }
+        let editor = try XCTUnwrap(node.textArea)
+        XCTAssertTrue(editor.becomeFirstResponder())
+        editor.selectedRange = NSRange(location: 5, length: 0)
+        editor.insertText("\n")
+        editor.deleteBackward()
+        XCTAssertEqual(keys, ["Enter", "Backspace"])
+        XCTAssertEqual(editor.text, "hello", "prevented, neither edits")
+        prevent = false
+        editor.insertText("\n")
+        XCTAssertEqual(editor.text, "hello\n")
+        editor.deleteBackward()
+        XCTAssertEqual(editor.text, "hello")
+        XCTAssertEqual(keys, ["Enter", "Backspace", "Enter", "Backspace"])
+    }
+
     func testCancelableBeforeInputAndCaretChange() throws {
         let p = presenter()
         for id: UInt32 in [2, 3] {

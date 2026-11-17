@@ -346,12 +346,31 @@ impl<D: DataSource> Runner<D> {
         self.extensions.devices.app.clone().unwrap_or_default()
     }
 
-    /// A new connection on the device `args` names.
+    /// A new connection on the device `args` names, or `InvalidStateError`
+    /// when the device is exclusive and open in any session of the app.
     fn opened(&mut self, row: &ModulesRow, device: &Json, args: &Json) -> Json {
         let by = device["by"].as_str().unwrap_or("device");
         let id = args[by].as_str().unwrap_or_default().to_owned();
         let extension = self.plan.str(row.extension).to_owned();
         let sub = self.substitute(row);
+        // Checked and claimed under one lock, since another session may open
+        // the device between a check and a claim made apart, and on Android
+        // the open waits on a permission ticket after `device_open`'s check.
+        if sub["devices"]["exclusive"] == true {
+            let key = format!("{extension} {id}");
+            let app = self.device_app();
+            let mut state = app.lock().unwrap_or_else(|e| e.into_inner());
+            let open = state.entry(OPEN.to_owned()).or_insert_with(|| json!({}));
+            if !open.is_object() {
+                *open = json!({});
+            }
+            if open[&key] == true {
+                return json!({ "error": "InvalidStateError", "message": "already open" });
+            }
+            open[&key] = json!(true);
+            drop(state);
+            self.extensions.devices.exclusive.insert(key);
+        }
         let kind = sub["devices"]["kind"]
             .as_str()
             .unwrap_or("device")
@@ -366,17 +385,6 @@ impl<D: DataSource> Runner<D> {
                     options[k] = v.clone();
                 }
             }
-        }
-        if sub["devices"]["exclusive"] == true {
-            let key = format!("{extension} {id}");
-            let app = self.device_app();
-            let mut state = app.lock().unwrap_or_else(|e| e.into_inner());
-            if !state.get(OPEN).is_some_and(Json::is_object) {
-                state.insert(OPEN.into(), json!({}));
-            }
-            state.get_mut(OPEN).expect("the open record")[&key] = json!(true);
-            drop(state);
-            self.extensions.devices.exclusive.insert(key);
         }
         let devices = &mut self.extensions.devices;
         devices.connections.insert(

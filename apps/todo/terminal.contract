@@ -1,6 +1,14 @@
 // Todo — a terminal app (LLP 1101): written for the terminal from the first
 // line, in the same vocabulary as every other surface, lengths in cells
 // (`ch` a column, `lh` a row). Terminal-only to start (LLP 1101 Q9).
+//
+// The filter is the location, so a shell can print one list:
+// `todo --print /active` (LLP 1101.003).
+
+routes nav
+  all "/"
+  active "/active"
+  done "/done"
 
 shape Todo
   id: string
@@ -15,7 +23,7 @@ component Todos
   ]
   state draft = ""
   state next = 4
-  state filter = "all"
+  derive filter = top(nav).name
   derive shown = filter == "all" ? todos : todos.filter(t => filter == "done" ? t.done : not t.done)
   derive left = todos.filter(t => not t.done).length
 
@@ -30,11 +38,11 @@ component Todos
   action clearDone
     todos = todos.filter(t => not t.done)
   action showAll
-    filter = "all"
+    nav = open(nav, "/")
   action showActive
-    filter = "active"
+    nav = open(nav, "/active")
   action showDone
-    filter = "done"
+    nav = open(nav, "/done")
 
   view
     column width="100%" height="100%" color="light-dark(#1a1a1a, #d0d0d0)"

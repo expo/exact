@@ -49,7 +49,7 @@ pub fn alternates(sized: &[bool], parents: &[Option<usize>]) -> Vec<bool> {
 }
 
 /// A sized child's parent: its live display (block or not) and whether its own `justify-items`
-/// aligns (`start`, `center`, …), as the kernel's layout does since Taffy patch 66.
+/// aligns (`start`, `center`, …).
 pub fn parent_css(node: &NodeRef<'_>, alt: bool, css: &mut String) {
     let (justify, aligned) = names(alt);
     let block = node.style.display == Display::Block;
@@ -67,9 +67,6 @@ pub fn parent_css(node: &NodeRef<'_>, alt: bool, css: &mut String) {
 /// A sized node's own `justify-self`, over the host CSS's `start`, reading its parent's names.
 pub fn own_css(node: &NodeRef<'_>, canvas: bool, reads_alt: bool, css: &mut String) {
     let absolute = node.style.position_type == PositionType::Absolute;
-    if canvas && absolute {
-        return;
-    }
     *css = css.replace("justify-self:start;", "");
     let justify = match (canvas, absolute) {
         (false, true) => "auto".into(),
@@ -106,19 +103,15 @@ pub fn writes(id: StyleId, parts: &Parts) -> Vec<(String, String, Option<String>
             "v=>{const s=normal(\"justify-items\",String(v??\"\")).toLowerCase().replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").replace(/\\s+/g,\" \").trim();return /^(?:(?:safe|unsafe) )?(?:start|end|center|self-start|self-end|flex-start|flex-end|left|right)$|^(?:first )?baseline$/.test(s)?\"auto\":\"initial\"}".into(),
         )));
     }
-    // A canvas out of flow keeps `start`; a progress stretches between absolute insets.
-    let canvas = parts.tag == "canvas";
-    if id == StyleId::PositionType && (canvas || parts.props.contains_key("data-exact-progress")) {
-        let (out_of_flow, justify) = match canvas {
-            true => ("start", canvas_justify(reads_alt)),
-            false => ("auto", progress_justify(reads_alt)),
-        };
+    // A progress stretches between absolute insets.
+    if id == StyleId::PositionType && parts.props.contains_key("data-exact-progress") {
+        let justify = progress_justify(reads_alt);
         out.push((
             "justify-self".into(),
             String::new(),
             Some(format!(
-            "v=>normal(\"position\",String(v??\"\"))===\"absolute\"?{out_of_flow:?}:{justify:?}"
-        )),
+                "v=>normal(\"position\",String(v??\"\"))===\"absolute\"?\"auto\":{justify:?}"
+            )),
         ));
     }
     out

@@ -133,6 +133,14 @@ enum FrameHealthMetrics {
         return result
     }
 
+    /// The bounds of a population's median, p99 and maximum, or null where it is empty or its bins do not hold all
+    /// `count` of it.
+    static func bounds(_ bins: [UInt32], count: UInt64, overflows: UInt64, layout: Layout = .frames) -> Any {
+        guard count > 0, overflows == 0, bins.reduce(UInt64(0), { $0 + UInt64($1) }) == count else { return NSNull() }
+        return ["median": quantile(bins, fraction: 0.5, layout: layout), "p99": quantile(bins, fraction: 0.99, layout: layout),
+            "maximum": quantile(bins, fraction: 1, layout: layout)]
+    }
+
     /// The bounds of the bin holding `fraction` of the values, by nearest rank, or null without values.
     static func quantile(_ bins: [UInt32], fraction: Double, layout: Layout = .frames) -> Any {
         guard let index = bin(bins, fraction: fraction) else { return NSNull() }

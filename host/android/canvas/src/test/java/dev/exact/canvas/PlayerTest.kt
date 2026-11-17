@@ -1,5 +1,7 @@
 package dev.exact.canvas
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.RenderNode
 import java.nio.IntBuffer
@@ -18,6 +20,32 @@ class PlayerTest {
     private val identity = intArrayOf(1, f(1), 0, 0, f(1), 0, 0)
     private fun rect(y: Int) = intArrayOf(0, f(y), f(200), f(40)) + IntArray(8)
     private fun blur(y: Int) = intArrayOf(42, 1, 0, f(8)) + rect(y)
+
+    @Test fun pixelatedAnimationsRemainLiveHardwareDraws() {
+        val recorded = ArrayList<Pair<Boolean, Int>>()
+        val drawable = object : android.graphics.drawable.Drawable() {
+            override fun getIntrinsicWidth() = 2
+            override fun getIntrinsicHeight() = 1
+            override fun draw(canvas: Canvas) { recorded.add(canvas.isHardwareAccelerated to bounds.width()) }
+            override fun setAlpha(alpha: Int) {}
+            override fun setColorFilter(filter: android.graphics.ColorFilter?) {}
+            @Deprecated("Drawable requires it")
+            override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+        }
+        val player = Player(emptyMap()).apply {
+            width = 8; height = 4
+            animated = { drawable }
+        }
+        val page = RenderNode("page").apply { setPosition(0, 0, 8, 4) }
+        for (width in listOf(4, 5)) {
+            recorded.clear()
+            val ops = identity + intArrayOf(49, 2, 8, 1, 0, 0, f(width), f(2))
+            player.replay(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size)
+            page.endRecording()
+            assertEquals(listOf(true to if (width == 4) 4 else 6), recorded)
+            assertTrue(page.hasDisplayList())
+        }
+    }
 
     private fun stream(backdrops: List<IntArray>): IntBuffer {
         val words = ArrayList<Int>()
@@ -78,5 +106,20 @@ class PlayerTest {
                 assertTrue("$label: the scroller remains recorded", scroller.hasDisplayList())
             }
         }
+    }
+
+    /** SVG's `stroke-miterlimit`, op 13's word after the join: a 28° corner, whose miter is 4.1 widths long, is
+     * bevelled at the initial limit of 4 and mitered at 10, as the other painters draw it. */
+    @Test fun aStrokeTakesItsMiterLimit() {
+        fun tip(limit: Float): Int {
+            val corner = intArrayOf(3, 0, f(10), f(50), 1, f(50), f(40), 1, f(10), f(30))
+            val ops = identity + intArrayOf(13, Color.BLUE, f(8), 0, 0, limit.toRawBits()) + corner
+            val bitmap = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
+            Player(emptyMap()).apply { width = 80; height = 80 }
+                .replay(Canvas(bitmap), IntBuffer.wrap(ops), 0, ops.size)
+            return bitmap.getPixel(60, 40)
+        }
+        assertEquals(0, tip(4f))
+        assertEquals(Color.BLUE, tip(10f))
     }
 }

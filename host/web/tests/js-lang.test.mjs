@@ -43,7 +43,7 @@ test('a chosen language commits atomically, persists, and initializes the next l
   async function launch(chooses = true) {
     const here = resolve(dir, `runtime-${boots++}`);
     mkdirSync(here);
-    const real = ['rt.js', 'chosen.js', 'shape.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'resource-inspection.js', 'held.js', 'uploads.js'];
+    const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'chosen.js', 'shape.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'resource-inspection.js', 'held.js', 'uploads.js'];
     for (const file of real) copyFileSync(resolve(ROOT, 'host/web-js', file), resolve(here, file));
     for (const [file, source] of standIns(real)) writeFileSync(resolve(here, file), source);
     const nav = resolve(here, 'navigation.js');

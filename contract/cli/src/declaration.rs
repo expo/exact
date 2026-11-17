@@ -11,13 +11,23 @@ use contract_syntax::{
 use serde_json::{Map, Value};
 use std::path::Path;
 
+mod implementation;
+mod json;
 mod permissions;
+
+use json::{is_json, json_holds};
 
 /// A refusal: its id and message; the caller adds the `use`'s span.
 type Refusal = (&'static str, String);
 
 /// Read `text`, the declaration at `path`, as unit `source_id`.
-pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refusal> {
+pub(crate) fn read(
+    path: &Path,
+    text: &str,
+    source_id: u32,
+    origin: &crate::resolve::Origin,
+    consulted: &mut Vec<std::path::PathBuf>,
+) -> Result<File, Refusal> {
     let span = Span {
         line: 1,
         col: 0,
@@ -42,7 +52,7 @@ pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refu
                 .as_str()
                 .ok_or_else(|| refuse("an interface has a `name`".into()))?;
             let dir = path.parent().unwrap_or(Path::new("."));
-            let implementations = endorsed(dir).map_err(refuse)?;
+            let implementations = implementation::endorsed(dir).map_err(refuse)?;
             for (subpath, implementation) in &implementations {
                 let names: Vec<UseName> = object(&implementation["shapes"])
                     .keys()
@@ -95,13 +105,8 @@ pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refu
             }
         }
         "implementation" => {
-            // Its platform-only names (D2) are read when one is first
-            // declared and imported; stage 0 has none.
-            if json["names"].as_array().is_some_and(|names| !names.is_empty()) {
-                return Err(refuse(
-                    "an implementation's own sources and sends are not read yet (LLP 1133.001 D2)".into(),
-                ));
-            }
+            implementation::read(path, &json, origin, consulted, span, &mut file)
+                .map_err(refuse)?;
         }
         other => {
             return Err(refuse(format!(
@@ -143,34 +148,6 @@ fn groups(json: &Value, file: &File) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// The implementations an interface's own package carries, by subpath, from
-/// its `package.json` `exports` (LLP 1133.001 D1: `./apple`, `./android`).
-fn endorsed(dir: &Path) -> Result<Vec<(String, Value)>, String> {
-    let manifest = dir.join("package.json");
-    let text =
-        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let json: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("{}: not JSON: {e}", manifest.display()))?;
-    let mut out = Vec::new();
-    for (key, target) in object(&json["exports"]) {
-        let (Some(subpath), Some(target)) = (key.strip_prefix("./"), target.as_str()) else {
-            continue;
-        };
-        if target != format!("./{subpath}/exact.json") {
-            continue;
-        }
-        let at = dir.join(subpath).join("exact.json");
-        let text = std::fs::read_to_string(&at).map_err(|e| format!("{}: {e}", at.display()))?;
-        let implementation: Value =
-            serde_json::from_str(&text).map_err(|e| format!("{}: not JSON: {e}", at.display()))?;
-        if implementation["kind"] == "implementation" {
-            out.push((subpath.to_owned(), implementation));
-        }
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
 }
 
 /// Each shape, its fields in name order: `serde_json` here keeps no key
@@ -851,6 +828,16 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
     if !literal.is_empty() {
         out.insert("literal".into(), Value::Array(literal));
     }
+    // The options whose literals are the app's declarations, a list of
+    // records each named by its `declares` field (LLP 1133.004 stage 2: the
+    // actions a notification category shows, registered at launch).
+    let declares: Map<String, Value> = (object(&entry["options"]).iter())
+        .filter(|(_, ty)| ty["literal"] == true)
+        .filter_map(|(option, ty)| Some((option.clone(), ty["declares"].as_str()?.into())))
+        .collect();
+    if !declares.is_empty() {
+        out.insert("declares".into(), Value::Object(declares));
+    }
     // The options that name a handler, each a string literal (LLP 1133.034 D5).
     let handlers: Vec<Value> = (object(&entry["options"]).iter())
         .filter(|(_, ty)| ty.as_str().is_some_and(|t| bare(t).0 == "handler"))
@@ -1112,12 +1099,6 @@ fn argument_grant(spec: &Value) -> bool {
     }
 }
 
-/// Whether a declaration's type is `json<T>`.
-fn is_json(ty: &Value) -> bool {
-    ty.as_str()
-        .is_some_and(|t| t.trim().starts_with("json<") && t.trim().ends_with('>'))
-}
-
 /// The permission a name asks, where an interface declares several, each
 /// with the grant lines it covers (`"grants"`; LLP 1133.008 D6, LLP 1133.009
 /// D3: `camera` and `microphone`). A status source asks its own; a name
@@ -1354,8 +1335,8 @@ pub(crate) fn agent_words(words: &Value) -> Result<String, String> {
 /// the app's strings table, `handle<kind>`, the id of a native object the
 /// session holds (LLP 1133.009 D10 item 10), `surface`, a canvas's surface
 /// name (LLP 1133.013 D12 item 3), `color`, a CSS colour (LLP 1133.022 D10
-/// item 2), `json<T>`, a WebAuthn dictionary passed whole (LLP 1133.011
-/// D10), or `handler`, a function of the data module's `tools` (LLP
+/// item 2), `json<T>`, a value passed whole as JSON, such as a WebAuthn
+/// dictionary (LLP 1133.011 D10), or `handler`, a function of the data module's `tools` (LLP
 /// 1133.034 D5); each is a string here. `unit` answers nothing.
 fn type_expr(ty: &str, span: Span) -> Result<TypeExpr, String> {
     let ty = ty.trim();
@@ -1372,7 +1353,16 @@ fn type_expr(ty: &str, span: Span) -> Result<TypeExpr, String> {
         }
         return Ok(TypeExpr::Enum(members, span));
     }
-    if (ty.starts_with("handle<") || ty.starts_with("json<")) && ty.ends_with('>') {
+    if let Some(held) = ty.strip_prefix("json<").and_then(|t| t.strip_suffix('>')) {
+        if !json_holds(held) {
+            return Err(format!(
+                "`{ty}` is not a JSON value's type: {}",
+                json::HOLDS
+            ));
+        }
+        return Ok(TypeExpr::Named("string".to_owned(), span));
+    }
+    if ty.starts_with("handle<") && ty.ends_with('>') {
         return Ok(TypeExpr::Named("string".to_owned(), span));
     }
     // One of the app's shapes by name, which the bake writes as its JSON

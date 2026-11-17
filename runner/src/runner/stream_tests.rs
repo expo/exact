@@ -175,10 +175,14 @@ fn one_stream(r: &mut Runner<Scripted>) -> u64 {
     out[0].ticket
 }
 
-/// What a render's checkpoint would list now: pending, and open (LLP 1048.000 D6).
+/// What a render's checkpoint would list now: pending, and the answers open,
+/// by name (LLP 1048.000 D6).
 fn listed(r: &Runner<Scripted>) -> (Vec<String>, Vec<String>) {
     let checkpoint = r.document_checkpoint("/");
-    (checkpoint.pending, checkpoint.open)
+    let open = (checkpoint.open.iter())
+        .map(|&k| checkpoint.answers[k].0.clone())
+        .collect();
+    (checkpoint.pending, open)
 }
 
 #[test]
@@ -500,6 +504,39 @@ fn an_upload_is_pending_until_its_reply_while_its_progress_commits() {
     );
     assert_eq!(value(&r, "busy"), Value::Bool(false));
     assert!(!r.has_pending() && r.in_flight().is_empty() && !r.holds(ticket));
+}
+
+/// An upload in flight holds the app open until its reply, as a request with
+/// effects does; one let go is aborted and holds nothing (LLP 1133.008.000 D8).
+#[test]
+fn an_upload_must_finish_until_its_reply_and_not_once_let_go() {
+    let mut r = boot_with(Scripted {
+        upload: true,
+        ..Scripted::default()
+    });
+    let ticket = r.take_requests()[0].ticket;
+    assert!(r.must_finish(), "admitted");
+    started(&mut r, ticket);
+    r.fulfill(
+        ticket,
+        Outcome::Message(Message::upload_progress(1024, 4096)),
+    )
+    .unwrap();
+    assert!(r.must_finish(), "going out");
+    let reply = Outcome::Response(Response {
+        status: 201,
+        headers: Vec::new(),
+        body: b"{}".to_vec(),
+    });
+    r.fulfill(ticket, reply).unwrap();
+    assert!(!r.must_finish(), "replied");
+    r.act("wave", vec![Value::Number(2.)]).unwrap();
+    let second = r.take_requests()[0].ticket;
+    assert!(r.must_finish());
+    // Wave 0 answers now, letting the running upload go.
+    r.act("wave", vec![Value::Number(0.)]).unwrap();
+    assert!(!r.holds(second), "the host aborts what the runner let go");
+    assert!(!r.must_finish(), "a let-go upload is not kept");
 }
 
 /// An upload is asked once for its arguments (LLP 1016.000 D10): neither a
@@ -1139,4 +1176,58 @@ fn a_stream_asked_at_readiness_is_pending_only_until_its_first_message() {
         assert_eq!(r.resource(name), Some(&Value::Bool(false)), "{name}");
     }
     assert!(r.in_flight().is_empty() && !r.has_pending());
+}
+
+#[test]
+fn frozen_page_releases_a_gated_stream_in_the_transition_commit() {
+    let plan = contract::compile(
+        r#"shape Page
+  frozen: bool
+component App
+  resource page = exactPage() as shape Page
+  resource feed = progress(1) when not page.frozen as shape number else empty()
+  view
+    text `${page.frozen} ${feed}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Scripted::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(value(&r, "page"), Value::record(vec![Value::Bool(false)]));
+    let first = one_stream(&mut r);
+    r.fulfill(first, message("5", 0)).unwrap();
+    let hidden = crate::Page {
+        hidden: true,
+        ..r.page()
+    };
+    assert!(
+        r.set_page(hidden).unwrap().is_none(),
+        "visibility alone has no reader"
+    );
+    assert!(r.holds(first), "a hidden desktop keeps its socket");
+    let before = r.kernel().epoch();
+    let frozen = crate::Page {
+        frozen: true,
+        ..hidden
+    };
+    let receipt = r.set_page(frozen).unwrap().unwrap();
+    assert_eq!(receipt.epoch, before + 1);
+    assert_eq!(value(&r, "page"), Value::record(vec![Value::Bool(true)]));
+    assert!(!r.holds(first) && r.streams().is_empty());
+    assert!(r.take_requests().is_empty());
+    assert_eq!(r.fulfill(first, message("99", 0)).unwrap(), None);
+    assert_eq!(value(&r, "feed"), Value::Number(5.));
+    assert!(r.set_page(frozen).unwrap().is_none());
+    r.set_page(hidden).unwrap().unwrap();
+    assert_ne!(
+        one_stream(&mut r),
+        first,
+        "resume asks again while still hidden"
+    );
 }

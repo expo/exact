@@ -12,7 +12,9 @@ final class MaterialTableIOSTests: XCTestCase {
     /// `.light` (Charlie, 2026-09-27; LLP 1053.000 §3).
     func testNamedMaterialsAndABareBlurDrawTheirStyles() {
         XCTAssertEqual(Backdrop.material, .light)
-        for (name, style) in [("thin", UIBlurEffect.Style.systemThinMaterial), ("chrome-dark", .systemChromeMaterialDark), ("prominent", .prominent)] {
+        // UIKit's plain blurs, with no material's wash, are names too (#122).
+        for (name, style) in [("thin", UIBlurEffect.Style.systemThinMaterial), ("chrome-dark", .systemChromeMaterialDark), ("prominent", .prominent),
+                              ("dark", .dark), ("light", .light), ("extra-light", .extraLight), ("regular", .regular)] {
             XCTAssertEqual(Materials.blurStyle(Materials.platform(name)!.apple), style, name)
         }
         XCTAssertEqual(Materials.platform("sidebar")?.standIn, true, "an AppKit material draws a stand-in")

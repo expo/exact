@@ -4,9 +4,7 @@
 //! timeline drives paint rows only (Q1): a bound animation whose keyframes
 //! animate layout or geometry is refused when the app compiles.
 
-use exact_kernel::timeline::{
-    AnimationRange, AnimationTimeline, Axis, DragTimeline, TimelineScope,
-};
+use exact_kernel::timeline::{AnimationTimeline, Axis, DragTimeline, TimelineScope};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
 use exact_runner::{agent, DataError, DataSource, Event, Runner};
@@ -50,7 +48,7 @@ fn the_rows_reach_the_kernel_and_a_computed_animation_keeps_its_binding() {
         backdrop.rare.animation_timeline,
         AnimationTimeline(Some("--dismiss".into()))
     );
-    assert_eq!(backdrop.animation_range, AnimationRange(Some([0.0, 300.0])));
+    assert_eq!(backdrop.animation_range.lengths(), Some([0.0, 300.0]));
     assert_eq!(backdrop.animation.0[0].name, "fade");
     assert_eq!(
         style(&r, "clip").rare.timeline_scope,
@@ -84,6 +82,56 @@ fn the_rows_reach_the_kernel_and_a_computed_animation_keeps_its_binding() {
         backdrop.rare.animation_timeline,
         AnimationTimeline(Some("--dismiss".into()))
     );
+}
+
+/// The animation checks read every string a value can be, as the length
+/// checks do: a `match` arm, an enum argument (a type ascription) and a
+/// child's derive bound once and read twice (a `let`), not a ternary alone.
+#[test]
+fn animation_checks_read_every_arm_a_value_can_take() {
+    let app = |attr: &str, extra: &str, refused: &str, fine: &str, row: &str| {
+        format!(
+            "keyframes k\n  to opacity=0\ncomponent App\n  state pick: option<number> = none\n  view\n    column\n      {row}\ncomponent Spin\n  props\n    anim: enum<\"{fine}\", \"{refused}\">\n  view\n    box width=4 height=4 {attr}=anim {extra}\ncomponent Based\n  derive base = \"{refused}\"\n  derive anim = base == \"\" ? \"none\" : base\n  view\n    box width=4 height=4 {attr}=anim {extra}\n"
+        )
+    };
+    let bound = "animation-timeline=\"--pull\" animation-range=\"0px 100px\"";
+    for (attr, extra, refused, fine, id) in [
+        ("animation", "", "nope 1s", "k 1s", "lower-animation-name"),
+        (
+            "animation",
+            bound,
+            "k 1s infinite both",
+            "k 1s both",
+            "lower-timeline-endless",
+        ),
+        (
+            "-exact-exit-animation",
+            "",
+            "k 1s infinite",
+            "k 1s",
+            "lower-exit-endless",
+        ),
+    ] {
+        let arm = format!(
+            "box width=4 height=4 {attr}=(match pick {{ case some(x) => \"{refused}\", case none => \"{fine}\" }}) {extra}"
+        );
+        for row in [
+            arm.as_str(),
+            &format!("Spin(anim=\"{refused}\")"),
+            "Based()",
+        ] {
+            let error = contract::compile(&app(attr, extra, refused, fine, row)).unwrap_err();
+            assert_eq!(error.id, id, "{row}: {error}");
+        }
+        contract::compile(&app(
+            attr,
+            extra,
+            refused,
+            fine,
+            &format!("Spin(anim=\"{fine}\")"),
+        ))
+        .unwrap_or_else(|e| panic!("{attr} {fine}: {e}"));
+    }
 }
 
 /// Keyframes refuse `height` already (`lower-keyframe-property`), and an SVG
@@ -141,8 +189,18 @@ fn a_row_outside_its_grammar_is_refused_by_name() {
             "-exact-drag-timeline=\"--dismiss z\"",
             "-exact-drag-timeline",
         ),
-        ("animation-timeline=\"scroll()\"", "animation-timeline"),
-        ("animation-range=\"0% 100%\"", "animation-range"),
+        ("animation-timeline=\"scroll(far)\"", "animation-timeline"),
+        ("animation-timeline=\"--a, --b\"", "animation-timeline"),
+        ("animation-range=\"0% 0%\"", "animation-range"),
+        ("animation-range=\"exit 1em\"", "animation-range"),
+        ("scroll-timeline-name=\"cols\"", "scroll-timeline-name"),
+        ("scroll-timeline-axis=\"z\"", "scroll-timeline-axis"),
+        ("scroll-timeline=\"--a, --b\"", "scroll-timeline"),
+        ("scroll-timeline=\"--a x y\"", "scroll-timeline"),
+        ("scroll-timeline=\"--a 10px\"", "scroll-timeline"),
+        ("view-timeline=\"--a x 1px 2px 3px\"", "view-timeline"),
+        ("view-timeline=\"--a 1px x 2px\"", "view-timeline"),
+        ("view-timeline-inset=\"1em\"", "view-timeline-inset"),
         ("timeline-scope=\"--a --b\"", "timeline-scope"),
         ("timeline-scope=\"dismiss\"", "timeline-scope"),
         ("timelineScope=\"--a\"", "timeline-scope"),

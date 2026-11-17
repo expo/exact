@@ -129,7 +129,8 @@ fn memory_hints() -> wgpu::MemoryHints {
 }
 
 /// Optional features, each granted only where the adapter has it: timestamp
-/// diagnostics (no queries or buffers until a surface arms them), the two
+/// diagnostics (no queries or buffers until a surface arms them or a plan
+/// reads its `gpuMs`), the two
 /// block-compressed texture families a surface may choose its payloads from,
 /// forced early depth tests (a game's forward shaders, where nothing discards),
 /// half-precision shader arithmetic (a game's colour math, which a mobile GPU
@@ -149,12 +150,13 @@ pub fn requested_features() -> wgpu::Features {
 }
 
 /// Request each optional capacity independently; a low inter-stage limit must
-/// not discard storage capacity offered by the same adapter.
+/// not discard storage capacity offered by the same adapter. Clamp every field
+/// to what it supports, including alignment minima (where larger is worse).
 pub fn requested_limits(available: wgpu::Limits) -> wgpu::Limits {
     let mut limits = wgpu::Limits::downlevel_defaults().using_resolution(available.clone());
     limits.max_storage_buffers_per_shader_stage = available.max_storage_buffers_per_shader_stage;
     limits.max_inter_stage_shader_variables = available.max_inter_stage_shader_variables.min(16);
-    limits
+    limits.or_worse_values_from(&available)
 }
 
 /// wgpu's defaults without its validation of indirect draw arguments: a game

@@ -38,8 +38,9 @@ async function editor(engine, source, drive, runtime = false, attrs = '') {
         window.events = []; window.logs = []; window.prevent = () => false;
         const record = (type, value, start, end, direction, inputType, data, cancelable, composing) => events.push({ type, value, start, end, direction, inputType, data, cancelable, composing });
         if (${runtime}) {
-          const { mde, on, onKey, onBeforeInput, onSelectionChange, onValue, Hosts } = await import('./rt.js');
+          const { mde, on, onKey, onBeforeInput, onSelectionChange, onValue, Hosts, useCommands } = await import('./rt.js');
           const commands = await import('./commands.js');
+          useCommands({ preventDefault: commands.preventDefault, stopPropagation: commands.stopPropagation });
           window.command = (name, args) => commands[name](s => logs.push(s))(...args);
           on(field, 'beforeinput', r => { record('beforeinput', r[0], ...r.slice(2)); if (prevent(r)) Hosts.preventDefault(); }, onBeforeInput);
           on(field, 'selectionchange', r => record('selectionchange', r[0], ...r.slice(2)), onSelectionChange);
@@ -256,6 +257,41 @@ for (const engine of engines) {
           return el.value;
         }, retire)).toBe('a new source');
       }
+    });
+  }, 60000);
+
+  engineTest[engine](`${engine}: Markdown emphasis continues across spaces until toggled or moved`, async () => {
+    for (const [format, marker] of [['bold', '**'], ['italic', '*'], ['strike', '~~']]) {
+      await editor(engine, '', async (page, field) => {
+        await field.focus();
+        if (format === 'bold') await page.keyboard.press('ControlOrMeta+B');
+        else await field.evaluate((el, format) => el.exactMarkup.format(format), format);
+        await page.keyboard.type('hello ');
+        expect(await field.evaluate(el => el.value)).toBe(`${marker}hello${marker} `);
+        await settle(page);
+        await page.keyboard.type('world');
+        expect(await field.evaluate(el => el.value)).toBe(`${marker}hello world${marker}`);
+        await page.keyboard.type(' ');
+        await field.evaluate((el, format) => el.exactMarkup.format(format), format);
+        await page.keyboard.type('plain');
+        expect(await field.evaluate(el => el.value)).toBe(`${marker}hello world${marker} plain`);
+        await page.keyboard.press('ControlOrMeta+Z');
+        expect(await field.evaluate(el => el.value)).toBe('');
+        await page.keyboard.press('ControlOrMeta+Shift+Z');
+        expect(await field.evaluate(el => el.value)).toBe(`${marker}hello world${marker} plain`);
+      });
+    }
+    await editor(engine, '**hello**', async (page, field) => {
+      await field.focus();
+      await field.evaluate(el => el.setSelectionRange(7, 7));
+      await page.keyboard.type(' world ');
+      expect(await field.evaluate(el => el.value)).toBe('**hello world** ');
+      await page.keyboard.press('ArrowLeft');
+      await settle(page);
+      await page.keyboard.press('ArrowRight');
+      await settle(page);
+      await page.keyboard.type('plain');
+      expect(await field.evaluate(el => el.value)).toBe('**hello world** plain');
     });
   }, 60000);
 
@@ -509,6 +545,35 @@ for (const engine of engines) {
       expect(await field.evaluate(el => [...el.children].map(line => line.textContent).join('\n'))).toBe('one\n\ntwo');
       await page.keyboard.press('ControlOrMeta+Shift+Z');
       expect(await field.evaluate(el => el.value)).toBe('composed\nnext');
+    });
+  }, 60000);
+
+  engineTest[engine](`${engine}: composition continues emphasis after trailing whitespace`, async () => {
+    for (const word of ['日本', 'é']) await editor(engine, '**hello**', async (page, field) => {
+      await field.focus();
+      await field.evaluate(el => el.setSelectionRange(7, 7));
+      await page.keyboard.type(' ');
+      await field.evaluate(el => {
+        el.dispatchEvent(new CompositionEvent('compositionstart'));
+        el.dispatchEvent(new CompositionEvent('compositionend'));
+      });
+      await settle(page);
+      expect(await field.evaluate(el => el.value)).toBe('**hello** ');
+      await field.evaluate((el, word) => {
+        el.dispatchEvent(new CompositionEvent('compositionstart'));
+        document.execCommand('insertText', false, word);
+      }, word);
+      expect(await field.evaluate(el => el.value)).toBe(`**hello** ${word}`);
+      await field.evaluate((el, word) => el.dispatchEvent(new CompositionEvent('compositionend', { data: word })), word);
+      await settle(page);
+      expect(await field.evaluate(el => el.value)).toBe(`**hello ${word}**`);
+      expect(await page.locator('#echo').textContent()).toBe(`**hello ${word}**`);
+      await page.keyboard.type(' next');
+      expect(await field.evaluate(el => el.value)).toBe(`**hello ${word} next**`);
+      await page.keyboard.press('ControlOrMeta+Z');
+      expect(await field.evaluate(el => el.value)).toBe('**hello**');
+      await page.keyboard.press('ControlOrMeta+Shift+Z');
+      expect(await field.evaluate(el => el.value)).toBe(`**hello ${word} next**`);
     });
   }, 60000);
 
@@ -767,6 +832,39 @@ for (const engine of engines) for (const runtime of [false, true]) {
   }, 60000);
 }
 
+// The editor's element copies the textarea's attributes, `autofocus` included: it is the same field, offered once.
+engineTest.chromium('chromium: a Markdown field keeps its autofocus offer when the editor replaces it', async () => {
+  await editor('chromium', '', async page => {
+    await page.evaluate(async () => {
+      const rt = await import('./rt.js');
+      const root = rt.h(document.body, 'div', 0, { id: 'exact-root' }, 0);
+      rt.mount(() => {
+        for (const name of ['pending', 'offered']) {
+          const box = rt.h(root, 'div', 0, { id: name + '-box' }, 0);
+          box.hidden = name !== 'offered';
+          rt.mde(rt.h(box, 'textarea', 0, { id: name, markup: 'markdown', autofocus: 'true' }, 0));
+        }
+      });
+    });
+    await page.waitForFunction(() => ['pending', 'offered'].every(id => document.getElementById(id)?.exactMarkup));
+    const result = await page.evaluate(async () => {
+      const rt = await import('./rt.js');
+      const offered = document.getElementById('offered'), pending = document.getElementById('pending');
+      const initial = document.activeElement === offered;
+      offered.blur();
+      rt.commit(() => {});
+      const once = document.activeElement === document.body;
+      document.getElementById('pending-box').hidden = false;
+      rt.commit(() => {});
+      const revealed = document.activeElement === pending;
+      pending.blur();
+      rt.commit(() => {});
+      return { initial, once, revealed, done: document.activeElement === document.body };
+    });
+    expect(result).toEqual({ initial: true, once: true, revealed: true, done: true });
+  }, true);
+});
+
 // Chrome's input method, through CDP: a composition's events carry the DOM's
 // text and selection in source offsets, hidden syntax counted.
 engineTest.chromium('chromium: a composition reports source offsets as it composes', async () => {
@@ -793,6 +891,26 @@ engineTest.chromium('chromium: a composition reports source offsets as it compos
   }, runtime);
 }, 60000);
 
+engineTest.chromium('chromium: native IME continues emphasis after a space', async () => {
+  await editor('chromium', '**hello**', async (page, field) => {
+    const cdp = await page.context().newCDPSession(page);
+    await field.focus();
+    await field.evaluate(el => el.setSelectionRange(7, 7));
+    await page.keyboard.type(' ');
+    await cdp.send('Input.imeSetComposition', { text: 'に', selectionStart: 1, selectionEnd: 1 });
+    expect(await field.evaluate(el => el.value)).toBe('**hello** に');
+    await cdp.send('Input.imeSetComposition', { text: 'にほ', selectionStart: 2, selectionEnd: 2 });
+    expect(await field.evaluate(el => el.value)).toBe('**hello** にほ');
+    await cdp.send('Input.insertText', { text: '日本' });
+    await settle(page);
+    expect(await field.evaluate(el => [el.value, el.selectionStart, el.selectionEnd])).toEqual(['**hello 日本**', 10, 10]);
+    await page.keyboard.type(' next');
+    expect(await field.evaluate(el => el.value)).toBe('**hello 日本 next**');
+    await page.keyboard.press('ControlOrMeta+Z');
+    expect(await field.evaluate(el => el.value)).toBe('**hello**');
+  });
+}, 60000);
+
 engineTest.chromium('chromium: Markdown editing escapes an inert ancestor at an open modal', async () => {
   await editor('chromium', 'hello', async (page, field) => {
     await field.evaluate(el => {
@@ -814,6 +932,22 @@ engineTest.chromium('chromium: Markdown editing escapes an inert ancestor at an 
       }, target)).toEqual([false, 'hello']);
     }
   }, true);
+}, 60000);
+
+// A file saved as "UTF-8 with BOM" and decoded with `String::from_utf8` keeps
+// U+FEFF; every offset the editor reports counts it.
+engineTest.chromium('chromium: a Markdown source that starts with a byte order mark draws and edits as written', async () => {
+  const source = '\ufeff# Title\nfirst line\nsecond line';
+  await editor('chromium', source, async (page, field) => {
+    expect(await field.evaluate(el => el.value)).toBe(source);
+    expect(await field.locator('.md-line').allTextContents()).toEqual(['\ufeff# Title', 'first line', 'second line']);
+    await field.focus();
+    await field.evaluate((el, end) => el.setSelectionRange(end, end), source.length);
+    await settle(page);
+    await page.keyboard.insertText('!');
+    expect(await field.evaluate(el => el.value)).toBe(source + '!');
+    expect(only(await heard(page), 'input').map(e => e[0])).toEqual([source + '!']);
+  });
 }, 60000);
 
 // On a Mac the editor's chords are ⌘'s, and Control with a letter is the text

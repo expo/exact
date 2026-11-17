@@ -24,6 +24,9 @@ extension Presenter {
         set { focusEvents.onEvent = newValue }
     }
     func focus(_ id: UInt32) {
+        #if os(iOS)
+        navigation.finishBootOwner()
+        #endif
         #if os(macOS)
         tabStart = nil
         #endif
@@ -59,6 +62,8 @@ final class FocusEvents {
 
     init(_ presenter: Presenter) { self.presenter = presenter }
     func reset() { current = nil; pending = nil }
+    /// The node that has the focus, as the page was told.
+    var focused: UInt32? { current?.node }
 
     private func snapshot(_ id: UInt32) -> FocusSnapshot? {
         guard let presenter, let view = presenter.textHost(id) else { return nil }

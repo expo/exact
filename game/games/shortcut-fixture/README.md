@@ -7,3 +7,8 @@ held. `bun game/games/shortcut-fixture/proof.mjs <linux|web> --paranoid` runs it
 continuous, under Save and under FreshGame; `bun game/games/shortcut-fixture/proof.mjs macos`
 on the Mac. Pins live in [pins.json](pins.json); `bun game/prove.mjs shortcut-fixture --repin`
 replaces them.
+
+`bun game/app/shells.mjs game/games/shortcut-fixture --test` also
+feeds delayed evdev reports through the production presenter and this game's
+surface. East increments `ones` on a 150 ms tap and `jumps` on a 210 ms hold,
+including when the press itself selects the first canvas to receive pads.

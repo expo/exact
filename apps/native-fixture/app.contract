@@ -405,7 +405,7 @@ component NativeFixture
                 // says it has no bar (`navigationBar="none"`, LLP 1115.000
                 // D5.2). Menu, a sheet's first route, has nothing to go back to.
                 if e.name != "photo" and e.name != "menu" and not tabsAtTop
-                  header testId=`header-${e.name}` display="flex" flex-direction="row" align-items="center" gap=8 padding=12 flex-shrink=0 border-bottom-width=1 border-bottom-style="solid" border-color="#e5e7eb"
+                  header testId=`header-${e.name}` display="flex" flex-direction="row" flex-wrap="wrap" align-items="center" gap=8 padding=12 flex-shrink=0 border-bottom-width=1 border-bottom-style="solid" border-color="#e5e7eb"
                     if e.name == "detail" or e.name == "rows" or e.name == "chat"
                       button id="back" press=back testId="back" aria-label="Back" padding=6 background-color="#e5e7eb"
                         image "symbol:back" width=20 height=20
@@ -460,6 +460,10 @@ component NativeFixture
                     if e.name == "plain"
                       button popovertarget="plain-about" aria-label="About" testId="about-plain" padding=6 background-color="#e5e7eb"
                         image "symbol:info" width=20 height=20
+                    // A bar item that shows an alert by its command alone, pressing nothing (#387).
+                    if e.name == "plain"
+                      button commandfor="plain-clear" command="show-modal" aria-label="Clear" testId="clear-plain" padding=6 background-color="#e5e7eb"
+                        image "symbol:delete" width=20 height=20
                     button id="compose" press=compose aria-label="Compose" testId=`compose-${e.name}` padding=6 background-color="#e5e7eb"
                       image "symbol:compose" width=20 height=20
                     // A readout after the buttons: an item nothing presses,
@@ -472,6 +476,13 @@ component NativeFixture
                 if e.name == "plain"
                   column id="plain-about" popover="auto" testId="plain-about" padding=12 width=220
                     text "A route with no Back control of its own." font-size=13
+                if e.name == "plain"
+                  dialog id="plain-clear" role="alertdialog" aria-label="Clear the count?" padding=16
+                    text "The count goes back to zero."
+                    button press=unbump destructive=true commandfor="plain-clear" command="close" testId="plain-clear-clear"
+                      text "Clear"
+                    button commandfor="plain-clear" command="close" testId="plain-clear-cancel"
+                      text "Cancel"
                 if e.name == "home"
                   column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" width=200 padding=8 background-color="#ffffff"
                     button appearance="none" press=bump popovertarget="bar-menu" popovertargetaction="hide" role="menuitem" testId="bar-menu-bump" height=44 text-align="start"
@@ -781,7 +792,7 @@ component NativeFixture
                 // A sheet over a sheet: the menu pushed over Sheet presents
                 // from Sheet's controller, and closing it returns to Sheet.
                 if e.name == "sheet"
-                  column testId="sheet-body" padding=16
+                  column testId="sheet-body" padding=16 min-height=0 overflow="auto"
                     // Two fields in a mounted sheet: focus bubbles out of it
                     // to the document's ancestors (LLP 1123 D2)
                     input id="sheet-a" testId="sheet-field-a" aria-label="Sheet A" height=32
@@ -871,7 +882,7 @@ component NativeFixture
         button press=hush testId="root-toast" position="absolute" top=60 left=16 right=16 padding=12 background-color="#111827" border-radius=8
           text toast color="#ffffff"
       if overlayShown
-        column testId="root-overlay" role="dialog" aria-label="Overlay" position="absolute" top=0 right=0 bottom=0 left=0 z-index=10 background-color="#000000cc" align-items="center" justify-content="center"
+        column testId="root-overlay" position="absolute" top=0 right=0 bottom=0 left=0 z-index=10 background-color="#000000cc" align-items="center" justify-content="center"
           button press=hideOverlay testId="hide-overlay" padding=12 background-color="#ffffff"
             text "Close"
 

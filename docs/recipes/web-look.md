@@ -35,8 +35,9 @@ unsaid: a hex stays the same in dark mode while the controls change.
   (`forward-chevron`) sits beside its detail, with nothing to write ([tabs](tabs.md),
   [a navigation stack](navigation-stack.md)); a layout chosen by width (`exactViewport()`):
   [columns that wrap on a phone](responsive-columns.md).
-- **A route is a page.** The tab's title is the route `header`'s heading, focus moves to
-  it on a push and back on Back, a sheet is a dialog to a screen reader, a tab bar and a
-  menu take arrow keys: nothing to write. A row that only navigates is a `link
-  href=path(…)`, not a `button`, so a new tab and "Copy Link" work
-  ([a navigation stack](navigation-stack.md)).
+- **A route is a page.** Its title is the `head` title, else the selected route's
+  `header` heading, else the app's name, before startup too. Focus follows a push and
+  returns on Back; a sheet is a dialog to a screen reader. A menu takes focus when it
+  opens and returns it on dismissal. Tabs and menus take arrow keys. A row that only
+  navigates is a `link href=path(…)`, so new tabs and "Copy Link" work
+  ([navigation](navigation-stack.md)).

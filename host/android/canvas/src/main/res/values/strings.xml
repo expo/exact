@@ -4,4 +4,7 @@
          Android offers. The platform has no string for it and Material 3's are not public, so the reader
          carries its own, in the languages Android ships. -->
     <string name="exact_clear">Clear</string>
+    <!-- The channel a notification without a declared one takes (LLP 1133.004.000 D1), as a hand-built app names
+         its general channel. -->
+    <string name="exact_default_channel">Notifications</string>
 </resources>

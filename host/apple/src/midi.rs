@@ -49,12 +49,40 @@ impl<D: DataSource> Host<D> {
     /// A module event the platform reported (LLP 1133.004 D6): `{"extension",
     /// "event", "args", "activation"}`, raised with a person's origin only
     /// when an activation callback of the host's reported it, then heard.
+    /// With `"background": id` it is a notification's background action the
+    /// person chose (stage 2), run as an invocation that owns its work
+    /// (`cold` when the host booted the session for it, `hidden` unless
+    /// the app is in front); `{"expire": id}`
+    /// says the platform's time for that action ran out.
     pub fn module_event(&mut self, json: &str) -> String {
         let v: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
         // The session ends: what no handler heard is journaled.
         if v["unheard"] == true {
             self.runner.journal_unheard_events();
             return self.finish(Batch::new(), None);
+        }
+        if let Some(id) = v["expire"].as_str() {
+            let (receipts, error) = self.runner.expire_action(id);
+            return self.timed_commit(receipts, error.map(|e| format!("{e:?}")));
+        }
+        if let (Some(id), Some(event), true) = (
+            v["background"].as_str(),
+            v["event"].as_str(),
+            v["activation"] == true,
+        ) {
+            let how = exact_runner::WakeHow {
+                id: 0,
+                cold: v["cold"] == true,
+                hidden: v["hidden"] != false,
+            };
+            let extension = v["extension"].as_str().unwrap_or_default();
+            if let Err(e) =
+                (self.runner).raise_action(extension, event, &v["args"].to_string(), how, id)
+            {
+                return self.finish(Batch::new(), Some(e));
+            }
+            let (receipts, error) = self.runner.apply_announced();
+            return self.timed_commit(receipts, error.map(|e| format!("{e:?}")));
         }
         let origin = if v["activation"] == true {
             exact_runner::CallOrigin::App
@@ -78,12 +106,20 @@ impl<D: DataSource> Host<D> {
             }
         }
         let (receipts, error) = self.runner.apply_announced();
+        self.timed_commit(receipts, error.map(|e| format!("{e:?}")))
+    }
+
+    fn timed_commit(
+        &mut self,
+        receipts: Vec<exact_kernel::CommitReceipt>,
+        error: Option<String>,
+    ) -> String {
         let at_ms = self.now_ms;
         let timed: Vec<Timed> = receipts
             .into_iter()
             .map(|receipt| Timed { at_ms, receipt })
             .collect();
-        self.commit(&timed, error.map(|e| format!("{e:?}")))
+        self.commit(&timed, error)
     }
 
     /// The batch of a host that replaces `old` (a boot, a new generation):

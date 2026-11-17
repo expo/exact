@@ -167,8 +167,10 @@ impl LayoutInput {
 /// neither inset (CSS 2.1 §10.3.7's static position), as its parent's algorithm gives it: a
 /// rectangle in the parent's border-box coordinates and an alignment inside it.
 ///
-/// Block layout gives a point (where the box would be in flow). Flex and grid give the box
-/// the box would be aligned in as the container's only item, and that alignment.
+/// Block layout aligns between the inline content-box edges and keeps the point where the
+/// box would be in the block flow. Without inline alignment it gives a point on both axes.
+/// Flex and grid give the box the box would be aligned in as the container's only item,
+/// and that alignment.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct StaticPosition {
     /// The rectangle's edges.

@@ -1,6 +1,90 @@
 use super::*;
 
 #[test]
+fn typed_storages_preserve_name_order_across_worlds_and_restores() {
+    #[derive(Default, crate::Component)]
+    struct Zulu {
+        n: u32,
+    }
+    impl Resource for Zulu {
+        const NAME: &'static str = "Zulu";
+    }
+    #[derive(Default, crate::Component)]
+    struct Alpha {
+        n: u32,
+    }
+    let mut a = World::new(60, 7);
+    let mut b = World::new(60, 7);
+    a.register::<Zulu>()
+        .register::<Alpha>()
+        .register_resource::<Zulu>();
+    b.register_resource::<Zulu>()
+        .register::<Alpha>()
+        .register::<Zulu>();
+    let e = a.spawn((Zulu { n: 3 }, Alpha { n: 5 }));
+    assert_eq!(b.spawn((Alpha { n: 5 }, Zulu { n: 3 })), e);
+    a.insert_resource(Zulu { n: 11 });
+    b.insert_resource(Zulu { n: 11 });
+    assert_eq!(a.component_names(e).collect::<Vec<_>>(), ["Alpha", "Zulu"]);
+    assert_eq!(a.components_json(e).unwrap(), b.components_json(e).unwrap());
+    assert_eq!(a.save(), b.save());
+    assert_eq!(a.hash(), b.hash());
+    let saved = a.save();
+    b.get_mut::<Zulu>(e).unwrap().n = 17;
+    b.resource_mut::<Zulu>().n = 19;
+    b.load(&saved).unwrap();
+    assert_eq!(b.get::<Zulu>(e).unwrap().n, 3);
+    assert_eq!(b.get::<Alpha>(e).unwrap().n, 5);
+    assert_eq!(b.resource::<Zulu>().n, 11);
+    assert_eq!(b.save(), saved);
+    assert_eq!(b.hash(), a.hash());
+    let mut invalid = saved.clone();
+    invalid.push(0);
+    assert!(b.load(&invalid).is_err());
+    assert_eq!(b.save(), saved);
+    assert_eq!(b.remove::<Zulu>(e).unwrap().n, 3);
+    assert!(!b.has::<Zulu>(e));
+    b.insert(e, Zulu { n: 23 });
+    b.insert_resource(Zulu { n: 29 });
+    assert_eq!(b.get::<Zulu>(e).unwrap().n, 23);
+    assert_eq!(b.resource::<Zulu>().n, 29);
+    assert!(b.despawn(e));
+    assert!(!b.has::<Alpha>(e));
+    assert_eq!(a.get::<Zulu>(e).unwrap().n, 3);
+}
+
+#[test]
+fn typed_storages_do_not_alias_an_unregistered_type_with_the_same_name() {
+    mod first {
+        #[derive(Default, crate::Component)]
+        pub struct Same;
+        impl crate::Resource for Same {
+            const NAME: &'static str = "Same";
+        }
+    }
+    mod second {
+        #[derive(Default, crate::Component)]
+        pub struct Same;
+        impl crate::Resource for Same {
+            const NAME: &'static str = "Same";
+        }
+    }
+    let mut w = World::new(60, 0);
+    let e = w.spawn(first::Same);
+    w.insert_resource(first::Same);
+    assert!(w.has::<first::Same>(e));
+    assert!(!w.has::<second::Same>(e));
+    assert!(w.get::<second::Same>(e).is_none());
+    assert!(w.try_resource::<second::Same>().is_none());
+    let saved = w.save();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        w.register::<second::Same>();
+    }))
+    .is_err());
+    assert_eq!(w.save(), saved);
+}
+
+#[test]
 fn named_index_preserves_duplicates_recycling_and_restored_state() {
     let mut w = World::new(60, 7);
     let names = ["", "part", "part-tail", "part", "λ", "part#2"];

@@ -5,7 +5,7 @@
 //! and `audio=` the microphone's, one after the other; a tool's capture
 //! start is refused before anything is asked.
 
-use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Work};
+use exact_runner::{CallOrigin, Dispatch, Outcome, Reply, Response, Runner, Value, Work};
 use serde_json::{json, Value as Json};
 #[cfg(unix)]
 use std::os::unix::fs::symlink as symlink_dir;
@@ -114,7 +114,7 @@ fn a_view_only_camera_accepts_a_typed_preferred_picture() {
         .all(|m| plan.str(m.extension) == "camera"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        Granted(CAMERA_LINES),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -187,7 +187,7 @@ fn an_unused_camera_view_does_not_admit_preferences() {
     assert!(plan.views.is_empty());
     let mut r = Runner::boot(
         plan,
-        Granted,
+        Granted(CAMERA_LINES),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -211,7 +211,7 @@ fn shelfs_viewfinder_receives_the_preferred_scan_fixture() {
     assert!(plan.view_named("exact-camera").is_some());
     let mut r = Runner::boot(
         plan,
-        Granted,
+        Granted(CAMERA_LINES),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -236,7 +236,8 @@ impl Drop for App {
     }
 }
 
-struct Granted;
+/// The app's grant lines.
+struct Granted(&'static str);
 impl exact_runner::DataSource for Granted {
     fn query(
         &mut self,
@@ -257,21 +258,27 @@ impl exact_runner::DataSource for Granted {
         )))
     }
     fn grants(&self) -> &str {
-        "device.camera purpose.camera\ndevice.microphone purpose.microphone\n"
+        self.0
     }
 }
+
+const CAMERA_LINES: &str = "device.camera purpose.camera\ndevice.microphone purpose.microphone\n";
 
 type Calls = Arc<Mutex<Vec<Json>>>;
 
 /// A runner over the app, the two implementations bound under the agent and
 /// played by the native slot: `getUserMedia` answers a stream of one track.
 fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
-    let app = App::new(name);
+    boot_with(App::new(name), CAMERA_LINES)
+}
+
+/// [`boot`] over `app`, which grants `lines`.
+fn boot_with(app: App, lines: &'static str) -> (App, Runner<Granted>, Calls) {
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
     let mut r = Runner::boot(
         plan,
-        Granted,
+        Granted(lines),
         exact_kernel::Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -288,6 +295,15 @@ fn boot(name: &str) -> (App, Runner<Granted>, Calls) {
                 Some("takePhoto") => {
                     json!({ "path": "app:/tmp/camera/1.jpg", "type": "image/jpeg", "size": 1, "width": 1, "height": 1 })
                 }
+                // The implementation's agent path: the picture for `take`, a cancel otherwise.
+                Some("takePhotoWithCameraApp") if v["preferred"]["tap"] == "take" => {
+                    json!({ "path": "app:/tmp/camera/2.jpg", "type": "image/jpeg", "size": 1, "width": 1, "height": 1 })
+                }
+                Some("takePhotoWithCameraApp") => json!({ "error": "AbortError" }),
+                Some("recordVideoWithCameraApp") if v["preferred"]["tap"] == "take" => {
+                    json!({ "path": "app:/tmp/camera/1.mp4", "type": "video/mp4", "size": 1209, "duration": 1, "width": 160, "height": 120 })
+                }
+                Some("recordVideoWithCameraApp") => json!({ "error": "AbortError" }),
                 _ => json!({}),
             };
             reply.send(Outcome::Response(Response {
@@ -469,4 +485,199 @@ fn an_implementation_s_disclosure_is_listed() {
         state["media-capture"]["permissions"].is_object(),
         "beside the runner's own"
     );
+}
+
+const CAMERA_APP: &str = r#"use takePhotoWithCameraApp, Photo from "@exact/camera"
+
+component App
+  mutation shot as shape Photo
+  derive shotError = match failure(shot) { case some(f) => f.code, case none => "" }
+  derive shotPath = match shot { case some(p) => p.path, case none => "" }
+  action snap
+    send shot = takePhotoWithCameraApp(facingMode="environment")
+  view
+    column
+      text shotError
+"#;
+
+/// The camera app (`takePhotoWithCameraApp`) is system UI the person works,
+/// like a picker: it needs no grant line, so an app that uses only it
+/// derives no camera permission. Under the agent its sheet holds before the
+/// implementation hears of the call, which is told the tap: `take` or
+/// `cancel`. A tool's is refused; it exists on Android, iOS and the web, not
+/// on a Mac.
+#[test]
+fn the_camera_app_needs_no_line_and_its_sheet_takes_take_or_cancel() {
+    let (_app, mut r, calls) = boot_with(App::with_source("camera-app", CAMERA_APP), "");
+    r.set_module_target("android");
+    let mut parked = Vec::new();
+    pump(&mut r, &mut parked);
+    r.act("snap", Vec::new()).unwrap();
+    pump(&mut r, &mut parked);
+    let holds = r.device_holds();
+    assert_eq!(holds.len(), 1, "{}", logs(&r));
+    assert_eq!(holds[0].capability, "camera-app");
+    assert_eq!(holds[0].choices, ["take"]);
+    let args: Json = serde_json::from_str(&holds[0].args).unwrap();
+    assert_eq!(args["options"]["facingMode"], "environment");
+    assert_eq!(sent(&calls, "takePhotoWithCameraApp"), 0, "held");
+
+    let tap = |r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>, choice: &str| {
+        let ticket = r.device_holds()[0].ticket;
+        let line = json!({ "op": "tap", "ticket": ticket, "choice": choice }).to_string();
+        exact_runner::agent::answer(r, &line).unwrap();
+        pump(r, parked);
+    };
+    tap(&mut r, &mut parked, "take");
+    assert_eq!(sent(&calls, "takePhotoWithCameraApp"), 1, "{}", logs(&r));
+    let told = |calls: &Calls| {
+        let calls = calls.lock().unwrap();
+        let last = calls
+            .iter()
+            .rev()
+            .find(|c| c["send"] == "takePhotoWithCameraApp");
+        last.unwrap()["preferred"].clone()
+    };
+    assert_eq!(told(&calls), json!({ "tap": "take" }));
+    assert_eq!(
+        r.derive("shotPath"),
+        Some(&Value::str("app:/tmp/camera/2.jpg"))
+    );
+
+    r.act("snap", Vec::new()).unwrap();
+    pump(&mut r, &mut parked);
+    tap(&mut r, &mut parked, "cancel");
+    assert_eq!(told(&calls), json!({ "tap": "cancel" }));
+    assert!(
+        r.derive("shotError") == Some(&Value::str("AbortError")),
+        "{}",
+        logs(&r)
+    );
+
+    r.act_from(CallOrigin::Tool, "snap", Vec::new()).unwrap();
+    pump(&mut r, &mut parked);
+    assert!(r.device_holds().is_empty(), "a tool raises no sheet");
+    assert!(
+        logs(&r).contains("camera.takePhotoWithCameraApp: refused, person-required (tool origin)"),
+        "{}",
+        logs(&r)
+    );
+
+    r.set_module_target("macos");
+    r.act("snap", Vec::new()).unwrap();
+    pump(&mut r, &mut parked);
+    assert!(
+        r.device_holds().is_empty(),
+        "no sheet where it does not exist"
+    );
+    assert!(
+        r.derive("shotError") == Some(&Value::str("NotSupportedError")),
+        "{}",
+        logs(&r)
+    );
+    assert_eq!(sent(&calls, "takePhotoWithCameraApp"), 2);
+}
+
+const VIDEO_APP: &str = r#"use recordVideoWithCameraApp, Video from "@exact/camera"
+
+component App
+  mutation clip as shape Video
+  derive clipError = match failure(clip) { case some(f) => f.code, case none => "" }
+  derive clipFacts = match clip { case some(v) => `${v.path} ${v.type} ${v.duration} ${v.width}x${v.height}`, case none => "" }
+  action record
+    send clip = recordVideoWithCameraApp(maxDuration=30)
+  view
+    column
+      text clipError
+"#;
+
+/// A video from the camera app (LLP 1133.008.000 D1, D9) is the photo's
+/// sibling: no grant line, the `camera-app` sheet holding with its options,
+/// `take` answering a `Video` and `cancel` `AbortError`, on Android, iOS and
+/// the web; every other host is `NotSupportedError` before the
+/// implementation hears of it. An app that only records derives no Android
+/// permission beyond its lines' (D5: the camera app records the sound).
+#[test]
+fn a_video_from_the_camera_app_holds_the_same_sheet_and_answers_a_video() {
+    let (app, mut r, calls) = boot_with(App::with_source("camera-video", VIDEO_APP), "");
+    let mut parked = Vec::new();
+    pump(&mut r, &mut parked);
+    let tap = |r: &mut Runner<Granted>, parked: &mut Vec<(u64, u64)>, choice: &str| {
+        let ticket = r.device_holds()[0].ticket;
+        let line = json!({ "op": "tap", "ticket": ticket, "choice": choice }).to_string();
+        exact_runner::agent::answer(r, &line).unwrap();
+        pump(r, parked);
+    };
+    for target in ["android", "ios", "web"] {
+        r.set_module_target(target);
+        r.act("record", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        let holds = r.device_holds();
+        assert_eq!(holds.len(), 1, "{target}: {}", logs(&r));
+        assert_eq!(holds[0].capability, "camera-app");
+        let args: Json = serde_json::from_str(&holds[0].args).unwrap();
+        assert_eq!(args["options"]["maxDuration"], 30.0, "{target}");
+        tap(&mut r, &mut parked, "take");
+        assert_eq!(
+            r.derive("clipFacts"),
+            Some(&Value::str("app:/tmp/camera/1.mp4 video/mp4 1 160x120")),
+            "{target}: {}",
+            logs(&r)
+        );
+        r.act("record", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        tap(&mut r, &mut parked, "cancel");
+        assert!(
+            r.derive("clipError") == Some(&Value::str("AbortError")),
+            "{target}: {}",
+            logs(&r)
+        );
+    }
+    assert_eq!(sent(&calls, "recordVideoWithCameraApp"), 6);
+    for target in ["macos", "linux", "windows"] {
+        r.set_module_target(target);
+        r.act("record", Vec::new()).unwrap();
+        pump(&mut r, &mut parked);
+        assert!(r.device_holds().is_empty(), "{target}: no sheet");
+        assert!(
+            r.derive("clipError") == Some(&Value::str("NotSupportedError")),
+            "{target}: {}",
+            logs(&r)
+        );
+    }
+    assert_eq!(sent(&calls, "recordVideoWithCameraApp"), 6, "never sent");
+
+    let plan = contract::compile_path_all(&app.0.join("app.contract"), false)
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .0;
+    let both = Some("device.camera purpose.camera\ndevice.microphone purpose.microphone");
+    assert!(contract::native::android_permissions(&plan, both, VIDEO_APP).is_empty());
+}
+
+/// Android's `CAMERA` comes from opening the camera in the app: any use of
+/// `getUserMedia` under the `device.camera` line, since data code may compute
+/// its options (`getUserMedia(JSON.parse(saved))` names no `video`). The line
+/// alone, which iOS's system camera UI needs for its usage key, derives none:
+/// an app that only uses the camera app asks nothing on Android, and an
+/// audio-only app has no camera line (LLP 1133.008 D6 as amended).
+#[test]
+fn android_s_camera_permission_comes_from_opening_the_camera_in_the_app() {
+    let plan = |source: &str| {
+        let app = App::with_source("derives", source);
+        contract::compile_path_all(&app.0.join("app.contract"), false)
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .0
+    };
+    let camera = ["android.permission.CAMERA"];
+    let both = Some("device.camera purpose.camera\ndevice.microphone purpose.microphone");
+    let mic = Some("device.microphone purpose.microphone");
+    let permissions = contract::native::android_permissions;
+    assert!(permissions(&plan(CAMERA_APP), both, CAMERA_APP).is_empty());
+    let opens = plan(APP);
+    assert_eq!(permissions(&opens, both, APP), camera);
+    // Computed in data code: no `video` in the source, still the camera.
+    let computed = "const stream = await getUserMedia(JSON.parse(saved));\n";
+    assert_eq!(permissions(&opens, both, computed), camera);
+    // An app whose lines grant no camera opens none.
+    assert!(permissions(&opens, mic, computed).is_empty());
 }

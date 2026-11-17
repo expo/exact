@@ -44,6 +44,7 @@ use crate::css;
 #[path = "document_before.rs"]
 mod before;
 use before::Before;
+pub use before::HeroImage;
 use exact_kernel::paint_order::{self, Child, Facts};
 use exact_kernel::{NodeFacts, PropId, SortedMap, SortedSet, ViewId};
 use exact_plan::EventKind;
@@ -52,7 +53,7 @@ pub use markup::dataset;
 use markup::{markup_pieces, Json};
 pub use page::{
     build_locations, canonical_location, checkpoint, digest, read_checkpoint, route_at,
-    route_location, Site,
+    route_location, route_title, Site,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -75,6 +76,8 @@ pub struct Document {
     /// The active head's fields: the page's `<head>` (LLP 1048.003 D1). A
     /// head node has no element in the root.
     pub head: exact_runner::Head,
+    /// The selected route's header heading (LLP 1115.000 D4.1).
+    pub route_title: Option<String>,
     /// Every `@keyframes` rule an element's `animation` names, once each
     /// (LLP 1055 D7), for the head: a reader without JavaScript sees it play.
     pub keyframes: String,
@@ -83,15 +86,9 @@ pub struct Document {
     pub scroll_document: bool,
     /// The first shown, eager image, preloaded on JavaScript pages (LLP 1048.007 D5).
     pub hero_image: Option<HeroImage>,
-}
-
-/// The image selected for a JavaScript page's preload and fetch priority.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HeroImage {
-    /// The source URL before HTML escaping.
-    pub src: String,
-    /// Byte offset in `Document::root` for adding a missing `fetchpriority` attribute.
-    pub priority_at: Option<usize>,
+    /// The views whose elements carry `data-exact-on`, in document order: a
+    /// boot document's swap moves a queued event by them (LLP 1048.005).
+    pub controls: Vec<ViewId>,
 }
 
 /// Why a tree has no document.
@@ -155,8 +152,9 @@ pub trait Source {
     /// The element an SVG reference from `from` names.
     fn resolve(&self, from: ViewId, id: &str) -> Option<ViewId>;
     /// `style`, node `id`'s, with the weight and leading a text style named
-    /// on it gives the wasm host (LLP 1115.000 D12.2). JavaScript's fills
-    /// are written from the node's facts instead.
+    /// on it gives the wasm host (LLP 1115.000 D12.2), and its animation row
+    /// held for a prefetched row (LLP 1055 D13). JavaScript's fills and holds
+    /// are applied when it adopts the document.
     fn with_style_rows<'s>(
         &self,
         _id: ViewId,
@@ -196,7 +194,10 @@ impl Source for KernelSource<'_> {
         style: Cow<'s, exact_kernel::StyleProps>,
     ) -> Cow<'s, exact_kernel::StyleProps> {
         match self.kernel.node(id) {
-            Some(node) if self.bare => super::element::with_style_rows(style, &node),
+            Some(node) if self.bare => super::element::with_style_rows(
+                super::element::animation_style(self.kernel, &node, style),
+                &node,
+            ),
             _ => style,
         }
     }
@@ -258,7 +259,7 @@ pub fn project_tree<D: DataSource>(
             .and_then(|n| n.site)
             .is_some_and(|site| exact_runner::rows::repeated(runner.plan(), site))
     };
-    let (out, keyframes, scroll_document, _, sent, hero_image) = write(
+    let (out, keyframes, scroll_document, _, sent, hero_image, controls) = write(
         tree,
         tree.roots(),
         handlers,
@@ -274,10 +275,12 @@ pub fn project_tree<D: DataSource>(
         viewport_fit: first_prop(tree, tree.roots(), PropId::ViewportFit),
         interactive_widget: first_prop(tree, tree.roots(), PropId::InteractiveWidget),
         head: tree.head(),
+        route_title: page::route_title(tree, tree.roots()),
         keyframes,
         scroll_document,
         hero_image,
         root: out,
+        controls,
     };
     Ok((document, sent))
 }
@@ -309,10 +312,7 @@ pub fn before_root(tree: &DocTree, plan: &exact_plan::Plan) -> (String, bool, Op
     (
         keyframes.values().map(String::as_str).collect(),
         scroll,
-        before.hero.map(|(_, src)| HeroImage {
-            src,
-            priority_at: None,
-        }),
+        before.hero.map(|(_, hero)| hero),
     )
 }
 
@@ -344,7 +344,7 @@ fn walk<D: DataSource>(
             .site_of(id)
             .is_some_and(|(site, _)| exact_runner::rows::repeated(runner.plan(), site))
     };
-    let (out, keyframes, scroll_document, computed, _, hero_image) = write(
+    let (out, keyframes, scroll_document, computed, _, hero_image, controls) = write(
         &src,
         &roots,
         handlers,
@@ -364,16 +364,18 @@ fn walk<D: DataSource>(
         viewport_fit: first_prop(&src, &roots, PropId::ViewportFit),
         interactive_widget: first_prop(&src, &roots, PropId::InteractiveWidget),
         head: runner.head(),
+        route_title: page::route_title(&src, &roots),
         keyframes,
         scroll_document,
         hero_image,
+        controls,
     };
     Ok((document, computed))
 }
 
 /// The roots' elements; the `@keyframes`, whether an element is the page's
-/// scroller, what was computed, and what of the HTML the sink has not been
-/// handed yet.
+/// scroller, what was computed, what of the HTML the sink has not been
+/// handed yet, and [`Document::controls`].
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn write<S: Source>(
     src: &S,
@@ -392,6 +394,7 @@ fn write<S: Source>(
         Option<Computed>,
         String,
         Option<HeroImage>,
+        Vec<ViewId>,
     ),
     DocumentError,
 > {
@@ -423,6 +426,7 @@ fn write<S: Source>(
         style: writing.style,
         sink: writing.sink,
         sent: 0,
+        controls: Vec::new(),
     };
     for root in roots {
         walk.element(*root, None, 16., false)?;
@@ -434,10 +438,11 @@ fn write<S: Source>(
         walk.scroll_document,
         walk.computed,
         rest,
-        before.hero.map(|(_, src)| HeroImage {
-            src,
+        before.hero.map(|(_, hero)| HeroImage {
             priority_at: walk.image_priority_at,
+            ..hero
         }),
+        walk.controls,
     ))
 }
 
@@ -502,7 +507,7 @@ fn isolation<S: Source>(src: &S, roots: &[ViewId]) -> SortedMap<ViewId, Child> {
 /// head: a reader without JavaScript sees them play (LLP 1055 D7).
 fn animations(style: &exact_kernel::StyleProps, keyframes: &mut SortedMap<String, String>) {
     if let Some(link) = crate::link::linked().animations {
-        let press = css::press_composes(style);
+        let press = css::press_animations(style);
         for a in style.animation.0.iter().chain(&style.rare.exit_animation.0) {
             let name = (link.name)(a, press);
             if keyframes.get(&name).is_none() {
@@ -662,6 +667,8 @@ struct Walk<'r, 'w, S: Source> {
     /// [`Writing::sink`], and how much of `out` it has been handed.
     sink: Option<&'w mut dyn FnMut(&str)>,
     sent: usize,
+    /// [`Document::controls`].
+    controls: Vec<ViewId>,
 }
 
 impl<S: Source> Walk<'_, '_, S> {
@@ -794,11 +801,13 @@ impl<S: Source> Walk<'_, '_, S> {
                 node.style.display,
                 exact_kernel::Display::Flex | exact_kernel::Display::Grid
             )) << 12);
-        let z = node.style.mask.has(exact_kernel::StyleId::ZIndex).then(|| {
-            node.style
-                .z_index
-                .clamp(-paint_order::Z_MAX, paint_order::Z_MAX)
-        });
+        let z = node
+            .style
+            .mask
+            .has(exact_kernel::StyleId::ZIndex)
+            .then_some(node.style.z_index)
+            .flatten()
+            .map(|z| z.clamp(-paint_order::Z_MAX, paint_order::Z_MAX));
         let z = z.map_or_else(|| "null".into(), |z| z.to_string());
         let mut attrs: Vec<(String, Option<String>)> = Vec::new();
         let mut content: Option<String> = None;
@@ -924,6 +933,7 @@ impl<S: Source> Walk<'_, '_, S> {
         // focus, blur or keys and is not one already.
         attrs.push(("data-view".into(), Some(id.to_string())));
         if let Some(kinds) = self.handlers.get(&id).filter(|kinds| !kinds.is_empty()) {
+            self.controls.push(id);
             attrs.push((
                 "data-exact-on".into(),
                 Some({
@@ -970,19 +980,15 @@ impl<S: Source> Walk<'_, '_, S> {
             return Ok(());
         }
         if tag == "canvas" {
-            if self.style.is_some() {
-                self.open(
-                    id,
-                    "canvas",
-                    &[
-                        ("data-surface".into(), Some(String::new())),
-                        ("style".into(), Some(SURFACE_STYLE.into())),
-                    ],
-                )?;
-                self.out.push_str("</canvas>");
-            } else {
-                self.out.push_str(SURFACE);
-            }
+            self.open(
+                id,
+                "canvas",
+                &[
+                    ("data-surface".into(), None),
+                    ("style".into(), Some(SURFACE_STYLE.into())),
+                ],
+            )?;
+            self.out.push_str("</canvas>");
         }
         if let (Some(json), true) = (&markup, children.is_empty()) {
             // `renderMarkup`; a node's children replace its pieces.
@@ -1024,14 +1030,14 @@ impl<S: Source> Walk<'_, '_, S> {
                         // Top layers do not count as modal-card body rows (navigation.js).
                         let layer = tag_of(&c, self.buttons > 0) == "dialog"
                             || c.props.str(PropId::Popover).is_some();
-                        (role, if layer { "layer" } else { "" })
+                        (role, if layer { "=\"layer\"" } else { "" })
                     })
             } else {
                 None
             };
             if let Some((role, marker)) = item {
                 self.out.push_str(&format!(
-                    "<div role=\"{role}\" data-exact-list-item=\"{marker}\" style=\"display:contents\">"
+                    "<div role=\"{role}\" data-exact-list-item{marker} style=\"display:contents\">"
                 ));
             }
             let handled = self.handlers.get(&child).is_some_and(|k| !k.is_empty());
@@ -1078,7 +1084,7 @@ impl<S: Source> Walk<'_, '_, S> {
         self.out.push_str(element);
         if element == "img" && self.hero == Some(id) {
             if self.prioritize_image {
-                self.out.push_str(" fetchpriority=\"high\"");
+                self.out.push_str(HeroImage::PRIORITY);
             } else {
                 self.image_priority_at = Some(self.out.len());
             }
@@ -1100,16 +1106,12 @@ impl<S: Source> Walk<'_, '_, S> {
                     _ => {}
                 }
             }
-            self.out.push(' ');
-            self.out.push_str(name);
-            if let Some(value) = value {
-                self.out.push_str("=\"");
-                escape(&mut self.out, value, true).map_err(|reason| DocumentError {
+            attribute(&mut self.out, name, value.as_deref().unwrap_or_default()).map_err(
+                |reason| DocumentError {
                     view: id,
                     reason: format!("attribute `{name}`: {reason}"),
-                })?;
-                self.out.push('"');
-            }
+                },
+            )?;
         }
         self.out.push('>');
         Ok(())
@@ -1237,9 +1239,7 @@ impl<S: Source> Walk<'_, '_, S> {
     }
 }
 
-/// The surface element `glue.js` puts first in a canvas's `div`.
-const SURFACE: &str = "<canvas data-surface=\"\" style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>";
-/// [`SURFACE`]'s style.
+/// The style of the surface element `glue.js` puts first in a canvas's `div`.
 const SURFACE_STYLE: &str =
     "position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1";
 
@@ -1266,6 +1266,21 @@ fn option_label(src: &impl Source, id: ViewId) -> String {
     exact_kernel::control::option_label(&text)
 }
 
+/// Append ` name`, or ` name="value"` escaped. An empty value is written
+/// bare: the HTML parser reads `name` as `name=""`, and the JS render's DOM
+/// (`dom.js` `attr`), which keeps no difference between a boolean attribute
+/// and an empty one, writes it so.
+fn attribute(out: &mut String, name: &str, value: &str) -> Result<(), &'static str> {
+    out.push(' ');
+    out.push_str(name);
+    if !value.is_empty() {
+        out.push_str("=\"");
+        escape(out, value, true)?;
+        out.push('"');
+    }
+    Ok(())
+}
+
 /// Append `text` escaped for HTML text (`attribute` false) or a
 /// double-quoted attribute value. A carriage return is a reference (the
 /// parser folds a literal one into a newline); a NUL has no spelling the
@@ -1281,7 +1296,7 @@ fn escape(out: &mut String, text: &str, attribute: bool) -> Result<(), &'static 
             b'>' => "&gt;",
             b'"' if attribute => "&quot;",
             b'\r' => "&#13;",
-            0 => return Err("a NUL character, which the HTML parser drops"),
+            0 => return Err("a NUL character, which the HTML parser does not keep"),
             _ => continue,
         };
         out.push_str(&text[run..at]);
@@ -1292,9 +1307,7 @@ fn escape(out: &mut String, text: &str, attribute: bool) -> Result<(), &'static 
     Ok(())
 }
 
-// Resolve the first concrete ARIA role before supplying item semantics; navigation.js has the same vocabulary.
-// https://www.w3.org/TR/wai-aria-1.3/#host_general_role
-// https://www.w3.org/TR/dpub-aria-1.1/ and https://www.w3.org/TR/graphics-aria-1.0/
+// Resolve the first concrete ARIA role before supplying item semantics.
 fn role_is(value: &str, wanted: &str) -> bool {
     let mut words = value
         .split(['\t', '\n', '\x0c', '\r', ' '])
@@ -1308,8 +1321,11 @@ fn role_is(value: &str, wanted: &str) -> bool {
     let Some(next) = words.next() else {
         return false;
     };
-    const ROLES: &str = "alert alertdialog application article banner blockquote button caption cell checkbox code columnheader combobox comment complementary contentinfo definition deletion dialog directory doc-abstract doc-acknowledgments doc-afterword doc-appendix doc-backlink doc-biblioentry doc-bibliography doc-biblioref doc-chapter doc-colophon doc-conclusion doc-cover doc-credit doc-credits doc-dedication doc-endnote doc-endnotes doc-epigraph doc-epilogue doc-errata doc-example doc-footnote doc-foreword doc-glossary doc-glossref doc-index doc-introduction doc-noteref doc-notice doc-pagebreak doc-pagefooter doc-pageheader doc-pagelist doc-part doc-preface doc-prologue doc-pullquote doc-qna doc-subtitle doc-tip doc-toc document emphasis feed figure form generic graphics-document graphics-object graphics-symbol grid gridcell group heading image img insertion link list listbox listitem log main mark marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar search searchbox sectionfooter sectionheader separator slider spinbutton status strong subscript suggestion superscript switch tab table tablist tabpanel term textbox time timer toolbar tooltip tree treegrid treeitem";
-    let known = |word: &str| ROLES.split(' ').any(|r| r.eq_ignore_ascii_case(word));
+    let known = |word: &str| {
+        exact_kernel::ARIA_ROLES
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(word))
+    };
     !known(first)
         && std::iter::once(next)
             .chain(words)

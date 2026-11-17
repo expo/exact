@@ -21,8 +21,9 @@ cargo build -p windows-desk
 ```
 
 `--smoke-exit` exercises actual editor notifications into Contract state,
-Unicode text, checkbox/topmost state, save bytes, sample selection, font changes,
-and resizing. A successful run exits 0 and writes
+Unicode text, checkbox/topmost state, save bytes, sample selection (a switch the
+unsaved-changes prompt cancels keeps the document's own sample selected, and none
+after New), font changes, and resizing. A successful run exits 0 and writes
 `$env:TEMP/exact2-windows-desk-smoke.txt`. `--smoke` runs those checks and leaves
 the window open. `--capture <path.bmp>` renders the native window for visual QA.
 

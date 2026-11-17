@@ -13,7 +13,7 @@ use crate::{
     GridItemStyle, JustifyContent, LayoutGridContainer, RequestedAxis,
 };
 use crate::compute::ratio::container_sizes_through_ratio;
-use crate::compute::common::absolute::AbsolutePass;
+use crate::compute::common::absolute::{AbsoluteArea, AbsolutePass};
 #[cfg(feature = "content_size")]
 use crate::compute::common::scrollable_overflow::with_end_padding;
 use alignment::{align_and_position_item, align_tracks, static_position};
@@ -58,6 +58,8 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
 ) -> LayoutOutput {
     let LayoutInput { known_dimensions, parent_size, available_space, run_mode, .. } = inputs;
 
+    // EXACT PATCH 78: the container's own keyword bounds.
+    let own = crate::compute::common::sizing_keyword::own_keyword_bounds(tree, node, inputs);
     let style = tree.get_grid_container_style(node);
     let direction = style.direction();
     let contain = style.contain();
@@ -85,8 +87,8 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
         &style,
         padding_border_size,
         known_dimensions.or(preferred_size),
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
         inputs.sizing_mode,
     );
 
@@ -340,6 +342,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
             track.max_track_sizing_function.definite_value(parent_size, |val, basis| tree.calc(val, basis))
         },
         has_baseline_aligned_item,
+        (run_mode == RunMode::ComputeSize).then_some(node),
     );
     let initial_column_sum = columns.iter().map(|track| track.base_size).sum::<f32>();
     inner_node_size.width = inner_node_size.width.or_else(|| initial_column_sum.into());
@@ -361,6 +364,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
         &mut items,
         |track: &GridTrack, _, _| Some(track.base_size),
         false, // TODO: Support baseline alignment in the vertical axis
+        None,
     );
     let initial_row_sum = rows.iter().map(|track| track.base_size).sum::<f32>();
     inner_node_size.height = inner_node_size.height.or_else(|| initial_row_sum.into());
@@ -485,6 +489,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
             &mut items,
             |track: &GridTrack, _, _| Some(track.base_size),
             has_baseline_aligned_item,
+            (run_mode == RunMode::ComputeSize).then_some(node),
         );
 
         // Row sizing must be re-run (once) if:
@@ -547,6 +552,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
                 &mut items,
                 |track: &GridTrack, _, _| Some(track.base_size),
                 false, // TODO: Support baseline alignment in the vertical axis
+                None,
             );
         }
     }
@@ -672,6 +678,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     // Position hidden and absolutely positioned children
     let contains_absolutes = tree.get_core_container_style(node).position() != Position::Static;
     let absolute_pass = AbsolutePass {
+        clearance: tree.get_core_container_style(node).absolute_clearance(),
         area_size: Size {
             width: f32_max(container_border_box.width - border.horizontal_axis_sum() - scrollbar_gutter.x, 0.0),
             height: f32_max(container_border_box.height - border.vertical_axis_sum() - scrollbar_gutter.y, 0.0),
@@ -682,6 +689,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
         #[cfg(feature = "content_size")]
         is_scroll_container,
     };
+    let AbsoluteArea { size: absolute_area, offset: absolute_offset, .. } = absolute_pass.inner_area();
     let mut order = items.len() as u32;
     (0..tree.child_count(node)).for_each(|index| {
         let child = tree.get_child_id(node, index);
@@ -776,28 +784,28 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
                     maybe_col_indexes
                         .end
                         .map(|index| rtl_line_as_end_edge(&columns, index))
-                        .unwrap_or(border.left + scrollbar_gutter.x),
+                        .unwrap_or(absolute_offset.x),
                     maybe_col_indexes
                         .start
                         .map(|index| rtl_line_as_start_edge(&columns, index))
-                        .unwrap_or(container_border_box.width - border.right),
+                        .unwrap_or(absolute_offset.x + absolute_area.width),
                 )
             } else {
                 (
-                    maybe_col_indexes.start.map(|index| line_as_start_edge(&columns, index)).unwrap_or(border.left),
+                    maybe_col_indexes.start.map(|index| line_as_start_edge(&columns, index)).unwrap_or(absolute_offset.x),
                     maybe_col_indexes
                         .end
                         .map(|index| line_as_end_edge(&columns, index))
-                        .unwrap_or(container_border_box.width - border.right - scrollbar_gutter.x),
+                        .unwrap_or(absolute_offset.x + absolute_area.width),
                 )
             };
 
             let grid_area = Rect {
-                top: maybe_row_indexes.start.map(|index| line_as_start_edge(&rows, index)).unwrap_or(border.top),
+                top: maybe_row_indexes.start.map(|index| line_as_start_edge(&rows, index)).unwrap_or(absolute_offset.y),
                 bottom: maybe_row_indexes
                     .end
                     .map(|index| line_as_end_edge(&rows, index))
-                    .unwrap_or(container_border_box.height - border.bottom - scrollbar_gutter.y),
+                    .unwrap_or(absolute_offset.y + absolute_area.height),
                 left: grid_area_left,
                 right: grid_area_right,
             };
@@ -822,13 +830,24 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
             tree.set_grid_origin(child, Point { x: grid_area.left, y: grid_area.top });
 
             if contains_absolutes {
-                let area = (
-                    Size {
+                let (left_index, right_index) = if direction.is_rtl() {
+                    (maybe_col_indexes.end, maybe_col_indexes.start)
+                } else {
+                    (maybe_col_indexes.start, maybe_col_indexes.end)
+                };
+                let area = AbsoluteArea {
+                    size: Size {
                         width: f32_max(grid_area.right - grid_area.left, 0.0),
                         height: f32_max(grid_area.bottom - grid_area.top, 0.0),
                     },
-                    Point { x: grid_area.left, y: grid_area.top },
-                );
+                    offset: Point { x: grid_area.left, y: grid_area.top },
+                    clearance: Rect {
+                        top: maybe_row_indexes.start.map_or(absolute_pass.clearance.top, |_| 0.0),
+                        right: right_index.map_or(absolute_pass.clearance.right, |_| 0.0),
+                        bottom: maybe_row_indexes.end.map_or(absolute_pass.clearance.bottom, |_| 0.0),
+                        left: left_index.map_or(absolute_pass.clearance.left, |_| 0.0),
+                    },
+                };
                 #[cfg_attr(not(feature = "content_size"), allow(unused_variables))]
                 let overflow_contribution = absolute_pass.place(tree, child, position, Some(area), Point::ZERO);
                 #[cfg(feature = "content_size")]

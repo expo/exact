@@ -25,6 +25,15 @@ pub use darwin::DarwinTransport;
     feature = "portable-http"
 ))]
 pub mod rustls_http;
+#[cfg(any(
+    not(target_vendor = "apple"),
+    test,
+    feature = "test-support",
+    feature = "portable-http"
+))]
+mod tls;
+#[cfg(target_os = "android")]
+pub use tls::initialize_android;
 // A system name lookup an abort or a deadline can leave (rustls_http, websocket).
 #[cfg(any(
     not(target_vendor = "apple"),
@@ -103,3 +112,5 @@ impl crate::stdlib::fetch::Transport for LazyDefaultTransport {
 
 #[cfg(test)]
 mod stream_tests;
+#[cfg(test)]
+mod trust_tests;

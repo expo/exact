@@ -431,7 +431,7 @@ const componentOfPath = token => {
  * length, a number or (no type) a colour. */
 export function packageTokens(root = ROOT) {
   // An icon token (`name = icon(svg "…")`, a space before its `(` or none) is no colour, length or number: no case restyles it.
-  return PACKAGES.flatMap(p => [...readFileSync(join(root, 'packages', p, `${p}.tamber`), 'utf8').matchAll(/^\s+([a-z][\w-]*(?:\.[\w-]+)+)(?::\s*([\w-]+))?\s*=(?!\s*icon\s*\()/gm)]
+  return PACKAGES.flatMap(p => [...readFileSync(join(root, 'packages', p, `${p}.forma`), 'utf8').matchAll(/^\s+([a-z][\w-]*(?:\.[\w-]+)+)(?::\s*([\w-]+))?\s*=(?!\s*icon\s*\()/gm)]
     .map(m => ({ name: m[1], kind: m[2] ?? 'color' })));
 }
 
@@ -577,12 +577,13 @@ export function apart(base, want, kind, row = '') {
 
 /** One drive of `plan` on `host` that reads `ids` (the runner's tree first):
  * { tree, nodes: Map(id, node) }. The terminal is driven itself, as
- * scale-check drives it. */
+ * scale-check drives it, and takes only a terminal compile (`plan` as
+ * stage12-drive.mjs's `drivePlan` hands it on, LLP 1101.003 D9). */
 export function inspectDrive(host, plan, ids, app = null) {
   const steps = ids.map(id => (host === 'terminal' ? ['node', String(id)] : [`layout ${id}`])).flat();
   const launch = host === 'android' ? ['--reader', '--app', app, '--plan', plan] : ['--plan', plan];
   const run = host === 'terminal'
-    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', 'plan', 'runner-tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 })
+    ? spawnSync('cargo', ['run', '-q', '-p', 'exact-terminal', '--', plan, '--size', '64x64', '--drive', 'plan', 'runner-tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 })
     : spawnSync(process.execPath, [join(ROOT, 'scripts/agent.mjs'), host, ...launch, '--storage', 's13c-restyle', '--reset-storage', '--json', 'perf', 'tree', ...steps], { cwd: ROOT, encoding: 'utf8', timeout: 900_000, maxBuffer: 1 << 30 });
   const lines = (run.stdout ?? '').split('\n').filter(l => l.startsWith('{'));
   if (run.error || run.status !== 0) throw new Error(`the drive failed${run.error ? ` (${run.error.message})` : ''}\n${(run.stdout ?? '').slice(-1500)}${(run.stderr ?? '').slice(-1500)}`);

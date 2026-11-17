@@ -5,6 +5,62 @@
 //! lengths at 96 px per inch)
 
 use crate::style::{Dimension, Env};
+use crate::PropId;
+
+/// Diagnostic for an unsupported computed SVG attribute length.
+pub const ATTRIBUTE_LENGTH_DIAGNOSTIC: &str = "runtime-svg-length";
+
+/// The grammar of an SVG length attribute that has no CSS geometry row.
+#[derive(Debug, Clone, Copy)]
+pub struct AttributeLength {
+    /// Text positioning attributes admit a list of lengths.
+    pub list: bool,
+    /// Marker reference points also admit these SVG keywords.
+    pub keywords: &'static [&'static str],
+}
+
+impl AttributeLength {
+    /// Attribute-only lengths covered by LLP 1055.000 D4 and D11.
+    /// CSS geometry, filter primitives, `offset` and `orient` have other grammars.
+    pub fn of(prop: PropId) -> Option<Self> {
+        let list = match prop {
+            PropId::TextX | PropId::TextY | PropId::TextDx | PropId::TextDy => true,
+            PropId::X1
+            | PropId::Y1
+            | PropId::X2
+            | PropId::Y2
+            | PropId::Fx
+            | PropId::Fy
+            | PropId::Fr
+            | PropId::MarkerWidth
+            | PropId::MarkerHeight
+            | PropId::RefX
+            | PropId::RefY => false,
+            _ => return None,
+        };
+        let keywords: &[_] = match prop {
+            PropId::RefX => &["left", "center", "right"],
+            PropId::RefY => &["top", "center", "bottom"],
+            _ => &[],
+        };
+        Some(Self { list, keywords })
+    }
+
+    /// Whether the whole computed value uses the admitted length grammar.
+    pub fn accepts(self, text: &str) -> bool {
+        if self.keywords.contains(&text.trim()) {
+            return true;
+        }
+        if !self.list {
+            return Length::parse(text).is_some();
+        }
+        let mut words = text
+            .split(|c: char| c == ',' || c.is_ascii_whitespace())
+            .filter(|w| !w.is_empty())
+            .peekable();
+        words.peek().is_some() && words.all(|w| Length::parse(w).is_some())
+    }
+}
 
 /// A length as authored: a number of user units, or a percentage.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -119,10 +175,11 @@ impl Viewport<'_> {
 
     /// A CSS length in user units, with percentages against the SVG basis.
     /// `None` preserves `auto`, including an undefined environment length,
-    /// so the reader can apply the property's initial value.
+    /// so the reader can apply the property's initial value. A size keyword
+    /// is `auto` on geometry (LLP 1001.001 D3, "SVG").
     pub fn resolve(&self, d: Dimension, basis: f32) -> Option<f32> {
         match d.resolve(self.env) {
-            Dimension::Auto => None,
+            Dimension::Auto | Dimension::Keyword(_) => None,
             d => Some(d.at_basis(self.env, basis)),
         }
     }

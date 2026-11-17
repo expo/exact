@@ -76,6 +76,31 @@ pub struct Admitted {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// The plan's timers at boot. A gated task starts idle; the gate step
+    /// arms the ones whose gate holds, over the settled state (LLP 1092 D8).
+    pub(super) fn boot_timers(&self) -> Vec<Timer> {
+        let now = self.now_ms;
+        self.plan
+            .timers
+            .iter()
+            .map(|t| Timer {
+                next_ms: if t.gated || t.keyed {
+                    f64::INFINITY
+                } else if t.frame {
+                    virtual_frame(now, 1)
+                } else {
+                    now + t.interval_ms as f64
+                },
+                armed: !(t.gated || t.keyed),
+                generation: 0,
+                completion: Default::default(),
+                key: None,
+                base: now,
+                k: 1,
+            })
+            .collect()
+    }
+
     /// Declare supported waits before installing the live clock.
     pub fn hold_waits(&mut self, kinds: WaitKinds) {
         self.clock.waits = kinds;
@@ -118,6 +143,7 @@ impl<D: DataSource> Runner<D> {
                     now_ms: self.now_ms,
                     error: Some(RunnerError::Poisoned),
                     stopped_on_request: false,
+                    needs_apply: false,
                 },
                 continuing: false,
             };
@@ -132,7 +158,9 @@ impl<D: DataSource> Runner<D> {
         if !resumed {
             let advanced = self.advance_timed(cutoff);
             if advanced.error.is_some() || !advanced.receipts.is_empty() {
-                if advanced.error.is_none() {
+                if advanced.needs_apply {
+                    self.clock.admission = None;
+                } else if advanced.error.is_none() {
                     self.clock.admission = Some(cutoff);
                 }
                 return Admitted {
@@ -161,6 +189,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         if let Some((i, nominal)) = candidate {
             self.now_ms = self.now_ms.max(cutoff);
@@ -229,6 +258,10 @@ impl<D: DataSource> Runner<D> {
         let row = &self.plan.timers[i];
         if !t.next_ms.is_finite() {
             return t.next_ms;
+        }
+        // Wakes may hold change work past the commit that queued it.
+        if row.change {
+            return t.next_ms.max(self.now_ms);
         }
         if self.clock_live() {
             if self.native_timer(i) {

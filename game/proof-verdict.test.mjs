@@ -21,6 +21,19 @@ test('coverage names missing modes and release without upgrading native-only leg
     .toEqual(['mode 1 not pinned','mode fresh-game not pinned','release not pinned']);
 });
 
+test('physics consumer pins retain native and browser development coverage', async () => {
+  const {readFileSync} = await import('node:fs');
+  const {pinCoverageGaps} = await import('./proof.mjs');
+  for (const file of [
+    new URL('./games/asset-fixture/pins.json', import.meta.url),
+    new URL('./games/forest/pins.json', import.meta.url),
+    new URL('./games/rivals/pins.json', import.meta.url),
+  ]) {
+    const pins = JSON.parse(readFileSync(file));
+    expect(pinCoverageGaps(pins).filter(gap => gap !== 'release not pinned'), pins.game).toEqual([]);
+  }
+});
+
 test('delivery refuses development pins and accepts release or legacy coverage', async () => {
   const {requireReleasePins} = await import('./inputs.mjs');
   const {mkdtempSync,writeFileSync,rmSync} = await import('node:fs');

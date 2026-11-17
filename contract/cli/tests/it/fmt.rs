@@ -4,6 +4,7 @@
 //! No checked-in file is formatted: source snapshots use their original
 //! path for import and asset resolution.
 
+use crate::scratch::Scratch;
 use contract_syntax::fmt::format;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -134,8 +135,7 @@ fn round_trip(path: &Path) -> String {
 
 #[test]
 fn fmt_check_diffs_and_exits_non_zero_only_on_a_difference() {
-    let dir = std::env::temp_dir().join(format!("exact-fmt-check-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-fmt-check-{}", std::process::id()));
     let file = dir.join("a.contract");
     std::fs::write(
         &file,
@@ -188,8 +188,7 @@ fn fmt_check_diffs_and_exits_non_zero_only_on_a_difference() {
 
 #[test]
 fn fmt_check_accepts_typed_states_in_components_and_members() {
-    let dir = std::env::temp_dir().join(format!("exact-fmt-typed-states-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-fmt-typed-states-{}", std::process::id()));
     let file = dir.join("a.contract");
     let expected = r#"component App
   state picked: option<string> = none
@@ -229,8 +228,7 @@ members App
 
 #[test]
 fn fmt_check_keeps_distant_edits_local_without_rewriting_source() {
-    let dir = std::env::temp_dir().join(format!("exact-fmt-hunks-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-fmt-hunks-{}", std::process::id()));
     let file = dir.join("a.contract");
     let before = format!(
         "component A\n  view\n{}",
@@ -274,8 +272,7 @@ fn fmt_check_keeps_distant_edits_local_without_rewriting_source() {
 
 #[test]
 fn formatter_refuses_unknown_flags_extra_paths_and_invalid_source_without_writing() {
-    let dir = std::env::temp_dir().join(format!("exact-fmt-refusal-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-fmt-refusal-{}", std::process::id()));
     let file = dir.join("a.contract");
     let original = "component A\n  view\n    text   \"a\"";
     std::fs::write(&file, original).unwrap();
@@ -323,8 +320,7 @@ fn formatter_refuses_unknown_flags_extra_paths_and_invalid_source_without_writin
 /// plan, and a break that would change the tree is refused.
 #[test]
 fn a_bare_flag_a_prefix_minus_and_a_conditional_keep_their_meaning() {
-    let dir = std::env::temp_dir().join(format!("exact-fmt-flag-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-fmt-flag-{}", std::process::id()));
     let file = dir.join("app.contract");
     let src = r#"component App
   state name = ""

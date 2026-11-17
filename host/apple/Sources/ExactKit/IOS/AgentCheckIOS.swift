@@ -16,10 +16,15 @@ import UIKit
 
 extension Agent {
     func check(_ req: [String: Any]) -> [String: Any] {
-        _ = settleForPicture()
-        settleMotion()
+        finishCheckPicture()
+        if req["release"] as? Bool == true { return [:] }
+        let holding = req["capture"] as? Bool == true
+        if holding { checkPicture = preparePicture(req) }
+        else { _ = settleForPicture(); settleMotion() }
+        presenter.menus.beginCheck()
+        defer { if !holding { finishCheckPicture() } }
         let vp = presenter.viewport
-        guard let win = vp.window else { return ["error": "check: the app has no window yet"] }
+        guard let win = vp.window else { finishCheckPicture(); return ["error": "check: the app has no window yet"] }
         // What lies over a view is what a finger at its middle lands on, not the cell's widening of its field's
         // target: a touch a grouped row leaves to no control falls to the row's field, which covers nothing the
         // row draws (LLP 1116.009 D5).
@@ -45,6 +50,15 @@ extension Agent {
         }
         roots.forEach(findBars)
         var items: [[String: Any]] = []
+        // A menu UIKit presents to a person, which the system places, sizes and scrolls, is not the page: the painted
+        // stand-in the agent drives is left unjudged, and named as advice.
+        #if os(iOS)
+        let platformMenus = presenter.menus.platformMenus
+        #else
+        let platformMenus: [(popover: NodeView, context: Bool)] = []
+        #endif
+        let unjudged = Set(platformMenus.map { ObjectIdentifier($0.popover) })
+        func inPlatformMenu(_ v: UIView) -> Bool { sequence(first: v, next: \.superview).contains { unjudged.contains(ObjectIdentifier($0)) } }
 
         func rgba(_ c: [Double]?) -> [Double]? {
             guard let c, c.count >= 4, c[3] > 0 else { return nil }
@@ -119,10 +133,10 @@ extension Agent {
             }
             return r
         }
-        /// `v`'s alpha times its ancestors'.
+        /// `v`'s alpha times its ancestors'. A view's `alpha` is its layer's `opacity`, so each counts once.
         func opacity(_ v: UIView) -> Double {
             var o = 1.0, at: UIView? = v
-            while let cur = at { o *= Double(cur.alpha) * Double(cur.layer.opacity); at = cur.superview }
+            while let cur = at { o *= Double(cur.alpha); at = cur.superview }
             return o
         }
         /// Whether `s` or a view in it paints at `p` something a style does not say for certain: a fill, a picture, a
@@ -189,7 +203,7 @@ extension Agent {
             if let top = keyboard, p.y >= top {
                 return reachable(v, hit: nil, above: false) ? nil : ["kind": "keyboard", "name": "the software keyboard"]
             }
-            guard let hit = win.hitTest(p, with: nil), hit !== v, !hit.isDescendant(of: v), !v.isDescendant(of: hit) else { return nil }
+            guard let hit = win.hitTest(p, with: nil), hit !== v, !hit.isDescendant(of: v), !v.isDescendant(of: hit), !inPlatformMenu(hit) else { return nil }
             var owner: UIView? = hit, bar: UIView? = nil, barBox: CGRect? = nil
             while let cur = owner, !(cur is NodeView) {
                 if cur.accessibilityIdentifier?.hasPrefix("exact.host.frame-health") == true { return nil }
@@ -239,6 +253,32 @@ extension Agent {
             return ["by": Int(p.id), "dx": Double(r2(past)), "pad": Double(r2(pad))]
         }
 
+        /// Whether `n` lets touches through: `pointer-events: none` on it, or on the nearest ancestor that says one,
+        /// as the property inherits (NodeViewIOS.swift's `hitTest` passes such a node by).
+        func passesTouches(_ n: NodeView) -> Bool {
+            var at: UIView? = n
+            while let v = at {
+                if let said = (v as? NodeView)?.style["pointer_events"]?.string { return said == "none" }
+                at = v.superview
+            }
+            return false
+        }
+        /// Whether `n` is in a live region (`aria-live` polite or assertive, a `status` or `alert` role) laid out of
+        /// flow, at or above it up to that region.
+        func laidOverAsAnnouncement(_ n: NodeView) -> Bool {
+            var at: UIView? = n, out = false
+            while let v = at {
+                if let node = v as? NodeView {
+                    out = out || ["absolute", "fixed"].contains(node.layoutPosition)
+                    let live = ["polite", "assertive"].contains(node.props["accessibilityLive"] ?? "")
+                        || ["status", "alert"].contains(node.props["accessibilityRole"] ?? "")
+                    if live { return out }
+                }
+                at = v.superview
+            }
+            return false
+        }
+
         /// A flex or grid item past its container's sides within the viewport (a centred word wider than its column runs
         /// out both sides), where neither the container nor an ancestor it lies beyond clips it or scrolls it sideways, and
         /// it is in flow and untransformed. The web's `spill` (host/web-js/check.js) is the same rule.
@@ -261,11 +301,11 @@ extension Agent {
         // and not each of its children.
         var visited = Set<ObjectIdentifier>()
         func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil) {
-            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, v.layer.opacity > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
-            let a = alpha * v.alpha * CGFloat(v.layer.opacity)
+            guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
+            let a = alpha * v.alpha
             var heldBelow = held, outBelow = out
             if let n = v as? NodeView {
-                guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n) else { return }
+                guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n), !unjudged.contains(ObjectIdentifier(n)) else { return }
                 let b = n.convert(n.bounds, to: nil)
                 if b.width > 0, b.height > 0, b.intersects(port) || b.intersects(win.bounds) {
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
@@ -275,7 +315,12 @@ extension Agent {
                     if let parent, let padded = paddedWidth(n, in: parent) { item["padded"] = padded }
                     if n.isParagraph { paragraph(n, b, alpha: a, into: &item) }
                     control(n, into: &item)
-                    if item["control"] != nil || item["text"] != nil, let c = cover(n, b), item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
+                    // What lets touches through is no target, and a hit test passes through it to what lies under it, so
+                    // cannot say what lies over it; in an announcement laid over the page (a toast) it lies there by design.
+                    // The web's `through` and `overlay` (host/web-js/check.js).
+                    let through = passesTouches(n)
+                    if through, laidOverAsAnnouncement(n) { item["overlay"] = true }
+                    if !through, item["control"] != nil || item["text"] != nil, let c = cover(n, b), item["control"] != nil || c["kind"] as? String != "offscreen" { item["cover"] = c }
                     if item["text"] == nil, item["control"] == nil { fill(n, b, alpha: a, faded: alpha < 0.999, into: &item) }
                     // A fill's presented part too: a card below the viewport, or past its scroller's edge, is not drawn, and the
                     // pixels there are the page's (LLP 1116.010 D2: trivia's Badge below the viewport was "a card that does not show").
@@ -495,6 +540,7 @@ extension Agent {
         var reply: [String: Any] = ["viewport": rect(port), "capture": ["window": true, "w": r2(win.bounds.width), "h": r2(win.bounds.height)],
                                     "scheme": dark ? "dark" : "light", "target": 44, "items": items]
         if let keyboard { reply["keyboard"] = r2(keyboard) }
+        if !platformMenus.isEmpty { reply["advice"] = platformMenus.map { ["kind": "menu", "id": Int($0.popover.id), "context": $0.context] } }
         return reply
     }
 

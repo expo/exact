@@ -18,11 +18,12 @@ extension ExactSession {
 #endif
 
 extension ExactSession {
-    /// Tells the launch's and a navigation's TTI to read outstanding work
+    /// Releases completed background actions and tells launch and navigation TTI to read outstanding work
     /// again. Work that shows nothing new can end the last of it (a skipped
     /// batch, owner work landing, a canvas replay or an SVG picture done), so
     /// this follows every end of work, not only an apply.
     func workEnded() {
+        backgroundActionsApplied()
         ExactLaunch.shared.workEnded(self)
         NavigationMarks.shared.workEnded(self)
     }
@@ -48,7 +49,7 @@ struct LaunchPlace: Equatable {
             epoch = Double(environment["EXACT_AGENT_EPOCH"] ?? "1767225600000") ?? 1_767_225_600_000
         } else {
             epoch = nil
-            locale = Locale.preferredLanguages.first ?? Locale.current.identifier(.bcp47)
+            locale = SessionFacts.viewerLocale()
             timeZone = TimeZone.current.identifier
             seed = UInt64(UInt32.random(in: .min ... .max))
             formatLocale = SessionFacts.currentFormatLocale

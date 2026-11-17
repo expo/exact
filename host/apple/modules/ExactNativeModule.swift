@@ -41,8 +41,10 @@
 // writes from app.json `data` (`route.data[.title]`).
 //
 //     #if os(iOS)
+//     let transitions = FadeTransitions()
 //     override func navigation(_ navigation: ExactNavigation) {
 //         navigation.controller.navigationBar.prefersLargeTitles = true
+//         navigation.delegate = transitions // forwarded: the controller's own slot is Exact's
 //     }
 //     override func route(_ route: ExactRoute) {
 //         route.controller.navigationItem.rightBarButtonItem = route.data[.trailing].map { id in
@@ -94,7 +96,7 @@ public final class ExactModuleContext: @unchecked Sendable {
     // has the hatch table (before its hatches are called), and what each token calls.
     typealias FramesFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Int32) -> Void
     typealias AfterFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Double) -> Void
-    var framesFn: FramesFn?, afterFn: AfterFn?
+    var framesFn: FramesFn?, afterFn: AfterFn?, coalescingAfterFn: AfterFn?
     var ticks: [UInt64: (ExactFrame) -> Void] = [:], afters: [UInt64: () -> Void] = [:]
     private var nextToken: UInt64 = 1
 
@@ -144,10 +146,15 @@ public final class ExactModuleContext: @unchecked Sendable {
     /// agent, where a seek fires it at its own instant. `stop()` before then
     /// and it never runs. Main thread.
     @discardableResult
-    public func after(_ ms: Double, _ body: @escaping () -> Void) -> ExactTicket {
+    public func after(_ ms: Double, _ body: @escaping () -> Void) -> ExactTicket { after(ms, coalescing: false, body) }
+
+    /// A coalescing callback runs at the next clock instant at or past its
+    /// deadline, without adding a seek stop or advancing settlement.
+    @discardableResult
+    public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> ExactTicket {
         let token = nextToken
         nextToken += 1
-        guard let afterFn else { return ExactTicket {} }
+        guard let afterFn = coalescing ? coalescingAfterFn : afterFn else { return ExactTicket {} }
         afters[token] = body
         afterFn(host, token, max(0, ms))
         return ExactTicket { [weak self] in
@@ -319,8 +326,8 @@ open class ExactModule {
     /// already built). Set `showsBar` here; the bar's look is the app's.
     open func navigation(_ navigation: ExactNavigation) {}
     /// A route: when its controller is built (`route.isNew`), and again
-    /// whenever its `data-*` words or the header Exact projects change, each
-    /// time before the frame that shows it. Its `navigationItem` is the
+    /// whenever its `data-*` words, the header Exact projects or its content
+    /// scroll view change, each time before the frame that shows it. Its `navigationItem` is the
     /// app's, over the defaults Exact projects from an authored header.
     open func route(_ route: ExactRoute) {}
     /// A route's controller is leaving for good; its handle does nothing
@@ -329,11 +336,14 @@ open class ExactModule {
     /// Exact's tab container (LLP 1075.003 §3.7): once, before its tabs are
     /// laid out. Its appearance is the app's; its tabs Exact's. A person's
     /// selection is UIKit's, which Exact's router follows through UIKit's
-    /// delegate calls. To select a tab, press its authored tab: a selection
-    /// the app sets in code sends no tab delegate call, so the router follows
-    /// it only for a tab under More, whose `willShow` More sends. Each tab's
-    /// controller is made with the container and kept for the tab's life
-    /// (`ExactTab.controller`).
+    /// delegate calls. To select a tab, press its authored tab. A selection
+    /// the app sets in code is followed too (LLP 1075.003 §3.7): a tab under
+    /// More at More's `willShow`; where the tabs are `UITab`s, at
+    /// `didSelectTab`; otherwise as the tab's route appears or as a pop UIKit
+    /// runs there reaches Exact, whichever is first, so a tab not built yet,
+    /// which has no route to show, is followed only once it has one. Each
+    /// tab's controller is made with the container and kept for the tab's
+    /// life (`ExactTab.controller`).
     open func tabs(_ tabs: ExactTabs) {}
     /// Own the tabs yourself: return a container holding each tab's
     /// controller (`contents.tabs`), which Exact keeps current, or nil to
@@ -554,9 +564,9 @@ final class ExactHatches {
     typealias OwnsFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UInt32) -> Int32
     typealias PartsFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafePointer<UInt8>?, UInt32, UnsafePointer<UnsafeMutableRawPointer?>?, UInt32) -> Int32
     let ownsFn: OwnsFn?, partsFn: PartsFn?
-    /// One of 104 or more: the bindings' answer (LLP 1121 D12; ExactTamber.swift).
-    typealias TamberFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UInt32
-    let tamberFn: TamberFn?
+    /// One of 104 or more: the bindings' answer (LLP 1121 D12; ExactForma.swift).
+    typealias FormaFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UInt32
+    let formaFn: FormaFn?
     /// One of 120 or more: `app.onLine`.
     typealias OnLineFn = @convention(c) (UnsafeMutableRawPointer?) -> UInt32
     let onLineFn: OnLineFn?
@@ -577,6 +587,8 @@ final class ExactHatches {
     let arrangementFn: ArrangementFn?
     /// One of 184 or more: a module's service query (ExactServices.swift).
     let serviceFn: ServiceFn?
+    /// One of 192 or more: an after that coalesces across a seek.
+    let coalescingAfterFn: ExactModuleContext.AfterFn?
     #if os(iOS) || os(tvOS)
     var navigations: [ObjectIdentifier: ExactNavigation] = [:]
     var routes: [String: ExactRoute] = [:]
@@ -610,8 +622,8 @@ final class ExactHatches {
         let regions = table.load(as: UInt32.self) >= 96
         ownsFn = regions ? table.load(fromByteOffset: 80, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: OwnsFn.self) } : nil
         partsFn = regions ? table.load(fromByteOffset: 88, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: PartsFn.self) } : nil
-        tamberFn = table.load(as: UInt32.self) >= 104
-            ? table.load(fromByteOffset: 96, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: TamberFn.self) } : nil
+        formaFn = table.load(as: UInt32.self) >= 104
+            ? table.load(fromByteOffset: 96, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: FormaFn.self) } : nil
         onLineFn = table.load(as: UInt32.self) >= 120
             ? table.load(fromByteOffset: 112, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: OnLineFn.self) } : nil
         let audio = table.load(as: UInt32.self) >= 136
@@ -628,6 +640,8 @@ final class ExactHatches {
             ? table.load(fromByteOffset: 168, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ArrangementFn.self) } : nil
         serviceFn = table.load(as: UInt32.self) >= 184
             ? table.load(fromByteOffset: 176, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ServiceFn.self) } : nil
+        coalescingAfterFn = table.load(as: UInt32.self) >= 192
+            ? table.load(fromByteOffset: 184, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ExactModuleContext.AfterFn.self) } : nil
     }
 
     /// A package picture changed (0) or revoked (1): the host's raster loader acts on it.
@@ -689,6 +703,8 @@ final class ExactHatches {
 #if os(iOS) || os(tvOS)
 /// A navigation controller Exact built (LLP 1075.003 §3.2, §3.7).
 public final class ExactNavigation {
+    /// The stack's controller. Its `delegate` is Exact's: give yours to
+    /// `delegate` here, which Exact forwards to (LLP 1075.003 §3.5).
     public let controller: UINavigationController
     /// Whether the stack's routes may show UIKit's bar. Exact's default is
     /// true, and each route then decides for itself (LLP 1115.000 D5.3: a
@@ -699,8 +715,11 @@ public final class ExactNavigation {
     public var showsBar: Bool
     /// The app's navigation delegate. Exact keeps the controller's own slot,
     /// where it reconciles pops, and forwards each call here after its own
-    /// handling; what Exact does not implement (a custom transition's
-    /// animator) comes straight here.
+    /// handling; it asks here first for a transition's animator, and what
+    /// Exact does not implement (an interaction controller) comes straight
+    /// here. Exact keeps it until you give another or nil, or the controller
+    /// goes. This property holds it weakly, as UIKit's does, so a delegate
+    /// that keeps this handle makes no cycle.
     public weak var delegate: UINavigationControllerDelegate? {
         didSet {
             guard let hatches else { return }
@@ -725,10 +744,16 @@ public final class ExactRoute {
     public internal(set) var navigation: ExactNavigation?
     /// The route node's `data-*` words.
     public internal(set) var data: ExactData
-    /// The route's content scroll view: its native top-edge selection, else the one named
-    /// by `navigationScroll` or its first vertical scroller. Select with UIKit's
-    /// `controller.setContentScrollView(_:for:)`; nil for the top edge makes it that scroller
-    /// again, as UIKit's nil makes an edge automatic.
+    /// The route's content scroll view when the hatch was last called: the app's top-edge
+    /// selection; else, where the route has a `navigationScroll`, the scroll view of the element
+    /// it names, or nil when no element carries the name or it does not scroll; else the scroll
+    /// view of the route's first vertical scroller; else the route's own viewport, which an
+    /// unpresented route has when its navigation root scrolls or native chrome uses
+    /// `interactive-widget="resizes-visual"`; else nil. A top-edge
+    /// selection or nil made with UIKit's `controller.setContentScrollView(_:for:)` reaches it
+    /// when the hatch next runs, which Exact does as it prepares the route with a changed
+    /// projection: once the runtime's answer to a changed clearance is applied, or else at the
+    /// next authored update. Nil makes the edge automatic, as in UIKit.
     /// An authored scroller's offset, insets, size and delegate remain Exact's.
     public internal(set) weak var contentScrollView: UIScrollView?
     /// Whether this call is the controller's first.
@@ -764,10 +789,15 @@ public final class ExactRoute {
 
 /// Exact's tab container (LLP 1075.003 §3.7).
 public final class ExactTabs {
+    /// The tab container. Its `delegate` is Exact's: give yours to `delegate`
+    /// here, which Exact forwards to (LLP 1075.003 §3.5).
     public let controller: UITabBarController
     /// The app's tab delegate. Exact keeps the controller's own slot: a tab
     /// the bar would select presses its authored tab, after asking this
-    /// delegate's `shouldSelect`; the rest is forwarded.
+    /// delegate's `shouldSelect`; the rest is forwarded. Exact keeps it until
+    /// you give another or nil, or the container goes. This property holds it
+    /// weakly, as UIKit's does, so a delegate that keeps this handle makes no
+    /// cycle.
     public weak var delegate: UITabBarControllerDelegate? {
         didSet {
             guard let hatches else { return }
@@ -1025,7 +1055,13 @@ private let moduleLater: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer
 
 private let moduleCall: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int, UnsafeMutableRawPointer?, ExactModuleReplyFn?) -> Void = { raw, body, length, slot, fn in
     guard let fn else { return }
+    let loaded = ExactExtensions.loadSeconds
     let answer = { (status: UInt32, text: String) in
+        let loading = ExactExtensions.loadSeconds - loaded
+        if loading > 0 {
+            let report = Array(String(loading).utf8)
+            report.withUnsafeBufferPointer { fn(slot, 102, $0.baseAddress, $0.count) }
+        }
         let bytes = Array(text.utf8)
         bytes.withUnsafeBufferPointer { fn(slot, status, $0.baseAddress, $0.count) }
     }
@@ -1081,13 +1117,14 @@ private let moduleConnect: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPo
     m.context.diagnostics.recordFn = m.hatches?.recordFn
     m.context.framesFn = m.hatches?.framesFn
     m.context.afterFn = m.hatches?.afterFn
+    m.context.coalescingAfterFn = m.hatches?.coalescingAfterFn
 }
 
-/// `tamber(module)`: a batch moved what a binding reads (LLP 1121 D12); each
-/// place is asked again, and each that moved redrawn (ExactTamber.swift).
-private let moduleTamber: @convention(c) (UnsafeMutableRawPointer?) -> Void = { raw in
+/// `forma(module)`: a batch moved what a binding reads (LLP 1121 D12); each
+/// place is asked again, and each that moved redrawn (ExactForma.swift).
+private let moduleForma: @convention(c) (UnsafeMutableRawPointer?) -> Void = { raw in
     guard module(raw) != nil else { return }
-    Tambers.moved()
+    Formas.moved()
 }
 
 /// `tick(module, kind, token, now, seq)`: a frame ticket's tick (0) or an
@@ -1239,7 +1276,7 @@ private let moduleElement: @convention(c) (UnsafeMutableRawPointer?, UInt32, Uns
     element.data = ExactData(object["data"] as? [String: String] ?? [:])
     element.view = view.map { Unmanaged<ExactNativeView>.fromOpaque($0).takeUnretainedValue() }
     // A hatched node's view is a place a binding finds, as a module view is (LLP 1121 D12).
-    if let view = element.view { Tambers.made(view, by: m) }
+    if let view = element.view { Formas.made(view, by: m) }
     if event == 3 {
         if let platform { m.elementConfiguration(element, Unmanaged<AnyObject>.fromOpaque(platform).takeUnretainedValue()) }
         return 0
@@ -1414,7 +1451,7 @@ private let table: UnsafeMutableRawPointer = {
     t.storeBytes(of: unsafeBitCast(moduleWindow, to: UnsafeRawPointer.self), toByteOffset: 192, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleTick, to: UnsafeRawPointer.self), toByteOffset: 200, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleWillQuit, to: UnsafeRawPointer.self), toByteOffset: 208, as: UnsafeRawPointer.self)
-    t.storeBytes(of: unsafeBitCast(moduleTamber, to: UnsafeRawPointer.self), toByteOffset: 216, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(moduleForma, to: UnsafeRawPointer.self), toByteOffset: 216, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(ExactNativeViewABI.createView, to: UnsafeRawPointer.self), toByteOffset: 224, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleAuthenticate, to: UnsafeRawPointer.self), toByteOffset: 232, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleImage, to: UnsafeRawPointer.self), toByteOffset: 240, as: UnsafeRawPointer.self)

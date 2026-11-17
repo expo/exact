@@ -25,47 +25,27 @@ pub(super) fn check_targets(file: &File, ambiguous: &BTreeSet<Span>, sink: &mut 
     }
 }
 fn view<'a>(nodes: &'a [Node], out: &mut Targets<'a>) {
-    for n in nodes {
-        match n {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                if tag == "iframe" {
-                    out.has_frames = true;
-                    for a in attrs.iter().filter(|a| a.name == "id") {
-                        if let Expr::Str(id, _) = &a.value {
-                            out.frames.insert(id);
-                        } else {
-                            out.dynamic_frames = true;
-                        }
-                    }
+    for n in Node::walk(nodes) {
+        let Node::Element { tag, attrs, .. } = n else {
+            continue;
+        };
+        if tag == "iframe" {
+            out.has_frames = true;
+            for a in attrs.iter().filter(|a| a.name == "id") {
+                if let Expr::Str(id, _) = &a.value {
+                    out.frames.insert(id);
+                } else {
+                    out.dynamic_frames = true;
                 }
-                for a in attrs
-                    .iter()
-                    .filter(|a| a.name == "surface" && tag == "canvas")
-                {
-                    if let Expr::Ident(name, _) | Expr::Call(name, _, _) = &a.value {
-                        out.canvases.insert(name);
-                    }
-                }
-                view(children, out);
             }
-            Node::Use { children, .. } => view(children, out),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                view(then, out);
-                view(otherwise, out);
+        }
+        for a in attrs
+            .iter()
+            .filter(|a| a.name == "surface" && tag == "canvas")
+        {
+            if let Expr::Ident(name, _) | Expr::Call(name, _, _) = &a.value {
+                out.canvases.insert(name);
             }
-            Node::Each { body, .. } => view(body, out),
-            Node::Match { some, none, .. } => {
-                view(&some.1, out);
-                view(none, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }

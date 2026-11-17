@@ -16,6 +16,7 @@ mod decls;
 mod decorations;
 mod expr;
 mod keyframes;
+mod layout_step;
 mod media_session;
 mod midi;
 mod migration;
@@ -29,6 +30,7 @@ mod properties;
 mod routes;
 mod sequence;
 mod sounds;
+mod source_decl;
 mod states;
 mod steps;
 mod theme;
@@ -471,10 +473,12 @@ impl Parser {
             .map(|t| &t.kind)
             .take_while(|k| !matches!(k, TokenKind::Newline | TokenKind::Indent | TokenKind::Eof))
             .collect();
-        let word = |k: &TokenKind| match k {
+        let word = |kind: &str, k: &TokenKind| match k {
             TokenKind::Ident(w) => Some(Hidden {
                 name: w.clone(),
+                kind: kind.into(),
                 component: None,
+                lines: None,
             }),
             _ => None,
         };
@@ -482,14 +486,14 @@ impl Parser {
             [TokenKind::Ident(k), rest @ ..] if k == "use" => self.hidden.extend(
                 rest.iter()
                     .take_while(|t| !matches!(t, TokenKind::Ident(w) if w == "from"))
-                    .filter_map(|t| word(t))
+                    .filter_map(|t| word(k, t))
                     .filter(|w| w.name != "as"),
             ),
             [TokenKind::Ident(k), name, ..] => {
                 if k == "component" && file.components.is_empty() {
                     self.first_refused = true;
                 }
-                self.hidden.extend(word(name));
+                self.hidden.extend(word(k, name));
             }
             _ => {}
         }
@@ -559,6 +563,13 @@ impl Parser {
                 TokenKind::Ident(w) if w == "color-profile" => self.color_profile(file)?,
                 TokenKind::Ident(w) if w == "theme" => self.theme(file)?,
                 TokenKind::Ident(w) if w == "fn" => file.fns.push(self.fn_decl()?),
+                TokenKind::Ident(w) if w == "source" => {
+                    let decl = self.source_decl()?;
+                    if let Some(first) = file.sources.iter().find(|s| s.name == decl.name) {
+                        return duplicate("source", &decl.name, decl.span, first.span);
+                    }
+                    file.sources.push(decl);
+                }
                 TokenKind::Ident(w) if w == "test" => file.tests.push(self.test_decl()?),
                 TokenKind::Ident(w) if matches!(w.as_str(), "always" | "after" | "never") => {
                     file.properties.push(self.property_decl()?);
@@ -604,7 +615,7 @@ impl Parser {
                     return self.err(
                         "syntax-expected-declaration",
                         format!(
-                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `use`, `component`, or `members`, found {}",
+                        "expected `routes`, `font`, `sound`, `shape`, `style`, `decoration`, `atom`, `keyframes`, `timeline`, `color-profile`, `theme`, `fn`, `source`, `use`, `component`, or `members`, found {}",
                         describe(other)
                     ),
                     );
@@ -911,7 +922,8 @@ impl Parser {
         Ok(ty)
     }
 
-    fn action(&mut self) -> R<Action> {
+    /// An action's line, through its newline: the action with no body yet.
+    fn action_signature(&mut self) -> R<Action> {
         let span = self.expect_word("action")?;
         let name = self.named_ident(span)?;
         let mut params = Vec::new();
@@ -947,11 +959,10 @@ impl Parser {
             );
         }
         self.newline()?;
-        let body = self.block(|p| p.stmt())?;
         Ok(Action {
             name,
             params,
-            body,
+            body: Vec::new(),
             span,
         })
     }
@@ -1064,6 +1075,20 @@ impl Parser {
             let expr = self.expr()?;
             self.newline()?;
             return Ok(Stmt::Let { name, expr, span });
+        }
+        // Each statement runs once, in order: there is no loop and no
+        // early exit, so `for` and `return` are refused with what to write.
+        if self.at_ident("for") {
+            return self.err(
+                "syntax-expected-statement",
+                "`for` repeats views; an action has no loop. Compute the list or value the loop would build with a list function, then assign it once: `items = items.filter(x => x.id != id)`, `total = sum(xs.map(x => x * 2))`, or `match first(xs.filter(x => x.id == id))` for one item",
+            );
+        }
+        if self.at_ident("return") && !matches!(self.peek2(), TokenKind::Punct("=" | "(")) {
+            return self.err(
+                "syntax-expected-statement",
+                "an action returns no value: its effect is what it assigns, sends and calls. Compute a value in a `fn` or a derive that the caller reads, and put statements that should not always run under `if`",
+            );
         }
         let (name, span) = self.ident()?;
         if self.eat_punct("=") {

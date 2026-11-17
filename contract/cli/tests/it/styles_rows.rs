@@ -538,8 +538,46 @@ fn user_select_text_and_all_compile_and_contain_is_refused_by_name() {
     let source = "component App\n  view\n    text \"x\" user-select=\"contain\"\n";
     let error = contract::compile(source).unwrap_err().to_string();
     assert!(error.contains("`user-select=\"contain\"`"), "{error}");
-    assert!(error.contains("auto, none, text and all"), "{error}");
+    assert!(
+        error.contains("Write one of auto, none, text, all"),
+        "{error}"
+    );
     assert!(!error.contains("unknown attribute"), "{error}");
+}
+
+#[test]
+fn normalized_css_literals_keep_keyword_and_codec_validation() {
+    for (value, id) in [
+        ("contain", "lower-css-user-select"),
+        ("invalid", "lower-attr-value"),
+    ] {
+        let source = format!(
+            "component App\n  view\n    Child(mode=\"{value}\")\ncomponent Child\n  props\n    mode: enum<\"{value}\", \"none\">\n  view\n    text \"hi\" user-select=mode\n"
+        );
+        let error = contract::compile(&source).expect_err(&source);
+        assert_eq!(error.id, id, "{error}");
+        assert!(error.message.contains(value), "{error}");
+    }
+}
+
+#[test]
+fn shared_css_literals_keep_keyword_and_codec_validation() {
+    for (name, value, id) in [
+        ("user-select", "contain", "lower-css-user-select"),
+        ("resize", "invalid", "lower-attr-value"),
+    ] {
+        for choice in [
+            "(on ? mode : mode)",
+            "match picked { case some(p) => mode, case none => mode }",
+        ] {
+            let source = format!(
+                "component App\n  view\n    Child()\ncomponent Child\n  state on = false\n  state picked = some(0)\n  derive mode = \"{value}\"\n  derive choice = {choice}\n  view\n    text \"hi\" {name}=(on ? choice : choice)\n"
+            );
+            let error = contract::compile(&source).expect_err(&source);
+            assert_eq!(error.id, id, "{error}");
+            assert!(error.message.contains(value), "{error}");
+        }
+    }
 }
 
 /// @ref LLP 1053.000 D4 — every platform material by name, and `none`; others refused.
@@ -689,5 +727,81 @@ fn a_class_choice_is_the_class_it_chooses() {
             );
             r.act("flip", vec![]).unwrap();
         }
+    }
+}
+
+#[test]
+fn image_rendering_is_inherited_and_changes_with_dynamic_styles() {
+    use exact_kernel::{ImageRendering, StyleId};
+    for mode in ["auto", "crisp-edges", "pixelated"] {
+        contract::compile(&format!(
+            "component App\n  view\n    image \"sprite.png\" width=96 height=96 image-rendering=\"{mode}\"\n"
+        )).unwrap();
+    }
+    let plan = contract::compile(
+        r#"style Smooth
+  image-rendering="auto"
+style Follow
+  opacity=1
+component App
+  state mode = "pixelated"
+  state own = true
+  action crisp
+    mode = "crisp-edges"
+  action smooth
+    mode = "auto"
+  action release
+    own = false
+  view
+    column image-rendering=mode
+      image "sprite.png" testId="inherited"
+      image "sprite.png" image-rendering="auto" testId="own"
+      image "sprite.png" class=(own ? Smooth : Follow) testId="class"
+      button aria-label="Sprite" testId="face"
+        image "sprite.png"
+"#,
+    )
+    .unwrap();
+    let plan = contract::bake(plan, NoData).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let mode = |r: &Runner<NoData>, id| {
+        let k = r.kernel();
+        k.node_by_key(k.find_by_test_id(id)[0])
+            .unwrap()
+            .computed_row(StyleId::ImageRendering, |s| s.image_rendering)
+    };
+    let fits = |r: &Runner<NoData>| {
+        let k = r.kernel();
+        let id = k.node_by_key(k.find_by_test_id("face")[0]).unwrap().id;
+        k.press_face(id).unwrap().fits
+    };
+    assert!(
+        !fits(&r),
+        "the authored image keeps its sampler instead of becoming a native face"
+    );
+    assert_eq!(mode(&r, "inherited"), ImageRendering::Pixelated);
+    assert_eq!(mode(&r, "own"), ImageRendering::Auto);
+    assert_eq!(mode(&r, "class"), ImageRendering::Auto);
+    r.act("crisp", vec![]).unwrap();
+    assert_eq!(mode(&r, "inherited"), ImageRendering::CrispEdges);
+    assert_eq!(mode(&r, "class"), ImageRendering::Auto);
+    r.act("release", vec![]).unwrap();
+    assert_eq!(mode(&r, "class"), ImageRendering::CrispEdges);
+    r.act("smooth", vec![]).unwrap();
+    assert_eq!(mode(&r, "inherited"), ImageRendering::Auto);
+    assert!(fits(&r));
+    for value in ["smooth", "nearest", "low-quality"] {
+        let error = contract::compile(&format!(
+            "component App\n  view\n    image \"sprite.png\" image-rendering=\"{value}\"\n"
+        ))
+        .unwrap_err();
+        assert_eq!(error.id, "lower-attr-value");
     }
 }

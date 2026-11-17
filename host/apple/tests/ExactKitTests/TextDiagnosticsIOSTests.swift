@@ -8,7 +8,7 @@ final class TextDiagnosticsIOSTests: XCTestCase {
     func testScheduledTimestampSurvivesAnIntentionalRunLoopWait() {
         let screen = FrameHealthScreen()
         var observed: [Double] = []
-        screen.completedUpdate = { scheduled, start, deadline, before, finished, waited in
+        screen.completedUpdate = { scheduled, start, deadline, before, finished, waited, _ in
             observed = [scheduled, start, deadline, before, finished, waited]
         }
         screen.scheduled(presented: 1000.020, deadline: 1000.010, now: 1000)

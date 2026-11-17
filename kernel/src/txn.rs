@@ -12,7 +12,7 @@
 //! never a silent skip and never a panic.
 
 use crate::id::{IdMap, IdSet};
-use crate::sorted::{SortedMap, SortedSet};
+use crate::sorted::SortedSet;
 
 use crate::arena::NodeArena;
 use crate::error::{ApplyError, StyleDomainError};
@@ -22,9 +22,11 @@ use crate::layout::LayoutMirror;
 use crate::segmented;
 use crate::selector::SelectorIndex;
 use crate::wire::Op;
+mod animation;
+mod capacity;
 mod defaults;
 mod inherited;
-use inherited::{inherited_changed, propagate_inherited};
+use inherited::{inherited_changed, propagate_inherited, written_direction};
 mod text_style;
 
 /// The deepest a node may sit below the top of its tree (a root is 0). Layout
@@ -123,15 +125,18 @@ struct Staged<'a> {
 }
 
 impl<'a> Staged<'a> {
-    fn new(arena: &'a NodeArena) -> Self {
+    fn new(arena: &'a NodeArena, capacity: &capacity::Batch) -> Self {
         Staged {
             arena,
-            created: IdMap::default(),
-            destroyed: IdSet::default(),
-            parents: IdMap::default(),
-            children: IdMap::default(),
-            roots_added: IdSet::default(),
-            roots_removed: IdSet::default(),
+            created: IdMap::with_capacity_and_hasher(capacity.created, Default::default()),
+            destroyed: IdSet::with_capacity_and_hasher(capacity.destroyed, Default::default()),
+            parents: IdMap::with_capacity_and_hasher(capacity.parents, Default::default()),
+            children: IdMap::with_capacity_and_hasher(capacity.children, Default::default()),
+            roots_added: IdSet::with_capacity_and_hasher(capacity.roots_added, Default::default()),
+            roots_removed: IdSet::with_capacity_and_hasher(
+                capacity.roots_removed,
+                Default::default(),
+            ),
         }
     }
 
@@ -289,17 +294,24 @@ impl<'a> Staged<'a> {
             self.roots_added.remove(&id);
             self.roots_removed.insert(id);
         }
-        let mut stack = vec![id];
-        while let Some(n) = stack.pop() {
+        // A single op can destroy more nodes than the batch has operations.
+        let mut subtree = vec![id];
+        let mut next = 0;
+        while next < subtree.len() {
+            subtree.extend(self.children_of(subtree[next]));
+            next += 1;
+        }
+        self.destroyed.reserve(subtree.len());
+        for n in subtree {
             self.destroyed.insert(n);
             self.created.remove(&n);
-            stack.extend(self.children_of(n));
         }
     }
 }
 
-fn validate(arena: &NodeArena, ops: &[Op]) -> Result<(), ApplyError> {
-    let mut staged = Staged::new(arena);
+fn validate(arena: &NodeArena, ops: &[Op]) -> Result<capacity::Batch, ApplyError> {
+    let capacity = capacity::Batch::new(arena, ops);
+    let mut staged = Staged::new(arena, &capacity);
     let mut creates: u64 = 0;
     // Children placed under a parent they did not have: what can deepen a tree.
     let mut arrivals: Vec<(usize, ViewId)> = Vec::new();
@@ -374,6 +386,9 @@ fn validate(arena: &NodeArena, ops: &[Op]) -> Result<(), ApplyError> {
                         }
                         StyleDomainError::PercentNotAdmitted(style) => {
                             ApplyError::PercentNotAdmitted { op_index, style }
+                        }
+                        StyleDomainError::KeywordNotAdmitted(style) => {
+                            ApplyError::KeywordNotAdmitted { op_index, style }
                         }
                         StyleDomainError::TooManyTracks { style, count } => {
                             ApplyError::TooManyTracks {
@@ -493,12 +508,13 @@ fn validate(arena: &NodeArena, ops: &[Op]) -> Result<(), ApplyError> {
         }
     }
     staged.check_depth(&arrivals)?;
+    animation::validate(arena, &staged, ops)?;
     // Conservative: ignores free-slot reuse, so it only ever refuses a batch that
     // would have fit within a few slots of the four-billion-node ceiling.
     if arena.slot_space() as u64 + creates > u32::MAX as u64 {
         return Err(ApplyError::SlotSpaceExhausted);
     }
-    Ok(())
+    Ok(capacity)
 }
 
 /// Everything the apply engine writes.
@@ -598,7 +614,7 @@ pub(crate) fn continue_document(
     language: Option<(&str, crate::Direction)>,
     commit: &mut DocumentCommit,
 ) -> Result<(), ApplyError> {
-    validate(target.arena, ops)?;
+    let capacity = validate(target.arena, ops)?;
     let Target {
         arena,
         layout,
@@ -612,7 +628,11 @@ pub(crate) fn continue_document(
         leavers,
         ..
     } = commit;
-    let mut detach = Detach::default();
+    created.reserve(capacity.created);
+    let mut detach = Detach {
+        seen: IdSet::with_capacity_and_hasher(capacity.destroyed, Default::default()),
+        ..Detach::default()
+    };
     // A node this batch creates and then styles: its first engine style
     // would be derived twice, at the create (from the default style) and at
     // the style. It is created with the engine's default instead and derived
@@ -642,6 +662,7 @@ pub(crate) fn continue_document(
                     if arena.slot_of(*id).is_some() {
                         continue; // live no-op
                     }
+                    selectors.references.clear();
                     let slot = arena
                         .alloc(*id, *node_type)
                         .map_err(|_| ApplyError::Internal {
@@ -676,6 +697,7 @@ pub(crate) fn continue_document(
                 }
                 Op::DestroyView { id } => {
                     let slot = live_slot(arena, op_index, *id)?;
+                    selectors.references.clear();
                     if let Some(exit) = exit(arena, created, left, slot) {
                         receipt.exits.push(exit);
                     }
@@ -820,6 +842,7 @@ pub(crate) fn continue_document(
                     if changed.is_empty() {
                         continue;
                     }
+                    let before = crate::kernel::owner::before_style(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
                     arena.patch_style(slot, patch);
@@ -837,6 +860,9 @@ pub(crate) fn continue_document(
                     }
                     touched.push(arena.key(slot));
                     propagate_inherited(arena, layout, slot, changed, touched, receipt);
+                    crate::kernel::owner::after_style(
+                        arena, layout, slot, before, touched, receipt,
+                    );
                 }
                 Op::ClearStyle { id, mask, written } => {
                     let slot = live_slot(arena, op_index, *id)?;
@@ -844,6 +870,7 @@ pub(crate) fn continue_document(
                     if changed.is_empty() {
                         continue;
                     }
+                    let before = crate::kernel::owner::before_style(arena, slot, changed);
                     let excluded = crate::flow::is_exclusion(arena, slot);
                     let named = arena.named_text_style(slot).is_some();
                     arena.clear_style(slot, *mask, *written);
@@ -857,6 +884,9 @@ pub(crate) fn continue_document(
                         segmented::style_changed(arena, layout, slot, changed, touched);
                     touched.push(arena.key(slot));
                     propagate_inherited(arena, layout, slot, changed, touched, receipt);
+                    crate::kernel::owner::after_style(
+                        arena, layout, slot, before, touched, receipt,
+                    );
                 }
                 Op::SetChildren { id, children } => {
                     let slot = live_slot(arena, op_index, *id)?;
@@ -871,6 +901,7 @@ pub(crate) fn continue_document(
                     if arena.children(slot) == new.as_slice() {
                         continue;
                     }
+                    selectors.references.clear();
                     let context = arena.default_context(slot);
                     let old: Vec<u32> = arena.children(slot).to_vec();
                     let retained: IdSet<u32> = new.iter().copied().collect();
@@ -888,6 +919,7 @@ pub(crate) fn continue_document(
                         let at = |n: &u32| (*n, crate::grouped::reached(arena, *n));
                         arriving.chain(leaving).map(at).collect()
                     };
+                    let written = written_direction(arena, reached.iter().map(|r| r.0));
                     for o in &old {
                         if !retained.contains(o) {
                             arena.set_parent(*o, None);
@@ -958,7 +990,9 @@ pub(crate) fn continue_document(
                             text_nodes.push(arena.key(orphan));
                         }
                         defaults::changed(arena, layout, orphan, context, touched, receipt);
-                        inherited_after_move(arena, layout, orphan, before, touched, receipt);
+                        inherited_after_move(
+                            arena, layout, orphan, before, &written, touched, receipt,
+                        );
                     }
                     for (m, before, context) in moved {
                         if arena.node_type(m) == NodeType::Image
@@ -968,7 +1002,7 @@ pub(crate) fn continue_document(
                             text_nodes.push(arena.key(m));
                         }
                         defaults::changed(arena, layout, m, context, touched, receipt);
-                        inherited_after_move(arena, layout, m, before, touched, receipt);
+                        inherited_after_move(arena, layout, m, before, &written, touched, receipt);
                     }
                 }
                 Op::AttachRoot { id } => {
@@ -1220,15 +1254,16 @@ impl Detach {
             }
         }
         self.seen.clear();
-        let mut leaving: SortedMap<String, IdSet<u32>> = SortedMap::new();
-        for (test_id, slot) in self.selectors.drain(..) {
-            leaving
-                .get_or_insert_with(test_id, IdSet::default)
-                .insert(slot);
+        // Sorted once and taken a name at a time: inserting each name into a
+        // sorted map moves its tail, N²/2 moves when the names descend.
+        self.selectors.sort_unstable();
+        let mut slots = IdSet::default();
+        for run in self.selectors.chunk_by(|a, b| a.0 == b.0) {
+            slots.clear();
+            slots.extend(run.iter().map(|&(_, slot)| slot));
+            selectors.remove_all(&run[0].0, &slots);
         }
-        for (test_id, slots) in leaving {
-            selectors.remove_all(&test_id, &slots);
-        }
+        self.selectors.clear();
         // A later op can only have destroyed an ancestor of an earlier one's
         // root (a destroyed node's descendants go with it), and each subtree
         // lists its root first. Removing the ops' nodes in reverse therefore
@@ -1322,6 +1357,7 @@ fn inherited_after_move(
     layout: &mut dyn LayoutMirror,
     slot: u32,
     before: InheritedStyle,
+    written: &[u32],
     touched: &mut Vec<NodeKey>,
     receipt: &mut CommitReceipt,
 ) {
@@ -1331,8 +1367,19 @@ fn inherited_after_move(
         invalidate_text(arena, layout, slot);
     }
     invalidate_text_sources(arena, slot);
+    receipt.layout_invalidated |= crate::kernel::owner::moved(arena, layout, slot);
     let after = arena.computed_inherited(slot);
-    let changed = before.changed_mask(&after);
+    let mut changed = before.changed_mask(&after);
+    // Natural text turns on whether a `direction` is authored above, which a
+    // move can change while every value stays (LLP 1060.000 D3).
+    if arena.natural_text
+        && written.contains(&slot)
+            != arena
+                .inherited_source(slot, crate::StyleId::Direction)
+                .is_some()
+    {
+        changed = changed.union(StyleMask::of(crate::StyleId::Direction));
+    }
     if !changed.is_empty() {
         inherited_changed(arena, layout, slot, changed, receipt);
         touched.push(arena.key(slot));
@@ -1360,7 +1407,7 @@ fn view_box_changed(
     receipt.layout_invalidated = true;
 }
 
-fn style_changed(
+pub(crate) fn style_changed(
     arena: &mut NodeArena,
     layout: &mut dyn LayoutMirror,
     slot: u32,

@@ -97,6 +97,28 @@ final class ContextMenuIOSTests: XCTestCase {
         XCTAssertNil(try outline(), "no radius: the whole view, as UIKit shows it by default")
     }
 
+    /// UIKit hides the long-pressed node and grows its highlight in the
+    /// preview's container, the route's mount, after the route and at depth 0.
+    /// The positioned route ranks above 0, so the highlight takes the route's
+    /// depth: it paints over the route, and the node never shows blank.
+    func testTheHighlightUIKitAddsBesideTheRoutePaintsOverIt() throws {
+        let session = try boot()
+        let host = session.presenter.menus.context
+        let peek = try node(session, "peek")
+        let interaction = try XCTUnwrap(peek.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
+        defer { host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil) }
+        let lifted = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
+        let mount = try XCTUnwrap(lifted.target.container as? PresentationMount, "the route's mount")
+        let route = try XCTUnwrap(mount.subviews.last as? NodeView)
+        XCTAssertGreaterThan(route.paintZPosition, 0, "the positioned route ranks above the origin")
+        let highlight = UIView(frame: peek.convert(peek.bounds, to: mount))
+        mount.addSubview(highlight)
+        defer { highlight.removeFromSuperview() }
+        XCTAssertEqual(highlight.layer.zPosition, route.paintZPosition, accuracy: 1e-9)
+        XCTAssertTrue(NodeView.hitOrder(mount.subviews).first === highlight)
+    }
+
     func testTheRowLiftsIntoUIKitsMenuWithItsPreviewAndThePreviewPopsIntoItsScreen() throws {
         let session = try boot()
         let host = session.presenter.menus.context

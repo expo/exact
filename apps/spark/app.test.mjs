@@ -24,7 +24,9 @@ test('the match backdrop covers the page throughout its content entrance', async
     for (const scheme of ['light', 'dark']) {
       await session.prefer({ 'prefers-color-scheme': scheme });
       expect(await overlayMounted()).toBe(false);
-      await session.tap('btn-like');
+      const trigger = scheme === 'dark' ? 'btn-super' : 'btn-like';
+      await session.carrier.evaluate(`document.querySelector('[data-testid="${trigger}"]').focus()`);
+      await session.tap(trigger);
       expect((await session.state()).slots.matched).toBe(0);
       // Sample mounting, the delay and the content entrance before settling.
       for (const step of [0, 160, 290, 'settle']) {
@@ -37,10 +39,19 @@ test('the match backdrop covers the page throughout its content entrance', async
           for (let node = overlay; node; node = node.parentElement) {
             opacity *= Number(getComputedStyle(node).opacity);
           }
-          return { opacity, background: style.backgroundImage,
+          return { modal: overlay.matches(':modal'), focused: overlay.contains(document.activeElement),
+            contentOpacity: Number(getComputedStyle(overlay.firstElementChild).opacity),
+            opacity, background: style.backgroundImage,
             coversViewport: rect.top <= 0 && rect.left <= 0 &&
               rect.right >= innerWidth && rect.bottom >= innerHeight };
         })()`);
+        expect(paint.modal).toBe(true);
+        expect(paint.focused).toBe(true);
+        if (step === 0 || step === 160) expect(paint.contentOpacity).toBe(0);
+        else if (step === 290) {
+          expect(paint.contentOpacity).toBeGreaterThan(0);
+          expect(paint.contentOpacity).toBeLessThan(1);
+        } else expect(paint.contentOpacity).toBe(1);
         expect(paint.opacity).toBe(1);
         expect(paint.background).toContain('linear-gradient(');
         expect(paint.coversViewport).toBe(true);
@@ -48,10 +59,18 @@ test('the match backdrop covers the page throughout its content entrance', async
       const overlay = (await session.layout('match-overlay')).node;
       expect(overlay.style.color_scheme.computed).toBe('dark');
       expect(await overlayMounted()).toBe(true);
-      await session.tap('keep-swiping');
+      const { ax } = await session.tree(null, { ax: true });
+      expect(ax.elements.some(element => element.role === 'dialog' && element.name === "It's a match")).toBe(true);
+      expect(ax.modal.present).toBe(true);
+      expect(ax.elements.some(element => element.testId === 'btn-like')).toBe(false);
+      await session.type('keep-swiping', { key: 'Tab' });
+      expect(await session.carrier.evaluate(`document.activeElement === document.body || document.querySelector('[data-testid="match-overlay"]').contains(document.activeElement)`)).toBe(true);
+      if (scheme === 'dark') await session.type('keep-swiping', { key: 'Escape' });
+      else await session.tap('keep-swiping');
       await session.clock('settle');
       expect((await session.state()).slots.matched).toBe(-1);
       expect(await overlayMounted()).toBe(false);
+      expect(await session.carrier.evaluate(`document.activeElement.dataset.testid`)).toBe(trigger);
       await session.tap('btn-undo');
       await session.clock('settle');
     }

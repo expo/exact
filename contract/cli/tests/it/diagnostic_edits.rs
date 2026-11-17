@@ -322,3 +322,21 @@ fn a_view_of_two_nodes_is_told_to_wrap_both() {
     let wrapped = "component App\n  view\n    column\n      text \"Notes\" role=\"heading\" aria-level=1\n      text \"Nothing yet\"\n";
     contract::compile(wrapped).unwrap();
 }
+
+#[test]
+fn computed_timer_refusals_recommend_a_gated_backoff_ladder() {
+    for word in ["after", "every"] {
+        let source = app(
+            &format!("  state delay = 250\n  task retry mount\n    {word}(delay, go)\n"),
+            "text \"waiting\"",
+        );
+        let error = contract::compile(&source).unwrap_err();
+        assert_eq!(error.id, "lower-timer-literal");
+        assert_eq!(error.message, format!("`{word}` needs a literal number of milliseconds (`{word}(1000, …)`). For bounded retry backoff, use one gated task per step: `task retry1 when waiting and attempt == 1` with `after(250, again)`, then steps with `after(500, again)` and `after(1000, again)` (docs/contract-for-agents.md, \"Retry backoff\"). For a wait that follows a continuous value, gate an `every(frame, check)` task and compare `performanceNow()` with the wait; a tempo follows the transport (\"Following the transport\")"));
+    }
+    contract::compile(&app(
+        "  state waiting = true\n  state attempt = 1\n  action again\n    attempt = attempt + 1\n  task retry1 when waiting and attempt == 1\n    after(250, again)\n  task retry2 when waiting and attempt == 2\n    after(500, again)\n  task retry3 when waiting and attempt >= 3\n    after(1000, again)\n",
+        "text attempt.toString()",
+    ))
+    .expect("the suggested ladder compiles");
+}

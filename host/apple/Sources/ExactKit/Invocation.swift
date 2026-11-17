@@ -169,8 +169,13 @@ extension ExactSession {
     /// none: their glass is drawn at once. So do events the app's own script
     /// can cause as well as a person: focus, a selection, a scroll, a
     /// dialog's close and a popover's `toggle`.
-    func applyInput(_ batch: Batch) {
-        var batch = batch
+    // Input without a touch hit test still installs ownership before its runner call.
+    func applyInput(_ input: @autoclosure () -> Batch) {
+        #if os(iOS)
+        presenter.navigation.finishBootOwner()
+        #endif
+        if clock == nil { followOffset() } // (the input reads the date: after a sleep, a press can come before any frame)
+        var batch = input()
         batch.input = CACurrentMediaTime()
         apply(batch)
     }

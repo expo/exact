@@ -129,6 +129,27 @@ fn deep_columns_fit_a_small_stack() {
     ]);
 }
 
+/// The lexer finds a template's end before the parser counts its depth, so
+/// its scan must not take a native frame for each level of nesting.
+#[test]
+fn deep_templates_fit_a_small_stack() {
+    let nested = |levels: usize| {
+        let mut e = "\"x\"".to_owned();
+        for _ in 0..levels {
+            e = format!("`${{{e}}}`");
+        }
+        format!("component App\n  view\n    text {e}\n")
+    };
+    // Escaped backticks and `${`, and braces in a string, close nothing.
+    let escapes = "component App\n  state n = 1\n  view\n    text `a \\` \\${ ${`b ${\"}{\" + `${n}`} \\${`} c`\n";
+    assert_small_stack(vec![
+        (nested(8), None),
+        (escapes.to_owned(), None),
+        (nested(64), Some("syntax-expression-depth")),
+        (nested(100_000), Some("syntax-expression-depth")),
+    ]);
+}
+
 #[test]
 fn deep_matches_fit_a_small_stack() {
     assert_small_stack(vec![

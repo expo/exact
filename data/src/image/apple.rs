@@ -12,7 +12,7 @@
 //! encoder writes its own JFIF, sRGB profile and colour-space EXIF.
 use super::edit::{Affine, Edit, Geometry, ResizeQuality};
 use super::{
-    failure, search, search_lossless, Compressed, Deadline, Format, Transform, Transformed,
+    failure, search, search_lossless, Compressed, Deadline, Format, Limits, Transform, Transformed,
 };
 use std::ffi::c_void;
 use std::ptr::{self, NonNull};
@@ -267,11 +267,11 @@ pub(super) fn scratch_bytes(
 pub(super) fn compress(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     edit: &Edit,
     deadline: Deadline<'_>,
 ) -> Result<Compressed, String> {
+    let max_bytes = limits.bytes();
     // ImageIO autoreleases internally; a storage worker lives long, so each
     // call drains its own pool.
     let _pool = Pool::new();
@@ -345,7 +345,7 @@ pub(super) fn compress(
     let (width, height) = geometry.as_ref().map_or(upright, Geometry::size);
     // Refuse before the first decode, using component depth rather than
     // assuming every accepted PNG/TIFF/HEIC source has 8-bit channels.
-    let target = super::contain(width, height, max_dimension);
+    let target = super::contain(width, height, limits.max_dimension);
     // The thumbnail can round up one pixel while contain() floors the target;
     // an edit's is the whole upright picture at the target's scale.
     let thumbnail = match &geometry {
@@ -381,7 +381,7 @@ pub(super) fn compress(
         Format::Png => "PNG",
     };
     let mut drawn: Option<(u32, u32, Owned)> = None;
-    let mut trial = |w: u32, h: u32, quality: Option<u32>| {
+    let mut trial = |w: u32, h: u32, quality: Option<f64>| {
         // Native temporaries from a failed trial must not accumulate across
         // the quality search or survive until the outer worker pool drains.
         let _trial_pool = Pool::new();
@@ -404,12 +404,8 @@ pub(super) fn compress(
             .ok_or_else(|| failure("unsupported", format!("ImageIO did not encode a {name}")))
     };
     let found = match format {
-        Format::Jpeg => search(width, height, max_dimension, max_bytes, |w, h, q| {
-            trial(w, h, Some(q))
-        })?,
-        Format::Png => search_lossless(width, height, max_dimension, max_bytes, |w, h| {
-            trial(w, h, None)
-        })?,
+        Format::Jpeg => search(width, height, limits, |w, h, q| trial(w, h, Some(q)))?,
+        Format::Png => search_lossless(width, height, limits, |w, h| trial(w, h, None))?,
     };
     found.ok_or_else(|| {
         failure(
@@ -577,8 +573,8 @@ unsafe extern "C" fn put_bytes(info: *mut c_void, bytes: *const c_void, len: usi
 
 /// Keep at most `cap + 1` bytes. The extra byte tells the search to lower
 /// its next trial without retaining the remainder of an oversized image.
-/// A quality is a JPEG's; none is a PNG.
-fn encode(image: CFTypeRef, quality: Option<u32>, cap: usize) -> Option<Vec<u8>> {
+/// A quality (0 to 1) is a JPEG's; none is a PNG.
+fn encode(image: CFTypeRef, quality: Option<f64>, cap: usize) -> Option<Vec<u8>> {
     let limit = cap.checked_add(1)?;
     let mut out = Encoded {
         bytes: Vec::with_capacity(limit),
@@ -608,7 +604,7 @@ fn encode(image: CFTypeRef, quality: Option<u32>, cap: usize) -> Option<Vec<u8>>
     })?;
     let props = match quality {
         Some(quality) => {
-            let quality = number_f64(f64::from(quality) / 100.0)?;
+            let quality = number_f64(quality)?;
             Some(dictionary(&[(
                 // SAFETY: the key is an immutable static.
                 unsafe { kCGImageDestinationLossyCompressionQuality },

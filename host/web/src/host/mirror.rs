@@ -15,4 +15,7 @@ pub(in crate::host) struct Mirror {
     pub(in crate::host) handled: bool,
     /// Its state looks' page rules (LLP 1121 D8, `looks::rules`).
     pub(in crate::host) looks: String,
+    /// As a boundary, the view whose colour it writes again
+    /// (`data-exact-from`, `looks.rs`).
+    pub(in crate::host) from: Option<exact_kernel::ViewId>,
 }

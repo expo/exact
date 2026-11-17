@@ -2,7 +2,7 @@
 // once per value of each variant prop, one varied at a time (the others at
 // their first value; a bool's first is false), and a component with no
 // variant props once. The exports and their variants are the compiler's
-// (`contract tamber ir`'s `library`: D0's exports, D5's variants), not a read
+// (`contract forma ir`'s `library`: D0's exports, D5's variants), not a read
 // of the sources. Cells whose id starts `sample-` show other states and are
 // held only to naming real props. Every cell renders (no `if`, `for` or
 // `match` in the view), and every PostCard's slot holds its marker.
@@ -35,10 +35,12 @@ function slottedIn(packages) {
 }
 
 function ir() {
-  const out = join(mkdtempSync(join(tmpdir(), 'library-gate-ir-')), 'ir.json');
-  const r = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'tamber', 'ir', join(ROOT, 'apps/library-gate'), '-o', out], { cwd: ROOT, encoding: 'utf8' });
-  if (r.status !== 0) throw new Error(`contract tamber ir: ${r.stderr}`);
-  return JSON.parse(readFileSync(out, 'utf8')).library.filter(c => c.library);
+  const dir = mkdtempSync(join(tmpdir(), 'library-gate-ir-')), out = join(dir, 'ir.json');
+  try {
+    const r = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'forma', 'ir', join(ROOT, 'apps/library-gate'), '-o', out], { cwd: ROOT, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`contract forma ir: ${r.stderr}`);
+    return JSON.parse(readFileSync(out, 'utf8')).library.filter(c => c.library);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 test('every exported component, once per variant value, every cell rendered, every slot marked', () => {
@@ -102,7 +104,7 @@ test("contract gallery places the cells this app does, each placed, on the app's
     const got = cells.map(p => JSON.stringify(Object.fromEntries(variants.map(v => [v.prop, option(p.values[v.prop])])))).sort();
     expect([c.name, got]).toEqual([c.name, want]);
   }
-  expect(JSON.parse(readFileSync(join(out, 'app.json'), 'utf8')).tamber).toBe(relative(out, join(ROOT, 'apps/library-gate/app.tamber')));
+  expect(JSON.parse(readFileSync(join(out, 'app.json'), 'utf8')).forma).toBe(relative(out, join(ROOT, 'apps/library-gate/app.forma')));
   rmSync(out, { recursive: true, force: true });
 }, 600_000);
 
@@ -148,7 +150,7 @@ test("every round FollowButton cell names its label, the label swapped with the 
 // text_sm and text_xs, 17 and 15 px), so it keeps its height when the icon
 // comes or goes with the state (icon "follow" or "following").
 test("a FollowButton label's line is its icon box's height, each size", () => {
-  const design = readFileSync(join(ROOT, 'packages/actions/actions.tamber'), 'utf8');
+  const design = readFileSync(join(ROOT, 'packages/actions/actions.forma'), 'utf8');
   const px = name => {
     const v = new RegExp(`^\\s+${name.replace('.', '\\.')}: length = (\\S+)`, 'm').exec(design)?.[1];
     return v?.endsWith('rem') ? Number.parseFloat(v) * 16 : Number.parseFloat(v);

@@ -987,6 +987,41 @@ fn a_call_waits_for_a_running_wake() {
     assert_eq!(calls[0]["certainty"], "applied");
 }
 
+/// LLP 1133.023 D7: a call waits at most [`WAIT`] for the invocation
+/// before it, a running call as much as a wake: behind a call that has not
+/// settled after 5 s it is refused `busy` and never runs.
+#[test]
+fn a_call_behind_a_running_call_is_refused_after_five_seconds() {
+    let app = App::new("call");
+    let text = std::fs::read_to_string(app.0.join("app.contract")).unwrap();
+    let tool = "  tool poke writes closed \"Pull once.\" = poke\n  action poke\n    send pulled = pull(\"call\")\n  action once\n";
+    app.write("app.contract", &text.replacen("  action once\n", tool, 1));
+    let mut r = boot(&app);
+    let how = || exact_runner::CallHow {
+        door: "agent".into(),
+        ..Default::default()
+    };
+    r.call_tool("poke", "{}", how()).unwrap();
+    r.call_tool("poke", "{}", how()).unwrap();
+    by(&mut r, 0.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[0]["state"], "running", "{calls}");
+    assert_eq!(calls[1]["state"], "waiting", "{calls}");
+    by(&mut r, 4_999.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[1]["state"], "waiting", "{calls}");
+    by(&mut r, 1.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[0]["outcome"], "refused", "{calls} {}", logs(&r));
+    assert_eq!(calls[0]["reason"], "busy");
+    assert_eq!(calls[1]["state"], "running", "{calls}");
+    answer_pull(&mut r);
+    by(&mut r, 0.0);
+    let calls = state(&r)["intents"]["calls"].clone();
+    assert_eq!(calls[1]["outcome"], "ok", "{calls} {}", logs(&r));
+    assert!(r.take_requests().is_empty(), "{}", logs(&r));
+}
+
 /// LLP 1133.033 D21: Android's reader under the agent starts no foreground
 /// service and says each claim through the claimant's `changed`; the runner
 /// journals it and lists the claims held in the claimant's
@@ -1078,5 +1113,74 @@ fn waiting_timers_stay_stopped_during_a_hidden_wake() {
             before,
             "{kind}: timers resume after the wake"
         );
+    }
+}
+
+#[test]
+fn change_tasks_wait_for_unseen_wakes_and_for_their_expiry_receipts() {
+    let app = App::new("change-wake");
+    let source = std::fs::read_to_string(app.0.join("app.contract")).unwrap();
+    let source = source.replace("  task ticker mount\n    every(1000, tick)\n", "");
+    app.write(
+        "app.contract",
+        &source.replace(
+            "  view\n",
+            r#"  state changed = 0
+  action countChange
+    changed = changed + 1
+  task change when heard != "" key=heard
+    change(countChange)
+  view
+"#,
+        ),
+    );
+    let mut r = boot(&app);
+    r.act("periodic", Vec::new()).unwrap();
+    let reference = entry(&r, "every")["ref"].as_u64().unwrap();
+    by(&mut r, 60_000.0);
+    tap(&mut r, reference).unwrap();
+    by(&mut r, 0.0);
+    assert!(r.page().hidden);
+    assert!(r.land_then().receipts.is_empty());
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    by(&mut r, 3_000.0);
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    let expired = r.advance_timed(65_001.0);
+    assert!(expired.error.is_none(), "{:?}", expired.error);
+    assert!(expired.needs_apply);
+    assert!(!expired.receipts.is_empty());
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    let change = r.advance_timed(65_001.0);
+    assert!(change.error.is_none(), "{:?}", change.error);
+    assert!(change.needs_apply);
+    assert_eq!(r.slot("changed"), Some(&Value::Number(1.0)));
+    assert_eq!(
+        r.now_ms(),
+        65_000.0,
+        "a deferred change never rewinds the clock"
+    );
+}
+
+#[test]
+fn android_transfer_entry_follows_the_imported_package() {
+    let app = App::new("transfer-entry");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/background-transfer");
+    copy(
+        &package,
+        &app.0.join("node_modules/@exact/background-transfer"),
+        &["test"],
+    );
+    let out = app.0.join("out");
+    std::fs::create_dir(&out).unwrap();
+    for (source, selected) in [
+        ("component App\n  view\n    text \"plain\"\n", false),
+        ("use backgroundFetchStatus, BackgroundFetchStatus from \"@exact/background-transfer\"\ncomponent App\n  resource status = backgroundFetchStatus() as shape BackgroundFetchStatus\n  view\n    text status.state\n", true),
+        ("use backgroundfetchclick, BackgroundFetchRegistration from \"@exact/background-transfer\"\ncomponent App\n  state last = \"\"\n  action clicked(r: BackgroundFetchRegistration)\n    last = r.id\n  view\n    column backgroundfetchclick=clicked\n      text \"click\"\n", true),
+    ] {
+        app.write("app.contract", source);
+        let plan = app.compile().unwrap_or_else(|e| panic!("{e:?}"));
+        contract::native::android_reach(&app.0, &plan, &out).unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("transfers.rs")).unwrap(),
+            if selected { "exact_painted::android_transfer_jni!();\n" } else { "" });
     }
 }

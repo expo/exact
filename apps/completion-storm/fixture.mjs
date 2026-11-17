@@ -3,7 +3,7 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
-import { readStaticFileAsync, serveStatic } from '../../host/web/serve.mjs';
+import { jsTargetBuild, readStaticFileAsync, serveBuildTree, serveStatic } from '../../host/web/serve.mjs';
 
 export async function createFixture({port=4319, controlPort=4320, maxWaves=8, maxHeld=512, holdMs=30_000,
   dist=resolve(import.meta.dir, 'target/dist')} = {}) {
@@ -160,7 +160,8 @@ export async function createFixture({port=4319, controlPort=4320, maxWaves=8, ma
     }
     if (url.pathname.startsWith('/api/')) return reject(res,404,'Unknown control endpoint or method');
     if (dist===null) { res.writeHead(404,headers); res.end('API-only fixture'); return; }
-    serveStatic(dist,req,res);
+    if (jsTargetBuild(dist)) serveBuildTree(dist,req,res);
+    else serveStatic(dist,req,res);
   });
   controlServer.on('upgrade', (req, socket) => {
     const url=new URL(req.url, 'http://fixture'), key=req.headers['sec-websocket-key'];

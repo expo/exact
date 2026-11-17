@@ -435,17 +435,21 @@ fn an_inspection_from_beyond_a_hide_distance_leaves_the_live_levels_as_they_were
 /// One entity with up to three drawables: `mesh`, a model whose opaque square
 /// is 200 m to the side, out of view, and whose half-transparent square is
 /// delivered in front of the camera or 200 m to the other side; `sprite`, a
-/// white 2 m sprite in front of the camera; `emitter`, one with no live particle.
+/// white 2 m sprite in front of the camera; `emitter`, empty unless `burst`
+/// requests stationary white particles. `pending` selects undelivered streamed assets.
 #[derive(Default, Args)]
 struct MixedArgs {
     mesh: bool,
     sprite: bool,
     emitter: bool,
+    burst: u32,
+    pending: bool,
 }
 struct Mixed;
 impl Game for Mixed {
     const ID: &'static str = "look-mixed";
     const ASSETS: &'static [&'static str] = &["mixed.model", "white.tex"];
+    const STREAMED: &'static [&'static str] = &["pending.model", "pending.tex"];
     type Args = MixedArgs;
     fn setup(w: &mut World, args: &MixedArgs) {
         w.insert_resource(Environment {
@@ -463,18 +467,34 @@ impl Game for Mixed {
         );
         let e = w.spawn_named("mixed", (Transform::default(),));
         if args.mesh {
-            w.insert(e, Mesh::asset("mixed.model"));
+            w.insert(
+                e,
+                Mesh::asset(if args.pending {
+                    "pending.model"
+                } else {
+                    "mixed.model"
+                }),
+            );
         }
         if args.sprite {
-            w.insert(e, Sprite::new("white.tex", [2., 2.]));
+            let texture = if args.pending {
+                "pending.tex"
+            } else {
+                "white.tex"
+            };
+            w.insert(e, Sprite::new(texture, [2., 2.]));
         }
         if args.emitter {
-            let empty = Emitter {
+            let emitter = Emitter {
                 rate: 0.,
                 lifetime: 1.,
+                speed: 0.,
+                gravity: Vec3::ZERO,
+                size: [1.; 2],
+                color: [[1.; 4]; 2],
                 ..Default::default()
             };
-            w.insert(e, empty);
+            w.insert(e, emitter.burst(args.burst));
         }
     }
     fn tick(w: &mut World, _: &Input, _: &MixedArgs) {
@@ -527,11 +547,7 @@ fn mixed_model(glass: f32) -> asset::Model {
 
 type MixedSurface = WorldSurface<Mixed, crate::ModelExecutor, true>;
 
-/// A `Mixed` surface after three frames, on the path the adapter takes: the
-/// last frame's pixels lit, `visible`'s word for the entity, and whether the
-/// frame drew direct (an adapter without indirect draws, as the iOS
-/// simulator's Metal, draws every group whole, with no per-instance cull).
-fn mixed(gpu: &Gpu, args: MixedArgs, glass: f32) -> (usize, String, bool) {
+fn mixed_surface(args: MixedArgs, glass: f32) -> MixedSurface {
     let mut s = MixedSurface::default();
     s.device_ready(wgpu::Features::empty());
     s.bind(&args.values(), None).unwrap();
@@ -546,6 +562,15 @@ fn mixed(gpu: &Gpu, args: MixedArgs, glass: f32) -> (usize, String, bool) {
         ..Default::default()
     };
     s.asset("white.tex", Ok(&bin::to_vec(&white)));
+    s
+}
+
+/// A `Mixed` surface after three frames, on the path the adapter takes: the
+/// last frame's pixels lit, `visible`'s word for the entity, and whether the
+/// frame drew direct (an adapter without indirect draws, as the iOS
+/// simulator's Metal, draws every group whole, with no per-instance cull).
+fn mixed(gpu: &Gpu, args: MixedArgs, glass: f32) -> (usize, String, bool) {
+    let mut s = mixed_surface(args, glass);
     let mut pixels = None;
     for ms in [0., 20., 40.] {
         pixels = Some(fixture::render(gpu, &mut s, &frame(ms)).unwrap().0);
@@ -614,6 +639,63 @@ fn an_entity_is_drawn_when_its_sprite_draws_whatever_its_emitter_or_mesh_did() {
     let (lit, word, _) = mixed(&gpu, args, -200.);
     assert!(lit > 1000, "{lit} pixels lit");
     assert_eq!(word, "drawn");
+}
+
+#[test]
+fn an_entity_is_drawn_when_its_emitter_draws_despite_a_rejected_mesh_or_sprite() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    for (mesh, rejected) in [
+        (true, "asset-pending pending.model"),
+        (false, "asset-pending pending.tex"),
+    ] {
+        for burst in [0, 1] {
+            let mut s = mixed_surface(
+                MixedArgs {
+                    mesh,
+                    sprite: !mesh,
+                    emitter: true,
+                    burst,
+                    pending: true,
+                },
+                0.,
+            );
+            // Leave the other drawable's asset pending; the emitter needs no texture.
+            let mut pixels = None;
+            for ms in [0., 20., 40.] {
+                pixels = Some(fixture::render(&gpu, &mut s, &frame(ms)).unwrap().0);
+            }
+            assert!(s.error().is_none(), "{:?}", s.error());
+            let lit = pixels.unwrap().count(|p| p[..3].iter().any(|&c| c > 10));
+            let reply = s
+                .agent(r#"{"op":"state","entity":"mixed","visible":true,"width":320,"height":180}"#)
+                .unwrap();
+            let visible: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            if burst == 0 {
+                assert_eq!(lit, 0, "{rejected}: {visible}");
+                assert_eq!(visible["visible"], rejected, "{visible}");
+                continue;
+            }
+            let reply = s
+                .agent(r#"{"op":"state","look":true,"width":320,"height":180}"#)
+                .unwrap();
+            let look: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            let particles = look["look"]["particles"].as_array().unwrap();
+            assert_eq!(particles.len(), 1, "{look}");
+            assert_eq!(particles[0]["live"], 1, "{look}");
+            assert!(particles[0]["covered"].as_u64() > Some(0), "{look}");
+            assert!(lit > 100, "{rejected}: {lit} pixels lit");
+            assert_eq!(visible["visible"], "drawn", "{visible}");
+            assert!(
+                visible["reason"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("its emitter: drawn (drew 1 quads)"),
+                "{visible}"
+            );
+        }
+    }
 }
 
 #[derive(Default, Args)]

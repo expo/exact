@@ -13,7 +13,8 @@ use std::sync::Mutex;
 /// `render.mjs` `infer` decides it): nothing in the plan only the runtime
 /// keeps (`exact_runner::activation`), no answer pending, no stream to
 /// subscribe again, nothing due on the clock, no handler the capture script
-/// can neither replay nor wake for.
+/// can neither replay nor wake for. Such a page is `idle` instead when the
+/// plan offers tools to a browser's agent, which only the runtime registers.
 pub(crate) fn activation(
     plan: &Plan,
     location: &str,
@@ -35,6 +36,9 @@ pub(crate) fn activation(
                 .values()
                 .flatten()
                 .all(|kind| REPLAYED.contains(kind) || WOKEN.contains(kind));
+        if waits && inference.tools {
+            return (exact_plan::ActivatePolicy::Idle, String::new());
+        }
         if let Some(media) = inference.media.as_deref().filter(|_| waits) {
             let wake = if media.is_empty() {
                 String::new()
@@ -87,6 +91,9 @@ pub(crate) struct Inference {
     media: Option<Vec<exact_runner::viewport_reads::Media>>,
     /// The plan holds something only its runtime keeps.
     kept: bool,
+    /// The plan offers tools to a browser's agent: a page that would wait
+    /// for the reader is `idle` instead.
+    tools: bool,
 }
 
 impl Inference {
@@ -109,6 +116,7 @@ pub(crate) fn inference(plan: &Plan) -> std::sync::Arc<Inference> {
     let found = std::sync::Arc::new(Inference {
         media: exact_runner::activation::wake(plan),
         kept: exact_runner::activation::runtime_kept(plan),
+        tools: exact_runner::activation::offers_tools(plan),
     });
     if known.len() == 4 {
         known.remove(0);

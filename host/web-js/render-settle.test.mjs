@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import vm from 'node:vm';
 import { open } from '../../scripts/agent.mjs';
+import { CONTRACT, heldApp, holdingServer } from '../../scripts/held-fixture.mjs';
 import { webCompiler } from './module.mjs';
 
 const root = resolve(import.meta.dir, '../..');
@@ -14,17 +15,73 @@ const scratch = () => {
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Render Settle', app: { id: 'test.render-settle', name: 'Render Settle' }, host: { web: {} } }));
   return dir;
 };
-// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure.
+// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure. A Rust module
+// builds into the checkout's target, warm from the last run, rather than cold into the app's own.
 async function build(dir) {
   const dist = resolve(dir, 'dist');
   const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'render-settle-test', '--out', dist, '--render', 'js'], {
-    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe',
   });
   const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
   expect(status, stdout + stderr).toBe(0);
   expect(stdout + stderr).not.toMatch(/failed|structuredClone|dynamic import/);
   return dist;
 }
+
+test('a render waits for a held Rust module request until its reply or the deadline', async () => {
+  const server = holdingServer();
+  const dir = heldApp(root, server.origin, 'Rust');
+  let realm, current;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=client
+    plain "/plain" render=request
+    status "/status" render=request
+
+${CONTRACT.replace('    column', `    column
+      if top(nav).name == "status" && item != ""
+        head status=404`)}`);
+    const dist = await build(dir);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const createContext = vm.createContext;
+    realm = spyOn(vm, 'createContext').mockImplementation((ctx, options) => {
+      const clock = { now: 0 };
+      ctx.performance = { now: () => clock.now };
+      current = { ctx, clock };
+      return createContext(ctx, options);
+    });
+    const page = async path => {
+      const reply = await render(path, 1000);
+      const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
+      return { status: reply.status, settled: reply.settled, pending: checkpoint.pending, failed: reply.failed,
+        item: /data-testid="item"[^>]*>([^<]*)</.exec(reply.html)[1] };
+    };
+    for (const path of ['/plain', '/status']) for (const release of [true, false]) {
+      let finished = false;
+      const before = server.seen.filter(s => s === 'changes held').length;
+      const waiting = page(path).then(reply => { finished = true; return reply; });
+      const until = performance.now() + 10000;
+      while (!finished && server.seen.filter(s => s === 'changes held').length === before) {
+        if (performance.now() >= until) throw new Error('held request did not reach the server');
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      expect(finished).toBe(false);
+      if (release) {
+        expect(server.release('held')).toBe(true);
+        expect(await waiting).toEqual({ status: path === '/status' ? 404 : 200, settled: true, pending: [], failed: [], item: expect.stringMatching(/^r\d+\|detail$/) });
+      } else {
+        current.clock.now = 1000;
+        expect(await waiting).toEqual({ status: 503, settled: false, pending: ['item'], failed: [], item: '' });
+      }
+    }
+  } finally {
+    if (current) current.clock.now = Infinity;
+    realm?.mockRestore();
+    server.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
 
 // The rule a render settles by, as the render host settles (host/render/src/lib.rs `settle`; LLP 1048.000 D9): it
 // waits for work in flight (a fetch, a held fetch, an upload, a stream until its first message, an answer's own
@@ -191,7 +248,7 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       wanted[path] = DIFFERS[path] ?? native;
       if (path === '/watch-await') {
         expect(reply.failed).toEqual([]);
-        expect(checkpoint.open).toEqual(['r']);
+        expect(checkpoint.open.map(k => checkpoint.answers[k][0])).toEqual(['r']);
         expect(/data-testid="r"[^>]*>([^<]*)</.exec(reply.html)[1]).toBe('watched');
       }
       if (path === '/body-from-await') expect(reply.refused).toEqual([['r', 'exactBodyFrom app:/data/b']]);
@@ -303,7 +360,7 @@ export const answer = (): any => {
 
 // A fetch an app module makes as it loads, which the reader's page runs as its answer's wait, is work in flight: the
 // render waits for it, on a page with no status too, and the page shows its answer. (A device's executor refuses a
-// fetch with no answer running, js/src/prelude.js `request`, so the render host answers this page with `r` pending.)
+// fetch with no answer running, js/src/fetch.js `request`, so the render host answers this page with `r` pending.)
 test('a render waits for a fetch an app module made as it loaded', async () => {
   const dir = scratch();
   const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Promise(resolve => setTimeout(() => resolve(new Response('loaded')), 200)) });

@@ -1,7 +1,7 @@
 //! The abstract syntax tree.
 pub use crate::colours::{ColorProfileDecl, DesignSource, ThemeDecl};
 pub use crate::tap::TapForm;
-pub use crate::test_steps::{Step, TestDecl};
+pub use crate::test_steps::{StateComparison, Step, TestDecl};
 use crate::Span;
 use std::collections::BTreeMap;
 /// Identifier ranges that are distinct from their AST construct's diagnostic span.
@@ -24,8 +24,15 @@ impl NameSpans {
 pub struct Hidden {
     /// The name, as written.
     pub name: String,
+    /// The word that declared it (`fn`, `state`, `action`), or `use` for a
+    /// name a refused `use` line imported.
+    pub kind: String,
     /// The component whose member it named; `None` for a declaration.
     pub component: Option<String>,
+    /// The first and last lines of that component, where alone its member's
+    /// name is read; `None` for a declaration, and for a member of a
+    /// component some of whose members are in another file.
+    pub lines: Option<(u32, u32)>,
 }
 
 /// One source file.
@@ -64,10 +71,10 @@ pub struct File {
     pub color_profiles: Vec<ColorProfileDecl>,
     /// The app's `theme` (LLP 1095 D4): the root file's only.
     pub theme: Option<ThemeDecl>,
-    /// The app's design, `app.tamber` (LLP 1121 D2), set by the driver.
+    /// The app's design, `app.forma` (LLP 1121 D2), set by the driver.
     pub design: Option<DesignSource>,
     /// The designs of the packages the app's sources link (LLP 1121 D11),
-    /// each `<name>.tamber` beside its package's entry, set by the driver.
+    /// each `<name>.forma` beside its package's entry, set by the driver.
     pub package_designs: Vec<DesignSource>,
     /// The identities of the exported library components (LLP 1139 D0):
     /// each component a private package that ships a design declares in
@@ -79,6 +86,8 @@ pub struct File {
     pub library_packages: Vec<String>,
     /// `fn` declarations, in order (LLP 1017 P5).
     pub fns: Vec<FnDecl>,
+    /// `source` declarations (LLP 1162.001): the root file's only.
+    pub sources: Vec<SourceDecl>,
     /// Native modules' sources and sends, read from packages (LLP 1133.001).
     pub modules: Vec<crate::ModuleDecl>,
     /// `test` declarations, in order (LLP 1017 P7) — normally in a file of
@@ -286,6 +295,33 @@ pub struct FnDecl {
     pub ret: TypeExpr,
     /// The body, one expression.
     pub body: Expr,
+    /// Where.
+    pub span: Span,
+}
+/// `source name(param: type, …) as shape T` and its request's lines (LLP
+/// 1162.001 D1): a source the runner answers with one HTTP request.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceDecl {
+    /// The source's name, which a `resource` or a `send` calls.
+    pub name: String,
+    /// Typed parameters.
+    pub params: Vec<Param>,
+    /// The answer's shape.
+    pub shape: TypeExpr,
+    /// The request's lines, in order, as written; lowering reads them.
+    pub lines: Vec<SourceLine>,
+    /// Where.
+    pub span: Span,
+}
+/// One line of a `source`: a key (`url`, `method`, `header`, `body`,
+/// `graphql`, `pointer`) and its words, each a string literal's text or a
+/// bare word.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceLine {
+    /// The key.
+    pub key: String,
+    /// Its words.
+    pub words: Vec<String>,
     /// Where.
     pub span: Span,
 }
@@ -520,6 +556,8 @@ pub struct ResourceDecl {
     /// `transient` (LLP 1156.005 D4): its answer is never kept across
     /// launches.
     pub transient: bool,
+    /// Keep this surface reader's last publication for launch.
+    pub keep: bool,
     /// `when cond` (LLP 1161.002): asked only while `cond` holds.
     pub gate: Option<Expr>,
     /// Where.
@@ -784,17 +822,17 @@ impl Stmt {
 }
 
 /// `task name mount` (or `when cond [key=expr]`, or `key=expr`) with
-/// `every(ms, action)`, `every(frame, action)` or `after(ms, action)`.
+/// `every(ms, action)`, `every(frame, action)`, `after(ms, action)` or keyed `change(action)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Task {
     /// Name.
     pub name: String,
-    /// Whether the timer repeats or fires once.
+    /// The timer or keyed change schedule.
     pub kind: TaskKind,
     /// `when cond`: the timer exists while `cond` holds (LLP 1092 D7);
     /// `None` for `mount` and for `key=` alone (`when true`).
     pub gate: Option<Expr>,
-    /// `key=expr`: a new key restarts the timer, as a new `for` key makes
+    /// `key=expr`: a new key restarts the timer or queues a change action, as a `for` key makes
     /// a new row (LLP 1092 D7).
     pub key: Option<Expr>,
     /// `(ms, action)` and the entry's span.
@@ -815,6 +853,8 @@ pub enum TaskKind {
     /// `every(frame, action)`: fires once per presented frame (LLP 1073);
     /// the timer's expression is a placeholder `0`.
     Frame,
+    /// `change(action)`: once after activation or a changed key, without a delay.
+    Change,
 }
 
 /// A view node.
@@ -1026,6 +1066,7 @@ pub fn unsupported_input_type(value: &Expr) -> Option<&str> {
         Expr::Match { some, none, .. } => {
             unsupported_input_type(some).or_else(|| unsupported_input_type(none))
         }
+        Expr::Let { body, .. } => unsupported_input_type(body),
         _ => None,
     }
 }
@@ -1035,16 +1076,20 @@ pub fn unsupported_input_type(value: &Expr) -> Option<&str> {
 /// (`shown ? "text" : "password"`, a password's show and hide). The node is
 /// a text field either way, so the choice can be made as the app runs, as
 /// the attribute can be set on the web; any other expression could name a
-/// control the compiler has to know (LLP 1069.001 D1).
+/// control the compiler has to know (LLP 1069.001 D1). A `let` around the
+/// choice (a prop read twice, evaluated once) is the same choice.
 pub fn text_input_type(value: &Expr) -> bool {
     match value {
         Expr::Str(t, _) => control_type(t).is_none() && unsupported_input_type(value).is_none(),
         Expr::Ternary(_, a, b, _) => text_input_type(a) && text_input_type(b),
+        Expr::Let { body, .. } => text_input_type(body),
         _ => false,
     }
 }
 
-pub use crate::part::{part_attr, PLACEHOLDER_COLOR};
+pub use crate::part::{
+    part_attr, BACKDROP_COLOR, PLACEHOLDER_COLOR, VIEW_TRANSITION_NEW, VIEW_TRANSITION_OLD,
+};
 
 /// `name=expr`.
 #[derive(Debug, Clone, PartialEq)]

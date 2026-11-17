@@ -21,10 +21,16 @@ end of the VS buffer table.
         TODO: Eventually all deprecated features should be abstracted and use new api when available."
 )]
 mod adapter;
+// EXACT (EXACT-PATCHES.md, 15): the optional device archive belongs to its cache owner.
+mod binary_archive;
+pub use binary_archive::BinaryArchive;
 mod command;
 mod conv;
 mod device;
 mod library_from_metallib;
+// EXACT (EXACT-PATCHES.md, 16).
+mod shipped;
+pub use shipped::set_shader_libraries;
 mod surface;
 mod time;
 
@@ -691,6 +697,8 @@ impl fmt::Debug for OnScheduled {
 
 #[derive(Debug)]
 pub struct Device {
+    // EXACT (EXACT-PATCHES.md, 15).
+    binary_archive: Mutex<Option<Arc<BinaryArchive>>>,
     shared: Arc<AdapterShared>,
     features: wgt::Features,
     counters: Arc<wgt::HalCounters>,

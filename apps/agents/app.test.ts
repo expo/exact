@@ -1,10 +1,16 @@
 import { afterEach, expect, mock, test } from 'bun:test';
 
+// The device's language model, as a test supplies it; a call it supplies nothing for fails.
+let device: Record<string, (...args: any[]) => unknown> = {};
 mock.module('@exact/language-model', () => Object.fromEntries([
   'abortLanguageModelResponse', 'createLanguageModel', 'destroyLanguageModel', 'languageModelAvailability', 'languageModelResponse', 'prompt', 'promptStreaming',
-].map(name => [name, () => { throw new Error(`unexpected device call: ${name}`); }])));
+].map(name => [name, (...args: any[]) => {
+  const call = device[name];
+  if (!call) throw new Error(`unexpected device call: ${name}`);
+  return call(...args);
+}])));
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(() => { globalThis.fetch = realFetch; device = {}; });
 
 test('stopping while the service accepts a turn drops its blank row and cancels the late job', async () => {
   const source = await import('./app.ts');
@@ -44,4 +50,46 @@ test('a failed read is not a first launch, and no command saves over the stored 
   await expect(call('command', 'new', '', source.FEATURED[0]!.id, 0)).rejects.toThrow('Permission denied');
   await expect(call('snapshot', '', '', 0, 100, 0)).rejects.toThrow('Permission denied');
   expect(writes).toBe(0);
+});
+
+// The module keeps a session alive until the app destroys it, so the app must destroy every one it lets go.
+test('changing the model, retrying and deleting release the on-device sessions', async () => {
+  const source = await import('./app.ts?case=sessions');
+  const storage = { fs: { readFile: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); }, atomicWriteFile: async () => {} } };
+  const call = (name: string, ...args: unknown[]) => (source.answer as any)(name, args, {}, storage);
+  const live = new Set<string>();
+  let made = 0, hold: Promise<void> | undefined;
+  device = {
+    languageModelAvailability: async () => ({ tools: false }),
+    createLanguageModel: async () => { await hold; const id = `s${++made}`; live.add(id); return { id, overflowed: false }; },
+    destroyLanguageModel: async ({ session }: { session: string }) => { live.delete(session); return {}; },
+    promptStreaming: async () => { throw Object.assign(new Error('busy'), { code: 'UnknownError' }); },
+  };
+  const create = async () => (device.createLanguageModel!() as Promise<{ id: string }>).then(m => m.id);
+
+  // A conversation with its download's session, moved to a hosted model, then deleted.
+  for (let i = 0; i < 3; i++) {
+    const { id } = await call('command', 'new', '', `device|none|${await create()}`, 0);
+    await call('command', 'model', id, source.FEATURED[0]!.id, 10);
+    await call('command', 'delete', id, '', 20);
+  }
+  expect([...live]).toEqual([]);
+
+  // A failed reply retried: the retry makes a session from the history and the old one goes.
+  const { id } = await call('command', 'new', '', `device|none|${await create()}`, 0);
+  await call('command', 'send', id, 'Hello', 10);
+  await call('command', 'retry', id, '', 20);
+  expect(live.size).toBe(1);
+  await call('command', 'delete', id, '', 30);
+  expect([...live]).toEqual([]);
+
+  // A session that finishes being made after its conversation was deleted.
+  let resume!: () => void;
+  hold = new Promise(resolve => { resume = resolve; });
+  const late = (await call('command', 'new', '', 'device|none|', 0)).id;
+  const send = call('command', 'send', late, 'Hello', 10);
+  await call('command', 'delete', late, '', 20);
+  resume();
+  await send;
+  expect([...live]).toEqual([]);
 });

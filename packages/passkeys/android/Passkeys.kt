@@ -1,7 +1,7 @@
 // @exact/passkeys on Android (LLP 1133.011 D1, D3-D6, D10, D11, D13): Credential Manager (`androidx.credentials`
-// 1.6, in the app's one locked Gradle graph) over the resumed activity, in WebAuthn's JSON forms, which Credential
-// Manager takes and answers as they are. The build makes one per host when the app binds the extension, outside the
-// agent; under the agent the runner's substitute answers and none is made.
+// 1.6, in the app's one locked Gradle graph) over the activity that shows the app, in WebAuthn's JSON forms, which
+// Credential Manager takes and answers as they are. The build makes one per host when the app binds the extension,
+// outside the agent; under the agent the runner's substitute answers and none is made.
 //
 // - Credential Manager writes the response's origin itself, `android:apk-key-hash:<the signing certificate's
 //   SHA-256>`, which the relying party must accept (D6).
@@ -10,6 +10,9 @@
 //   no such field, the capability reads false and the call fails `NotSupportedError`.
 // - No answer carries a PRF output (D10): `clientExtensionResults.prf.results` is removed. A lock's user handle (§7
 //   item 3, beginning `exact-lock:`) is never registered, delivered or signalled from here.
+// - The sheet is an activity Credential Manager starts from the app's (`startIntentSender`), which Android allows
+//   while the app's activity shows, resumed or paused under a dialog (a permission dialog's answer comes before
+//   `onResume`): a ceremony then starts at once. With no activity showing it fails `NotAllowedError`.
 // - One ceremony at a time (D9): a newer one ends a pending conditional `get` with `AbortError`.
 // - The hatches (D5) are given each request and return a replacement, since both are immutable; one that changes the
 //   options' JSON, which the module owns, is not used, and a development build says so.
@@ -131,7 +134,7 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun refused(reply: (JSONObject) -> Unit): Boolean {
         if (context.origin != "app") { reply(JSONObject().put("error", "NotAllowedError").put("message", "person-required")); return true }
-        if (context.activity == null || !context.resumed) { reply(JSONObject().put("error", "NotAllowedError").put("message", "the app is not in front")); return true }
+        if (context.activity == null || !context.visible) { reply(JSONObject().put("error", "NotAllowedError").put("message", "the app is not in front")); return true }
         return false
     }
 

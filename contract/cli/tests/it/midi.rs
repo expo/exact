@@ -2,6 +2,8 @@
 //! `requestMIDIAccess` checked, `midimessage` and `midiinputs`, `clockOut=`
 //! compiled and `clock=` refused, and the test steps for the driver.
 
+use crate::scratch::Scratch;
+
 fn app(body: &str, view: &str) -> String {
     format!("component A\n  state out = \"synth\"\n  state ins = [\"keys\"]\n  action go\n    {body}\n  action heard(e: MIDIMessageEvent)\n    out = e.input\n  view\n    {view}\n")
 }
@@ -94,9 +96,7 @@ fn midi_steps_parse_and_reach_the_driver() {
 /// Rust grant and strings pass; a file outside an app is checked for none.
 #[test]
 fn reaching_midi_without_its_grant_warns_at_the_call() {
-    let dir = std::env::temp_dir().join(format!("exact2-midi-grant-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-midi-grant-{}", std::process::id()));
     let src = "shape M\n  state: string\n\ncomponent A\n  resource midi = exactMIDI() as shape M\n  view\n    text midi.state\n";
     std::fs::write(dir.join("app.contract"), src).unwrap();
     let grant = |grants: &str| {

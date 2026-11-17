@@ -1,5 +1,5 @@
 //! Weatherlight on Android's Canvas host (LLP 1076 §3.3): the host's JNI
-//! (`exact_linux::canvas_jni!`) over the app's TypeScript data module
+//! (`exact_painted::canvas_jni!`) over the app's TypeScript data module
 //! (`app.ts` as Hermes bytecode, run by the lean Hermes VM in this library)
 //! and its baked plan. The reader (`host/android`) loads this library as
 //! `libexactcanvas.so`.
@@ -20,5 +20,5 @@ mod android {
     include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
-    exact_linux::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
+    exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }

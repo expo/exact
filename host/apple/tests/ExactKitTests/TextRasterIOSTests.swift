@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+import ExactMarkdown
 
 /// Paragraph pixels come from worker jobs the pump admits ahead of the list's
 /// travel. What shows gets pixels before the frame commits, from its job if a
@@ -260,6 +261,157 @@ final class TextRasterIOSTests: XCTestCase {
         p.textRasters.ensure(node, urgent: true)
         XCTAssertTrue(node.textRasterReady, "shown without pixels: painted here, the queue held")
         XCTAssertTrue(try XCTUnwrap(node.textRasterKey?.clip).contains(p.textPreparationRect(node)))
+    }
+
+    /// A band's job lays out only the lines that can paint in it, and paints
+    /// what a job of all the paragraph's lines paints there. Every band down a
+    /// long Markdown document, urgent and led, is compared pixel for pixel. A
+    /// band's bitmap may be narrower: it holds only its own lines' ink.
+    func testABandsJobPaintsItsOwnLinesAsAllTheLinesDo() throws {
+        // Installed, the Markdown expands into lines of three sizes (headings,
+        // prose, code), which a band's reach must cover
+        let installed = MarkdownLink.installed
+        ExactMarkdown.install()
+        let session = ExactApp.shared.makeSession(label: "text-band-lines")
+        defer { session.destroy(); RegionTextExecutor.queue.isSuspended = false; MarkdownLink.installed = installed }
+        let p = session.presenter
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        let section = (1...30).map { i in
+            "## \(i). Why a magazine measures first\n\nIt measures first and draws second, so a column " +
+            "knows its height before a single glyph is set. " + String(repeating: "Reflow keeps every line. ", count: i % 7 + 3) +
+            "\n\n- one item\n- another item, a little longer\n\n```\nlet line = \(i) // a code line wider than most of the prose around it\n```\n\n> A quote."
+        }.joined(separator: "\n\n")
+        func frames(_ height: Double) -> [[String: Any]] { [
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 800.0, "h": height + 32],
+            ["op": "frame", "id": 2, "x": 16.0, "y": 16.0, "w": 700.0, "h": height],
+        ] }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": section, "markup": "markdown"], "style": ["font_size": 17.0, "line_height": "26px"]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+        ] + frames(40000)))
+        let node = try XCTUnwrap(p.views[2]), engine = try XCTUnwrap(node.text)
+        let layout = try XCTUnwrap(node.paragraphLayout())
+        XCTAssertFalse(try XCTUnwrap(layout.shape).attributed.string.contains("## "), "the Markdown is expanded")
+        p.apply(wireBatch(frames(Double(ceil((layout.baselines.last ?? 0) + 26)))))
+        window.layoutIfNeeded()
+        let maxY = p.viewport.contentSize.height - p.viewport.bounds.height
+        XCTAssertGreaterThan(maxY, 3000, "a document many ports tall")
+        var bands = 0
+        for y in stride(from: CGFloat(0), through: maxY, by: 431) {
+            p.viewport.contentOffset.y = y
+            drain(p)
+            for urgent in [true, false] {
+                node.dropTextRaster()
+                RegionTextExecutor.queue.isSuspended = true
+                p.textRasters.ensure(node, urgent: urgent)
+                let key = try XCTUnwrap(node.textRasterKey)
+                let clip = try XCTUnwrap(key.clip, "the document is painted in bands")
+                let own = try XCTUnwrap(p.textRasters.job(node, key: key, engine: engine))
+                let geometry = try XCTUnwrap(engine.measuredBreaks(key.spec, width: key.box.width) ?? node.paragraphLayout().map(LineGeometry.init))
+                let all = TextRasterJob(source: own.source, ranges: geometry.ranges, baselines: geometry.baselines, flush: own.flush,
+                    whiteSpace: own.whiteSpace, justifies: own.justifies, insets: own.insets, box: own.box, size: own.size, scale: own.scale,
+                    lineScale: own.lineScale, clip: own.clip, room: own.room, ellipsis: own.ellipsis, crop: own.crop, clamped: own.clamped,
+                    shadow: own.shadow, antialiased: own.antialiased, measuredGlyphs: own.measuredGlyphs, measuredColor: own.measuredColor)
+                let at = "y \(y), \(urgent ? "urgent" : "led") band \(clip)"
+                XCTAssertLessThan(own.ranges.count, geometry.ranges.count / 3, at)
+                let a = try XCTUnwrap(all.render(), at), b = try XCTUnwrap(own.render(), at)
+                XCTAssertTrue(a.frame.insetBy(dx: -0.01, dy: -0.01).contains(b.frame), at)
+                let union = a.frame.union(b.frame)
+                let pa = try XCTUnwrap(canvas(a, over: union, scale: key.scale), at), pb = try XCTUnwrap(canvas(b, over: union, scale: key.scale), at)
+                XCTAssertTrue(pa.contains { $0 != 0 }, "\(at): it paints")
+                XCTAssertEqual(pa, pb, at)
+                bands += 1
+                drain(p)
+            }
+        }
+        XCTAssertGreaterThan(bands, 12)
+    }
+    /// A run's shadow cast 2,000 points down from the paragraph's first line
+    /// lands in a band far below it: the band's job lays out that line too,
+    /// and paints what a job of every line paints there.
+    func testABandsJobLaysOutALineWhoseShadowIsCastIntoIt() throws {
+        let session = ExactApp.shared.makeSession(label: "text-band-shadow")
+        defer { session.destroy(); RegionTextExecutor.queue.isSuspended = false }
+        let p = session.presenter
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        let cast = 2000.0, style: [String: Any] = ["font_size": 17.0, "line_height": "100px"]
+        var caster = style
+        caster["text_shadow"] = ["o": [0.0, cast], "b": 0.0, "c": [255.0, 0.0, 0.0, 255.0]]
+        func frames(_ height: Double) -> [[String: Any]] { [
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 800.0, "h": height + 32],
+            ["op": "frame", "id": 2, "x": 16.0, "y": 16.0, "w": 700.0, "h": height],
+        ] }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "style": style],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "paragraph", "id": 2, "runs": [
+                ["id": 3, "parent": 2, "paint": true, "props": ["text": "Caster. "], "style": caster],
+                ["id": 4, "parent": 2, "paint": true, "props": ["text": String(repeating: "Reflow keeps every line. ", count: 380)], "style": style],
+            ]],
+        ] + frames(40000)))
+        let node = try XCTUnwrap(p.views[2]), engine = try XCTUnwrap(node.text)
+        XCTAssertTrue(node.paragraphSpec().runs.contains { $0.shadow != nil }, "the run keeps its own shadow")
+        let layout = try XCTUnwrap(node.paragraphLayout()), first = try XCTUnwrap(layout.baselines.first)
+        p.apply(wireBatch(frames(Double(ceil((layout.baselines.last ?? 0) + 100)))))
+        window.layoutIfNeeded()
+        p.viewport.contentOffset.y = first + cast - 300
+        drain(p)
+        node.dropTextRaster()
+        RegionTextExecutor.queue.isSuspended = true
+        p.textRasters.ensure(node, urgent: true)
+        let key = try XCTUnwrap(node.textRasterKey), clip = try XCTUnwrap(key.clip, "the paragraph is painted in bands")
+        XCTAssertTrue(clip.minY > first + 1000 && (clip.minY...clip.maxY).contains(first + cast), "the band holds the shadow, not its line: \(clip)")
+        let own = try XCTUnwrap(p.textRasters.job(node, key: key, engine: engine))
+        let geometry = try XCTUnwrap(engine.measuredBreaks(key.spec, width: key.box.width) ?? node.paragraphLayout().map(LineGeometry.init))
+        XCTAssertEqual(own.ranges.first?.location, 0, "the casting line is laid out")
+        XCTAssertLessThan(own.ranges.count, geometry.ranges.count, "lines past the band's reach are not")
+        func job(_ ranges: ArraySlice<CFRange>, _ baselines: ArraySlice<CGFloat>) -> TextRasterJob {
+            TextRasterJob(source: own.source, ranges: Array(ranges), baselines: Array(baselines), flush: own.flush,
+                whiteSpace: own.whiteSpace, justifies: own.justifies, insets: own.insets, box: own.box, size: own.size, scale: own.scale,
+                lineScale: own.lineScale, clip: own.clip, room: own.room, ellipsis: own.ellipsis, crop: own.crop, clamped: own.clamped,
+                shadow: own.shadow, antialiased: own.antialiased, measuredGlyphs: own.measuredGlyphs, measuredColor: own.measuredColor)
+        }
+        let all = try XCTUnwrap(job(geometry.ranges[...], geometry.baselines[...]).render())
+        let band = try XCTUnwrap(own.render())
+        let unlit = try XCTUnwrap(job(own.ranges.dropFirst(), own.baselines.dropFirst()).render())
+        let union = all.frame.union(band.frame).union(unlit.frame)
+        let pixels = try [all, band, unlit].map { try XCTUnwrap(canvas($0, over: union, scale: key.scale)) }
+        // Compared whole: a failure's message would otherwise print every byte.
+        XCTAssertTrue(pixels[0] == pixels[1], "the band paints what every line paints in it")
+        XCTAssertTrue(pixels[0] != pixels[2], "the first line's shadow is in the band")
+    }
+    /// `image`'s mask or pixels, drawn where its frame is in a canvas over
+    /// `union`: the bytes of its rows.
+    private func canvas(_ image: TextRasterImage, over union: CGRect, scale: CGFloat) -> [UInt8]? {
+        let mask: CGImage?, alpha: Bool
+        switch image.content {
+        case .pixels(let pixels): (mask, alpha) = (pixels, false)
+        case .coverage(let coverage): (mask, alpha) = (coverage.mask, true)
+        case .drawn(let drawing): (mask, alpha) = (drawing.coverage()?.mask, true)
+        }
+        let width = Int((union.width * scale).rounded()), height = Int((union.height * scale).rounded())
+        guard let mask, let ctx = alpha
+            ? CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
+                        bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue)
+            : CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        let frame = image.frame
+        ctx.draw(mask, in: CGRect(x: ((frame.minX - union.minX) * scale).rounded(), y: ((union.maxY - frame.maxY) * scale).rounded(),
+                                  width: CGFloat(mask.width), height: CGFloat(mask.height)))
+        guard let drawn = ctx.makeImage(), let data = drawn.dataProvider?.data as Data? else { return nil }
+        let row = drawn.width * drawn.bitsPerPixel / 8
+        return (0..<drawn.height).flatMap { data[($0 * drawn.bytesPerRow)..<($0 * drawn.bytesPerRow + row)] }
     }
 
     /// Two tall paragraphs side by side share one allowance for room ahead

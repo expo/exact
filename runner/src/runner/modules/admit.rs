@@ -41,7 +41,7 @@
 //! commit's checkpoint, and an invocation is superseded only when the
 //! commit that let go of its work stands (`let_go`).
 
-use super::super::{CommitReceipt, DataSource, Runner, RunnerError, Target};
+use super::super::{CommitReceipt, DataSource, Event, Runner, RunnerError, Target};
 use super::{error_code, Decision, Json, ModulesRow, Waits};
 use exact_plan::Value;
 use serde_json::json;
@@ -56,6 +56,13 @@ pub enum CallOrigin {
     Wake,
     /// A tool invocation (LLP 1111).
     Tool,
+    /// A notification's background action the person chose (LLP 1133.004
+    /// stage 2, as amended 2026-11-12): the person's act for that one
+    /// declared action, run with no view. It may call a name held to the
+    /// app (`"origin": "app"`) that shows nothing; it opens no UI, so a
+    /// prompt, a presence check, a name only the foreground may call and
+    /// the host commands a wake may not run are refused, as for a wake.
+    Action,
     /// A person's input, or the app's own code in a foreground session.
     #[default]
     App,
@@ -68,6 +75,7 @@ impl CallOrigin {
             CallOrigin::Device => "device",
             CallOrigin::Wake => "wake",
             CallOrigin::Tool => "tool",
+            CallOrigin::Action => "action",
             CallOrigin::App => "app",
         }
     }
@@ -149,6 +157,37 @@ pub(in crate::runner) struct Origins {
     /// The invocations whose work a commit let go of, each with whether
     /// that work was a send; taken when the commit stands.
     let_go: Vec<(u64, bool)>,
+    /// When the last activation-triggering input, or activation the host
+    /// raised, arrived, on the session's clock ([`Runner::user_activation`]).
+    activated: Option<f64>,
+}
+
+/// How long a person's input stands as user activation, in ms. HTML leaves
+/// the transient activation duration to the user agent, "at most a few
+/// seconds"; this is Chromium's.
+const TRANSIENT_ACTIVATION_MS: f64 = 5_000.0;
+
+/// Whether `event` is one of HTML's activation triggering input events
+/// (HTML §6.4.1, "Tracking user activation"): a keydown other than Escape,
+/// a mouse's `pointerdown`, a touch's or a pen's `pointerup`, and what a
+/// host makes of those same acts where the app hears no pointer or key (a
+/// press, a control's `input`, `change` and `submit`, a context menu).
+fn activates(event: &Event) -> bool {
+    match event {
+        Event::Key(key) | Event::Keycapture(key) => key.key != "Escape",
+        Event::Pointerdown(pointer) => pointer.pointer_type == "mouse",
+        Event::Pointerup(pointer) => pointer.pointer_type != "mouse",
+        Event::Press
+        | Event::PressWith(_)
+        | Event::Atompress(_)
+        | Event::Dblclick
+        | Event::Contextmenu
+        | Event::ContextmenuAt(_)
+        | Event::Input(_)
+        | Event::Change(_)
+        | Event::Submit => true,
+        _ => false,
+    }
 }
 
 /// The origin tables as a commit found them (`commit.rs`'s checkpoint).
@@ -187,6 +226,8 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<CommitReceipt, RunnerError> {
         let before = std::mem::replace(&mut self.extensions.origins.now, origin);
         let out = self.act(name, args);
+        // Its data calls' reports keep its origin (LLP 1175 D3).
+        self.take_reports();
         self.extensions.origins.now = before;
         out
     }
@@ -194,6 +235,35 @@ impl<D: DataSource> Runner<D> {
     /// The origin of the commit being made.
     pub fn call_origin(&self) -> CallOrigin {
         self.extensions.origins.now
+    }
+
+    /// The host delivers `event`, the app's own commit: an activation
+    /// triggering one starts the window [`Self::user_activation`] reads.
+    pub(in crate::runner) fn note_input(&mut self, event: &Event) {
+        if self.call_origin() == CallOrigin::App && activates(event) {
+            self.extensions.origins.activated = Some(self.now_ms);
+        }
+    }
+
+    /// The host delivers an activation it raised as the app's (`events.rs`):
+    /// a person's act on the platform's own UI, a notification's tap, which
+    /// no input event carries. It starts the window as an input does, at the
+    /// clock's reading now, since no commit need have come before it.
+    pub(in crate::runner) fn note_activation(&mut self) {
+        self.sample();
+        self.extensions.origins.activated = Some(self.now_ms);
+    }
+
+    /// Whether a call `origin` makes now has HTML's transient activation:
+    /// the app makes it within [`TRANSIENT_ACTIVATION_MS`] of a person's
+    /// input or of an activation the host raised. Code a timer or an answer runs inside the window has it too,
+    /// as on the web, since a data-code call cannot be traced to the handler
+    /// that led to it. Nothing consumes the window: one press may start
+    /// several calls.
+    pub(in crate::runner) fn user_activation(&self, origin: CallOrigin) -> bool {
+        let at = self.extensions.origins.activated;
+        origin == CallOrigin::App
+            && at.is_some_and(|at| (0.0..TRANSIENT_ACTIVATION_MS).contains(&(self.now_ms - at)))
     }
 
     /// Run `f` as a commit of `origin`, part of invocation `id` (0: none).
@@ -231,9 +301,15 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether invocation `id` owns work in flight: a request, an armed
-    /// `then`, a held call or a queued send stamped with it.
+    /// `then`, a native statement, a held call or a queued send stamped with it.
     pub(in crate::runner) fn invocation_owns(&self, id: u64) -> bool {
-        !self.invocation_tickets(id).is_empty()
+        self.extensions
+            .declared
+            .statements
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&id)
+            || !self.invocation_tickets(id).is_empty()
             || (self.extensions.origins.then_ids.iter())
                 .any(|(m, i)| *i == id && self.then_due[*m].is_finite())
             || (self.extensions.held.iter()).any(|h| h.id == id)
@@ -338,6 +414,8 @@ impl<D: DataSource> Runner<D> {
         let before = std::mem::replace(&mut o.now, origin);
         let caused = std::mem::replace(&mut o.causes, causes);
         let out = f(self);
+        // The reports its data calls made take its authority (LLP 1175 D3).
+        self.take_reports();
         let o = &mut self.extensions.origins;
         o.now = before;
         o.causes = caused;
@@ -520,6 +598,14 @@ impl<D: DataSource> Runner<D> {
             .fold(o.now, CallOrigin::min)
     }
 
+    /// [`Self::data_origin`] for a call that arrives now, outside any commit:
+    /// the clock is sampled first, so [`Self::user_activation`] reads the
+    /// window against the time of the call and not of the last commit.
+    pub(in crate::runner) fn arriving_data_origin(&mut self) -> CallOrigin {
+        self.sample();
+        self.data_origin()
+    }
+
     /// Every input [`Self::data_origin`] folds, kept apart: the commit's
     /// causes, each request in flight's, and each handler running (LLP
     /// 1133.035 D16 item 6).
@@ -602,9 +688,23 @@ impl<D: DataSource> Runner<D> {
         self.forget_refused_row(i);
     }
 
+    pub(super) fn implementation_here(&self, row: &ModulesRow) -> bool {
+        let sub = self.substitute(row);
+        let target = self.host_target();
+        sub["implementationTargets"]
+            .as_array()
+            .is_none_or(|targets| targets.iter().any(|t| t == target))
+            && !sub["implementationOverrides"]
+                .as_array()
+                .is_some_and(|targets| targets.iter().any(|t| t == target))
+    }
+
     /// What answers `row` now (module doc).
     pub(in crate::runner) fn route(&self, row: &ModulesRow) -> Route {
         let extension = self.plan.str(row.extension);
+        if !self.implementation_here(row) {
+            return Route::Substitute;
+        }
         if self.extensions.bound.contains(extension) && !self.kept_by_runner(row) {
             Route::Real
         } else if self.extensions.bound.contains(extension) {
@@ -655,6 +755,9 @@ impl<D: DataSource> Runner<D> {
         if let Err((code, why)) = self.value_grants(row, args) {
             self.log(format!("{}: refused, {why}", self.key(row)));
             return Decision::Now(json!({ "error": code, "message": why }));
+        }
+        if let Some(refused) = self.undeclared(row, args) {
+            return Decision::Now(refused);
         }
         if let Err(why) = self.admit(row, args, origin) {
             self.log(format!("{}: refused, {why}", self.key(row)));
@@ -741,6 +844,45 @@ impl<D: DataSource> Runner<D> {
         };
         self.span_admitted(row, args, origin, &decision);
         decision
+    }
+
+    /// An option whose values are the app's declarations takes one of them
+    /// (LLP 1133.004 stage 2): the platform shows only what was registered
+    /// at launch, so data code cannot add to it. The refusal, journaled.
+    pub(super) fn undeclared(&mut self, row: &ModulesRow, args: &Json) -> Option<Json> {
+        let sub = self.substitute(row);
+        let declares = sub["declares"].as_object()?;
+        let source = &self.plan.sources[row.source.0 as usize];
+        let shape = self
+            .plan
+            .source_params
+            .get(source.params.start as usize)
+            .and_then(|p| exact_js_value::Shape::from_plan(&self.plan, p.ty).ok());
+        let option = declares.iter().find(|(option, _)| {
+            let field = match &shape {
+                Some(exact_js_value::Shape::Record(fields)) => fields
+                    .iter()
+                    .find(|(name, _)| name == *option)
+                    .map(|(_, field)| field),
+                _ => None,
+            };
+            let normalize = |value: &Json| {
+                let mut value = value.clone();
+                if let Some(field) = field {
+                    super::absent_is_none(&mut value, field);
+                }
+                value
+            };
+            let given = normalize(&args[option.as_str()]);
+            let declared = sub["declared"][option.as_str()].as_array();
+            !given.is_null() && !declared.is_some_and(|d| d.iter().any(|v| normalize(v) == given))
+        })?;
+        let why = format!(
+            "{} not declared: only a literal the app's Contract writes declares them",
+            option.0
+        );
+        self.log(format!("{}: refused, {why}", self.key(row)));
+        Some(json!({ "error": "TypeError", "message": why }))
     }
 
     /// The permission a call of `row` with `args` asks: its declared one,
@@ -1054,7 +1196,11 @@ impl<D: DataSource> Runner<D> {
         // (LLP 1133.036 D3).
         let joins = (sub["samples"]["stream"].as_str()).is_some_and(|s| self.app_rate(s).is_some())
             || self.joins_running(row, args);
-        if applies && app_only && origin != CallOrigin::App && !joins {
+        // A background action is the person's act: it may call a name held
+        // to the app, which shows nothing there (the foreground rule below
+        // refuses one that would).
+        let persons = matches!(origin, CallOrigin::App | CallOrigin::Action);
+        if applies && app_only && !persons && !joins {
             return Err(format!("person-required ({} origin)", origin.word()));
         }
         // A call the app holds admits a capture's start while hidden on iOS
@@ -1066,7 +1212,10 @@ impl<D: DataSource> Runner<D> {
                 && origin == CallOrigin::App
                 && self.in_call()
         };
-        if applies && sub["foreground"] == true && self.page.in_background() && !calling() {
+        if applies
+            && sub["foreground"] == true
+            && (origin == CallOrigin::Action || (self.page.in_background() && !calling()))
+        {
             return Err("not in the foreground".into());
         }
         Ok(())
@@ -1109,10 +1258,11 @@ fn fetch_refusal(grants: &str, at: &str, given: &str) -> Option<String> {
 }
 
 /// Every origin, least privileged first.
-pub(in crate::runner) const ORIGINS: [CallOrigin; 4] = [
+pub(in crate::runner) const ORIGINS: [CallOrigin; 5] = [
     CallOrigin::Device,
     CallOrigin::Wake,
     CallOrigin::Tool,
+    CallOrigin::Action,
     CallOrigin::App,
 ];
 

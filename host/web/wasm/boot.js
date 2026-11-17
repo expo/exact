@@ -1,9 +1,49 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, SETTLE_DEADLINE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, reportTime, reportPlace, preferences, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { navigation, launchLocation, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
+import { startClock } from "./flow.js";
 import { waitForInflight } from "./agent.js";
 import { forgetList } from "./views.js";
+// A trap leaves the module as it stopped (a Rust borrow held, a batch half
+// applied), so every later call traps again. The first one stops the page's
+// calls: the clock ends, a later call throws `ModuleStopped` without entering
+// the module and is not reported, and the page says so once.
+class ModuleStopped extends Error {}
+function guardedExports(exports) {
+  const guarded = {};
+  for (const [name, value] of Object.entries(exports)) {
+    guarded[name] = typeof value !== "function" ? value : (...args) => {
+      if (host.trapped) {
+        throw new ModuleStopped(`app.wasm stopped after a trap: ${host.trapped}`);
+      }
+      try {
+        return value(...args);
+      } catch (error) {
+        if (error instanceof WebAssembly.RuntimeError) {
+          stopModule(error);
+        }
+        throw error;
+      }
+    };
+  }
+  return guarded;
+}
+function stopModule(error) {
+  if (host.trapped) {
+    return;
+  }
+  host.trapped = error;
+  host.ticker?.dispose();
+  host.ticker = null;
+  host.textflow?.dispose();
+  host.textflow = null;
+  root.dataset.error = String(error);
+  console.error("exact: app.wasm trapped, and the page no longer calls it:", error);
+  globalThis.exact.onTrap?.(error);
+}
+addEventListener("error", (e) => e.error instanceof ModuleStopped && e.preventDefault());
+addEventListener("unhandledrejection", (e) => e.reason instanceof ModuleStopped && e.preventDefault());
 export async function loadRust() {
   if (host.rustLoader) {
     return;
@@ -19,6 +59,14 @@ export async function loadRust() {
 // LLP 1019 D5: FontFace loading is part of host boot. The DOM remains empty until every local face loaded, or 100 ms elapsed. At the barrier, install
 // every face already ready unless its family has a failed sibling; faces that
 // finish later remain unused for this generation (no post-paint swap).
+function devCard(source, assets) {
+  try {
+    const url = new URL(source, document.baseURI);
+    return url.origin === location.origin ? assets?.get(decodeURIComponent(url.pathname.replace(/^\//, ""))) : null;
+  } catch {
+    return null;
+  }
+}
 async function prepareFonts(faces, assets) {
   if (!faces?.length) {
     return [];
@@ -28,11 +76,17 @@ async function prepareFonts(faces, assets) {
     state: "pending",
     loaded: null
   }));
-  const pending = rows.map(async (row) => {
+  // A dev generation's font file, which the page reads when asked (dev.js `later`), is read before the 100 ms
+  // barrier starts: the barrier times the face's load, not the dev server.
+  const read = await Promise.all(faces.map((face) => {
+    const card = devCard(face.source, assets);
+    return card?.read ? card.read().catch(() => null) : null;
+  }));
+  const pending = rows.map(async (row, i) => {
     const { face } = row;
     try {
       const url = new URL(localAssetURL(face.source, assets), document.baseURI).href;
-      row.loaded = await new FontFace(face.family, `url(${JSON.stringify(url)})`, {
+      row.loaded = await new FontFace(face.family, read[i] ?? `url(${JSON.stringify(url)})`, {
         weight: face.weight,
         stretch: face.stretch,
         style: face.style
@@ -64,25 +118,6 @@ function commitFonts(faces) {
   }
   host.installedFonts = faces;
 }
-function startClock() {
-  if (host.timerFactory && !agentMode && !host.textflow && !host.flowLoading) {
-    host.ticker ??= host.timerFactory({
-      now,
-      scrollPending: () => collections.scrollPending(),
-      advance: (time) => {
-        followOffset(time);
-        send(host.wasm.exact_advance(time, 0));
-      },
-      present: host.present,
-      release: (kinds, cutoff) => {
-        const batch = JSON.parse(readOut(host.wasm.exact_advance(cutoff, 16 | kinds << 8)));
-        applyBatch(batch);
-        return batch;
-      }
-    });
-    host.ticker.update(host.flowDue, host.flowFrames, host.flowWaits, host.flowTolerance);
-  }
-}
 function activateData() {
   const batch = JSON.parse(readOut(host.wasm.exact_data_ready()));
   if (batch.error) {
@@ -110,6 +145,24 @@ function activateData() {
 }
 export function boot(...args) {
   return mutate(() => bootNow(...args));
+}
+// Report both schemes as the page draws them, beneath an app's theme (LLP 1095 D4), so the kernel's canvas ink
+// follows the browser's palette at boot and when its contrast changes (src/colors.rs).
+export function reportColors() {
+  const appleRoles = host.wasm?.exact_report_colors && getComputedStyle(document.documentElement).getPropertyValue("--exact-apple-roles").trim();
+  if (!appleRoles) return;
+  const probe = document.body.appendChild(document.createElement("i")), seen = getComputedStyle(probe), colors = [];
+  for (const dark of [false, true]) {
+    probe.style.colorScheme = dark ? "dark" : "light";
+    for (const name of JSON.parse(appleRoles).split(" ")) {
+      if (seen.getPropertyValue(`--exact-apple-${name}`).trim()) {
+        probe.style.color = `var(--exact-apple-${name})`;
+        colors.push([name, dark, seen.color]);
+      }
+    }
+  }
+  probe.remove();
+  host.wasm.exact_report_colors(writeIn(JSON.stringify(colors)));
 }
 async function bootNow(bytes, assets = host.devAssets, current = () => true, module = null, fresh = false) {
   const t = performance.now(), request = ++host.bootAttempt;
@@ -164,28 +217,10 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
       return null;
     }
   }
-  const appleRoles = host.wasm.exact_report_colors && getComputedStyle(document.documentElement).getPropertyValue("--exact-apple-roles").trim();
-  if (appleRoles) {
-    const probe = document.body.appendChild(document.createElement("i")), seen = getComputedStyle(probe), colors = [];
-    for (const dark of [false, true]) {
-      probe.style.colorScheme = dark ? "dark" : "light";
-      for (const name of JSON.parse(appleRoles).split(" ")) {
-        if (seen.getPropertyValue(`--exact-apple-${name}`).trim()) {
-          probe.style.color = `var(--exact-apple-${name})`;
-          colors.push([
-            name,
-            dark,
-            seen.color
-          ]);
-        }
-      }
-    }
-    probe.remove();
-    host.wasm.exact_report_colors(writeIn(JSON.stringify(colors)));
-  }
+  reportColors();
   let len;
   host.wasm.exact_live_clock?.(agentMode ? 0 : 1);
-  // each role look.mjs names, light and dark, as the page draws it, reported so a colour the kernel resolves itself (a canvas's ink) is the page's (src/colors.rs); the page's clock owns time, the agent's when it drives (the timers RFC, D1); kept for every boot
+  // The page's clock owns time, the agent's when it drives (the timers RFC, D1); kept for every boot.
   if (module) {
     const id = module.rust ?? new TextEncoder().encode(JSON.stringify(module.realm.id));
     const payload = new Uint8Array(plan.length + module.receipt.length + id.length);
@@ -204,14 +239,19 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     const payload = new Uint8Array(host.memory.buffer, ptr, bytes.length + launch.length);
     payload.set(bytes);
     payload.set(launch, bytes.length);
+    host.wasm.exact_set_update?.(updateCode());
     len = host.wasm.exact_boot_plan(bytes.length, innerWidth, innerHeight, launch.length, preferences() | foldBits());
   } else {
     if (host.page?.checkpoint) {
-      host.wasm.exact_checkpoint(writeIn(agentMode ? host.page.checkpoint.replace("\n", " driven\n") : host.page.checkpoint));
+      const checkpoint = agentMode
+        ? (await loadAfterPaint("./faults.js", "drivenCheckpoint"))(host.page.checkpoint)
+        : host.page.checkpoint;
+      host.wasm.exact_checkpoint(writeIn(checkpoint));
     }
     ptr = host.wasm.exact_in(launch.length);
     // a drive's clock starts at zero (page.rs)
     new Uint8Array(host.memory.buffer, ptr, launch.length).set(launch);
+    host.wasm.exact_set_update?.(updateCode());
     len = host.wasm.exact_boot(innerWidth, innerHeight, launch.length, preferences() | foldBits());
   }
   const batch = JSON.parse(readOut(len));
@@ -256,6 +296,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   host.textflow?.dispose();
   host.textflow = null;
   host.flowLoading = null;
+  host.flowFailed = false;
   host.flowContexts = [];
   host.flowDue = null;
   host.flowFrames = false;
@@ -320,7 +361,10 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   document.getElementById("exact-looks")?.remove();
   // a held state goes unsaid (dev.js holds it again); the last plan's theme (LLP 1095 D4) and state looks (LLP 1121 D8): this boot's batch sets its own
   commitFonts(preparedFonts);
-  focus.restart(kept, () => applyBatch(batch), () => ask({ op: "tree" }), (id) => views.get(id));
+  focus.restart(kept, () => {
+    host.restoringScheme = fresh;
+    try { applyBatch(batch); } finally { host.restoringScheme = false; }
+  }, () => ask({ op: "tree" }), (id) => views.get(id));
   host.toldOffset = null;
   followOffset(now());
   // @ref LLP 1027.000.000 — the date, as the clock the runner already reads
@@ -329,6 +373,16 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   }
   if (host.wasm.exact_set_page) {
     applyBatch(JSON.parse(readOut(host.wasm.exact_set_page(pageFacts.bits()))));
+  }
+  // @ref LLP 1069.000 D2 r7 — the present of this runner's first picture: the first animation frame after its first
+  // commit (under the agent, each frame is presented at its commit, and the runner says so at its boot)
+  if (host.wasm.exact_page_presented && !agentMode) {
+    const incarnation = host.incarnation;
+    requestAnimationFrame(() => {
+      if (host.incarnation === incarnation) {
+        applyBatch(JSON.parse(readOut(host.wasm.exact_page_presented())));
+      }
+    });
   }
   appRootFontSize("medium");
   if (host.wasm.exact_set_root_font_size) {
@@ -457,7 +511,8 @@ export async function main() {
       response = download();
     }
   }
-  host.wasm = instance.exports;
+  host.exports = instance.exports;
+  host.wasm = guardedExports(instance.exports);
   const [staged] = WebAssembly.Module.customSections(compiled, "exact.stages");
   if (staged) {
     host.stages = JSON.parse(new TextDecoder().decode(staged)).stages;
@@ -575,6 +630,7 @@ export async function main() {
         views,
         retiredViews,
         agentMode,
+        pick: el => ask({ op: "showPicker", view: Number(el.dataset.view) }),
         ready: () => host.inputReady,
         inertAncestor,
         editMenu,

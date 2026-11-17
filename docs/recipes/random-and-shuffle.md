@@ -1,9 +1,9 @@
 # Recipe: randomness and a shuffle
 
 Rolls in the view: [random rolls in an expression](random-rolls.md). The data module refuses
-`Math.random()`. Deal from `exactTime()`'s `seed` (below 2^32, new each launch, `seed 2` in a
-test), a stream for each thing dealt: the questions' order from the game, each question's
-answers from the game and the round. One stream for both deals every question the
+`Math.random()`. Deal from `exactTime()`'s `seed`, after `with` (below 2^32, new each launch,
+`seed 2` in a test), a stream for each thing dealt: the questions' order from the game, each
+question's answers from the game and the round. One stream for both deals every question the
 same shuffle, its right answer in one place all game. Keep the right answer by identity
 (`correct`), never by index.
 
@@ -24,7 +24,7 @@ component Quiz
   state game = 0
   state round = 0
   resource time = exactTime() as shape Time
-  resource q = deal(game, round, time.seed) as shape Question else empty()
+  resource q = deal(game, round) with time.seed as shape Question else empty()
   derive order = q.choices.map(c => c.text).join(" ")
   action next
     round = round + 1

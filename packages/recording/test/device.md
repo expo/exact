@@ -10,8 +10,9 @@ production: no agent, both packages bound.
 Each step says what to do and what should happen.
 
 1. **First take.** Tap Record. The system asks for the microphone; allow
-   it. Speak for ten seconds: the bars move with your voice and the time
-   counts. Tap Stop: "Saved Take 1 · 10.0 s · level N%" shows, and the
+   it. Speak for ten seconds at a normal voice: the bars rise to about
+   half the height with your voice, fall back between words, and scroll
+   left smoothly, a bar every 50 ms, without jumping; the time counts. Tap Stop: "Saved Take 1 · 10.0 s · level N%" shows, and the
    take's player plays your voice back at its length.
 2. **Pause.** Record, tap Pause for a few seconds, Resume, Stop. The take
    is as long as the time recorded, without the pause.

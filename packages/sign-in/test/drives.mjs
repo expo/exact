@@ -63,6 +63,18 @@ const run = (n) => !only || only.includes(n);
 const appleHere = host !== 'macos';
 try {
   await s.clock('settle');
+  if (host !== 'web') {
+    const caps = (await s.state()).resources?.identities;
+    check(3, 'default capabilities offer combined Apple/passkey requests on iOS and hide Google',
+      caps?.providers?.google?.active === false && caps?.providers?.apple?.withPublicKey === (host === 'ios'),
+      JSON.stringify(caps));
+    check(3, 'the default app shows no Google button', !(await shown(s, 'google-sign-in')));
+    // The remaining drives exercise ticket handling with explicitly simulated cells.
+    await s.prefer({ extension: `sign-in.getIdentityCapabilities=${JSON.stringify({ providers: {
+      google: { active: true },
+    } })}` });
+    await s.clock('settle');
+  }
   if (run(1) && appleHere) {
     // A passive offer may be held first where the target has one (drive 4); the press supersedes it.
     await until(s, () => shown(s, 'apple-sign-in'));

@@ -77,12 +77,20 @@ fn preorder(r: &Runner<Oracle>) -> Vec<ViewId> {
 }
 
 /// The elements an observation shows, in preorder: every live element but
-/// a virtualized list's descendants, which are the rows its window lays out
-/// (`Contract.Observe.viewLines` leaves them out too).
+/// its virtualized data rows. Fixed children remain observable
+/// (`Contract.Observe.viewLines` uses the same boundary).
 fn observed(r: &Runner<Oracle>) -> Vec<ViewId> {
-    fn walk(r: &Runner<Oracle>, windowed: &[ViewId], id: ViewId, out: &mut Vec<ViewId>) {
+    fn walk(
+        r: &Runner<Oracle>,
+        windowed: &[exact_runner::CollectionSnapshot],
+        id: ViewId,
+        out: &mut Vec<ViewId>,
+    ) {
         out.push(id);
-        if windowed.contains(&id) {
+        if let Some(collection) = windowed.iter().find(|c| c.view == id) {
+            for root in collection.fixed.iter().flat_map(|fixed| &fixed.roots) {
+                walk(r, windowed, *root, out);
+            }
             return;
         }
         if let Some(n) = r.kernel().node(id) {
@@ -91,7 +99,7 @@ fn observed(r: &Runner<Oracle>) -> Vec<ViewId> {
             }
         }
     }
-    let windowed: Vec<ViewId> = r.collections().iter().map(|c| c.view).collect();
+    let windowed = r.collections();
     let mut out = Vec::new();
     for root in r.roots() {
         walk(r, &windowed, root, &mut out);
@@ -126,6 +134,13 @@ pub(crate) fn boot(
             "/",
         )
     })?;
+    // A module's per-target answers are the web's, as the JS target gives them, not those of the machine the
+    // runner was built for: Photo Editor's wallet can pay on macOS and cannot on Linux, so a walk there never
+    // reached its print sizes (#465). The answers boot asked for are asked again for the web.
+    r.set_module_target("web");
+    if let (_, Some(error)) = r.apply_announced() {
+        return Err(error);
+    }
     if every {
         r.build_every_tab()?;
     }
@@ -136,7 +151,7 @@ pub(crate) fn boot(
 fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
     for (i, row) in plan.slots.iter().enumerate() {
         let id = exact_plan::SlotsId(i as u32);
-        if row.owner.is_some() || plan.locale == Some(id) {
+        if row.owner.is_some() || plan.locale == Some(id) || plan.format == Some(id) {
             continue;
         }
         let name = plan.str(row.name);
@@ -184,7 +199,13 @@ fn state(r: &mut Runner<Oracle>, plan: &Plan, out: &mut Vec<String>) {
             continue;
         };
         if let Some(t) = n.props.str(PropId::TestId) {
-            let text = n.props.str(PropId::Text).map_or("-".to_string(), quote);
+            // A `time`'s text is the runner's live time (LLP 1126 D6), a
+            // presentation the semantics leaves out (`OMITTED_KINDS`).
+            let live = n.props.str(PropId::SemanticTag) == Some("time")
+                && n.props.get(PropId::Datetime).is_some();
+            let text = (n.props.str(PropId::Text))
+                .filter(|_| !live)
+                .map_or("-".to_string(), quote);
             out.push(format!("view {} {text}", quote(t)));
         }
     }
@@ -237,15 +258,19 @@ impl Driver {
                 out.push("outcome ok".into());
                 trapped(&r, 0, &mut out);
                 for res in &plan.resources {
-                    let source = plan.str(res.source);
-                    // Only the runner's own sources: one of the app's may
-                    // be asked nothing at boot (a closed `when`, LLP
-                    // 1161.002) and asked of the oracle later.
-                    if exact_plan::runner_owned_source(source)
-                        && !matches!(source, "exactTransport" | "exactMIDI")
-                    {
+                    // Only what the runner answers itself: one of the app's
+                    // sources may be asked nothing at boot (a closed `when`,
+                    // LLP 1161.002) and asked of the oracle later.
+                    if answers_itself(&plan, res) {
                         let name = plan.str(res.name);
-                        if let Some(v) = r.resource(name).cloned() {
+                        // Only an answer: a read held, refused or failed shows
+                        // its placeholder, which `failed`, `pending` and
+                        // `current` read as no answer; with no fact the
+                        // semantics leaves a module's read out.
+                        let unanswered = r.resource_is_placeholder(name)
+                            || r.failed_resources().iter().any(|(n, _)| *n == name)
+                            || r.pending().iter().any(|(n, _)| n == name);
+                        if let Some(v) = r.resource(name).filter(|_| !unanswered).cloned() {
                             r.data()
                                 .facts
                                 .borrow_mut()
@@ -314,6 +339,9 @@ impl Driver {
         }
         if moved_without_trace && !out.iter().any(|l| l == "untraced configuration moved") {
             out.push("untraced configuration moved".into());
+        }
+        if !r.is_poisoned() {
+            out.extend(module_moved(r, &self.plan));
         }
         out.extend(after);
         out
@@ -427,6 +455,43 @@ fn deliver(
     let now = r.now_ms();
     let advanced = r.dispatch_at(view, event, now);
     (advanced.error.map_or(Ok(()), Err), advanced.receipts.len())
+}
+
+/// Whether the runner answers resource `res` itself, so that its boot value
+/// is a host fact: one of its own sources (but a transport's or MIDI port's,
+/// which change as they play), or a single read of a native module's name,
+/// which the module's substitute answers (`runner/src/runner/modules.rs`).
+/// A module read per element (`each`) has no one fact; the semantics leaves
+/// it out (`module` in the oracle's text).
+fn answers_itself(plan: &Plan, res: &exact_plan::ResourcesRow) -> bool {
+    let source = plan.str(res.source);
+    (exact_plan::runner_owned_source(source) && !matches!(source, "exactTransport" | "exactMIDI"))
+        || (plan.module_named(source).is_some() && res.each.len == 0)
+}
+
+/// The start of the note a step carries when a module's read holds other
+/// than at boot.
+pub const MODULE_MOVED: &str = "# outside: a module's answer moved";
+
+/// A [`MODULE_MOVED`] note for each module read whose value is no longer its
+/// boot fact: the module's state is the runner's (a permission, a preferred
+/// value, a send's answer), and the semantics holds the boot answer, so what
+/// the step shows from here on is outside it.
+fn module_moved(r: &mut Runner<Oracle>, plan: &Plan) -> Vec<String> {
+    let facts = r.data().facts.clone();
+    let facts = facts.borrow();
+    facts
+        .iter()
+        .filter(|(name, _, _)| {
+            plan.resources.iter().any(|res| {
+                plan.str(res.name) == name && plan.module_named(plan.str(res.source)).is_some()
+            })
+        })
+        .filter(|(name, _, boot)| r.resource(name).map(value) != Some(value(boot)))
+        .map(|(name, _, _)| {
+            format!("{MODULE_MOVED}: resource {name} no longer holds its boot answer")
+        })
+        .collect()
 }
 
 /// Commit kinds for which the semantics has no branch (LLP 1151 D3).

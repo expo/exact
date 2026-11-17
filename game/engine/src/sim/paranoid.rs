@@ -33,6 +33,7 @@ impl<G: Game> Sim<G> {
         let period_ms = self.period_ms;
         let lookahead = self.lookahead_us_hz;
         let last_motion = self.last_motion;
+        let pointer_samples = std::mem::take(&mut self.pointer_samples);
         let paused_clock = self.paused_clock;
         let rebase_queue = self.rebase_queue;
         let posts_logged = self.posts_logged;
@@ -42,7 +43,8 @@ impl<G: Game> Sim<G> {
             && self.asset_sprite_names.is_empty();
         let delay = self.settle_delay.get();
         let pending = self.world.published_pending.get();
-        let messages = self.take_messages();
+        // Kept as the world holds them: `take_messages` marks them for the host.
+        let messages = std::mem::take(&mut *self.world.messages.borrow_mut());
         // These are driver outputs/ownership, not dependencies of Game::tick.
         // Keep them outside the rebuild just like advance_with's callback.
         if mode == Paranoid::FreshGame {
@@ -79,6 +81,8 @@ impl<G: Game> Sim<G> {
             mode, G::ID
         );
         self.paranoid_checked += 1;
+        // The restore advanced the presentation generation; the picture stays.
+        self.paranoid_rebuilds += 1;
         self.world_us = horizon;
         self.paranoid_skipped = skipped;
         self.last_us = host;
@@ -87,6 +91,7 @@ impl<G: Game> Sim<G> {
         self.period_ms = period_ms;
         self.lookahead_us_hz = lookahead;
         self.last_motion = last_motion;
+        self.pointer_samples = pointer_samples;
         self.paused_clock = paused_clock;
         self.rebase_queue = rebase_queue;
         self.posts_logged = posts_logged;

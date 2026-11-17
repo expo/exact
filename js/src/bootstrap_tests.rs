@@ -108,7 +108,7 @@ fn an_entry_without_application_sources_does_not_load_typescript() {
 fn a_typescript_canvas_keeps_its_executor_reachable() {
     use exact_runner::DataSource;
     let mut module =
-        Module::new(Vec::new(), "test.canvas", "").with_canvas_surfaces(&[("drawing", 0)]);
+        Module::new(Vec::new(), "test.canvas", "").with_canvas_surfaces([("drawing", 0)]);
     let mut builder = exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     builder.surface("drawing", &[]);
     module.bind(&builder.finish().unwrap());

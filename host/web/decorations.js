@@ -59,16 +59,19 @@ export function install(textarea, log = () => {}) {
     try { record = JSON.parse(textarea.getAttribute('data-decorations') ?? 'null'); table = JSON.parse(textarea.getAttribute('data-decoration-styles') ?? '{}'); }
     catch (error) { log(`decorations: ${error.message}`); }
     const resolved = record && typeof record.value === 'string' ? resolve(record, textarea.value) : null;
-    handle.applied = resolved && { ...resolved, value: textarea.value };
+    if (resolved) resolved.spans = resolved.spans.filter(span => {
+      if (!Object.hasOwn(table, span.name)) {
+        if (!warned.has(span.name)) { warned.add(span.name); log(`decorations: no decoration ${JSON.stringify(span.name)}`); }
+        return false;
+      }
+      return true;
+    });
+    handle.applied = resolved && { source: textarea.value, recordValue: record.value, ...resolved };
     if (!painted) return;
     clear();
     if (!resolved) return;
     const rules = [];
     resolved.spans.forEach((span, index) => {
-      if (!Object.hasOwn(table, span.name)) {
-        if (!warned.has(span.name)) { warned.add(span.name); log(`decorations: no decoration ${JSON.stringify(span.name)}`); }
-        return;
-      }
       // One highlight per span, registered in order: at equal priority the
       // later registration paints over the earlier (CSS Highlight API §4).
       const name = `exact-decoration-${id}-${index}`;
@@ -95,4 +98,11 @@ export function install(textarea, log = () => {}) {
   return handle;
 }
 
-if (globalThis.exact) globalThis.exact.installDecorations = install;
+/** The last applied snapshot, held during composition. `painted` says
+ * whether this browser can paint it with OpaqueRange highlights. */
+export function state(views) {
+  return [...views].flatMap(([id, el]) => el.isConnected && el.exactDecorations?.applied
+    ? [{ id, painted: el.exactDecorations.painted, applied: el.exactDecorations.applied }] : []).sort((a, b) => a.id - b.id);
+}
+
+if (globalThis.exact) Object.assign(globalThis.exact, { installDecorations: install, decorations: { state } });

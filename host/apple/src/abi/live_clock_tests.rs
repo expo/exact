@@ -118,6 +118,77 @@ fn an_idle_viewport_resize_samples_the_presenters_clock_before_layout() {
 }
 
 #[test]
+fn a_combined_view_change_settles_timers_before_resize_notifications() {
+    static NOW: AtomicU64 = AtomicU64::new(0);
+    extern "C" fn sample() -> f64 {
+        f64::from_bits(NOW.load(Ordering::SeqCst))
+    }
+    let plan = contract::compile(
+        r#"shape Viewport
+  width: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  state wide = false
+  state timerWidth = 0
+  state parentWidth = 0
+  state childWidth = 0
+  task grow mount
+    after(100, grow)
+  action grow
+    timerWidth = viewport.width
+    wide = true
+  action parent(w: number, h: number, r: DOMRectReadOnly)
+    parentWidth = w
+  action child(w: number, h: number, r: DOMRectReadOnly)
+    childWidth = w
+  view
+    view width="100%"
+      view width=(wide ? 300 : 100) height=20 resize=parent
+        view width="100%" height=20 resize=child
+"#,
+    )
+    .unwrap()
+    .encode();
+    for live in [false, true] {
+        NOW.store(0f64.to_bits(), Ordering::SeqCst);
+        let mut bridge = Bridge::<NoData>::new();
+        if live {
+            bridge.set_live_clock(Some(sample));
+        }
+        bridge.boot(&plan, NoData, Hooks::none(), 100., 100.);
+        NOW.store(200f64.to_bits(), Ordering::SeqCst);
+        if !live {
+            bridge.tick(200.);
+        }
+        let mut words = vec![1u32 | 8 | 32];
+        words.extend([200f32, 100., 0., 0., 0., 0., 200., 100.].map(f32::to_bits));
+        words.extend([0, 0]);
+        let wire: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        let len = bridge.input_write(&wire);
+        bridge.view(len);
+        let host = bridge.host.as_ref().unwrap();
+        assert_eq!(
+            host.runner().slot("timerWidth"),
+            Some(&Value::Number(100.)),
+            "live={live}"
+        );
+        assert_eq!(
+            host.runner().slot("parentWidth"),
+            Some(&Value::Number(300.)),
+            "live={live}"
+        );
+        assert_eq!(
+            host.runner().slot("childWidth"),
+            Some(&Value::Number(300.)),
+            "live={live}"
+        );
+        assert_eq!(host.runner().now_ms(), 200.);
+        let batch: serde_json::Value = serde_json::from_slice(&bridge.output).unwrap();
+        assert!(batch["error"].is_null(), "{batch}");
+    }
+}
+
+#[test]
 fn wait_admission_crosses_the_apple_batch_boundary() {
     static NOW: AtomicU64 = AtomicU64::new(0);
     extern "C" fn sample() -> f64 {

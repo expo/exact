@@ -1,0 +1,69 @@
+{
+  "host": {
+    "web": {},
+    "ios": {
+      "minimumOS": "18.0",
+      "deviceFamily": [
+        "iphone",
+        "ipad"
+      ]
+    },
+    "macos": {
+      "minimumOS": "15.0"
+    }
+  },
+  "deploy": {
+    "store": {
+      "web": "0",
+      "ios": "0"
+    }
+  },
+  "name": "Native Intents Fixture",
+  "short_name": "Native Intent",
+  "id": "com.exact.nativeintentsfixture",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.exact.nativeintentsfixture",
+    "name": "Native Intents Fixture"
+  },
+  "launch": [
+    "intentprobe"
+  ],
+  "widgets": [
+    {
+      "kind": "probe",
+      "title": "Probe",
+      "description": "Intent extraction fixture.",
+      "families": [
+        "systemSmall"
+      ],
+      "component": "IntentWidget",
+      "props": "IntentWidgetProps",
+      "refresh": "intentWidget",
+      "preview": {
+        "title": "Screenshot"
+      }
+    }
+  ],
+  "intents": {
+    "tools": {
+      "saveScreenshot": {
+        "title": "Save screenshot",
+        "doors": [
+          "apple"
+        ],
+        "parameters": {
+          "image": {
+            "type": "file",
+            "accept": [
+              "image/png",
+              "image/jpeg",
+              "image/heic"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

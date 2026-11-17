@@ -375,10 +375,11 @@ theorem triple_read_prestate {x y e₁ v₀ fx₀} :
 
 /-! ## Actions as transactions -/
 
-/-- The state an action reads: the configuration as the event found it. -/
+/-- The state an action reads: the configuration as the event found it,
+its rows' instances' requests among the resources. -/
 def actionEnv (p : Program) (c : Config) (rows : List RowId) : Env :=
-  { prog := p, slots := c.slots, derives := c.settled.derives, resources := c.settled.resources,
-    rows := rowSlots c.store rows, now := c.now, idle := c.settled.idle }
+  ({ prog := p, slots := c.slots, derives := c.settled.derives, resources := c.settled.resources,
+     rows := rowSlots c.store rows, now := c.now, idle := c.settled.idle } : Env).withOwned
 
 /-- An action's parameters bound to its arguments. -/
 def actionLocals (a : ActionDecl) (args : List Value) : Locals := ((a.params.map (·.1)).zip args).reverse
@@ -455,6 +456,8 @@ theorem runAction_commit {p o c name args rows c' out}
     split at hr
     · obtain ⟨_, h', _⟩ := Except.bind_ok_iff.mp hr; cases h'
     · exact (Except.pure_ok_iff.mp hr).symm) hans
+  split at h
+  · exact (refused h).elim
   split at h
   · exact (refused h).elim
   split at h
@@ -596,7 +599,7 @@ theorem runAction_reads_prestate {p o c name args rows c' out a x y e₁ st}
       cases hv with
       | «local» hl => rw [hparam] at hl; cases hl
       | global _ _ hg =>
-        simp only [Env.global, actionEnv, hst, hown] at hg
+        simp only [Env.global, actionEnv, Env.withOwned_prog, Env.withOwned_slots, hst, hown] at hg
         exact ⟨hs₁, _, Option.elim_err_ok.mp hg, rfl⟩
   have hw : ∃ ws v, fx.sends = [] ∧ lookup x c.slots = .some v ∧ fx.writes = ws ++ [(y, v)] := by
     cases hx with

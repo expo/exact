@@ -1,7 +1,7 @@
 ```prompt Find devices on my local network
-Make the Exact app in this folder find a device on the local network (a light, a printer, a NAS) and reach it. Use https://github.com/expo/exact/blob/main/docs/recipes/local-network.md as the source for each step. The exact2 checkout has the same page at docs/recipes/local-network.md.
+Make the Exact app in this folder find a device on the local network (a light, a printer, a NAS) and reach it. Use https://github.com/expo/exact/blob/main/docs/recipes/local-network.md as the source for each step. The Exact checkout has the same page at docs/recipes/local-network.md.
 
-1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
 2. If I did not name the device and its DNS-SD service type (for example `_wled._tcp`), ask me before you write code. Do not guess a service type.
 3. Install the package: `bun <exact2>/scripts/exact.mjs add local-network .`.
 4. In app.ts, declare the grants as the recipe shows (`device.local-network`, `net.dns-sd` for each service type, `net.fetch local-network`), and add the purpose text to `strings/en.json`. Resolve only the instance about to be used, each time, and reach it with `fetch`. Know a device by what it states, not by its instance name.

@@ -18,7 +18,9 @@ import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
-import { bake, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, inspectHead, materializeSnapshot, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
+import { streamBundle } from './texture-families.mjs';
+import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, deployRun, holdBundles, inspectHead, disposeSnapshot, materializeSnapshot, readAssetIndex, portableAssetNames, publishRoot, renderTable, snapshotOf as capturedSnapshotOf } from './deploy.mjs';
+import { defaultRelease, publishStream, streamHead, streamIndex } from './publisher.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
 // behavior is tested independently with declared requirements.
@@ -111,9 +113,31 @@ async function rejects(action, matches) {
     const bytes = Buffer.from(text + '\n');
     return { json: JSON.parse(text), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
   };
+  for (const [before, after] of [
+    [{state:[],secrets:[]}, {state:['liked'],secrets:['seed']}],
+    [{state:['liked'],secrets:['seed']}, {state:['liked'],secrets:['other']}],
+    [{state:['liked'],secrets:['seed']}, {state:[],secrets:[]}],
+    [{state:['liked'],secrets:[],types:{liked:'Bool'}}, {state:['liked'],secrets:[],types:{liked:'Number'}}],
+  ]) {
+    const installed = signed(head => { head.cohort.compat.inputs.watchSync = before; });
+    const candidate = fixtureBuild(compatibilityId, bundle);
+    candidate.compat.inputs.watchSync = after;
+    candidate.graph.artifacts[0].requires.watchSync = after;
+    const table = await classify({app, opts:{platform:['linux']}, origin:{kind:'directory',describe:()=>dir,
+      get:async name => name===blobPath(streamIndex(bundle).card.sha256)?streamIndex(bundle).bytes:null,
+      head:async()=>found(installed), list:async()=>[]}, channel:stream.channel,
+      snapshot:{commit:'watch-policy',dirty:false,changes:[],repo:dir}, release:'policy', bundle,
+      builds:{linux:candidate}, compat:{linux:candidate.compat}, platforms:['linux'], wantOrigin:false});
+    const row = table.rows.find(row => row.kind === 'stream');
+    result(`deployment requires a new binary for watch policy ${JSON.stringify(before)} to ${JSON.stringify(after)}`,
+      row.action === 'binary' && row.reason.includes('watchSync'), JSON.stringify(row));
+  }
   const valid = signed();
+  // The head's asset index, a blob the origin must also serve.
+  const index = streamIndex(bundle), indexPath = blobPath(index.card.sha256);
   // A host display-name change repairs metadata without losing signed capabilities.
   const renameDir=mkdtempSync(join(tmpdir(),'exact-renamed-cohort-')), renameOrigin=new DirectoryOrigin(renameDir);
+  await renameOrigin.put(indexPath,index.bytes,{immutable:true});
   await renameOrigin.putHead(stream,found(valid).bytes,{previousDigest:null});
   await renameOrigin.put(`.exact/${stream.channel}/${compatibilityId}/releases/old.json`,Buffer.from(JSON.stringify({platform:'linux',envelope:valid})),{immutable:true});
   const renamed={...app,displayName:'Renamed'}, build=fixtureBuild(compatibilityId,bundle);
@@ -133,10 +157,10 @@ async function rejects(action, matches) {
     &&independent.rows.some(r=>r.compatibilityId===foreign&&r.action==='binary')&&independent.notes.some(n=>n.includes(foreign)&&n.includes('does not verify')));
   rmSync(renameDir,{recursive:true,force:true});
   const history = Buffer.from(JSON.stringify({ envelope: valid }) + '\n');
-  const tableFor = (candidate, withHistory = true) => classify({ app, opts: { platform: [] },
+  const tableFor = (candidate, withHistory = true, withIndex = true) => classify({ app, opts: { platform: [] },
     origin: {
       kind: 'directory', describe: () => dir,
-      get: async (name) => withHistory && name.endsWith('/releases/old.json') ? history : null,
+      get: async (name) => withHistory && name.endsWith('/releases/old.json') ? history : withIndex && name === indexPath ? index.bytes : null,
       head: async () => candidate === null ? null : candidate?.bytes ? candidate : found(candidate),
       list: async (name) => withHistory && name.endsWith('/releases') ? ['old.json'] : [],
     },
@@ -169,6 +193,8 @@ async function rejects(action, matches) {
     signed((head) => { delete head.plan.bytes; }),
   ];
   const validTable = await tableFor(valid);
+  // A signed head whose asset index the origin lacks is repaired, not current.
+  const missingIndexTable = await tableFor(valid, true, false);
   const reordered = { cohort: valid.cohort, signature: valid.signature, stream: valid.stream, release: valid.release,
     plan: valid.plan, exact: valid.exact, assets: valid.assets, app: valid.app };
   const prettyBytes = Buffer.from(JSON.stringify(reordered, null, 2) + '\n');
@@ -276,7 +302,7 @@ async function rejects(action, matches) {
     && emptyHeadTable.rows[0].action === 'bundle' && emptyHeadTable.rows[0].seq === 1
     && unlistableTable.rows[0].action === 'unavailable'
     && unlistableTable.rows[0].reason.includes('cannot enumerate its authenticated release history')
-    && repaired.every((table) => table.rows[0].action === 'bundle' && table.rows[0].seq === 8
+    && [...repaired, missingIndexTable].every((table) => table.rows[0].action === 'bundle' && table.rows[0].seq === 8
       && table.rows[0].changes[0].name === 'exact.json' && table.rows[0].changes[0].change === 'repair')
     && noHistoryRefused && unknownHistoryRefused && !unknownHistoryWrote
     && badHistoryClassifyRefused.every(Boolean) && corruptHistoryPublishRefused && !corruptHistoryWrote
@@ -308,6 +334,43 @@ async function rejects(action, matches) {
     builds:{linux:fixtureBuild(cohort,{plan:{sha256:'0'.repeat(64)}})}, compat: { linux: { id: cohort, inputs: { store: { L: 'A' }, executors: [] } } }, platforms: ['linux'], wantOrigin: false });
   result('stream discovery outage retains the classified cohort row', table.rows.filter(r=>r.kind==='stream').length === 1
     && table.rows[0].action === 'bundle' && table.notes.some((note) => note.includes('stream discovery unavailable')),
+  JSON.stringify(table));
+  rmSync(dir, { recursive: true, force: true });
+}
+// Android's binary is the APK, which its own verb builds (LLP 1030.006 D6, LLP 1030.007 D5): with no stream and no
+// production APK receipt, the table names the APK's command.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-android-binary-'));
+  const origin = { kind: 'directory', describe: () => dir, get: async () => null, head: async () => null, list: async () => [] };
+  const table = async (store) => classify({ app: { id: 'com.exact.test', displayName: 'Test', dir, manifest: { deploy: { store: { android: store } } } },
+    opts: { platform: [] }, origin, channel: 'prod', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir },
+    release: 'test', web: dir, bundle: { plan: { sha256: '0'.repeat(64) }, assets: [] }, builds: {}, compat: {}, platforms: ['android'], wantOrigin: false });
+  const updating = await table('A'), fixed = await table('0');
+  const rendered = renderTable(updating);
+  result('an Android deploy with no stream names the production APK command', updating.rows.length === 1
+    && updating.rows[0].kind === 'binary' && updating.rows[0].reason.includes('EXACT_UPDATE_TRUST=production bun exact.mjs android --release')
+    && updating.rows[0].reason.includes('EXACT_UPDATE_GENESIS=1') && fixed.rows[0].reason.startsWith('deploy.store.android is "0"')
+    && rendered.includes('new APK needed: android — EXACT_UPDATE_TRUST=production bun exact.mjs android --release'), rendered);
+  rmSync(dir, { recursive: true, force: true });
+}
+// A production APK receipt with no head starts its stream: the row's cohort is that APK's, and a note names the
+// receipt (LLP 1030.007 D4).
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-android-start-'));
+  const origin = { kind: 'directory', describe: () => dir, get: async () => null, head: async () => null, list: async () => [] };
+  const id = 'a'.repeat(32), bundle = { plan: { sha256: '1'.repeat(64) }, assets: [] };
+  const apk = fixtureBuild(id, bundle);
+  apk.compat.inputs.platform = 'android';
+  const cohort = cohortReceipt(apk), stream = { channel: 'prod', compatibilityId: id };
+  const table = await classify({ app: { id: 'com.exact.test', displayName: 'Test', dir, manifest: { deploy: { store: { android: 'A' } } } },
+    opts: { platform: [] }, origin, channel: 'prod', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir },
+    release: 'test', web: dir, bundle, builds: {}, compat: {}, platforms: ['android'], wantOrigin: false,
+    knownStreams: [{ stream, head: null, cohort, platform: 'android', build: apk }],
+    candidates: new Map([[id, { build: apk, bundle }]]), anchors: new Map([[id, '/receipts/android-aarch64-linux-android.build.json']]) });
+  const [row] = table.rows;
+  result('a production APK receipt starts its Android stream with that APK as the cohort', table.rows.length === 1
+    && row.kind === 'stream' && row.platform === 'android' && row.action === 'bundle' && row.receipt === cohort && row.head === null
+    && table.notes.some((note) => note === `android stream ${id.slice(0, 8)} starts from the production build receipt /receipts/android-aarch64-linux-android.build.json: binary ${'0'.repeat(12)}`),
   JSON.stringify(table));
   rmSync(dir, { recursive: true, force: true });
 }
@@ -378,6 +441,29 @@ async function rejects(action, matches) {
   result('a bundle needing a newer TypeScript runtime is refused by an older cohort only',
     !olderPrelude.bundle&&olderPrelude.missing[0].includes('typescriptRuntime')&&!runtimeOne.bundle&&runtimeOne.missing[0].includes('runtime 2 or later; this cohort\'s is 1')
     &&samePrelude.bundle&&newerPrelude.bundle, JSON.stringify({olderPrelude,runtimeOne,samePrelude,newerPrelude}));
+  // The TypeScript module pair runs only where the binary's TypeScript grants are exactly its own (js/src/paired.rs).
+  const pair=(grants)=>{const c=structuredClone(moved);c.graph.artifacts.push({name:'typescript/app.hbc',requires:{javascriptGrants:grants}});return c;};
+  const holding=g=>({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,javascriptGrants:g}}});
+  const narrower=classifyArtifacts(pair('net.fetch https://x/\nnet.fetch https://y/'),holding('net.fetch https://x/'));
+  const wider=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/\nnet.fetch https://y/'));
+  const exact=classifyArtifacts(pair('net.fetch https://x/'),holding('net.fetch https://x/'));
+  result('a TypeScript pair goes only to a binary holding exactly its grants',
+    !narrower.bundle&&narrower.missing[0].includes('typescript/app.hbc: javascriptGrants')&&!wider.bundle&&exact.bundle,
+    JSON.stringify({narrower,wider,exact}));
+  // An Android cohort takes a generation that needs no more than its APK was composed from, and only its own Hermes
+  // bytecode version (LLP 1030.006 D4, D4a).
+  const apk=({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,hermesBytecode:96,
+    androidLinked:{uses:['fetch','dates'],permissions:['android.permission.READ_CALENDAR'],extensions:['swatch']}}}});
+  const android=(plan,module)=>{const c=structuredClone(moved);Object.assign(c.graph.artifacts[0].requires,plan);c.graph.artifacts.push({name:'typescript/app.hbc',requires:module});return c;};
+  const less=classifyArtifacts(android({androidUses:['fetch'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const capability=classifyArtifacts(android({androidUses:['fetch','camera'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const extension=classifyArtifacts(android({androidUses:[],androidExtensions:['pedometer']},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const permission=classifyArtifacts(android({androidUses:[],androidExtensions:[]},{hermesBytecode:96,androidPermissions:['android.permission.WRITE_CALENDAR']}),apk);
+  const engine=classifyArtifacts(android({androidUses:[],androidExtensions:[]},{hermesBytecode:97,androidPermissions:[]}),apk);
+  result('an Android cohort refuses a generation beyond what its APK linked or of another bytecode version, and takes one that needs less',
+    less.bundle&&!capability.bundle&&capability.missing[0].includes('androidUses.camera')&&!extension.bundle&&extension.missing[0].includes('androidExtensions.pedometer')
+    &&!permission.bundle&&permission.missing[0].includes('WRITE_CALENDAR')&&!engine.bundle&&engine.missing[0].includes('Hermes bytecode 97'),
+    JSON.stringify({less,capability,extension,permission,engine}));
   result('artifact graph separates binary changes, compatible older cohorts, and named missing dependencies',
     same.binary&&same.bundle&&old.binary&&old.bundle&&old.warnings[0].includes('will run the old code')
     &&!absent.bundle&&absent.missing[0].includes('sources.camera')&&!unsupported.bundle&&unsupported.missing[0].includes('gpuSurfaces.map')
@@ -461,7 +547,8 @@ async function rejects(action, matches) {
   const compiler = join(fixture, 'contract-stub');
   writeFileSync(compiler, '#!/usr/bin/env bun\nconsole.log(JSON.stringify({packages:[],sources:[{origin:"app",path:process.argv.at(-1)}],consulted:[],errors:[]}));\n');
   chmodSync(compiler, 0o755);
-  const snapshotOf = (app, opts, exactRoot) => capturedSnapshotOf(app, { ...opts, compiler }, exactRoot);
+  const snapshots = [];
+  const snapshotOf = (app, opts, exactRoot) => { const snapshot = capturedSnapshotOf(app, { ...opts, compiler }, exactRoot); snapshots.push(snapshot); return snapshot; };
   const init = (repo, files) => {
     mkdirSync(repo, { recursive: true });
     spawnSync('git', ['init', '-q'], { cwd: repo });
@@ -720,6 +807,7 @@ async function rejects(action, matches) {
     stagedGitSealed, escapingSymlinkRefused,
     ignoredRootRefused, ignoredRootCaptured,
     ignoredDependencyRefused, capturedDependency, dependencyRefused }));
+  for (const snapshot of snapshots) disposeSnapshot(snapshot);
   rmSync(fixture, { recursive: true, force: true });
 }
 {
@@ -775,10 +863,21 @@ async function rejects(action, matches) {
   try { await publishStream(args); }
   catch (error) { reusedRefused = error.message.includes('already has an immutable record'); }
   const names = await origin.list(base);
-  const blobCards = [head.json.plan, ...head.json.assets];
+  // The head names the plan and the asset index as blobs; the index names the asset beside them.
+  const blobCards = [head.json.plan, head.json.assets];
+  const listed = readAssetIndex(head.json.assets, await origin.get(blobPath(head.json.assets.sha256)));
+  // An index the origin cannot serve now is an unavailable row, not a classification that throws.
+  const outage = Object.create(origin);
+  outage.get = async (rel) => { if (rel === blobPath(head.json.assets.sha256)) throw new OriginUnavailable('index: HTTP 503'); return origin.get(rel); };
+  const outageTable = await classify({ app, opts: { platform: [] }, origin: outage, channel: 'prod',
+    snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir }, release: 'next', web: dir, bundle,
+    builds: { linux: fixtureBuild(compatibilityId, bundle) }, compat: { linux: { id: compatibilityId, inputs: { store: { L: 'A' }, executors: [] } } },
+    platforms: ['linux'], wantOrigin: false });
+  const indexOutageUnavailable = outageTable.rows[0]?.action === 'unavailable' && outageTable.rows[0].reason.includes('HTTP 503');
   const recordBeforeHead = order.indexOf(`put ${recordPath}`) < order.indexOf('put head');
   const interrupted = [];
-  for (const moment of ['before', 'after']) for (let stop = 1; stop <= 4; stop++) {
+  // Writes: the plan, index and asset blobs, the record, then the head.
+  for (const moment of ['before', 'after']) for (let stop = 1; stop <= 5; stop++) {
     const failedDir = mkdtempSync(join(tmpdir(), `exact-stream-failure-${moment}-${stop}-`));
     const failed = new DirectoryOrigin(failedDir);
     const oldPlan = Buffer.from('old plan');
@@ -810,7 +909,7 @@ async function rejects(action, matches) {
     try { result = await publishStream({ ...args, origin: failed, release: `failed-${moment}-${stop}` }); }
     catch (error) { stopped = error.message.includes('injected'); }
     const after = await failed.head(stream);
-    interrupted.push((stop < 4
+    interrupted.push((stop < 5
       ? stopped && after.bytes.equals(oldBytes)
       : moment === 'before'
         ? stopped && after.bytes.equals(oldBytes)
@@ -821,9 +920,11 @@ async function rejects(action, matches) {
   result('stream publication commits immutable blobs and receipt before its head', recordBeforeHead
     && names.join(',') === 'exact.json,releases' && blobCards.every((card) => card.url === `../../blobs/${card.sha256}`)
     && blobCards.every((card) => existsSync(join(dir, '.exact', 'blobs', card.sha256)))
+    && listed.length === 1 && listed[0].url === `./${listed[0].sha256}` && existsSync(join(dir, '.exact', 'blobs', listed[0].sha256))
+    && canonicalBytes(record.assets).equals(await origin.get(blobPath(head.json.assets.sha256)))
     && record.head.entryDigest === createHash('sha256').update(canonicalBytes(head.json)).digest('hex')
     && record.envelope.signature.keyId === 'test' && immutableRaceHeld && reusedRefused && order.length === beforeRetry
-    && interrupted.every(Boolean));
+    && interrupted.every(Boolean) && indexOutageUnavailable, JSON.stringify(outageTable.rows[0]));
   rmSync(dir, { recursive: true, force: true });
 }
 // All origin verbs reject links at the root, intermediate, and leaf boundary.
@@ -926,12 +1027,24 @@ async function rejects(action, matches) {
   const card = (name) => ({ name, bytes: Buffer.from(name), sha256: sha256(Buffer.from(name)) });
   const bundle = { plan: { bytes: planBytes, sha256: sha256(planBytes), formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [card('Logo.png'), card('logo.png')] };
   const signingRefused = await rejects(() => streamHead({ app, bundle, stream, seq: 1, release: 'names' }), (error) => /differ only by case/.test(error.message));
-  const head = streamHead({ app, bundle: { ...bundle, assets: [card('Logo.png')] }, stream, seq: 1, release: 'names' });
-  head.assets.push({ ...head.assets[0], name: 'logo.png' });
-  const bytes = Buffer.from(JSON.stringify(head));
-  const inspected = inspectHead({ bytes, json: head, sha256: sha256(bytes) }, app, stream);
+  // An index another publisher wrote with names that fold together is refused as it is read.
+  const listed = JSON.parse(streamIndex({ ...bundle, assets: [card('Logo.png')] }).bytes).assets;
+  const raw = canonicalBytes({ assets: [...listed, { ...listed[0], name: 'logo.png' }] });
+  let indexProblem = null;
+  try { readAssetIndex({ url: './x', sha256: sha256(raw), bytes: raw.length, count: 2 }, raw); } catch (error) { indexProblem = error.message; }
+  // A web root's index is read at any size (a browser loads it); a client's is bounded.
+  const huge = canonicalBytes({ assets: Array.from({ length: 34000 }, (_, i) => ({ ...listed[0], name: `assets/n${i}` })) });
+  const hugeCard = { url: './x', sha256: sha256(huge), bytes: huge.length, count: 34000 };
+  const unbounded = readAssetIndex(hugeCard, huge, { bounded: false }).length === 34000;
+  const bounded = await rejects(() => readAssetIndex(hugeCard, huge), (error) => /for 34000 assets; the most is 4096\.0 KiB/.test(error.message));
+  result('a web root reads an index over the client bound; a client refuses it', unbounded && bounded);
+  // `plans` is optional, as exact-update reads it: an index with a plan asset and no map is read.
+  const planned = canonicalBytes({ assets: [{ ...listed[0], name: 'plans/card.plan' }] });
+  let plansOptional = true;
+  try { readAssetIndex({ url: './x', sha256: sha256(planned), bytes: planned.length, count: 1 }, planned); } catch { plansOptional = false; }
+  result('an asset index without a plans map is read', plansOptional);
   result('the publisher refuses asset names a client filesystem folds together', refused.every(Boolean) && accepted
-    && signingRefused && !inspected.usable && /differ only by case/.test(inspected.problem), JSON.stringify({ refused, accepted, signingRefused, inspected: inspected.problem }));
+    && signingRefused && /differ only by case/.test(indexProblem ?? ''), JSON.stringify({ refused, accepted, signingRefused, indexProblem }));
 }
 
 // The next seq sits above everything the stream has authenticated: the head
@@ -1004,8 +1117,9 @@ async function rejects(action, matches) {
   const app = { id: 'test.widgets', displayName: 'Widgets' };
   const bundle = { plan: { bytes: Buffer.from('app'), sha256: 'b'.repeat(64), formatVersion: 5, kernelSchema: '0'.repeat(16) }, assets: [card] };
   const head = streamHead({ app, bundle, stream: { channel: 'prod', compatibilityId: 'c'.repeat(32) }, seq: 1, release: 'widgets' });
-  result('entry plans index the signed asset cards in the same stream',
-    JSON.stringify(head.plans.trains) === JSON.stringify(head.assets[0]) && head.plan.sha256 === bundle.plan.sha256);
+  const index = JSON.parse(streamIndex(bundle).bytes);
+  result('entry plans index the signed asset cards in the same stream\'s asset index',
+    JSON.stringify(index.plans.trains) === JSON.stringify(index.assets[0]) && head.assets.count === 1 && head.plans === undefined && head.plan.sha256 === bundle.plan.sha256);
 }
 
 
@@ -1022,13 +1136,12 @@ test('snapshot plans are public files and authenticated dev generation assets', 
     const id = 'test.widget', plan = Buffer.alloc(36 + id.length);
     plan.write('EXPL'); plan.writeUInt32LE(4, 4); plan.writeBigUInt64LE(1n, 16);
     plan.writeUInt32LE(id.length, 32); plan.write(id, 36);
-    const published = webEnvelope({id,displayName:'Widget'}, plan, assetCards(captured));
-    published.dev = {epoch,seq:1};
-    for (const card of published.assets) card.url = `/__dev/generation/${epoch}/1/${card.name}`;
-    captured.set('exact.json', Buffer.from(JSON.stringify(published)));
+    const sealed = sealEnvelope({ ...webEnvelope({id,displayName:'Widget'}, plan, assetCards(captured)), dev: {epoch,seq:1} }, `/__dev/generation/${epoch}/1/assets.json`);
+    captured.set('assets.json', sealed.index); captured.set('exact.json', sealed.bytes);
     retainDevGeneration(cache, epoch, 1, captured);
     const envelope = JSON.parse(readDevGeneration(cache, `/__dev/generation/${epoch}/1/exact.json`).body);
-    if (envelope.plans.card.name !== name || envelope.plans.card.sha256 !== sha256(body) || envelope.plans.card.url !== envelope.assets[0].url) throw new Error('published envelope omitted the captured entry');
+    const index = readDevGeneration(cache, envelope.assets.url).body, listed = readAssetIndex(envelope.assets, index), { plans } = JSON.parse(index);
+    if (plans.card.name !== name || plans.card.sha256 !== sha256(body) || plans.card.url !== listed[0].url) throw new Error('published index omitted the captured entry');
     if (readDevGeneration(cache, `/__dev/generation/${epoch}/1/${name}`)?.body.toString() !== 'snapshot') throw new Error('entry absent from dev generation');
   } finally { rmSync(dir, {recursive:true,force:true}); }
 });
@@ -1054,12 +1167,14 @@ test('a production web root serves every authenticated asset card, including act
       mkdirSync(dirname(join(bake, name)), {recursive:true});
       writeFileSync(join(bake, name), body);
     }
-    writeFileSync(join(bake, 'exact.json'), JSON.stringify(webEnvelope(app, readFileSync(join(bake, 'app.plan')), assetCards(captureAssets(bake)))));
+    const sealed = sealEnvelope(webEnvelope(app, readFileSync(join(bake, 'app.plan')), assetCards(captureAssets(bake))));
+    writeFileSync(join(bake, 'assets.json'), sealed.index); writeFileSync(join(bake, 'exact.json'), sealed.bytes);
     build(web, ['--production', '--plan', join(bake, 'app.plan')]);
     const published = await publishRoot({origin, row:{}, web});
     const envelope = JSON.parse(readStaticFile(origin.dir, `/${webReleasePath(published.root)}/exact.json`)?.body ?? 'null');
-    if (!envelope?.assets.some(card => card.name === 'activities/card.schema.json')) throw new Error('activity schema absent from published envelope');
-    for (const card of [envelope.plan, ...envelope.assets]) {
+    const listed = readAssetIndex(envelope.assets, readStaticFile(origin.dir, envelope.assets.url)?.body);
+    if (!listed.some(card => card.name === 'activities/card.schema.json')) throw new Error('activity schema absent from published index');
+    for (const card of [envelope.plan, ...listed.map(c => ({ ...c, url: new URL(c.url, 'http://o' + envelope.assets.url).pathname }))]) {
       const body = readStaticFile(origin.dir, card.url)?.body;
       if (!body || body.length !== card.bytes || sha256(body) !== card.sha256) throw new Error(`published card is not served: ${card.url}`);
     }
@@ -1067,6 +1182,72 @@ test('a production web root serves every authenticated asset card, including act
     if (!await rejects(() => publishRoot({origin, row:{}, web}), error => error.message.includes('web envelope does not bind activities/card.schema.json'))) throw new Error('missing asset was published');
   } finally { rmSync(dir, {recursive:true,force:true}); }
 }, 300000);
+
+// A TypeScript app with a Live Activity: the Apple bake's generation lists the module pair, which the web bundle
+// carries as its own module, so the macOS stream's bundle adds the pair the bake made beside its receipt.
+test('a native stream of a TypeScript app with a Live Activity publishes the module pair its bake made', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-hold-bundles-'));
+  try {
+    const card = (name, body) => ({ name, bytes: Buffer.from(body), sha256: sha256(Buffer.from(body)) });
+    const plan = card('app.plan', 'plan'), activity = card('plans/departure.plan', 'activity');
+    const pair = [card('typescript/app.hbc', 'bytecode'), card('typescript/app.module.json', '{}')];
+    const graph = (cards) => ({ artifacts: cards.map(({ name, bytes, sha256 }) => ({ name, sha256, bytes: bytes.length, kind: 'bundle', requires: {} })) });
+    const builds = {
+      web: { compat: { target: 'wasm32-unknown-unknown', inputs: { platform: 'web' } }, graph: graph([plan, activity]) },
+      macos: { compat: { target: 'aarch64-apple-darwin', inputs: { platform: 'macos' } }, graph: graph([plan, activity, ...pair]) },
+    };
+    const entries = join(dir, 'macos-aarch64-apple-darwin.entries');
+    mkdirSync(join(entries, 'typescript'), { recursive: true });
+    for (const { name, bytes } of pair) writeFileSync(join(entries, name), bytes);
+    const fresh = () => ({ plan: { sha256: plan.sha256, bytes: plan.bytes }, assets: [activity] });
+    const bundle = fresh();
+    holdBundles(bundle, builds, dir);
+    expect(bundle.assets.map((a) => a.name)).toEqual(['plans/departure.plan']);
+    expect(Object.keys(bundle.platforms)).toEqual(['macos']);
+    expect(bundle.platforms.macos.assets.map((a) => [a.name, a.bytes.toString()]))
+      .toEqual([['plans/departure.plan', 'activity'], ['typescript/app.hbc', 'bytecode'], ['typescript/app.module.json', '{}']]);
+    // The pair is held to the graph's digests, and any other difference still refuses.
+    writeFileSync(join(entries, 'typescript/app.hbc'), 'edited');
+    expect(() => holdBundles(fresh(), builds, dir)).toThrow('typescript/app.hbc');
+    writeFileSync(join(entries, 'typescript/app.hbc'), 'bytecode');
+    builds.macos.graph.artifacts.push({ name: 'plans/other.plan', sha256: sha256(Buffer.from('x')), bytes: 1, kind: 'bundle', requires: {} });
+    expect(() => holdBundles(fresh(), builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A game's baked texture: the web root carries its three files, and each Apple stream the one family its
+// bake's roster holds (scripts/texture-families.mjs).
+test('a native stream publishes only the texture family its platform reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-hold-textures-'));
+  try {
+    const card = (name) => ({ name, bytes: Buffer.from(name), sha256: sha256(Buffer.from(name)) });
+    const plan = card('app.plan'), model = card('assets/fox.model');
+    const [rgba, bc, astc] = ['assets/fox/0.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.astc.tex'].map(card);
+    const graph = (cards) => ({ artifacts: cards.map(({ name, bytes, sha256 }) => ({ name, sha256, bytes: bytes.length, kind: 'bundle', requires: {} })) });
+    const builds = {
+      web: { compat: { inputs: { platform: 'web' } }, graph: graph([plan, model, rgba, bc, astc]) },
+      macos: { compat: { inputs: { platform: 'macos', textureFamily: 'bc' } }, graph: graph([plan, model, bc]) },
+      ios: { compat: { inputs: { platform: 'ios', textureFamily: 'astc' } }, graph: graph([plan, model, astc]) },
+    };
+    const bundle = { plan: { sha256: plan.sha256, bytes: plan.bytes }, assets: [model, rgba, bc, astc] };
+    holdBundles(bundle, builds, dir);
+    expect(bundle.assets.length).toBe(4);
+    expect(Object.keys(bundle.platforms)).toEqual(['macos', 'ios']);
+    expect(bundle.platforms.macos.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.bc.tex']);
+    expect(bundle.platforms.ios.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    // A stream of an iOS cohort baked with ASTC alone is sent ASTC; one baked before thinning, every file.
+    expect(streamBundle(bundle, 'ios', { textureFamily: 'astc' }).assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    expect(streamBundle(bundle, 'ios', { platform: 'ios' }).assets.map((a) => a.name).sort()).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.tex']);
+    // A macOS bake that kept another family differs from the bundle its stream publishes.
+    builds.macos.graph = graph([plan, model, bc, astc]);
+    expect(() => holdBundles({ plan: bundle.plan, assets: [model, rgba, bc, astc] }, builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+    // A bake that thinned nothing names no family, and its stream publishes every file.
+    builds.macos = { compat: { inputs: { platform: 'macos' } }, graph: graph([plan, model, rgba, bc, astc]) };
+    const whole = { plan: bundle.plan, assets: [model, rgba, bc, astc] };
+    holdBundles(whole, builds, dir);
+    expect(Object.keys(whole.platforms)).toEqual(['ios']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('adding editing and removing only a sunset publishes a new signed sequence', async () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -1103,4 +1284,45 @@ test('adding editing and removing only a sunset publishes a new signed sequence'
     expect(again.action).toBe('current');
     expect(writes).toBe(before);
   }
+});
+
+// The captured deploy with producer boundaries doubled: an existing iOS stream must reach classification on Linux.
+test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only for an authenticated cohort (%s)', async state => {
+  const root = mkdtempSync(resolve(import.meta.dir, '../target/deploy-bundle-'));
+  const sourceRoot = resolve(root, 'exact-source-capture-fixture/source'), exactRoot = resolve(sourceRoot, 'exact');
+  const app = { id: 'com.exact.bundle', name: 'bundle', displayName: 'Bundle', dir: exactRoot, workspace: exactRoot, target: root,
+    manifest: { host: { ios: {} }, deploy: { signing: { key: 'test', keys: { test: 'public' } } } } };
+  const bundle = { plan: { bytes: Buffer.from('plan'), sha256: sha256(Buffer.from('plan')), formatVersion: 4, kernelSchema: '0'.repeat(16) }, assets: [] };
+  const build = fixtureBuild('a'.repeat(32), bundle);
+  build.trust = 'production';
+  build.compat.inputs = { platform: 'ios', store: { L: 'A' }, keys: { test: 'public' }, executors: [] };
+  const cohort = cohortReceipt(build), stream = { channel: 'prod', compatibilityId: build.compat.id };
+  const calls = [], output = [];
+  const bindings = {
+    ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
+    process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
+    resolveApp: selector => { expect(selector).toBe(state === 'new' ? 'bundle' : app.dir); return app; }, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
+    loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
+    bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
+    buildFor: () => { calls.push('native bake'); return build; },
+    holdBundles() {}, rustPackage: () => false, resolve, sealedSourceEnv: (_, env) => env,
+    streams: async () => state === 'authenticated' ? [{ stream, head: {}, cohort, platform: 'ios' }] : state === 'new' ? [] : [{ stream, platform: 'ios', problem: 'unauthenticated' }],
+    streamCandidates: async () => [{ row: { kind: 'stream', platform: 'ios', ...stream }, compat: build.compat, build, bundle }],
+    classify: async () => ({ snapshot: {}, rows: [{ kind: 'stream', platform: 'ios', ...stream, receipt: cohort, action: 'bundle' }] }),
+    streamBundle, publishStream: async () => { calls.push('publish'); return { kind: 'stream', action: 'published', seq: 8, head: { sha256: 'b'.repeat(64) } }; },
+    refuse: message => { throw Error(message); },
+  };
+  const source = readFileSync(DEPLOY, 'utf8');
+  const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
+  const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
+  try {
+    const selector = state === 'new' ? 'bundle' : state === 'invalid' ? '.' : resolve(root, 'live/app');
+    expect(await deploy({ _: [selector], platform: ['ios'], keys: root, yes: true, json: true }, {
+      version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
+      snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] }, receipts: [],
+    })).toBe(0);
+    expect(calls).toEqual(state === 'authenticated' ? ['publish'] : ['native bake', 'publish']);
+    expect(JSON.parse(output.at(-1)).published[0].seq).toBe(8);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

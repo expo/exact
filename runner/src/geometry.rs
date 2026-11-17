@@ -15,7 +15,8 @@
 //! `elementFromPoint(x, y)` and `elementsFromPoint(x, y)` (LLP 1094 D10)
 //! test the same boxes front to back: the former names the first hit by its
 //! nearest `id`, the latter lists each hit's own `id`. Natively both use the
-//! kernel's boxes, transform rows and [`Scrolled`]; the web uses its hit test.
+//! kernel's boxes, transform rows and [`Scrolled`], including the host's
+//! modal-backdrop hit region; the web uses its hit test.
 //! `querySelectorAll` (LLP 1075.003 §9.1) lists nodes by a declared data word.
 //!
 //! An action runs against a read-only runner, so `frame` reads through a
@@ -29,11 +30,15 @@ mod hit_slop_tests;
 #[cfg(test)]
 mod inline_tests;
 mod intersection;
+mod modal;
 #[cfg(test)]
 mod modal_tests;
 #[cfg(test)]
+mod placement_tests;
+#[cfg(test)]
 mod top_layer_tests;
-pub(crate) use intersection::{intersection, Root as IntersectionRoot};
+pub(crate) use intersection::{block_clip, intersection, Root as IntersectionRoot};
+use modal::{behind_modal, modal_dialog, modal_live};
 
 use exact_kernel::{
     Display, Frame, Kernel, NodeFlags, NodeKey, Overflow, PointerEvents, PropId, StyleId, ViewId,
@@ -121,6 +126,9 @@ pub trait InlineGeometry: std::fmt::Debug {
 /// LLP 1123 D2). The clip bounds reads without changing the frame's mapping.
 pub type TopLayerFrame = (ViewId, [f64; 4], Option<[f64; 4]>);
 
+/// A modal backdrop's view, viewport bounds and optional excluded rectangle.
+pub type TopLayerBackdrop = (ViewId, [f64; 4], Option<[f64; 4]>);
+
 #[derive(Debug, Clone)]
 struct TopLayerBox {
     key: NodeKey,
@@ -131,6 +139,7 @@ struct TopLayerBox {
 #[derive(Debug, Clone)]
 struct PlacedBlock {
     key: NodeKey,
+    clip_only: bool,
     rect: [f64; 4],
     within: NodeKey,
     offset: Option<[f64; 2]>,
@@ -150,6 +159,7 @@ pub struct Scrolled {
     /// The index in `top_layer` of the frontmost modal presentation's
     /// first box, as its host reports it.
     modal: Option<usize>,
+    backdrop: Option<modal::Backdrop>,
     placed: Vec<PlacedBlock>,
     pub(crate) inline: Option<std::rc::Rc<dyn InlineGeometry>>,
 }
@@ -177,6 +187,18 @@ impl Scrolled {
         }
     }
 
+    /// `view`'s offset as last noted, or the page's for `None`; zero for a
+    /// node with none noted.
+    pub fn shown(&self, kernel: &Kernel, view: Option<ViewId>) -> (f64, f64) {
+        match view {
+            None => self.page,
+            Some(view) => kernel
+                .arena()
+                .key_of(view)
+                .map_or((0.0, 0.0), |key| self.offset(key)),
+        }
+    }
+
     /// One scroller's offset, zero for a node with none noted.
     fn offset(&self, key: NodeKey) -> (f64, f64) {
         self.boxes
@@ -199,6 +221,7 @@ impl Scrolled {
             })
             .collect();
         self.modal = None;
+        self.backdrop = None;
     }
 
     /// The presenter's front-to-back-independent stack order and viewport
@@ -227,6 +250,7 @@ impl Scrolled {
                 })
         };
         self.top_layer = frames.iter().filter_map(entry).collect();
+        self.backdrop = None;
         // The boxes ignored before it are not counted
         self.modal = modal.map(|i| {
             frames[..i.min(frames.len())]
@@ -246,7 +270,11 @@ impl Scrolled {
     /// the root's parent unless the host holds the block beside it, as
     /// UIKit's tab container holds a tab's route beside its panel; the
     /// root is then shown in `within` directly, as the host's hierarchy
-    /// shows it, and the boxes between move nothing of it.
+    /// shows it, and the boxes between neither move nor clip it.
+    /// Without a host block, a placement only clips the subtree to the
+    /// rectangle: it changes neither layout nor `frame()`'s border box. Its
+    /// holder must be the direct parent and its offset absent. The rectangle
+    /// is in that parent's coordinates after scrolling, before transforms.
     /// An offset names a scrollport, even at zero: it moves the root and its
     /// subtree while the allocation's clip stays put. No offset means a pane.
     /// An absent placement forgets the rectangle. The root keeps its place
@@ -267,10 +295,14 @@ impl Scrolled {
         let Some(key) = arena.key_of(view) else {
             return;
         };
+        let clip_only = kernel.host_block(view).is_none();
         let placement = match placement {
             Some((rect, within, offset)) => {
-                let Some(within) = arena.key_of(within).filter(|_| {
-                    valid_rect(&rect) && offset.iter().flatten().all(|v| v.is_finite())
+                let Some(within) = arena.key_of(within).filter(|holder| {
+                    valid_rect(&rect)
+                        && offset.iter().flatten().all(|v| v.is_finite())
+                        && (!clip_only
+                            || (arena.parent(key.index) == Some(holder.index) && offset.is_none()))
                 }) else {
                     return;
                 };
@@ -282,6 +314,7 @@ impl Scrolled {
         if let Some((rect, within, offset)) = placement {
             self.placed.push(PlacedBlock {
                 key,
+                clip_only,
                 rect,
                 within,
                 offset,
@@ -294,7 +327,11 @@ impl Scrolled {
     /// (`place`). `None` for an open top-layer box, a node with no block or
     /// placement, or a placement whose `within` is not above the node.
     fn placement(&self, kernel: &Kernel, slot: u32, frame: Frame) -> Option<(u32, Affine)> {
+        kernel.host_block(kernel.arena().local_id(slot))?;
         let (entry, within) = self.placed_block(kernel, slot)?;
+        if entry.clip_only {
+            return None;
+        }
         let offset = entry.offset.unwrap_or([0.0; 2]);
         Some((
             within,
@@ -314,8 +351,16 @@ impl Scrolled {
             .placed
             .iter()
             .find(|entry| entry.key == arena.key(slot))?;
-        kernel.host_block(arena.local_id(slot))?;
         let within = arena.resolve(entry.within)?;
+        if entry.clip_only {
+            if arena.parent(slot) != Some(within)
+                || kernel.host_block(arena.local_id(slot)).is_some()
+            {
+                return None;
+            }
+        } else {
+            kernel.host_block(arena.local_id(slot))?;
+        }
         std::iter::successors(arena.parent(slot), |&p| arena.parent(p)).find(|&p| p == within)?;
         Some((entry, within))
     }
@@ -330,7 +375,10 @@ impl Scrolled {
     ) -> GeometryAnswer {
         let mut at = kernel.arena().slot_of(view);
         while let Some(slot) = at {
-            if self.placed_block(kernel, slot).is_some() {
+            if self
+                .placed_block(kernel, slot)
+                .is_some_and(|(entry, _)| !entry.clip_only)
+            {
                 return kernel_frame(kernel, self, view);
             }
             at = kernel.arena().parent(slot);
@@ -585,9 +633,17 @@ fn own_transform(s: &exact_kernel::StyleProps, at: Frame) -> Affine {
     let (w, h) = (f64::from(at.width), f64::from(at.height));
     let (ox, oy) = s.transform_origin.resolve(at.width, at.height);
     let (ox, oy) = (f64::from(ox), f64::from(oy));
-    let turn = if s.rotate_axis.is_3d() { 0.0 } else { s.rotate };
+    let turn = if s.rotate_axis.is_3d() {
+        0.0
+    } else {
+        exact_motion::rotation::presented(exact_motion::rotation::value(
+            f64::from(s.rotate),
+            s.rotate_axis.0.map(f64::from),
+        ))
+        .x
+    };
     let k = f64::from(s.scale);
-    let (sin, cos) = f64::from(turn).to_radians().sin_cos();
+    let (sin, cos) = turn.to_radians().sin_cos();
     let (tx, ty) = (
         f64::from(s.translate.x) + f64::from(s.translate_percent.x) / 100.0 * w,
         f64::from(s.translate.y) + f64::from(s.translate_percent.y) / 100.0 * h,
@@ -661,31 +717,6 @@ pub(crate) fn shown_in(kernel: &Kernel, scrolled: &Scrolled, slot: u32, frame: F
 /// Whether a host's rectangle is one: finite, of no negative size.
 fn valid_rect(rect: &[f64; 4]) -> bool {
     rect.iter().all(|v| v.is_finite()) && rect[2] >= 0.0 && rect[3] >= 0.0
-}
-
-/// The native allocation's clip in its block root's border-box coordinates.
-/// Scrolling moves content inside this fixed allocation. None for implied
-/// popover blocks, which supply layout space and allow visible overflow.
-pub(crate) fn block_clip(
-    kernel: &Kernel,
-    scrolled: &Scrolled,
-    slot: u32,
-    frame: Frame,
-) -> Option<[f64; 4]> {
-    let view = kernel.arena().local_id(slot);
-    if kernel.host_block_implied(view) {
-        return None;
-    }
-    let (w, h) = kernel.host_block_size(view)?;
-    let offset = scrolled
-        .placed_block(kernel, slot)
-        .and_then(|(entry, _)| entry.offset)
-        .unwrap_or([0.0; 2]);
-    let (x, y) = (
-        offset[0] - f64::from(frame.x),
-        offset[1] - f64::from(frame.y),
-    );
-    Some([x, y, x + f64::from(w), y + f64::from(h)])
 }
 
 /// A top-layer box replaced whole by its host has no kernel layout. Its
@@ -1031,38 +1062,6 @@ fn data_matches(
     out
 }
 
-/// The live part of the top layer starts at the frontmost modal dialog or
-/// the first box of the host's frontmost presentation (`top_layer_frames`):
-/// whichever of its routes it shows, and what is open above it.
-/// Everything else, below it in the top layer or in the document, is
-/// behind it and inert to structural reads, as UIKit's dimming view and
-/// the host's `inertBehind` make it to touch. None while no presentation
-/// is open.
-fn modal_live(kernel: &Kernel, scrolled: &Scrolled) -> Option<Vec<u32>> {
-    let arena = kernel.arena();
-    let dialog = scrolled.top_layer.iter().rposition(|open| {
-        arena
-            .resolve(open.key)
-            .is_some_and(|slot| modal_dialog(kernel, slot))
-    });
-    let from = scrolled.modal.into_iter().chain(dialog).max()?;
-    Some(
-        scrolled.top_layer[from.min(scrolled.top_layer.len())..]
-            .iter()
-            .filter_map(|open| arena.resolve(open.key))
-            .collect(),
-    )
-}
-
-/// Whether `slot` is behind an open presentation (`modal_live`).
-fn behind_modal(kernel: &Kernel, scrolled: &Scrolled, slot: u32) -> bool {
-    let Some(live) = modal_live(kernel, scrolled) else {
-        return false;
-    };
-    let arena = kernel.arena();
-    !std::iter::successors(Some(slot), |&s| arena.parent(s)).any(|s| live.contains(&s))
-}
-
 fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> bool {
     if crate::head::inactive(kernel, view) {
         return false;
@@ -1106,16 +1105,18 @@ fn kernel_shown(kernel: &Kernel, scrolled: &Scrolled, view: ViewId, _: bool) -> 
     }
 }
 
-/// The front-most laid-out box at viewport `(x, y)` (LLP 1094 D10): every
+/// The front-most hit at viewport `(x, y)` (LLP 1094 D10): every
 /// root from the last, each node's children front to back by LLP 1083.000's
 /// rank and then tree order, a child before its parent. Boxes are `frame`'s,
 /// through every transform (LLP 1051.000 D1, changed 2026-10-04), each
 /// tested in its own space, so a turned box answers its own shape, not its
 /// bounding box, as DOM's hit test does, and grown by its hit slop
 /// (`StyleProps::hit_slop`); a scroller or a box that clips cuts
-/// its descendants to its padding box; `pointer-events: none` and
+/// its rendering descendants to its padding box; `pointer-events: none` and
 /// `visibility` other than `visible` (both inherited) are passed over, and
-/// `display: none` takes its subtree.
+/// `display: none` takes its subtree. The front modal's host-reported
+/// backdrop is a hit where it contains the point, beneath live content
+/// boxes. Nothing behind that modal is read.
 fn kernel_point(kernel: &Kernel, scrolled: &Scrolled, x: f64, y: f64) -> Option<ViewId> {
     kernel_hits(kernel, scrolled, x, y, true).into_iter().next()
 }
@@ -1131,6 +1132,20 @@ fn kernel_hits(
     y: f64,
     first_only: bool,
 ) -> Vec<ViewId> {
+    let arena = kernel.arena();
+    let mut escapes = std::collections::HashSet::new();
+    for entry in &scrolled.placed {
+        let Some(slot) = arena.resolve(entry.key) else {
+            continue;
+        };
+        let Some((_, holder)) = scrolled.placed_block(kernel, slot) else {
+            continue;
+        };
+        escapes.extend(
+            std::iter::successors(arena.parent(slot), |&p| arena.parent(p))
+                .take_while(|&p| p != holder),
+        );
+    }
     let ranks: std::collections::HashMap<ViewId, i64> = kernel
         .paint_order()
         .into_iter()
@@ -1139,11 +1154,11 @@ fn kernel_hits(
     let walk = Point {
         kernel,
         scrolled,
+        escapes,
         ranks,
         at: (x, y),
         first_only,
     };
-    let arena = kernel.arena();
     let page = shift(-scrolled.page.0, -scrolled.page.1);
     let mut hits = Vec::new();
     // Only the open presentation and what is open above it are read
@@ -1166,9 +1181,21 @@ fn kernel_hits(
         let Some(inherited) = inherited_hit_state(kernel, slot) else {
             continue;
         };
-        walk.hits(slot, shown, inherited, true, &mut Vec::new(), &mut hits);
+        walk.hits(
+            slot,
+            Some(shown),
+            inherited,
+            true,
+            &mut Vec::new(),
+            &mut hits,
+        );
         if first_only && !hits.is_empty() {
             return hits;
+        }
+    }
+    if let Some(view) = modal::backdrop_hit(kernel, scrolled, live.as_deref(), x, y) {
+        if !hits.contains(&view) {
+            hits.push(view);
         }
     }
     if live.is_some() {
@@ -1179,7 +1206,7 @@ fn kernel_hits(
         let placed = mul(page, shift(f64::from(f.x), f64::from(f.y)));
         walk.hits(
             root,
-            placed,
+            Some(placed),
             (PointerEvents::Auto, Visibility::Visible),
             false,
             &mut Vec::new(),
@@ -1227,35 +1254,34 @@ fn inherited_hit_state(kernel: &Kernel, slot: u32) -> Option<(PointerEvents, Vis
     ))
 }
 
-fn modal_dialog(kernel: &Kernel, slot: u32) -> bool {
-    let props = kernel.arena().props(slot);
-    props.str(PropId::SemanticTag) == Some("dialog") && props.str(PropId::Popover).is_none()
-}
-
 struct Point<'a> {
     kernel: &'a Kernel,
     scrolled: &'a Scrolled,
+    // Logical ancestors a placement skips on its way to its holder.
+    escapes: std::collections::HashSet<u32>,
     ranks: std::collections::HashMap<ViewId, i64>,
     at: (f64, f64),
     first_only: bool,
 }
 
 impl Point<'_> {
-    /// `slot`'s hit, `placed` mapping its untransformed border box (its
-    /// top left at the origin) to the viewport, and `above` the boxes the
-    /// walk came through, each with the map from its local coordinates to
-    /// the viewport, which a placed block's root shown in one of them
-    /// (`shown_in`) starts from. Every clip above it holds the point, or the
-    /// walk would not have come here.
+    /// `placed` maps the border box to the viewport, or is absent when a
+    /// rendering ancestor clips the point. `above` keeps each ancestor's
+    /// map after clipping, so a placed root starts from its actual holder.
+    /// Only paths to roots that escape a clip keep walking through it;
+    /// logical order, inheritance and subtree suppression still apply.
     fn hits(
         &self,
         slot: u32,
-        placed: Affine,
+        placed: Option<Affine>,
         inherited: (PointerEvents, Visibility),
         lifted: bool,
-        above: &mut Vec<(u32, Affine)>,
+        above: &mut Vec<(u32, Option<Affine>)>,
         hits: &mut Vec<ViewId>,
     ) {
+        if placed.is_none() && !self.escapes.contains(&slot) {
+            return;
+        }
         let arena = self.kernel.arena();
         let style = arena.style(slot);
         let flags = arena.flags(slot);
@@ -1288,31 +1314,43 @@ impl Point<'_> {
             inherited.1
         };
         let f = native.unwrap_or_else(|| arena.frame(slot));
-        // A block's root and its subtree are reached only inside the block
-        // its host shows them in
-        if let Some(b) = block_clip(self.kernel, self.scrolled, slot, f) {
-            let at = unmap(placed, self.at);
-            if !at.is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3]) {
-                return;
-            }
+        let placed = placed.filter(|&m| {
+            block_clip(self.kernel, self.scrolled, slot, f).is_none_or(|b| {
+                unmap(m, self.at)
+                    .is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3])
+            })
+        });
+        if placed.is_none() && !self.escapes.contains(&slot) {
+            return;
         }
-        let m = mul(
-            placed,
-            if native.is_some() {
-                own_transform(style, f)
-            } else {
-                intersection::placed_transform(self.kernel, self.scrolled, slot, f)
-            },
-        );
-        let local = unmap(m, self.at);
+        let m = placed.map(|placed| {
+            mul(
+                placed,
+                if native.is_some() {
+                    own_transform(style, f)
+                } else {
+                    intersection::placed_transform(self.kernel, self.scrolled, slot, f)
+                },
+            )
+        });
+        let local = m.and_then(|m| unmap(m, self.at));
         let (width, height) = (f64::from(f.width), f64::from(f.height));
         let inside = |b: [f64; 4]| {
             local.is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3])
         };
         // The padding box on each axis that clips: `clip` beside `visible`
-        // clips its own axis alone (CSS Overflow 3 §3.1).
-        let border = style.border_widths_in(arena.env()).map(f64::from);
-        let (ox, oy) = (style.overflow_x, style.overflow_y);
+        // clips its own axis alone (CSS Overflow 3 §3.1). A `scroll` or
+        // `list` with no `overflow-y` row scrolls on y, as the engine lays
+        // it out (`style.rs`).
+        let env = arena.env_of(slot);
+        let border = style.border_widths_in(&env).map(f64::from);
+        let ox = style.overflow_x;
+        let oy =
+            if !style.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default() {
+                Overflow::Auto
+            } else {
+                style.overflow_y
+            };
         let (x_clips, y_clips) = (
             ox.computed(oy) != Overflow::Visible,
             oy.computed(ox) != Overflow::Visible,
@@ -1325,7 +1363,7 @@ impl Point<'_> {
             (clip[1], clip[3]) = (f64::NEG_INFINITY, f64::INFINITY);
         }
         let clipped = (x_clips || y_clips) && !inside(clip);
-        if !clipped && native.is_none() {
+        if (!clipped || self.escapes.contains(&slot)) && native.is_none() {
             let mut children: Vec<(i64, usize, u32)> = arena
                 .children(slot)
                 .iter()
@@ -1336,7 +1374,7 @@ impl Point<'_> {
                 })
                 .collect();
             children.sort_unstable();
-            above.push((slot, m));
+            above.push((slot, m.filter(|_| !clipped)));
             for &(_, _, child) in children.iter().rev() {
                 // Where the child is shown, in this box or the one above that
                 // holds it; a top-layer child is tested in the top layer instead
@@ -1349,7 +1387,14 @@ impl Point<'_> {
                     continue;
                 };
                 let inherited = (pointer, visibility);
-                self.hits(child, mul(from, local), inherited, false, above, hits);
+                self.hits(
+                    child,
+                    from.map(|from| mul(from, local)),
+                    inherited,
+                    false,
+                    above,
+                    hits,
+                );
                 if self.first_only && !hits.is_empty() {
                     above.pop();
                     return;
@@ -1360,7 +1405,7 @@ impl Point<'_> {
         // Its own box grows by its hit slop, tested after its children and
         // before what is behind it, as a front box's slop takes the pointer
         // from a back box (Charlie, 2026-11-10).
-        let [t, r, b, l] = style.hit_slop(arena.env()).map(f64::from);
+        let [t, r, b, l] = style.hit_slop(&env).map(f64::from);
         let hit = inside([-l, -t, width + r, height + b])
             && pointer != PointerEvents::None
             && visibility == Visibility::Visible
@@ -1392,7 +1437,7 @@ fn measure_ahead(
 ) -> Measured {
     let mut answers: Measured = Vec::new();
     let mut literal = None;
-    for instruction in crate::vm::instructions(code).map_while(Result::ok) {
+    for instruction in crate::vm::instructions(plan.read_code(code).0).map_while(Result::ok) {
         match instruction.op {
             Opcode::Str => literal = Some(instruction.args[0] as u32),
             Opcode::Call

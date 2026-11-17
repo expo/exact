@@ -1,4 +1,4 @@
-import {mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync} from 'node:fs';
+import {mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, readdirSync, unlinkSync, rmdirSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 
@@ -7,37 +7,45 @@ export function readStatus(app, now = Date.now()) {
   let rows; try { rows = JSON.parse(readFileSync(resolve(app, '.exact/status.json'), 'utf8')); } catch { return []; }
   return rows.map(row => row.state === 'running' ? {...row, elapsedMs:now - row.startedAt, state:alive(row.pid) ? 'running' : 'unknown'} : row);
 }
+function release(lock, owner) {
+  // The owner filename identifies one acquisition. A replacement is nonempty
+  // before it becomes visible, so neither operation can remove its lock.
+  if (owner) {
+    try { unlinkSync(resolve(lock, owner)); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  try { rmdirSync(lock); } catch (e) { if (!['ENOENT','EEXIST','ENOTEMPTY'].includes(e.code)) throw e; }
+}
 function update(app, row) {
   const dir = resolve(app, '.exact'), lock = resolve(dir, 'status.lock');
   mkdirSync(dir, {recursive:true});
+  const owner = `${process.pid}-${randomUUID()}`, candidate = `${lock}.${owner}`;
+  mkdirSync(candidate);
   const deadline = Date.now() + 2000;
-  for (;;) {
-    try { mkdirSync(lock); writeFileSync(resolve(lock,'owner'), String(process.pid)); break; } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      try {
-        const inode = statSync(lock).ino;
-        let owner; try { owner = Number(readFileSync(resolve(lock,'owner'),'utf8')); } catch {}
-        if (owner && !alive(owner)) {
-          // Keep the nonempty tombstone: a second observer of this dead owner
-          // cannot rename a successor over it (rename refuses nonempty targets).
-          try { renameSync(lock, `${lock}.dead-${owner}-${inode}`); }
-          catch (error) { if (!['ENOENT','EEXIST','ENOTEMPTY'].includes(error.code)) throw error; }
-          continue;
-        }
-      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      if (Date.now() >= deadline) throw e;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-    }
-  }
   try {
-    const rows = readStatus(app).filter(r => r.invocation !== row.invocation);
-    rows.push(row);
-    const temp = resolve(dir, `status.${process.pid}.tmp`);
-    writeFileSync(temp, JSON.stringify(rows, null, 2) + '\n');
-    renameSync(temp, resolve(dir, 'status.json'));
-  } finally {
-    if (readFileSync(resolve(lock,'owner'),'utf8') === String(process.pid)) rmSync(lock, {recursive:true});
-  }
+    writeFileSync(resolve(candidate, owner), '');
+    for (;;) {
+      try { renameSync(candidate, lock); break; } catch (e) {
+        // Windows also reports directory contention as a permission error.
+        if (!['EEXIST','ENOTEMPTY','EPERM','EACCES'].includes(e.code)) throw e;
+        try {
+          const observed = readdirSync(lock)[0], pid = Number(observed?.split('-')[0]);
+          if (!observed || pid && !alive(pid)) { release(lock, observed); continue; }
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          if (['EEXIST','ENOTEMPTY'].includes(e.code)) continue;
+        }
+        if (Date.now() >= deadline) throw e;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+      }
+    }
+    try {
+      const rows = readStatus(app).filter(r => r.invocation !== row.invocation);
+      rows.push(row);
+      const temp = resolve(dir, `status.${process.pid}.tmp`);
+      writeFileSync(temp, JSON.stringify(rows, null, 2) + '\n');
+      renameSync(temp, resolve(dir, 'status.json'));
+    } finally { release(lock, owner); }
+  } finally { rmSync(candidate, {recursive:true, force:true}); }
 }
 export function startStatus(app, verb, extra = {}) {
   const previous = readStatus(app).filter(r => r.verb === verb && r.lastDurationMs != null).at(-1);

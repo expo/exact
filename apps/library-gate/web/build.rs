@@ -5,7 +5,7 @@ use contract::DataSource;
 
 fn main() {
     contract::rerun_if_changed(std::path::Path::new("../app.contract"));
-    println!("cargo:rerun-if-changed=../app.tamber");
+    println!("cargo:rerun-if-changed=../app.forma");
     println!("cargo:rerun-if-changed=../app.json");
     println!("cargo:rerun-if-changed=../data");
     println!("cargo:rerun-if-changed=build.rs");

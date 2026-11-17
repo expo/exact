@@ -4,7 +4,7 @@ import { glueDeclarations } from '../web/tests/glue-fixture.mjs';
 
 mock.module('./rt.js', () => ({
   journal: [], clock: { now: 0, agent: true }, nextTicket: () => 1,
-  inflight: { n: 0 }, Hosts: {}, OnHooks: {}, viewId: () => 1, Views: new Map(), data: {}, painted: () => Promise.resolve(),
+  inflight: { n: 0 }, Hosts: {}, OnHooks: {}, viewId: () => 1, Views: new Map(), data: {}, painted: () => Promise.resolve(), pressFeedback: () => Promise.resolve(),
 }));
 mock.module('./pointer.js', () => ({ record: () => {} }));
 const { inertAncestor } = await import('../web/navigation/layers.js');
@@ -110,10 +110,8 @@ test('app files reach navigator.share as typed Files, guarded by canShare', asyn
 // Check every entry in both directions so adding a type to only one fails.
 test('picker admission and delivery agree on every filename MIME type', async () => {
   const rust = readFileSync(new URL('../../runner/src/runner/picker.rs', import.meta.url), 'utf8');
-  const body = rust.slice(rust.indexOf('pub fn mime_for('), rust.indexOf('/// Whether `accept`'));
-  const native = {};
-  for (const [, extensions, mime] of body.matchAll(/((?:"[a-z0-9]+"\s*\|?\s*)+) => "([^"]+)"/g))
-    for (const [, ext] of extensions.matchAll(/"([a-z0-9]+)"/g)) native[ext] = mime;
+  const body = rust.slice(rust.indexOf('const MIME_TYPES'), rust.indexOf('/// Whether `accept`'));
+  const native = Object.fromEntries([...body.matchAll(/\("([a-z0-9]+)", "([^"]+)"\)/g)].map(([, ext, mime]) => [ext, mime]));
   const js = readFileSync(new URL('./files.js', import.meta.url), 'utf8');
   const table = new Function(glueDeclarations(js, ['MIME']) + '; return MIME;')();
   const source = readFileSync(new URL('../web/picker-glue.js', import.meta.url), 'utf8');

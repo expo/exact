@@ -13,31 +13,31 @@ pub enum ListTextPolicy {
 /// A text position that survives retirement of a list row's native views.
 #[derive(Debug, Clone, Copy)]
 pub struct ListTextPosition<'a> {
-    /// The opaque key published on the row wrapper.
+    /// The opaque row-wrapper key; ignored for fixed positions.
     pub key: &'a str,
-    /// Zero-based paragraph within the row.
+    /// Fixed lead (`Some(false)`) or trail (`Some(true)`); `None` addresses a row.
+    pub fixed: Option<bool>,
+    /// Zero-based paragraph within the row or fixed region.
     pub paragraph: usize,
     /// UTF-16 offset within that paragraph, as on the DOM and Apple text APIs.
     pub offset: usize,
 }
 
 impl<D: DataSource> Runner<D> {
-    /// Nearest unmounted row snap area in a horizontal collection, using its
-    /// measured sizes or current estimates. At most 64 local rows are evaluated;
-    /// no row is mounted. `distance` bounds the search by the nearest mounted
-    /// target, or infinity when there is none.
-    pub fn collection_snap(
-        &self,
-        view: ViewId,
-        proposed: f64,
-        port: f64,
-        maximum: f64,
-        distance: f64,
-    ) -> Option<f64> {
+    /// Nearest unmounted row snap area in a collection, along its axis, using
+    /// its measured sizes or current estimates. At most 64 local rows are
+    /// evaluated; no row is mounted. `geometry`: the snapport start's
+    /// projected rest, the snapport's length, the least and greatest rests,
+    /// and the distance of the nearest mounted target (infinity when there is
+    /// none), which bounds the search.
+    pub fn collection_snap(&self, view: ViewId, geometry: [f64; 5]) -> Option<f64> {
+        let [proposed, port, minimum, maximum, distance] = geometry;
         if self.poisoned
-            || ![proposed, port, maximum].into_iter().all(f64::is_finite)
+            || ![proposed, port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
             || port <= 0.0
-            || maximum < 0.0
+            || maximum < minimum
             || distance.is_nan()
             || distance <= 0.0
         {
@@ -48,11 +48,82 @@ impl<D: DataSource> Runner<D> {
         u.fonts = Some(self.fonts.clone());
         self.tree
             .as_ref()?
-            .collection_snap(
+            .collection_snap(&mut u, &self.kernel, view, geometry)
+            .ok()
+            .flatten()
+    }
+
+    /// The positions each unmounted row root with a snap alignment along a
+    /// collection's axis rests at, first to last, in
+    /// [`Runner::collection_snap`]'s coordinates: of the rows `window` covers,
+    /// at most `cap` up to and including the one at `around` and `cap` after
+    /// it. `snapport`: its length and the least and greatest positions of its
+    /// start. No row is mounted.
+    pub fn collection_snap_areas(
+        &self,
+        view: ViewId,
+        (around, window, cap): (f64, [f64; 2], usize),
+        snapport: [f64; 3],
+    ) -> Vec<(f64, f64, bool)> {
+        let [port, minimum, maximum] = snapport;
+        if self.poisoned
+            || ![around, window[0], window[1], port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
+            || port <= 0.0
+            || maximum < minimum
+        {
+            return Vec::new();
+        }
+        let mut ids = Ids::default();
+        let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+        u.fonts = Some(self.fonts.clone());
+        self.tree
+            .as_ref()
+            .and_then(|tree| {
+                tree.collection_snap_areas(
+                    &mut u,
+                    &self.kernel,
+                    view,
+                    (around, window, cap),
+                    snapport,
+                )
+                .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The first position past `release` toward `rest` an unmounted row
+    /// root with `scroll-snap-stop: always` holds a snap at, in
+    /// [`Runner::collection_snap`]'s coordinates; `snapport`: its length and
+    /// the least and greatest positions of its start. At most 256 rows past
+    /// the release are read; no row is mounted.
+    pub fn collection_snap_stop(
+        &self,
+        view: ViewId,
+        [release, rest]: [f64; 2],
+        snapport: [f64; 3],
+    ) -> Option<f64> {
+        let [port, minimum, maximum] = snapport;
+        if self.poisoned
+            || ![release, rest, port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
+            || port <= 0.0
+            || maximum < minimum
+        {
+            return None;
+        }
+        let mut ids = Ids::default();
+        let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+        u.fonts = Some(self.fonts.clone());
+        self.tree
+            .as_ref()?
+            .collection_snap_stop(
                 &mut u,
                 &self.kernel,
                 view,
-                [proposed, port, maximum, distance],
+                [release, rest, port, minimum, maximum],
             )
             .ok()
             .flatten()
@@ -103,6 +174,15 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<CommitReceipt, RunnerError> {
+        self.render_owned(settled, update)
+    }
+
+    /// One render, applied.
+    pub(super) fn render_once(
+        &mut self,
+        settled: bool,
+        update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
+    ) -> Result<CommitReceipt, RunnerError> {
         let (ops, surfaces, _) = self.update_ops(settled, update)?;
         match self.apply(ops) {
             Ok(receipt) => {
@@ -128,6 +208,8 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
         update: impl FnOnce(&mut Tree, &mut Update<'_>) -> Result<(), crate::instance::InstanceError>,
     ) -> Result<UpdateOps, RunnerError> {
+        let owned = self.sync_owned();
+        let owned_sends = self.sync_sends();
         let mut tree = self.tree.take().expect("booted");
         let mut ids = std::mem::take(&mut self.ids);
         let rows = std::mem::take(&mut self.row_writes);
@@ -145,6 +227,8 @@ impl<D: DataSource> Runner<D> {
             u.full = self.full;
             u.discard = self.kernel.is_detached();
             u.rows = rows;
+            u.owned = owned;
+            u.owned_sends = owned_sends;
             u.reuse = self.reuse;
             update(&mut tree, &mut u)
                 .map(|_| (u.ops, u.surfaces, u.notes, u.renewed, u.shown, u.work))

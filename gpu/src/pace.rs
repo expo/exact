@@ -37,6 +37,18 @@ impl ThermalState {
             _ => Self::Unknown,
         }
     }
+
+    /// The state's word, as `ProcessInfo.ThermalState` names its cases;
+    /// `None` while unknown.
+    pub fn keyword(self) -> Option<&'static str> {
+        match self {
+            Self::Unknown => None,
+            Self::Nominal => Some("nominal"),
+            Self::Fair => Some("fair"),
+            Self::Serious => Some("serious"),
+            Self::Critical => Some("critical"),
+        }
+    }
 }
 
 /// The host's display callback that drew a frame, on the host's clock in
@@ -383,6 +395,8 @@ mod tests {
                 assert_eq!(state as u32, code);
             }
         }
+        assert_eq!(ThermalState::Unknown.keyword(), None);
+        assert_eq!(ThermalState::Serious.keyword(), Some("serious"));
     }
 
     #[test]

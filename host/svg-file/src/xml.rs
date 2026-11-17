@@ -26,20 +26,35 @@ pub enum Event {
     Text(String),
 }
 
+/// XML events and constructs an icon template must distinguish from plain SVG.
+#[derive(Debug)]
+pub struct Tokens {
+    pub events: Vec<Event>,
+    pub has_doctype: bool,
+    pub has_cdata: bool,
+}
+
 /// The events of `text`, or the first error with its line.
-pub fn tokenize(text: &str) -> Result<Vec<Event>, Error> {
+pub fn tokenize(text: &str) -> Result<Tokens, Error> {
     let mut t = Tokenizer {
         src: text.trim_start_matches('\u{feff}'),
         at: 0,
         line: 1,
         out: Vec::new(),
         open: Vec::new(),
+        has_doctype: false,
+        has_cdata: false,
+        root_seen: false,
     };
     t.run()?;
     if let Some((name, line)) = t.open.pop() {
         return Err(Error::at(line, format!("`<{name}>` is never closed")));
     }
-    Ok(t.out)
+    Ok(Tokens {
+        events: t.out,
+        has_doctype: t.has_doctype,
+        has_cdata: t.has_cdata,
+    })
 }
 
 /// The root start tag alone: its name and attributes, from a prefix of the
@@ -52,6 +67,9 @@ pub fn root_tag(prefix: &str) -> Option<(String, Vec<(String, String)>)> {
         line: 1,
         out: Vec::new(),
         open: Vec::new(),
+        has_doctype: false,
+        has_cdata: false,
+        root_seen: false,
     };
     while t.at < t.src.len() {
         if t.step().is_err() {
@@ -70,6 +88,9 @@ struct Tokenizer<'a> {
     line: usize,
     out: Vec<Event>,
     open: Vec<(String, usize)>,
+    has_doctype: bool,
+    has_cdata: bool,
+    root_seen: bool,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -122,6 +143,7 @@ impl<'a> Tokenizer<'a> {
             return self.skip_past("-->", "a comment");
         }
         if let Some(body) = rest.strip_prefix("<![CDATA[") {
+            self.has_cdata = true;
             let Some(i) = body.find("]]>") else {
                 return Err(self.err("a CDATA section is never closed"));
             };
@@ -133,6 +155,7 @@ impl<'a> Tokenizer<'a> {
             return self.skip_past("?>", "a processing instruction");
         }
         if rest.starts_with("<!DOCTYPE") || rest.starts_with("<!doctype") {
+            self.has_doctype = true;
             // The internal subset (`[...]`) may declare entities: refused,
             // as the one way a small file expands without bound.
             let close = rest
@@ -175,6 +198,12 @@ impl<'a> Tokenizer<'a> {
     }
 
     fn start_tag(&mut self) -> Result<(), Error> {
+        if self.open.is_empty() {
+            if self.root_seen {
+                return Err(self.err("a second root element"));
+            }
+            self.root_seen = true;
+        }
         let line = self.line;
         let rest = self.rest();
         let bytes = rest.as_bytes();
@@ -187,11 +216,7 @@ impl<'a> Tokenizer<'a> {
             i += 1;
         }
         let name = &rest[1..i];
-        if name.is_empty()
-            || !name
-                .chars()
-                .all(|c| c.is_alphanumeric() || matches!(c, ':' | '_' | '-' | '.'))
-        {
+        if !xml_name(name) {
             return Err(self.err("a tag name is malformed"));
         }
         let mut attrs = Vec::new();
@@ -230,6 +255,9 @@ impl<'a> Tokenizer<'a> {
                 i += 1;
             }
             let key = &rest[start..i];
+            if !xml_name(key) {
+                return Err(self.err(format!("`<{name}>` has a malformed attribute")));
+            }
             while i < bytes.len() && bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
@@ -252,6 +280,12 @@ impl<'a> Tokenizer<'a> {
             let raw = &rest[value_start..value_start + len];
             attrs.push((key.to_string(), decode(raw, line)?));
             i = value_start + len + 1;
+            if bytes
+                .get(i)
+                .is_some_and(|b| !b.is_ascii_whitespace() && !matches!(b, b'/' | b'>'))
+            {
+                return Err(self.err(format!("`<{name}>`'s attributes are not apart")));
+            }
         }
         self.open.push((name.to_string(), line));
         self.out.push(Event::Start {
@@ -263,6 +297,36 @@ impl<'a> Tokenizer<'a> {
         self.advance(i);
         Ok(())
     }
+}
+
+/// XML 1.0 (fifth edition), §2.3: NameStartChar and NameChar.
+/// https://www.w3.org/TR/xml/#NT-Name
+fn xml_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(name_start)
+        && chars.all(|c| {
+            name_start(c)
+                || matches!(c, '-' | '.' | '0'..='9' | '\u{b7}' | '\u{300}'..='\u{36f}' | '\u{203f}'..='\u{2040}')
+        })
+}
+
+fn name_start(c: char) -> bool {
+    matches!(
+        c,
+        ':' | 'A'..='Z' | '_' | 'a'..='z'
+            | '\u{c0}'..='\u{d6}'
+            | '\u{d8}'..='\u{f6}'
+            | '\u{f8}'..='\u{2ff}'
+            | '\u{370}'..='\u{37d}'
+            | '\u{37f}'..='\u{1fff}'
+            | '\u{200c}'..='\u{200d}'
+            | '\u{2070}'..='\u{218f}'
+            | '\u{2c00}'..='\u{2fef}'
+            | '\u{3001}'..='\u{d7ff}'
+            | '\u{f900}'..='\u{fdcf}'
+            | '\u{fdf0}'..='\u{fffd}'
+            | '\u{10000}'..='\u{effff}'
+    )
 }
 
 /// `raw` with its entity and character references decoded: the five
@@ -277,7 +341,7 @@ pub fn decode(raw: &str, line: usize) -> Result<String, Error> {
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         let after = &rest[i + 1..];
-        let Some(end) = after.find(';').filter(|e| *e <= 10) else {
+        let Some(end) = after.find(';') else {
             return Err(Error::at(line, "a `&` that starts no reference"));
         };
         let name = &after[..end];
@@ -318,8 +382,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn template_only_restrictions_are_preserved_in_the_tokens() {
+        let tokens = tokenize("<!DOCTYPE svg><svg><![CDATA[<path/>]]></svg>").unwrap();
+        assert!(tokens.has_doctype && tokens.has_cdata);
+        assert_eq!(tokens.events[1], Event::Text("<path/>".into()));
+        let plain = tokenize("<!-- <!DOCTYPE svg> --><svg title='&lt;![CDATA['/>").unwrap();
+        assert!(!plain.has_doctype && !plain.has_cdata);
+    }
+
+    #[test]
+    fn malformed_attributes_and_multiple_roots_are_refused() {
+        for xml in ["<svg a='1'b='2'/>", "<svg ='1'/>", "<svg/><svg/>"] {
+            assert!(tokenize(xml).is_err(), "{xml}");
+        }
+    }
+
+    #[test]
+    fn xml_names_admit_combining_marks_and_the_xml_character_ranges() {
+        for name in [
+            "data-cafe\u{301}",
+            "m:cafe\u{301}",
+            "a\u{b7}0-._\u{203f}\u{2040}",
+            "\u{200c}\u{200d}",
+            "\u{10000}\u{effff}",
+        ] {
+            let xml = format!("<svg {name}='x'><{name}></{name}></svg>");
+            let tokens = tokenize(&xml).unwrap_or_else(|e| panic!("{xml}: {e}"));
+            assert!(matches!(&tokens.events[0], Event::Start { attrs, .. }
+                if attrs == &[(name.into(), "x".into())]));
+            assert!(matches!(&tokens.events[1], Event::Start { name: n, .. } if n == name));
+            assert!(matches!(&tokens.events[2], Event::End { name: n, .. } if n == name));
+        }
+    }
+
+    #[test]
+    fn xml_names_refuse_invalid_initial_and_continuation_characters() {
+        for name in [
+            "1a",
+            ".a",
+            "-a",
+            "\u{301}a",
+            "\u{b7}a",
+            "a\u{37e}",
+            "a\u{f0000}",
+        ] {
+            for xml in [
+                format!("<svg {name}='x'/>"),
+                format!("<svg><{name}/></svg>"),
+            ] {
+                assert!(tokenize(&xml).is_err(), "{xml}");
+            }
+        }
+    }
+
+    #[test]
     fn elements_text_and_references_in_order() {
-        let events = tokenize("<?xml version=\"1.0\"?>\n<!-- a -->\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox='0 0 2 2'>\n  <path d=\"M0 0h1\"/>\n  <text>A &amp; B &#65;&#x42;<![CDATA[<c>]]></text>\n</svg>").unwrap();
+        let events = tokenize("<?xml version=\"1.0\"?>\n<!-- a -->\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox='0 0 2 2'>\n  <path d=\"M0 0h1\"/>\n  <text>A &amp; B &#65;&#x42;<![CDATA[<c>]]></text>\n</svg>").unwrap().events;
         assert!(
             matches!(&events[0], Event::Start { name, attrs, empty: false, line: 3 } if name == "svg" && attrs[1] == ("viewBox".into(), "0 0 2 2".into()))
         );

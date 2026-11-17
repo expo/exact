@@ -3,9 +3,9 @@
 //! ASCII rows are compared against Parley's own layout of the same text
 //! in the same face.
 use exact_kernel::{PropId, ViewId};
-use exact_linux::{presenter::PainterChoice, Presenter};
 use exact_logic::exact_plan::Value;
 use exact_logic::exact_runner::DataSource;
+use exact_painted::{presenter::PainterChoice, Presenter};
 use reflow_data::Reflow;
 
 const VIEWPORT: (f32, f32) = (1000., 900.);

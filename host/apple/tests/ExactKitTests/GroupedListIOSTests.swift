@@ -27,7 +27,7 @@ class GroupedListFixture: XCTestCase {
     }
 
     func presenter(height: Double = 874, handlers: [String] = [], props: [String: String] = [:], style: [String: Any] = [:],
-                           nativeButtonRow: Bool = false, on given: Presenter? = nil, _ m: @escaping () -> GroupedListModel) -> Presenter {
+                           nativeButtonRow: Bool = false, on given: Presenter? = nil, _ m: @escaping () -> GroupedListModel?) -> Presenter {
         ExactGroupedLists.install()
         let p = given ?? Presenter()
         host(p).model = { $0 == 1 ? m() : nil }

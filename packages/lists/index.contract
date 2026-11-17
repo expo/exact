@@ -3,7 +3,7 @@
 // platform's native list cell (D6), so the platform lays them out; and a
 // menu's drawn items and group (stage 15 B batch 2, Bluesky's Menu, a sheet
 // of drawn items). Their look is their params, whose defaults are the
-// package's tokens (lists.tamber); an app restyles them by setting a param
+// package's tokens (lists.forma); an app restyles them by setting a param
 // or a token by full name, never by editing this file.
 
 use ListRow from "./list-row.contract"

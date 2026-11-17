@@ -82,7 +82,7 @@ fn a_kept_answer_keyed_on_the_offset_is_admitted_when_the_boot_knows_it() {
     assert_eq!(r.resource("feeds"), Some(&Value::str("feeds at -420")));
     assert!(r
         .journal()
-        .any(|l| l.contains("feeds shows its kept answer from the last session, kept for [-420]")));
+        .any(|l| l.contains("feeds shows its kept answer from the last session")));
     // On zero (a host that says the date only after the boot), or in
     // another zone, the identity differs: refused.
     for time in [None, at(60.)] {

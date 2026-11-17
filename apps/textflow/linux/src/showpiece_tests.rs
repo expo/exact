@@ -1,6 +1,6 @@
 //! @ref LLP 1043.000 §3 D7/D8 — real app coverage, live drag, seek and CPU cost.
 use crate::tests::{boot_size, id};
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 use std::time::{Duration, Instant};
 use textflow_data::Textflow;
 const SCENES: [&str; 7] = [

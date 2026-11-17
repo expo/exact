@@ -62,3 +62,25 @@ test('fail makes the next utterance to begin end with that error', async () => {
   clock.now = 6000;
   expect(await impl.speechUtterance({ utterance: c.id })).toMatchObject({ outcome: 'end' });
 });
+
+// The browser path over a `speechSynthesis` stand-in that records what it is given to speak.
+for (const [order, paused] of [['speaking first', false], ['queued first', false], ['speaking first', true]]) {
+  test(`dropping the speaking and a queued utterance (${order}${paused ? ', paused' : ''}) never gives the browser the dropped one`, async () => {
+    const spoken = [], had = { synth: globalThis.speechSynthesis, utterance: globalThis.SpeechSynthesisUtterance };
+    globalThis.speechSynthesis = { speak: u => spoken.push(u.text), cancel() {}, pause() {}, resume() {}, getVoices: () => [] };
+    globalThis.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+    try {
+      const impl = implementation({ ...context().ctx, agent: false });
+      const a = await impl.speak({ text: 'first' }), b = await impl.speak({ text: 'dropped' }), c = await impl.speak({ text: 'kept' });
+      if (paused) await impl.pauseSpeech();
+      impl.dispose(order === 'speaking first' ? [a.id, b.id] : [b.id, a.id]);
+      if (paused) await impl.resumeSpeech();
+      expect(spoken).toEqual(['first', 'kept']);
+      expect(await impl.speechUtterance({ utterance: a.id })).toMatchObject({ outcome: 'error', error: 'interrupted' });
+      expect(await impl.speechUtterance({ utterance: b.id })).toMatchObject({ outcome: 'error', error: 'canceled' });
+      expect(await impl.speechSynthesisState()).toMatchObject({ utterance: c.id, queue: [] });
+    } finally {
+      Object.assign(globalThis, { speechSynthesis: had.synth, SpeechSynthesisUtterance: had.utterance });
+    }
+  });
+}

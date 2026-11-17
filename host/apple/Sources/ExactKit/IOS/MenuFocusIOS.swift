@@ -144,7 +144,10 @@ final class BarTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
 
 #if os(iOS)
 /// An invoker's pull-down (`MenuHost` overlays): the focus set aside while its
-/// menu shows.
+/// menu shows, and the invoker, not this transparent overlay, the shape the
+/// menu grows out of and shrinks back into. UIKit hides the view it previews
+/// while the menu shows, so the invoker's own glass is not drawn under the
+/// menu's, as a stock button's is not.
 final class MenuButton: InvokerButton {
     weak var focus: MenuFocus?
     weak var popover: NodeView?
@@ -156,6 +159,16 @@ final class MenuButton: InvokerButton {
         isMenuOpen = false
         toggled?(false)
         contextMenuInteraction?.dismissMenu()
+    }
+    // An invoker hidden or out of the window (unmounted while its menu
+    // showed) has no preview: UIKit's default, nil outside a window.
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        if let preview = invoker.flatMap(LiftTarget.preview(of:)) { return preview }
+        return window == nil ? nil : super.contextMenuInteraction(interaction, previewForHighlightingMenuWithConfiguration: configuration)
+    }
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+        if let preview = invoker.flatMap(LiftTarget.preview(of:)) { return preview }
+        return window == nil ? nil : super.contextMenuInteraction(interaction, previewForDismissingMenuWithConfiguration: configuration)
     }
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
         super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)

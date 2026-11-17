@@ -109,7 +109,14 @@ pub fn rules(text: &str, dropped: &mut Vec<String>) -> Vec<Rule> {
         }
         let Some(open) = rest.find('{') else { break };
         let selectors = rest[..open].trim().to_string();
-        let Some(close) = rest[open..].find('}') else {
+        // An at-rule's block can hold blocks of its own (`@media`,
+        // `@keyframes`): it ends at the `}` that closes its `{`.
+        let close = if selectors.starts_with('@') {
+            block_end(&rest[open..])
+        } else {
+            rest[open..].find('}')
+        };
+        let Some(close) = close else {
             break;
         };
         let body = rest[open + 1..open + close].to_string();
@@ -180,6 +187,24 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
+/// The offset of the `}` closing the block `text` opens with its first `{`.
+fn block_end(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +226,35 @@ mod tests {
         assert_eq!(fills, vec!["#0f0", "#f00", "#ff0", "#00f"]);
         assert_eq!(matching(&sheet, "rect", None, &["cls-1"]).len(), 2);
         assert!(matching(&sheet, "rect", None, &[]).is_empty());
+    }
+
+    /// An at-rule holding blocks is skipped whole: the rules after it apply.
+    #[test]
+    fn rules_after_a_nested_at_rule_are_read() {
+        let mut dropped = Vec::new();
+        let sheet = rules(
+            "@keyframes spin { from { opacity: 1 } to { opacity: 0 } } .cls { fill: #c00 }\n\
+             @media (min-width: 1px) { .cls { fill: #0c0 } } rect { stroke: #00c }",
+            &mut dropped,
+        );
+        assert_eq!(
+            dropped,
+            vec![
+                "@keyframes spin".to_string(),
+                "@media (min-width: 1px)".to_string()
+            ]
+        );
+        let hits: Vec<_> = matching(&sheet, "rect", None, &["cls"])
+            .into_iter()
+            .cloned()
+            .collect();
+        assert_eq!(
+            hits,
+            vec![
+                ("stroke".to_string(), "#00c".to_string()),
+                ("fill".to_string(), "#c00".to_string())
+            ]
+        );
     }
 
     #[test]

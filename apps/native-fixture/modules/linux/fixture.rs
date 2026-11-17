@@ -10,7 +10,7 @@
 //
 // The app's Linux crate includes this file in a module of its own, beside
 // the generated `HatchKey` (the words `app.json` gives this platform).
-use exact_linux::hatches::{App, Context, Element, Hatches, Input, Phase, Span, Ticket, Window};
+use exact_painted::hatches::{App, Context, Element, Hatches, Input, Phase, Span, Ticket, Window};
 use std::collections::BTreeMap;
 
 #[derive(Default)]

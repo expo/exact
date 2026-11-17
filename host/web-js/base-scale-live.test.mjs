@@ -1,6 +1,7 @@
 // Build exact-web-js before running these tests (docs/testing.md).
 // Live token edits must update both direct rows and aliases without reloading.
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -12,7 +13,7 @@ const VIEW = `component App
       column testId="alias" padding="card.pad"
         text "a"
 `;
-const design = px => `tamber t\n\ntheme\n  space.md = ${px}\n  card.pad: length = space.md\n`;
+const design = px => `forma t\n\ntheme\n  space.md = ${px}\n  card.pad: length = space.md\n`;
 
 test('a live edit of a base name the app sets moves its row and its alias on the page', async () => {
   const root = resolve(import.meta.dir, '../..');
@@ -21,16 +22,16 @@ test('a live edit of a base name the app sets moves its row and its alias on the
   const app = mkdtempSync(resolve(target, 'base-live-app-'));
   const dir = mkdtempSync(resolve(target, 'base-live-out-'));
   const sheet = readFileSync(resolve(root, 'host/web/index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/)[1];
-  const bin = resolve(target, 'debug/exact-web-js');
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
   let server, browser;
   try {
     writeFileSync(resolve(app, 'app.contract'), VIEW);
-    writeFileSync(resolve(app, 'app.tamber'), design('40px'));
+    writeFileSync(resolve(app, 'app.forma'), design('40px'));
     const built = spawnSync(bin, ['js', resolve(app, 'app.contract'), '-o', dir, '--dev-reload'], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     const before = JSON.parse(readFileSync(resolve(dir, 'dev-design.json'), 'utf8'));
     // The edit, compiled as the dev loop's design read compiles it.
-    const edited = resolve(app, 'edited.tamber');
+    const edited = resolve(app, 'edited.forma');
     writeFileSync(edited, design('48px'));
     const read = spawnSync(bin, ['design', resolve(app, 'app.contract'), edited], { encoding: 'utf8' });
     expect(read.status, read.stderr).toBe(0);
@@ -40,7 +41,7 @@ test('a live edit of a base name the app sets moves its row and its alias on the
     expect(next.shape).toBe(before.shape);
     const changed = next.tokens.filter((t, i) => JSON.stringify(t) !== JSON.stringify(before.tokens[i]));
     expect(changed.map(t => t.name).sort()).toEqual(['card.pad', 'space.md']);
-    const batch = { kind: 'tamber-batch', structure: next.shape, base: before.digest, design: next.digest, tokens: changed };
+    const batch = { kind: 'forma-batch', structure: next.shape, base: before.digest, design: next.digest, tokens: changed };
 
     server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
       const path = new URL(request.url).pathname.slice(1);
@@ -80,13 +81,13 @@ test('an alias switched between base names goes live; the first base name moves 
   const target = resolve(root, 'target');
   const app = mkdtempSync(resolve(target, 'base-switch-app-'));
   const dir = mkdtempSync(resolve(target, 'base-switch-out-'));
-  const bin = resolve(target, 'debug/exact-web-js');
-  const alias = base => `tamber t\n\ntheme\n  card.pad: length = ${base}\n`;
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
+  const alias = base => `forma t\n\ntheme\n  card.pad: length = ${base}\n`;
   let server, browser;
   try {
     writeFileSync(resolve(app, 'app.contract'), `component App\n  view\n    column testId="alias" padding="card.pad"\n      text "a"\n`);
     const build = (design) => {
-      writeFileSync(resolve(app, 'app.tamber'), design);
+      writeFileSync(resolve(app, 'app.forma'), design);
       const built = spawnSync(bin, ['js', resolve(app, 'app.contract'), '-o', dir, '--dev-reload'], { encoding: 'utf8' });
       expect(built.status, built.stderr).toBe(0);
       return JSON.parse(readFileSync(resolve(dir, 'dev-design.json'), 'utf8'));
@@ -108,7 +109,7 @@ test('an alias switched between base names goes live; the first base name moves 
     expect(readFileSync(resolve(dir, 'app.css'), 'utf8')).toContain('--exact-space-lg:24px');
     // Between two base names: the same structure, in a patch and a compile.
     expect(patch(before, [['card.pad', ['space.lg']]]).structure).toBe(before.structure);
-    const edited = resolve(app, 'edited.tamber');
+    const edited = resolve(app, 'edited.forma');
     writeFileSync(edited, alias('space.lg'));
     const read = spawnSync(bin, ['design', resolve(app, 'app.contract'), edited], { encoding: 'utf8' });
     expect(read.status, read.stderr).toBe(0);
@@ -133,7 +134,7 @@ test('an alias switched between base names goes live; the first base name moves 
     const padding = () => row.evaluate(n => getComputedStyle(n).paddingTop);
     expect(await padding()).toBe('16px');
     await page.evaluate(() => (window.__kept = 1));
-    const batch = { kind: 'tamber-batch', structure: next.shape, base: before.digest, design: next.digest, tokens: changed };
+    const batch = { kind: 'forma-batch', structure: next.shape, base: before.digest, design: next.digest, tokens: changed };
     expect(await page.evaluate(b => globalThis.exact.design(b).live, batch)).toBe('applied');
     expect(await padding()).toBe('24px');
     expect(await page.evaluate(() => window.__kept)).toBe(1);
@@ -150,11 +151,11 @@ test('a bound grid track naming a base name or an alias keeps its length', async
   const root = resolve(import.meta.dir, '../..');
   const target = resolve(root, 'target');
   const app = mkdtempSync(resolve(target, 'base-grid-app-'));
-  const bin = resolve(target, 'debug/exact-web-js');
+  const bin = resolve(target, `debug/exact-web-js${EXE}`);
   let server, browser;
   const dirs = [];
   try {
-    writeFileSync(resolve(app, 'app.tamber'), 'tamber t\n\ntheme\n  card.pad: length = space.lg\n');
+    writeFileSync(resolve(app, 'app.forma'), 'forma t\n\ntheme\n  card.pad: length = space.lg\n');
     writeFileSync(resolve(app, 'app.contract'), `component App\n  state direct = "space.md"\n  state alias = "card.pad"\n  view\n    column\n      column display="grid" grid-template-columns=direct testId="direct"\n        text "a"\n      column display="grid" grid-template-columns=alias testId="alias"\n        text "b"\n`);
     browser = await suiteBrowser();
     for (const dev of [false, true]) {

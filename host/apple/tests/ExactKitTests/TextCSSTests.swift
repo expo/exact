@@ -30,7 +30,7 @@ final class TextCSSTests: XCTestCase {
 
     func testFontCacheBoundsDeclaredCascadesAndFeatureVariants() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../")
-        let data = try Data(contentsOf: root.appendingPathComponent("host/linux/tests/fonts/RobotoFlex-subset.ttf").standardized)
+        let data = try Data(contentsOf: root.appendingPathComponent("host/painted/tests/fonts/RobotoFlex-subset.ttf").standardized)
         let descriptor = (CTFontManagerCreateFontDescriptorsFromData(data as CFData) as! [CTFontDescriptor])[0]
         let face = RegisteredFace(family: "Flex", generic: nil, weights: 100...1000,
                                   stretches: 25...151, italic: false, descriptor: descriptor)
@@ -449,7 +449,7 @@ final class TextCSSTests: XCTestCase {
     /// `font-optical-sizing: none` leaves `opsz` to the face.
     func testFontVariationSettingsWinAndAPlatformFaceStretches() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../")
-        let flex = try Data(contentsOf: root.appendingPathComponent("host/linux/tests/fonts/RobotoFlex-subset.ttf").standardized)
+        let flex = try Data(contentsOf: root.appendingPathComponent("host/painted/tests/fonts/RobotoFlex-subset.ttf").standardized)
         let engine = TextEngine(resolve: { _ in nil }, read: { _ in flex })
         let family = Array("Flex".utf8), source = Array("flex.ttf".utf8)
         family.withUnsafeBufferPointer { f in
@@ -495,7 +495,7 @@ final class TextCSSTests: XCTestCase {
     /// a range as its value nearest the request (CSS Fonts 4 §5.2).
     func testADeclaredRangeDrawsEachWeightAndWidthOnTheAxes() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../")
-        let flex = try Data(contentsOf: root.appendingPathComponent("host/linux/tests/fonts/RobotoFlex-subset.ttf").standardized)
+        let flex = try Data(contentsOf: root.appendingPathComponent("host/painted/tests/fonts/RobotoFlex-subset.ttf").standardized)
         let engine = TextEngine(resolve: { _ in nil }, read: { _ in flex })
         let family = Array("Flex".utf8), source = Array("flex.ttf".utf8)
         family.withUnsafeBufferPointer { f in

@@ -400,3 +400,61 @@ fn far_player_lets_out_balls_go_and_calls_them() {
     );
     let _ = Transform::default();
 }
+
+/// A let ends the point at the serve's bounce, as a fault does: Jev's
+/// planned return is neither committed (counted on time or late) nor swung.
+#[test]
+fn a_let_spends_no_return() {
+    let mut game = game(false);
+    bind_plan(&mut game, "");
+    let mut bot = Bot::default();
+    for _ in 0..2000 {
+        let ball = *game.get::<Ball>("ball").unwrap();
+        if phase(&game).phase == Phase::Rally && ball.serve && ball.hitter == Side::Near {
+            break;
+        }
+        bot.step(&mut game, None);
+    }
+    let far = *game.get::<Player>("far").unwrap();
+    assert!(far.contact > game.world().tick(), "a return is planned");
+    game.world().require_mut::<Ball>("ball").cord = true;
+    while phase(&game).phase == Phase::Rally {
+        bot.step(&mut game, None);
+    }
+    assert_eq!(phase(&game).call, "Let");
+    let stats = |game: &Sim<Tennis>| {
+        let brain = game.world().resource::<Brain>().clone();
+        (brain.stats.on_time, brain.stats.late)
+    };
+    let before = stats(&game);
+    while phase(&game).phase == Phase::Dead {
+        bot.step(&mut game, None);
+        assert!(game.world().tick() < far.contact + 1000, "the let never ended");
+    }
+    assert!(game.world().tick() > far.contact, "the replay outlasts the planned contact");
+    assert_eq!(stats(&game), before, "a return counted after the let");
+    let swung = game.get::<Player>("far").unwrap().swing;
+    assert!(swung.is_none_or(|s| s.start < far.contact - CONTACT), "{swung:?}");
+}
+
+/// A point, a fault or a let ends the rally: neither player is left with a
+/// ball to meet.
+#[test]
+fn a_dead_ball_leaves_no_return_planned() {
+    let mut game = game(true);
+    let mut bot = Bot::default();
+    for _ in 0..(120 * 90) {
+        bot.step(&mut game, None);
+        let m = phase(&game);
+        if matches!(m.phase, Phase::Dead | Phase::Over) {
+            for side in ["near", "far"] {
+                let contact = game.get::<Player>(side).unwrap().contact;
+                assert_eq!(contact, 0, "{side} after {:?}", m.call);
+            }
+        }
+        if m.phase == Phase::Over {
+            break;
+        }
+    }
+    assert!(phase(&game).points_played >= 4, "{:?}", phase(&game));
+}

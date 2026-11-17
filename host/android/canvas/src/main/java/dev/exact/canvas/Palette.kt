@@ -11,7 +11,7 @@ import android.os.Build
  * device from the platform's own resources, under the light scheme and under the dark one, and told whole in one call
  * ([Native.colors]) before the host boots and again whenever one of them is not what was last told (a new wallpaper
  * changes the dynamic palette). exact2 gives each of its own colour roles one of these
- * (`host/linux/src/presenter/palette.rs`, which has D4's table). Both schemes are told whatever the night mode is:
+ * (`host/painted/src/presenter/palette.rs`, which has D4's table). Both schemes are told whatever the night mode is:
  * exact2 chooses between them by the scheme it is told with the device's settings ([Device]).
  *
  * From Android 14 the platform has each role as a colour of its own (`android.R.color.system_primary_light` and the

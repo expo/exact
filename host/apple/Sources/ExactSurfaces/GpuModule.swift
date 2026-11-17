@@ -107,6 +107,9 @@ final class GpuModule {
     typealias BindFn = @convention(c) (UInt32, UnsafePointer<UInt8>?, Int) -> UInt32
     typealias BindAtFn = @convention(c) (UInt32, UnsafePointer<UInt8>?, Int, Double) -> UInt32
     var bindAt: BindAtFn?
+    typealias SizeFn = @convention(c) (UInt32, Float, Float) -> UInt32
+    /// The canvas's size in points, given before each bind (`Surface::size`).
+    var canvasSize: SizeFn?
     typealias RenderFn = @convention(c) (UInt32, Float, Float, Float, Double) -> UInt32
     typealias DirtyFn = @convention(c) (UInt32) -> UInt32
     typealias DestroyFn = @convention(c) (UInt32) -> Void
@@ -139,6 +142,9 @@ final class GpuModule {
     var maxFps: WantsFn?
 
     let wantsInput: WantsFn?
+    /// Whether a canvas's world reads gamepads; absent from an older module,
+    /// whose canvases that take input all hear them.
+    var wantsPads: WantsFn?
     let input: BindFn?
     typealias HeadroomFn = @convention(c) (UInt32, Float) -> Void
     /// An HDR surface (LLP 1100 D12b): whether a canvas is one, and the
@@ -153,6 +159,10 @@ final class GpuModule {
     var carry: WantsFn?
     var restore: RestoreFn?
     let published: WantsFn?
+    typealias PerformanceReportingFn = @convention(c) (UInt32, Bool) -> Bool
+    typealias PerformanceFn = @convention(c) (UInt32, Double) -> UInt32
+    var performanceReporting: PerformanceReportingFn?
+    var performance: PerformanceFn?
     let messages: WantsFn?
     let agent: BindFn?
     private let outPtr: ErrorPtrFn?
@@ -305,6 +315,8 @@ final class GpuModule {
             return .failure(GpuLoadError(message: "\(path) is not an exact GPU module (missing exports)"))
         }
         let module = GpuModule(create: create, bind: bind, render: render, dirty: dirty, destroy: destroy, texture: texture, textureMetal: sym("gpu_texture_metal", TextureMetalFn.self), sync: sym("gpu_sync", SyncFn.self), childrenMode: childrenMode, readback: readback, child: child, childrenCount: childrenCount, placement: placement, shader: sym("gpu_shader", ShaderFn.self), validateShader: sym("gpu_shader_validate", ShaderFn.self), clearShaders: sym("gpu_shaders_clear", ClearShadersFn.self), errorLen: errorLen, errorPtr: errorPtr, wantsInput: sym("gpu_wants_input", WantsFn.self), input: sym("gpu_input", BindFn.self), messages: sym("gpu_messages", WantsFn.self), published: sym("gpu_published", WantsFn.self), agent: sym("gpu_agent", BindFn.self), outPtr: sym("gpu_out_ptr", ErrorPtrFn.self))
+        module.performanceReporting = sym("gpu_performance_reporting", PerformanceReportingFn.self)
+        module.performance = sym("gpu_performance", PerformanceFn.self)
         module.flushFn = flush
         // The GPU tier (LLP 1139.003 D2): the drive's, told before the device
         // is made, under the agent; else the module's own from its device.
@@ -328,6 +340,8 @@ final class GpuModule {
         module.due = sym("gpu_due", DueFn.self)
         module.maxFps = sym("gpu_max_fps", WantsFn.self)
         module.bindAt = sym("gpu_bind_at", BindAtFn.self)
+        module.canvasSize = sym("gpu_size", SizeFn.self)
+        module.wantsPads = sym("gpu_wants_pads", WantsFn.self)
         module.assets = sym("gpu_assets", WantsFn.self); module.asset = sym("gpu_asset", AssetFn.self); module.assetFailed = sym("gpu_asset_failed", AssetFn.self)
         module.carry = sym("gpu_carry", WantsFn.self); module.restore = sym("gpu_restore", RestoreFn.self)
         sym("gpu_seekable", SeekableFn.self)?(ExactEnv.agentFreezes)
@@ -338,9 +352,7 @@ final class GpuModule {
         module.landed = sym("gpu_landed", WantsFn.self)
         if module.starved != nil { sym("gpu_on_acquire", OnAcquireFn.self)?(gpuAcquired) }
         module.seen = sym("gpu_seen", WantsFn.self)
-        #if os(iOS) || os(tvOS)
         if module.seen != nil { sym("gpu_on_presented", OnAcquireFn.self)?(gpuPresented) }
-        #endif
         return .success(module)
     }
 
@@ -350,15 +362,20 @@ final class GpuModule {
         self.childView = child; self.childrenCount = childrenCount; self.placement = placement; self.shader = shader; self.validateShader = validateShader; self.clearShaders = clearShaders; self.errorLen = errorLen; self.errorPtr = errorPtr
     }
 
-    #if os(iOS) || os(tvOS)
     /// First frames are with the compositor: every session's canvases that
-    /// waited hidden on a reused layer show theirs.
+    /// waited hidden on a reused layer show theirs, each canvas's record
+    /// carries its `presented` (LLP 1009), and the launch marks `world`.
     static func presented() {
+        ExactLaunch.shared.worldPresented()
         for case .success(let module) in shared.values {
-            for owner in module.canvases.allObjects { owner.revealPresented() }
+            for owner in module.canvases.allObjects {
+                #if os(iOS) || os(tvOS)
+                owner.revealPresented()
+                #endif
+                owner.publishPresented()
+            }
         }
     }
-    #endif
 
     /// A starved canvas's drawable arrived: every session's starved canvases render.
     static func acquired() {
@@ -456,15 +473,15 @@ struct DisplayPeriod {
     }
 }
 
-#if os(iOS) || os(tvOS)
-/// The module's callback when canvases' first frames have been handed to the
-/// compositor, on the thread Metal scheduled the frame on (gpu/src/frame.rs):
-/// the layers that waited hidden are shown on the main thread. Entries are
-/// looked up again there, so a canvas that went meanwhile is not touched.
+/// The module's callback when canvases' first frames, or the first of a
+/// canvas's current picture, have been handed to the compositor, on the
+/// thread Metal scheduled the frame on (gpu/src/frame.rs): the main thread
+/// shows the layers that waited hidden and gives the app the records whose
+/// `presented` changed. Entries are looked up again there, so a canvas that
+/// went meanwhile is not touched.
 private let gpuPresented: GpuModule.AcquiredFn = {
     DispatchQueue.main.async { GpuModule.presented() }
 }
-#endif
 
 /// The module's callback on the thread that acquired a starved canvas's
 /// drawable (gpu/src/acquire.rs): the render belongs on the main thread.

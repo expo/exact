@@ -1,0 +1,427 @@
+//! LLP 1121 D8 on the Linux host's CPU painter (Android's Canvas reader
+//! replays what it records; its layers are not exercised here): `:active` is
+//! the press paint, eased on the press's curve,
+//! its opacity an absolute target from what shows; a `:hover` look shows at
+//! once while a mouse hovers the node (or a child of it), its opacity in
+//! place of the node's, under the press's paint; a disabled node takes none.
+use super::*;
+
+const APP: &str = r##"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    column width=400 height=400 background-color="#ffffff"
+      box press=go background-color="#00ff00" border="8px solid #000000" width=300 height=120 testId="card" scale=(presses > 1 ? 1.01 : 1) transition="scale 200ms"
+        :active
+          background-color = "#0000ff"
+          opacity = 0.5
+        :hover
+          background-color = "#ffff00"
+          border-color = "#ff0000"
+          opacity = 0.8
+        text "c" testId="child"
+      box press=go background-color="#00ff00" width=300 height=40 testId="focused"
+        :focus-visible
+          background-color = "#ff00ff"
+      box background-color="#00ff00" width=300 height=40 testId="clears"
+        :hover
+          background-color = "unset"
+      box press=go disabled=true background-color="#00ff00" width=300 height=60 testId="off"
+        :hover
+          background-color = "#ffff00"
+"##;
+
+fn boot() -> Presenter<()> {
+    boot_with(APP)
+}
+
+fn boot_with(src: &str) -> Presenter<()> {
+    let (p, error) = Presenter::boot_with(
+        &contract::compile(src)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .encode(),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p
+}
+
+fn rect(p: &mut Presenter<()>, test_id: &str) -> (f32, f32, f32, f32) {
+    let k = p.host().kernel();
+    let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+    p.rect_of(id).unwrap()
+}
+
+fn pixel(p: &mut Presenter<()>, x: f32, y: f32) -> [u8; 3] {
+    let c = p.frame().pixel(x as u32, y as u32).unwrap().demultiply();
+    [c.red(), c.green(), c.blue()]
+}
+
+fn near(got: [u8; 3], want: [u8; 3]) -> bool {
+    got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 2)
+}
+
+#[test]
+fn the_active_look_is_the_press_and_the_hover_look_shows_beneath_it() {
+    let mut p = boot();
+    let b = rect(&mut p, "card");
+    let ground = (b.0 + b.2 - 20., b.1 + 30.);
+    let border = (b.0 + b.2 / 2., b.1 + 3.);
+    assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 255, 0]);
+    assert_eq!(pixel(&mut p, border.0, border.1), [0, 0, 0]);
+    // A mouse over it: the hover look at once, yellow at 0.8 over the white page.
+    p.pointer_move(ground.0, ground.1, 0.).unwrap();
+    assert!(
+        near(pixel(&mut p, ground.0, ground.1), [255, 255, 51]),
+        "{:?}",
+        pixel(&mut p, ground.0, ground.1)
+    );
+    assert!(
+        near(pixel(&mut p, border.0, border.1), [255, 51, 51]),
+        "{:?}",
+        pixel(&mut p, border.0, border.1)
+    );
+    // Pressed: eased in, then blue at 0.5 (not 0.5 of 0.8), the hover's border beneath.
+    assert!(p.pointer_down(ground.0, ground.1, 0.).unwrap());
+    p.clock(30.);
+    let part = pixel(&mut p, ground.0, ground.1);
+    assert!(part[0] < 250 && part[0] > 127, "eased in: {part:?}");
+    p.clock(120.);
+    assert!(
+        near(pixel(&mut p, ground.0, ground.1), [127, 127, 255]),
+        "{:?}",
+        pixel(&mut p, ground.0, ground.1)
+    );
+    assert!(
+        near(pixel(&mut p, border.0, border.1), [255, 127, 127]),
+        "{:?}",
+        pixel(&mut p, border.0, border.1)
+    );
+    // Lifted: the hover again, eased back.
+    p.pointer_up(ground.0, ground.1, 120.).unwrap();
+    p.clock(240.);
+    assert!(
+        near(pixel(&mut p, ground.0, ground.1), [255, 255, 51]),
+        "{:?}",
+        pixel(&mut p, ground.0, ground.1)
+    );
+    // Over its child still hovers it; away, its own again.
+    let c = rect(&mut p, "child");
+    p.pointer_move(c.0 + 1., c.1 + 1., 250.).unwrap();
+    assert!(near(pixel(&mut p, ground.0, ground.1), [255, 255, 51]));
+    p.pointer_move(390., 390., 260.).unwrap();
+    assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 255, 0]);
+    assert_eq!(pixel(&mut p, border.0, border.1), [0, 0, 0]);
+    assert!(!p.host.motion());
+}
+
+#[test]
+fn a_disabled_node_takes_no_look_and_a_finger_hovers_none() {
+    let mut p = boot();
+    let off = rect(&mut p, "off");
+    let at = (off.0 + 20., off.1 + 20.);
+    p.pointer_move(at.0, at.1, 0.).unwrap();
+    assert_eq!(pixel(&mut p, at.0, at.1), [0, 255, 0]);
+    let b = rect(&mut p, "card");
+    p.pointer_move(390., 390., 1.).unwrap();
+    p.set_pointer_kind(PointerKind::Touch);
+    p.pointer_down(b.0 + 20., b.1 + 30., 2.).unwrap();
+    p.pointer_up(b.0 + 20., b.1 + 30., 3.).unwrap();
+    p.clock(200.);
+    assert_eq!(
+        pixel(&mut p, b.0 + b.2 - 20., b.1 + 30.),
+        [0, 255, 0],
+        "no hover left behind"
+    );
+}
+
+/// A look's opacity is the host's, read at every frame, never kept: a
+/// transition that starts while a look holds leaves the node's own opacity
+/// when the look goes. The agent's hover shows the look too.
+#[test]
+fn a_looks_opacity_is_never_kept() {
+    let mut p = boot();
+    let b = rect(&mut p, "card");
+    let ground = (b.0 + b.2 - 20., b.1 + 30.);
+    let k = p.host().kernel();
+    let card = k.node_by_key(k.find_by_test_id("card")[0]).unwrap().id;
+    p.hover(card).unwrap();
+    assert!(
+        near(pixel(&mut p, ground.0, ground.1), [255, 255, 51]),
+        "{:?}",
+        pixel(&mut p, ground.0, ground.1)
+    );
+    // Two taps start a scale transition under the hover (the engine's cache takes the node then).
+    for t in [0., 200.] {
+        p.pointer_down(ground.0, ground.1, t).unwrap();
+        p.pointer_up(ground.0, ground.1, t + 10.).unwrap();
+        p.clock(t + 150.);
+    }
+    p.pointer_move(390., 390., 400.).unwrap();
+    p.clock(700.);
+    assert_eq!(
+        pixel(&mut p, ground.0, ground.1),
+        [0, 255, 0],
+        "its own opacity, 1, again"
+    );
+}
+
+#[test]
+fn a_step_equal_to_hover_is_kept_when_the_pointer_leaves_between_steps() {
+    let plan = crate::test_plan(
+        r##"keyframes blink
+  from opacity=1
+  to opacity=0
+component App
+  view
+    box width=80 height=40 background-color="#ffffff"
+      box testId="caret" width=20 height=20 background-color="#000000" animation="blink 1s steps(2) infinite"
+        :hover
+          opacity = 0.5
+"##,
+    );
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        (),
+        (80., 40.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    assert_eq!(pixel(&mut p, 10., 10.), [0, 0, 0]);
+    p.pointer_move(10., 10., 0.).unwrap();
+    assert!(near(pixel(&mut p, 10., 10.), [128, 128, 128]));
+    p.tick(500.);
+    p.frame();
+    p.pointer_move(60., 30., 750.).unwrap();
+    // No animation tick on pointer leave: the held step must already be kept.
+    assert!(near(pixel(&mut p, 10., 10.), [128, 128, 128]));
+}
+
+/// A row a look clears (`unset`) is CSS's initial value: a transparent
+/// background shows the page.
+#[test]
+fn a_looks_clear_is_the_initial_value() {
+    let mut p = boot();
+    let c = rect(&mut p, "clears");
+    let at = (c.0 + 20., c.1 + 20.);
+    assert_eq!(pixel(&mut p, at.0, at.1), [0, 255, 0]);
+    p.pointer_move(at.0, at.1, 0.).unwrap();
+    assert_eq!(pixel(&mut p, at.0, at.1), [255, 255, 255]);
+}
+
+/// A `:focus-visible` look shows where the focus's ring would: not after a
+/// press, and once a key is pressed.
+#[test]
+fn a_focus_look_shows_with_the_ring() {
+    let mut p = boot();
+    let f = rect(&mut p, "focused");
+    let at = (f.0 + 20., f.1 + 20.);
+    p.pointer_down(at.0, at.1, 0.).unwrap();
+    p.pointer_up(at.0, at.1, 10.).unwrap();
+    p.pointer_move(390., 390., 20.).unwrap();
+    p.clock(200.);
+    let pressed = pixel(&mut p, at.0, at.1);
+    assert_ne!(pressed, [255, 0, 255], "a press's focus shows neither");
+    p.key_down("ArrowDown", 210.);
+    p.clock(400.);
+    assert_eq!(
+        pixel(&mut p, at.0, at.1),
+        [255, 0, 255],
+        "a key shows the ring, and the look"
+    );
+}
+
+#[test]
+fn a_target_appearing_during_a_stationary_press_is_painted() {
+    let src = APP
+        .replace(
+            "background-color = \"#0000ff\"",
+            "background-color = (presses > 0 ? \"#0000ff\" : none)",
+        )
+        .replace("opacity = 0.5", "opacity = (presses > 0 ? 0.5 : none)");
+    let mut p = boot_with(&src);
+    let b = rect(&mut p, "card");
+    let (x, y) = (b.0 + b.2 - 20., b.1 + 30.);
+    p.pointer_move(x, y, 0.).unwrap();
+    assert!(p.pointer_down(x, y, 0.).unwrap());
+    p.clock(120.);
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id("card")[0]).unwrap().id;
+    assert_eq!(p.host.dispatch_at(id, Event::Press, 120.), None);
+    assert_eq!(p.after_commit(), None);
+    p.clock(240.);
+    assert!(
+        near(pixel(&mut p, x, y), [127, 127, 255]),
+        "{:?}",
+        pixel(&mut p, x, y)
+    );
+    p.pointer_up(x, y, 240.).unwrap();
+    p.clock(360.);
+    assert!(
+        near(pixel(&mut p, x, y), [255, 255, 51]),
+        "{:?}",
+        pixel(&mut p, x, y)
+    );
+}
+
+#[test]
+fn hover_scale_moves_paint_and_hits_without_moving_layout() {
+    let source = r##"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    column padding=50 width=400 height=400
+      box testId="card" press=go width=100 height=100 background-color="#ff0000" transition="scale 150ms linear"
+        :hover
+          scale=1.2
+"##;
+    let mut p = boot_with(source);
+    let k = p.host().kernel();
+    let card = k.node_by_key(k.find_by_test_id("card")[0]).unwrap().id;
+    let frame = p.host.kernel().node(card).unwrap().frame;
+    p.pointer_move(100., 100., 0.).unwrap();
+    p.clock(75.);
+    assert!((p.host.presented(card).scale - 1.1).abs() < 1e-5);
+    assert_eq!(p.host.kernel().node(card).unwrap().frame, frame);
+    p.clock(150.);
+    assert_eq!(
+        p.hit(45., 100.),
+        Some(card),
+        "the grown paint is the hit target"
+    );
+    assert_eq!(pixel(&mut p, 45., 100.), [255, 0, 0]);
+    p.pointer_move(390., 390., 150.).unwrap();
+    p.clock(300.);
+    assert!((p.host.presented(card).scale - 1.).abs() < 1e-5);
+    assert_ne!(p.hit(45., 100.), Some(card));
+}
+
+/// A `:hover` look's `scale` (issue #151's icon button): it stands in for
+/// the node's own while the pointer is over it, moved there and back by the
+/// node's own `transition` for `scale`, with no layout; a press multiplies
+/// onto it. With no transition it snaps.
+#[test]
+fn a_hover_scale_moves_on_the_nodes_transition_and_lays_nothing_out() {
+    let src = r##"component App
+  state n = 0
+  action go
+    n = n + 1
+  view
+    column width=400 height=400
+      box press=go width=100 height=40 scale=1 transition="scale 150ms linear" -exact-press-scale=0.5 testId="eased"
+        :hover
+          scale = 1.2
+      box width=100 height=40 testId="snaps"
+        :hover
+          scale = 2
+"##;
+    let mut p = boot_with(src);
+    let shown = |p: &Presenter<()>, test_id: &str| {
+        let k = p.host.kernel();
+        let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+        p.host.presented(id)
+    };
+    let (b, below) = (rect(&mut p, "eased"), rect(&mut p, "snaps"));
+    let (x, y) = (b.0 + b.2 / 2., b.1 + b.3 / 2.);
+    p.pointer_move(x, y, 0.).unwrap();
+    assert_eq!(shown(&p, "eased").scale, 1.);
+    p.clock(75.);
+    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4, "halfway");
+    assert_eq!(
+        rect(&mut p, "snaps"),
+        below,
+        "the box below stays: no layout"
+    );
+    p.clock(150.);
+    assert!((shown(&p, "eased").scale - 1.2).abs() < 1e-6);
+    assert!(!p.host.motion(), "settled");
+    // Pressed: the press's factor over the look's scale.
+    assert!(p.pointer_down(x, y, 150.).unwrap());
+    p.clock(300.);
+    let pressed = shown(&p, "eased");
+    assert!(
+        (pressed.scale * pressed.press - 0.6).abs() < 1e-4,
+        "{pressed:?}"
+    );
+    p.pointer_up(x, y, 300.).unwrap();
+    p.clock(450.);
+    // Away midway back: from what shows, not from the target.
+    p.pointer_move(390., 390., 450.).unwrap();
+    p.clock(525.);
+    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4);
+    p.clock(600.);
+    assert_eq!(shown(&p, "eased").scale, 1.);
+    // No transition: at once.
+    let s = rect(&mut p, "snaps");
+    p.pointer_move(s.0 + 5., s.1 + 5., 600.).unwrap();
+    assert_eq!(shown(&p, "snaps").scale, 2.);
+}
+
+/// CSS Transitions' reversing shortening (§3.2) on a look's scale: leaving
+/// 75 ms into a 150 ms hover returns in 75 ms, not 150.
+#[test]
+fn leaving_a_hover_scale_midway_returns_in_the_time_it_took() {
+    let src = r##"component App
+  view
+    column width=400 height=400
+      box width=100 height=40 scale=1 transition="scale 150ms linear" testId="eased"
+        :hover
+          scale = 1.2
+"##;
+    let mut p = boot_with(src);
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id("eased")[0]).unwrap().id;
+    let b = rect(&mut p, "eased");
+    p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
+    p.clock(75.);
+    assert!((p.host.presented(id).scale - 1.1).abs() < 1e-4);
+    p.pointer_move(390., 390., 75.).unwrap();
+    p.clock(75. + 37.5);
+    let half = p.host.presented(id).scale;
+    assert!(
+        (half - 1.05).abs() < 1e-4,
+        "half the way back at half the shortened time: {half}"
+    );
+    p.clock(150.);
+    assert!(
+        (p.host.presented(id).scale - 1.).abs() < 1e-5,
+        "back by 150 ms, not 225"
+    );
+}
+
+/// A look's scale may be 0: it animates there and back like any other value.
+#[test]
+fn a_zero_scale_look_animates() {
+    let src = r##"component App
+  view
+    column width=400 height=400
+      box width=100 height=40 scale=1 transition="scale 100ms linear" testId="eased"
+        :hover
+          scale = 0
+"##;
+    let mut p = boot_with(src);
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id("eased")[0]).unwrap().id;
+    let b = rect(&mut p, "eased");
+    p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
+    p.clock(50.);
+    assert!((p.host.presented(id).scale - 0.5).abs() < 1e-4);
+    p.clock(100.);
+    assert!(p.host.presented(id).scale.abs() < 1e-5);
+    p.pointer_move(390., 390., 100.).unwrap();
+    p.clock(150.);
+    assert!(
+        (p.host.presented(id).scale - 0.5).abs() < 1e-4,
+        "and back from 0"
+    );
+}

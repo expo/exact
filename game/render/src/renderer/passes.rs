@@ -123,21 +123,20 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         encoder: &mut wgpu::CommandEncoder,
         frame: &FrameInput<'_>,
         custom: &[CustomMaterial],
+        cached: bool,
     ) -> u32 {
         let Some(shadows) = &self.shadows else {
             return 0;
         };
         let mut draws = 0;
-        // A look frame draws every caster itself and leaves the cache as the
-        // live frames left it (`prepare_shadow_cache`).
-        let cache = shadows.cached.as_ref().filter(|_| self.probe.is_none());
+        let cache = shadows.cached.as_ref().filter(|_| cached);
         for i in 0..shadows.count as usize {
             let view = 1 + i as u32;
             self.probe_stage(Stage::SunShadow(i as u8));
             let stamped = cache.is_some()
                 && timing::encoder_stamp(&self.device, encoder, frame.timestamps, i as u32, false);
             if let Some(cache) = cache {
-                if cache.dirty {
+                if cache.dirty && self.probe.is_none() {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("game static sun casters"),
                         color_attachments: &[],
@@ -172,6 +171,9 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
                     }
                     bound.flush(&mut pass);
                 }
+            }
+            if cache.is_some() {
+                self.probe_note(|| Drew::Summary("cached sun casters"));
             }
             let copied = cache.is_some_and(|c| c.copy(encoder, shadows.view.texture(), i));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -212,7 +214,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             }
             bound.flush(&mut pass);
         }
-        if let Some(cache) = cache {
+        if let Some(cache) = cache.filter(|_| self.probe.is_none()) {
             cache.encoded.set(true);
         }
         draws

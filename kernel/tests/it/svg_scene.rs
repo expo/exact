@@ -16,6 +16,8 @@ mod filters;
 mod lengths;
 #[path = "svg_scene/object_box.rs"]
 mod object_box;
+#[path = "svg_scene/refs.rs"]
+mod refs;
 
 fn style(id: u32, rows: &[(StyleId, &str)]) -> Op {
     let mut patch = StyleProps::default();
@@ -821,6 +823,35 @@ fn clips_resolve_in_the_element_space() {
         find(&s.items, clip).is_none(),
         "a clipPath is never painted"
     );
+}
+
+#[test]
+fn css_path_clips_start_at_the_svg_fill_box_origin() {
+    use StyleId::*;
+    for (width, expected) in [("100", Some((100., 80., 50., 50.))), ("0", None)] {
+        let mut d = Doc::new();
+        let svg = d.node(NodeType::Svg, &[(Width, "300"), (Height, "300")], &[]);
+        let rect = d.node(
+            NodeType::SvgRect,
+            &[
+                (X, "100"),
+                (Y, "80"),
+                (Width, width),
+                (Height, "100"),
+                (ClipPath, "path('M0 0H50V50H0Z')"),
+            ],
+            &[],
+        );
+        d.children(svg, &[rect]);
+        let k = d.kernel(&[svg], 400.);
+        let scene = resolve(&k, svg);
+        if let Some(item) = find(&scene.items, rect) {
+            let clip = item.clip.as_ref().unwrap();
+            assert_eq!(clip.shapes.first().and_then(|s| s.path.bounds()), expected);
+        } else {
+            assert!(expected.is_none(), "only an empty element may disappear");
+        }
+    }
 }
 
 /// LLP 1055.000 D11: SVG text resolves into chunks of runs: a `tspan` with

@@ -14,6 +14,7 @@ import UIKit
 struct AimedGradient {
     weak var layer: CAGradientLayer?
     let source: BatchValue, dark: Bool, bounds: CGRect, box: CGRect
+    let tint: UIColor?
     let gradient: Gradient, stops: ([CGFloat], [CGColor])
 }
 
@@ -50,7 +51,9 @@ final class NodeAside {
     var translatePx = CGPoint.zero, translatePercent = CGPoint.zero
     var scale: CGFloat = 1
     var rotate: CGFloat = 0
+    var rotationAxis: [Double] = [0, 0, 0]
     var content = CGSize.zero
+    var fitContentHeight: CGFloat?
     var image: UIImage?
     var raster: NativeRasterLease?
     var imageLayer: CALayer?
@@ -68,6 +71,8 @@ final class NodePaintExtras {
     var boxFill: CALayer?
     /// A `background-image` gradient Core Animation paints (LLP 1066).
     var boxGradient: CAGradientLayer?
+    /// Repeating linear gradients as patterns (`GradientPatternLayer`).
+    var boxPattern: GradientPatternLayer?
     /// What a fixed gradient was last aimed with (`reaimFixedGradient`).
     var aimedGradient: AimedGradient?
     /// `box-shadow` and the clip it casts outside (`BoxShadow.swift`).
@@ -92,6 +97,10 @@ final class NodeExtras {
     var layoutOffset: CGPoint = .zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
     var stickyOffset: CGPoint = .zero
+    /// A zoomable scroller's zoom, and the scale and shift its zoom draws its child at (`ScrollZoomIOS.swift`).
+    var zoom: ScrollZoom?
+    var zoomFactor: CGFloat = 1
+    var zoomShift: CGPoint = .zero
     var keyboardLift: CGFloat = 0
     /// How far its surface's size stands from the laid-out size (LLP 1063).
     var layoutResize: CGSize = .zero
@@ -163,6 +172,9 @@ final class NodeExtras {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)?
     var followsEndAfterInteraction = false
     var followingEndAnimated = false
+    /// Until when a `scrollTop` write UIKit animates (`scroll-behavior: smooth`) counts as running: UIKit does not always
+    /// report the end of an animation another write stops, so, as a reveal, for `ElementScrolls.revealBound` at most.
+    var authoredScrollUntil: CFTimeInterval = 0
     var anchoredScrollTop: CGFloat?
     var retainedScrollTop: CGFloat?
     var materialKind: String?
@@ -176,6 +188,8 @@ final class NodeExtras {
     var glassSlot: GlassSlot?
     var pendingScrollLeft: Double?
     var pendingScrollTop: Double?
+    /// A `scrollZoom` written and not yet applied (`ScrollZoomIOS.swift`).
+    var pendingZoom: Double?
     var pendingScrollTransfer = false
     /// A collapsing title's scroller (LLP 1075.003 Stage 3): its expanded
     /// title's inset, where `scrollTop` 0 rests; 0 for every other scroller.
@@ -198,6 +212,9 @@ final class NodeExtras {
     /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
     /// above, and UIKit's edge effect.
     var bandOver: Int64?
+    /// A child beside the routes or below their tab panels: it paints over
+    /// the whole-view native container (`NavigationHost.clearBesideRoutes`).
+    var clearsNavigation = false
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
     /// A hatched node whose hatch undoes its own additions: its row may be
@@ -240,10 +257,12 @@ extension NodeView {
     var translatePx: CGPoint { get { aside?.translatePx ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePx = newValue } } }
     var translatePercent: CGPoint { get { aside?.translatePercent ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePercent = newValue } } }
     package var scale: CGFloat { get { aside?.scale ?? 1 } set { if newValue != 1 || aside != nil { asideMade.scale = newValue } } }
+    var rotationAxis: [Double] { get { aside?.rotationAxis ?? [0, 0, 0] } set { if newValue != [0, 0, 0] || aside != nil { asideMade.rotationAxis = newValue } } }
     package var rotate: CGFloat { get { aside?.rotate ?? 0 } set { if newValue != 0 || aside != nil { asideMade.rotate = newValue } } }
     /// A scroll container's content extent (the `content` op), before the
     /// axes that do not scroll are held to the box.
     var content: CGSize { get { aside?.content ?? .zero } set { if newValue != .zero || aside != nil { asideMade.content = newValue } } }
+    var fitContentHeight: CGFloat? { get { aside?.fitContentHeight } set { if newValue != nil || aside != nil { asideMade.fitContentHeight = newValue } } }
     /// An image node's picture, once loaded (decoded off the main thread),
     /// the source it came from, and which load is current: a completion
     /// from an older load, or for a view that was destroyed, is dropped.
@@ -287,12 +306,15 @@ extension NodeView {
     }
     var boxFill: CALayer? { get { paintExtras?.boxFill } set { if newValue != nil || paintExtras != nil { paintMore.boxFill = newValue } } }
     var boxGradient: CAGradientLayer? { get { paintExtras?.boxGradient } set { if newValue != nil || paintExtras != nil { paintMore.boxGradient = newValue } } }
+    var boxPattern: GradientPatternLayer? { get { paintExtras?.boxPattern } set { if newValue != nil || paintExtras != nil { paintMore.boxPattern = newValue } } }
     var aimedGradient: AimedGradient? { get { paintExtras?.aimedGradient } set { if newValue != nil || paintExtras != nil { paintMore.aimedGradient = newValue } } }
     var shadowCaster: ShadowCaster? { get { paintExtras?.shadowCaster } set { if newValue != nil || paintExtras != nil { paintMore.shadowCaster = newValue } } }
     var insetCaster: InsetShadowCaster? { get { paintExtras?.insetCaster } set { if newValue != nil || paintExtras != nil { paintMore.insetCaster = newValue } } }
     var clipBox: PlainView? { get { extras?.clipBox } set { if newValue != nil || extras != nil { more.clipBox = newValue } } }
     var layoutOffset: CGPoint { get { extras?.layoutOffset ?? .zero } set { if newValue != .zero || extras != nil { more.layoutOffset = newValue } } }
     var stickyOffset: CGPoint { get { extras?.stickyOffset ?? .zero } set { if newValue != .zero || extras != nil { more.stickyOffset = newValue } } }
+    var zoomFactor: CGFloat { get { extras?.zoomFactor ?? 1 } set { if newValue != 1 || extras != nil { more.zoomFactor = newValue } } }
+    var zoomShift: CGPoint { get { extras?.zoomShift ?? .zero } set { if newValue != .zero || extras != nil { more.zoomShift = newValue } } }
     var authoredAccentTint: UIColor? { get { extras?.authoredAccentTint } set { if newValue != nil || extras != nil { more.authoredAccentTint = newValue } } }
     /// How far a keyboard toolbar rides up with the keyboard (KeyboardToolbarIOS).
     var keyboardLift: CGFloat { get { extras?.keyboardLift ?? 0 } set { if newValue != 0 || extras != nil { more.keyboardLift = newValue } } }
@@ -369,7 +391,7 @@ extension NodeView {
     /// the capture that brings its next frame, as UIKit's own walk would see
     /// the change at once.
     func transparencyChanged() {
-        guard let overlay = superview, let canvas = overlay.superview as? NodeView, canvas.overlay === overlay else { return }
+        guard let overlay = superview, let canvas = overlay.canvasOverlayOwner else { return }
         canvas.needsCapture = true
         canvases?.scheduleCapture()
     }
@@ -421,6 +443,11 @@ extension NodeView {
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }
     var followsEndAfterInteraction: Bool { get { extras?.followsEndAfterInteraction ?? false } set { if newValue || extras != nil { more.followsEndAfterInteraction = newValue } } }
+    /// A smooth `scrollTop` write is running: the app's scroll, which the end-follow leaves alone (LLP 1070.000 §15).
+    var authoredScrollAnimating: Bool {
+        get { (extras?.authoredScrollUntil ?? 0) > CACurrentMediaTime() }
+        set { if newValue || extras != nil { more.authoredScrollUntil = newValue ? CACurrentMediaTime() + ElementScrolls.revealBound : 0 } }
+    }
     var anchoredScrollTop: CGFloat? { get { extras?.anchoredScrollTop } set { if newValue != nil || extras != nil { more.anchoredScrollTop = newValue } } }
     var retainedScrollTop: CGFloat? { get { extras?.retainedScrollTop } set { if newValue != nil || extras != nil { more.retainedScrollTop = newValue } } }
     var materialKind: String? { get { extras?.materialKind } set { if newValue != nil || extras != nil { more.materialKind = newValue } } }
@@ -450,6 +477,7 @@ extension NodeView {
     var scrollCollapsed: CGFloat { get { extras?.scrollCollapsed ?? 0 } set { if newValue != 0 || extras != nil { more.scrollCollapsed = newValue } } }
     var scrollWritten: String? { get { extras?.scrollWritten } set { if newValue != nil || extras != nil { more.scrollWritten = newValue } } }
     var hatchReusable: Bool { get { extras?.hatchReusable ?? false } set { if newValue || extras != nil { more.hatchReusable = newValue } } }
+    var clearsNavigation: Bool { get { extras?.clearsNavigation ?? false } set { if newValue || extras != nil { more.clearsNavigation = newValue } } }
     /// Where CSS's `scrollTop` 0 is in UIKit's offsets: past the scroller's
     /// top inset when UIKit insets it — a collapsing title's bar, or the bar
     /// over a route's bottom-edge scroller (`reachBottom`), which stays
@@ -465,6 +493,22 @@ extension NodeView {
     var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
+    /// Whether a touch at `point` can reach this box's children. Overflow
+    /// that is not visible clips them at the padding edge (CSS Overflow 3
+    /// §3), so a touch on the border is the box's own, as a browser hit-tests
+    /// it. A scroller's border is its scroll view's, which takes the touch
+    /// for its pan.
+    func reachesChildren(at point: CGPoint) -> Bool {
+        let x = (style["overflow_x"]?.string ?? "visible") != "visible", y = (style["overflow_y"]?.string ?? "visible") != "visible"
+        guard x || y, scrollView == nil else { return true }
+        if clipsOneAxis { return oneAxisClipContains(point) }
+        let uniform = number("border_width")
+        let widths = ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
+        let box = surface?.frame ?? bounds
+        if x && y { return innerOutline(widths, in: box).contains(point) }
+        return x ? point.x >= box.minX + widths[3] && point.x <= box.maxX - widths[1]
+            : point.y >= box.minY + widths[0] && point.y <= box.maxY - widths[2]
+    }
     /// Its scroll view's frame: its bounds, and the band past them.
     package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }
     /// Native padding and footer space are content, unlike a bar or keyboard.

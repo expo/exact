@@ -260,7 +260,7 @@ mod tests {
                             );
                         }
                     }
-                    assert!(img.px.chunks_exact(4).any(|p| p != pixel(0, 0)));
+                    assert!(img.px.as_chunks::<4>().0.iter().any(|p| p != pixel(0, 0)));
                 }
             }
         }

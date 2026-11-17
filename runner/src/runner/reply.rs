@@ -53,6 +53,31 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let binding = self.request_completion(ticket);
+        let completion = match &binding {
+            Some(binding) => binding.completion(outcome, timing),
+            None => Completion::Reply { outcome, timing },
+        };
+        let capability = binding.as_ref().and_then(CompletionReply::delivery);
+        match capability {
+            Some(capability) => self.deliver(capability, completion),
+            // Unissued, consumed or retired requests keep their integer
+            // protocol during carry (LLP 1172.019 §2 item 1).
+            None => self.deliver_reply(ticket, completion),
+        }
+    }
+
+    pub(super) fn deliver_reply(
+        &mut self,
+        ticket: u64,
+        completion: Completion,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (Completion::Reply { outcome, timing }
+        | Completion::Subscription { outcome, timing }
+        | Completion::DurableOperation { outcome, timing }) = completion
+        else {
+            unreachable!("callback dispatched by deliver")
+        };
         // A let-go request's reply: it has ended, and an abort names it no more.
         self.retired_fetches.retain(|r| r.1 != ticket);
         let answering = std::mem::replace(&mut self.churn.answering, true);
@@ -67,6 +92,10 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.hear_aborted();
+        if let Some(message) = self.failed_tickets.remove(&ticket) {
+            return self.executor_failed(ticket, message);
+        }
         if self.is_background(ticket) {
             // Its own path (LLP 1097 D5): no commit, no `then`, no update.
             self.background_landed(outcome);
@@ -124,6 +153,10 @@ impl<D: DataSource> Runner<D> {
                 self.pending[pos].sent = true;
                 return Ok(None);
             }
+            return self.message(pos, outcome, &summary);
+        }
+        // Messages that waited together (LLP 1016.000 D4): one commit.
+        if let (Some(_), Outcome::Messages(_)) = (self.pending[pos].stream, &outcome) {
             return self.message(pos, outcome, &summary);
         }
         // A re-ask's wait was never sent (`overrun.rs`): only its invocation's end fails it.
@@ -198,9 +231,11 @@ impl<D: DataSource> Runner<D> {
             self.long_poll_replied(pos);
         }
         let p = &mut self.pending[pos];
-        if let (Some(count), Outcome::Message(m)) = (p.stream.as_mut(), &outcome) {
-            count.coalesced += u64::from(m.coalesced);
-            sockets::socket_message(count, m);
+        if let Some(count) = p.stream.as_mut() {
+            for m in outcome.messages() {
+                count.coalesced += u64::from(m.coalesced);
+                sockets::socket_message(count, m);
+            }
         }
         let p = p.clone();
         self.note_child_outcome(p.ticket, &outcome);
@@ -251,11 +286,12 @@ impl<D: DataSource> Runner<D> {
         }
         let name = self.target_name(p.target);
         let turn = std::mem::take(&mut self.mapper_turns.landing);
-        let message = p.stream.is_some() && matches!(outcome, Outcome::Message(_));
+        let message = p.stream.is_some() && !outcome.messages().is_empty();
+        let messages = outcome.messages().len().max(1) as u64;
         let failed_end = matches!(outcome, Outcome::Failed { .. });
         let ty = match p.target {
             Target::Resource(i) => self.resource_row(i).ty,
-            Target::Mutation(m) | Target::Sent(m, _) => self.plan.mutations[m].ty,
+            Target::Mutation(m) | Target::Sent(m, _) => self.mutation_row(m).ty,
         };
         self.store.take_topics();
         self.snapshot_sockets();
@@ -274,13 +310,19 @@ impl<D: DataSource> Runner<D> {
         };
         self.store.set_clock_ms(self.now_ms);
         let (reads_before, revision_before) = (self.store.reads(), self.store.revision());
+        let draws_before = self.store.entropy_draws();
         let parsed = if Self::activity_send(&p.source) {
             Self::activity_reply(&self.plan, ty, outcome).map(Some)
         } else if self.plan.module_named(&p.source).is_some() {
             self.module_parse(p.target, ty, &p.source, outcome)
                 .map(Some)
+        } else if self.plan.fetch_named(&p.source).is_some() {
+            self.fetch_parse(ty, &p.source, outcome).map(Some)
         } else {
-            let parsed = self.parse_frame(&p, message, outcome);
+            let parsed = match outcome {
+                Outcome::Messages(batch) => self.parse_batch(&p, batch),
+                outcome => self.parse_frame(&p, message, outcome),
+            };
             let parsed = parsed.and_then(|answer| match answer {
                 Some(answer) if p.target.mutation().is_some() => {
                     self.single_answer(p.target, Ok(answer)).map(Some)
@@ -305,10 +347,7 @@ impl<D: DataSource> Runner<D> {
             self.store.take_sockets();
         }
         self.stage_answer(p.target);
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         // What this reply's turn watched joins the resource's topics whatever
         // the reply says: a turn that yields another request (a long native
         // call) watched them as much as the one that answers.
@@ -316,13 +355,10 @@ impl<D: DataSource> Runner<D> {
             // A read in a later turn (after an `await`) makes a store reader
             // as one in the first does (LLP 1146 §2.3).
             if self.store.reads() > reads_before {
-                self.resources[i].store_reader = true;
-                self.module_work.reply_reader = Some(i);
+                let contents = self.note_reads(i, reads_before, draws_before);
+                self.module_work.reply_reader = Some((i, contents));
             }
-            // A module's source that data code read: the answer is asked
-            // again when that source's answer changes (LLP 1133.002 D14).
-            let module = (p.keepable.as_ref()).and_then(|r| self.module_topic(&r.body));
-            for topic in self.store.take_topics().into_iter().chain(module) {
+            for topic in self.store.take_topics() {
                 if !self.resources[i].watching.contains(&topic) {
                     self.resources[i].watching.push(topic);
                 }
@@ -442,7 +478,7 @@ impl<D: DataSource> Runner<D> {
         if message || turn {
             let pending = self.pending.iter_mut().find(|q| q.ticket == p.ticket);
             if let Some(count) = pending.and_then(|p| p.stream.as_mut()) {
-                count.messages += 1;
+                count.messages += messages;
             }
             self.sync_pending_flags();
         }
@@ -484,7 +520,7 @@ impl<D: DataSource> Runner<D> {
                 // leaves the slot and the failure (LLP 1161.000 D4).
                 if self.conclude_send(p.target) {
                     self.failed_mut[m] = None;
-                    self.slots[slot] = Value::some(value);
+                    self.land_send(m, slot, Value::some(value));
                 }
                 self.landed.push(m);
                 // The reply landed: what the mutation changed is asked again
@@ -500,6 +536,32 @@ impl<D: DataSource> Runner<D> {
             .and_then(|_| self.gate_step())?;
         self.update()
     }
+    /// Messages that waited together, parsed in arrival order (LLP
+    /// 1016.000 D4): the last one's answer is the batch's, and the values
+    /// before it are the mapper's to fold. One answered otherwise than now
+    /// stops the batch there: a mapper's next turn holds the rest behind
+    /// it, in order, and a stream reopened lets them go with its old ticket.
+    fn parse_batch(
+        &mut self,
+        p: &PendingReq,
+        batch: Vec<crate::Message>,
+    ) -> Result<Option<Answer>, DataError> {
+        let mut rest = batch.into_iter();
+        let mut last = None;
+        while let Some(m) = rest.next() {
+            match self.parse_frame(p, true, Outcome::Message(m))? {
+                Some(Answer::Now(value)) => last = Some(Answer::Now(value)),
+                Some(Answer::Later(request)) if request.continuation.is_some() => {
+                    self.hold_behind_turn(p.ticket, rest.collect())
+                        .map_err(DataError::Unavailable)?;
+                    return Ok(Some(Answer::Later(request)));
+                }
+                other => return Ok(other),
+            }
+        }
+        Ok(last)
+    }
+
     fn continue_answer(&mut self, previous: &PendingReq) {
         let effects = previous.admitted_effects();
         for next in self

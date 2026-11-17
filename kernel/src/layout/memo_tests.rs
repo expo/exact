@@ -71,6 +71,9 @@ struct List {
     batch: u64,
     /// Rows differ in their texts only, from a few (a feed of one kind).
     plain: bool,
+    peers: Vec<Kernel>,
+    stopped: usize,
+    replayed_answers: usize,
 }
 
 impl List {
@@ -124,6 +127,9 @@ impl List {
             seed,
             batch: 1,
             plain: false,
+            peers: Vec::new(),
+            stopped: 0,
+            replayed_answers: 0,
         }
     }
 
@@ -252,6 +258,31 @@ impl List {
                 children: vec![line, mark, rule],
             },
         ]);
+        if !self.peers.is_empty() {
+            let mut child = line;
+            for level in 0..2 {
+                let id = self.next;
+                self.next += 1;
+                ops.push(Op::CreateView {
+                    id,
+                    node_type: NodeType::View,
+                });
+                ops.push(style(
+                    id,
+                    &flex(if level % 2 == 0 { "column" } else { "row" }),
+                ));
+                ops.push(style(id, &[(StyleId::AlignItems, t("flex-start"))]));
+                ops.push(Op::SetChildren {
+                    id,
+                    children: vec![child],
+                });
+                child = id;
+            }
+            ops.push(Op::SetChildren {
+                id: wrapper,
+                children: vec![child, mark, rule],
+            });
+        }
         if !block {
             ops.push(style(column, &flex("column")));
         }
@@ -316,6 +347,23 @@ impl List {
         self.batch += 1;
         self.k.apply(0, self.batch, ops).unwrap();
         self.k.compute_layout(1, OFFER).unwrap();
+        self.stopped += self.k.size_cache_counts().stopped_replays;
+        self.replayed_answers = self
+            .replayed_answers
+            .max(self.k.size_cache_counts().replayed_max_answers);
+        for peer in &mut self.peers {
+            peer.apply(0, self.batch, ops).unwrap();
+            peer.compute_layout(1, OFFER).unwrap();
+            super::size_cache::assert_same(&self.k, peer);
+        }
+        if !self.peers.is_empty() {
+            assert_eq!(self.k.size_cache_counts().repeated, 0);
+            assert!(
+                self.k.size_cache_counts().max_answers <= 64,
+                "LLP 1165 alarm: {:?}",
+                self.k.size_cache_counts()
+            );
+        }
         let mut fresh = self.k.rehydrate(Box::new(MonospaceMeasurer::default()));
         fresh.compute_layout(1, OFFER).unwrap();
         let (a, b) = (self.k.arena(), fresh.arena());
@@ -631,4 +679,55 @@ fn engine_styles_share_by_value_with_absent_or_allocated_defaults() {
     let c = tree.share(placed.clone());
     assert!(!Rc::ptr_eq(&a, &c));
     assert!(Rc::ptr_eq(&c, &tree.share(placed)));
+}
+
+fn compare_size_policies(case: u64, rounds: usize) -> (usize, usize, usize) {
+    let mut observed = (0, 0, 0);
+    use super::size_cache::SizeCachePolicy::{All, Nine};
+    for memo in [true, false] {
+        let mut list = List::new(0x1078_0029_5eed ^ (case * 0x9E37_79B9));
+        list.k.set_size_cache_policy(All);
+        list.k.set_row_layout_memo(memo);
+        let mut peer = list.k.rehydrate(Box::new(MonospaceMeasurer::default()));
+        peer.set_size_cache_policy(Nine);
+        peer.set_row_layout_memo(memo);
+        list.peers.push(peer);
+        list.run(6 + case as usize % 4 * 2, rounds);
+        eprintln!(
+            "rebind case {case} memo {memo}: {:?}, stopped {}, replayed answers {}",
+            list.k.row_layout_memo_counts(),
+            list.stopped,
+            list.replayed_answers
+        );
+        if memo {
+            observed = (
+                list.k.row_layout_memo_counts().0,
+                list.stopped,
+                list.replayed_answers,
+            );
+        }
+    }
+    observed
+}
+
+fn assert_replayed_overflow((replays, stopped, answers): (usize, usize, usize)) {
+    assert!(replays > 0, "no row was replayed");
+    assert!(stopped > 0, "no replay stopped after storing an answer");
+    assert!(answers > 9, "replayed subtrees held only {answers} answers");
+}
+
+#[test]
+fn rebound_rows_agree_under_both_size_cache_policies() {
+    assert_replayed_overflow(compare_size_policies(0, 30));
+}
+
+#[test]
+#[ignore = "async lane: full row-rebinding size-cache comparisons"]
+fn rebound_rows_agree_under_both_size_cache_policies_all_seeds() {
+    let counts = (0..4)
+        .map(|case| compare_size_policies(case, 300))
+        .fold((0, 0, 0), |(h, s, a), (hits, stopped, answers)| {
+            (h + hits, s + stopped, a.max(answers))
+        });
+    assert_replayed_overflow(counts);
 }

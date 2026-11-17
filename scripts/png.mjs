@@ -112,7 +112,7 @@ export function encodePng(image) {
   return Buffer.concat([SIGNATURE, header(image.width, image.height), chunk('IDAT', scanlines(image)), chunk('IEND', Buffer.alloc(0))]);
 }
 
-/** An animated PNG of equal-size RGBA frames, each shown `delayMs`, looping. A viewer without APNG shows the first. */
+/** An animated PNG of equal-size RGBA frames, each shown `delayMs` (one for all, or one each), looping. A viewer without APNG shows the first. */
 export function encodeApng(frames, delayMs) {
   const { width, height } = frames[0];
   if (frames.some(f => f.width !== width || f.height !== height)) throw new Error('animated PNG: every frame must be one size');
@@ -123,7 +123,7 @@ export function encodeApng(frames, delayMs) {
   frames.forEach((frame, i) => {
     const fctl = Buffer.alloc(26);
     fctl.writeUInt32BE(seq++, 0); fctl.writeUInt32BE(width, 4); fctl.writeUInt32BE(height, 8);
-    fctl.writeUInt16BE(Math.min(65535, Math.round(delayMs)), 20); fctl.writeUInt16BE(1000, 22);
+    fctl.writeUInt16BE(Math.min(65535, Math.round(Array.isArray(delayMs) ? delayMs[i] : delayMs)), 20); fctl.writeUInt16BE(1000, 22);
     parts.push(chunk('fcTL', fctl));
     const data = scanlines(frame);
     if (i === 0) parts.push(chunk('IDAT', data));

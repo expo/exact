@@ -198,10 +198,14 @@ mod tests {
         assert!(ahead(&manifest(serde_json::json!({}))).unwrap().is_empty());
         assert_eq!(
             ahead(&manifest(
-                serde_json::json!({"link": ["markdown", "grouped_lists"]})
+                serde_json::json!({"link": ["markdown", "grouped_lists", "presence"]})
             ))
             .unwrap(),
-            vec![Capability::Markdown, Capability::GroupedLists]
+            vec![
+                Capability::Markdown,
+                Capability::GroupedLists,
+                Capability::Presence
+            ]
         );
         let refused = ahead(&manifest(serde_json::json!({"link": ["markdwon"]}))).unwrap_err();
         assert!(

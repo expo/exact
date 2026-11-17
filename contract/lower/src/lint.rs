@@ -2,8 +2,8 @@
 //! and its literal style values against their rows.
 
 use crate::{dataset, native, shorthands, svg, tags, values, LowerError, MAX_REFUSALS};
-use contract_syntax::{Attr, Expr, File, Node, Span};
-use contract_types::Ty;
+use contract_syntax::{Attr, Component, Expr, File, Node, Span};
+use contract_types::{Scope, Ty};
 use exact_kernel::StyleId;
 use exact_motion::animation::LONGHANDS;
 
@@ -318,8 +318,11 @@ pub(crate) fn active_migration_hint(name: &str, target: &str) -> String {
 
 pub(crate) fn unknown_attr(tag: &str, a: &Attr) -> LowerError {
     let hint = match tags::renamed(&a.name) {
-        None if crate::fields::placeholder_hint(&a.name).is_some() => {
-            crate::fields::placeholder_hint(&a.name).unwrap_or_default()
+        None if crate::fields::part_hint(&a.name).is_some() => {
+            crate::fields::part_hint(&a.name).unwrap_or_default()
+        }
+        None if crate::route_parts::hint(&a.name).is_some() => {
+            crate::route_parts::hint(&a.name).unwrap_or_default()
         }
         Some(new @ ("press" | "change" | "input")) => format!(
             "; `{}` is `{new}` here: a handler is named for its event (LLP 1005 §3)",
@@ -460,7 +463,7 @@ fn shorthand(a: &Attr, names: &Substituted) -> Result<(), LowerError> {
     if a.name == "font"
         && crate::type_tokens::tokens_named(
             &a,
-            exact_tamber::Kind::Type,
+            exact_forma::Kind::Type,
             &[],
             &Default::default(),
             false,
@@ -470,6 +473,20 @@ fn shorthand(a: &Attr, names: &Substituted) -> Result<(), LowerError> {
         return Ok(());
     }
     shorthands::component(&a.value, &a.name, 0).map(|_| ())
+}
+
+/// A press offset's known derive arms, with local names retaining their scope.
+pub(crate) fn press_translation_arms(a: &Attr, root: &Component, scope: &Scope) -> Attr {
+    let names = Substituted {
+        derives: root.derives.iter().enumerate().filter_map(|(i, d)| {
+            matches!(scope.lookup(&d.name), Some((contract_types::Ref::Derive(j), _)) if j as usize == i)
+                .then_some((d.name.as_str(), &d.expr))
+        }).collect(),
+        ..Substituted::default()
+    };
+    let mut budget = DERIVE_READS;
+    let value = known_arms(&a.value, &names, &mut budget).unwrap_or_else(|| a.value.clone());
+    Attr { value, ..a.clone() }
 }
 
 /// At most this many derive bodies read into one value: a derive read twice
@@ -563,19 +580,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                         out.push(name);
                         uses(children, out);
                     }
-                    Node::Element { children, .. } => uses(children, out),
-                    Node::When {
-                        then, otherwise, ..
-                    } => {
-                        uses(then, out);
-                        uses(otherwise, out);
+                    node => {
+                        for list in node.child_lists() {
+                            uses(list, out);
+                        }
                     }
-                    Node::Each { body, .. } => uses(body, out),
-                    Node::Match { some, none, .. } => {
-                        uses(&some.1, out);
-                        uses(none, out);
-                    }
-                    Node::Children { .. } => {}
                 }
             }
         }
@@ -610,18 +619,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                     }));
                     literal(children, out);
                 }
-                Node::Element { .. } | Node::Children { .. } => {}
-                Node::Use { children, .. } => literal(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    literal(then, out);
-                    literal(otherwise, out);
-                }
-                Node::Each { body, .. } => literal(body, out),
-                Node::Match { some, none, .. } => {
-                    literal(&some.1, out);
-                    literal(none, out);
+                Node::Element { .. } => {}
+                node => {
+                    for list in node.child_lists() {
+                        literal(list, out);
+                    }
                 }
             }
         }
@@ -764,24 +766,15 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                     }
                     walk(children, names, errors);
                 }
-                Node::Use { children, .. } => walk(children, names, errors),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, names, errors);
-                    walk(otherwise, names, errors);
+                node => {
+                    for (list, binds) in node.scoped_child_lists() {
+                        if binds.is_empty() {
+                            walk(list, names, errors);
+                        } else {
+                            walk(list, &names.hiding(binds.iter()), errors);
+                        }
+                    }
                 }
-                Node::Each {
-                    var, index, body, ..
-                } => {
-                    let row = std::iter::once(var.as_str()).chain(index.as_deref());
-                    walk(body, &names.hiding(row), errors);
-                }
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, &names.hiding([some.0.as_str()]), errors);
-                    walk(none, names, errors);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

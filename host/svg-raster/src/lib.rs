@@ -22,7 +22,7 @@ const LUMINANCE: [f32; 3] = [0.2126, 0.7152, 0.0722];
 /// takes the luminance of the premultiplied colour (`mask-type:
 /// luminance`); otherwise the alpha (`mask-type: alpha`).
 pub fn mask_coverage(pixels: &mut [u8], luminance: bool) {
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         let c = if luminance {
             let l = LUMINANCE[0] * px[0] as f32
                 + LUMINANCE[1] * px[1] as f32
@@ -39,7 +39,9 @@ pub fn mask_coverage(pixels: &mut [u8], luminance: bool) {
 /// or the alpha of a [`mask_coverage`] image when `stride` is 4), in place.
 pub fn apply_coverage(target: &mut [u8], coverage: &[u8], stride: usize) {
     for (px, c) in target
-        .chunks_exact_mut(4)
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
         .zip(coverage.chunks_exact(stride))
     {
         let k = c[stride - 1] as u32;
@@ -161,7 +163,7 @@ pub fn backdrop_saturate(pixels: &mut [u8], amount: f32) {
     if !amount.is_finite() || amount < 0.0 || amount == 1.0 {
         return;
     }
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         let gray = 0.213 * px[0] as f64 + 0.715 * px[1] as f64 + 0.072 * px[2] as f64;
         let alpha = px[3] as f64;
         for channel in &mut px[..3] {
@@ -195,7 +197,7 @@ mod tests {
         // Symmetric about the edge between pixels 19 and 20.
         assert!((250..=260).contains(&(at(w / 2 - 1) as u32 + at(w / 2) as u32)));
         assert!(at(w / 2 - 3) > 0 && at(w / 2 + 2) < 255);
-        assert!(px.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(px.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
 
     #[test]
@@ -221,7 +223,7 @@ mod tests {
         let (w, h) = (128, 4);
         let mut px = vec![0; w * h * 4];
         for row in px.chunks_exact_mut(w * 4) {
-            for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+            for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let value = if x < w / 2 { 0 } else { 255 };
                 pixel.copy_from_slice(&[value, value, value, 255]);
             }
@@ -230,7 +232,7 @@ mod tests {
         for x in w / 2 - 10..w / 2 + 10 {
             assert!(px[x * 4] < px[(x + 1) * 4], "flat step at {x}");
         }
-        assert!(px.chunks_exact(4).all(|pixel| pixel[3] == 255));
+        assert!(px.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255));
     }
 
     #[test]

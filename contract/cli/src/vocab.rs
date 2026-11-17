@@ -245,7 +245,11 @@ fn entry(name: &str) -> Option<Entry> {
         .or_else(|| vocab::compile_attr(name).map(compile_attr_json));
     let value_of: Vec<&'static str> = vocab::attrs()
         .into_iter()
-        .filter(|(n, a)| rows_of(n, a).iter().any(|r| r.enum_names().contains(&name)))
+        .filter(|(n, a)| {
+            rows_of(n, a)
+                .iter()
+                .any(|r| vocab::authored_names(*r).contains(&name))
+        })
         .map(|(n, _)| n)
         .collect();
     let concept = concepts::concept(name);
@@ -527,13 +531,16 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
             println!("  on any element (LLP 1133.029). While the element is mounted and displayed (by `wakelock`'s rule) and outside every `dialog` and popover, the window keeps to the orientations it names: a Screen Orientation API lock type (\"portrait\", \"landscape\", \"portrait-primary\", \"portrait-secondary\", \"landscape-primary\", \"landscape-secondary\", \"natural\", \"any\"), or \"current\", the orientation the window has when the lock begins (a game steered by tilt); \"none\", the default, holds nothing. Bind it to state: `orientationlock=(tilt ? \"current\" : \"none\")`. The topmost sheet that holds wins over what it covers, a descendant's lock replaces its ancestor's (\"any\" there frees a subtree), and unrelated locks intersect; locks that share no orientation hold none and are journaled. A type only narrows the manifest's `orientation`: a literal outside it, or one inside a `dialog` or popover, is refused. iOS and Android (on a tablet only \"current\" holds), the web in fullscreen where the browser locks, Windows' auto-rotation preference; macOS, tvOS and Linux have no screen orientation and journal it once. The agent's `state.orientationlock` is `{{held, by, words, lock, conflict, applied}}`, `applied` the host's readback.");
         }
         if name == "navigationSplit" {
-            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when it draws the disclosure, an `image \"symbol:forward-chevron\"` (the chevron an iOS list draws) in a `link`, or in a `button` or pressable whose action writes the router (`push`, `open`, `go`); a chevron on a row that only selects is decoration, and its route is left unsplit, `navigationSplit=\"none\"` said for you. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a phone pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
+            println!("  on a stack's root route (LLP 1116.004 D1.2). A wide window (900 px and up on the web) shows a stack whose root route is a list whose rows push beside its top, as a split view does, with nothing to write: a row pushes when its press does: a `link` to one of the app's routes, or a `button` or pressable whose action writes the router (`push`, `open`, `go`). A row's `image \"symbol:forward-chevron\"` (the disclosure an iOS list draws) is paint, which neither splits a list nor keeps one from splitting, and a list whose rows only select stays pushed. An action that writes the router only to go back or open a sheet looks the same, so say `navigationSplit=\"none\"` for such a list. The list is a 320-wide column, its chevrons hidden and the row whose press pushed the detail marked; the top route is the detail beside it (a detail a row pushed has no Back), a `navigationPresentation=\"modal\"` route stays a sheet, and a phone pushes. The router is unchanged: a push from a row while a detail shows stacks it, so `replace` there to swap the detail. \"none\" keeps the stack pushed; a number is the column's width and splits a list the rule does not find. While nothing is selected the detail pane shows the platform's placeholder (\"No Selection\" on a Mac or an iPad, \"Select an item\" on the web, centred, in the secondary label's colour); \"placeholder\" on a box in the root route (an `EmptyState`) is your own instead, shown only there and then and laid out nowhere else. A root `tablist` left as the tabs recipe places it is a sidebar on the same window. docs/recipes/navigation-stack.md");
         }
         if matches!(
             name,
             "transition" | "animation" | "-exact-exit-animation" | "-exact-layout-transition"
         ) {
             println!("  how motion is written, and what animates: `contract vocab motion` (docs/recipes/motion.md)");
+        }
+        if name == "direction" {
+            println!("  one box's direction; an app in a right-to-left language takes the page's from its strings table: `contract vocab rtl`");
         }
         if name == "-exact-fit" {
             println!("  on a `text`: \"shrink\" draws a line too wide for its box smaller until it fits, down to half its size, as UIKit's adjustsFontSizeToFitWidth (a timer's readout at the largest text size); with `white-space=\"nowrap\"` the whole line fits, else its longest word (LLP 1116.001 D1.4)");
@@ -833,7 +840,7 @@ const MIDI_SOURCE: &str = "reserved source, `resource midi = exactMIDI() as shap
 
 /// `@exact/notifications`' names (LLP 1133.004), which a package declares and
 /// no table of the compiler's holds.
-const NOTIFICATIONS: &str = "a name of the standard module `@exact/notifications` (LLP 1133.004): `exact add notifications`, then `use showNotification, notificationclick, NotificationEvent from \"@exact/notifications\"` and the grant `device.notifications purpose.notifications`. A post is a statement in an action, `showNotification(title=\"Build finished\", tag=t, silent=true, data=\"/thread/3\")`; `closeNotification(tag=t)` takes it away. Its click is `notificationclick=opened` on the root component's outermost node (`action opened(tag: string, e: NotificationEvent)`, `e.data`); with `navigate=\"/thread/3\"` the click opens that route. `setAppBadge(contents=3)`, `setAppBadge()` (a flag) and `clearAppBadge()` set the app icon's badge; `notificationStatus()` reads the permission and `requestNotificationPermission()` asks. Data code calls the same names through the package's binding. Under the agent `state.notifications` lists each post, `tap @ref` clicks one, and `state.badge` is the badge (docs/reference.md#notifications)";
+const NOTIFICATIONS: &str = "a name of the standard module `@exact/notifications` (LLP 1133.004): `bun exact.mjs add notifications`, then `use showNotification, notificationclick, NotificationEvent from \"@exact/notifications\"` and the grant `device.notifications purpose.notifications`. A post is a statement in an action, `showNotification(title=\"Build finished\", tag=t, silent=true, data=\"/thread/3\")`; `closeNotification(tag=t)` takes it away. Its click is `notificationclick=opened` on the root component's outermost node (`action opened(tag: string, e: NotificationEvent)`, `e.data`); with `navigate=\"/thread/3\"` the click opens that route. `actions=[NotificationAction(action=\"approve\", title=\"Approve\", foreground=false, destructive=false, authenticationRequired=true, placeholder=none)]`, written out, gives a post its buttons (a push names the list by `aps.category`, \"approve\"); a choice is the click with `e.action` and `e.reply`, and one with `foreground=false` runs its handler in the background, its work held to completion. `setAppBadge(contents=3)`, `setAppBadge()` (a flag) and `clearAppBadge()` set the app icon's badge; `notificationStatus()` reads the permission and `requestNotificationPermission()` asks. Data code calls the same names through the package's binding. Under the agent `state.notifications` lists each post, `tap @ref` clicks one (`tap @ref approve` chooses an action), and `state.badge` is the badge (docs/reference.md#notifications)";
 
 /// A host command: an action statement, never a value.
 fn command_text(name: &str) -> String {
@@ -841,11 +848,12 @@ fn command_text(name: &str) -> String {
         "requestMIDIAccess" | "sendMIDI" => "; `sendMIDI` to an output that is not connected drops the message; to `\"\"`, no output, it reaches no device and `exactMIDI().sent` lists it, with no access needed (`contract vocab exactMIDI`); MIDI answers only under the grant `device.midi purpose.midi` (a line of app.ts's `export const grants`), whose second word is a strings key: `\"purpose.midi\": \"…\"` in strings/en.json, the text the person is shown when asked (apps/metronome)",
         "setRangeText" =>"; `setRangeText(id, text[, start, end[, selectionMode]])`: web/macOS/iOS/Linux plain text field replacement, and on web/macOS/iOS the Markdown editor's, over its source; UTF-16 offsets, selectionMode preserve (default), select, start or end; one input (InputEvent.inputType insertReplacementText); no undo step on a plain field, one undo step each on the Markdown editor (LLP 1045 D1). Markdown on Linux, Windows, Android and terminal are not supported yet (LLP 1069.001)",
         "startTrace_EXPERIMENTAL" | "stopTrace_EXPERIMENTAL" => "; experimental: `startTrace_EXPERIMENTAL()` records each display-link callback from now, in any build; `stopTrace_EXPERIMENTAL()` ends the recording and puts its trace on the clipboard as JSON: on iOS each drag and glide of an element's scroller, a route's page or the document with an estimate of its hitch time ratio, and each late frame with what the main thread did in it; `stopTrace_EXPERIMENTAL(maxBytes)` copies it cut to that many bytes, the frames late the longest first, for a conversation that limits a message (a budget too small for its totals copies a note naming the size that fits them). Apple hosts (tvOS, with no clipboard, only saves the file); the web and Linux refuse it in the journal",
-        "setMode" => "; `setMode(\"dark-style\", \"dim\")` sets one of the window's app modes, an axis of the app's design (`app.tamber`) and one of its values; a subtree pins its own with `-exact-mode` (LLP 1121 D5)",
+        "setMode" => "; `setMode(\"dark-style\", \"dim\")` sets one of the window's app modes, an axis of the app's design (`app.forma`) and one of its values; a subtree pins its own with `-exact-mode` (LLP 1121 D5)",
         "setPageZoom" => "; `setPageZoom(factor)` sets the window's page zoom, as View ▸ Zoom In does and Electron's `webContents.setZoomFactor`: CSS px per point, so the viewport, media queries, `px` and `rem` all follow (`setPageZoom(1)` is Actual Size). The Mac's own; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1)",
         "exitFullscreen" => "; `exitFullscreen()`: the document leaves full screen, as the web's `document.exitFullscreen()`; on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s). iOS, Linux and Windows refuse it in the journal (LLP 1069.010)",
         "setWindowOpacity" => "; `setWindowOpacity(opacity)` draws the session's window at that opacity, 0 (unseen, still key and still hearing keys) to 1, as Electron's `BrowserWindow.setOpacity`: what an app's own quit hold does before it quits. The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1069.010)",
         "setLocale" => "; `setLocale(\"de\")` makes the app's `t(…)` texts read the strings table that tag resolves to (the same lookup as the host's locale: `de-AT`, then `de`, then the base), with `lang`, `dir` and `exactTime().resolvedLocale`; `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and read before the first frame; `setLocale(\"\")` forgets it and follows the host's locale again. An app with strings tables only",
+        "hideWindow" => "; `hideWindow()` puts the session's window away and keeps the app running, as the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed, and as Electron's `BrowserWindow.hide`: `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and bare `focus()`, a Dock click or the status item's own press shows it again as a restore (`restores`). For the menu-bar utility whose window goes once its work is done; `close()` still closes and ends the app. The Mac's, refused in the journal where the app would not keep running (no `keepRunning`, no status item placed, a `navigate-new` app); iOS, Linux, Windows, Android and the web refuse it in the journal (LLP 1133.025 D4)",
         "setRootFontSize" => "; `setRootFontSize(px)` sets CSS's `:root { font-size }`, the size every `rem` follows (px above 0), over the host's own; `setRootFontSize(\"125%\")` sets a percentage of the host's size that keeps following it (Dynamic Type, the browser's setting); `setRootFontSize(\"medium\")` hands it back (LLP 1069.000 D3, LLP 1121 D6)",
         _ => frames::command(name).unwrap_or(""),
     };
@@ -896,8 +904,11 @@ const AUTOCAPITALIZE: &str = "`words` for a person's name, `none` for a username
 /// `anywhere` broke their words.
 const OVERFLOW_WRAP: &str = "text wraps between words by default; at a large text size give the row room (flex-wrap=\"wrap\" with a flex-basis in rem) rather than breaking words. `break-word` breaks only a word wider than its line (a pasted link); `anywhere` breaks inside any word (\"Octo/ber\"), which verify names on prose: it is for a URL or a token on a `link` or in a monospace face. `word-break` is not admitted";
 
+const TRANSLATE: &str = "one or two lengths, x then y, and an optional z in px, as CSS's `translate`: each of x and y px, a percentage of the box's own border box, or a `calc()` of the two (`translate=\"calc(50% - 12px) 0\"`); transitions and keyframes interpolate the px and the percentage separately, as CSS does a `calc()`. A `rem`, viewport or `env()` length is refused";
 /// Charlie, 2026-11-10 (issues/20261021-scroll-drag-events-and-hit-slop.md).
 const HIT_SLOP: &str = "not CSS: how far past its box a pointer still reaches the node, one to four nonnegative lengths as `padding` takes them (React Native's `hitSlop`): `-exact-hit-slop=\"8px\"` on a 28px icon button takes a tap 8px outside it. Layout, paint and accessibility never see it, and `tap <target>` still aims at the box's middle. Where boxes overlap the front one takes the pointer, slop and all; an `overflow` other than `visible` on the node or an ancestor clips it. On the web a positioned pseudo-element is the slop: it reaches from the padding edge, so a border's width comes off it, and a node that says no `position` becomes `position: relative`. An `image`, `input` or other replaced element refuses it (`lower-hit-slop`): give the slop to the box or button that holds it";
+/// LLP 1057.001.000 D1–D4.
+const ZOOM: &str = "not CSS (`@viewport`'s `min-zoom` and `max-zoom`, on an element): on a scroll container that scrolls both ways and holds one element, the range a pinch zooms that child through, a number or percentage above 0, each 1 by default; `-exact-max-zoom=4` alone zooms from the laid-out size to four times it. The child keeps its layout and is drawn scaled, the extent grows with it, and it is centred while smaller than the port, so rows that align it are refused (`lower-zoom-align`). The pinch, the bounce and the double tap are the platform's (`touch-action=\"manipulation\"` turns the double tap off). `scrollZoom` on the scroll is the zoom, written as `scrollTop` is and read as `ScrollEvent.scrollZoom`";
 const REACH_MARGIN: &str = "reach-margin on a `list virtualized=true`: how far ahead of an edge `reachstart` and `reachend` fire, a literal one or two nonnegative px or % lengths (before, after; a % is of the list's port along its axis), default one port, \"100%\". \"200%\" fires `reachend` when the last row is two ports away (LLP 1145 D4). While the list scrolls toward an end, that end's margin grows by the lead the list's window takes for the scroll, a quarter second of travel up to two ports, so a fling's edge fires as the window loads ahead for it";
 /// What VoiceOver needs to move from a transcript's first message to its last.
 const KEEP_MOUNTED: &str = "keep-mounted on a `list virtualized=true`: the keys of rows it keeps mounted wherever its window is, a list of up to 64 keys as the `for`'s `key=` gives them (an `option` of one too, `none` naming no row): `keep-mounted=[first(ids), ids.at(-1)]` keeps a transcript's first and last message in the accessibility tree, so VoiceOver moves from one to the other; a playing row keeps its player. A key the list does not hold is passed over; another value keeps none and says so in the journal (LLP 1010 §6.11)";
@@ -907,6 +918,8 @@ const TRANSCRIPT_END: &str = "on a `list virtualized=true` (a grouped list never
 /// the euxy port's warm deep link to another tab's route opened over the
 /// tab it was on.
 const NAVIGATE: &str = "on the navigation root: a location from outside the running app (a link, a protocol handler's or a notification's URL, the web's Back and Forward), whose action chooses the verb (LLP 1038 D8). `go` pops to the location when the selected stack holds it, selects the tab whose top it is, and otherwise pushes it on the selected tab, whatever tab declares its route. `open(nav, url)` lands in the route's declared tab, that tab's stack its declared chain. A cold launch's location is no event: it opens there, as `open` does";
+
+const PLAYING: &str = "on video or audio, with no payload: playback is ready to start after a pause or delay for media data (WHATWG: https://html.spec.whatwg.org/multipage/media.html#event-media-playing). The web forwards the browser's event. Apple waits until the item's timebase advances, then reports once per start or resumption; calling play alone does not fire it. Use playing to hand over a feed's volume; timeupdate remains a periodic position report (250 ms on Apple). This is not a guarantee that a speaker has produced sound. Android and the painted hosts do not currently deliver this event (LLP 1042).";
 
 /// What `metadata=` takes (LLP 1098 D1): the Media Session's record.
 const METADATA: &str = "MediaMetadata(title=, artist=, album=, artwork=), each a string";
@@ -920,7 +933,7 @@ const SEARCH_TYPE: &str = "on an `input`, HTML's (`number`, `date`, `checkbox`, 
 /// `contract vocab color-scheme` (LLP 1034 §8): what it fixes, and the
 /// app's own scheme, which is `setScheme`'s (the euxy port's Theme row
 /// guessed at `prefersColorScheme`).
-const COLOR_SCHEME: &str = "`light` or `dark` fixes the node and its subtree in that scheme (`light-dark()`, platform colours, glass); left off, it follows the surrounding scheme. `normal`, `light dark` and `only` are refused, written or as a branch of a computed value. A Theme setting of Auto, Light and Dark is the app's own scheme: `setScheme(\"system\" | \"light\" | \"dark\")` in the action that chooses it (and a `mount` task, for a kept choice), which the bars, sheets and windows follow. `exactViewport().prefersColorScheme` is the system's scheme beneath `setScheme` and any subtree's, a fact to read, not one to paint by (`lower-scheme-color`)";
+const COLOR_SCHEME: &str = "`light` or `dark` fixes the node and its subtree in that scheme (`light-dark()`, platform colours, glass); left off, it follows the surrounding scheme. `normal`, `light dark` and `only` are refused, written or as a branch of a computed value. A Theme setting of Auto, Light and Dark is the app's own scheme: `setScheme(\"system\" | \"light\" | \"dark\")` in the action that chooses it, which the bars, sheets and windows follow; the choice is kept across launches and shown from the first frame. `exactViewport().prefersColorScheme` is the system's scheme beneath `setScheme` and any subtree's, a fact to read, not one to paint by (`lower-scheme-color`)";
 const APPEARANCE: &str = "Explicit none on a header or root tablist keeps the authored bar; on a header button it keeps only that button authored in place while the rest of the header projects. A title button keeps its contents; an authored Back replaces UIKit Back. Search or a header tablist can opt out on that element; a tab button alone keeps its parent segmented. Tabs retain their panels and navigation stacks. Auto restores platform projection.";
 
 /// Where an attribute is admitted, if not on every tag.
@@ -932,7 +945,7 @@ fn only_on(name: &str) -> Option<&'static str> {
         return Some("a `textarea` with `markup=\"markdown\"`: one HTML `dir` word per source line (a Markdown paragraph broken over three source lines takes three), in order, which the web, macOS and iOS draw as that line's base direction; a line past the last word takes the last, so one word sets every line. A list is bound to what the app derives from the value: a literal says one word (`lower-paragraph-dirs-literal`). Words stay with their lines through edits until the app's next words, and a line an edit adds takes the word above it. A line without a word takes the field's `direction`; `auto` is the line's first strong letter outside its syntax and atoms. Linux, Windows and Android show the source as a plain field and ignore it (LLP 1045 D11)");
     }
     if name == "decorations" {
-        return Some("plain `textarea`: paint only, each span's name a `decoration` declaration (color, background-color, text-decoration, text-shadow); the web paints it where `createValueRange` exists, Apple, Linux and Windows all but its text-shadow, Android and the terminal not yet (LLP 1114.007)");
+        return Some("plain `textarea`: paint only, each span's name a `decoration` declaration (color, background-color, text-decoration, text-shadow); the web paints it where `createValueRange` exists, Linux and Windows paint it, Apple paints all but text-shadow, Android and the terminal not yet (LLP 1114.007)");
     }
     // `title` is every element's, HTML's tooltip; `head`'s is the document's.
     if tags::HEAD_FIELDS.contains(&name) && name != "title" {
@@ -960,9 +973,13 @@ fn row_json(row: StyleId) -> Value {
     let mut doc = json!({
         "row": row.name(),
         "codec": vocab::codec(row),
-        "values": row.enum_names(),
+        "values": vocab::authored_names(row),
         "default": vocab::default(row),
     });
+    // LLP 1043.000 §3 D1: keywords the wire keeps and the compiler refuses.
+    if !row.refused_enum_names().is_empty() {
+        doc["refused"] = row.refused_enum_names().into();
+    }
     // Only a row with entries has the key: none recorded is not "every host draws it".
     let hosts = vocab::style_hosts(row);
     if !hosts.is_empty() {
@@ -1038,12 +1055,23 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
             doc["event"] = (*event).into();
             if let Some(calls) = contract_types::handler_signature(name) {
                 doc["calls"] = calls.into();
+                // The same signature as data: what its action declares, then optionally its record.
+                doc["params"] = contract_types::handler_parameters(name, None)
+                    .iter()
+                    .map(|(name, ty)| json!({ "name": name, "type": ty }))
+                    .collect();
+                if let Some(record) = contract_types::event_record(name) {
+                    doc["record"] = record.into();
+                }
             }
             if name == "contextmenu" {
                 doc["note"] = CONTEXTMENU.into();
             }
             if name == "navigate" {
                 doc["note"] = NAVIGATE.into();
+            }
+            if name == "playing" {
+                doc["note"] = PLAYING.into();
             }
         }
         AttrTarget::Surface => {}
@@ -1088,6 +1116,7 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
         doc["note"] = GRID_TRACKS.into();
     }
     if name == "buttonStyle" {
+        doc["values"] = exact_kernel::generated::BUTTON_STYLES.into();
         doc["note"] = vocab::BUTTON_DEFAULT_NOTE.into();
     }
     if name == "appearance" {
@@ -1107,6 +1136,9 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
     }
     if name == "transform" {
         doc["note"] = vocab::BOX_TRANSFORM_REFUSAL.into();
+    }
+    if name == "translate" {
+        doc["note"] = TRANSLATE.into();
     }
     if matches!(name, "reachstart" | "reachend") {
         doc["note"] = vocab::collection_edge_refusal(name).into();
@@ -1155,12 +1187,15 @@ fn tag_text(t: &Tag) -> String {
 /// One row's codec, values and default, as one phrase.
 fn row_text(row: StyleId) -> String {
     let mut text = vocab::codec(row);
-    let values = row.enum_names();
+    let values = vocab::authored_names(row);
     if !values.is_empty() {
         text += &format!(" {}", values.join("|"));
     }
     if let Some(default) = vocab::default(row) {
         text += &format!(", default {default}");
+    }
+    if !row.refused_enum_names().is_empty() {
+        text += &format!("; refused: {}", row.refused_enum_names().join("|"));
     }
     text
 }
@@ -1241,6 +1276,9 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             if matches!(name, "grid-template-columns" | "grid-template-rows") {
                 lines.push(GRID_TRACKS.into());
             }
+            if name == "mix-blend-mode" {
+                lines.push("SVG elements blend with the backdrop inside the same svg on iOS/tvOS (Core Graphics) and Android (tiny-skia before the reader). Include the background shapes in that svg. macOS uses its public Core Animation layer blend, including the backdrop outside the SVG. Canvas 2D globalCompositeOperation, including multiply, also draws on iOS and Android; draw both inks into one canvas. On iOS and Android neither route blends with boxes or another surface outside it".into());
+            }
             if name == "font-family" {
                 lines.push("CSS family list: literal lists and literal choices work on every host; a string from state or data names installed or generic families on web, macOS, iOS and Linux. Invalid lists leave the row unset. Bundled faces use a `font` declaration".into());
             }
@@ -1259,8 +1297,14 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             if name.starts_with("-exact-hit-slop") {
                 lines.push(HIT_SLOP.into());
             }
+            if matches!(name, "-exact-min-zoom" | "-exact-max-zoom") {
+                lines.push(ZOOM.into());
+            }
             if name == "transform" {
                 lines.push(vocab::BOX_TRANSFORM_REFUSAL.into());
+            }
+            if name == "translate" {
+                lines.push(TRANSLATE.into());
             }
             lines
         }
@@ -1303,6 +1347,9 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
         }
         AttrTarget::Handler(event) if name == "navigate" => {
             vec![format!("event {event}"), NAVIGATE.into()]
+        }
+        AttrTarget::Handler(event) if name == "playing" => {
+            vec![format!("event {event}"), PLAYING.into()]
         }
         // The action's signature first: the scroll port guessed one
         // `ScrollEvent` parameter, and `moved(x, y)` was a later bullet.

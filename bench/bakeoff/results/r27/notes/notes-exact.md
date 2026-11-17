@@ -33,7 +33,7 @@ nothing spills at the largest accessibility text size, and the scroll feel check
 - **The editor's Delete button.** With `commandfor`/`command="show-modal"` the button did not appear in the iOS
   bar. Using `press=` with `showModal(...)` fixed it.
 - **The unpin icon.** `sf/pin.slash` set off warnings, because the project also ships web and Linux. I added an
-  `app.tamber` icon token with a hand-drawn SVG fallback.
+  `app.forma` icon token with a hand-drawn SVG fallback.
 - **The largest text size.** At the largest text size, verify flagged the date and preview line, which shared one
   line. That line now wraps, so the preview drops under the date at huge sizes; it is still one line.
 - **Swipe to pin.** Swipe-right-to-pin would need Exact's "long form" swipe (a horizontally snapping scroll), so

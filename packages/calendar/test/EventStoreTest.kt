@@ -40,10 +40,16 @@ class EventStoreTest {
 
     private class Provider : ContentProvider() {
         val rows = ArrayList<Map<String, Any?>>()
+        /** `Events` rows by id, which the writes read first. */
+        val events = HashMap<Long, Map<String, Any?>>()
+        val writes = ArrayList<Uri>()
         override fun onCreate() = true
         override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): Cursor {
-            val (from, to) = uri.pathSegments.takeLast(2).map(String::toLong)
             val columns = requireNotNull(projection)
+            if (uri.pathSegments.first() == "events") return MatrixCursor(columns).apply {
+                events[uri.lastPathSegment!!.toLong()]?.let { row -> addRow(columns.map { row[it] }.toTypedArray()) }
+            }
+            val (from, to) = uri.pathSegments.takeLast(2).map(String::toLong)
             return MatrixCursor(columns).apply {
                 for (row in rows) {
                     // CalendarProvider2's SQL_WHERE_INSTANCES_BETWEEN compares the stored UTC instants.
@@ -55,8 +61,8 @@ class EventStoreTest {
         }
         override fun getType(uri: Uri): String? = null
         override fun insert(uri: Uri, values: ContentValues?): Uri = error("read only")
-        override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?): Int = error("read only")
-        override fun delete(uri: Uri, selection: String?, args: Array<out String>?): Int = error("read only")
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?): Int = 1.also { writes += uri }
+        override fun delete(uri: Uri, selection: String?, args: Array<out String>?): Int = 1.also { writes += uri }
     }
 
     @Before fun setUp() {
@@ -208,4 +214,30 @@ class EventStoreTest {
         assertEquals("2026-10-22T09:00:00", moved.getString("recurrenceId"))
         assertEquals(instant("2026-10-23T17:00:00Z"), moved.getLong("utcStart"))
     }
+
+    private fun write(name: String, args: JSONObject): JSONObject {
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app.packageManager).getInternalMutablePackageInfo(app.packageName).requestedPermissions =
+            arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+        shadowOf(app).grantPermissions(Manifest.permission.WRITE_CALENDAR)
+        var answer: JSONObject? = null
+        store.later(name, args) { answer = it }
+        worker.submit {}.get(10, TimeUnit.SECONDS)
+        shadowOf(Looper.getMainLooper()).idle()
+        return requireNotNull(answer) { "$name did not reply" }
+    }
+
+    /** A series may be a list of dates alone (RFC 5545 §3.8.5.2), with no rule; writing it is refused as a ruled one is. */
+    private fun seriesIsNotWritten(rule: String?, dates: String?) {
+        provider.events[7L] = mapOf(CalendarContract.Events.CALENDAR_ID to 1L, CalendarContract.Events.RRULE to rule,
+            CalendarContract.Events.RDATE to dates, CalendarContract.Events.ORIGINAL_ID to null)
+        assertEquals("NotSupportedError", write("removeEvent", JSONObject().put("id", "7")).optString("error"))
+        val event = JSONObject().put("id", "7").put("title", "Moved").put("start", "2026-11-10T09:00:00").put("duration", "PT1H")
+        assertEquals("NotSupportedError", write("saveEvent", JSONObject().put("event", event)).optString("error"))
+        assertEquals(emptyList<Uri>(), provider.writes)
+    }
+
+    @Test fun aRuledSeriesIsNotWritten() = seriesIsNotWritten("FREQ=WEEKLY", null)
+
+    @Test fun aDateListSeriesIsNotWritten() = seriesIsNotWritten(null, "20261110T090000Z,20261117T090000Z")
 }

@@ -61,12 +61,13 @@ impl<G: Game> Sim<G> {
     pub fn trace_events_json(&self) -> String {
         self.world.spans.borrow().trace_json()
     }
-    /// Arm host-only tick measurements. The game receives no measurement reads.
-    pub fn measure_spans(&mut self, clock: fn() -> f64, reset: bool) {
-        self.world.spans.borrow_mut().arm(clock, reset);
+    /// Arm host-only tick measurements in a namespace unique to this loaded host module.
+    /// The game receives no measurement reads.
+    pub fn measure_spans(&mut self, clock: fn() -> f64, reset: bool, namespace: &str) {
+        self.world.spans.borrow_mut().arm(clock, reset, namespace);
     }
     /// Exclusive span distributions in milliseconds over the retained tick window.
-    pub fn spans_json(&self, since: Option<u64>) -> String {
+    pub fn spans_json(&self, since: Option<crate::diagnostics::SpanCursor>) -> String {
         self.world.spans.borrow().json(since)
     }
 }

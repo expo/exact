@@ -42,6 +42,7 @@ fn block(r: &mut Runner<NoData>, view: exact_kernel::ViewId, width: f32, height:
         .set_host_block(
             view,
             Some(exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: is(width),
                 height: is(height),
             }),
@@ -752,6 +753,7 @@ fn a_block_of_no_height_holds_its_root_by_its_frame() {
         .set_host_block(
             route,
             Some(exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::Is(0.0),
             }),

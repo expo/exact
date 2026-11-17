@@ -20,8 +20,9 @@ struct ShareInbox {
 
     /// The app's inbox, when it declares `share_target` and is entitled to
     /// the group (`ExactShareGroup` is written only then). Under the agent,
-    /// `EXACT_AGENT_SHARE_INBOX` names another directory, for a drive whose
-    /// build has no group (an ad-hoc Mac build).
+    /// `EXACT_AGENT_SHARE_INBOX` names another directory: a drive's own,
+    /// apart from the shares a person left (and, on an ad-hoc Mac build,
+    /// where there is no group).
     static var main: ShareInbox? {
         guard let json = Bundle.main.object(forInfoDictionaryKey: "ExactShareTarget") as? String,
               let target = try? JSONSerialization.jsonObject(with: Data(json.utf8)) else { return nil }
@@ -59,20 +60,29 @@ struct ShareInbox {
 
 /// The inbox's Darwin notification, `<app id>.shares`, which the extension
 /// posts after writing a share: while the app runs it claims at once.
-private final class ShareInboxPing {
+final class ShareInboxPing {
     static let shared = ShareInboxPing()
-    weak var session: ExactSession?
+    /// The sessions that claim the inbox, in the order they began to.
+    private var sessions: [WeakSession] = []
     private var listening = false
 
+    /// The session a ping goes to: the newest not destroyed. One session
+    /// claims, so each share is delivered once.
+    var recipient: ExactSession? {
+        sessions.removeAll { $0.session == nil || $0.session?.state == .destroyed }
+        return sessions.last?.session
+    }
+
     func listen(_ name: String, for session: ExactSession) {
-        self.session = session
+        sessions.removeAll { $0.session == nil || $0.session === session }
+        sessions.append(WeakSession(session))
         guard !listening else { return }
         listening = true
         let center = CFNotificationCenterGetDarwinNotifyCenter()
         CFNotificationCenterAddObserver(center, Unmanaged.passUnretained(self).toOpaque(), { _, observer, _, _, _ in
             guard let observer else { return }
             let ping = Unmanaged<ShareInboxPing>.fromOpaque(observer).takeUnretainedValue()
-            DispatchQueue.main.async { ping.session?.claimInbox() }
+            DispatchQueue.main.async { ping.recipient?.claimInbox() }
         }, name as CFString, nil, .deliverImmediately)
     }
 }

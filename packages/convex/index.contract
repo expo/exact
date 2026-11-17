@@ -3,7 +3,8 @@
 
 shape ConvexLive
   // "connecting" until the socket opens, "open" until the first results
-  // arrive, "ready" from then, "closed" once it has ended.
+  // arrive, "ready" from then; "closed" once it has ended, or "failed" when
+  // it ended on something a new connection would meet too.
   status: string
   // Rises when a query's answer may have changed: every query takes it.
   rev: number

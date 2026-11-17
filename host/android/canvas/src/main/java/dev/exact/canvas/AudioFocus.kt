@@ -15,7 +15,7 @@ import android.os.Looper
  * - `playback`: `AUDIOFOCUS_GAIN`; `transient-solo`: `AUDIOFOCUS_GAIN_TRANSIENT`; `transient`:
  *   `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`.
  *
- * Each uses `USAGE_MEDIA` and `CONTENT_TYPE_SPEECH`, and pauses when ducked, since spoken content "should pause rather
+ * Claims default to `USAGE_MEDIA` and `CONTENT_TYPE_SPEECH`, and pause when ducked, since spoken content "should pause rather
  * than duck" ([Manage audio focus](https://developer.android.com/media/optimize/audio-focus)). One listener serves
  * every request: the platform keys a request by its listener, so a new type replaces the request instead of the
  * process losing focus to itself. Each holder hears a focus change: `focus-transient` for a transient loss (a duck
@@ -25,17 +25,19 @@ object AudioFocus {
     private val order = listOf("transient", "transient-solo", "playback", "capture")
     private val claims = ArrayList<AudioClaim>()
     private var request: AudioFocusRequest? = null
-    private var requested: String? = null
+    private var requested: FocusSpec? = null
+    private var lost = false
     internal var application: Context? = null
     private val main = Handler(Looper.getMainLooper())
     private val listener = AudioManager.OnAudioFocusChangeListener { change -> main.post { changed(change) } }
 
     /** A claim of [type], told each focus change through [events]; null when the platform refused the focus it
      * needed (another app's call, or API 35's rule that only the top app or a foreground service may request it). */
-    fun claim(type: String, events: (String) -> Unit): AudioClaim? {
+    fun claim(type: String, attributes: AudioAttributes = speechAttributes(), pauseWhenDucked: Boolean = true, events: (String) -> Unit): AudioClaim? {
         require(type in order) { "audio focus: no type $type" }
-        val c = AudioClaim(type, events)
+        val c = AudioClaim(type, attributes, pauseWhenDucked, events)
         claims += c
+        lost = false
         if (compose()) return c
         claims -= c
         compose()
@@ -48,8 +50,8 @@ object AudioFocus {
 
     /** The request the claims held now need, made if it changed: false when the platform refused it. */
     private fun compose(): Boolean {
-        val want = claims.maxByOrNull { order.indexOf(it.type) }?.type
-        if (want == requested) return true
+        val holder = claims.maxByOrNull { order.indexOf(it.type) }
+        val want = holder?.let { FocusSpec(it.type, it.attributes, it.pauseWhenDucked) }
         val manager = application?.getSystemService(AudioManager::class.java) ?: return want == null
         if (want == null) {
             request?.let { manager.abandonAudioFocusRequest(it) }
@@ -57,19 +59,25 @@ object AudioFocus {
             requested = null
             return true
         }
-        val gain = when (want) {
+        // A release after permanent loss cannot take focus back from its new owner.
+        if (lost || want == requested) return true
+        val gain = when (want.type) {
             "transient" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
             "transient-solo" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
             else -> AudioManager.AUDIOFOCUS_GAIN
         }
-        val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        val made = AudioFocusRequest.Builder(gain).setAudioAttributes(attributes).setWillPauseWhenDucked(true)
+        val made = AudioFocusRequest.Builder(gain).setAudioAttributes(want.attributes).setWillPauseWhenDucked(want.pauseWhenDucked)
             .setOnAudioFocusChangeListener(listener, main).build()
         if (manager.requestAudioFocus(made) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) return false
         request = made
         requested = want
         return true
     }
+
+    private data class FocusSpec(val type: String, val attributes: AudioAttributes, val pauseWhenDucked: Boolean)
+
+    private fun speechAttributes() = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
 
     private fun changed(change: Int) {
         val event = when (change) {
@@ -79,12 +87,15 @@ object AudioFocus {
             else -> return
         }
         // A lasting loss leaves the process off the focus stack: the next claim requests again.
-        if (event == "focus") requested = null
+        if (event == "focus") { lost = true; requested = null }
         claims.toList().forEach { it.events(event) }
     }
 }
 
 /** A module's hold on audio focus ([AudioFocus.claim]); [release] gives it back. */
-class AudioClaim internal constructor(internal val type: String, internal val events: (String) -> Unit) {
+class AudioClaim internal constructor(
+    internal val type: String, internal val attributes: AudioAttributes, internal val pauseWhenDucked: Boolean,
+    internal val events: (String) -> Unit,
+) {
     fun release() = AudioFocus.release(this)
 }

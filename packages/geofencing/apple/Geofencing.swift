@@ -146,7 +146,7 @@ public final class GeofencingModule: NSObject, ExactPackage, CLLocationManagerDe
         let event: [String: Any] = ["geofence": geofence, "timestamp": pending["timestamp"] ?? 0]
         wake.raise(kind == "enter" ? "geofenceenter" : "geofenceleave", [event]) { [self] outcome in
             context.log("geofencing: \(name) \(kind) \(outcome)")
-            if outcome == "completed" || outcome == "unheard" { context.regions.delivered(name: name) }
+            if outcome == "completed" || outcome == "unheard" { context.regions.delivered(name: name, pending: pending) }
             deliver(names.dropFirst(), wake)
         }
     }

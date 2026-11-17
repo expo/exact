@@ -22,6 +22,13 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "reach_bluetooth_tests.rs"]
+mod bluetooth_tests;
+#[cfg(test)]
+#[path = "reach_entitlement_tests.rs"]
+mod entitlement_tests;
+
 /// Fill `compat.reach` and, for an app with device grants, the
 /// `grantPurposes` input (moving the id). Refuses a malformed device line and
 /// a purpose key the base strings table lacks, each reported.
@@ -55,23 +62,25 @@ pub(crate) fn derive(
     {
         return Err("grant-device: `device.calls` stays out of production builds until exact2 has a call transport: a call is a test call until then (LLP 1133.033 §13 question 4); begin the line in app.ts with `development` (`development device.calls purpose.calls`), which a production bake leaves out".into());
     }
-    let strings = if devices.iter().all(|g| !g.device.purpose) {
-        None
-    } else {
-        contract::strings_tables(app_dir)?
-    };
+    // The tables give a grant's purpose and are the Apple bundle's localizations (#486).
+    let read = devices.iter().any(|g| g.device.purpose) || app_dir.join("strings").is_dir();
+    let tables = read.then(|| contract::strings_tables(app_dir));
+    let strings = tables.transpose()?.flatten();
     let mut errors = Vec::new();
     // Key → locale → text, a translation lacking a key falling back to the
     // base as `t` does.
     let mut purposes: BTreeMap<&str, BTreeMap<String, String>> = BTreeMap::new();
     for grant in devices.iter().filter(|g| g.device.purpose) {
+        // A blank text is no purpose: iOS shows the prompt with nothing in it, or refuses
+        // the request (expo/exact-build#6).
         let base = strings
             .as_ref()
-            .and_then(|s| s.base_table().get(grant.purpose));
+            .and_then(|s| s.base_table().get(grant.purpose))
+            .filter(|text| !text.trim().is_empty());
         let (Some(strings), Some(base)) = (strings.as_ref(), base) else {
             let table = strings.as_ref().map_or_else(
                 || "the app has no strings/ directory".to_string(),
-                |s| format!("strings/{}.json has no \"{}\": add `\"{}\": \"…\"`, the text the person is shown when asked", s.base, grant.purpose, grant.purpose),
+                |s| format!("strings/{}.json has no \"{}\", or only a blank one: add `\"{}\": \"…\"`, the text the person is shown when asked", s.base, grant.purpose, grant.purpose),
             );
             errors.push(format!(
                 "grant-purpose: `device.{} {}` names its purpose by strings key (LLP 1060), and {table}",
@@ -83,7 +92,10 @@ pub(crate) fn derive(
             .tables
             .iter()
             .map(|(locale, table)| {
-                let text = table.get(grant.purpose).unwrap_or(base);
+                let text = table
+                    .get(grant.purpose)
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or(base);
                 (locale.clone(), text.clone())
             })
             .collect();
@@ -158,6 +170,9 @@ pub(crate) fn derive(
     // entitlements the platform's signature must carry.
     let mut usage = Map::new();
     let mut entitlements = Vec::new();
+    // macOS's entitlements a provisioning profile must authorize, apart from
+    // the hardened-runtime ones any signature carries.
+    let mut profile_entitlements: Vec<&str> = Vec::new();
     // An entitlement whose value is no boolean (LLP 1133.035 D16 item 2).
     let mut values = Map::new();
     let mut flags: Vec<&str> = Vec::new();
@@ -200,11 +215,21 @@ pub(crate) fn derive(
         // LLP 1133.004 §9 P2). `auth.*`'s associated domains are `reach.auth`
         // (below).
         match platform {
-            "macos" => entitlements.extend(grant.device.hardened),
+            "macos" => {
+                entitlements.extend(grant.device.hardened);
+                profile_entitlements.extend(grant.device.macos_profile);
+                for (name, value) in grant.device.entitlement_values {
+                    if grant.device.macos_profile.contains(name) {
+                        values.insert((*name).into(), json!(value));
+                    }
+                }
+            }
             "ios" => {
                 entitlements.extend(grant.device.ios_entitlements);
-                for (name, value) in grant.device.ios_entitlement_values {
-                    values.insert((*name).into(), json!(value));
+                for (name, value) in grant.device.entitlement_values {
+                    if grant.device.ios_entitlements.contains(name) {
+                        values.insert((*name).into(), json!(value));
+                    }
                 }
                 flags.extend(grant.device.ios_flags);
                 modes.extend(grant.device.ios_modes);
@@ -275,6 +300,8 @@ pub(crate) fn derive(
     }
     entitlements.sort_unstable();
     entitlements.dedup();
+    profile_entitlements.sort_unstable();
+    profile_entitlements.dedup();
     for list in [&mut modes, &mut tasks] {
         list.sort_unstable();
         list.dedup();
@@ -324,6 +351,7 @@ pub(crate) fn derive(
         "flags": flags,
         "android": android,
         "entitlements": entitlements,
+        "profileEntitlements": profile_entitlements,
         "helperEntitlements": helpers,
         "tvOmits": tv_omits,
         "auth": auth,
@@ -788,22 +816,17 @@ mod grant_lines_tests;
 mod tests {
     use super::*;
 
-    fn compat(grants: &str) -> Compat {
+    pub(super) fn compat(grants: &str) -> Compat {
         Compat {
             id: "old".into(),
             inputs: json!({"grantCeiling": grants, "javascriptGrants": grants, "rustGrants": ""}),
-            channel: String::new(),
-            origin: None,
             activate: "next-launch".into(),
             target: "t".into(),
-            embedded: Value::Null,
-            reach: Value::Null,
-            painter: None,
-            game: false,
+            ..Compat::default()
         }
     }
 
-    fn app(tables: &[(&str, &str)]) -> tempdir::Dir {
+    pub(super) fn app(tables: &[(&str, &str)]) -> tempdir::Dir {
         let dir = tempdir::Dir::new();
         std::fs::create_dir(dir.0.join("strings")).unwrap();
         for (locale, json) in tables {
@@ -812,7 +835,7 @@ mod tests {
         dir
     }
 
-    mod tempdir {
+    pub(super) mod tempdir {
         pub struct Dir(pub std::path::PathBuf);
         impl Dir {
             pub fn new() -> Dir {
@@ -849,6 +872,32 @@ mod tests {
         assert!(error.contains("no strings/ directory"), "{error}");
         let error = derive(&bare.0, "ios", None, &mut compat("device.lidar p")).unwrap_err();
         assert!(error.starts_with("grant-device: "), "{error}");
+    }
+
+    #[test]
+    fn a_blank_purpose_refuses_and_a_blank_translation_falls_back() {
+        let dir = app(&[("en", r#"{"purpose.eye": "  "}"#)]);
+        let error = derive(
+            &dir.0,
+            "ios",
+            None,
+            &mut compat("device.camera purpose.eye"),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("strings/en.json has no \"purpose.eye\", or only a blank one"),
+            "{error}"
+        );
+        let dir = app(&[
+            ("en", r#"{"purpose.eye": "Scans."}"#),
+            ("es", r#"{"purpose.eye": ""}"#),
+        ]);
+        let mut c = compat("device.camera purpose.eye");
+        derive(&dir.0, "ios", None, &mut c).unwrap();
+        assert_eq!(
+            c.reach["usage"]["NSCameraUsageDescription"],
+            json!({"en": "Scans.", "es": "Scans."})
+        );
     }
 
     #[test]
@@ -908,6 +957,8 @@ mod tests {
         assert_eq!(c.id, "old");
         assert!(c.inputs.get("grantPurposes").is_none());
         assert_eq!(c.reach["usage"], json!({}));
+        derive(&app(&[("en", "{}"), ("fr", "{}")]).0, "macos", None, &mut c).unwrap();
+        assert_eq!(c.reach["locales"], json!(["en", "fr"]));
         let mut ios = compat("device.speech-recognition p");
         let dir = app(&[("en", r#"{"p": "Transcribes."}"#)]);
         derive(&dir.0, "ios", None, &mut ios).unwrap();
@@ -1023,8 +1074,9 @@ mod tests {
     }
 
     #[test]
-    fn push_signs_aps_environment_on_ios_alone() {
-        // LLP 1133.004 §9 P2: nothing on the Mac, and tvOS drops it.
+    fn push_signs_aps_environment_on_ios_and_under_a_mac_profile() {
+        // LLP 1133.004 §9 P2: tvOS drops it, and the Mac's key travels apart
+        // from the hardened-runtime list, for a profile to authorize.
         let dir = app(&[("en", r#"{"n": "Says when a build ends."}"#)]);
         let derive_for = |platform: &str| {
             let mut c = compat("device.notifications n\ndevice.push");
@@ -1034,7 +1086,13 @@ mod tests {
         let ios = derive_for("ios");
         assert_eq!(ios["entitlements"], json!(["aps-environment"]));
         assert_eq!(ios["tvOmits"], json!(["aps-environment"]));
-        assert_eq!(derive_for("macos")["entitlements"], json!([]));
+        assert_eq!(ios["profileEntitlements"], json!([]));
+        let mac = derive_for("macos");
+        assert_eq!(mac["entitlements"], json!([]));
+        assert_eq!(
+            mac["profileEntitlements"],
+            json!(["com.apple.developer.aps-environment"])
+        );
     }
 
     #[test]
@@ -1197,37 +1255,6 @@ mod tests {
             assert_eq!(c.reach["usage"], json!({}));
             assert_eq!(c.reach["android"], json!([]));
         }
-    }
-
-    #[test]
-    fn nfc_signs_its_formats_array_on_ios_and_leaves_tvos_out() {
-        // LLP 1133.035 D15, D16 item 2.
-        let dir = app(&[("en", r#"{"nfc": "Reads the tags on your books."}"#)]);
-        let derive_for = |platform: &str| {
-            let mut c = compat("device.nfc nfc");
-            derive(&dir.0, platform, None, &mut c).unwrap();
-            c.reach
-        };
-        let formats = "com.apple.developer.nfc.readersession.formats";
-        let ios = derive_for("ios");
-        assert_eq!(
-            ios["usage"],
-            json!({"NFCReaderUsageDescription": {"en": "Reads the tags on your books."}})
-        );
-        assert_eq!(ios["entitlements"], json!([formats]));
-        assert_eq!(ios["entitlementValues"], json!({formats: ["TAG"]}));
-        assert_eq!(
-            ios["tvOmits"],
-            json!(["NFCReaderUsageDescription", formats])
-        );
-        // Android's bake derives as `linux`.
-        assert_eq!(
-            derive_for("linux")["android"],
-            json!(["android.permission.NFC"])
-        );
-        let mac = derive_for("macos");
-        assert_eq!(mac["entitlements"], json!([]));
-        assert!(mac.get("entitlementValues").is_none());
     }
 
     #[test]

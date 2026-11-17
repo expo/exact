@@ -64,10 +64,12 @@ final class AnimatedRasterTests: XCTestCase {
     }
 
     private func decode(_ url: URL, maxPixel: Int) throws -> RasterImage {
-        let bytes = try Data(contentsOf: url)
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        let bytes = try XCTUnwrap(file.readToEnd())
         let metadata = try RasterMetadata.read(prefix: bytes.prefix(RasterMetadata.headerLimit), encodedBytes: bytes.count)
         return try RasterImage.decode(bytes, metadata: metadata, plan: RasterDecodePlan(metadata: metadata, maxPixel: maxPixel),
-                                      charge: AnimatedTestCharge(), url: url)
+                                      charge: AnimatedTestCharge(), file: file)
     }
 
     private func pixel(_ image: CGImage, _ x: Int, _ y: Int) throws -> [UInt8] {
@@ -143,6 +145,48 @@ final class AnimatedRasterTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: still); try? FileManager.default.removeItem(at: once) }
         XCTAssertNil(try decode(still, maxPixel: 16).animation)
         XCTAssertEqual(try XCTUnwrap(try decode(once, maxPixel: 16).animation).schedule.plays, 1)
+    }
+
+    func testAnAnimationKeepsItsOpenedFileWhenALinkReplacesIt() throws {
+        let files = FileManager.default
+        let dir = files.temporaryDirectory.appendingPathComponent("exact-animation-links-\(UUID().uuidString)")
+        try files.createDirectory(at: dir.appendingPathComponent("album"), withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: dir) }
+        let gif = try gif([(1, 0, 0), (0, 0, 1)], delays: [0.1, 0.1], loop: 0, size: 16)
+        let otherGIF = try self.gif([(0, 1, 0), (0, 1, 0)], delays: [0.1, 0.1], loop: 0, size: 16)
+        defer { try? files.removeItem(at: gif); try? files.removeItem(at: otherGIF) }
+        let webp = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../../../apps/motion-gallery/assets/twice.webp").standardizedFileURL
+        let replacement = dir.appendingPathComponent("replacement")
+        try files.createDirectory(at: replacement, withIntermediateDirectories: true)
+        for (fixture, expected) in [(gif, [UInt8(0), 0, 255]), (webp, [UInt8(220), 38, 38])] {
+            let other = replacement.appendingPathComponent("image")
+            try files.copyItem(at: fixture == gif ? otherGIF : webp.deletingLastPathComponent().appendingPathComponent("pulse.webp"), to: other)
+            defer { try? files.removeItem(at: other) }
+            for ancestor in [false, true] {
+                let album = dir.appendingPathComponent("album"), file = album.appendingPathComponent("image")
+                try files.copyItem(at: fixture, to: file)
+                AppFiles.learn(["roots": ["data": dir.path]])
+                let input = try RasterInput.open("app:/data/album/image", resolver: AssetResolver(root: dir))
+                let metadata = try input.metadata()
+                let image = try input.withBytes { bytes, file in
+                    try RasterImage.decode(bytes, metadata: metadata,
+                        plan: RasterDecodePlan(metadata: metadata, maxPixel: 16), charge: AnimatedTestCharge(), file: file)
+                }
+                let animation = try XCTUnwrap(image.animation)
+                let original = dir.appendingPathComponent("original")
+                try files.moveItem(at: ancestor ? album : file, to: original)
+                try files.createSymbolicLink(at: ancestor ? album : file, withDestinationURL: ancestor ? replacement : other)
+                if let frames = animation.frames() {
+                    XCTAssertEqual(Array(try pixel(try XCTUnwrap(frames.frame(1)), 1, 1).prefix(3)), expected)
+                } else {
+                    XCTFail("\(fixture.pathExtension), ancestor: \(ancestor)")
+                }
+                try files.removeItem(at: ancestor ? album : file)
+                try files.removeItem(at: original)
+                if ancestor { try files.createDirectory(at: album, withIntermediateDirectories: true) }
+            }
+        }
     }
 
     /// The gallery's WebP: three frames, the second and third cropped to a

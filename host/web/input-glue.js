@@ -2,11 +2,18 @@ import { viewChildren, viewParent } from './navigation.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
 import "./alert-message.js"; // a grouped alert's message box
+// False in a production bake, which host/web/build.mjs and host/web-js/build.mjs write here (LLP 1069.007 D2): the
+// agent's hold, its press readout and its file picker, which only the agent reads, then leave the piece.
+const AGENT_ADMITTED = true;
+// False in the JS target's runtime, which host/web-js/glue.mjs writes here (LLP 1047.002 D4.1): that runtime hears its
+// own pointers and routes its own links, so the wasm host's pointer, mouse and link paths leave the piece.
+const WASM_HOST = true;
+const hearsPress = el => (el.exactHandlers ?? el.dataset?.exactOn?.split(" "))?.includes("press") === true;
 /** An element whose `press` the keyboard reaches only through its tabindex:
  * not one the browser activates itself (the wasm host's handler list, or the
  * JS target's `data-exact-on`). */
 const pressesByKey = el => !el.matches("button, a[href], input, select, textarea, summary")
-  && (el.exactHandlers ?? el.dataset.exactOn?.split(" "))?.includes("press") === true;
+  && hearsPress(el);
 const shortcutKeys = new Set(["Enter", "Tab", "Escape", "Backspace", "Delete", "Insert", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 /** A shortcut's key when `e.key` is one character outside ASCII and the Latin script (ㅠ on KeyB under Korean 2-Set,
  * Russian, Greek): what its physical key (`code`) types on a US layout, with Shift, as web apps match (the macOS host
@@ -35,7 +42,9 @@ function pointerLine(el, e, lifted = false) {
  * focus; and the arrows move the choice, to the next or previous radio, wrapping and past
  * disabled ones (Left and Right mirrored right to left), focused and pressed. */
 const radiosOf = group => viewChildren(group).filter(el => el.getAttribute?.("role") === "radio");
-const radioUsable = el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && el.getClientRects().length > 0;
+// Eligible as LLP 1166.000 D1 has it; the box test stands where a browser has no `checkVisibility`.
+const radioUsable = el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && !el.closest("[inert]")
+  && el.checkVisibility?.({ visibilityProperty: true }) !== false && el.getClientRects().length > 0;
 // Both renderers keep authored updates here, even when the DOM already has roving's -1.
 const roveAllowed = el => {
   if (el.exactAuthoredTabIndex === undefined) el.exactAuthoredTabIndex = el.getAttribute("tabindex");
@@ -90,17 +99,60 @@ function roveArrow(root, event) {
   const open = top && !top.contains(el) && (within ? within.matches(MENUS) : /^Arrow/.test(key)) ? top : null; // from a menu beneath it, or by an arrow from outside
   const group = open ?? within;
   if (!group || !root.contains(group)) return false;
-  const menu = group.matches(MENUS), all = roversOf(group), live = all.filter(item => item === el || radioUsable(item));
+  // An arrow steps from the focused member whatever its state; Home and End go to the first and last usable one.
+  const menu = group.matches(MENUS), all = roversOf(group), usable = all.filter(radioUsable), live = all.filter(item => item === el || usable.includes(item));
   if (!open && !all.includes(el)) return false;
   const vertical = menu || group.getAttribute("aria-orientation") === "vertical" || viewParent(group)?.hasAttribute("data-exact-sidebar"), rtl = getComputedStyle(group).direction === "rtl";
   const step = (vertical ? { ArrowDown: 1, ArrowUp: -1 } : { ArrowRight: rtl ? -1 : 1, ArrowLeft: rtl ? 1 : -1 })[key];
-  const next = open ? live.at(key === "ArrowDown" || key === "Home" ? 0 : -1) : step ? live[(live.indexOf(el) + step + live.length) % live.length] : key === "Home" ? live[0] : key === "End" ? live.at(-1) : null;
+  const next = open ? live.at(key === "ArrowDown" || key === "Home" ? 0 : -1) : step ? live[(live.indexOf(el) + step + live.length) % live.length] : key === "Home" ? usable[0] ?? el : key === "End" ? usable.at(-1) ?? el : null;
   if (!next) return false;
   event.preventDefault();
   if (next !== el) { if (!menu) rove(all, next); next.focus(); }
   return true;
 }
-export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null }) {
+/** A printable key in a menu moves the focus to the next of its items whose label starts with what was typed in the
+ * last half second, as the WAI-ARIA menu pattern's type-ahead and the platform's menus give it: the same letter again
+ * goes on to the next item it starts, wrapping, past disabled ones. The items are the menu's `menuitem`s, whether the
+ * author or the host (menu-rows.js) gave the role. Space starts no search (it presses), and a field in the menu keeps
+ * its keys. Whether it moved the focus. */
+let typed = "", typedAt = -Infinity;
+function typeAhead(root, event) {
+  const el = event.target, menu = el?.closest?.('[role="menu"]'), key = event.key;
+  if (!menu || !root.contains(menu) || [...key].length !== 1 || el.matches("input, textarea, select, [contenteditable]") || event.timeStamp - typedAt > 500 && key === " ") return false;
+  typed = (event.timeStamp - typedAt > 500 ? "" : typed) + key.toLocaleLowerCase();
+  typedAt = event.timeStamp;
+  const items = [...menu.querySelectorAll('[role^="menuitem"]')].filter(item => item.closest('[role="menu"]') === menu && (item === el || radioUsable(item)));
+  // One letter, or the same one again, steps on from the focused item; more letters refine the match from it.
+  const again = [...typed].every(c => c === typed[0]), prefix = again ? typed[0] : typed, at = items.indexOf(el) + (again ? 1 : 0);
+  const label = item => (item.getAttribute("aria-label") ?? item.textContent).trim().toLocaleLowerCase();
+  const next = [...items.slice(at), ...items.slice(0, at)].find(item => !(again && item === el) && label(item).startsWith(prefix));
+  if (!next) return false;
+  event.preventDefault();
+  next.focus();
+  return true;
+}
+export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
+  // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
+  // Append the default there so the handler's updates and showPicker run first.
+  // A successful showPicker consumes the activation, even for another input.
+  // The JS executor may hold the press's commit for a view transition (shared.js):
+  // the choice waits for it, and the input is checked again.
+  let pickerActivations = 0;
+  (globalThis.exact ??= {}).pickerOpened = () => pickerActivations++;
+  if (AGENT_ADMITTED && agentMode && pick) root.addEventListener("click", event => {
+    const el = event.target;
+    if (!(el instanceof HTMLInputElement) || el.type !== "file") return;
+    const activation = pickerActivations;
+    const after = event.composedPath().find(n => n === root || hearsPress(n));
+    const usable = () => ready() && el.isConnected && !retiredViews.has(el) && [...views.values()].includes(el)
+      && el.type === "file" && !el.matches(":disabled") && !inertAncestor(el) && el.getClientRects().length > 0
+      && !["hidden", "collapse"].includes(getComputedStyle(el).visibility);
+    after.addEventListener("click", e => {
+      if (e !== event || e.defaultPrevented || !usable()) return;
+      e.preventDefault();
+      (globalThis.exact.afterCommit ?? (run => run()))(() => { if (pickerActivations === activation && usable()) pick(el); });
+    }, { once: true });
+  }, true);
   // @ref LLP 1005 §Events — a pointer's down goes along the event's own path,
   // innermost first, to each node's `exactPointerDown` (`pointer` below), from
   // this one listener at the root's capture, before any element's: a
@@ -108,7 +160,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // from the pointer events, as on the native hosts.
   // Every holder is fixed before any down runs, as the native hosts fix the
   // path: a node a handler further in disables or removes still hears the up.
-  root.addEventListener("pointerdown", e => { const path = e.composedPath(); for (const n of path) n.exactPointerDown?.(e, true); for (const n of path) n.exactPointerDown?.(e, false); }, true);
+  if (WASM_HOST) root.addEventListener("pointerdown", e => { const path = e.composedPath(); for (const n of path) n.exactPointerDown?.(e, true); for (const n of path) n.exactPointerDown?.(e, false); }, true);
   // @ref LLP 1038 §7 — a plain click on a same-origin link to a declared
   // route stays in this document: a link with its own `press` navigates by
   // it; any other goes to the root's `navigate` handler, as popstate does.
@@ -120,7 +172,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // location too (LLP 1153 D5): `href="#moves"` is the visit shown, read from
   // the attribute, since the shell's `<base href="/">` resolves it to `/`.
   // The page's own `exact` names the route table and the root's handler.
-  document.addEventListener("click", event => {
+  if (WASM_HOST) document.addEventListener("click", event => {
     const a = event.target.closest?.("a[href]");
     if (!a || !root.contains(a) || event.defaultPrevented || !ready()) return;
     const press = a.exactHandlers?.includes("press");
@@ -190,7 +242,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   document.addEventListener("keydown", (event) => {
     const el = event.target;
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.key === "Process" || event.metaKey || event.ctrlKey || event.altKey || !ready()) return;
-    if (radioArrow(root, event) || roveArrow(root, event) || event.repeat) return;
+    if (radioArrow(root, event) || roveArrow(root, event) || typeAhead(root, event) || event.repeat) return;
     // @ref LLP 1115.000 D4.14 — Space holds a `<button>` down until its keyup,
     // when the browser clicks it. Its press shows meanwhile, as under a pointer:
     // the unsaid dim, a native button's highlight, a `-exact-press-scale`, a pressed paint.
@@ -262,13 +314,9 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // (`paintRule`) paints its pressed values `--exact-press-paint` of the way
   // (which this piece eases) over its look beneath, read again whenever the
   // node's style or class changes, the scheme flips, or the press turns. It
-  // paints on images (a background layer, a mask), which no transition
-  // animates, so the node's authored transitions run as authored, beneath
-  // the paint. (An earlier form wrote the paint into opacity, background-
-  // color and color through custom properties only its animation supplied,
-  // which the style a transition is computed from lacks: every press started
-  // the node's transitions toward the properties' initial values.) Its
-  // `color` reaches the subtree as CSS's does.
+  // writes no property in a way that starts one of the node's authored
+  // transitions (`paintRule`), so they run as authored. Its `color` reaches
+  // the subtree as CSS's does.
   // `:active`'s opacity is the press's absolute target (`--exact-press-opacity-to`,
   // LLP 1121 D8), eased from what shows at the press, a hover look's included.
   const PAINT = ["--exact-press-opacity", "--exact-press-opacity-to", "--exact-press-background-color", "--exact-press-color"];
@@ -316,7 +364,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     return on;
   };
   // An authored transition running (or paused, as the agent's clock pauses it) on `property`.
-  const PAINTED_KEY = { opacity: "opacity", color: "color" };
+  const PAINTED_KEY = { opacity: "opacity", color: "color", "background-color": "backgroundColor" };
   const running = (el, property) => el.getAnimations().find(a => a.transitionProperty === property && (a.playState === "running" || a.playState === "paused"));
   // A layered list (a background's, a mask's) with the paint's own layer first: each of the node's lists cycled out
   // to its images' count, as CSS matches them, then `first` before it.
@@ -341,16 +389,18 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     return out.join("; ");
   };
   // The node's important paint (LLP 1061 D7), its own pressed values `--exact-press-paint` of the way over its look
-  // beneath: the pressed colour as a background-image layer over the node's own background-color (its own images
-  // beneath; a colour at alpha p over another, which is CSS's premultiplied mix for an opaque pressed colour),
-  // images changing discretely, so starting no transition; the pressed opacity as the property where the engine
-  // hands its own number (computedStyleMap; a float, exact) and elsewhere (Firefox) a uniform mask, which
-  // multiplies as opacity does (WebKit clips a mask to the border box, a shadow with it, so it takes the number);
-  // the pressed text colour as the property. Where the node declares a transition on a property the rule writes,
+  // beneath: the pressed colours as the properties, mixed from the look beneath as CSS mixes colours (premultiplied,
+  // so a pressed colour stands in for the node's own, translucent too, and one equal to it changes nothing); the
+  // pressed opacity as the property where the engine hands its own number (computedStyleMap; a float, exact) and
+  // elsewhere (Firefox) a uniform mask, which multiplies as opacity does (WebKit clips a mask to the border box, a
+  // shadow with it, so it takes the number). Where the node declares a transition on a property the rule writes,
   // the rule is exactly the look beneath at 0 (else a transition starts and, above every declaration, hides the
-  // paint), written only from a look whose numbers round-trip (an opaque rgb(), the engine's opacity), left out
+  // paint), written only from a look whose numbers round-trip (an rgb() colour, the engine's opacity), left out
   // while a transition of the property runs (added when it ends), and, once written, kept as it is for the press:
   // re-read with the paint on, so the paint's turn starts nothing (Firefox's transition styles see the animation).
+  // An opaque pressed background colour that can't be written so (over another space's look, or while its
+  // transition runs) is for the press a background-image layer over the node's background-color instead, which
+  // is the same mix (images change discretely, starting no transition).
   const paintRule = (el, state) => {
     if (!el.closest("#exact-root")) return "";
     // What is kept holds only while the node's own inputs (its inline style: its opacity and colour, its pressed
@@ -362,7 +412,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const kept = state.kept ?? {};
     // Re-read with only the kept declarations on, under the same key: the look beneath of what isn't kept, and the
     // node's own images and masks.
-    if (state.rule) hold(el, state, Object.values(kept).join("; "));
+    if (state.rule) hold(el, state, Object.values(kept).join("; "), []);
     const cs = getComputedStyle(el), own = name => el.style.getPropertyValue(name) ? cs.getPropertyValue(name).trim() : "";
     // A transition the read itself started (Firefox's transition styles see the animation, so taking a kept
     // declaration off is a change there) toward the very look beneath the kept one was written from: none of the
@@ -372,10 +422,35 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const number = (name, copy) => { if (!own(name)) return null; const v = parseFloat(cs.getPropertyValue(copy)); return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null; };
     const settle = () => { if (paints.get(el) === state) repaint(el); };
     const later = property => { const a = running(el, property); if (a && !state.waits?.has(a)) { (state.waits ??= new Set()).add(a); a.finished.then(settle, settle); } return !!a; };
-    if (own("--exact-press-background-color")) {
-      const bg = layer(cs, "background", `linear-gradient(color-mix(in srgb, var(--exact-press-background-color) calc(${p} * 100%), transparent) 0 0)`);
-      if (bg) out.push(bg);
-      state.background = !!bg;
+    // `name` `p` of the way from the look beneath to the pressed colour (`inSrgb`, its `color(srgb …)`),
+    // premultiplied. From an rgb() look (b at alpha β; every colour of the app's has an 8-bit alpha, which written
+    // as k / 255 computes exactly as it does) to v at alpha a, the alpha is β + (a − β)·p and each channel
+    // b + (v − b)·a·p / (β + (a − β)·p): exactly the look at 0 (the divisor held off 0, where both are clear). From
+    // another look, color-mix, where the node declares no transition of `name`. Null where neither applies:
+    // another space doesn't compute as it reads.
+    const mixed = (name, look, pressed, inSrgb) => {
+      const m = /^rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)$/.exec(look), x = /^color\(srgb ([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([\d.]+))?\)$/.exec(cs.getPropertyValue(inSrgb).trim());
+      if (m && x) {
+        const b = m.slice(1, 4).map(Number), v = x.slice(1, 4).map(Number), a = x[4] == null ? 1 : Number(x[4]);
+        const k = m[4] == null ? 255 : Math.round(Number(m[4]) * 255), beneath = k === 255 ? "1" : `${k} / 255`, opaque = k === 255 && a === 1;
+        const alpha = `${beneath} + ${a - k / 255} * ${p}`, w = opaque ? p : `${a} * ${p} / max(${alpha}, 0.000001)`;
+        return `${name}: rgb(${b.map((bi, i) => `calc(${bi} + ${v[i] * 255 - bi} * ${w})`).join(" ")}${opaque ? "" : ` / calc(${alpha})`}) !important`;
+      }
+      return transitioned(cs, name) ? null : `${name}: color-mix(in srgb, var(${pressed}) calc(${p} * 100%), ${look}) !important`;
+    };
+    state.background = false;
+    if (kept["background-color"]) next["background-color"] = kept["background-color"];
+    else if (own("--exact-press-background-color")) {
+      const declared = transitioned(cs, "background-color"), opaque = !cs.getPropertyValue("--exact-press-background-in-srgb").includes("/");
+      const d = !state.layered && !(declared && running(el, "background-color")) && mixed("background-color", cs.backgroundColor, "--exact-press-background-color", "--exact-press-background-in-srgb");
+      if (d) { if (declared) next["background-color"] = d; else out.push(d); }
+      else if (state.layered || opaque) {
+        // Once layered, layered for the press: the property written later would start the node's transition.
+        state.layered = true;
+        const bg = layer(cs, "background", `linear-gradient(color-mix(in srgb, var(--exact-press-background-color) calc(${p} * 100%), transparent) 0 0)`);
+        if (bg) out.push(bg);
+        state.background = !!bg;
+      } else later("background-color");
     }
     const to = number("--exact-press-opacity-to", "--exact-press-opacity-to-number"), share = number("--exact-press-opacity", "--exact-press-opacity-number");
     const held = el.computedStyleMap?.().get("opacity")?.value, base = Number.isFinite(held) ? held : Number(cs.opacity);
@@ -393,28 +468,26 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     if (kept.color) next.color = kept.color;
     else if (own("--exact-press-color") && !later("color")) {
-      const m = /^rgba?\((\d+), (\d+), (\d+)\)$/.exec(cs.color), x = /^color\(srgb ([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([\d.]+))?\)$/.exec(cs.getPropertyValue("--exact-press-color-in-srgb").trim());
-      if (m && x) {
-        const b = m.slice(1, 4).map(Number), v = x.slice(1, 4).map(Number), a = x[4] == null ? 1 : Number(x[4]);
-        // Opaque beneath: premultiplied over it is (b + (v·a − b)·p) / (1 + (a − 1)·p), exactly b at 0 (a pressed
-        // colour fully transparent at 1: no colour to divide, held off 0).
-        const alpha = `max(1 + ${a - 1} * ${p}, 0.000001)`;
-        const c = b.map((bi, i) => a === 1 ? `calc(${bi} + ${v[i] * 255 - bi} * ${p})` : `calc((${bi} + ${v[i] * 255 * a - bi} * ${p}) / ${alpha})`);
-        const d = `color: rgb(${c.join(" ")}${a === 1 ? "" : ` / calc(1 + ${a - 1} * ${p})`}) !important`;
-        if (transitioned(cs, "color")) next.color = d; else out.push(d);
-      } else if (!transitioned(cs, "color")) out.push(`color: color-mix(in srgb, var(--exact-press-color) calc(${p} * 100%), ${cs.color}) !important`);
+      const d = mixed("color", cs.color, "--exact-press-color", "--exact-press-color-in-srgb");
+      if (d && transitioned(cs, "color")) next.color = d; else if (d) out.push(d);
     }
+    // A boundary below that writes again the colour this node gives it takes the press's colour too, as this node's
+    // own colour paints it, on this node's progress, inherited (`hold`).
+    const coloured = !!next.color || out.some(d => d.startsWith("color:"));
+    state.below = coloured ? pressBelow(el) : [];
+    if (state.below.length) out.push("--x-press-paint: var(--exact-press-paint)");
     state.kept = next;
     // The look each kept declaration was written from: carried with it while it is kept (a re-read with it on sees
     // the painted look, not that one), read now only where it was written now.
-    state.keptBase = { opacity: next.opacity ? (kept.opacity ? state.keptBase?.opacity : String(held ?? base)) : undefined, color: next.color ? (kept.color ? state.keptBase?.color : cs.color) : undefined };
+    const look = { opacity: String(held ?? base), color: cs.color, "background-color": cs.backgroundColor };
+    state.keptBase = Object.fromEntries(Object.keys(next).map(name => [name, kept[name] ? state.keptBase?.[name] : look[name]]));
     return [...out, ...Object.values(next)].join("; ");
   };
-  // What a painting node shows, as the page can't read it from the node's computed style (the paint is on images):
-  // its opacity times the mask, its background-color with the pressed colour over it (as pixels, 8-bit; its own
-  // images and masks aren't in it), its colour. Without OffscreenCanvas, the background-color beneath.
+  // What a painting node shows, where the page can't read it from the node's computed style (a paint on images):
+  // its opacity times the mask, its background-color with a layered pressed colour over it (as pixels, 8-bit; its
+  // own images and masks aren't in it), its colour. Without OffscreenCanvas, the background-color beneath.
   // The agent's node detail reports it (scripts/agent-inspect.mjs), and the press tests read it.
-  (globalThis.exact ??= {}).pressShown = el => {
+  if (AGENT_ADMITTED) (globalThis.exact ??= {}).pressShown = el => {
     const state = paints.get(el);
     if (!state?.animation) return null;
     const cs = getComputedStyle(el), paint = Number(cs.getPropertyValue("--exact-press-paint")) || 0;
@@ -444,20 +517,41 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     } catch { return null; }
     return sheet;
   };
-  const hold = (el, state, declarations) => {
+  // The boundaries under `el` that write again the colour `el` gives them: the JS target's modes.js finds them; on
+  // the wasm target each names the view whose colour it writes again (`data-exact-from`, host/web/src/host/looks.rs),
+  // which is `el` or a view above it.
+  const pressBelow = el => globalThis.exact?.pressBelow?.(el) ?? [...el.querySelectorAll("[data-exact-from]")].filter(b => {
+    const from = views.get(Number(b.getAttribute("data-exact-from")));
+    return !!from && (from === el || !el.contains(from));
+  });
+  const hold = (el, state, declarations, below = state.below) => {
     drop(state);
     const sheet = declarations && sheetOf(el);
     if (!sheet) return "";
     state.key ??= String(++paintKeys);
-    const at = sheet.insertRule(`#exact-root [data-exact-painting="${state.key}"][data-exact-painting] { ${declarations} }`, sheet.cssRules.length);
-    state.rule = { sheet, rule: sheet.cssRules[at] };
+    const painting = `#exact-root [data-exact-painting="${state.key}"][data-exact-painting]`;
+    const insert = text => sheet.cssRules[sheet.insertRule(text, sheet.cssRules.length)];
+    state.rule = { sheet, rule: insert(`${painting} { ${declarations} }`), below: [] };
+    // Each boundary below it eases from the colour it shows (a look's included; its own rule is off) to the press's,
+    // resolved in the boundary's modes: the JS target's is a token's property, which resolves there; the wasm host
+    // resolves it on each boundary, by the pressed view (`--exact-press-color-below-<view>`, host/web/src/host/looks.rs).
+    const own = el.style.getPropertyValue("--exact-press-color"), view = el.getAttribute("data-view");
+    const pressed = own && view ? `var(--exact-press-color-below-${view}, ${own})` : own;
+    below.forEach((b, n) => {
+      const base = getComputedStyle(b).color, mark = `${state.key}.${n}`;
+      if (!base || !pressed) return;
+      b.setAttribute("data-x-pr", mark);
+      state.rule.below.push([b, mark, insert(`${painting} [data-x-pr="${mark}"] { color: color-mix(in srgb, ${pressed} calc(var(--x-press-paint) * 100%), ${base}) !important }`)]);
+    });
     return state.key;
   };
   const drop = state => {
     if (!state.rule) return;
-    const { sheet, rule } = state.rule, at = [...sheet.cssRules].indexOf(rule);
+    const { sheet, rule, below } = state.rule, rules = [...sheet.cssRules];
     state.rule = null;
-    if (at >= 0) sheet.deleteRule(at);
+    const at = [rule, ...below.map(([, , r]) => r)].map(r => rules.indexOf(r)).filter(i => i >= 0).sort((a, b) => b - a);
+    for (const i of at) sheet.deleteRule(i);
+    for (const [b, mark] of below) if (b.getAttribute("data-x-pr") === mark) b.removeAttribute("data-x-pr");
   };
   // The look beneath changed: the ease goes on from where it is, over the rest of its time.
   // `stale`: a sheet, the scheme or a token changed, which no attribute of the node's says.
@@ -504,17 +598,30 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     // is the token's (LLP 1121 D7).
     const press = el.style.getPropertyValue("--exact-press");
     const to = down ? Number((press.includes("var(") ? getComputedStyle(el).getPropertyValue("--exact-press") : press) || 1) : 1;
-    const old = feedback.get(el);
-    if (old?.to === to || !old && to === 1) return;
+    const old = feedback.get(el), shift = !!el.style.getPropertyValue("--exact-press-translate");
+    const pressed = down && shift ? 1 : 0;
+    if (old?.to === to && old.pressed === pressed) { old.release = false; return; }
+    if (!old && to === 1 && !pressed) return;
     const progress = old?.animation.effect.getComputedTiming().progress ?? 0;
+    // A translating quick tap shows its ease-in before returning, on the same curve as scale.
+    if (!down && old?.pressed && progress < 1 && !now && pressDuration(el, EASE.duration)) {
+      old.release = true;
+      return;
+    }
     const from = old ? old.from + (old.to - old.from) * progress : 1;
+    const offset = old ? old.offset + (old.pressed - old.offset) * progress : 0;
     old?.animation.cancel();
     const ms = pressDuration(el, EASE.duration);
-    const animation = el.animate([{ "--exact-press-factor": from }, { "--exact-press-factor": to }], { ...EASE, duration: ms });
-    const state = { animation, from, to };
+    const animation = el.animate([
+      { "--exact-press-factor": from, "--exact-pressed": offset },
+      { "--exact-press-factor": to, "--exact-pressed": pressed },
+    ], { ...EASE, duration: ms });
+    const state = { animation, from, to, offset, pressed };
     feedback.set(el, state);
     animation.onfinish = () => {
-      if (to === 1 && feedback.get(el) === state) { animation.cancel(); feedback.delete(el); }
+      if (feedback.get(el) !== state) return;
+      if (state.release) showScale(el, false);
+      else if (to === 1 && !pressed) { animation.cancel(); feedback.delete(el); }
     };
     if (ms === 0 || now) animation.finish();
   };
@@ -547,7 +654,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   const unpressedBox = el => {
     const effect = feedback.get(el)?.animation.effect;
     const frames = effect?.getKeyframes();
-    effect?.setKeyframes([{ "--exact-press-factor": 1 }]);
+    effect?.setKeyframes(frames.map(frame => ({ ...frame, "--exact-press-factor": 1 })));
     const box = el.getBoundingClientRect();
     if (effect) effect.setKeyframes(frames);
     return box;
@@ -562,111 +669,114 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // refuses one; real input on the node, its going or its disabling lets it go (`dropped(reason)`). A real press on
   // the node as it is held ends there: the hold has it (its release unpaints nothing).
   const DISABLED = ":disabled,[disabled]:not([disabled='false'])";
-  let held = null;
-  // (A leaving view, `data-exiting`, is gone as it starts to leave.)
-  const watch = new MutationObserver(() => { if (!held?.el.isConnected || held.el.closest("[data-exiting]")) letGo("gone"); else if (held.el.closest(DISABLED)) letGo("disabled"); });
-  // (Held still as a look's edge is, below: `data-exact-snap`, which the press paint's observer doesn't watch.)
-  const snap = (el, change) => { el.setAttribute("data-exact-snap", ""); change(); getComputedStyle(el).opacity; el.removeAttribute("data-exact-snap"); };
-  // `reason` null: let go unsaid (a dev loop's new generation, whose tree goes and whose hold the server replays).
-  const letGo = (reason) => {
-    if (!held) return;
-    const h = held;
-    held = null;
-    watch.disconnect();
-    if (h.state === "active") showPress(h.el, false); else snap(h.el, () => h.el.removeAttribute("data-exact-held"));
-    if (reason) h.dropped?.(reason);
-  };
-  // (Announced once it is: a hold sent while the glue loads, after paint, waits for it — `exact-hold`.)
-  queueMicrotask(() => globalThis.dispatchEvent?.(new Event("exact-hold")));
-  (globalThis.exact ??= {}).hold = (el, state, dropped) => {
-    if (state != null && !["active", "hover", "focus-visible"].includes(state)) return { error: "holdState is active, hover, focus-visible or null", malformed: true };
-    letGo("replaced");
-    if (state == null) return { held: null };
-    // `active`: the innermost node with a press handler, as a real press's (theme2's 07:48); none there is `gone`.
-    const node = state === "active" ? el?.closest?.("[data-exact-on~=press]") : el;
-    if (!node?.isConnected || !root.contains(node) || node.closest("[data-exiting]")) return { reason: "gone", error: state === "active" ? "no press there: the node presses nothing, nor does any around it" : "the node is not on the page" };
-    if (node.closest(DISABLED)) return { reason: "disabled", error: "a disabled node holds no state" };
-    held = { el: node, asked: el, state, dropped };
-    watch.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled", "data-exiting"] });
-    if (state === "active") {
-      if (press?.el === node) press = null;
-      if (keyHold?.el === node) { const up = keyHold; keyHold = null; removeEventListener("keyup", up, true); node.removeEventListener("blur", up); }
-      showPress(node, true);
-    } else snap(node, () => node.setAttribute("data-exact-held", state));
-    return { held: state, el: node };
-  };
-  globalThis.exact.holdQuiet = () => letGo(null);
-  // What is held on `el` (or on the press it resolved to, `el` named), for `layout` and inspect (LLP 1122 D8): its
-  // state and the rows that state shows, by their
-  // wire names: a press's paint rows (`:active` lowered to them), else the state look's rows in the looks sheet
-  // (its `[data-exact-held~=…]` rule). The rows' places are the server's to join, from the source map.
-  const WIRE = { "--exact-press": "press_scale", "--exact-press-background-color": "press_background_color", "--exact-press-color": "press_color", "--exact-press-opacity": "press_opacity", "--exact-press-opacity-to": "press_opacity_to" };
-  // `ask`: the runner's agent (the wasm page): the rows as `layout` says the press's own (its D7 rows, `:active`
-  // lowered to them) or its look's, each with the token it read (LLP 1121 D8, stage 9 E). Without one (the JS
-  // target) they are the CSS the page holds, a varying token named where modes.js knows it. Either names the node
-  // the state is held on (the press it resolved to, when named on a node inside it).
-  globalThis.exact.heldOf = (el, ask = null) => {
-    if (!held || (held.el !== el && held.asked !== el)) return null;
-    el = held.el;
-    // (The wasm page numbers its elements `data-view`; the JS target its own way, a link's `data-view` an empty marker.)
-    const view = /^\d+$/.test(el.dataset?.view ?? "") ? Number(el.dataset.view) : globalThis.$exactViewId?.(el) ?? null;
-    const node = ask && view != null ? ask({ op: "node", id: view, plan: true }) : null;
-    if (node && !node.error) {
-      const own = held.state === "active" ? Object.fromEntries(Object.entries(node.style ?? {}).filter(([name]) => Object.values(WIRE).includes(name)))
-        : node.looks?.[held.state === "hover" ? "hover" : "focus_visible"] ?? {};
-      const rows = Object.entries(own).map(([name, row]) => ({ name, value: row.value, ...(row.token ? { token: row.token } : {}) }));
-      return { held: { state: held.state, node: view, site: node.site ?? null, instance: node.instance ?? [], rows } };
-    }
-    const rows = [];
-    if (held.state === "active") for (const [prop, name] of Object.entries(WIRE)) { const value = el.style.getPropertyValue(prop).trim(); if (value) rows.push({ name, value, prop }); }
-    else for (const sheet of document.styleSheets) {
-      let list; try { list = [...sheet.cssRules]; } catch { continue; }
-      for (const rule of list.flatMap(r => r instanceof CSSMediaRule ? [...r.cssRules] : [r])) {
-        if (!rule.selectorText?.includes(`[data-exact-held~="${held.state}"]`) && !rule.selectorText?.includes(`[data-exact-held~=${held.state}]`)) continue;
-        if (!el.matches(rule.selectorText)) continue;
-        // A custom property is the look's own (`--exact-hover-wash`), not a row.
-        for (const prop of rule.style) if (!prop.startsWith("--")) rows.push({ name: prop.replace(/^border-(top|right|bottom|left)-color$/, "border_color_$1").replace(/-/g, "_"), value: rule.style.getPropertyValue(prop).trim(), prop });
+  if (AGENT_ADMITTED) {
+    let held = null;
+    // (A leaving view, `data-exiting`, is gone as it starts to leave.)
+    const watch = new MutationObserver(() => { if (!held?.el.isConnected || held.el.closest("[data-exiting]")) letGo("gone"); else if (held.el.closest(DISABLED)) letGo("disabled"); });
+    // (Held still as a look's edge is, below: `data-exact-snap`, which the press paint's observer doesn't watch.)
+    const snap = (el, change) => stillThrough([el], change);
+    // `reason` null: let go unsaid (a dev loop's new generation, whose tree goes and whose hold the server replays).
+    const letGo = (reason) => {
+      if (!held) return;
+      const h = held;
+      held = null;
+      watch.disconnect();
+      if (h.state === "active") showPress(h.el, false); else snap(h.el, () => h.el.removeAttribute("data-exact-held"));
+      if (reason) h.dropped?.(reason);
+    };
+    // (Announced once it is: a hold sent while the glue loads, after paint, waits for it — `exact-hold`.)
+    queueMicrotask(() => globalThis.dispatchEvent?.(new Event("exact-hold")));
+    (globalThis.exact ??= {}).hold = (el, state, dropped) => {
+      if (state != null && !["active", "hover", "focus-visible"].includes(state)) return { error: "holdState is active, hover, focus-visible or null", malformed: true };
+      letGo("replaced");
+      if (state == null) return { held: null };
+      // `active`: the innermost node with a press handler or a view's link, as a real press's (theme2's 07:48; LLP 1121 D8);
+      // none there is `gone`.
+      const node = state === "active" ? el?.closest?.("[data-exact-on~=press],a[data-view][href]") : el;
+      if (!node?.isConnected || !root.contains(node) || node.closest("[data-exiting]")) return { reason: "gone", error: state === "active" ? "no press there: the node presses nothing, nor does any around it" : "the node is not on the page" };
+      if (node.closest(DISABLED)) return { reason: "disabled", error: "a disabled node holds no state" };
+      held = { el: node, asked: el, state, dropped };
+      watch.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["disabled", "data-exiting"] });
+      if (state === "active") {
+        if (press?.el === node) press = null;
+        if (keyHold?.el === node) { const up = keyHold; keyHold = null; removeEventListener("keyup", up, true); node.removeEventListener("blur", up); }
+        showPress(node, true);
+      } else snap(node, () => node.setAttribute("data-exact-held", state));
+      return { held: state, el: node };
+    };
+    globalThis.exact.holdQuiet = () => letGo(null);
+    // What is held on `el` (or on the press it resolved to, `el` named), for `layout` and inspect (LLP 1122 D8): its
+    // state and the rows that state shows, by their
+    // wire names: a press's paint rows (`:active` lowered to them), else the state look's rows in the looks sheet
+    // (its `[data-exact-held~=…]` rule). The rows' places are the server's to join, from the source map.
+    const WIRE = { "--exact-press-translate": "press_translate", "--exact-press": "press_scale", "--exact-press-background-color": "press_background_color", "--exact-press-color": "press_color", "--exact-press-opacity": "press_opacity", "--exact-press-opacity-to": "press_opacity_to" };
+    // `ask`: the runner's agent (the wasm page): the rows as `layout` says the press's own (its D7 rows, `:active`
+    // lowered to them) or its look's, each with the token it read (LLP 1121 D8, stage 9 E). Without one (the JS
+    // target) they are the CSS the page holds, a varying token named where modes.js knows it. Either names the node
+    // the state is held on (the press it resolved to, when named on a node inside it).
+    globalThis.exact.heldOf = (el, ask = null) => {
+      if (!held || (held.el !== el && held.asked !== el)) return null;
+      el = held.el;
+      // (The wasm page numbers its elements `data-view`; the JS target its own way, a link's `data-view` an empty marker.)
+      const view = /^\d+$/.test(el.dataset?.view ?? "") ? Number(el.dataset.view) : globalThis.$exactViewId?.(el) ?? null;
+      const node = ask && view != null ? ask({ op: "node", id: view, plan: true }) : null;
+      if (node && !node.error) {
+        const own = held.state === "active" ? Object.fromEntries(Object.entries(node.style ?? {}).filter(([name]) => Object.values(WIRE).includes(name)))
+          : node.looks?.[held.state === "hover" ? "hover" : "focus_visible"] ?? {};
+        const rows = Object.entries(own).map(([name, row]) => ({ name, value: row.value, ...(row.token ? { token: row.token } : {}) }));
+        return { held: { state: held.state, node: view, site: node.site ?? null, instance: node.instance ?? [], rows } };
       }
-    }
-    // A row a token or a role writes (`var(…)`, `light-dark(…)`) says the value it resolves to here, and the token
-    // where modes.js names it; a token reference (`var(--x-…)`) it can't name leaves the answer
-    // `provenance: "incomplete"` (a literal pair or a host's own property names none to miss).
-    let incomplete = false;
-    const cs = getComputedStyle(el);
-    for (const row of rows) {
-      const prop = row.prop;
-      delete row.prop;
-      if (!/\b(var|light-dark)\(/.test(row.value)) continue;
-      row.computed = cs.getPropertyValue(prop).trim();
-      const token = globalThis.exact.modes?.token?.(el, prop, row.value);
-      if (token) row.token = token;
-      // Each token reference on its own: one modes.js can't name leaves the answer incomplete, whatever else it named.
-      const refs = new Set([...row.value.matchAll(/var\((--x-[\w-]+)/g)].map(m => m[1]));
-      if ([...refs].some(ref => !globalThis.exact.modes?.token?.(el, prop, `var(${ref})`))) incomplete = true;
-    }
-    const site = el.dataset?.site != null ? Number(el.dataset.site) : null;
-    // (Its instance path is the inspect table's, where the page has one: `exact.instanceOf`, inspect-dev.js.)
-    const instance = site != null ? globalThis.exact.instanceOf?.(el) ?? null : null;
-    const answer = { held: { state: held.state, node: view, site, ...(instance ? { instance } : {}), rows, ...(incomplete ? { provenance: "incomplete" } : {}) } };
-    // (The element, unsaid in JSON: a host that numbers its views another way names it from this.)
-    Object.defineProperty(answer.held, "el", { value: el, enumerable: false });
-    return answer;
-  };
-  // Real input on the held node: a press, a key, the pointer coming over it (a hover's), the focus (a focus's).
-  for (const type of ["pointerdown", "keydown"]) root.addEventListener(type, e => { if (held?.el.contains(e.target)) letGo("input"); }, true);
-  // The pointer or the focus coming or going: its leaving the node, not moving within it.
-  const crosses = (e) => held.el.contains(e.target) !== held.el.contains(e.relatedTarget);
-  for (const type of ["pointerover", "pointerout"]) root.addEventListener(type, e => { if (held?.state === "hover" && crosses(e)) letGo("input"); }, true);
-  for (const type of ["focusin", "focusout"]) root.addEventListener(type, e => { if (held?.state === "focus-visible" && crosses(e)) letGo("input"); }, true);
-  // @ref LLP 1121 D8 — a look snaps, an authored transition or not. The browser has already moved `:hover` and
-  // `:focus-visible` when these events come, so an enabled node with a look for the state whose edge this is (the
-  // pointer entering or leaving it where it can hover; its `:focus-visible` turning on or off) takes that style change
-  // with its transitions off (`data-exact-snap`, an attribute the press paint's observer doesn't watch), one forced
-  // style for all of them. A base change still eases as authored; a transition of that node's running across the edge
-  // ends there (CSS can't hold one property still: theme2's 19:55 (b)). A look: the JS target's `data-exact-looks`,
-  // whose rules name their states, or a view the wasm host's looks sheet has rules for. (Not heard: hover that moves
-  // with no event: LLP 1121 §10.)
-  if (!document.getElementById("exact-snap")) document.head.append(Object.assign(document.createElement("style"), { id: "exact-snap", textContent: "[data-exact-snap]{transition:none!important}" }));
+      const rows = [];
+      if (held.state === "active") for (const [prop, name] of Object.entries(WIRE)) { const value = el.style.getPropertyValue(prop).trim(); if (value) rows.push({ name, value, prop }); }
+      else for (const sheet of document.styleSheets) {
+        let list; try { list = [...sheet.cssRules]; } catch { continue; }
+        for (const rule of list.flatMap(r => r instanceof CSSMediaRule ? [...r.cssRules] : [r])) {
+          if (!rule.selectorText?.includes(`[data-exact-held~="${held.state}"]`) && !rule.selectorText?.includes(`[data-exact-held~=${held.state}]`)) continue;
+          const own = el.matches(rule.selectorText);
+          const card = !own && el.matches(':is([data-liststyle],[data-liststyle]>[data-exact-list-item])>section')
+            ? el.querySelector(':scope>div') : null;
+          if (!own && !card?.matches(rule.selectorText)) continue;
+          // The section owns the row and its source; only the shadow's paint target moves.
+          // A custom property is the look's own (`--exact-hover-wash`), not a row.
+          for (const prop of rule.style) if (!prop.startsWith("--") && (own || prop === "box-shadow")) rows.push({ name: prop.replace(/^border-(top|right|bottom|left)-color$/, "border_color_$1").replace(/-/g, "_"), value: rule.style.getPropertyValue(prop).trim(), prop, target: own ? el : card });
+        }
+      }
+      // A row a token or a role writes (`var(…)`, `light-dark(…)`) says the value it resolves to here, and the token
+      // where modes.js names it; a token reference (`var(--x-…)`) it can't name leaves the answer
+      // `provenance: "incomplete"` (a literal pair or a host's own property names none to miss).
+      let incomplete = false;
+      const cs = getComputedStyle(el);
+      for (const row of rows) {
+        const prop = row.prop;
+        const target = row.target ?? el;
+        delete row.prop;
+        delete row.target;
+        if (target !== el) row.computed = getComputedStyle(target).getPropertyValue(prop).trim();
+        if (!/\b(var|light-dark)\(/.test(row.value)) continue;
+        row.computed ??= cs.getPropertyValue(prop).trim();
+        const token = globalThis.exact.modes?.token?.(el, prop, row.value);
+        if (token) row.token = token;
+        // Each token reference on its own: one modes.js can't name leaves the answer incomplete, whatever else it named.
+        const refs = new Set([...row.value.matchAll(/var\((--x-[\w-]+)/g)].map(m => m[1]));
+        if ([...refs].some(ref => !globalThis.exact.modes?.token?.(el, prop, `var(${ref})`))) incomplete = true;
+      }
+      const site = el.dataset?.site != null ? Number(el.dataset.site) : null;
+      // (Its instance path is the inspect table's, where the page has one: `exact.instanceOf`, inspect-dev.js.)
+      const instance = site != null ? globalThis.exact.instanceOf?.(el) ?? null : null;
+      const answer = { held: { state: held.state, node: view, site, ...(instance ? { instance } : {}), rows, ...(incomplete ? { provenance: "incomplete" } : {}) } };
+      // (The element, unsaid in JSON: a host that numbers its views another way names it from this.)
+      Object.defineProperty(answer.held, "el", { value: el, enumerable: false });
+      return answer;
+    };
+    // Real input on the held node: a press, a key, the pointer coming over it (a hover's), the focus (a focus's).
+    for (const type of ["pointerdown", "keydown"]) root.addEventListener(type, e => { if (held?.el.contains(e.target)) letGo("input"); }, true);
+    // The pointer or the focus coming or going: its leaving the node, not moving within it.
+    const crosses = (e) => held.el.contains(e.target) !== held.el.contains(e.relatedTarget);
+    for (const type of ["pointerover", "pointerout"]) root.addEventListener(type, e => { if (held?.state === "hover" && crosses(e)) letGo("input"); }, true);
+    for (const type of ["focusin", "focusout"]) root.addEventListener(type, e => { if (held?.state === "focus-visible" && crosses(e)) letGo("input"); }, true);
+  }
+  // Paint looks snap; a scale look uses the author's transition and its transformed hit box.
+  if (!document.getElementById("exact-snap")) document.head.append(Object.assign(document.createElement("style"), { id: "exact-snap", textContent: "[data-exact-snap]{transition:var(--exact-look-transition,none)!important}" }));
   // A JS-target look's states, by its attribute's value, from its rules; read again when a sheet comes or goes.
   const lookStates = new Map();
   new MutationObserver(() => lookStates.clear()).observe(document.head, { childList: true, subtree: true, characterData: true });
@@ -676,20 +786,43 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     if (at == null) return "";
     if (!lookStates.has(at)) {
       let text = "";
-      const sel = `[data-exact-looks="${at}"]`, walk = (rules) => { for (const r of rules) { if (r.selectorText?.includes(sel)) text += r.selectorText; if (r.cssRules) walk(r.cssRules); } };
+      const sel = `[data-exact-looks="${at}"]`, walk = (rules) => { for (const r of rules) { if (r.selectorText?.includes(sel)) text += r.cssText; if (r.cssRules) walk(r.cssRules); } };
       for (const s of document.styleSheets) { try { walk(s.cssRules); } catch { /* another origin's */ } }
       if (!text) return "";
       lookStates.set(at, text);
     }
     return lookStates.get(at);
   };
-  // Held still before any style is read: a read under the authored transition would start the one it holds off. (A
-  // node with no transition of its own takes this as nothing.)
-  const stillThrough = (els) => {
+  const stillThrough = (els, change) => {
     if (!els.length) return;
-    for (const el of els) el.setAttribute("data-exact-snap", "");
-    getComputedStyle(els[0]).opacity;
-    for (const el of els) el.removeAttribute("data-exact-snap");
+    // A grouped section's state shadow paints on its card (looks.rs).
+    els = [...new Set(els.flatMap(el => el.matches(':is([data-liststyle],[data-liststyle]>[data-exact-list-item])>section')
+      ? [el, ...el.querySelectorAll(':scope>div')] : [el]))];
+    const kept = els.map(el => {
+      if (!/(?:^|[;{])\s*(?:--exact-)?scale\s*:/.test(looks(el, document.getElementById("exact-looks")))) {
+        el.setAttribute("data-exact-snap", "");
+        return [el, null, ""];
+      }
+      const style = getComputedStyle(el), split = text => text.split(/,(?![^(]*\))/).map(x => x.trim());
+      const props = split(style.transitionProperty), durations = split(style.transitionDuration);
+      const curves = split(style.transitionTimingFunction), delays = split(style.transitionDelay);
+      const rows = ["scale", "--exact-scale"].map(prop => {
+        const i = props.findLastIndex(p => p === prop || p === "all");
+        return i < 0 ? `${prop} 0s` : `${prop} ${durations[i % durations.length]} ${curves[i % curves.length]} ${delays[i % delays.length]}`;
+      });
+      const old = el.style.getPropertyValue("--exact-look-transition"), priority = el.style.getPropertyPriority("--exact-look-transition");
+      el.style.setProperty("--exact-look-transition", rows.join(","));
+      el.setAttribute("data-exact-snap", "");
+      return [el, old, priority];
+    });
+    change?.();
+    for (const el of els) getComputedStyle(el).opacity;
+    for (const [el, old, priority] of kept) {
+      el.removeAttribute("data-exact-snap");
+      if (old === null) continue;
+      if (old) el.style.setProperty("--exact-look-transition", old, priority);
+      else el.style.removeProperty("--exact-look-transition");
+    }
   };
   // In the page: under `root`, through any shadow root's host.
   const inPage = (el) => { while (el && !root.contains(el)) el = el.getRootNode?.().host; return !!el; };
@@ -850,14 +983,11 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     if (!press || !holds(e.target, press.el)) return;
     press.box = boxOf(press.el);
-    if (!press.delay) showHeld(press, stillUnder(press));
+    if (!press.delay) showPress(press.el, stillUnder(press));
   }, { capture: true, passive: true });
   const inside = (p, e) => { const [l, t, r, b] = p.box; return e.clientX >= l && e.clientX <= r && e.clientY >= t && e.clientY <= b; };
   // Whether the finger, where it last was, is over the target as the page last moved it.
   const stillUnder = p => inside(p, { clientX: p.at[0], clientY: p.at[1] });
-  // Only mark a mouse-held link without a `press` handler: it dims unless it declares feedback, in which case
-  // it shows nothing (LLP 1121's `lower-state-dead` lint). Buttons and touch presses show authored feedback.
-  const showHeld = (p, down, now = false) => p.dimOnly ? markPressed(p.el, down, now) : showPress(p.el, down, now);
   // Play the haptic when feedback appears, where `navigator.vibrate` is available (LLP 1077 D14)
   const begin = p => {
     // Discard delayed feedback if the target became unavailable before its timer fired
@@ -867,7 +997,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       }
       return false;
     }
-    showHeld(p, true);
+    showPress(p.el, true);
     if (p.haptic) {
       navigator.vibrate?.(p.haptic);
     }
@@ -879,14 +1009,14 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const p = lifts.get(el);
     lifts.delete(el);
     clearTimeout(p.lift);
-    if (press?.el !== el || press.delay) showHeld(p, false, now);
+    if (press?.el !== el || press.delay) showPress(p.el, false, now);
   };
   // `lifted`: the pointer came up inside the box, so a tap still waiting out the delay shows its press now.
   const release = (now = false, lifted = false) => {
     const p = press;
     press = null;
     if (!p) return;
-    if (!p.delay) return showHeld(p, false, now);
+    if (!p.delay) return showPress(p.el, false, now);
     clearTimeout(p.delay);
     if (!lifted) return;
     if (!begin(p)) {
@@ -914,7 +1044,6 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const p = press = {
       el, id: e.pointerId, box: boxOf(el), at: [e.clientX, e.clientY], touch,
       haptic: haptic && haptic !== "none" ? (haptic === "selection" ? 5 : 12) : 0,
-      dimOnly: !touch && el.matches('a:not([data-exact-on~=press])'),
     };
     // The delay over, the press shows if its target is still under the finger: the page may have moved it away.
     if (scroll.delay) p.delay = setTimeout(() => { if (press !== p) return; p.delay = 0; if (stillUnder(p)) begin(p); }, TOUCH_DELAY);
@@ -927,7 +1056,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     press.at = [e.clientX, e.clientY];
     // Inside the delay the browser decides: a scroll cancels the touch, a tap lifts it.
     if (press.delay) return;
-    showHeld(press, inside(press, e));
+    showPress(press.el, inside(press, e));
   }, true);
   // A touch belongs to the target it began on, as UIKit hit-tests a touch once: lifted outside that target's box as it
   // stands now (the app may have moved it from under the finger), it presses nothing, though the browser aims its
@@ -1038,100 +1167,108 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   };
   return {
     arrive, // once the piece is made (the stack as it stands), then after each commit's tree, its focus commands and its `autofocus`
-    // @ref LLP 1005 §3 — `pointerdown`/`pointerup`, DOM's own: the primary
-    // button or a touch going down on the node, then up or cancelled (a
-    // cancel is an up), bubbling to every enabled ancestor that hears either
-    // (Charlie, 2026-10-15). The up is heard on the document, so it arrives
-    // wherever the pointer lifts; a pointer capture would also retarget the
-    // click there, a press the platforms do not make. LLP 1056 §3 stage 3 —
-    // `pointermove`: a free pointer over the node (no button down), or the
-    // held one anywhere, at most once a frame, the latest. Each carries the
-    // `PointerEvent` record (`offsetX,offsetY,button,buttons,pressure,pointerType,
-    // pointerId,` the modifiers held, from the content box): `fire(29, r)` is down, 30 up, 31 a
-    // move. The JS target's pointer.js is the same rule.
-    pointer(el, on, fire) {
-      let held = null, owner = false, last = null, move = null, frame = 0, downOf = null;
-      const wants = kind => el.exactHandlers?.includes(kind);
-      const record = (e, lifted = false) => pointerLine(el, e, lifted);
-      const flush = () => {
-        cancelAnimationFrame(frame); frame = 0;
-        const m = move; move = null;
-        if (m && wants("pointermove") && ready()) fire(31, record(m));
-      };
-      const moved = e => { last = e; move = e; if (!frame) frame = requestAnimationFrame(flush); };
-      // While held: the owner's moves, and every holder's latest point,
-      // which a blur's up reports.
-      const heldMove = e => { if (e.pointerId !== held) return; last = e; if (owner) moved(e); };
-      // The end: an up or cancel anywhere in the document, or the pointer
-      // leaving it (out of the window, into a frame) or the window losing
-      // focus, which this document never hears the up from.
-      const ends = [["pointerup", document], ["pointercancel", document], ["pointerout", document], ["blur", window]];
-      const up = e => {
-        if (e.type === "blur" ? e.target !== window : e.pointerId !== held || (e.type === "pointerout" && e.relatedTarget && e.relatedTarget.localName !== "iframe")) return;
-        held = null; downOf = null;
-        for (const [type, target] of ends) target.removeEventListener(type, up, target === document);
-        document.removeEventListener("pointermove", heldMove, true);
-        flush();
-        // Never for a removed node, nor past a handler further in that
-        // stopped this up (`exactStopped`, glue.js).
-        if (wants("pointerup") && ready() && el.isConnected && !e.exactStopped) fire(30, record(e.type === "blur" ? last : e, true), e);
-      };
-      const disabled = () => el.matches(":disabled") || el.hasAttribute("disabled") || inertAncestor(el);
-      // A free pointer over it: the innermost node hearing moves takes them;
-      // one that hears only down or up lets them by to an ancestor that
-      // hears them, as pointer.js does.
-      on("pointermove", e => {
-        if (e.exactPointerMover || !wants("pointermove")) return;
-        e.exactPointerMover = el;
-        if (held === null && e.buttons === 0 && !disabled()) moved(e);
-      });
-      // `hold`: the walk's first pass, which fixes the holders; then the down.
-      return (e, hold) => {
-        // Its down, unless a handler further in removed or disabled it, or
-        // stopped this down (`exactStopped`, glue.js): it still holds the up and the moves.
-        if (!hold) { if (downOf === e && el.isConnected && !disabled() && wants("pointerdown") && ready() && !e.exactStopped) fire(29, record(e), e); return; }
-        // Any button, as the DOM's (studio diary R22); `buttons` says which.
-        if (!e.isPrimary || held !== null || !el.isConnected || disabled()) return;
-        // The innermost enabled pointer node holds its moves (the walk
-        // reaches it first and marks the event); an ancestor holds only its up.
-        owner = !e.exactPointerOwner;
-        if (!owner && !wants("pointerdown") && !wants("pointerup")) return;
-        e.exactPointerOwner = el;
-        held = e.pointerId; last = e; downOf = e;
-        for (const [type, target] of ends) target.addEventListener(type, up, target === document);
-        document.addEventListener("pointermove", heldMove, true);
-        flush();
-      };
-    },
-    // Studio diary R22, R3, R19, R17: a `contextmenu` with its point (10),
-    // `dblclick` (11), a `wheel` (37, its record; a prevented one does not
-    // scroll), files and folders dropped from outside (38, each minted a
-    // `doc:` handle, documents-glue.js), a file drag's enter and leave (55, 56, documents-glue.js
-    // `hearDrags`) and the window's `beforeunload` (36), as the JS target's
-    // rt.js and files.js hear them. `fire(kind, line)` dispatches.
-    mouse(el, kind, e, fire) {
-      if (!ready()) return;
-      if (kind === "beforeunload") return el.isConnected && fire(36, "");
-      if (el.matches(":disabled") || inertAncestor(el)) return;
-      if (kind === "wheel") return e.exactStopped || fire(37, `${pointerLine(el, e).split(",").slice(0, 2)},${e.deltaX},${e.deltaY},${e.deltaMode},${modifiers(e)}`);
-      if (kind === "dragover") { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } return; }
-      if (kind === "dragenter" || kind === "dragleave") return fire(kind === "dragenter" ? 55 : 56, `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`);
-      if (kind === "drop") {
-        const dt = e.dataTransfer;
-        if (!dt?.types?.includes("Files")) return;
-        e.preventDefault(); e.stopPropagation();
-        const at = `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`, files = [...dt.files], items = [...dt.items].filter(i => i.kind === "file");
-        const handles = items.map(i => i.getAsFileSystemHandle?.().catch(() => null) ?? null), entries = items.map(i => i.webkitGetAsEntry?.() ?? null);
-        return documents?.().then(async (glue) => {
-          const found = await glue.dropped(await Promise.all(handles), files, entries);
-          if (found.length) fire(38, `${at}\n${found.join("\n")}`); else log("drop: refused: the browser handed over no file");
+    ...(WASM_HOST && {
+      // @ref LLP 1005 §3 — `pointerdown`/`pointerup`, DOM's own: the primary
+      // button or a touch going down on the node, then up or cancelled (a
+      // cancel is an up), bubbling to every enabled ancestor that hears either
+      // (Charlie, 2026-10-15). The up is heard on the document, so it arrives
+      // wherever the pointer lifts; a pointer capture would also retarget the
+      // click there, a press the platforms do not make. LLP 1056 §3 stage 3 —
+      // `pointermove`: a free pointer over the node (no button down), or the
+      // held one anywhere, at most once a frame, the latest. Each carries the
+      // `PointerEvent` record (`offsetX,offsetY,button,buttons,pressure,pointerType,
+      // pointerId,` the modifiers held, from the content box): `fire(29, r)` is down, 30 up, 31 a
+      // move. The JS target's pointer.js is the same rule.
+      pointer(el, on, fire) {
+        let held = null, owner = false, last = null, move = null, frame = 0, spent = false, downOf = null;
+        const wants = kind => el.exactHandlers?.includes(kind);
+        const record = (e, lifted = false) => pointerLine(el, e, lifted);
+        const flush = () => {
+          const m = move; move = null;
+          if (m && wants("pointermove") && ready()) fire(31, record(m));
+        };
+        // A move goes out in its own event unless one went out since the last animation frame; then the latest goes
+        // at the next frame. Chromium and Firefox deliver moves aligned to frames, so each goes out as it comes.
+        const tick = () => { frame = 0; spent = move !== null; flush(); if (spent) frame = requestAnimationFrame(tick); };
+        const moved = e => {
+          last = e; move = e;
+          if (!spent) { spent = true; flush(); }
+          if (!frame) frame = requestAnimationFrame(tick);
+        };
+        // While held: the owner's moves, and every holder's latest point,
+        // which a blur's up reports.
+        const heldMove = e => { if (e.pointerId !== held) return; last = e; if (owner) moved(e); };
+        // The end: an up or cancel anywhere in the document, or the pointer
+        // leaving it (out of the window, into a frame) or the window losing
+        // focus, which this document never hears the up from.
+        const ends = [["pointerup", document], ["pointercancel", document], ["pointerout", document], ["blur", window]];
+        const up = e => {
+          if (e.type === "blur" ? e.target !== window : e.pointerId !== held || (e.type === "pointerout" && e.relatedTarget && e.relatedTarget.localName !== "iframe")) return;
+          held = null; downOf = null;
+          for (const [type, target] of ends) target.removeEventListener(type, up, target === document);
+          document.removeEventListener("pointermove", heldMove, true);
+          flush();
+          // Never for a removed node, nor past a handler further in that
+          // stopped this up (`exactStopped`, glue.js).
+          if (wants("pointerup") && ready() && el.isConnected && !e.exactStopped) fire(30, record(e.type === "blur" ? last : e, true), e);
+        };
+        const disabled = () => el.matches(":disabled") || el.hasAttribute("disabled") || inertAncestor(el);
+        // A free pointer over it: the innermost node hearing moves takes them;
+        // one that hears only down or up lets them by to an ancestor that
+        // hears them, as pointer.js does.
+        on("pointermove", e => {
+          if (e.exactPointerMover || !wants("pointermove")) return;
+          e.exactPointerMover = el;
+          if (held === null && e.buttons === 0 && !disabled()) moved(e);
         });
-      }
-      // A field keeps the browser's own double-click, and a text field its edit menu (navigation.js `editMenu`); a control's input has no edit menu, so its node's `contextmenu` runs (#487).
-      if (kind === "contextmenu" ? editMenu(e.target) : e.target.closest("input,textarea,[contenteditable]")) return;
-      e.preventDefault(); e.stopPropagation();
-      fire(kind === "contextmenu" ? 10 : 11, kind === "contextmenu" ? pointerLine(el, e) : "");
-    },
+        // `hold`: the walk's first pass, which fixes the holders; then the down.
+        return (e, hold) => {
+          // Its down, unless a handler further in removed or disabled it, or
+          // stopped this down (`exactStopped`, glue.js): it still holds the up and the moves.
+          if (!hold) { if (downOf === e && el.isConnected && !disabled() && wants("pointerdown") && ready() && !e.exactStopped) fire(29, record(e), e); return; }
+          // Any button, as the DOM's (studio diary R22); `buttons` says which.
+          if (!e.isPrimary || held !== null || !el.isConnected || disabled()) return;
+          // The innermost enabled pointer node holds its moves (the walk
+          // reaches it first and marks the event); an ancestor holds only its up.
+          owner = !e.exactPointerOwner;
+          if (!owner && !wants("pointerdown") && !wants("pointerup")) return;
+          e.exactPointerOwner = el;
+          held = e.pointerId; last = e; downOf = e;
+          for (const [type, target] of ends) target.addEventListener(type, up, target === document);
+          document.addEventListener("pointermove", heldMove, true);
+          flush();
+        };
+      },
+      // Studio diary R22, R3, R19, R17: a `contextmenu` with its point (10),
+      // `dblclick` (11), a `wheel` (37, its record; a prevented one does not
+      // scroll), files and folders dropped from outside (38, each minted a
+      // `doc:` handle, documents-glue.js), a file drag's enter and leave (55, 56, documents-glue.js
+      // `hearDrags`) and the window's `beforeunload` (36), as the JS target's
+      // rt.js and files.js hear them. `fire(kind, line)` dispatches.
+      mouse(el, kind, e, fire) {
+        if (!ready()) return;
+        if (kind === "beforeunload") return el.isConnected && fire(36, "");
+        if (el.matches(":disabled") || inertAncestor(el)) return;
+        if (kind === "wheel") return e.exactStopped || fire(37, `${pointerLine(el, e).split(",").slice(0, 2)},${e.deltaX},${e.deltaY},${e.deltaMode},${modifiers(e)}`);
+        if (kind === "dragover") { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } return; }
+        if (kind === "dragenter" || kind === "dragleave") return fire(kind === "dragenter" ? 55 : 56, `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`);
+        if (kind === "drop") {
+          const dt = e.dataTransfer;
+          if (!dt?.types?.includes("Files")) return;
+          e.preventDefault(); e.stopPropagation();
+          const at = `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`, files = [...dt.files], items = [...dt.items].filter(i => i.kind === "file");
+          const handles = items.map(i => i.getAsFileSystemHandle?.().catch(() => null) ?? null), entries = items.map(i => i.webkitGetAsEntry?.() ?? null);
+          return documents?.().then(async (glue) => {
+            const found = await glue.dropped(await Promise.all(handles), files, entries);
+            if (found.length) fire(38, `${at}\n${found.join("\n")}`); else log("drop: refused: the browser handed over no file");
+          });
+        }
+        // A field keeps the browser's own double-click, and a text field its edit menu (navigation.js `editMenu`); a control's input has no edit menu, so its node's `contextmenu` runs (#487).
+        if (kind === "contextmenu" ? editMenu(e.target) : e.target.closest("input,textarea,[contenteditable]")) return;
+        e.preventDefault(); e.stopPropagation();
+        fire(kind === "contextmenu" ? 10 : 11, kind === "contextmenu" ? pointerLine(el, e) : "");
+      },
+    }),
     pan(el, id, on) {
       // @ref LLP 1043.000 §3 D8: one coalesced action per display frame.
       // LLP 1057.001 §1: an inner swipe that is still deciding (its pointer

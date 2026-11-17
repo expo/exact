@@ -1,0 +1,32 @@
+tap init
+expect background.queued == 0
+expect background.inFlight == 0
+expect background.done == 1
+tap first
+tap second
+tap read
+expect slots.answer == "second"
+expect background.done == 4
+tap chain
+expect background.done == 7
+tap read
+expect slots.answer == "end"
+expect background.done == 8
+tap fail
+tap code
+expect slots.answer == "ENOENT"
+expect background.failed == 1
+expect background.done == 8
+tap recovered
+tap read
+expect slots.answer == "recovered"
+expect background.done == 10
+expect background.queued == 0
+expect background.inFlight == 0
+reload
+expect slots.answer == ""
+tap read
+expect slots.answer == "recovered"
+expect background.done == 1
+expect background.failed == 0
+expect background.last == null

@@ -31,24 +31,15 @@ const artifact = () => globalThis.exact.nativeArtifact ??= new Promise((resolve,
   const attempt = globalThis.exact.nativeAttempt ?? 0;
   globalThis.exact.nativeAttempt = attempt + 1;
   const url = new URL(artifactUrl());
-  // Failed module fetches are cached by the browser too. A retry gets a fresh
-  // URL; a late result from an older attempt cannot answer the new one.
+  // Failed module fetches are cached by the browser too: a retry gets a fresh
+  // URL. A late answer to an attempt that timed out settles nothing.
   if (attempt) url.searchParams.set('exact-native-retry', attempt);
-  const script = document.createElement('script');
-  const finish = (error, table) => {
-    clearTimeout(timer); removeEventListener('error', failed); script.remove();
-    if (globalThis.exact.nativeTable === loaded) globalThis.exact.nativeTable = null;
-    if (error) reject(error); else resolve(table);
-  };
-  const loaded = (token, table) => { if (token === attempt) finish(null, table); };
-  const failed = e => { if (e.filename === url.href) finish(new Error(`${url}: ${e.message}`)); };
-  const timer = setTimeout(() => finish(new Error(`the module artifact ${url} did not load in 10 s`)), 10000);
-  script.type = 'module';
-  globalThis.exact.nativeTable = loaded;
-  script.textContent = `import * as table from ${JSON.stringify(url.href)}; globalThis.exact.nativeTable?.(${attempt}, table);`;
-  script.onerror = () => finish(new Error(`the module artifact ${url} did not load`));
-  addEventListener('error', failed);
-  document.head.append(script);
+  const timer = setTimeout(() => reject(new Error(`the module artifact ${url} did not load in 10 s`)), 10000);
+  // A dynamic import, not an injected inline script, which a page whose
+  // `script-src` is `'self'` refuses (CSP Level 3).
+  import(url.href).then(
+    table => { clearTimeout(timer); resolve(table); },
+    error => { clearTimeout(timer); reject(new Error(`the module artifact ${url} did not load: ${error?.message ?? error}`)); });
 }).catch(error => { globalThis.exact.nativeArtifact = null; throw error; });
 
 // The artifact itself, for the page module's hatches (LLP 1075.003.000).

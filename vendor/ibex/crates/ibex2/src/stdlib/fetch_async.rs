@@ -135,6 +135,8 @@ pub struct HopRequest {
     pub max_body: usize,
     /// The platform's own idle timeout.
     pub timeout: Option<std::time::Duration>,
+    /// Refuse speculative work on constrained networks (LLP 1162 D7).
+    pub speculative: bool,
 }
 
 /// A started exchange: what activates and what cancels it. Dropping it
@@ -331,6 +333,11 @@ impl FetchTask {
             Err(HostError::InvalidArgument(
                 "asynchronous fetch requires finite allocation limits".into(),
             ))
+        } else if request.body_file.is_some() {
+            // Its body is an upload held in memory (Exact patch 46).
+            Err(HostError::InvalidArgument(
+                "asynchronous fetch takes no file body".into(),
+            ))
         } else {
             prepare_body(request)
         };
@@ -446,6 +453,7 @@ impl FetchTask {
                 body: state.upload.clone(),
                 max_body: current.body_limit(),
                 timeout: current.timeout,
+                speculative: current.speculative,
             };
             (request, state.hop)
         };
@@ -896,7 +904,7 @@ impl WorkerService for BoundedWorkerPool {
             .as_ref()
             .ok_or_else(|| HostError::Failed("HTTP workers retired".into()))?;
         self.occupied
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < self.capacity).then_some(n + 1)
             })
             .map_err(|_| HostError::Failed("HTTP worker capacity exhausted".into()))?;
@@ -967,6 +975,7 @@ fn run_blocking(
     request.body = hop.body.as_ref().map(|b| b.bytes().to_vec());
     request.max_body = Some(hop.max_body);
     request.timeout = hop.timeout;
+    request.speculative = hop.speculative;
     request.redirect = crate::stdlib::fetch::RedirectMode::Manual;
     let _sending = hop.body;
     let refused = Arc::new(Mutex::new(None));

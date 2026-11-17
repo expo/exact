@@ -134,6 +134,17 @@ final class ContextPositionIOSTests: XCTestCase {
         // A positioned wrapper really does constrain the preview.
         p.apply(wireBatch([["op": "style", "id": 2, "style": ["position_type": "relative"]]]))
         XCTAssertEqual(panel.convert(panel.bounds, to: p.views[1]).minY, 100, accuracy: 0.01)
+        #if os(macOS)
+        // The source moves without a batch (a scroll of the list it is in),
+        // and the batch that follows only says where the lists stand: the
+        // preview follows its source all the same.
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["position_type": "static"]]]))
+        try XCTUnwrap(p.views[5]).setFrameOrigin(NSPoint(x: 0, y: 60))
+        let snapshots = wireBatch([["op": "collections", "items": []]])
+        XCTAssertTrue(Presenter.onlySnapshots(snapshots))
+        p.apply(snapshots)
+        XCTAssertEqual(panel.convert(panel.bounds, to: p.views[1]).minY, 60, accuracy: 0.01)
+        #endif
     }
 }
 #endif

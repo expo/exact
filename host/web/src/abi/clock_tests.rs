@@ -306,3 +306,33 @@ fn wait_admission_crosses_the_wasm_batch_boundary() {
         assert_eq!(ticks(&bridge), 1.0);
     }
 }
+
+/// A stream's messages that arrived together are one outcome, every one
+/// in order (LLP 1016.000 D4; `wasm/commit.js`'s kind 8); one alone is one.
+#[test]
+fn kind_eight_carries_one_message_or_those_that_arrived_together() {
+    use exact_runner::{Message, Outcome};
+    let one = crate::host::outcome_from(
+        8,
+        0,
+        "event: tick\nid: 7\ncoalesced: 0\nprotocol: ",
+        b"a".to_vec(),
+    );
+    let message = |event: &str, id: &str, data: &str| Message {
+        event: event.into(),
+        id: id.into(),
+        data: data.into(),
+        ..Message::default()
+    };
+    assert_eq!(one, Outcome::Message(message("tick", "7", "a")));
+    let head = "event: \nid: 1\ncoalesced: 0\nprotocol: \nlength: 3\n\nevent: x\nid: 2\ncoalesced: 0\nprotocol: \nlength: 0\n\nevent: \nid: 3\ncoalesced: 0\nprotocol: \nlength: 3";
+    let batch = crate::host::outcome_from(8, 0, head, "héllo".as_bytes().to_vec());
+    assert_eq!(
+        batch,
+        Outcome::Messages(vec![
+            message("", "1", "h\u{e9}"),
+            message("x", "2", ""),
+            message("", "3", "llo"),
+        ])
+    );
+}

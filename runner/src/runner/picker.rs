@@ -156,40 +156,62 @@ pub fn extension(name: &str) -> String {
 /// The MIME type a file's name says, as a browser guesses it; unknown is
 /// `application/octet-stream`.
 pub fn mime_for(name: &str) -> &'static str {
-    match extension(name).as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "heic" => "image/heic",
-        "heif" => "image/heif",
-        "avif" => "image/avif",
-        "tif" | "tiff" => "image/tiff",
-        "svg" => "image/svg+xml",
-        "bmp" => "image/bmp",
-        "ico" => "image/vnd.microsoft.icon",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "m4v" => "video/x-m4v",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "m4a" => "audio/mp4",
-        "ogg" => "audio/ogg",
-        "pdf" => "application/pdf",
-        "json" => "application/json",
-        "md" | "markdown" => "text/markdown",
-        "txt" | "log" => "text/plain",
-        "csv" => "text/csv",
-        "tsv" => "text/tab-separated-values",
-        "html" | "htm" => "text/html",
-        "xhtml" => "application/xhtml+xml",
-        "css" => "text/css",
-        "xml" => "application/xml",
-        "yaml" | "yml" => "application/yaml",
-        _ => "application/octet-stream",
-    }
+    let ext = extension(name);
+    MIME_TYPES
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map_or("application/octet-stream", |(_, m)| m)
 }
+
+/// Keep a matching name extension; otherwise use the delivered MIME's extension.
+pub fn extension_for(name: &str, mime: &str) -> String {
+    if mime_for(name) == mime {
+        return extension(name);
+    }
+    MIME_TYPES
+        .iter()
+        .find(|(_, m)| *m == mime)
+        .map_or_else(|| extension(name), |(e, _)| (*e).into())
+}
+
+const MIME_TYPES: &[(&str, &str)] = &[
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("png", "image/png"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("heic", "image/heic"),
+    ("heif", "image/heif"),
+    ("avif", "image/avif"),
+    ("tif", "image/tiff"),
+    ("tiff", "image/tiff"),
+    ("svg", "image/svg+xml"),
+    ("bmp", "image/bmp"),
+    ("ico", "image/vnd.microsoft.icon"),
+    ("mp4", "video/mp4"),
+    ("mov", "video/quicktime"),
+    ("m4v", "video/x-m4v"),
+    ("webm", "video/webm"),
+    ("mp3", "audio/mpeg"),
+    ("wav", "audio/wav"),
+    ("m4a", "audio/mp4"),
+    ("ogg", "audio/ogg"),
+    ("pdf", "application/pdf"),
+    ("json", "application/json"),
+    ("md", "text/markdown"),
+    ("markdown", "text/markdown"),
+    ("txt", "text/plain"),
+    ("log", "text/plain"),
+    ("csv", "text/csv"),
+    ("tsv", "text/tab-separated-values"),
+    ("html", "text/html"),
+    ("htm", "text/html"),
+    ("xhtml", "application/xhtml+xml"),
+    ("css", "text/css"),
+    ("xml", "application/xml"),
+    ("yaml", "application/yaml"),
+    ("yml", "application/yaml"),
+];
 
 /// Whether `accept` takes a file named `name` of type `mime`, as HTML
 /// matches it: absent or `*/*` accepts all; otherwise an extension,
@@ -201,6 +223,15 @@ pub fn accepts(accept: &[String], name: &str, mime: &str) -> bool {
     let ext = format!(".{}", extension(name));
     accept.iter().any(|t| {
         t == &ext
+            || (t.starts_with('.')
+                && mime_for(t) != "application/octet-stream"
+                && mime_for(t) == mime
+                && (!name
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(name)
+                    .contains('.')
+                    || mime_for(name) == mime))
             || t == mime
             || t.strip_suffix("/*")
                 .is_some_and(|kind| mime.split('/').next() == Some(kind))
@@ -283,21 +314,26 @@ impl<D: DataSource> Runner<D> {
     pub fn picker(&self, id: &str) -> Option<PickerRequest> {
         self.kernel.find_by_id(id).into_iter().find_map(|key| {
             let n = self.kernel.node_by_key(key)?;
-            if n.node_type != NodeType::Control || n.props.str(PropId::Type) != Some("file") {
-                return None;
-            }
-            Some(PickerRequest {
-                view: n.id,
-                accept: n
-                    .props
-                    .str(PropId::Accept)
-                    .unwrap_or("")
-                    .split(',')
-                    .map(|t| t.trim().to_ascii_lowercase())
-                    .filter(|t| !t.is_empty())
-                    .collect(),
-                multiple: n.props.bool(PropId::Multiple) == Some(true),
-            })
+            self.picker_at(n.id)
+        })
+    }
+
+    fn picker_at(&self, view: ViewId) -> Option<PickerRequest> {
+        let n = self.kernel.node(view)?;
+        if n.node_type != NodeType::Control || n.props.str(PropId::Type) != Some("file") {
+            return None;
+        }
+        Some(PickerRequest {
+            view,
+            accept: n
+                .props
+                .str(PropId::Accept)
+                .unwrap_or("")
+                .split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            multiple: n.props.bool(PropId::Multiple) == Some(true),
         })
     }
 
@@ -310,6 +346,24 @@ impl<D: DataSource> Runner<D> {
             self.log(e.clone());
             return Err(e);
         };
+        self.hold_picker_request(request, id)
+    }
+
+    /// An activated file input's hold, with or without an authored `id`.
+    pub fn hold_picker_view(&mut self, view: ViewId) -> Result<u64, String> {
+        let request = self
+            .picker_at(view)
+            .ok_or_else(|| format!("picker: refused: view {view} is not a file input"))?;
+        let id = self
+            .kernel
+            .node(view)
+            .and_then(|n| n.props.str(PropId::Id))
+            .unwrap_or("")
+            .to_owned();
+        self.hold_picker_request(request, &id)
+    }
+
+    fn hold_picker_request(&mut self, request: PickerRequest, id: &str) -> Result<u64, String> {
         if self
             .device_holds()
             .iter()
@@ -344,6 +398,36 @@ impl<D: DataSource> Runner<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_activated_file_input_can_hold_by_view_without_an_authored_id() {
+        let source =
+            "component App\n  view\n    input type=\"file\" testId=\"files\" multiple=true\n";
+        let mut runner = Runner::boot(
+            contract::compile(source).unwrap(),
+            (),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let key = runner.kernel.find_by_test_id("files")[0];
+        let view = runner.kernel.node_by_key(key).unwrap().id;
+        let request = format!("{{\"op\":\"showPicker\",\"view\":{view}}}");
+        let (reply, _) = crate::agent::answer(&mut runner, &request).unwrap();
+        assert!(reply.contains("\"ticket\":"), "{reply}");
+        let hold = &runner.device_holds()[0];
+        assert_eq!(hold.node, Some(view));
+        assert_eq!(hold.args, r#"{"id":"","accept":[],"multiple":true}"#);
+        let ticket = hold.ticket;
+        let (again, _) = crate::agent::answer(&mut runner, &request).unwrap();
+        assert!(again.contains("already open"), "{again}");
+        assert_eq!(runner.device_holds().len(), 1);
+        runner
+            .answer_hold(ticket, &crate::HoldAnswer::Value("/a.pdf /b.pdf".into()))
+            .unwrap();
+        assert!(runner.device_holds().is_empty());
+    }
 
     #[test]
     fn an_image_picker_accepts_svg_bmp_and_ico_by_type() {
@@ -392,6 +476,26 @@ mod tests {
             assert!(accepts(&[mime.into()], name, mime_for(name)), "{name}");
         }
         assert_eq!(mime_for("page.xhtml"), "application/xhtml+xml");
+    }
+
+    #[test]
+    fn extension_accepts_match_provider_mime_without_accepting_unknown_binary_types() {
+        for name in ["photo.jpeg", "photo"] {
+            assert!(accepts(&[".jpg".into()], name, "image/jpeg"));
+        }
+        for name in ["invoice.exe", "scan.png", "scan.v2"] {
+            assert!(!accepts(&[".jpg".into()], name, "image/jpeg"), "{name}");
+        }
+        assert!(!accepts(
+            &[".board".into()],
+            "photo",
+            "application/octet-stream"
+        ));
+        assert!(accepts(
+            &[".board".into()],
+            "design.board",
+            "application/octet-stream"
+        ));
     }
 
     #[test]

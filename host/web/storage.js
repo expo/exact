@@ -163,8 +163,9 @@ export function createStorage(win, admitted, scope, key = storageKey(admitted.ap
   // kept handles, which the prelude asks here rather than at the host door.
   files.recentDocuments = () => enqueue(async active => { await documentFiles(); active(); return globalThis.exact.documents.recent(admitted.grantSet); }, clone, () => {}, false);
   files.forgetDocument = path => enqueue(async active => { await documentFiles(); active(); return globalThis.exact.documents.forget(String(path), admitted.grantSet); }, clone, () => {}, false);
-  // The prelude hands `compressImage` its options as two numbers, the media
-  // type and its edit's JSON (LLP 1069.002 A1, A1.11; LLP 1133.019 D15), and
+  // The prelude hands `compressImage` its options as two numbers (`maxBytes`
+  // undefined when unsaid), the media type and the JSON of its edit and
+  // `quality` (LLP 1069.002 A1, A1.11, A1.12; LLP 1133.019 D15), and
   // `transformImage` its options' JSON (D14); app files only, so never the
   // documents' backend.
   files.compressImage = (from, to, maxDimension, maxBytes, type, edit) =>

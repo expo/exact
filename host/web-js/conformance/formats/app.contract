@@ -1,0 +1,29 @@
+// Synthetic conformance plan: the formatters in the strings table's locale
+// (LLP 1054.000.003 D6). The tables are en, de and ar-EG, so the plan carries
+// each one's format data and a format slot; the agent's locale reads `en`.
+// `setLocale` moves every formatted text with the table: German symbols,
+// grouping, 24-hour times and words, then Arabic-Indic digits, bidi marks and
+// the plural forms of compact numbers, then back to English.
+component Formats
+  state n = 1234.5
+  state at = 1791762120000
+  action grow
+    n = n * 37
+    at = at - 86400000 * 3
+  action choose(tag: string)
+    setLocale(tag)
+  view
+    column testId="root" padding=10
+      text t("title") testId="title"
+      text `${formatNumber(n, "decimal")} | ${formatNumber(n / 10000, "percent")} | ${formatNumber(-n, "currency", "EUR")} | ${formatNumber(n, "currency", "CHF")}` testId="numbers"
+      text `${formatNumber(n, "compact")} | ${formatNumber(n * 1000, "compact")} | ${formatNumber(3000, "compact")} | ${formatNumber(-n * 1e9, "compact")}` testId="compact"
+      text `${formatDate(at, -420, "medium")} | ${formatDate(at, -420, "month-year")} | ${formatDate(at, -420, "iso")} | ${formatTime(at, -420, "short")}` testId="dates"
+      text `${formatDay(at, 1791762120000, -420, "day")} | ${formatDay(at, 1791762120000, -420, "day-time")} | ${formatDay(at, 1791762120000, -420, "list")}` testId="days"
+      button press=grow testId="grow"
+        text "Grow"
+      button press=choose("de") testId="german"
+        text "Deutsch"
+      button press=choose("ar-EG") testId="arabic"
+        text "Arabic"
+      button press=choose("") testId="system"
+        text "System"

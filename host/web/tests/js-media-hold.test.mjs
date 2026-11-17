@@ -2,13 +2,14 @@
 // element with no source, or one that stalls or fails, releases `inflight`; an `emptied` releases only once the
 // source is gone (a changed source's load begins with one). An opening seek still holds until it finishes. The
 // DOM and the glue's install are stand-ins.
-import { test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-media-hold-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(resolve(fileURLToPath(new URL('../../web-js/media.js', import.meta.url))), resolve(dir, 'media.js'));
 writeFileSync(resolve(dir, 'rt.js'), 'export const { onEnd, inflight, journal, data, clock } = globalThis.rtStandIn;\n');
 writeFileSync(resolve(dir, 'navigation.js'), 'export const liveById = id => document.getElementById(id);\n'); // host/web/navigation.js in a build

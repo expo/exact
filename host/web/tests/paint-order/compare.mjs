@@ -1,25 +1,29 @@
 // Run by exact-web-js's Rust test: real emitted plans and Rust DocTree pages,
 // the JS renderer before adoption, a fresh client, and both adopted pages.
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { rolldown } from 'rolldown';
 import { chromium as playwright } from 'playwright-core';
 import { chromium } from '../../../../scripts/agent-launch.mjs';
 import { renderer } from '../../../web-js/render.mjs';
-import { stageHostGlue } from '../../../web-js/glue.mjs';
+import { localImports, stageHostGlue } from '../../../web-js/glue.mjs';
 import { hostFixtureFile } from '../glue-fixture.mjs';
+import { buildMotion } from '../../../web-js/module.mjs';
+import { decodePng } from '../../../../scripts/png.mjs';
 
 const work = process.argv[2], root = resolve(import.meta.dir, '../../../..');
 const { executable, unavailable } = chromium();
 if (unavailable) throw new Error(unavailable);
 const names = JSON.parse(readFileSync(resolve(work, 'cases.json')));
 const pages = new Map();
+let motion;
 const readIsolation = () => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).isolation]));
 const withoutScripts = html => html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
-const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
+const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
   const path = new URL(req.url).pathname;
   if (path === '/favicon.ico') return new Response(null, { status: 204 });
+  if (path.endsWith('/motion.wasm')) return new Response(Bun.file(await (motion ??= buildMotion())));
   if (pages.has(path)) return new Response(pages.get(path), { headers: { 'content-type': 'text/html' } });
   return new Response(Bun.file(resolve(work, '.' + path)));
 } });
@@ -32,25 +36,42 @@ try {
       mkdirSync(gen, { recursive: true });
       // The same runtime files the app build copies, with JS target modules
       // taking precedence over the host's glue.
-      for (const folder of ['host/web', 'host/web-js']) for (const file of readdirSync(resolve(root, folder)).filter(f => f.endsWith('.js'))) writeFileSync(resolve(gen, file), hostFixtureFile(resolve(root, folder, file)));
+      for (const folder of ['host/web', 'host/web-js']) for (const file of readdirSync(resolve(root, folder)).filter(f => f.endsWith('.js'))) writeFileSync(resolve(gen, file), localImports(hostFixtureFile(resolve(root, folder, file), 'utf8')));
       stageHostGlue(root, gen);
       for (const f of ['app.js', 'names.js', 'paint.js']) copyFileSync(resolve(dir, f), resolve(gen, f));
       writeFileSync(resolve(gen, 'entry.js'), `import app from './app.js'; import { journal } from './rt.js'; app(); globalThis.journal=journal; globalThis.ready=true;`);
-      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[]});`);
+      writeFileSync(resolve(gen, 'server-entry.js'), `import app from './app.js'; globalThis.__start=async()=>{app();return {activate:'eager',policy:'build'}};globalThis.__render=async()=>({hero:document.heroPreload(),root:document.rootHTML(),time:0,answers:'[]',pending:[],open:[],readers:[]});`);
       for (const [entry, file] of [['entry.js', 'app.js'], ['server-entry.js', '.gen/server.js']]) {
         const bundle = await rolldown({ input: resolve(gen, entry), logLevel: 'silent', external: ['./draw.js'] });
         await bundle.write({ file: resolve(dir, file), format: 'iife', codeSplitting: false });
         await bundle.close();
       }
       const css = readFileSync(resolve(dir, 'app.css'), 'utf8');
-      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" src="./app.js"></script></body></html>`;
+      const shell = `<!doctype html><html><head><title>Paint</title><meta name="viewport" content="width=device-width">\n<style>${css}</style></head><body><div id="exact-root"></div><script type="module" data-entry src="./app.js"></script></body></html>`;
       writeFileSync(resolve(dir, 'shell.html'), shell);
       const rendered = (await renderer(dir)('/')).html;
       const rust = readFileSync(resolve(dir, 'rust.html'), 'utf8');
       const page = await browser.newPage();
       const steps = JSON.parse(readFileSync(resolve(dir, 'steps.json')));
+      const probesPath = resolve(dir, 'probes.json');
+      const probes = existsSync(probesPath) ? JSON.parse(readFileSync(probesPath)) : null;
+      const checkProbes = async index => {
+        if (!probes) return;
+        const points = await page.evaluate(probes => probes.map(([scene]) => {
+          const r = document.querySelector(`[data-testid="${scene}"]`).getBoundingClientRect();
+          const x = r.x + 50, y = r.y + 50;
+          return { x, y, hit: document.elementFromPoint(x, y)?.closest('[data-testid]')?.dataset.testid };
+        }), probes[index]);
+        const png = decodePng(await page.screenshot());
+        for (let i = 0; i < points.length; i++) {
+          const { x, y, hit } = points[i], [scene, expectedHit, rgb] = probes[index][i];
+          assert.equal(hit, expectedHit, `${scene} hit at step ${index}`);
+          const offset = (Math.floor(y) * png.width + Math.floor(x)) * 4;
+          assert.deepEqual([...png.data.slice(offset, offset + 3)], rgb, `${scene} paint at step ${index}`);
+        }
+      };
       const driveSteps = async (waiting = false) => {
-        for (const step of steps) {
+        for (const [index, step] of steps.entries()) {
           await page.evaluate(id => document.querySelector(`[data-testid="${id}"]`).click(), step.action);
           if (waiting) assert.ok(await page.evaluate(() => document.querySelector('[data-testid="row-200"]').$paintWaiting), 'binding changes leave keyed rows waiting');
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => {
@@ -61,6 +82,7 @@ try {
           assert.deepEqual(await page.evaluate(readIsolation), step.isolation, `after ${step.action}`);
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).zIndex]))), step.zIndex, 'authored z-index remains exact and clamped');
           assert.deepEqual(await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('[data-testid]')].map(e => [e.dataset.testid, getComputedStyle(e).backdropFilter]))), step.backdrop, 'ordered backdrop values update and refused values clear');
+          await checkProbes(index + 1);
         }
       };
       const sliced = names[i].startsWith('sliced keyed');
@@ -77,6 +99,7 @@ try {
         if (mode !== 'static') await page.waitForFunction(() => globalThis.ready);
         if (mode === 'adopt') assert.ok((await page.evaluate(() => journal)).some(s => s.includes('adopted the document')), 'server document adopts without rebuilding');
         const result = await page.evaluate(readIsolation);
+        await checkProbes(0);
         if (mode === 'adopt' && sliced) {
           assert.deepEqual(result, expected, 'waiting rows retain server isolation');
           assert.ok(await page.evaluate(() => adoptionSlices.length > 0), 'the list exceeded the initial budget');
@@ -104,9 +127,11 @@ try {
       // adoption is deterministic and independent of capture scheduling.
       const adopted = rendered.replace(/<script>[^]*?<\/script>/, '') + '<script src="./app.js"></script>';
       assert.deepEqual(await check(adopted, 'adopt'), expected, 'adopted JS document');
+      if (probes) await driveSteps();
       const fromRust = adopted.replace(/<div id="exact-root">[^]*?<\/div>(?=<script type="application\/vnd.exact.checkpoint")/, `<div id="exact-root">${rust}</div>`);
       assert.notEqual(fromRust, adopted, 'Rust document substituted');
       assert.deepEqual(await check(fromRust, 'adopt'), expected, 'adopted Rust document');
+      if (probes) await driveSteps();
       const stale = fromRust.replace(/<div([^>]*data-testid[^>]*)>/g, (tag, attrs) => attrs.includes('style="') ? tag.replace(/style="([^"]*)"/, (_, css) => `style="${css}isolation:isolate;"`) : `<div${attrs} style="isolation:isolate">`);
       assert.deepEqual(await check(stale, 'adopt'), expected, 'adoption drops stale isolation even without candidacy');
       await page.close();

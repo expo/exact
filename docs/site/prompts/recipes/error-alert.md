@@ -1,5 +1,5 @@
 ```prompt Tell the person when something fails
-Make the Exact app in this folder tell the person in an alert when a save or another action fails. Use https://github.com/expo/exact/blob/main/docs/recipes/error-alert.md as the source for each step. The exact2 checkout has the same page at docs/recipes/error-alert.md.
+Make the Exact app in this folder tell the person in an alert when a save or another action fails. Use https://github.com/expo/exact/blob/main/docs/recipes/error-alert.md as the source for each step. The Exact checkout has the same page at docs/recipes/error-alert.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which failure, list the mutations in app.contract and ask me which ones the person must acknowledge.

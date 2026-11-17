@@ -102,6 +102,7 @@ fn get(url: &str) -> HopRequest {
         body: None,
         max_body: 1 << 20,
         timeout: Some(Duration::from_secs(5)),
+        speculative: false,
     }
 }
 

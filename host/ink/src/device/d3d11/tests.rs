@@ -105,8 +105,10 @@ fn prepared_device_draws_on_the_receiving_thread() {
     assert!(device
         .readback(target)
         .unwrap()
-        .chunks_exact(4)
-        .all(|p| p == [64, 0, 0, 128]));
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [64, 0, 0, 128]));
 }
 
 #[test]
@@ -131,7 +133,7 @@ fn readback_scissors_uploads_mips_and_retirement() {
     d.upload_texture(image, [0, 0], [8, 8], &data).unwrap();
     d.generate_mips(image).unwrap();
     for level in 1..4 {
-        for p in d.readback_level(image, level).unwrap().chunks_exact(4) {
+        for p in d.readback_level(image, level).unwrap().as_chunks::<4>().0 {
             assert!(
                 p.iter()
                     .zip([64u8, 0, 64, 128])
@@ -227,11 +229,11 @@ fn composition_and_windowless_text() {
     let image = editor.draw(&mut device).unwrap();
     let pixels = device.readback(image).unwrap();
     assert!(
-        pixels.chunks_exact(4).any(|p| p[3] > 128),
+        pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 128),
         "RichEdit drew no ink"
     );
     assert!(
-        pixels.chunks_exact(4).any(|p| p[3] == 0),
+        pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
         "RichEdit ground is not transparent"
     );
     let target = device.create_target(384, 200).unwrap();
@@ -334,7 +336,9 @@ fn windowless_field_edit_and_scale() {
         assert!(device
             .readback(texture)
             .unwrap()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[3] > 128));
         println!(
             "S1W_FIELD scale={scale} text={:?} selection={:?} caret={:?}",

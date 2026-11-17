@@ -1,8 +1,8 @@
 //! A component and its sections. When the parser recovers, a refused
 //! member (a `state`, `derive`, `resource`, `mutation`, `action`, `task` or
 //! `sequence`) is recorded and skipped, and the component keeps the rest, so
-//! later passes still check it; the member's name is hidden from what they
-//! report (`Parser::hidden`). A component whose view is refused is refused
+//! later passes still check it; what they report because the member is
+//! missing is left out (`Parser::hidden`). A component whose view is refused is refused
 //! whole: without its view, later passes would refuse the component itself.
 
 use super::*;
@@ -10,7 +10,26 @@ use crate::members::MembersLine;
 
 impl Parser {
     pub(super) fn component(&mut self) -> R<Component> {
-        self.component_body("component")
+        let from = self.hidden.len();
+        let c = self.component_body("component")?;
+        // A component whose `members` lines name other files has members
+        // read there too, so its refused members' names are not scoped.
+        if c.members.lines.is_empty() {
+            let last = self.tokens[..self.pos]
+                .iter()
+                .rev()
+                .find(|t| {
+                    !matches!(
+                        t.kind,
+                        TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent | TokenKind::Eof
+                    )
+                })
+                .map_or(c.span.line, |t| t.span.line);
+            for h in &mut self.hidden[from..] {
+                h.lines = Some((c.span.line, last));
+            }
+        }
+        Ok(c)
     }
 
     /// A members file's `members Name` block (LLP 1091.002 D2): a
@@ -171,17 +190,24 @@ impl Parser {
                         }
                         "state" | "derive" | "resource" | "mutation" | "action" | "task"
                         | "sequence" | "tool" => {
-                            let start = self.pos;
+                            let (start, actions) = (self.pos, c.actions.len());
                             if let Err(e) = self.member(&mut c, &w) {
                                 if !self.recover {
                                     return Err(e);
                                 }
-                                if let Some(TokenKind::Ident(name)) =
-                                    self.tokens.get(start + 1).map(|t| &t.kind)
+                                // An action kept without its body is declared: its name hides nothing.
+                                let kept = c.actions.len() > actions;
+                                if let Some(TokenKind::Ident(name)) = self
+                                    .tokens
+                                    .get(start + 1)
+                                    .map(|t| &t.kind)
+                                    .filter(|_| !kept)
                                 {
                                     self.hidden.push(Hidden {
                                         name: name.clone(),
+                                        kind: w.clone(),
                                         component: Some(c.name.clone()),
+                                        lines: None,
                                     });
                                 }
                                 self.recovered.push(e);
@@ -295,7 +321,20 @@ impl Parser {
             }
             "resource" => c.resources.push(self.resource()?),
             "mutation" => c.mutations.push(self.mutation()?),
-            "action" => c.actions.push(self.action()?),
+            // A body refused after its line parsed leaves the action declared,
+            // so what names it is checked against its signature, not against
+            // whatever else in scope has its name (#705).
+            "action" => {
+                let action = self.action_signature()?;
+                let (body, refused) = match self.block(|p| p.stmt()) {
+                    Ok(body) => (body, None),
+                    Err(e) => (Vec::new(), Some(e)),
+                };
+                c.actions.push(Action { body, ..action });
+                if let Some(e) = refused {
+                    return Err(e);
+                }
+            }
             "task" => c.tasks.push(self.task()?),
             "tool" => self.tool(c)?,
             _ => c.sequences.push(self.sequence()?),

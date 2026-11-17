@@ -1,5 +1,15 @@
 use super::*;
 use ibex2::stdlib::sqlite::{Database, ForeignKeys, Provider};
+
+#[test]
+fn sqlite_is_the_bundled_version_with_the_wal_page_size_fix() {
+    assert!(rusqlite::version_number() >= 3_054_001);
+    assert_eq!(
+        rusqlite::version_number(),
+        rusqlite::ffi::SQLITE_VERSION_NUMBER
+    );
+}
+
 fn open(dir: &tempfile::TempDir) -> Database {
     let path = dir.path().canonicalize().unwrap().join("app.db");
     Database::new(SqliteProvider.open(Location { path }).unwrap())
@@ -236,7 +246,14 @@ fn a_refused_statement_names_what_was_refused_and_the_rule() {
             "ATTACH and DETACH",
         ),
         ("PRAGMA journal_mode=OFF", "PRAGMA journal_mode: "),
-        ("SELECT load_extension('/tmp/evil.so')", "load_extension: "),
+        (
+            "SELECT load_extension('/tmp/evil.so')",
+            "load_extension: extensions are not loaded",
+        ),
+        (
+            "SELECT LOAD_EXTENSION('/tmp/evil.so')",
+            "load_extension: extensions are not loaded",
+        ),
         (
             "CREATE VIRTUAL TABLE x USING fts5(body)",
             "a virtual table: ",
@@ -253,6 +270,11 @@ fn a_refused_statement_names_what_was_refused_and_the_rule() {
             "{sql}: {got}"
         );
     }
+    let got = format!(
+        "{:?}",
+        db.execute("SELECT missing_function()", &[]).unwrap_err()
+    );
+    assert!(got.contains("no such function: missing_function"), "{got}");
     // A table-valued PRAGMA prepares its PRAGMA while the query steps.
     let got = format!(
         "{:?}",

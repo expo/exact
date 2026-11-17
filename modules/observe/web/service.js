@@ -3,7 +3,10 @@
 // in expo-observe's OTLP/JSON with its retry rules.
 // Every tab of the app shares the stored queue. A tab adds its rows to what is stored, and
 // sends while holding a Web Lock named for the queue, so one tab at a time sends and each
-// row is sent once (https://w3c.github.io/web-locks/).
+// row is sent once (https://w3c.github.io/web-locks/). Each change to the stored queue, an
+// append or a send's removal, holds a second lock, so tabs in other processes do not save
+// over each other's changes (localStorage makes each getItem and setItem atomic, not the
+// pair) and an append never waits on a send's fetch.
 // On page hide it flushes with fetch(keepalive), limiting each signal's JSON length
 // to 60 * 1024 UTF-16 code units. The browser's shared byte limit may still reject
 // a request; those rows stay queued for retry.
@@ -89,9 +92,13 @@ export function start(config, { boot = 0 } = {}) {
     }
     try { localStorage.setItem(key, JSON.stringify(q)); } catch {}
   };
-  // A read-modify-write of the stored queue. The session's metadata goes with each change,
-  // since another tab's save drops it while this session has no queued rows.
-  const update = change => { const q = load(); q.sessions[session] = meta; change(q); save(q); };
+  // A read-modify-write of the stored queue, under the edit lock where there are Web Locks;
+  // it resolves once saved. The session's metadata goes with each change, since another
+  // tab's save drops it while this session has no queued rows.
+  const update = change => {
+    const edit = () => { const q = load(); q.sessions[session] = meta; change(q); save(q); };
+    return navigator.locks ? navigator.locks.request(`${key}:edit`, edit) : edit();
+  };
   const queued = () => { const q = load(); return q.metrics.length > 0 || q.logs.length > 0; };
   update(() => {});
   let globals = {}, gate = { after: 0, failures: 0 }, sending = false, timer = null, launchRoute = null, navigated = false;
@@ -184,7 +191,7 @@ export function start(config, { boot = 0 } = {}) {
         gate.failures = 0;
         // Remove only this request's rows: this tab or another may have added rows, and
         // the capacity trim dropped old ones, during the fetch.
-        update(q => { q[signal] = without(q[signal], rows); });
+        await update(q => { q[signal] = without(q[signal], rows); });
         limit = CHUNK;
         continue;
       }
@@ -193,7 +200,7 @@ export function start(config, { boot = 0 } = {}) {
     }
   }
   async function drain(keepalive) {
-    if (!shouldDispatch() || !config.projectId) { update(q => { q.metrics = []; q.logs = []; }); return; }
+    if (!shouldDispatch() || !config.projectId) { await update(q => { q.metrics = []; q.logs = []; }); return; }
     const base = String(config.endpoint ?? 'https://o.expo.dev').replace(/\/+$/, '');
     await send('metrics', `${base}/${config.projectId}/v1/metrics`, keepalive);
     await send('logs', `${base}/${config.projectId}/v1/logs`, keepalive);

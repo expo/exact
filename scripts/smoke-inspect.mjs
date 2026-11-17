@@ -1,4 +1,4 @@
-// The smoke's inspection steps (`smoke.mjs` imports them as it does
+// The smoke's web builds and inspection steps (`smoke.mjs` imports them as it does
 // `smoke-duo.mjs`): 2b, `layout <node>` (LLP 1035.002 D1); 2c, `state`'s
 // host sections (D2, D3); 7a, `layout agree` (LLP 1080.001 D5) at the drive's
 // settled points; and the pooling drive on Carousel's virtualized feed.
@@ -9,11 +9,40 @@ import { createServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { HOST_DEV } from './app.mjs';
+import { HOST_DEV, resolveApp } from './app.mjs';
 
 const byTestId = (t, id) => t.nodes.find((n) => n.props.testId === id);
 const box = (l, id) => l.nodes.find((n) => n.testId === id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+export function webSmokeBuild(app, appOnly) {
+  const root = resolve(import.meta.dir, '..'), dir = mkdtempSync(resolve(tmpdir(), 'exact-smoke-web-'));
+  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+  const build = (selected, dist, flags = [], env = {}) => {
+    const result = spawnSync(process.execPath, [resolve(root, 'host/web/build.mjs'), selected.crate('web'), ...flags], {
+      cwd: root, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: selected.dir, EXACT_WEB_DIST: dist, ...env },
+    });
+    if (result.status !== 0) process.exit(result.status ?? 1);
+  };
+  const selectedWebDist = resolve(dir, 'dist');
+  build(app, selectedWebDist);
+  if (appOnly) return { selectedWebDist, fixtureWebDist: null, fixtureOptions: null };
+  // Generic plans need neither the selected app's module nor its source declarations.
+  // Orientation Fixture has an empty data source and no replaceable module.
+  const fixtureApp = resolveApp(resolve(root, 'apps/orientation-fixture'));
+  const fixtureAppDist = resolve(dir, 'fixture-app');
+  const fixtureWebDist = resolve(dir, 'fixtures');
+  build(fixtureApp, fixtureAppDist);
+  build(fixtureApp, fixtureWebDist, ['--wasm'], { EXACT_WEB_LINK: 'all' });
+  return { selectedWebDist, fixtureWebDist, fixtureOptions: { app: fixtureApp.dir, webDist: fixtureAppDist } };
+}
+
+export function webSmokeSweep(fixtureWebDist) {
+  // The JS fixtures choose Caltrain explicitly, even when the smoke's app came from the environment.
+  return spawnSync('cargo', ['test', '-p', 'exact-web', '--test', 'it', 'navigation::', '--', '--ignored', '--nocapture'], {
+    cwd: resolve(import.meta.dir, '..'), stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: '', EXACT_ROUTER_DIST: fixtureWebDist },
+  });
+}
 
 export function isDeckURL(source, base) {
   // Native trees keep the authored path; web trees expose src under the page's base.
@@ -208,13 +237,14 @@ export async function poolingDrive(s, { host, check }) {
   console.log(`${host} carousel pool: parks ${before.parks}→${after.parks}, takes ${before.takes}→${after.takes}, parked ${after.parked}`);
 }
 
-/** A web page the smoke reloaded has booted again. Nothing notifies across a reload, so this polls, and its bound
- *  only stops a page that never boots (docs/testing.md). The bound was 5 s, which a loaded Mac's boot outlasts, and
- *  the caller then read an `exact` the page had not made yet ("exact is not defined"). */
-export async function rebooted(carrier) {
-  const ready = "document.readyState === 'complete' && document.getElementById('exact-root')?.dataset.bootMs != null && !!globalThis.exact?.agentSettled";
+/** Wait for the replacement document and its runtime. The time origin distinguishes it from the page reloaded. */
+export async function rebooted(carrier, before) {
+  const ready = `performance.timeOrigin !== ${JSON.stringify(before)} && document.readyState === 'complete' && document.getElementById('exact-root')?.dataset.bootMs != null && !!globalThis.exact?.ready && !!globalThis.exact?.agentSettled`;
   for (let i = 0; i < 600; i++) {
-    if (await carrier.evaluate(ready).catch(() => false)) return;
+    if (await carrier.evaluate(ready).catch(() => false)) {
+      await carrier.evaluate('globalThis.exact.ready');
+      return;
+    }
     await new Promise((done) => setTimeout(done, 50));
   }
   throw new Error('the reloaded page did not boot within 30 s');

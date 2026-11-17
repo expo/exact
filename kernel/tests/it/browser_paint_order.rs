@@ -43,7 +43,7 @@ fn rows(css: &str) -> Rows {
         match name {
             "scale" => out.push((Scale, number())),
             "opacity" => out.push((Opacity, number())),
-            "z-index" => out.push((ZIndex, number())),
+            "z-index" => out.push((ZIndex, if value == "auto" { text() } else { number() })),
             "isolation" => out.push((Isolation, text())),
             "transition" => out.push((Transition, text())),
             "background" => {}

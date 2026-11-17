@@ -16,7 +16,7 @@ fn asymmetric_heightfield_visual_triangles_match_collision_samples() {
             ..Default::default()
         },
     ));
-    for tri in mesh.indices.chunks_exact(3) {
+    for tri in mesh.indices.as_chunks::<3>().0 {
         let point = |i: u32| Vec3::from_slice(&mesh.positions[i as usize * 3..][..3]);
         let p = point(tri[0]) * 0.2 + point(tri[1]) * 0.3 + point(tri[2]) * 0.5;
         let hit = physics::raycast(&w, Vec3::new(p.x, 20., p.z), -Vec3::Y, 30., u32::MAX).unwrap();

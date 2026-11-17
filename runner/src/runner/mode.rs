@@ -6,10 +6,58 @@
 //! reload carries the window's.
 
 use super::{DataSource, Runner, RunnerError};
-use exact_kernel::CommitReceipt;
+use exact_kernel::style::theme;
+use exact_kernel::{CommitReceipt, StyleId, StyleProps, ViewId};
 use exact_plan::Value;
+use std::borrow::Cow;
 
 impl<D: DataSource> Runner<D> {
+    /// The app tuple `view` is in: the nearest pin's at or above it, else
+    /// the window's.
+    pub fn tuple_at(&self, view: ViewId) -> u32 {
+        let kernel = self.kernel();
+        let mut at = kernel.node(view);
+        while let Some(node) = at {
+            // A pin's row holds the tuple it makes, plus one (bridge.rs).
+            if node.style.mask.has(StyleId::Mode) && node.style.mode > 0 {
+                return node.style.mode - 1;
+            }
+            at = node.parent.and_then(|p| kernel.node(p));
+        }
+        self.ids.theme.window
+    }
+
+    /// Whether `view` is a mode boundary (LLP 1121 D7): in a plan with a
+    /// theme, its site pins modes or sets a scheme, so it writes the colours
+    /// it inherits again in its own tuple, whatever its pin or scheme is now.
+    pub fn is_boundary(&self, view: ViewId) -> bool {
+        if self.plan.theme.is_empty() {
+            return false;
+        }
+        (self.ids.site(view))
+            .is_some_and(|n| crate::instance::theme::boundary(&self.plan, &self.plan.node(n)))
+    }
+
+    /// `view`'s state looks resolved in `tuple` (LLP 1121 D7, D8): a
+    /// boundary below `view` takes a look's colour in its own tuple. The
+    /// kernel's when they read no token, as they are the same in every
+    /// tuple.
+    pub fn looks_in(&self, view: ViewId, tuple: u32) -> Cow<'_, [(u8, StyleProps)]> {
+        match self.ids.theme.look(view) {
+            Some(looks) => Cow::Owned(theme::recorded(|| looks.resolve_in(&self.plan, tuple).0).0),
+            None => Cow::Borrowed(self.kernel().node(view).map_or(&[][..], |n| n.looks())),
+        }
+    }
+
+    /// `view`'s row `style` resolved in `tuple`, when its text read a token
+    /// (LLP 1121 D7): a boundary below `view` takes `view`'s press colour in
+    /// its own tuple. `None` when it read none, or the row refuses its text
+    /// there.
+    pub fn row_in(&self, view: ViewId, style: StyleId, tuple: u32) -> Option<StyleProps> {
+        let row = self.ids.theme.row(view, style)?;
+        theme::recorded(|| row.resolve_in(&self.plan, tuple)).0
+    }
+
     /// The window's app modes: each axis of the plan with its value.
     pub fn modes(&self) -> Vec<(String, String)> {
         self.modes_of(self.ids.theme.window)
@@ -277,12 +325,7 @@ impl<D: DataSource> Runner<D> {
         };
         // The entries a parse of its text reads in its tuple, each by its
         // token's name (an override read by a role's spelling too).
-        let tuple = crate::bridge::set_tuple(row.tuple);
-        let mut scratch = exact_kernel::StyleProps::default();
-        let (_, read) = exact_kernel::style::theme::recorded(|| {
-            crate::bridge::set_plan_style(&mut scratch, style as u16, &row.text, &self.plan)
-        });
-        crate::bridge::set_tuple(tuple);
+        let (_, read) = theme::recorded(|| row.resolve_in(&self.plan, row.tuple));
         let names = self.token_names(read);
         let modes = self
             .modes_of(row.tuple)

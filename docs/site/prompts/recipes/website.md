@@ -1,7 +1,7 @@
 ```prompt Build a website
-Build a website with Exact in this folder: pages served to a browser. Use https://github.com/expo/exact/blob/main/docs/recipes/website.md as the source for each step. The exact2 checkout has the same page at docs/recipes/website.md, and docs/start-here-site.md is the guide for a website.
+Build a website with Exact in this folder: pages served to a browser. Use https://github.com/expo/exact/blob/main/docs/recipes/website.md as the source for each step. The Exact checkout has the same page at docs/recipes/website.md, and docs/start-here-site.md is the guide for a website.
 
-1. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. If this folder is not an Exact app (it has no exact.mjs and app.contract), make one: `bun <exact2>/scripts/exact.mjs new <name>`, then `cd <name>`.
+1. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. If this folder is not an Exact app (it has no exact.mjs and app.contract), make one: `bun <exact2>/scripts/exact.mjs new <name>`, then `cd <name>`.
 2. If I did not say which pages the site has and where each page's data comes from (a list in app.ts, a live API, or one reader's data behind a sign-in), ask me before you write code.
 3. Run `bun exact.mjs pattern site` and start from it: a list built ahead, a page per item rendered for each request, and an API's origin as a setting.
 4. Give each route the `render` policy that fits its data, as the recipe's table says: `render=build` for what the build has, `render=request` for a live API's data, `render=cached` for an answer every reader may share for a while, and `render=client` (the default) for one reader's own data.

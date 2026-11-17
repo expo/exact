@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker } from '../../camera/test/fixture.mjs';
 import { ensureShells } from '../../../scripts/app-shells.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const run = (cmd, args, cwd, env = process.env) => {
@@ -41,7 +42,7 @@ try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', '--write-locks'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the fixture builds as an APK, its Kotlin compiled against play-services-wallet', built.status === 0, (built.stdout + built.stderr).slice(-3000));
 
-  const out = resolve(root, 'host/android/app/build', name);
+  const out = apkBuildDir(app);
   const roster = existsSync(resolve(out, 'extensions/exact/app/ExactExtensions.kt')) ? readFileSync(resolve(out, 'extensions/exact/app/ExactExtensions.kt'), 'utf8') : '';
   check('android', 'the roster binds the implementation', roster.includes('"payments" to { c -> exact.payments.PaymentsModule(c) }'), roster);
   const merged = existsSync(out) && readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));

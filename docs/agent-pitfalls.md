@@ -1,4 +1,4 @@
-# Pitfalls when writing exact2 apps
+# Pitfalls when writing Exact apps
 
 **Adding an entry:** only a pitfall you hit and reproduced on current `main`, written
 as symptom → cause → what to do, with where it was found. Delete the entry in the
@@ -11,7 +11,40 @@ diagnose it. **Candidate diagnostic** marks one that could become a check cheapl
 
 This list holds what the [agent guide](contract-for-agents.md)'s rules don't make obvious.
 
+## Component calculations
+
+- **A child derive still runs at every read.** Its body is compiled once per
+  use, without caching its value. Keep large calculations in a root derive
+  when readers should share the evaluated result. A binding's failing child
+  calculation unsets that binding; a root derive's failure refuses the commit.
+  (Instance expression tests and the form fixture pair, 2026-11-13.)
+
 ## Layout
+
+- **A video placed with `inset=0` does not fill its box.** An absolutely
+  positioned `video` with `inset=0` and no `width` or `height` is 300×150 until
+  its metadata arrives, then the stream's natural size, and an adaptive stream's
+  picture grows and shrinks with each rendition. Cause: CSS sizes a replaced
+  element whose width and height are auto by its natural size, and opposing
+  insets do not stretch it (CSS 2.1 §10.3.8, §10.6.5; an `image` likewise).
+  Chrome and iOS agree. Fix: `width="100%" height="100%"` with `object-fit`.
+  **Candidate diagnostic** (an absolutely positioned `video` or `image` with
+  opposing insets and an auto size on that axis). (expo/exact#648, web and iOS
+  simulator, 2026-11-15.)
+
+- **Inline runs with nothing between them never wrap apart.** Chips written as
+  adjacent runs (`text "one" padding="4px 8px" margin-right=6`, then `text
+  "two" …`) stay on one line and run off the edge. Cause: CSS breaks a line
+  only at a soft wrap opportunity, and two inline boxes with no white space
+  between them have none (CSS Text 3 §5), so the runs are one word; the web
+  does the same, and the margins still apply. Fix: a `text " "` run between
+  each pair. (expo/exact#649, web and iOS simulator, 2026-11-15.)
+
+- **A search field pushes a header button off a phone.** Under `--chrome agent`,
+  the authored header lays out in the page. A search field with no width constraint
+  can keep its intrinsic width even when the heading has `flex=1`. Give the field
+  `flex=1 min-width=0` so it takes the space left by the heading and buttons.
+  (Agents, 402-point iOS simulator, 2026-11-12.)
 
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
@@ -69,7 +102,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex-basis` of 0 is never smaller than the border), so a calendar's today with
   `border-width=(isToday ? 2 : 0)` is wider and taller than its neighbours and
   the days after it sit off the columns above. Fix: give every cell the border and vary
-  its colour, `border-width=2 border-color=(isToday ? "-exact-label" : "transparent")`.
+  its colour, `border="2px solid" border-color=(isToday ? "-exact-label" : "transparent")`.
   (Bake-off round 28, mood journal: 50.9 points against 47.4 on iOS; Chrome alike, with
   `border-box` too.)
 
@@ -142,6 +175,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   deliberately light-only design, write `color-scheme="light"` on the root, which
   holds the whole app in light as `overrideUserInterfaceStyle` does. (Shelf port,
   2026-10-09.)
+- **A menu opens white on a dark page.** Cause: `scheme=fixed` tokens colour the
+  boxes they are written on, but the app's scheme is still the device's, so the
+  platform's menus, sheets and alerts stay light. Fix: an always-dark design says
+  `"userInterfaceStyle": "dark"` in `app.json` (or `color-scheme="dark"` on the
+  root); a menu in the brand's colours writes `background-color` and `color` on its
+  `popover` column, which the web draws and its rows take. (#552, 2026-11-14.)
 
 - **The app is wider than the window, and its tests still pass.** A box with
   `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
@@ -223,6 +262,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   pattern's sortable table, LLP 1153 D8; reproduced on the web, 2026-10-30.)
 
 ## Lists and scrolling
+
+- **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
+  order.** A whole document in one `text` (an article, a long Markdown note) is
+  one string to Core Text, and Core Text does not shape a string longer than a
+  length it does not document: Arabic is unjoined and runs left to right, and
+  Latin text is not kerned, so a line can break at another word. The length was
+  10,240 UTF-16 units on iOS 27.1 and macOS 27.2, and can change in any release.
+  Give each paragraph or block its own `text`, and never split inside a
+  paragraph ([long text](recipes/long-text.md)). (Duo Lab, 2026-11-12.)
+  **Candidate diagnostic:** `check` could name a text whose string is that long.
 
 - **A frame's cell count is not its stretched layout width.** Giving the
   harness's animation rows a width of `animCols` cells changed fullscreen layout in
@@ -309,6 +358,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   its action: that misses a return which lands before the hide's timer has fired
   (`prefer visibility-state hidden` then `visible` with no clock step between).
   (Web and iOS simulator, 2026-10-06.)
+- **A hidden or frozen page fact under a drive is not a suspended process.**
+  `prefer visibility-state hidden` changes visibility and the background fact;
+  `prefer frozen true` applies the runner transitions defined for `frozen`, such
+  as stopping a transport sequence. A later `clock +N` still runs every due
+  timer and hatch callback, and replies and native announcements can land. Gate
+  authored work on the fact it follows. Test OS suspension and its coalescing or
+  wake behavior on a real host, outside the drive.
 - **A jump gated on the tab that shows runs again on every return to it.** A
   tab's panel and its list stay mounted while another tab shows, so the list
   keeps the reader's place, as a `UITabBarController`'s tabs and SwiftUI's
@@ -320,6 +376,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   on which tab shows; run a jump the reader asks for (a Now button) from its
   press. (Bake-off r25, timetable: Saved and back took the board from 07:34 to
   05:00.)
+
+- **A mixed native bake alone does not include its Rust source in the JS web build.**
+  A source composed with `exact_js_bake::build_mixed_with` still needs a module
+  crate exporting that source through `exact_logic_abi::export!`, named by
+  `rust.module.package` in app.json. Without it, the JS target calls TypeScript
+  for the Rust source and gets `UnknownSource`. The canvas gallery's `logic/`
+  crate and manifest show the declaration. (Web capture smoke, 2026-11-12.)
 
 - **A data answer past 16 MiB fails only on the JS target.** A 64 MiB string from
   a Rust source loaded on the wasm web host and on Linux, and on the JS target
@@ -404,16 +467,20 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`kernel/src/handoff.rs`); a push keeps the screen beneath in the stack, so the card is
   never destroyed and the product's photo lands without a flight. The platform's way is the
   zoom: `navigationSource=` on the pushed route's `navigationKey` column, naming the `id`
-  on the card's `image` and on the route's own (`ZoomPushIOS.swift`, iOS 18 and later). The
-  agent's filmed screenshots skip UIKit's push and zoom: record the simulator
-  (`xcrun simctl io booted recordVideo`) and read its frames.
+  on the card's `image` and on the route's own (`ZoomPushIOS.swift`, iOS 18 and later). Film
+  on the agent's clock skips UIKit's push and zoom, which run on their own: film them under
+  `--timing platform`, whose frames are sampled on the wall clock and not reproducible, or
+  record the simulator (`xcrun simctl io booted recordVideo`) and read its frames.
 
 - **A cold launch flashes the wrong colour, and no screenshot shows it.** The launch
   screen is `host.ios.launchImage` centred on `background_color` (`color_scheme_dark`'s
   `background_color` in dark mode); unset, the platform's background (the grouped grey
-  under a first route that scrolls a grouped list). It is gone before a screenshot can be taken: record one
-  (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl launch`) and read its
-  frames (the euxy port's white launch, 2026-10-21).
+  under a first route that scrolls a grouped list). Android's launch window takes the same
+  two colours, with the launcher icon on them from Android 12 unless
+  `host.android.launchImage` names a picture or `false`. It is gone before a screenshot
+  can be taken: record one (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl
+  launch`; `adb shell screenrecord` on Android) and read its frames (the euxy port's white
+  launch, 2026-10-21).
 
 - **A sticky child under the bar covers the first row at rest.** Cause: a `top` written
   as the bar's height to clear it (React Conf's day picker, `top=114`). A route's
@@ -426,6 +493,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   by the root's `navigationBack`, and a route that declares one that is disabled
   refuses it (the log says "back gesture refused" and why). A route with no such
   control always goes back (LLP 1115 D5). Fix: enable the control, or leave it out.
+- **Browser Back restores a screen, but its Back returns to the screen just left.**
+  Cause: an in-app transition used `open`, which replaced the current visit with
+  the destination's declared chain. Browser Back then pushed the discarded URL
+  above that destination. Fix: use `push` to keep the caller. `open` also keeps
+  every current visit when the selected stack is a prefix of the declared chain;
+  use it then to include an intermediate parent, or for a deliberate return such
+  as Home (LLP 1038 §3, D7).
 - **A `link` to a route does nothing on iOS or the Mac.** On the web the browser's
   Back and Forward and a `link` to a declared route work with no `navigate` handler:
   the runner pops or goes there itself (LLP 1115 D5, LLP 1115.000 D4.3). A native host
@@ -445,13 +519,14 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route's large
-  title opens collapsed over its scroller and expands on a pull (QUEUE.md); keep
-  large titles for a stack's first screen. The compiler refuses a name nothing in the
-  route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
+  (docs/contract-for-agents.md, "Routes and web documents"). The compiler refuses
+  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostic:** the
   compiler could refuse a named scroller that is not right after the `header` (an
-  iOS-only rule today, so not refused); the hosts could journal a route whose
-  content overflows with nothing to scroll it (QUEUE.md).
+  iOS-only rule today, so not refused). Apple's `logs` journals `route-overflow`
+  after first pixel at the settled window offer when no scroller reaches the
+  route's in-flow overflow: an ancestor's or the document's stops at a clip or a
+  native block, and never moves content that stays in the route's box out of its
+  padding. A fitting layout clears suppression.
 - **The root screen has no native bar, and the log says `navigationKey "0" matches no
   route`.** Cause: the list route is keyed by a name (`navigationKey="items"`, as the
   `list-detail` and `rest` patterns key it) while the root names the visit,
@@ -493,7 +568,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   Cause: a brand written as hex on a page, a card or text (`#f3f5f1`, `#ffffff`,
   `#18392d`); it stays the same in dark mode while the platform's text and controls
   turn dark. Four of round 4's five hex-heavy bake-off apps broke so. Fix: write no
-  colour (the accent is the platform's blue; a brand is an `app.tamber`); surfaces and text
+  colour (the accent is the platform's blue; a brand is an `app.forma`); surfaces and text
   are roles (`-exact-label`) or unsaid. Look in both schemes: `"prefer prefers-color-scheme dark"` as a drive's
   first op, or `prefer prefers-color-scheme dark` before a test's first
   observation. A later `prefer prefers-color-scheme light` switches back.
@@ -511,7 +586,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   not presented; the authored header, tablist and popover paint instead, by default.
   To see the bars, the tab bar and sheets as a person does, drive with `--chrome
   platform` and take `screenshot out.png window`; menus stay the agent's popovers
-  there. On the Mac the same switch shows a `dialog` and a modal route as
+  there (on the Mac, a `role="menu"` popover is painted with its rows 5 points
+  inside its box, as an `NSMenu`'s items are, on each side its author wrote no
+  padding for, and on AppKit's menu panel where its author wrote no surface in
+  any state; a person gets the `NSMenu`, which draws none of the rows' own
+  colours). On the Mac the same switch shows a `dialog` and a modal route as
   sheets and a popover
   that is no menu as AppKit's popover; each is a window of its own, so a plain
   `screenshot` (the viewport's own drawing) leaves it out and says so
@@ -519,6 +598,14 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `EXACT_AGENT=1` and `EXACT_AGENT_FAIL_FETCH`, no socket) shows the native bars
   and menus, its fetches still failing. (Signal Clone, builds 5 and 10; Splitter,
   rough 4 and 11; Recipe Finder, round 27.)
+- **A header with more buttons than the bar has room for loses the rest to UIKit's
+  overflow menu.** UIKit shows the first buttons as bar items and lists the others
+  under a More (…) button: a 402-point bar showed a symbol and two worded buttons
+  of 33. Under `--chrome platform` a `tap` on one of the others is refused (`its bar
+  item is in the navigation bar's overflow menu`): the driver does not open that
+  menu. Fix: write only the buttons that fit, and put the rest in one menu button
+  (a `button` with a `popovertarget`). (#738; iPhone 17 Pro and iPad Pro 11-inch
+  simulators, iOS 27.0, 2026-11-16.)
 - **An `EmptyState`'s button sits at the bottom of the screen.** Cause: the part
   takes the free height it is given, so a `button` written after it lands at that
   space's foot. Fix: indent the button under the `EmptyState` call, its slot.
@@ -527,20 +614,37 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   inside a route draws under the native bars. Fix: render full-screen overlays
   (menus, action sheets) as root children after the tab container, or as a
   `navigationPresentation="fullscreen"` route. (Signal Clone, build 10.)
-- **A full-screen route on iOS shows white bands above and below its content.**
+- **A full-screen route on iOS shows bands above and below its content.**
   Cause: the host keeps the route's content clear of the status bar and the home
   indicator (LLP 1123 D3), so a child at `position="absolute" inset=0` starts
-  below the status bar, and where the route paints nothing its controller shows
-  the system background. Fix: give the route's own column the background
+  below the status bar and ends above the home indicator. Where the route paints
+  nothing, the bands show the nearest ancestor that paints a background, else
+  the platform background (the theme's page ground when set).
+  `system-bars-hidden=true` leaves them on a phone with a notch
+  or Dynamic Island, whose insets stay when the bars hide. Fix, where the
+  content needs only a backdrop: give the route's own column the background
   (`background-color`, with `color-scheme="dark"` for a photo viewer): it fills
   the screen to its edges, and where it is translucent, or fades out, the page
-  the route covers shows through. (Excord's image viewer, 2026-10-27.)
+  the route covers shows through. Fix, where the content itself must reach the
+  screen's edges (a full-screen canvas, a camera, a map): put
+  `-exact-safe-area="none"` on the route and place its controls
+  with `var(--exact-safe-area-inset-*)`, which still reads the route's insets.
+  (Excord's image viewer, 2026-10-27; #759, iPhone 12 and iPhone 17 Pro
+  simulators, iOS 27.0, 2026-11-16.)
 - **A Mac glass panel shows sharp content behind a wrapper.** AppKit's
   `backdrop-filter` samples only the parent's subtree, even when every wrapper
   is transparent. Make the glass a direct sibling of what it covers; put a
-  floating composer beside its scrolling transcript. Check it with `agent macos
-  "screenshot glass.png window"`: only the composited window capture shows
-  background filters; a plain `screenshot` shows every macOS glass sharp.
+  floating composer beside its scrolling transcript. CSS `backdrop-filter`
+  does not select the native-glass viewport path, so check its compositor blur
+  with `agent macos "screenshot glass.png window"`. Only native Liquid Glass
+  (`backgroundMaterial="glass"`, an `NSGlassEffectView`) selects the
+  WindowServer viewport path. `backgroundMaterial="sidebar"` and the other
+  `NSVisualEffectView` materials do not. If the WindowServer has no picture,
+  the viewport restores canvas readbacks, falls back to the ordinary
+  layer-tree capture and notes that glass was not composited. A capture
+  flushes, waits two display refreshes and reads the window without inserting
+  any view into it. The server's empty picture cannot distinguish a locked
+  screen from a sleeping display.
   (T3 Code backdrop case B; LLP 1053.000 §3.)
 - **A link in the app's own scheme never matches.** `signalclone://connect?x=1`
   reaches the root's `navigate` handler as the location `/connect?x=1`: the scheme
@@ -570,10 +674,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `tabindex` is now an attribute on every element and module tag's box (LLP
   1088 D7.3), with no DOM-property alias. Fix: write `tabindex` (x2apps paint,
   2026-10-04).
-- **With `viewport-fit="cover"`, route content goes under the native bar.** Cause:
-  the bar's cover is added to the route's padding, but a cover-fit root has no top
-  safe area. Fix: put `env(safe-area-inset-top)` on the route column, not on each
-  authored header. (Signal Clone, build 5.)
+- **Under `viewport-fit="cover"`, a route clears its insets twice.** A route
+  is cleared of its whole safe area, the status bar and the home indicator
+  included (LLP 1123 D3), and the clearance adds to padding that does not read
+  the inset: `env(safe-area-inset-top)` on a header or a box inside the route adds
+  the status bar a second time. Fix: pad the route column itself with
+  `env()` or `var(--exact-safe-area-inset-*)` (credited, so it counts once), drop the
+  inner padding, or opt those edges out with `-exact-safe-area` on the route and keep
+  padding them yourself, as the web needs (`-exact-safe-area="left right"` for a page
+  whose boxes pad the sensor housing). (Signal Clone, build 5; LLP 1123 D3,
+  2026-11-12.)
 - **A banner at the root of a tabbed app stays under the status bar on iOS.** A
   root-level `position="absolute" top=0` box padded with `env(safe-area-inset-top)`
   is drawn at y 0, and one at `top="calc(env(safe-area-inset-top) + 8px)"` at y 8.
@@ -582,13 +692,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   bars reach under the status bar, but `env()` stays 0; the host clears each route's
   content of the status bar and its bars instead, by padding the route or by UIKit's
   inset on its scroller (LLP 1123 D1). The same `env()` padding inside a route only
-  seems to work: it adds 0 to that clearance. A box outside every route has no inset
-  to read until LLP 1123 D9's `var(--exact-safe-area-inset-top)` is built. Until
-  then, put the banner in the route that shows it, where the host pads that route's
-  top: an absolutely positioned child at `top=0` then starts below the status bar and
-  any bar. A route whose scroller starts at its top or right under its header is
-  inset by UIKit instead, and a box at its `top=0` is under the bars. (euxy port's
-  "COPY SAVED" notice, 2026-10-21.)
+  seems to work: it adds 0 to that clearance. Fix: pad or place the banner with
+  `var(--exact-safe-area-inset-top)`, which outside every route is the screen's
+  inset and inside a route that route's own, its bars included (LLP 1123 D9):
+  `top="calc(var(--exact-safe-area-inset-top) + 8px)"`. (euxy port's "COPY SAVED"
+  notice, 2026-10-21.)
 
 - **After a relaunch on iOS, a form opens with old values and ignores the fresh answer.**
   While the data module is not ready, a native host (and the wasm web target) can make
@@ -600,6 +708,18 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   saved record (refresh the resource after each write, or key the child by a string or
   number from the answer). (Authoring bench, LLP 1087, ios19, ios22 and ios32
   t7-wizard, 2026-10-05/06.)
+- **A screen keyed on the signed-in user shows its kept answer on some relaunches only.**
+  A kept answer whose identifying argument is still `""` or `none`, or reads a
+  device-state resource on its placeholder, waits (`logs`: `feeds's kept answer is
+  waiting for its identifying arguments`) and shows when the argument reaches the
+  value it was kept for. Once the data module is ready, the resource is asked for the
+  empty id meanwhile; if that answer lands before the id, it is kept in the entry's
+  place and the id's arrival has nothing to show. An id from a resource that reads
+  no device state, on a placeholder that is not empty (`"nobody"`), is a known
+  mismatch, which `logs` names with the resource it read but never with either
+  identifying value. A resource whose `when` stays false until the id is set asks
+  nothing for the empty id, so its kept answer still waits. (A React Native port's
+  diaries, 2026-11-13; `runner/src/runner/kept_identity_tests.rs`.)
 - **A grouped-list row you lay out loses its side insets, or its content runs off the
   card.** Cause: the sheet gives a custom row (a `row` that is not a title/value row)
   its padding, and `padding="12px 0"` replaces all four sides, so the row's content
@@ -608,7 +728,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`apps/shelf`'s Progress and Yearly Goal rows), which the sheet keeps 15 from the
   card and the separator, or make the row itself a `column`, which stacks its children
   (LLP 1116 D2); to choose that space write the row's `padding-top`/`padding-bottom`
-  only, which replaces the column's. (Shelf recipe, 2026-10-10.)
+  only, which replaces the column's. A plain column of one or two texts becomes
+  a standard subtitle cell on iOS. An authored height, background colour or
+  corner radius on the row or column keeps its views; a subtitle column's
+  `min-height` does too, as does `align-items` or `justify-content` on either
+  a nested column or a row laid out as a column. Such nested columns get no
+  subtitle block padding for a literal box value or a ternary arm that writes
+  one; a `none` arm keeps the platform padding. Other expressions keep that
+  padding because they may evaluate to `none`; write explicit padding to control it.
+  The platform's interline gap stays. A column with `height=300` and no authored
+  padding or border has a 300 pt border box. Classes count too. (Shelf recipe; grouped tile, #327.)
 - **On iOS, a custom grouped row's leading symbol and line differ from a standard row's
   right to left or at an accessibility size.** Cause: a row the platform's cell can't
   express (a badge before its chevron) is its own views carried into the cell; iOS draws
@@ -630,7 +759,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 What a port writes from habit, what the compiler says, and what to write (the euxy port,
 2026-10-17: 19 of 50 compiles refused, most of them these). A warning builds; fix it anyway.
 
-| React Native writes | exact2 says | Write |
+| React Native writes | Exact says | Write |
 |---|---|---|
 | `line-height=20` | `lower-line-height-multiplier` (warning) | `line-height="20px"`: a bare number is a multiplier, as in CSS |
 | `color="rgba(0,0,0,0.5)"`, `"#00000080"` | `lower-colour-one-scheme` (warning) | a role (`-exact-secondary-label`, `-exact-fill`), `light-dark(<light>, <dark>)`, or nothing |
@@ -647,7 +776,9 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `font-weight="bold"`, `"600"` | `lower-attr-value` | `font-weight=700`, `font-weight=600` |
 | `fontSize: 16` | nothing; `verify` lists it as a fixed size | `font-size="1rem"` (16 ÷ 16), or a text style (`font="-exact-body"`): React Native's `fontSize` follows Dynamic Type by default (`allowFontScaling`), and a bare number here is points that do not (LLP 1115.000 D12) |
 | `transform="rotate(-2deg)"` | `lower-attr-tag` | `rotate="-2deg"`, `translate="0px 25px"`, `scale=0.8` |
+| Expo's `NativeTabs.Trigger role="search"`, SwiftUI's `Tab(role: .search)` | `lower-attr-value` on `role="search"` | `rel="search"` on the root tab, written last; `autofocus` on its root's header search field sets it apart on iOS 26 (`contract vocab search`) |
 | a `ScrollView` in a `flex: 1` `View`: `column flex=1` › `scroll flex=1` | `lower-scroll-grows` (warning) | `min-height=0` on the column; the scroller alone needs none |
+| `borderWidth` and `borderColor` without a style (solid in RN) | `lower-border-unstyled` (warning) | `border="1px solid" border-color="…"`, or add `border-style="solid"` to the written width; for one edge use `border-top-style="solid"` so the other sides stay absent |
 | `alignItems`, `justifyContent`, `gap` on a `View` (a flex column in RN) | `lower-flex-on-block` (warning) | `column` or `row`: a `view` is `display: block`, as a `<div>` is |
 | `flexDirection="row"` on a `Pressable` with content | `lower-flex-on-block` (warning) | `button display="flex"`, and `text-align="left"` where its text is not centred: a `button` is a block with centred text, as `<button>` is |
 | `<SFSymbol name="x" size={N}>`, expo-symbols `SymbolView` | nothing; hand-drawn as an `svg`, or as `font-size=N`, the glyph comes out smaller | `image "symbol:sf/x" width=N height=N object-fit="contain"`, its tint as `color` ("Values beside an SF Symbol", below) |
@@ -679,7 +810,7 @@ screen, 2026-10-16.)
   Lane sheet, scrolled to its end, left 58 points under Delete lane where the original
   left 24. Cause: a React Native `ScrollView` does not inset its content on iOS
   (`contentInsetAdjustmentBehavior` is `never`), so its `paddingBottom: 24` was the whole
-  gap and the last row sat over the home indicator. A route's last scroller in exact2 is
+  gap and the last row sat over the home indicator. A route's last scroller in Exact is
   inset by UIKit as a hand-built one is (`automatic`: the home indicator's 34 points, and
   the tab bar's height on a tab; a dialog sheet's outer scroller is `always`), and the
   ported padding adds to that. That inset is the platform's, as a hand-built table view in
@@ -836,17 +967,43 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Actions
 
-- **App resources belong in the root component.** A child can declare a reserved
-  viewport reader, but an app source there fails with `type-child-resource`.
-  Declare the resource in the root and pass the value the child needs as a prop.
+- **A command-line run ends while the data module still works on a thread.**
+  A terminal entry run once from a shell (`--print`, or stdout a pipe) exits
+  when nothing holds it: no request in flight, no one-shot timer armed and no
+  node `aria-busy` (LLP 1101.003 D2). A thread the module started after
+  answering a send is none of these, so the run settles and prints before
+  the work is done. Keep a node `aria-busy` from the send until the thread
+  has finished, as the harness's live column does with `session.busy`
+  (`apps/harness/terminal.contract`). (The harness's `--print`, 2026-11-12.)
 
-- **A send reads a derive from before the action's writes.** An action's writes
-  commit together; reading a derive after assigning one of its inputs still reads
-  the previous commit's derive. Build the next record explicitly for the send,
-  for example `DepartureState(current, at=current.at + 600000, status="Delayed")`,
-  and assign local state in the same action. Caltrain's activity update sent
-  "On time" after incrementing its delay until it built that next record
-  (`apps/caltrain/app.contract`, LLP 1126.001 WP9).
+- **A Rust update takes the other arm of a `#[cfg(target_os)]` branch.** Where a
+  replaced Rust module runs as wasm (iOS by default; `tiered` or `wasm` mode
+  elsewhere), the update is the data crate built for `wasm32-unknown-unknown`,
+  whose `target_os` is `"unknown"` and `target_family` `"wasm"` (`rustc --print cfg
+  --target wasm32-unknown-unknown`). A `#[cfg(target_os = "ios")]` arm the binary
+  ran is gone, and a `not(…)` arm or the `wasm32` one runs in its place. The bake
+  accepts the branch, since the source digest reads every arm (LLP 1030 D3a,
+  amended 2026-11-12). Branch only on `target_arch = "wasm32"`, as Markdown, Exact
+  Live and Update Lab do for what has no worker or thread there. (A crate with
+  `macos`, `ios` and `wasm32` arms, built for wasm32, ran the `wasm32` one;
+  2026-11-12.)
+
+- **A row cannot own a request.** A component that declares a resource or a
+  mutation, used under a `for` over data or in a virtualized `list`, fails with
+  `type-child-resource`; it may own them as a screen, a tab or an `if` arm.
+  Declare the root's resource over the list, or the mutation in the root, and
+  pass each row its answer or an action that sends it.
+
+- **A derive read after the action assigns its input is the old value, with no
+  warning.** With `derive count = items.length`, `items = next` then `found =
+  count` reads the old list's count. A derive read in an action is the starting
+  state's, as a state's read is, but only the state's read is warned of
+  (`analyze-read-after-assign`; a derive is a settled value, LLP 1089 D3). Read
+  what you assigned (`found = next.length`), and build the next record
+  explicitly for a send, for example `DepartureState(current, at=current.at +
+  600000, status="Delayed")`. Caltrain's activity update sent "On time" after
+  incrementing its delay until it built that next record
+  (`apps/caltrain/app.contract`, LLP 1126.001 WP9; expo/exact#649, 2026-11-15).
 
 - **A name refused as reserved.** `none`, `some`, `true`, `false` and the expression
   words (`if`, `for`, `match`, `and`, …) cannot name a state, a parameter or a `let`
@@ -906,6 +1063,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   a web build sends that request from a server (`docs/contract-for-agents.md`,
   "An app's own sign-in screens").
 
+- **An error listener's later fetch reaches the server from the web build
+  only.** A fetch that a data module's `error` or `unhandledrejection` listener
+  makes after an `await`, in a `.then`, or in its report's reply is sent on the
+  web build, where the listener is the page's. Natively, only a plain HTTP fetch
+  made in the listener itself is sent. The later one is refused with a line in
+  `logs`: `fetch() called outside an answer: it was never run`, or `fetch()
+  called after an error event's listener returned` (LLP 1175 D3, D7). On the
+  web the listener also hears the whole page, and a request of its own that
+  fails uncaught calls it again. Fix: fetch in the listener itself, before any
+  `await`, and catch the failure ([recipe](recipes/report-errors.md)).
+  (Scratch app under `agent macos` and `agent web`, 2026-11-14.)
+
 - **`Date.now()` in a data module passes its Bun tests and fails on the
   device.** Since 2026-10-05 the build refuses a direct use by file and line
   (`Date.now()`, `new Date()`, `Math.random()`, `setInterval` and the frame
@@ -934,6 +1103,36 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`agent macos --seed 7 …`), or drive against the stand-in
   (`bun exact.mjs docs convex live queries`). A launch outside the driver draws
   the system's entropy. (LLP 1157 §6, 2026-11-10.)
+
+- **A sign-out that also fetches leaves Convex signed in.** `cx.setAuth(undefined)`
+  and then a `fetch` (an auth provider's sign-out) in one synchronous mutation
+  source: the runner refuses it (`a mutation cannot both send on a socket and
+  fetch`), so its `Authenticate` never leaves and the socket stays the
+  person's. Cause: `setAuth` sends on the socket. Fix: an `async` source that
+  awaits the fetch, then calls `setAuth`. The module gives no answer and runs
+  no mutation as the wrong person meanwhile (`bun exact.mjs docs convex live
+  queries`). (expo/exact#54, 2026-11-12.)
+
+- **An upload of a picked file under the agent fails only when it runs.** The
+  `pick` succeeds, and the upload's `exactBodyFrom app:/…` fails with `storage
+  is unavailable in agent mode unless the drive names a scratch store`: a
+  picked file is a copy in app storage, which a web drive has only with
+  `--storage <name>`. Fix: name one on any drive that uploads what it picks.
+  (expo/exact#54, 2026-11-12.)
+
+- **A helper action does not see what its caller just assigned.** `sel = next`
+  then `follow()`, with `follow` reading `sel`, would read the old `sel`: a call
+  is its callee's statements in the caller's one commit, and every statement
+  reads the state the action started with (LLP 1089 D2). The compiler warns of
+  the read (`analyze-read-after-assign`, naming both lines; a warning since LLP
+  1035.005.002 C2, as the same read in the action's own body is). Fix: pass the
+  value the helper should see, `follow(next)`, or a `let` bound before the
+  assignment for the old one. (Spreadsheet F21 and Files F27 diaries, where a
+  copied block was the workaround.) In the action's own body the same read is
+  the same warning: `now = performanceNow()` then `if now >= endsAt`
+  tests the last tick's time (focus-timer's phases changed 250 ms late in two
+  bake-off rounds). Fix: `let stamp = performanceNow()`, `now = stamp`, and read
+  `stamp`.
 
 - **A delete or save is lost when the page reloads right after it.** An action that
   `send`s a write and navigates away in the same commit passes every test, but a
@@ -965,10 +1164,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   session is `ambient`. An app whose purpose includes media playback should
   set `"audio_session": "playback"` in `app.json`, as Recorder does. For sound
   over another app's audio, `"playback-mix"` also ignores the switch on iOS and
-  tvOS while mixing without ducking. On the web only sound output applies the
-  setting, mapping it to `ambient`, which obeys the switch in WebKit; media or
-  GPU audio alone leaves the browser's `auto`. Raising the media volume alone
-  does not override Silent mode. (LLP 1096 D8.)
+  tvOS while mixing without ducking. On the web, page initialization applies
+  `ambient` and `playback` as given and maps `playback-mix` to `ambient`, which
+  obeys the switch in WebKit. This also applies to pages with only `video`,
+  `audio` or GPU audio, where the Audio Session API exists. Raising the media
+  volume alone does not override Silent mode. (LLP 1096 D8.)
 
 - **A scheduled sound plays after Stop.** A sequencer that schedules each step
   ahead (`playSounds(…)` with a future `at=`) keeps sounding the hits already
@@ -1030,17 +1230,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   longer exists (declared in LLP 1005). Fix: keep the pressed node across the state
   change (change its contents, not which branch renders it).
   **Candidate diagnostic:** the runtime could log a dropped up in development.
-- **A `transformDragFor` handle does nothing.** No pinch or drag follows and
-  nothing is logged. Cause: the binding resolves only for a strict shape and
-  otherwise returns none silently (`kernel/src/transform.rs`; only the agent's
-  transform-drag command reports "no photo binding"). The target, the handle's one
-  ancestor with that `id`, needs
+- **A `transformDragFor` handle does nothing.** The binding resolves only for a
+  strict shape (`kernel/src/transform.rs`). The compiler warns with
+  `lower-transform-drag-ineligible` when it can prove a target, clip or path
+  violates that shape, naming the element and repair. Dynamic values and host
+  geometry remain runtime checks; the agent's transform-drag command reports
+  "no photo binding" when those fail. The target, the handle's one
+  ancestor with that `id`, must be a plain view (`column` or `box`) with
   `width="100%" height="100%" box-sizing="border-box"`, no padding, border,
-  margin or offsets, and its direct parent needs `overflow="hidden"` on both axes
-  and no padding or border; every other ancestor must be untransformed. (Signal
-  Clone, build 11: the photo viewer lacked `overflow="hidden"` and
-  `box-sizing`.) **Candidate diagnostic:** the compiler or a development log
-  could name the failed condition.
+  margin or offsets. Its direct parent must also be a plain view, with
+  `overflow="hidden"` on both axes and no padding or border. The handle and every
+  ancestor must be displayed, enabled and non-inert; all except the target must
+  be untransformed. (Signal Clone, build 11: the photo viewer lacked
+  `overflow="hidden"` and `box-sizing`.)
 
 - **A field normalized while the person types fights the typing.** A `task … when
   people != "${count}"` (or a timer, or an `input` action) that rewrites an
@@ -1096,6 +1298,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   left button. iOS refuses `mouse`; macOS and Linux drag with the mouse anyway
   ([authored tests](contract-grammar.md#authored-tests)). (Stocks diary: the chart
   readout unmounted, about 10 minutes, 2026-10-04.)
+  A finger on a box with its own pointer handlers also needs
+  `touch-action="none"` when that box should own the drag: otherwise the browser
+  may scroll and send `pointercancel`, ending its moves. The web drag reply names
+  observed cancellation and scrolling, with the named node’s `touch-action` and
+  the effective intersection through its ancestors at contact start. Changing
+  `touch-action` during a contact does not change the browser's decision for it.
+  `drag … mouse` exercises the mouse path.
 
 - **A `pan` hears nothing from a finger on the web.** A drag with
   `tap <id> drag dx dy` (or a real touch) moves nothing and logs nothing. Cause:
@@ -1197,6 +1406,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Driving and testing
 
+- **`packages/speech-recognition/test/drives.mjs --help` runs the web drives.**
+  That short package script has no help mode, so an unrecognized first argument
+  leaves its default platform in place. Pass a platform and optional drive number,
+  for example `ios --only 6`, or read the script before invoking it.
+  (Speech transcription rebase, 2026-11-15.)
+
+- **An Android APK drive needs an awake, unlocked screen.** The relay checks and
+  wakes it and dismisses an insecure keyguard before launching. A secure lock
+  screen fails at once: unlock the device and run the drive again. A readiness
+  timeout includes the screen state observed before launch. Headless drives do
+  not need the display. (expo/exact#365; covered with stubbed adb calls.)
+
 - **A production bake does not open an agent socket.** Its baked
   `embedded.trust="production"` makes the host ignore `EXACT_AGENT` and
   `EXACT_AGENT_*`, including `EXACT_AGENT_SOCKET` and `EXACT_AGENT_LIVE`,
@@ -1239,7 +1460,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`EXACT_VISION_FIXTURE`, `packages/barcode-detection/test/agent.mjs`). (LLP
   1133.027, 2026-10-26.)
 
-- **A host timing bug on iOS is chased with `NSLog` and rebuilds of exact2.** A
+- **A host timing bug on iOS is chased with `NSLog` and rebuilds of Exact.** A
   development build already journals what the host did: `logs` has `host:` lines for
   navigation (`willShow`, `didShow`, and whether the app, UIKit's Back or the edge swipe
   started it), sheets presented and dismissed, autofocus applied or skipped with what holds
@@ -1331,9 +1552,10 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   data source's `fetch` is captured when the data module loads, so a stub
   installed later (a browser script's `page.evaluate`, a console patch) never
   sees its requests. Fix: to test a failure, `fail fetch "<url prefix>"` (the
-  guide's testing section); a fixture that must stand in for the network
-  installs its stub before the document loads (`addInitScript`) or serves a
-  stand-in server. (Authoring bench, LLP 1087, t8-library, codex, 2026-10-08.)
+  guide's testing section). For a response, lead the authored test with
+  `answer fetch "<url prefix>" with 200 {"text":"Hello"}`. The driver installs
+  it before the first resource load. (Authoring bench, LLP 1087, t8-library,
+  codex, 2026-10-08; response fixtures, #699.)
 
 - **`xcrun simctl io booted screenshot` can capture the wrong simulator.** With
   several simulators booted, `booted` names any one of them, not the one the
@@ -1341,7 +1563,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   the agent's own `screenshot`, which targets the app's simulator. (Authoring
   bench, LLP 1087, t9-profile, 2026-10-07.)
 
-- **`axe tap` misses on an exact2 app about one time in three.** Its default
+- **`axe tap` misses on an Exact app about one time in three.** Its default
   style (FBSimulator `tapAt`) sometimes lands as nothing: a mute button toggled
   1 of 3, a drawer button did not open, and the app looked frozen until
   relaunched. Fix: `axe tap … --tap-style physical` (a real touch down and up),
@@ -1363,6 +1585,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   looks unchanged. Fix: `clock settle` (or `clock +N` past the transition)
   before `screenshot`. (Authoring bench, LLP 1087, t5-pomodoro, 2026-10-07:
   about 5 minutes and a probe script to find.)
+
+- **A macOS viewport screenshot omits a box's 3D rotation.** Both a static
+  `rotate="-45deg x"` and a sampled axis keyframe can look unrotated in the
+  default capture. Use `screenshot out.png window` to read the composited
+  window; `layout` also reports the transformed bounds. (#609, 2026-11-14.)
 
 - **A macOS `screenshot` shows no focus ring on a native field or button.** AppKit
   draws its focus ring only in the key window of the active app, and the driver's
@@ -1470,12 +1697,24 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   own document. With a `sandbox` on macOS, and always on iOS, it is the child of a
   wrapper page at `http://exact.invalid` (for an `http:` guest) or
   `https://exact.invalid`: the page's first request is a cross-site navigation, and
-  `window.parent`'s origin is the wrapper's. On the web the parent is the app's own
+  `window.parent`'s origin is the wrapper's. Either way its request carries
+  `Referer: http://exact.invalid/` (or `https:`), the parent's origin, as a browser
+  sends it for a cross-origin frame; Android's frame, a page of its own, is asked
+  for with the same value. On the web the parent is the app's own
   page, whose loopback port differs between the dev loop and an `agent web` or
   `test web` run. A server that checks `Origin`, `Referer` or `Sec-Fetch-Site`
   against a fixed list therefore refuses its own page on some hosts. Fix: admit the
   page by a token in the `src` URL the data module builds, and keep the origin check
   for the API requests the page itself makes. (Exact Draw, 2026-10-15.)
+
+- **An embed inside a bundled page gets no `Referer` on Apple.** An `iframe` the
+  app writes is asked for with its parent's origin as `Referer`, which an embed
+  that requires one (YouTube's player, else "Error 153") accepts. An `<iframe>`
+  written in the HTML of a page under `assets/` is not: that page is
+  `exact-app://app/<path>`, and WebKit sends no `Referer` from a custom scheme,
+  whatever its `<meta name="referrer">` says. Fix: put the embed in the app's own
+  `iframe`, or give the player what identifies its embedder in its URL (YouTube's
+  `origin` or `widget_referrer` parameter). (#704, 2026-11-15.)
 
 - **A focus ring never shows in an `agent macos` screenshot.** `type save key Tab`
   moves the focus (`state` reads it in `focus.logical`), yet neither `screenshot`
@@ -1735,8 +1974,8 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 - **The web build refuses every brand token (`color="ink.light"` is not a valid
   `color`) that `contract build` accepted a moment ago.** Cause: a later line
-  in `app.tamber` was refused (here `color-mix(in oklab, AccentColor 16%,
-  transparent)`, `tamber-residual`), and the web build reports the tokens the
+  in `app.forma` was refused (here `color-mix(in oklab, AccentColor 16%,
+  transparent)`, `forma-residual`), and the web build reports the tokens the
   design would have defined, not the design's refusal. Run `bun exact.mjs
   contract build app.contract --json`, which names the design's line. Also:
   a token's name is identifiers joined by dots (`hue.rose`, never `hue.1`).
@@ -1750,7 +1989,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   ancestor box's `color` (a token on `fill` itself draws black on the web).
   (Harmony, 2026-10-21.)
 
-- **`bun exact.mjs tamber check .` in an app outside the checkout says each icon's
+- **`bun exact.mjs forma check .` in an app outside the checkout says each icon's
   SVG under `assets/` is missing though it is there.** The check resolves
   `assets/<path>` from the process's working directory, which `exact.mjs`
   moves to the checkout; the app's build finds the files. Trust
@@ -1770,18 +2009,16 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   content (`for e in t.stack`) destroys nothing on a push. Keep each route's `navigationKey`
   column mounted (the host's Back needs the route beneath) and put its content under
   `if inApp or e.id == top(nav).id`: in a browser the card leaves as the product arrives, and
-  `shared.js` runs a view transition. A Back or Forward lands at once, without the flight
-  (`issues/20261103-web-history-traversal-forgoes-shared-element-flight.md`).
+  `shared.js` runs a view transition. A Back or Forward flies too, unless the browser
+  animated it itself (`hasUAVisualTransition`: a phone browser's swipe back can).
 
-- **`pages=` on a `render=build` route renders no pages in an app without a Rust render
-  entry.** A route `product "/product/:id" render=build pages=productPages()` compiles, and
-  `web-build --out dist` writes `/`, `/about` and `404.html` with no word about the product
-  pages: the JS target lists only unparameterised build routes (`host/web-js/src/emit.rs`,
-  `build_pages`), and the `pages=` source is asked only by the Rust render entry
-  (`exact_render::pages`), which an app `exact new` made has none of. A static host then
-  serves the shell for every product page. Until the JS build asks the source (QUEUE), make
-  the route `render=request`, which `serve` renders per request with its data, as the site
-  pattern's planet page is. (A web store from `pattern site`, 2026-11-01.)
+- **A parameterized page is absent from a static build unless its route lists its
+  pages.** Declare it with `render=build pages=productPages()`. The source returns
+  `string[]`: the values of the route's one parameter. Both renderers ask it once in the
+  render environment and render each returned value, encoding it as a path segment. An
+  app `exact new` made needs no Rust render entry. A source that fails or misses its
+  deadline fails the build; an empty list renders no pages. A static build contains only
+  the returned values.
 
 - **A link to the same route with a new query pushes a second entry.** A filter written as
   `link href=(path("shop") + "?cat=" + c)` on the shop page reached `follow`, whose
@@ -1792,7 +2029,23 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
 
-## Working on exact2 itself
+- **A route that says `activate=interaction` offers a browser's agent no tools at load.** Its page
+  registers its faced tools with `document.modelContext` only when its script starts: at the
+  person's first use of a control, on a page with an `intersect` handler at a scroll or when that
+  element shows, or when the viewport differs from one the page's comparisons were rendered for.
+  Until then `getTools()` is empty. Leave `activate` unsaid on such a route: in an app with a faced
+  tool on the web door, an undeclared route whose page would wait for the reader activates `idle`
+  instead, and registers its tools once the page has loaded and is idle. (Exact Bistro, a WebMCP
+  demo site, 2026-11-12.)
+
+## Working on Exact itself
+
+- **An Android regression test still runs the temporarily reverted code after
+  the source is restored.** A revert and restore close together can leave
+  Gradle reporting `compileDebugKotlin UP-TO-DATE` and reusing the class from
+  the reverted source. Run the restored test with `--rerun-tasks`; an ordinary
+  second test run does not prove the restored source was compiled. (OAuth
+  logout regression audit, 2026-11-14.)
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
   `DOM.setChildNodes` replaces the frontend's node objects. Repeating it for
@@ -1871,7 +2124,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `/usr/bin/openssl`, macOS's LibreSSL, comes first on `PATH`; it writes the run's EC
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
-  lane's `conform`, `conform-firefox` and `conform-webkit` steps included. Fix: put
+  lane's `conform` and `conform-browsers` steps included. Fix: put
   Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before
@@ -1995,24 +2248,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   and its assets with it, only when `app.ts` imports it: import its driver even if the app
   uses nothing from it yet. (LLP 1154, 2026-10-31.)
 
-- **An edit to a `file:` package inside the app does not reach the app.** Bun (1.4.2) copies
-  a `file:` package whose path is inside the app's directory (`file:./packages/p`) into
-  `node_modules`, each file keeping its modification time, and every build reads it there:
-  an edit or an added file is not in the copy, and a removed file is still in it, until the
-  next `bun install`, which copies the package again and drops removed files. A `file:`
-  package outside the app's directory, as `exact add` writes for a standard package, is
-  installed as links to each file: an edit reaches the build at once. A file the build opens
-  under `node_modules` (an `exact.json`, a shim, a Swift or Kotlin source it names) is not
-  there when added, and is a broken link when removed, until `bun install`; a file reached
-  from one already opened (a Rust module beside the root, a Contract file a `use` names) is
-  the source's own. `ls -l node_modules/<package>/<file>` shows which you have: `->` is a
-  link, anything else a copy. After changing a copied package, run `bun install` in the app.
-  (#115, 2026-11-11.)
-
 ## Games
 
+- **`exact new --game` refuses `--name` and `--bundle-id`.** Those flags name an app.
+  Create the game with `exact new <path> --game`, then set `app.name` and `app.id`
+  in its generated `app.json` before the first build. (Camera fixture, 2026-11-12.)
+
+- **Game wrappers under `.shells/` are regenerated.** Edit the root `app.json`,
+  `app.contract` and `logic/`, or an authored `render/` crate. Put added logic
+  dependencies in `logic/Cargo.toml`, not `.shells/logic/Cargo.toml`.
+
 A game's pitfalls (the world and its saves, game input, its tests, proof and setup)
-are in [Pitfalls when writing exact2 games](game-pitfalls.md).
+are in [Pitfalls when writing Exact games](game-pitfalls.md).
 
 
 ## Access hatches
@@ -2110,9 +2357,10 @@ are in [Pitfalls when writing exact2 games](game-pitfalls.md).
   Resources keep their previous value on failure. Gate account views while the
   account is pending or failed, and render rows only when their answer's principal
   matches the current principal. Throw `refused(page.denied)` on a query denial.
-  The complete online password example in `snapback4/README.md` demonstrates this
-  alongside reload, logout and sign-in tests; an empty successful list would hide
-  an authentication failure.
+  An empty successful list would hide an authentication failure. Where a checkout
+  has the Snapback client, its accompanying `snapback4/README.md` demonstrates this
+  in the complete online password example alongside reload, logout and sign-in
+  tests. That guide is not in this repository.
 
 
 - **A picker path can contain spaces.** Use `pick "attachment" "my photo.png"`
@@ -2130,9 +2378,18 @@ leave a binding on every page or list row. The JS target resolves `transformDrag
 `heightDragFor` and `reorderFor` after each commit against current ancestor IDs.
 Each binding must name exactly one strict ancestor; self, siblings and duplicate
 matching ancestors do not qualify. Changing the binding or ancestor ID cancels a
-drag whose target is no longer valid. The runtime journal names
-each passed-over target view and the owner once, then reports it again only after
-its valid bindings disappear and return. Read it with
+drag whose target is no longer valid. The compiler's `lower-transform-drag-owners`
+warning marks competing binding sites, including targets repeated by a `for`
+template. Guards over literal row values or indices that admit at most one
+iteration do not count as repetition; an index equality can also select one row
+of a dynamic list.
+Several handles for one target and mutually exclusive branches do not compete,
+including branches inside rows when their condition is shared across rows.
+Statically unreachable `if` and `match` arms are excluded, as are targets hidden
+by a static class or inline `display="none"`. Inline attributes override the
+class. Computed names it cannot resolve stay
+unknown. The runtime journal names each passed-over target view and the owner
+once, then reports it again only after its valid bindings disappear and return. Read it with
 `bun scripts/agent.mjs web logs` (or the native host).
 
 - The root file's first component is the app root. A fixture component placed

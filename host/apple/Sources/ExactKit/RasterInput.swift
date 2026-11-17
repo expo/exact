@@ -4,10 +4,11 @@ import Foundation
 
 /// A source-interest lifetime, not a Runtime callback. Cancelling detaches the
 /// task handler under lock and invokes it outside every backend/core lock.
-final class RasterCancellation: @unchecked Sendable {
+package final class RasterCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var handler: (() -> Void)?
+    package init() {}
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
     func install(_ handler: @escaping () -> Void) {
         lock.lock(); let cancel = stopped
@@ -24,7 +25,7 @@ final class RasterCancellation: @unchecked Sendable {
 /// Workers keep a descriptor, never a queued encoded Data closure. Complete
 /// resolvers still verify through their existing bytes/url path. Remote inputs
 /// spool to a bounded temporary file and are reused for metadata and decode.
-final class RasterInput: @unchecked Sendable {
+package final class RasterInput: @unchecked Sendable {
     static var httpCacheUsage: [String: Int] { RasterDownload.cacheUsage }
     /// A `data:` source's bound, in bytes of URL text, on every host (LLP 1011
     /// §2; `exact_raster::MAX_DATA_URL_BYTES`, the web hosts' `DATA_LIMIT`).
@@ -32,6 +33,8 @@ final class RasterInput: @unchecked Sendable {
     let url: URL
     let encodedBytes: Int
     private let temporary: Bool
+    /// Completed private spools keep the bytes their metadata described.
+    var rechecksMetadata: Bool { !temporary }
     /// The asset catalog's name for this file, when it is the launch image
     /// the catalog was built from (`ExactLaunchImageSource` and its bytes'
     /// `ExactLaunchImageSHA256`, host/apple/assets.mjs) and a plain PNG:
@@ -75,7 +78,27 @@ final class RasterInput: @unchecked Sendable {
     private static let launchSource = Bundle.main.object(forInfoDictionaryKey: "ExactLaunchImageSource") as? String
     private static let launchDigest = Bundle.main.object(forInfoDictionaryKey: "ExactLaunchImageSHA256") as? String
     private static let launchImage = (Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])?["UIImageName"] as? String
-    deinit { if temporary { try? FileManager.default.removeItem(at: url) } }
+    private static let removals = DispatchQueue(label: "exact.raster.removals", qos: .utility)
+    #if DEBUG
+    private static let removalLock = NSLock()
+    nonisolated(unsafe) private static var removalObserver: ((URL) -> Void)?
+    /// Tests observe completed removal on the thread that performed it.
+    static var testDidRemove: ((URL) -> Void)? {
+        get { removalLock.lock(); defer { removalLock.unlock() }; return removalObserver }
+        set { removalLock.lock(); defer { removalLock.unlock() }; removalObserver = newValue }
+    }
+    #endif
+    deinit {
+        guard temporary else { return }
+        // Each spool has a fresh UUID path. Readers retain the input while
+        // opening it; ImageIO's lazy reads own a duplicated file descriptor.
+        Self.removals.async { [url] in
+            try? FileManager.default.removeItem(at: url)
+            #if DEBUG
+            Self.testDidRemove?(url)
+            #endif
+        }
+    }
     /// CommonCrypto's, not CryptoKit's: launching an app that touches no
     /// other CryptoKit then dirties none of its pages (40 KB in euxy on iOS).
     private static func sha256(_ data: Data) -> String {
@@ -125,7 +148,7 @@ final class RasterInput: @unchecked Sendable {
     /// process's shared connections, as a browser's images do.
     /// An `urgent` one (a picture that fills the screen, asked as it starts)
     /// goes first, with the longer whole-load bound (`RasterRetry`).
-    static func fetch(_ url: URL, urgent: (() -> Bool)? = nil, cancellation: RasterCancellation, done: @escaping (Result<RasterInput, Error>) -> Void) {
+    package static func fetch(_ url: URL, urgent: (() -> Bool)? = nil, cancellation: RasterCancellation, done: @escaping (Result<RasterInput, Error>) -> Void) {
         do {
             try RasterDownload(url: url, urgency: urgent).start(cancellation) { result in
                 done(result.map { RasterInput(url: $0.0, encodedBytes: $0.1, temporary: true, status: $0.2.map { ($0, url) }) })
@@ -175,7 +198,12 @@ final class RasterInput: @unchecked Sendable {
         let prefix = try file.read(upToCount: RasterMetadata.headerLimit) ?? Data()
         return try RasterMetadata.read(prefix: prefix, encodedBytes: encodedBytes)
     }
-    func bytes() throws -> Data {
+    package func bytes() throws -> Data {
+        try withBytes { bytes, _ in bytes }
+    }
+    /// The decode and its animation use the same opened file. The animation
+    /// duplicates the descriptor before this read closes it.
+    func withBytes<T>(_ body: (Data, FileHandle) throws -> T) throws -> T {
         let file = try handle()
         defer { try? file.close() }
         // A changed file cannot make readToEnd allocate an unbounded buffer.
@@ -183,7 +211,7 @@ final class RasterInput: @unchecked Sendable {
         try file.seek(toOffset: 0)
         let bytes = try file.read(upToCount: encodedBytes) ?? Data()
         guard bytes.count == encodedBytes else { throw RasterFailure.decode }
-        return bytes
+        return try body(bytes, file)
     }
 }
 

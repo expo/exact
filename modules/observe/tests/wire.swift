@@ -68,7 +68,28 @@ enum WireHarness {
         out["initialization"] = ["returnedMs": Double(constructed - began) / 1_000_000, "readyMs": Double(ready - began) / 1_000_000,
                                  "threads": SQLiteThreads.counts()] as [String: Any]
         out["retry"] = try retryState(fixture, config: config, root: root.appendingPathComponent("retry"))
+        out["crash"] = try crashState(fixture, config: config, root: root.appendingPathComponent("crash"))
         FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: out))
+    }
+
+    /// A pending crash record across a launch whose store refuses the row, then one that stores it.
+    private static func crashState(_ fixture: [String: Any], config: [String: Any], root: URL) throws -> [String: Any] {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let record = root.appendingPathComponent("exact-observe-pending-crashed.json")
+        try JSONSerialization.data(withJSONObject: ["session": "crashed", "sessionStart": 1, "signal": 11]).write(to: record)
+        let clientId = UUID(uuidString: fixture["clientId"] as! String)!
+        let crashes = { (service: ObserveService) in
+            service.queue.sync { service.store?.rows("SELECT COUNT(*) FROM logs WHERE name = 'native.exception'", []).first?.first as? Int64 ?? -1 }
+        }
+        let schema = ObserveStore(directory: root)!
+        schema.run("CREATE TRIGGER refuse BEFORE INSERT ON logs BEGIN SELECT RAISE(ABORT, 'refused'); END", [])
+        let refused = ObserveService(config: config, handoff: Data(), root: root, clientId: clientId)
+        let refusedRows = crashes(refused)
+        let keptAfterRefusal = FileManager.default.fileExists(atPath: record.path)
+        schema.run("DROP TRIGGER refuse", [])
+        let stored = ObserveService(config: config, handoff: Data(), root: root, clientId: clientId)
+        return ["refusedRows": refusedRows, "keptAfterRefusal": keptAfterRefusal,
+                "storedRows": crashes(stored), "keptAfterStore": FileManager.default.fileExists(atPath: record.path)]
     }
 
     private static func retryState(_ fixture: [String: Any], config: [String: Any], root: URL) throws -> [String: Any] {

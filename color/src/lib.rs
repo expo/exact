@@ -3,7 +3,7 @@
 //! [`Rgba8`]; the rest keep their space ([`Wide`]). No ICC conversion.
 //!
 //! Transcendentals use the locked `libm` kernels, shared by folding and runtime
-//! colour arithmetic, so host libm rounding cannot change Tamber's IR or digests.
+//! colour arithmetic, so host libm rounding cannot change Forma's IR or digests.
 //! Cubes use explicit multiplication rather than `powi`'s unspecified precision.
 
 mod mix;
@@ -290,7 +290,7 @@ pub fn refusal(input: &str) -> Option<&'static str> {
             .iter()
             .enumerate()
             .map(|(i, p)| match p.strip_suffix('%').and_then(number) {
-                Some(v) if i < 3 => number_text(v * 255.0 / 100.0),
+                Some(v) if i < 3 => exact_num::js(v * 255.0 / 100.0),
                 _ => p.to_string(),
             })
             .collect();
@@ -614,7 +614,7 @@ impl Wide {
             if self.missing[i] {
                 "none".to_string()
             } else {
-                number_text(v)
+                exact_num::js(v)
             }
         };
         let [a, b, c] = [0, 1, 2].map(|i| n(i, self.c[i]));
@@ -752,18 +752,6 @@ pub fn p3_8_to_srgb(c: Rgba8) -> Rgba8 {
         [c.r, c.g, c.b].map(|v| srgb_to_linear(f64::from(v) / 255.0)),
     );
     encode8(lin, c.a)
-}
-
-/// A number as JavaScript's `String(n)` writes it, for finite, moderate values.
-pub fn number_text(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{}", v as i64);
-    }
-    let mut s = format!("{v}");
-    if s.contains('e') {
-        s = format!("{v:.6}");
-    }
-    s
 }
 
 type M3 = [[f64; 3]; 3];
@@ -1065,17 +1053,29 @@ pub const PROFILES: [(&str, &str, usize); 12] = [
 ];
 
 /// `color(--name c… [/ alpha])`: the name, one to four components, alpha.
+/// The function's name is case-insensitive and a dashed ident is not, as
+/// in CSS: an app's `--Brand` keeps its case. A standard space (`PROFILES`)
+/// is matched in any case and named in lowercase.
 pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
-    let s = input.trim().to_ascii_lowercase();
-    let body = s.strip_prefix("color(")?.strip_suffix(')')?.trim_start();
+    let s = input.trim();
+    if !s.get(..6)?.eq_ignore_ascii_case("color(") {
+        return None;
+    }
+    let body = s[6..].strip_suffix(')')?.trim_start();
     if !body.starts_with("--") || body.contains(',') {
         return None;
     }
     let end = body.find(char::is_whitespace)?;
-    let (name, rest) = (&body[..end], &body[end..]);
+    let (name, rest) = (&body[..end], body[end..].to_ascii_lowercase());
+    let lower = name.to_ascii_lowercase();
+    let name = if PROFILES.iter().any(|p| p.0 == lower) {
+        lower
+    } else {
+        name.to_string()
+    };
     let (main, alpha) = match rest.split_once('/') {
         Some((m, a)) => (m, Some(a.trim())),
-        None => (rest, None),
+        None => (rest.as_str(), None),
     };
     let c: Vec<f64> = main
         .split_whitespace()
@@ -1088,7 +1088,7 @@ pub fn parse_profiled(input: &str) -> Option<(String, Vec<f64>, f64)> {
     if c.is_empty() || c.len() > 4 || alpha == Some("") {
         return None;
     }
-    Some((name.to_string(), c, alpha_value(alpha)?))
+    Some((name, c, alpha_value(alpha)?))
 }
 
 #[cfg(test)]

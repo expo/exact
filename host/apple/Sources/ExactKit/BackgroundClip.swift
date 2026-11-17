@@ -28,6 +28,13 @@ extension NodeView {
         let inset = clip == "content-box"
             ? [content.minY - bounds.minY, bounds.maxX - content.maxX, bounds.maxY - content.maxY, content.minX - bounds.minX]
             : ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
+        return innerOutline(inset, in: area)
+    }
+
+    /// The outline `inset` (top, right, bottom, left) inside the border box
+    /// `area`, its corners the border's radii less the inset (CSS Backgrounds
+    /// 3 §5.3). Inset by the border widths it is the padding edge.
+    func innerOutline(_ inset: [CGFloat], in area: CGRect) -> CGPath {
         let inner = CGRect(x: area.minX + inset[3], y: area.minY + inset[0], width: max(0, area.width - inset[1] - inset[3]),
                            height: max(0, area.height - inset[0] - inset[2]))
         let outer = BorderPaint.reduced(BorderPaint.radii(style, in: area), in: area)
@@ -74,9 +81,20 @@ extension NodeView {
 
     /// `background-clip: text`: the background colour and gradients inside
     /// the paragraph's glyphs, before the glyphs themselves paint.
-    func paintBackgroundThroughText(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, in box: CGRect) {
+    func paintBackgroundThroughText(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, in box: CGRect, lines: Range<Int>? = nil) {
         guard backgroundClip == "text", !cssVisibilityHidden else { return }
-        let glyphs = TextEngine.glyphPath(paragraph, spec: spec, in: box, scale: TextEngine.deviceScale(ctx))
+        TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, pass: .backgrounds, lines: lines,
+            background: { runs, origin in self.paintBackgroundThroughGlyphs(ctx, runs: runs, at: origin) })
+    }
+
+    func drawParagraph(_ ctx: CGContext, paragraph: Paragraph, spec: Spec, in box: CGRect, dirty: CGRect?, lines: Range<Int>?) {
+        TextEngine.draw(paragraph, spec: spec, in: box, context: ctx, dirty: dirty, lines: lines,
+            background: backgroundClip == "text" && !cssVisibilityHidden
+                ? { runs, origin in self.paintBackgroundThroughGlyphs(ctx, runs: runs, at: origin) } : nil)
+    }
+
+    private func paintBackgroundThroughGlyphs(_ ctx: CGContext, runs: [CTRun], at origin: CGPoint) {
+        let glyphs = TextEngine.glyphPath(runs, at: origin)
         guard !glyphs.isEmpty else { return }
         ctx.saveGState()
         ctx.addPath(glyphs)
@@ -93,24 +111,30 @@ extension NodeView {
 extension TextEngine {
     /// The outlines of a paragraph's glyphs where `draw` paints them, in
     /// the view's y-down space (LLP 1077 D6).
-    static func glyphPath(_ p: Paragraph, spec: Spec, in bounds: CGRect, scale: CGFloat = 1) -> CGPath {
+    static func glyphPath(_ p: Paragraph, spec: Spec, in bounds: CGRect, scale: CGFloat = 1, lines: Range<Int>? = nil) -> CGPath {
         let path = CGMutablePath()
-        for index in p.lines.indices {
+        for index in p.lines.indices where lines?.contains(index) != false {
             let line = spec.ellipsis ? p.ellipsized(index, spec: spec, width: bounds.width) : p.lines[index]
             let origin = CGPoint(x: bounds.minX + p.origin(index, align: spec.align, width: bounds.width),
                                  y: paintedLine(p.baselines[index], top: bounds.minY, scale: scale, lineScale: p.lineScale))
-            for run in (CTLineGetGlyphRuns(line) as? [CTRun]) ?? [] {
-                if (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool == true { continue }
-                let count = CTRunGetGlyphCount(run)
-                guard count > 0, let font = (CTRunGetAttributes(run) as? [CFString: Any])?[kCTFontAttributeName] else { continue }
-                var glyphs = [CGGlyph](repeating: 0, count: count), positions = [CGPoint](repeating: .zero, count: count)
-                CTRunGetGlyphs(run, CFRange(location: 0, length: count), &glyphs)
-                CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
-                for i in 0..<count {
-                    // Glyph outlines are y up from the baseline.
-                    var t = CGAffineTransform(translationX: origin.x + positions[i].x, y: origin.y - positions[i].y).scaledBy(x: 1, y: -1)
-                    if let g = CTFontCreatePathForGlyph(font as! CTFont, glyphs[i], &t) { path.addPath(g) }
-                }
+            path.addPath(glyphPath(CTLineGetGlyphRuns(line) as! [CTRun], at: origin))
+        }
+        return path
+    }
+
+    static func glyphPath(_ runs: [CTRun], at origin: CGPoint) -> CGPath {
+        let path = CGMutablePath()
+        for run in runs {
+            if (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactHidden] as? Bool == true { continue }
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0, let font = (CTRunGetAttributes(run) as? [CFString: Any])?[kCTFontAttributeName] else { continue }
+            var glyphs = [CGGlyph](repeating: 0, count: count), positions = [CGPoint](repeating: .zero, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: count), &glyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &positions)
+            for i in 0..<count {
+                // Glyph outlines are y up from the baseline.
+                var t = CGAffineTransform(translationX: origin.x + positions[i].x, y: origin.y - positions[i].y).scaledBy(x: 1, y: -1)
+                if let g = CTFontCreatePathForGlyph(font as! CTFont, glyphs[i], &t) { path.addPath(g) }
             }
         }
         return path

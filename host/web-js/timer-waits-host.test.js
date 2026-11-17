@@ -51,6 +51,14 @@ function fixture() {
     intersect(value) { intersect([{ isIntersecting: value }]); },
   };
 }
+test('an advance that stops on a journal line ends the check, and drive schedules the rest', () => {
+  const f = fixture();
+  let advances = 0, drives = 0;
+  rt.advance = () => ++advances < 4 ? 'refused advance: 4096 commits in one advance (TIMER_FIRE_LIMIT)' : false;
+  rt.drive = () => { drives++; };
+  f.task(1); f.task(4); f.at(10); f.check();
+  expect([advances, drives, f.fired, f.frames.size, f.idles.size]).toEqual([1, 1, [], 0, 0]);
+});
 test('a frame wait requests a callback and a stale callback cannot admit after takeover', () => {
   const f = fixture(); f.task(1); f.at(10); f.check();
   expect(f.fired).toEqual([]); expect(f.frames.size).toBe(1);

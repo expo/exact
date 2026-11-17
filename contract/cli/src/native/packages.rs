@@ -1,7 +1,7 @@
 //! The Rust host builder (LLP 1133.001 D5's `rust-static`, built by LLP
 //! 1133.022 D10 item 5): the Linux or Windows implementation bound to each
 //! interface the plan's modules name, compiled as a module of the app's own
-//! host crate, and the table the host binds (`exact_linux::package`).
+//! host crate, and the table the host binds (`exact_painted::package`).
 //!
 //! Each implementation is chosen as the other builders choose (LLP 1133.001
 //! D4, `implementationFor` in `js/bake/src/typescript.mjs`): the one
@@ -13,7 +13,7 @@
 //! The root joins the app's crate by a `#[path]` module, as an app's own
 //! hatches join it by `include!` (LLP 1075.003.000.001 §5): its submodules
 //! resolve beside it, and it names exact2's crates the app's crate already
-//! depends on (`exact_linux::package`). No Cargo manifest is generated, so
+//! depends on (`exact_painted::package`). No Cargo manifest is generated, so
 //! a package's Rust takes no crate of its own yet.
 
 use std::path::{Path, PathBuf};
@@ -28,7 +28,9 @@ pub struct Bound {
     pub extension: String,
     /// The implementation's root Rust file.
     pub root: PathBuf,
-    /// The type in it that implements `exact_linux::package::Package`.
+    /// The declaration that selects the root and class.
+    pub manifest: PathBuf,
+    /// The type in it that implements `exact_painted::package::Package`.
     pub class: String,
 }
 
@@ -46,7 +48,7 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
         {
             continue;
         }
-        let Some((dir, json)) = implementation_for(app_root, &name, &root, target)? else {
+        let Some((_, dir, json)) = implementation_for(app_root, &name, &root, target)? else {
             continue;
         };
         if !matches!(json["platform"].as_str(), Some("linux" | "windows")) {
@@ -71,6 +73,7 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
         out.push(Bound {
             extension,
             root,
+            manifest: dir.join("exact.json"),
             class: class.to_owned(),
         });
     }
@@ -78,7 +81,7 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
 }
 
 /// The text an app's host crate includes for `target`: each bound root as a
-/// `#[path]` module and `exact_packages()`, the table `exact_linux::Composed`
+/// `#[path]` module and `exact_packages()`, the table `exact_painted::Composed`
 /// takes. With nothing bound the table is empty.
 pub fn rust_packages(app_root: &Path, extensions: &[&str], target: &str) -> Result<String, String> {
     let bound = match target {
@@ -96,22 +99,17 @@ pub fn rust_packages(app_root: &Path, extensions: &[&str], target: &str) -> Resu
             b.extension
                 .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
         );
-        if let Some(dir) = b.root.parent() {
-            println!(
-                "cargo:rerun-if-changed={}",
-                dir.join("exact.json").display()
-            );
-        }
+        println!("cargo:rerun-if-changed={}", b.manifest.display());
         text += &format!(
             "#[path = {:?}]\n#[allow(dead_code, missing_docs, unused_imports, clippy::all)]\nmod {module};\n",
             b.root.display().to_string()
         );
         entries += &format!(
-            "        exact_linux::package::Entry::of::<{module}::{}>({:?}),\n",
+            "        exact_painted::package::Entry::of::<{module}::{}>({:?}),\n",
             b.class, b.extension
         );
     }
-    text += "/// The packages this build composes, for `exact_linux::Composed`.\n#[allow(dead_code)]\nfn exact_packages() -> Vec<exact_linux::package::Entry> {\n    vec![\n";
+    text += "/// The packages this build composes, for `exact_painted::Composed`.\n#[allow(dead_code)]\nfn exact_packages() -> Vec<exact_painted::package::Entry> {\n    vec![\n";
     text += &entries;
     text += "    ]\n}\n";
     Ok(text)
@@ -197,7 +195,7 @@ fn implementation_for(
     name: &str,
     root: &Path,
     target: &str,
-) -> Result<Option<(PathBuf, Value)>, String> {
+) -> Result<Option<(String, PathBuf, Value)>, String> {
     let covers = |json: &Value| {
         json["kind"] == "implementation"
             && json["implements"]
@@ -209,16 +207,24 @@ fn implementation_for(
             && (json["targets"].as_array().into_iter().flatten()).any(|t| t == target)
     };
     let at = |package: &str| {
-        let (dir, _) = located(app_root, package)?;
+        let parts: Vec<_> = package.split('/').collect();
+        let take = if package.starts_with('@') { 2 } else { 1 };
+        let name = parts.get(..take)?.join("/");
+        let subpath = parts.get(take..)?.join("/");
+        let (dir, _) = located(app_root, &name)?;
         let manifest = read(&dir.join("package.json"))?;
-        let main = export(&manifest["exports"], ".")?;
-        let file = dir.join(main);
+        let key = if subpath.is_empty() {
+            ".".into()
+        } else {
+            format!("./{subpath}")
+        };
+        let file = dir.join(export(&manifest["exports"], &key)?);
         Some((file.parent()?.to_path_buf(), read(&file)?))
     };
     let manifest = read(&app_root.join("app.json")).unwrap_or_default();
     if let Some(named) = manifest["implementations"][name][target].as_str() {
         return match at(named) {
-            Some((dir, json)) if covers(&json) => Ok(Some((dir, json))),
+            Some((dir, json)) if covers(&json) => Ok(Some((named.to_owned(), dir, json))),
             found => Err(format!(
                 "bake-implementation-missing: app.json names {named} for {name} on {target}, and {}",
                 if found.is_some() {
@@ -240,8 +246,8 @@ fn implementation_for(
             direct[0].0, direct[1].0, direct[0].0
         ));
     }
-    if let Some((_, dir, json)) = direct.into_iter().next() {
-        return Ok(Some((dir, json)));
+    if let Some(selected) = direct.into_iter().next() {
+        return Ok(Some(selected));
     }
     let Some(manifest) = read(&root.join("package.json")) else {
         return Ok(None);
@@ -254,7 +260,11 @@ fn implementation_for(
         let path = root.join(file);
         if let (Some(json), Some(dir)) = (read(&path), path.parent()) {
             if file.ends_with("exact.json") && covers(&json) {
-                return Ok(Some((dir.to_path_buf(), json)));
+                return Ok(Some((
+                    format!("{name}{}", key.strip_prefix('.').unwrap_or(key)),
+                    dir.to_path_buf(),
+                    json,
+                )));
             }
         }
     }
@@ -286,4 +296,70 @@ pub fn write_desktop_packages(
         return Ok(());
     }
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// LLP 1133.001 D2: an implicit swap refuses the bake; an explicit swap
+/// makes the imported name answer its own substitute on that target.
+pub(crate) fn implementation_imports(
+    path: &Path,
+    app_root: &Path,
+    plan: &mut exact_plan::Plan,
+) -> Result<(), Vec<crate::CompileError>> {
+    let refuse = |message: String| {
+        vec![crate::CompileError {
+            pass: "bake",
+            id: message
+                .split(':')
+                .next()
+                .unwrap_or("bake-implementation-unbound")
+                .into(),
+            message,
+            span: contract_syntax::Span::default(),
+            file: Some(path.into()),
+            related: Box::new([]),
+        }]
+    };
+    let manifest = read(&app_root.join("app.json")).unwrap_or_default();
+    for index in 0..plan.modules.len() {
+        let row = &plan.modules[index];
+        let mut sub: Value = serde_json::from_str(plan.str(row.substitute)).unwrap_or_default();
+        let Some(owner) = sub["owner"].as_str() else {
+            continue;
+        };
+        let interface = plan.str(row.package);
+        let Some((root, _)) = located(app_root, interface) else {
+            continue;
+        };
+        let mut overrides = Vec::new();
+        for target in sub["implementationTargets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let Some(target) = target.as_str() else {
+                continue;
+            };
+            let selected =
+                implementation_for(app_root, interface, &root, target).map_err(refuse)?;
+            if selected.as_ref().is_some_and(|(name, _, _)| name == owner) {
+                continue;
+            }
+            if manifest["implementations"][interface][target].is_string() {
+                overrides.push(target.to_owned());
+            } else {
+                let bound = selected
+                    .as_ref()
+                    .map_or("none", |(name, _, _)| name.as_str());
+                return Err(refuse(format!(
+                    "bake-implementation-unbound: import `{}` from `{owner}` covers {target}, but `{interface}` binds `{bound}`; bind `{owner}` in app.json or remove the import",
+                    plan.str(row.declared)
+                )));
+            }
+        }
+        if !overrides.is_empty() {
+            sub["implementationOverrides"] = serde_json::json!(overrides);
+            plan.set_module_substitute(index, &sub.to_string());
+        }
+    }
+    Ok(())
 }

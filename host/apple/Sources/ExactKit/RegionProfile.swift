@@ -1,4 +1,4 @@
-// Immutable retained ICC bytes only; never a raw UI context identity or CT layout object.
+// Immutable ICC bytes and extended-sRGB identity; never a UI context or CT layout object.
 import Foundation
 import CoreGraphics
 
@@ -40,8 +40,12 @@ final class NativeProfile: Sendable, Equatable {
     static let maximumBytes = 256 * 1024
     let bytes: Data
     private let charge: NativeProfileCharge
-    private init(bytes: Data, charge: NativeProfileCharge) { self.bytes = bytes; self.charge = charge }
-    static func == (lhs: NativeProfile, rhs: NativeProfile) -> Bool { lhs.bytes == rhs.bytes }
+    // ICC exports extended sRGB as sRGB. Keep its extended components through reconstruction.
+    private let extended: Bool
+    private init(bytes: Data, charge: NativeProfileCharge, extended: Bool) {
+        self.bytes = bytes; self.charge = charge; self.extended = extended
+    }
+    static func == (lhs: NativeProfile, rhs: NativeProfile) -> Bool { lhs.bytes == rhs.bytes && lhs.extended == rhs.extended }
 
     static func capture(original: CGColorSpace, data: CFData?, account: NativeProfileAccount) -> NativeProfileCapture {
         func refused(_ reason: ProfileRefusal) -> NativeProfileCapture { NativeProfileCapture(owner: nil, refusal: reason) }
@@ -51,18 +55,20 @@ final class NativeProfile: Sendable, Equatable {
         guard count > 0, let reconstructed = CGColorSpace(iccData: data) else { return refused(.reconstruction) }
         guard original.model == .rgb, original.numberOfComponents == 3,
               reconstructed.model == .rgb, reconstructed.numberOfComponents == 3 else { return refused(.model) }
-        guard CFEqual(original, reconstructed) else { return refused(.notEquivalent) }
+        let extended = original == CGColorSpace(name: CGColorSpace.extendedSRGB)
+            && reconstructed == CGColorSpace(name: CGColorSpace.sRGB)
+        guard extended || CFEqual(original, reconstructed) else { return refused(.notEquivalent) }
         guard let roundtrip = reconstructed.copyICCData(), CFEqual(data, roundtrip) else { return refused(.roundtrip) }
         guard let charge = account.reserve(count) else { return refused(.capacity) }
         // Own the bytes explicitly; temporary API-provided CFData and framework heaps are separate.
         let bytes = Data(bytes: CFDataGetBytePtr(data)!, count: count)
-        return NativeProfileCapture(owner: NativeProfile(bytes: bytes, charge: charge), refusal: nil)
+        return NativeProfileCapture(owner: NativeProfile(bytes: bytes, charge: charge, extended: extended), refusal: nil)
     }
 
     func makeSpace() -> CGColorSpace? {
         guard let space = CGColorSpace(iccData: bytes as CFData), space.model == .rgb, space.numberOfComponents == 3,
               let roundtrip = space.copyICCData(), (roundtrip as Data) == bytes else { return nil }
-        return space
+        return extended ? CGColorSpace(name: CGColorSpace.extendedSRGB) : space
     }
 }
 

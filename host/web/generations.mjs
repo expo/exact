@@ -13,6 +13,16 @@ import { resolve } from 'node:path';
 import { BESIDE } from './beside.mjs';
 import { lockHeld } from './build-lock.mjs';
 import { buildTreeFileAsync } from './serve.mjs';
+import { withoutBase } from '../web-js/route-pattern.js';
+
+export function buildBase(dist) {
+  try { return JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).base ?? '/'; }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    try { return JSON.parse(readFileSync(resolve(`${dist}.previous`, 'routes.json'), 'utf8')).base ?? '/'; }
+    catch (previous) { if (previous.code === 'ENOENT') return '/'; throw previous; }
+  }
+}
 
 /** A generation's form: 32 lowercase hex digits, nothing else. */
 export const GENERATION = /^[0-9a-f]{32}$/;
@@ -28,13 +38,19 @@ const generationsOf = (dist) => `${dist}.gen`, leasesOf = (dist) => `${dist}.lea
  * another is never touched. */
 export function foreignBeside(dist) {
   const receipt = (dir) => realDirectory(dir) && realFile(resolve(dir, '.exact-build.json'));
-  const entries = (dir, each) => realDirectory(dir) && readdirSync(dir).every((name) => each(name, resolve(dir, name)));
+  // A drive releases its lease, and the emptied directory, without the lock: an entry gone meanwhile was a lease.
+  const gone = (path) => { try { lstatSync(path); return false; } catch (e) { return e.code === 'ENOENT'; } };
+  const entries = (dir, each) => {
+    let names;
+    try { names = realDirectory(dir) ? readdirSync(dir) : null; } catch (e) { return e.code === 'ENOENT'; }
+    return names ? names.every((name) => each(name, resolve(dir, name))) : gone(dir);
+  };
   const lines = (file, form) => realFile(file) && readFileSync(file, 'utf8').split('\n').every((line) => line === '' || form.test(line));
   const owned = {
     previous: [receipt, 'a web build (its .exact-build.json)'],
     gen: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && receipt(at)), 'builds kept by generation'],
     'gen.reaped': [(file) => lines(file, GENERATION), 'the generations reaped'],
-    leases: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && entries(at, (lease, file) => /^\d+-\d+$/.test(lease) && realFile(file))), 'leases on kept builds'],
+    leases: [(dir) => entries(dir, (name, at) => GENERATION.test(name) && entries(at, (lease, file) => /^\d+-\d+$/.test(lease) && (realFile(file) || gone(file)))), 'leases on kept builds'],
     lock: [(file) => lines(file, /^\d+$/), 'a build\'s lock'],
   };
   for (const name of BESIDE) {
@@ -137,13 +153,22 @@ const bytesIn = (dir) => {
  * cap leased generations alone exceed is said once and kept. */
 let overSaid = false;
 export function reapGenerations(dist, keep = KEEP, now = Date.now()) {
+  const refuseForeign = () => { const foreign = foreignBeside(dist); if (foreign) throw new Error(foreign); };
+  refuseForeign();
   let names = [];
   try { names = readdirSync(generationsOf(dist)); } catch { return []; }
   const leased = leasedGenerations(dist);
   const kept = names.filter((n) => GENERATION.test(n) && realDirectory(resolve(generationsOf(dist), n)))
     .map((id) => ({ id, at: statSync(resolve(generationsOf(dist), id)).mtimeMs })).sort((a, b) => b.at - a.at);
-  const reaped = [], gone = (g) => { rmSync(resolve(generationsOf(dist), g.id), { recursive: true, force: true }); reaped.push(g.id); };
-  const told = () => { if (reaped.length) writeFileSync(reapedOf(dist), [...[...reapedIds(dist)].filter((id) => !reaped.includes(id)), ...reaped].slice(-256).join('\n') + '\n'); };
+  const reaped = [];
+  const gone = (g) => {
+    refuseForeign();
+    rmSync(resolve(generationsOf(dist), g.id), { recursive: true, force: true });
+    reaped.push(g.id);
+    // A later ownership check can abort the pass; completed deletions must still answer 410.
+    const ids = [...reapedIds(dist)].filter((id) => id !== g.id);
+    writeFileSync(reapedOf(dist), [...ids, g.id].slice(-256).join('\n') + '\n');
+  };
   const left = [];
   for (const [i, g] of kept.entries()) {
     if (leased.has(g.id) || i < keep.newest || now - g.at < keep.ageMs) left.push(g); else gone(g);
@@ -156,9 +181,6 @@ export function reapGenerations(dist, keep = KEEP, now = Date.now()) {
     gone(g); total -= g.bytes;
   }
   if (total > keep.bytes && !overSaid) { overSaid = true; console.log(`${generationsOf(dist)}: leased builds alone hold ${Math.round(total / 2 ** 20)} MiB, past the ${Math.round(keep.bytes / 2 ** 20)} MiB cap; kept while their drives run`); }
-  // Anything else there (a half-moved tree, a stray name) is not a generation.
-  for (const n of names) if (!GENERATION.test(n)) rmSync(resolve(generationsOf(dist), n), { recursive: true, force: true });
-  told();
   return reaped;
 }
 
@@ -180,9 +202,10 @@ const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const swapping = (dist) => lockHeld(`${dist}.lock`);
 /** A file of generation `id` of `dist` for a request path, read whole from that build: the current one when it is
  * still `id` after the read, else the kept tree (asked again, for up to a second, while a swap holds `dist.lock`:
- * its rename lands under it); 'gone' for a generation reaped, 'busy' while a swap still holds the lock past that
- * second, null for no such file or an id that names nothing. With `miss`, no such file is the build's page for a
- * miss where it has one (`buildTreeFile`). */
+ * its rename lands under it, and while a read of the current build fails with its generation unchanged, as across a
+ * byte-identical swap); 'gone' for a generation reaped, 'busy' when either lasts past that second, null for no such
+ * file or an id that names nothing. With `miss`, no such file is the build's page for a miss where it has one
+ * (`buildTreeFile`). */
 export async function generationFile(dist, id, pathname, accept = '', { miss = false } = {}) {
   for (const end = Date.now() + 1000; ;) {
     if (generationOf(dist) === id) {
@@ -190,20 +213,29 @@ export async function generationFile(dist, id, pathname, accept = '', { miss = f
       if (found?.status === 503) return 'busy'; // (its route table unreadable: serve.mjs `buildTreeFile`)
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* moved */ }
-      if (generationOf(dist) === id) return found && body ? { ...found, body, id } : null;
+      const now = generationOf(dist);
+      if (now === id && (!found || body)) return found ? { ...found, body, id } : null;
+      if (now !== id) continue;
+      if (Date.now() > end) return 'busy';
+      await sleep(10);
       continue;
     }
-    const dir = resolve(generationsOf(dist), id);
-    if (realDirectory(dir)) {
+    const dir = resolve(generationsOf(dist), id), kept = realDirectory(dir);
+    if (kept) {
       const found = await buildTreeFileAsync(dir, pathname, accept, { miss });
       if (found?.status === 503) return 'busy';
       let body = null;
       try { body = found && readFileSync(found.path); } catch { /* reaped meanwhile */ }
       if (body) return { ...found, body, id };
-      // No such file there, unless the tree is being reaped under the swap's lock (its files go before it does).
-      if (!found && realDirectory(dir) && !swapping(dist)) return null;
     }
-    if (!swapping(dist)) return reapedIds(dist).has(id) ? 'gone' : null;
+    if (!swapping(dist)) {
+      // Since the looks above, a swap can have put the generation back in place, or kept it where the look found no
+      // kept tree, and let go of its lock
+      if (generationOf(dist) === id || (!kept && realDirectory(dir))) continue;
+      // No such file in a kept tree still there; a tree reaped under the swap's lock loses its files before it goes
+      if (kept && realDirectory(dir)) return null;
+      return reapedIds(dist).has(id) ? 'gone' : null;
+    }
     // A swap still under way past the second (a slow reap): not known yet, said as such (503), never as absent.
     if (Date.now() > end) return 'busy';
     await sleep(10);
@@ -223,7 +255,8 @@ export function withGenerationBase(html, id, base = '/') {
  * build; a document's base set to its generation. `{ status, route?, body?, id?, render? }`: 200, 400 for a malformed
  * generation path, 404 (with the build's page for a miss where it has one), or 410 for a generation kept no more;
  * `render`, for the shell, is the render policy of the route it is served for. */
-export async function servedFile(dist, pathname, accept = '', { base = '/', pinned = null } = {}) {
+export async function servedFile(dist, pathname, accept = '', { base = buildBase(dist), pinned = null } = {}) {
+  if (withoutBase(pathname, base) === null) return { status: 404 };
   const under = generationPath(pathname, base);
   if (under === 'bad') return { status: 400 };
   // The path in the app: a request under a generation names its page without that prefix.
@@ -251,5 +284,5 @@ export async function servedFile(dist, pathname, accept = '', { base = '/', pinn
   }
   if (!found) return { status: 404 };
   const body = found.route.endsWith('.html') && found.id ? withGenerationBase(found.body, found.id, base) : found.body;
-  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location };
+  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location, immutable: found.immutable };
 }

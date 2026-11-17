@@ -93,7 +93,8 @@ class InAppBrowserModule(context: ExtensionContext) : ExactExtension(context) {
         }
         customTabsBuilder?.invoke(builder)
         try {
-            builder.build().launchUrl(activity, uri)
+            val tab = builder.build()
+            dev.exact.canvas.SystemBrowser.launch(activity, uri, tab.intent, options = tab.startAnimationBundle)
         } catch (e: android.content.ActivityNotFoundException) {
             return reply(JSONObject().put("error", "NotSupportedError").put("message", "no browser opens this page"))
         }

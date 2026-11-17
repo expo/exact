@@ -35,10 +35,9 @@ component Main
     .unwrap()
 }
 
-/// The title's weight and stretch, as the kernel holds them.
-fn axes(r: &Runner<NoData>) -> (u16, f32) {
+fn title(r: &Runner<NoData>) -> u32 {
     let found = agent::handle(r, r#"{"op":"tree","target":"title","shallow":true}"#);
-    let id: u32 = found
+    found
         .split("{\"id\":")
         .nth(1)
         .unwrap()
@@ -46,8 +45,12 @@ fn axes(r: &Runner<NoData>) -> (u16, f32) {
         .next()
         .unwrap()
         .parse()
-        .unwrap();
-    let node = r.kernel().node(id).unwrap();
+        .unwrap()
+}
+
+/// The title's weight and stretch, as the kernel holds them.
+fn axes(r: &Runner<NoData>) -> (u16, f32) {
+    let node = r.kernel().node(title(r)).unwrap();
     let style = r.kernel().arena().style(node.key.index);
     (style.font_weight, style.font_stretch)
 }
@@ -107,5 +110,49 @@ fn without_a_transition_a_weight_lands_at_once() {
     let mut r = boot("opacity 400ms");
     r.act("toggle", vec![]).unwrap();
     assert_eq!(axes(&r), (700, 125.0));
+    assert!(!r.wants_frames());
+}
+
+#[test]
+fn a_transition_row_that_stops_covering_a_font_row_cancels_its_transition() {
+    let source = r#"
+component Main
+  state bold = false
+  state animate = true
+  action toggle
+    bold = !bold
+  action stop
+    animate = false
+  view
+    column
+      text "Library" testId="title" font-weight=(bold ? 700 : 300) font-stretch=(bold ? "125%" : "75%") font-variation-settings=(bold ? "'GRAD' 100" : "'GRAD' 0") transition=(animate ? "all 400ms linear" : "font-stretch 400ms linear")
+"#;
+    let plan = contract::compile(source).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let grad = |r: &Runner<NoData>| {
+        let node = r.kernel().node(title(r)).unwrap();
+        let style = r.kernel().arena().style(node.key.index);
+        style.font_variation_settings.css()
+    };
+    r.act("toggle", vec![]).unwrap();
+    r.advance(100.0).unwrap();
+    assert_eq!(axes(&r), (400, 87.5));
+    assert_eq!(grad(&r), r#""GRAD" 25"#);
+    // CSS Transitions 1 §3: a running transition that no
+    // `transition-property` matches any more is cancelled, and the row
+    // takes its after-change value.
+    r.act("stop", vec![]).unwrap();
+    assert_eq!(axes(&r), (700, 87.5));
+    assert_eq!(grad(&r), r#""GRAD" 100"#);
+    r.advance(400.0).unwrap();
+    assert_eq!(axes(&r), (700, 125.0));
+    assert_eq!(grad(&r), r#""GRAD" 100"#);
     assert!(!r.wants_frames());
 }

@@ -11,7 +11,7 @@ name = "exact-apple-painted"
 path = "src/main.rs"
 
 [dependencies]
-exact-linux = { path = "../linux" }
+exact-painted = { path = "../painted" }
 exact-runner = { path = "../../runner" }
 serde_json = "1"
 

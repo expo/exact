@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { EXE } from '../scripts/paths.mjs';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -116,6 +117,9 @@ test('generated commands run from an external author directory with quoted paths
     for (const file of ['app-cli.mjs', 'bun.mjs']) cpSync(resolve(import.meta.dir, '../scripts', file), resolve(sdk, 'scripts', file));
     mkdirSync(resolve(sdk, 'js/bake/src'), { recursive: true });
     cpSync(resolve(import.meta.dir, '../js/bake/src/__exact_env.mjs'), resolve(sdk, 'js/bake/src/__exact_env.mjs'));
+    // An installed checkout's: a verb that builds is refused without node_modules (app-cli.mjs).
+    mkdirSync(resolve(sdk, 'node_modules/.bin'), { recursive: true });
+    writeFileSync(resolve(sdk, 'node_modules/.bin/rolldown'), '');
     writeFileSync(resolve(sdk,'host/windows/build.mjs'),`console.log(JSON.stringify({args:process.argv.slice(2),app:process.env.EXACT_APP_DIR}));`);
     const windows=spawnSync(process.execPath,['exact.mjs','windows','--release','--run'],{cwd:app,env:{...process.env,EXACT:sdk},encoding:'utf8'});
     assert.equal(windows.status,0,windows.stderr);
@@ -454,6 +458,21 @@ test('two copies of a new game derive byte-identical shell locks from the SDK lo
   } finally {rmSync(root,{recursive:true,force:true});}
 }, 120000);
 
+test('Rivals\' captured lock resolves its generated hosts without changing dependencies', async () => {
+  const {prepareGame, gameDefaults} = await import('./app/shells.mjs');
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'rivals-lock-')));
+  const dir = resolve(root, 'rivals'), source = resolve(import.meta.dir, 'games/rivals');
+  try {
+    mkdirSync(dir);
+    for (const entry of ['app.json', 'Cargo.lock', 'logic'])
+      cpSync(resolve(source, entry), resolve(dir, entry), {recursive:true});
+    const captured = readFileSync(resolve(dir, 'Cargo.lock'), 'utf8');
+    prepareGame(dir, gameDefaults(dir).game);
+    assert.equal(readFileSync(resolve(dir, 'Cargo.lock'), 'utf8'), captured);
+    assert.equal(readFileSync(resolve(dir, '.shells/Cargo.lock'), 'utf8'), captured);
+  } finally {rmSync(root, {recursive:true, force:true});}
+});
+
 test('game and generated shell workspaces inherit every root vendor patch', async () => {
   const {outsideWorkspaceProblems} = await import('../scripts/app.mjs');
   assert.deepEqual(outsideWorkspaceProblems(import.meta.dir), []);
@@ -471,13 +490,14 @@ test('a Windows game shell links the shared presenter its baked entry uses', () 
     const app = resolve(root, 'windows-game');
     createGame(app);
     const manifest = Bun.TOML.parse(readFileSync(resolve(app, '.shells/windows/Cargo.toml'), 'utf8'));
-    assert.deepEqual(manifest.dependencies['exact-linux'], {workspace:true});
+    assert.deepEqual(manifest.dependencies['exact-painted'], {workspace:true});
     assert.deepEqual(manifest.dependencies['exact-windows'], {workspace:true});
   } finally {rmSync(root, {recursive:true, force:true});}
 });
 
 test('the SDK lock decides every version; a game that adds packages captures its own lock', async () => {
-  const {outsideSdkLock,sdkLock}=await import('./app/shells.mjs');
+  const {sdkLock}=await import('./app/shells.mjs');
+  const {outsideSdkLock}=await import('../scripts/app-shells.mjs');
   const lock=packages=>`version = 4\n\n${packages.map(([name,version,source,deps])=>`[[package]]\nname = "${name}"\nversion = "${version}"\n${source?`source = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "${source}"\n`:''}${deps?`dependencies = [\n${deps.map(d=>` "${d}",\n`).join('')}]\n`:''}`).join('\n')}`;
   const sdk=lock([['glam','0.33.7','aa',['approx','libm']],['approx','0.5.1','bb'],['libm','0.2.16','cc'],['exact-game','0.1.0',null,['glam']]]);
   const members=new Set(['x-logic','x-gpu']);
@@ -494,7 +514,8 @@ test('the SDK lock decides every version; a game that adds packages captures its
 }, 120000);
 
 test('a root crate\'s new registry dependency or new path crate resolves before the SDK lock is refreshed', async () => {
-  const {outsideSdkLock,withRootPins}=await import('./app/shells.mjs');
+  const {withRootPins}=await import('./app/shells.mjs');
+  const {outsideSdkLock}=await import('../scripts/app-shells.mjs');
   const registry='registry+https://github.com/rust-lang/crates.io-index';
   const block=(name,version,checksum)=>`[[package]]\nname = "${name}"\nversion = "${version}"\n${checksum?`source = "${registry}"\nchecksum = "${checksum}"\n`:''}`;
   const lock=(...blocks)=>`version = 4\n\n${blocks.join('\n')}`;
@@ -534,7 +555,8 @@ test('an empty Cargo cache permits adapter generation and refuses offline resolu
 
 
 test('lockDrift names what exact2 added and moved under a captured lock, never what the game chose', async () => {
-  const {lockDrift,lockChanges}=await import('./app/shells.mjs');
+  const {lockDrift}=await import('./app/shells.mjs');
+  const {lockChanges}=await import('../scripts/app-shells.mjs');
   const lock=packages=>`version = 4\n\n${packages.map(([name,version,source,deps])=>`[[package]]\nname = "${name}"\nversion = "${version}"\n${source?`source = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "${source}"\n`:''}${deps?`dependencies = [\n${deps.map(d=>` "${d}",\n`).join('')}]\n`:''}`).join('\n')}`;
   // exact2's text crate moved to parley, which brings fontique and a newer harfrust;
   // another shell's rand 0.8 is in the SDK lock, and this game chose rand 0.9.
@@ -569,7 +591,7 @@ test('lockDrift names what exact2 added and moved under a captured lock, never w
 });
 
 test('lock seeds the SDK lock\'s versions, a same-series bump included, and keeps the game\'s own packages', async () => {
-  const {lockSeed,staleLock}=await import('./app/shells.mjs');
+  const {lockSeed,staleLock}=await import('../scripts/app-shells.mjs');
   const block=(name,version,source)=>`[[package]]\nname = "${name}"\nversion = "${version}"\n${source?`source = "${source}"\n`:''}`;
   const lock=(...blocks)=>`version = 4\n\n${blocks.join('\n')}`;
   const crates='registry+https://github.com/rust-lang/crates.io-index';
@@ -686,7 +708,7 @@ test('an app.json edited after its shells: the compiler says the copy is stale, 
   const root=resolve(import.meta.dir,'..'), built=spawnSync('cargo',['build','-q','-p','contract','--bin','contract'],{cwd:root,encoding:'utf8'});
   assert.equal(built.status,0,built.stderr);
   const parent=realpathSync(mkdtempSync(resolve(tmpdir(),'stale-shells-'))), app=resolve(parent,'my-game');
-  const build=()=>spawnSync(resolve(root,'target/debug/contract'),['build',resolve(app,'app.contract'),'-o',resolve(parent,'app.plan')],{encoding:'utf8'});
+  const build=()=>spawnSync(resolve(root,`target/debug/contract${EXE}`),['build',resolve(app,'app.contract'),'-o',resolve(parent,'app.plan')],{encoding:'utf8'});
   try {
     createGame(app);
     gameShells(app,gameDefaults(app).game,import.meta.dir);
@@ -984,7 +1006,7 @@ test('generated logic targets rebuild from each snapshot sharing a Cargo target'
       const env = {...process.env,CARGO_TARGET_DIR:target,CARGO_BUILD_BUILD_DIR:target};
       const built = spawnSync('cargo',['build','--offline','--bin','probe'],{cwd:resolve(app,'.shells'),env,encoding:'utf8'});
       assert.equal(built.status,0,built.stderr);
-      const result = spawnSync(resolve(target,'debug/probe'),[],{encoding:'utf8'});
+      const result = spawnSync(resolve(target,`debug/probe${EXE}`),[],{encoding:'utf8'});
       assert.equal(result.status,0,result.stderr);
       assert.equal(result.stdout.trim(),String(value),'the product must contain this snapshot source');
     }

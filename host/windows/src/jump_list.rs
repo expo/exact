@@ -1,7 +1,7 @@
 //! The taskbar's jump list (LLP 1133.023 D3, D17): the app manifest's
 //! `shortcuts` as its tasks, each a shell link running this executable with
 //! the item's location as its one argument, which the next launch reads as
-//! its launch location (`exact_linux::app::launch_location`). The items
+//! its launch location (`exact_painted::app::launch_location`). The items
 //! come from the build's compatibility record, which carries the manifest's
 //! `shortcuts` for every native binary (`bake/src/compat.rs`).
 //!

@@ -5,16 +5,23 @@ use exact_plan::Value;
 struct Rows(Vec<String>);
 impl DataSource for Rows {
     fn query(&mut self, name: &str, args: &[Value]) -> Result<Value, DataError> {
-        if name == "refuse" {
+        if name == "refuse" || (name == "refuse_second" && args[0].as_str() == Some("11")) {
             return Err(DataError::BadArguments("refused drop".into()));
         }
         if name == "trim" {
             self.0.drain(..10);
         }
+        if name == "reset" {
+            self.0 = (0..30).map(|i| i.to_string()).collect();
+        }
         if name == "empty" {
             return Ok(Value::list(vec![]));
         }
-        if name == "move" || name == "remove" {
+        // `move2` applies two moves in one reply.
+        for args in args
+            .chunks(2)
+            .filter(|_| ["move", "move2", "remove"].contains(&name))
+        {
             let at = self
                 .0
                 .iter()
@@ -30,7 +37,7 @@ impl DataSource for Rows {
                 .iter()
                 .position(|k| Some(k.as_str()) == before)
                 .unwrap_or(self.0.len());
-            if name == "move" {
+            if name != "remove" {
                 self.0.insert(to, item);
             }
         }
@@ -167,6 +174,7 @@ fn cancellation_ordinary_moves_and_preview_measurements_keep_their_anchor() {
             let token = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
             r.preview_reorder(token, g, 300.).unwrap();
             r.cancel_reorder(token).unwrap();
+            r.finish_reorder(token).unwrap();
         }
         r.act(
             "receive",
@@ -281,6 +289,7 @@ fn same_slot_drop_does_not_anchor_a_later_move() {
         .token;
         r.preview_reorder(token, g.clone(), 200.).unwrap();
         r.drop_reorder(token, g).unwrap().unwrap();
+        r.finish_reorder(token).unwrap();
         r.act(
             "receive",
             vec![Value::str("10"), Value::some(Value::str("12"))],
@@ -296,11 +305,12 @@ fn same_slot_drop_does_not_anchor_a_later_move() {
 
 #[test]
 fn refused_or_cancelled_drop_does_not_anchor_a_later_move() {
-    for (cancel, grouped, refused) in [
-        (false, false, true),
-        (true, false, true),
-        (false, true, true),
-        (true, false, false),
+    for (cancel, grouped, refused, finish_first) in [
+        (false, false, true, false),
+        (true, false, true, false),
+        (false, true, true, false),
+        (true, false, false, false),
+        (true, false, false, true),
     ] {
         let source = SOURCE.replace("send changed = move(item, before)", if refused { "send changed = refuse(item, before)" } else { "send changed = unchanged()" })
             .replace("  view", "  action move_now(item: string, before: option<string>)\n    send changed = move(item, before)\n  view");
@@ -330,8 +340,14 @@ fn refused_or_cancelled_drop_does_not_anchor_a_later_move() {
             assert_eq!(frame.phase, crate::ReorderPhase::Settling);
             assert_eq!(frame.ending, None);
         }
+        if finish_first {
+            r.finish_reorder(token).unwrap();
+        }
         if cancel {
             r.cancel_reorder(token).unwrap();
+        }
+        if !finish_first {
+            r.finish_reorder(token).unwrap();
         }
         r.act(
             "move_now",
@@ -369,4 +385,241 @@ fn pending_drop_anchors_only_the_dispatched_destination() {
     )
     .unwrap();
     assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 200.);
+}
+
+#[test]
+fn deleting_the_dropped_key_or_destination_ends_its_anchor_exclusion() {
+    let source = SOURCE.replace("send changed = move(item, before)", "send changed = unchanged()")
+        .replace("  view", "  action move_now(item: string, before: option<string>)\n    send changed = move(item, before)\n  action remove_now(item: string, before: option<string>)\n    send changed = remove(item, before)\n  action reset_now()\n    send changed = reset()\n  view");
+    for removed in ["10", "15"] {
+        let (mut r, grip) = fixture_with(&source, 207., 10);
+        let b = r.reorder_binding(grip).unwrap();
+        let g = r.reorder_geometry(b.list).unwrap();
+        let token = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+        r.preview_reorder(token, g.clone(), 300.).unwrap();
+        r.drop_reorder(token, g).unwrap().unwrap();
+        r.finish_reorder(token).unwrap();
+        r.act("remove_now", vec![Value::str(removed), Value::Option(None)])
+            .unwrap();
+        r.act("reset_now", vec![]).unwrap();
+        report(&mut r, 207., None);
+        r.act(
+            "move_now",
+            vec![Value::str("10"), Value::some(Value::str("15"))],
+        )
+        .unwrap();
+        assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 287.);
+    }
+}
+
+#[test]
+fn a_later_preview_keeps_an_earlier_drops_anchor_and_deadline() {
+    let source = SOURCE.replace("send changed = move(item, before)", "send changed = unchanged()")
+        .replace("  view", "  action move_now(item: string, before: option<string>)\n    send changed = move(item, before)\n  view");
+    for grouped in [false, true] {
+        let source = source.replace(
+            "virtualized=true",
+            if grouped {
+                "virtualized=true reorderGroup=\"cards\""
+            } else {
+                "virtualized=true"
+            },
+        );
+        for cancel in [false, true] {
+            for (delay, expected) in [(700., 187.), (1000., 287.)] {
+                let (mut r, grip) = fixture_with(&source, 207., 10);
+                let b = r.reorder_binding(grip).unwrap();
+                let g = r.reorder_geometry(b.list).unwrap();
+                let token = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+                r.preview_reorder(token, g.clone(), 300.).unwrap();
+                r.drop_reorder(token, g).unwrap().unwrap();
+                r.advance(600.).unwrap();
+                r.finish_reorder(token).unwrap();
+
+                let grip = r.kernel().find_by_test_id("grip-11")[0];
+                report(&mut r, 207., Some(grip));
+                let next = r.reorder_binding(grip).unwrap();
+                let g = r.reorder_geometry(b.list).unwrap();
+                let next = if grouped {
+                    r.begin_group_reorder(next, g, false)
+                } else {
+                    r.begin_reorder(next, g)
+                }
+                .unwrap()
+                .unwrap()
+                .token;
+                if cancel {
+                    r.cancel_reorder(next).unwrap();
+                    r.finish_reorder(next).unwrap();
+                }
+                r.advance(delay).unwrap();
+                r.act(
+                    "move_now",
+                    vec![Value::str("10"), Value::some(Value::str("15"))],
+                )
+                .unwrap();
+                assert_eq!(
+                    r.reorder_geometry(b.list).unwrap().scroll_top,
+                    expected,
+                    "grouped={grouped}, cancel={cancel}, delay={delay}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_second_drop_keeps_an_earlier_drops_anchor_and_deadline() {
+    for (second, grouped) in [
+        ("same_slot", false),
+        ("same_slot", true),
+        ("pending", false),
+        ("cancelled", false),
+        ("refused", false),
+        ("refused", true),
+        ("completed", false),
+        ("completed", true),
+    ] {
+        let query = if second == "refused" {
+            "refuse_second"
+        } else {
+            "unchanged"
+        };
+        let source = SOURCE.replace("move(item, before)", &format!("{query}(item, before)"))
+            .replace("  view", "  action move_now(item: string, before: option<string>)\n    send changed = move(item, before)\n  view")
+            .replace("virtualized=true", if grouped { "virtualized=true reorderGroup=\"cards\"" } else { "virtualized=true" });
+        for (delay, expected) in [(700., 187.), (1000., 287.)] {
+            let (mut r, grip) = fixture_with(&source, 207., 10);
+            let b = r.reorder_binding(grip).unwrap();
+            let g = r.reorder_geometry(b.list).unwrap();
+            let first = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+            r.preview_reorder(first, g.clone(), 300.).unwrap();
+            r.drop_reorder(first, g).unwrap().unwrap();
+            r.advance(600.).unwrap();
+            r.finish_reorder(first).unwrap();
+            r.advance(650.).unwrap();
+            let grip = r.kernel().find_by_test_id("grip-11")[0];
+            report(&mut r, 207., Some(grip));
+            let b = r.reorder_binding(grip).unwrap();
+            let g = r.reorder_geometry(b.list).unwrap();
+            let next = if grouped {
+                r.begin_group_reorder(b, g.clone(), false)
+            } else {
+                r.begin_reorder(b, g.clone())
+            }
+            .unwrap()
+            .unwrap()
+            .token;
+            let y = if second == "same_slot" { 220. } else { 300. };
+            r.preview_reorder(next, g.clone(), y).unwrap();
+            assert_eq!(r.drop_reorder(next, g).is_err(), second == "refused");
+            if second == "cancelled" {
+                r.cancel_reorder(next).unwrap();
+            }
+            if second == "completed" {
+                r.act(
+                    "move_now",
+                    vec![Value::str("11"), Value::some(Value::str("15"))],
+                )
+                .unwrap();
+                assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 207.);
+            }
+            r.finish_reorder(next).unwrap();
+            r.advance(delay).unwrap();
+            r.act(
+                "move_now",
+                vec![Value::str("10"), Value::some(Value::str("15"))],
+            )
+            .unwrap();
+            assert_eq!(
+                r.reorder_geometry(b.list).unwrap().scroll_top,
+                expected,
+                "second={second}, grouped={grouped}, delay={delay}"
+            );
+            if second == "pending" {
+                report(&mut r, 207., None);
+                r.advance(if delay == 700. { 1100. } else { 1650. })
+                    .unwrap();
+                r.act(
+                    "move_now",
+                    vec![Value::str("11"), Value::some(Value::str("15"))],
+                )
+                .unwrap();
+                assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, expected);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_drop_after_the_return_spring_keeps_the_other_visible_row_in_place() {
+    let source = SOURCE.replace("send changed = move(item, before)", "send changed = unchanged()")
+        .replace("  view", "  action move_now(item: string, before: option<string>)\n    send changed = move(item, before)\n  view");
+    for (delay, expected) in [(600., 187.), (999., 187.), (1000., 287.), (1001., 287.)] {
+        for finish in [false, true] {
+            let (mut r, grip) = fixture_with(&source, 207., 10);
+            r.advance(3000.).unwrap();
+            let b = r.reorder_binding(grip).unwrap();
+            let g = r.reorder_geometry(b.list).unwrap();
+            let token = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+            r.preview_reorder(token, g.clone(), 300.).unwrap();
+            r.drop_reorder(token, g).unwrap().unwrap();
+            r.advance(3600.).unwrap();
+            if finish {
+                r.finish_reorder(token).unwrap();
+                assert!(r.reorder_frame(token).is_none());
+            }
+            r.act(
+                "move_now",
+                vec![Value::str("0"), Value::some(Value::str("2"))],
+            )
+            .unwrap();
+            assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 207.);
+            r.advance(3000. + delay).unwrap();
+            r.act(
+                "move_now",
+                vec![Value::str("10"), Value::some(Value::str("15"))],
+            )
+            .unwrap();
+            assert_eq!(
+                r.reorder_geometry(b.list).unwrap().scroll_top,
+                expected,
+                "delay={delay}, finish={finish}"
+            );
+        }
+    }
+}
+
+#[test]
+fn delayed_drops_landing_in_one_update_anchor_a_row_neither_moved() {
+    let source = SOURCE.replace("send changed = move(item, before)", "send changed = unchanged()")
+        .replace("  view", "  action move_both(a: string, a_before: option<string>, b: string, b_before: option<string>)\n    send changed = move2(a, a_before, b, b_before)\n  view");
+    let (mut r, grip) = fixture_with(&source, 207., 10);
+    let b = r.reorder_binding(grip).unwrap();
+    let g = r.reorder_geometry(b.list).unwrap();
+    let first = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+    r.preview_reorder(first, g.clone(), 300.).unwrap();
+    r.drop_reorder(first, g).unwrap().unwrap();
+    r.advance(600.).unwrap();
+    r.finish_reorder(first).unwrap();
+    r.advance(650.).unwrap();
+    let grip = r.kernel().find_by_test_id("grip-11")[0];
+    report(&mut r, 207., Some(grip));
+    let b = r.reorder_binding(grip).unwrap();
+    let g = r.reorder_geometry(b.list).unwrap();
+    let next = r.begin_reorder(b, g.clone()).unwrap().unwrap().token;
+    r.preview_reorder(next, g.clone(), 280.).unwrap();
+    r.drop_reorder(next, g).unwrap().unwrap();
+    r.finish_reorder(next).unwrap();
+    r.advance(700.).unwrap();
+    let both = ["10", "15", "11", "14"].map(Value::str);
+    let [a, a_before, b_item, b_before] = both;
+    r.act(
+        "move_both",
+        vec![a, Value::some(a_before), b_item, Value::some(b_before)],
+    )
+    .unwrap();
+    assert_eq!(&r.data_ref().0[10..15], ["12", "13", "11", "14", "10"]);
+    // Row 12, 33 px into the port before, stays there.
+    assert_eq!(r.reorder_geometry(b.list).unwrap().scroll_top, 167.);
 }

@@ -377,3 +377,50 @@ fn a_long_poll_on_other_work_is_refused_before_its_work_runs() {
     }
     assert!(!ran.load(Ordering::SeqCst), "its work never ran");
 }
+
+/// The screen a terminal makes of the frames, row by row, and the grid's
+/// own rows: a cell the terminal does not advance for shifts the first.
+fn rows(source: &str, cols: usize) -> (Vec<String>, Vec<String>) {
+    let plan = contract::compile_terminal(source).expect("compiles");
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, cols, 8).expect("boots");
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let lines = |s: String| s.lines().map(str::to_string).collect();
+    (lines(vt.text(false)), lines(host.frame().grid.text()))
+}
+
+/// A format character (Unicode category Cf) takes no column, in text and
+/// in a field, so a row after one is where the terminal draws it.
+#[test]
+fn a_zero_width_format_character_takes_no_column() {
+    for mark in ['\u{feff}', '\u{200e}', '\u{2060}', '\u{202e}'] {
+        let (screen, grid) = rows(
+            &format!(
+                "component App\n  view\n    column width=\"8ch\" border=\"thin solid\"\n      text \"a{mark}b\"\n      input value=\"c{mark}d\" appearance=\"none\"\n"
+            ),
+            20,
+        );
+        assert_eq!(screen[1..3], ["│ab      │", "│cd      │"], "{mark:?}");
+        assert_eq!(grid[1..3], screen[1..3], "{mark:?}");
+    }
+}
+
+/// A preserved tab stops every eight columns (`tab-size`'s initial value).
+#[test]
+fn a_preserved_tab_stops_every_eight_columns() {
+    for space in ["pre", "pre-wrap"] {
+        let (screen, _) = rows(
+            &format!(
+                "component App\n  view\n    column\n      text \"a\\tb\\n\\tc\" white-space=\"{space}\"\n"
+            ),
+            20,
+        );
+        assert_eq!(screen[..2], ["a       b", "        c"], "{space}");
+    }
+    // Under `pre-wrap` the tab hangs at the end of a line it does not fit.
+    let (screen, _) = rows(
+        "component App\n  view\n    column width=\"10ch\"\n      text \"abc\\tdefgh\" white-space=\"pre-wrap\"\n",
+        20,
+    );
+    assert_eq!(screen[..2], ["abc", "defgh"]);
+}

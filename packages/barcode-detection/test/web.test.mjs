@@ -287,3 +287,26 @@ test('releasing one pending scan preserves readers with other tracks or formats'
     ]);
   } finally { impl.destroy(); }
 });
+
+// The runner releases each argument group on its own: another interval, or the
+// same formats in another order, is another reader of the one scan.
+test('a scan ends only when the last argument group reading it is released', async () => {
+  const { impl, observed, released } = fixture(['qr_code', 'ean_13']);
+  const groups = [
+    { track: 'camera', formats: ['qr_code', 'ean_13'], interval: 100 },
+    { track: 'camera', formats: ['qr_code', 'ean_13'], interval: 250 },
+    { track: 'camera', formats: ['ean_13', 'qr_code'], interval: 100 },
+  ];
+  try {
+    for (const args of groups) expect((await impl.detectedBarcodes(args)).state).toBe('scanning');
+    expect(observed).toEqual(['camera']);
+    for (const args of groups.slice(0, -1)) {
+      impl.releaseArgs('detectedBarcodes', { ...args });
+      expect(released).toEqual([]);
+      expect(impl.state().scans).toHaveLength(1);
+    }
+    impl.releaseArgs('detectedBarcodes', { interval: 100, formats: ['ean_13', 'qr_code'], track: 'camera' });
+    expect(released).toEqual(['camera']);
+    expect(impl.state().scans).toEqual([]);
+  } finally { impl.destroy(); }
+});

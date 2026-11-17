@@ -5,7 +5,8 @@
 //!
 //! Where a block ends is decided here by the same line rules the parser
 //! (`markdown-parse`) uses, over complete lines only. The parser keeps no
-//! state from one block to the next, so parsing a finished block's lines
+//! state from one block to the next (raw HTML would, as images, so
+//! `markdown` has it read as written), so parsing a finished block's lines
 //! alone gives exactly the blocks the whole reply gives there.
 
 use crate::highlight::CodeHighlighter;
@@ -223,11 +224,8 @@ impl OpenCode {
     }
 
     fn has_closer(&self, text: &str) -> bool {
-        physical_lines(&text[self.scan_at..]).any(|(line, _)| {
-            let trimmed = line.trim_start();
-            trimmed.chars().take_while(|&c| c == self.marker).count() >= self.width
-                && trimmed.trim_end_matches(self.marker).is_empty()
-        })
+        physical_lines(&text[self.scan_at..])
+            .any(|(line, _)| closes(line.trim_start(), self.marker, self.width))
     }
 
     /// Highlight only rows after the immutable prefix. Completed blank rows
@@ -279,9 +277,15 @@ impl OpenCode {
     }
 }
 
+/// `line` without the fence's indentation, as the Markdown parser removes
+/// it: up to `indent` spaces and tabs, never other leading whitespace.
 fn strip_indent(line: &str, indent: usize) -> &str {
-    let cut = line.len() - line.trim_start().len();
-    &line[cut.min(indent)..]
+    let cut = line
+        .bytes()
+        .take(indent)
+        .take_while(|b| matches!(b, b' ' | b'\t'))
+        .count();
+    &line[cut..]
 }
 
 /// Physical rows as the Markdown parser sees them and whether they ended.
@@ -307,6 +311,14 @@ fn physical_lines(mut text: &str) -> impl Iterator<Item = (&str, bool)> {
 
 fn trimmed(line: &str) -> &str {
     line.trim_end_matches(['\n', '\r'])
+}
+
+/// Whether `line`, its indentation removed, closes a fence of `width`
+/// `marker`s: at least as many, then only spaces or tabs (CommonMark 0.31.2
+/// §4.5), as the Markdown parser reads it.
+fn closes(line: &str, marker: char, width: usize) -> bool {
+    let run = line.chars().take_while(|&c| c == marker).count();
+    run >= width && line[run..].trim_matches([' ', '\t']).is_empty()
 }
 
 fn fence_of(line: &str) -> Option<(char, usize)> {
@@ -403,9 +415,7 @@ fn groups(lines: &[&str]) -> Vec<usize> {
             while at < lines.len() {
                 let t = trimmed(lines[at]).trim_start();
                 at += 1;
-                if t.chars().take_while(|&c| c == marker).count() >= width
-                    && t.trim_end_matches(marker).is_empty()
-                {
+                if closes(t, marker, width) {
                     closed = true;
                     break;
                 }
@@ -549,6 +559,8 @@ mod tests {
             "\r\n  ~~~~js extra words\r\n    const x = `é`; /* a\r\n    b */ return 2;\r\n  ~~~\r\n  ~~~~\r\nNext\r\n",
             "```unknown\nplain\t字\n\n\nlast",
             "   ```python\n   # note\n x = None\n   ```\n\n- finished\n",
+            " ```text\n\u{2003}em\n x\n\u{a0}nbsp\n ```\n",
+            "  ```\n\u{2003}\u{2003}em\n \u{a0}nbsp\n  ```\nAfter.\n",
         ];
         let mut patch_count = 0;
         for text in docs {
@@ -617,6 +629,22 @@ mod tests {
             assert_eq!(joined, whole, "token size {size}");
             if size < 1000 {
                 assert!(before >= 8, "only {before} settled at size {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn raw_html_settles_as_the_whole_reply_reads_it() {
+        for reply in [
+            "<img src=\"https://x.test/a.png\"\n  alt=\"The logo\">\n\nAfter.",
+            "<p align=\"center\">\n<img src=\"https://x.test/a.png\" alt=\"Logo\">\n</p>\n\nAfter.",
+            "<img src=\"https://x.test/a.png\" alt=\"Logo\"> Exact\nis a framework.\n\nAfter.",
+            "Text\n<b>x</b>\nmore\n\n<details>\n<summary>S</summary>\n\nbody\n</details>\n\nAfter.",
+        ] {
+            let whole = markdown::blocks(reply);
+            for size in [1, 7, 1000] {
+                let (groups, _) = stream(reply, size);
+                assert_eq!(groups.concat(), whole, "{reply:?} at token size {size}");
             }
         }
     }

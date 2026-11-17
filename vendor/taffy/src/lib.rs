@@ -123,6 +123,7 @@ pub use crate::tree::TaffyTree;
 #[doc(inline)]
 pub use crate::util::print_tree;
 
+// EXACT PATCH 63: `FromCss` and `CssParseResult`, so Exact can extend the track parser.
 #[cfg(feature = "parse")]
 pub use parse::{CssParseResult, FromCss, ParseError, ParseResult};
 

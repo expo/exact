@@ -74,12 +74,12 @@ struct BodyHasher(u64);
 
 impl Hasher for BodyHasher {
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.mix(u64::from_le_bytes(chunk.try_into().unwrap()));
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.mix(u64::from_le_bytes(*word));
         }
         let mut tail = [0u8; 8];
-        tail[..chunks.remainder().len()].copy_from_slice(chunks.remainder());
+        tail[..rest.len()].copy_from_slice(rest);
         self.mix(u64::from_le_bytes(tail) ^ (bytes.len() as u64) << 56);
     }
 
@@ -547,9 +547,16 @@ impl PlanBuilder {
         self.plan.router = Some(slot);
     }
 
-    /// One locale's texts, `(key, text)` sorted by key; the first locale is
-    /// the base. @ref LLP 1060 D3.
-    pub fn locale(&mut self, name: &str, rtl: bool, texts: &[(&str, &str)]) -> LocalesId {
+    /// One locale's texts, `(key, text)` sorted by key, and its format data
+    /// (`""` for none); the first locale is the base. @ref LLP 1060 D3;
+    /// LLP 1054.000.003 D6.
+    pub fn locale(
+        &mut self,
+        name: &str,
+        rtl: bool,
+        format: &str,
+        texts: &[(&str, &str)],
+    ) -> LocalesId {
         let start = self.plan.texts.len() as u32;
         for (key, text) in texts {
             let key = self.str(key);
@@ -557,9 +564,11 @@ impl PlanBuilder {
             self.plan.texts.push(TextsRow { key, text });
         }
         let name = self.str(name);
+        let format = self.str(format);
         self.plan.locales.push(LocalesRow {
             name,
             rtl,
+            format,
             texts: TextsRange {
                 start,
                 len: texts.len() as u32,
@@ -573,11 +582,30 @@ impl PlanBuilder {
         self.plan.locale = Some(slot);
     }
 
+    /// The root slot holding the locale the formatters format in.
+    /// @ref LLP 1054.000.003 D6.
+    pub fn set_format(&mut self, slot: SlotsId) {
+        self.plan.format = Some(slot);
+    }
+
     /// A derive.
     pub fn derive(&mut self, name: &str, ty: TypesId, body: Code) -> DerivesId {
         let name = self.str(name);
-        self.plan.derives.push(DerivesRow { name, ty, body });
+        self.plan.derives.push(DerivesRow {
+            name,
+            ty,
+            body,
+            owner: None,
+            unsettled: false,
+        });
         DerivesId(self.plan.derives.len() as u32 - 1)
+    }
+
+    /// Mark an executable derive row that evaluates at each read in its owner's frame.
+    pub fn set_derive_unsettled(&mut self, id: DerivesId, owner: Option<ArmsId>) {
+        let row = &mut self.plan.derives[id.0 as usize];
+        row.unsettled = true;
+        row.owner = owner;
     }
 
     /// A resource: a data source name, argument expressions, its shape, and
@@ -616,7 +644,10 @@ impl PlanBuilder {
             placeholder_value: self.no_data(),
             each: ArgsRange { start: 0, len: 0 },
             transient: false,
+            keep: false,
             gate: ArgsRange { start: 0, len: 0 },
+            owner: None,
+            late: false,
         });
         ResourcesId(self.plan.resources.len() as u32 - 1)
     }
@@ -632,6 +663,8 @@ impl PlanBuilder {
             refreshes: MutationRefreshesRange { start: 0, len: 0 },
             then: None,
             mode: MutationMode::Newest,
+            owner: None,
+            then_args: ArgsRange { start: 0, len: 0 },
         });
         MutationsId(self.plan.mutations.len() as u32 - 1)
     }
@@ -639,6 +672,19 @@ impl PlanBuilder {
     /// The action run after each of `mutation`'s answers lands.
     pub fn set_mutation_then(&mut self, mutation: MutationsId, action: ActionsId) {
         self.plan.mutations[mutation.0 as usize].then = Some(action);
+    }
+
+    /// Make a mutation owned by an arm's instance (LLP 1035.005.004 D6):
+    /// each instance sends on its own.
+    pub fn set_mutation_owner(&mut self, mutation: MutationsId, arm: ArmsId) {
+        self.plan.mutations[mutation.0 as usize].owner = Some(arm);
+    }
+
+    /// The arguments `mutation`'s `then` action takes, read in the frames
+    /// of the instance whose send answered (LLP 1035.005.004 D6).
+    pub fn set_mutation_then_args(&mut self, mutation: MutationsId, args: &[Code]) {
+        let range = self.args(args);
+        self.plan.mutations[mutation.0 as usize].then_args = range;
     }
 
     /// `mutation … queue` (LLP 1092 D1), whose sends wait their turn, or
@@ -707,6 +753,53 @@ impl PlanBuilder {
             substitute: self.str(substitute),
         };
         self.plan.modules.push(row);
+    }
+
+    /// A source declared in Contract (LLP 1162.001): the runner answers
+    /// `source` with one HTTP request. `params` are its parameters' names, in
+    /// order; `headers` its request headers as written; `body` is empty,
+    /// `json` or `graphql`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fetch(
+        &mut self,
+        source: SourcesId,
+        method: &str,
+        url: &str,
+        origin: &str,
+        params: &[&str],
+        headers: &[(&str, &str)],
+        body: &str,
+        document: &str,
+        pointer: &str,
+    ) {
+        let range = |b: &mut Self, parts: &mut dyn Iterator<Item = (&str, &str)>| {
+            let start = b.plan.fetch_parts.len() as u32;
+            for (name, value) in parts {
+                let row = FetchPartsRow {
+                    name: b.str(name),
+                    value: b.str(value),
+                };
+                b.plan.fetch_parts.push(row);
+            }
+            FetchPartsRange {
+                start,
+                len: b.plan.fetch_parts.len() as u32 - start,
+            }
+        };
+        let params = range(self, &mut params.iter().map(|p| (*p, "")));
+        let headers = range(self, &mut headers.iter().copied());
+        let row = FetchesRow {
+            source,
+            method: self.str(method),
+            url: self.str(url),
+            origin: self.str(origin),
+            params,
+            headers,
+            body: self.str(body),
+            document: self.str(document),
+            pointer: self.str(pointer),
+        };
+        self.plan.fetches.push(row);
     }
 
     /// A native module's event the root hears (LLP 1133.004 D6): `action`
@@ -817,6 +910,13 @@ impl PlanBuilder {
         self.timer_row(0, action, false, true)
     }
 
+    /// A keyed action queued after a committed change, without a time delay.
+    pub fn change_task(&mut self, action: ActionsId) -> TimersId {
+        let id = self.timer_row(0, action, true, false);
+        self.plan.timers[id.0 as usize].change = true;
+        id
+    }
+
     fn timer_row(
         &mut self,
         interval_ms: u32,
@@ -827,6 +927,7 @@ impl PlanBuilder {
         let always = self.constant(&Value::Bool(true));
         let name = self.str("");
         self.plan.timers.push(TimersRow {
+            change: false,
             interval_ms,
             wait: 0,
             max_ms: 0,
@@ -1087,6 +1188,23 @@ impl PlanBuilder {
     /// 1156.005 D4).
     pub fn set_resource_transient(&mut self, id: ResourcesId) {
         self.plan.resources[id.0 as usize].transient = true;
+    }
+
+    /// Keep only successful live publications of this surface reader.
+    pub fn set_resource_keep(&mut self, id: ResourcesId) {
+        self.plan.resources[id.0 as usize].keep = true;
+    }
+
+    /// Make a resource owned by an arm's instance (LLP 1035.005.004 D1): one
+    /// request per instance, asked after the render that makes it.
+    pub fn set_resource_owner(&mut self, id: ResourcesId, arm: ArmsId) {
+        self.plan.resources[id.0 as usize].owner = Some(arm);
+    }
+
+    /// Make a resource settled with the root's once the `late` slots of the
+    /// child that declares it are initialized (LLP 1035.005.004 D2).
+    pub fn set_resource_late(&mut self, id: ResourcesId) {
+        self.plan.resources[id.0 as usize].late = true;
     }
 
     /// A resource's `when` (LLP 1161.002 D1): the condition under which it is asked.

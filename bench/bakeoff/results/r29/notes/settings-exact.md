@@ -14,7 +14,7 @@ picker screens (Font, Theme, Sort By) and two documents (Privacy Policy, Terms o
   (`exactViewport().accessibilityTextSize`) it turns into checkmark rows, because the
   three segments clip their labels there.
 - The preview paragraph follows the font, size (12–32 pt slider), spacing and theme. Sepia,
-  Light and Dark paint the preview's page from `app.tamber` tokens.
+  Light and Dark paint the preview's page from `app.forma` tokens.
 - The theme also sets the app's colour scheme with `setScheme` (Sepia uses light). A
   `mount` task applies the saved theme again at launch.
 - The notifications master switch shows or hides the reminder time (`input type="time"`)

@@ -1,16 +1,16 @@
 # The design tool
 
-LLP 1122's "living Figma" over an app's Tamber design (LLP 1121), unnamed
-until §9 Q1 names it. `bun exact.mjs tamber tool <app>` builds it if stale
-and opens it at `http://127.0.0.1:7740/__tamber/tool/`, served by the app's
+LLP 1122's "living Figma" over an app's Forma design (LLP 1121), unnamed
+until §9 Q1 names it. `bun exact.mjs forma tool <app>` builds it if stale
+and opens it at `http://127.0.0.1:7740/__forma/tool/`, served by the app's
 design server; with the app's dev loop running, which holds the design,
 `--via <dev url>` reaches that loop's server instead. Development only: it
 is never bundled into an app's release build.
 
 The tool always lives at `127.0.0.1:7740` (its grant names that one origin),
 so one runs per machine, on one project. To switch projects, stop it with
-ctrl-c and run `bun exact.mjs tamber tool <other app>`, adding `--via <its
-URL>` if that app's dev loop is running. A second `tamber tool` for the same
+ctrl-c and run `bun exact.mjs forma tool <other app>`, adding `--via <its
+URL>` if that app's dev loop is running. A second `forma tool` for the same
 app reuses the running one; for another app it is refused, naming the app
 whose design the port serves.
 
@@ -25,7 +25,7 @@ whose design the port serves.
   cookies and storage, apart from a tab at the printed 127.0.0.1 URL, which
   "Open in a tab" opens. A dev loop's HTML
   may be framed by the tool's origin and its own, no other. With no dev loop
-  (`tamber tool` alone), it says how to start one and open the tool through
+  (`forma tool` alone), it says how to start one and open the tool through
   it (`--via`, after stopping this tool).
 - Builds (T2, LLP 1122 D4) lists every running copy the server knows
   (`hello.builds`, then the `builds` and `build-status` events), the frame's
@@ -67,12 +67,12 @@ whose design the port serves.
   change; it stays so until a new selection. A token's impact is its
   `uses`, static source sites, and Outline shows them on every build in
   inspect mode, naming the builds told.
-- `app.ts` is the `tamber/1` client: the token from `GET /__tamber/token`
-  once, every request a `POST /__tamber`, and changes followed by the long
-  poll, `POST /__tamber/events`. Its grants name the tool's one origin.
+- `app.ts` is the `forma/1` client: the token from `GET /__forma/token`
+  once, every request a `POST /__forma`, and changes followed by the long
+  poll, `POST /__forma/events`. Its grants name the tool's one origin.
   The design is read again only when the files move (a `changed` event, a
   gap, a new server run), not on a build's status or a scrub's frame: a
-  read is `describe`, one `resolve` of its tokens (`tokens`, tamber/1.17;
+  read is `describe`, one `resolve` of its tokens (`tokens`, forma/1.17;
   one per token from a server before it, four at a time) and `hello`.
   After writes that named their tokens (`reread.ts`), back to the file's
   last whole read, it resolves only those and each token whose `describe`
@@ -187,11 +187,11 @@ whose design the port serves.
   one it cannot offer says why), every value it did not map with the
   reason, and the count: source values = mapped + reported. Accepting is
   one transaction, and Undo one step. Astryx's import comes from its CLI
-  (`bun exact.mjs tamber import astryx …`) and is reviewed the same way.
+  (`bun exact.mjs forma import astryx …`) and is reviewed the same way.
 - Pairing (T6, LLP 1122 D12): the local tool's Clients panel mints a code at
   a scope ("Pair a client"), shows it with each remote door's address and
   certificate fingerprint, lists the paired clients and revokes one. On the
-  other machine, open the door's address (`https://<host>:<port>/__tamber/tool/`,
+  other machine, open the door's address (`https://<host>:<port>/__forma/tool/`,
   its certificate's SHA-256 checked), and type the address and the code: the
   tool works there at its scope. What its scope can't do is greyed and said;
   at `propose` an edit is held for review. The canvas comes through the
@@ -213,14 +213,14 @@ whose design the port serves.
   Set for this app writes the app's override line (`set-token`); Back to
   the base or the package removes it.
 - `app.test.contract`, `editing.test.contract` and `inspector.test.contract`
-  run against `stub/tamber-stub.ts`, canned replies (`bun exact.mjs test`
+  run against `stub/forma-stub.ts`, canned replies (`bun exact.mjs test`
   and `verify` run the three);
   `scripts/design-tool.test.mjs` (with its `-ops`, `-canvas` and `-scrub`
   files, which a lane runs side by side) drives the built tool against a
   real server on a copy of `apps/theme-fixture`. Both run on the checkout's own
   port (`EXACT_TOOL_PORT` names another), never a person's 7740: `bun
   exact.mjs test` here runs a copy staged for that origin
-  (`scripts/tamber-tool-port.mjs`), and so does a drive or verify named
+  (`scripts/forma-tool-port.mjs`), and so does a drive or verify named
   straight to `scripts/agent.mjs` or `scripts/verify.mjs` (`--app
   design-tool`, `scripts/tool-drive.mjs`). `EXACT_TOOL_PORT=7740` runs any
   of them in place, on 7740.

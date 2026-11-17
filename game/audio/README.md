@@ -153,7 +153,8 @@ watermark. Device disposal still joins callbacks before dropping any PCM.
 
 Web may construct `AudioContext` on the first live frame or an earlier gesture.
 `Output::unlock` calls `resume()` synchronously on the first trusted key/pointer
-down stack, never for a seekable surface and never twice while activation is pending
+down stack, inside the canvas or anywhere else in the page (`Lifecycle::Activated`:
+a press on a Contract button starts it too), never for a seekable surface and never twice while activation is pending
 or the output is ready. Its owned async completion enables playback; the next sync
 bumps the transport generation. Lifecycle resumption can request activation again.
 The probe uses this production path and observes readiness. There is no second async

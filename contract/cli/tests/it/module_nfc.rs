@@ -93,6 +93,38 @@ impl App {
         std::fs::write(path.join("app.contract"), APP).unwrap();
         Self(path.canonicalize().unwrap())
     }
+
+    /// A second arrival extension, `tags`: the same package under another
+    /// name, whose scan the app calls `scanTags`.
+    fn with_tags(self) -> Self {
+        let source = self.0.join("node_modules/@exact/nfc");
+        let package = self.0.join("node_modules/@exact/tags");
+        for file in [
+            "package.json",
+            "exact.json",
+            "apple/exact.json",
+            "android/exact.json",
+            "web/exact.json",
+        ] {
+            let text = std::fs::read_to_string(source.join(file)).unwrap();
+            let text = (text.replace("@exact/nfc", "@exact/tags"))
+                .replace("\"name\": \"nfc\"", "\"name\": \"tags\"");
+            std::fs::create_dir_all(package.join(file).parent().unwrap()).unwrap();
+            std::fs::write(package.join(file), text).unwrap();
+        }
+        let app = APP
+            .replacen(
+                "\n",
+                "\nuse scan as scanTags, NDEFScanEnd as TagsScanEnd from \"@exact/tags\"\n",
+                1,
+            )
+            .replace(
+                "  action startScan\n",
+                "  mutation scannedTags as shape TagsScanEnd\n  action scanTags\n    send scannedTags = scanTags()\n  action startScan\n",
+            );
+        std::fs::write(self.0.join("app.contract"), app).unwrap();
+        self
+    }
 }
 impl Drop for App {
     fn drop(&mut self) {
@@ -181,7 +213,10 @@ struct Host {
 
 impl Host {
     fn boot(name: &str, target: &str) -> Self {
-        let app = App::new(name);
+        Self::boot_app(App::new(name), target)
+    }
+
+    fn boot_app(app: App, target: &str) -> Self {
         let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
             .unwrap_or_else(|e| panic!("{e:?}"));
         let data = Data::default();
@@ -528,6 +563,34 @@ fn the_background_interrupts_or_suspends_by_reader_ui() {
     assert!(!h.heard().contains("read"), "suspended: {}", h.heard());
     h.hidden(false);
     assert!(h.heard().contains("read r1"), "{} {}", h.heard(), h.logs());
+}
+
+/// Coming back resumes each arrival extension's own suspended scans and
+/// reads a tag still in its field, not only the first extension's.
+#[test]
+fn coming_back_resumes_every_extensions_scans() {
+    let mut h = Host::boot_app(App::new("bg-two").with_tags(), "android");
+    let tags: Json = serde_json::from_str(TAGS).unwrap();
+    h.prefer(json!({ "nfc.tags": tags.clone(), "tags.tags": tags }))
+        .unwrap();
+    h.act("keepScanning");
+    h.act("scanTags");
+    h.hidden(true);
+    h.prefer(json!({ "nfc.field": "dune", "tags.field": "dune" }))
+        .unwrap();
+    h.hidden(false);
+    let logs = h.logs();
+    for extension in ["nfc", "tags"] {
+        assert!(
+            logs.contains(&format!("{extension}: scans resumed")),
+            "{logs}"
+        );
+    }
+    assert_eq!(
+        logs.matches("tags: tag `dune` arrived").count(),
+        2,
+        "once while suspended, and read on return: {logs}"
+    );
 }
 
 /// D16 item 4: a write data code started is let go with the request that

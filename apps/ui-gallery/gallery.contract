@@ -133,7 +133,7 @@ component GalleryDemo
     toggleText: action
     pickLift: action
   view
-    column navigationKey=navigationId navigationBar=(authoredHeader ? "none" : "auto") dynamic-range-limit=limit navigationScroll=`gallery-${section}` position="absolute" inset=0 display="flex" flex-direction="column"
+    column navigationKey=navigationId -exact-safe-area="left right" navigationBar=(authoredHeader ? "none" : "auto") dynamic-range-limit=limit navigationScroll=`gallery-${section}` position="absolute" inset=0 display="flex" flex-direction="column"
       header display="flex" align-items="center" column-gap=16 padding="12px 16px"
         if authoredHeader and compact
           button id="back" press=back aria-label="Back to UI Gallery" testId="gallery-back" appearance="none" padding=8

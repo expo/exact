@@ -8,9 +8,24 @@
 // (emit.rs, LLP 1047.002 D1), so a command no action names is never linked.
 // The compiler reads this file's `export const` names as it is built.
 import { popoverCommand, appRootFontSize, liveById, declaredScheme, setFieldSelection, setFieldRangeText } from "./navigation.js";
+import { Kept, DEVELOPMENT_STORE, Hosts, KeyEvent, Propagating } from './rt.js';
+// A launch service can install its handlers before app() links the commands (LLP 1172.011 E1).
+export const observe = say => Hosts.observe ?? (name => say(`observe ${name}`));
+export const observeAttributes = () => Hosts.observeAttributes ?? (() => {});
+export const observeError = say => Hosts.observeError ?? (message => say(`observeError ${message}`));
+// Commands run before the handler returns; beforeunload also needs Safari's returnValue.
+export const preventDefault = () => () => {
+  KeyEvent?.preventDefault();
+  if (KeyEvent?.type === 'beforeunload') KeyEvent.returnValue = '';
+  if (!KeyEvent && Propagating?.type === 'pointerdown') Propagating.preventDefault();
+};
+export const stopPropagation = () => () => {
+  const event = KeyEvent ?? Propagating;
+  if (event) event.$stopped = true;
+};
 // A development page may hold a fact over the app's own (LLP 1122 T7, theme2's F2 ruling: a copy the design tool pins):
 // the app's choice kept as asked, with how to apply it, and applied only when the fact is not held.
-const asked = (fact, value, apply) => { const x = globalThis.exact; if (!x) return apply(); (x.asked ??= {})[fact] = { value, apply }; if (!x.held?.[fact]) apply(); else x.onAsked?.(); };
+const asked = (fact, value, apply, deferred = false) => { const x = globalThis.exact ?? (deferred ? (globalThis.exact = {}) : null); if (!x) return apply(); (x.asked ??= {})[fact] = { value, apply }; if (!x.held?.[fact] && !deferred) apply(); else x.onAsked?.(); };
 // Bare focus is the window's; under the agent it is journaled (LLP 1133.005 D10).
 export const focus = (say, agentMode) => id => id == null
   ? (agentMode() ? say("focus window") : window.focus()) : liveById(id)?.focus();
@@ -18,9 +33,23 @@ export const blur = () => id => {
   const a = document.activeElement;
   if (a && a !== document.body && (id == null || a.id === id)) a.blur();
 };
-export const setScheme = () => s => asked("scheme", s, () => {
-  document.documentElement.style.colorScheme = s === "system" ? "" : s;
-});
+// The scheme the app chose is kept beside persisted state under "#scheme", as runner/src/runner/held.rs keeps it
+// ("system" forgets it), and asked again as this command is installed, before the plan's first render.
+const keptScheme = () => Kept("state") + "#scheme";
+const scheme = s => () => { document.documentElement.style.colorScheme = s === "system" ? "" : s; };
+export const setScheme = say => {
+  if (!globalThis.__exactRender) try {
+    const s = JSON.parse(localStorage.getItem(keptScheme()));
+    if (s === "light" || s === "dark") asked("scheme", s, scheme(s), !!DEVELOPMENT_STORE && self !== parent && /^exact-copy-\d{1,2}$/.test(self.name) && !document.getElementById("exact-dev-pin"));
+  } catch {}
+  return s => {
+    if (!globalThis.__exactRender) try {
+      if (s === "light" || s === "dark") localStorage.setItem(keptScheme(), JSON.stringify(s));
+      else localStorage.removeItem(keptScheme());
+    } catch (e) { say(`store #scheme failed: ${e}`); }
+    asked("scheme", s, scheme(s));
+  };
+};
 // Never the person's clipboard under the agent (LLP 1133.006 §7).
 export const copyText = (_say, agentMode) => t => { if (!agentMode()) navigator.clipboard?.writeText(t); };
 // LLP 1077 D14: vibration where the browser has it.
@@ -74,6 +103,8 @@ export const setRootFontSize = say => v => v === "medium" || (typeof v === "numb
 // The document's own full screen ends, as `document.exitFullscreen()`; a page cannot fade its window (LLP 1069.010).
 export const exitFullscreen = say => () => { if (document.fullscreenElement) document.exitFullscreen().catch(e => say(`exitFullscreen: refused: ${e.name}`)); };
 export const setWindowOpacity = say => () => say("setWindowOpacity refused: a page cannot change its window's opacity");
+// A page cannot put its window away and keep running (LLP 1133.025 D4).
+export const hideWindow = say => () => say("hideWindow refused: a page cannot hide its window");
 // A page cannot set the browser's zoom, which is the person's (LLP 1021 §5.3.1).
 export const setPageZoom = say => () => say("setPageZoom refused: the browser's zoom is the person's; a page cannot set it");
 // A recording of frames is the Apple hosts'; the browser's performance panel records the page.

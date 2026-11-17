@@ -1,67 +1,28 @@
 #!/usr/bin/env bun
 /**
- * async — the async lane (rules/RULES.md §Loop shape): every first-parent
- * commit on origin/main, checked out in a dedicated worktree with its own
- * target/, gets the six checks over the whole workspace (its build covers the
- * sixth, `cargo check --workspace`) plus the tests marked
- * `#[ignore = "async lane: …"]`, every web host unit test found by one glob
- * and the script capture fixtures,
- * the web host's app-building document test in its own step, the web JS target's conformance run
- * (`host/web-js/conform.mjs --strict`), the separate game workspace and in-repo game tests,
- * the UIKit XCTests on a simulator and the tvOS and watchOS compiles (`build.mjs
- * --tvos --no-install`, `--watchos --no-install`), the SVG and motion parity smokes' Linux legs, the
- * Contract semantics (`semantics/README.md`) as four checks — the Lean proofs,
- * the extracted VM's proofs, the differential run against the Lean semantics
- * and the web JS target's against the runner — each skipped when its inputs
- * are those of a run that passed (scripts/async-inputs.mjs), then
- * `metrics.mjs --long` (every RULES budget;
- * a VIOLATION or FAILED row or a failed run counts, an OVER time does not — it
- * moves with the load). The build, clippy, fmt, caps, boot, web-bytes, metrics and the semantics checks
- * (gated by their own inputs) run on every commit; the other steps run the suites that the files
- * changed since the last commit checked can affect (scripts/affected.mjs: a Cargo package's tests,
- * built as the full run builds them, a glue file, an app's conformance, the Apple builds), and a
- * failure that nothing ran to find again is kept. Every step runs in full on the first commit, with
- * --full, and at least once a day. A failure that the previous commit did not have is filed with
- * `issue.mjs`, naming the commit that introduced it. A check past 2 h is
- * killed and filed as hung; the worktree's debug target is kept under 80 GiB.
- * Logs and timings (with the load average) stay in <worktree>/target/async/. What each commit's
- * checks found is also its git note, `refs/notes/async` (tier 2: `async2`), pushed to origin for
- * `scripts/known.mjs` (LLP 1146 D1).
+ * Hourly verification of origin/main's newest tip, over every commit since the last run.
+ * Full workspace build, lint and check always run; affected.mjs selects tests, app drives,
+ * XCTests and Apple builds. Every suite runs at least daily. New failures are bisected
+ * independently through that range, rerunning only their checks and prerequisite builds.
+ * An obstructed probe reports its range without assigning blame. Logs, timings and
+ * attribution stay in <worktree>/target/async; known.mjs reads the published git notes.
  *
- *   bun scripts/async.mjs                 watch: check new commits every 300 s
- *   bun scripts/async.mjs --once          check what is pending, then exit
- *   bun scripts/async.mjs --from <rev>    start after <rev> instead of the tip
- *   bun scripts/async.mjs --full          run every suite on each commit
- *   bun scripts/async.mjs --worktree <dir> --interval <s> --branch <ref>
- *   bun scripts/async.mjs --explain [<rev>]   the semantics checks at <rev> (default
- *                                         the branch tip): run or skip, and what changed
+ *   bun scripts/async.mjs [--once] [--from <rev>] [--full]
+ *   bun scripts/async.mjs --tier 2       hourly cross-platform builds in a separate worktree
+ *   bun scripts/async.mjs --worktree <dir> --interval <seconds> --branch <ref>
+ *   bun scripts/async.mjs --explain [<rev>]   explain semantics fingerprints
  *
- * The semantics checks' fingerprints and outcomes are kept in
- * <worktree>/target/async/fingerprints/<check>/ (scripts/async-inputs.mjs).
- *
- * --branch (default origin/main) checks another line of history; the
- * worktree is the script's own and is checked out with --force.
- *
- * --tier 2 is the second lane: the platforms that ride on another host's
- * code (tvOS on the UIKit presenter, cross-target Linux/Windows compile checks, and an Android APK), in its own
- * worktree (<repo>-async2) and state, hourly by default. It checks only the
- * newest pending commit, so a failure it files names the range since the
- * last commit it checked, never one commit.
- *
- *   bun scripts/async.mjs --tier 2        watch the second lane
- *
- * --newest makes the first lane coalesce the same way. Main outruns a check
- * that takes an hour (some 500 first-parent commits in 3.5 days, 2026-10-06),
- * so the lane on the mini runs `--newest --interval 3600` (Charlie, 2026-10-06).
+ * Both tiers coalesce commits once an hour in their own worktree and target directory.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync, writeSync } from 'node:fs';
 import { availableParallelism, loadavg } from 'node:os';
 import { basename, resolve } from 'node:path';
-import { Graph, LANE_DISTS, PARITY, Repo, WEB_APPS, parityLeg, select, stepEnv, suites } from './affected.mjs';
+import { Graph, LANE_DISTS, PARITY, Repo, WEB_APPS, commands, gameAppleLeg, parityLeg, select, stepEnv, suites } from './affected.mjs';
 import { INPUTS, Inputs, Store, checkEnv, decide, outcomeOf } from './async-inputs.mjs';
 import { main as issue } from './issue.mjs';
 import { noteOf, publish, stoppedEarly } from './known.mjs';
+import { bisectAffected, probeOutcomes } from './async-bisect.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -77,6 +38,29 @@ const git = (args, cwd = ROOT) => {
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr.trim()}`);
   return r.stdout.trim();
 };
+
+function refuseTrackedEdits(root) {
+  const dirty = git(['status', '--porcelain', '--untracked-files=no'], root);
+  if (dirty) throw new Error(`${root} has tracked edits; refusing to switch commits. Review them first:\n${dirty}`);
+}
+export function checkout(sha, root = WT) {
+  restoreLaneEdits(root);
+  refuseTrackedEdits(root);
+  git(['checkout', '--detach', sha], root);
+}
+
+function restoreLaneEdits(root) {
+  const paths = git(['ls-files', '-z', '--', 'game/app/shells.lock', 'apps/caltrain/app.contract',
+    'apps/realworld/app.contract', 'apps/realworld/app.ts'], root).split('\0').filter(Boolean);
+  if (paths.length) git(['restore', '--source=HEAD', '--staged', '--worktree', '--', ...paths], root);
+}
+
+/** Restore lane-owned inputs after a check; checkout also repairs an interrupted parent. */
+export async function withLaneEdits(root, action) {
+  refuseTrackedEdits(root);
+  try { return await action(); }
+  finally { restoreLaneEdits(root); }
+}
 
 /** Test names marked for this lane; libtest ORs several filters. */
 function laneTests() {
@@ -106,6 +90,7 @@ export const tvosCompile = ['tvos', 'env', ['EXACT_JS_ENGINE=stub', 'bun', 'host
 export const watchosCompile = ['watchos', 'bun', ['host/apple/build.mjs', '--watchos', '--no-install']];
 export const gameScaffoldCheck = ['game-scaffold', 'bun', ['test', 'game/proof-game.test.mjs', 'game/new.test.mjs', '--test-name-pattern', 'proof script|worldPixels|AGENTS.md lists vocab|new logic/tests file']];
 export const gameCheck = ['game', 'cargo', ['test', '--manifest-path', 'game/Cargo.toml', '--workspace', '--locked', '--lib', '--bins', '--tests', '--no-fail-fast']];
+export const gameAppleCheck = ['game-apple', 'sh', ['-c', gameAppleLeg]];
 // Glue files that edit an app's checked-in sources while they run
 const EDITS_APPS = /\/dev-scheduler\.test\.mjs$/;
 /** The glue step's worker processes: half the cores the machine's load leaves idle, at least one. Each worker's file
@@ -114,17 +99,17 @@ const EDITS_APPS = /\/dev-scheduler\.test\.mjs$/;
 export function glueWorkers(cores = availableParallelism(), load = loadavg()[0]) {
   return Math.max(1, Math.floor((cores - load) / 2));
 }
-// Glue files left out: `bundle-size` reads RealWorld's production app.js (`EXACT_REALWORLD_JS`), which no step prepares
-// before the glue; `document-agent` fails here (QUEUE.md, "The page's frames drop to one a second")
-const LEFT_OUT = /^host\/web-js\/(bundle-size|document-agent)\.test\.mjs$/;
+// `bundle-size` reads RealWorld's production entry (`EXACT_REALWORLD_DIST`), which no step prepares before the glue.
+const LEFT_OUT = /^host\/web-js\/bundle-size\.test\.mjs$/;
 /** The glue step's files: every test file of the web hosts, of the modules and of `scripts/`, so a new one runs without
  * being named, less `LEFT_OUT`'s. */
 export function glueTests(root) {
   const glob = pattern => [...new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: true })];
   const files = [...glob('host/web/**/*.test.{mjs,js}'), ...glob('host/web-js/**/*.test.{mjs,js}'), ...glob('modules/*/tests/*.test.mjs'),
     ...glob('scripts/*.test.mjs')].filter(file => !LEFT_OUT.test(file)).sort().map(file => `./${file}`);
-  // The glue lane is macOS: link.test reads Mach-O load commands with Apple tools.
-  return [...files, './host/apple/link.test.mjs', './host/apple/cloak.test.mjs'];
+  // The glue lane is macOS: link.test reads Mach-O load commands with Apple tools; xctest-fixtures compiles the
+  // XCTests' fixtures with the contract CLI into a directory outside the checkout.
+  return [...files, './host/apple/link.test.mjs', './host/apple/cloak.test.mjs', './host/apple/xctest-fixtures.test.mjs'];
 }
 /**
  * What a commit's checks run (scripts/affected.mjs): the suites whose inputs the files changed since the last commit
@@ -132,11 +117,15 @@ export function glueTests(root) {
  * build when it names the variable. A check whose suites are all left out does not run, and a failure nothing ran to
  * find again is kept (`retainSkippedFailures`). `repo` (tests) stands in for this checkout's.
  */
-export function laneSelection(changed, { root = WT, full = false, repo } = {}) {
-  if (full) return everything(root);
+export function laneSelection(changed, { root = WT, full = false, repo, graphs = new Map() } = {}) {
+  if (full) {
+    const all = everything(root);
+    repo ??= new Repo(root);
+    return { ...all, defaultCargo: repo.defaultMembers, extra: extraChecks(suites(repo).map(suite => ({ suite })), all.glue, repo) };
+  }
   repo ??= new Repo(root, { also: changed });
   const glue = glueTests(root), dists = new Set([...glue, ...WEB_AX]);
-  const graphs = new Map(), graph = step => graphs.get(step) ?? graphs.set(step, new Graph(repo, { env: step ? stepEnv(step) : {} })).get(step);
+  const graph = step => graphs.get(step) ?? graphs.set(step, new Graph(repo, { env: step ? stepEnv(step) : {} })).get(step);
   const step = suite => suite.kind === 'cargo' ? 'test' : suite.kind === 'bun' && dists.has(`./${suite.file}`) ? 'glue' : null;
   const hits = suites(repo).flatMap(suite => select(graph(step(suite)), changed, [suite]));
   const chosen = hits.map(hit => hit.suite), ids = new Set(chosen.map(s => s.id));
@@ -145,7 +134,7 @@ export function laneSelection(changed, { root = WT, full = false, repo } = {}) {
   const iosOnly = ios?.only && existsSync(build) && readFileSync(build, 'utf8').includes("'--only'") ? ios.only : null;
   const cargo = manifest => chosen.filter(s => s.kind === 'cargo' && s.manifest === manifest).map(s => s.name);
   return {
-    full, ids: [...ids].sort(),
+    full, ids: [...ids].sort(), defaultCargo: repo.defaultMembers,
     cargo: cargo('Cargo.toml'),
     game: cargo('game/Cargo.toml').length > 0 || chosen.some(s => s.kind === 'bun' && s.file.startsWith('game/')),
     glue: glue.filter(file => ids.has(`bun:${file.slice(2)}`)),
@@ -153,16 +142,50 @@ export function laneSelection(changed, { root = WT, full = false, repo } = {}) {
     webAx: WEB_AX.some(file => ids.has(`bun:${file.slice(2)}`)),
     conform: WEB_APPS.filter(app => ids.has(`conform:${app}`)),
     parity: PARITY.filter(smoke => ids.has(`parity:${smoke}`)),
+    moduleSeams: ids.has('drive:module-seams'), notificationsWeb: ids.has('drive:notifications-web'),
+    extra: extraChecks(hits, glue, repo),
     ios: ids.has('xctest:ios'), iosOnly, touch: ids.has('touch:ios'), tvos: ids.has('compile:tvos'), watchos: ids.has('compile:watchos'),
+    gameApple: ids.has('compile:game-apple'),
   };
 }
 const WEB_AX = ['./host/web/tests/accessibility-tree.test.mjs', './host/web/tests/presence-preload.test.mjs', './host/web/tests/zero-viewport.test.mjs'];
+/** Suites outside the established steps still run: other Bun files, macOS XCTests and authored app tests. */
+export function extraChecks(hits, glue, repo) {
+  const covered = new Set([...glue, ...WEB_AX, './host/web/tests/document.test.mjs', './game/vocab.test.mjs']);
+  const bun = hits.filter(({ suite: s }) => s.kind === 'bun' && !covered.has(`./${s.file}`));
+  const out = [], fixture = bun.some(({ suite }) => LEFT_OUT.test(suite.file));
+  const realworld = resolve(STATE_DIR, 'fixtures/realworld-production');
+  if (fixture) out.push(['bundle-fixture', 'bun', ['host/web-js/build.mjs', 'realworld', '--production', '--out', realworld]]);
+  for (const cmd of commands(bun)) out.push(['other-glue', 'env', ['EXACT_REQUIRED=1',
+    ...(fixture ? [`EXACT_REALWORLD_DIST=${realworld}`] : []), ...cmd]]);
+  for (const hit of hits) {
+    const s = hit.suite;
+    if (s.kind !== 'app' && !(s.kind === 'xctest' && s.host === 'macos')) continue;
+    const named = s.kind === 'app' ? `app:${s.app}:${s.host}` : 'macos';
+    const first = out.length;
+    if (s.kind === 'app') {
+      if (s.host === 'web') out.push([`build-${named}`, 'bun', ['host/web/build.mjs', s.app]]);
+      else if (s.host === 'macos' || s.host === 'ios') out.push([`build-${named}`, 'bun', ['host/apple/build.mjs', ...(s.host === 'ios' ? ['--ios'] : []), s.app]]);
+      else if (s.host === 'android') out.push([`build-${named}`, 'bun', ['scripts/agent-android.mjs', 'build', s.app]]);
+      else if (s.host === 'windows') out.push([`build-${named}`, 'bun', ['host/windows/build.mjs', s.app]]);
+      else out.push([`build-${named}`, 'cargo', ['build', '--profile', 'host-dev', '-p', repo.packageAt.get(`${repo.appNames.get(s.app)}/${s.host}`).name]]);
+    }
+    for (const [i, [cmd, ...args]] of commands([hit]).entries()) out.push([`${named}${s.kind === 'app' ? `:${i}` : ''}`, cmd, args]);
+    if (s.kind === 'app' && s.host === 'windows') for (const step of out.slice(first)) step[3] = { platform: 'win32' };
+  }
+  return out;
+}
+
 /** Every suite (a full run), as `laneSelection` gives it; `glue` is computed when it is not given. */
 export function everything(root = WT, glue) {
-  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), webBuild: true, webAx: true, conform: WEB_APPS, parity: PARITY, ios: true, iosOnly: null, touch: true, tvos: true, watchos: true };
+  return { full: true, ids: [], cargo: [], game: true, glue: glue ?? glueTests(root), extra: [], webBuild: true, webAx: true,
+    conform: WEB_APPS, parity: PARITY, moduleSeams: true, notificationsWeb: true,
+    ios: true, iosOnly: null, touch: true, tvos: true, watchos: true, gameApple: true };
 }
 /** No suite: what runs whatever changed. */
-export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false, conform: [], parity: [], ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, lane: [] });
+export const nothing = () => ({ full: false, ids: [], cargo: [], game: false, glue: [], webBuild: false, webAx: false,
+  conform: [], parity: [], moduleSeams: false, notificationsWeb: false,
+  ios: false, iosOnly: null, touch: false, tvos: false, watchos: false, gameApple: false, lane: [], extra: [] });
 /** The checks a selection can leave out: a full run's that no suite's selection runs. */
 export const gated = () => {
   const names = selection => new Set(checks('', null, selection).map(([name]) => name));
@@ -172,9 +195,18 @@ export const gated = () => {
 /** The suites a check that runs only some of its suites runs (`laneSelection`'s ids), or the iOS XCTest classes
  * (`xctest:ios:<Class>`); null when it runs whole. */
 export function covers(name, selection) {
+  if (name === 'default-test') return (selection?.defaultCargo ?? []).map(n => `cargo:${n}`);
   if (!selection || selection.full) return null;
   if (name === 'test' || name === 'lane') return selection.cargo.map(n => `cargo:${n}`);
   if (name === 'ios') return selection.iosOnly?.map(c => `xctest:ios:${c}`) ?? null;
+  if (name === 'macos') {
+    const args = selection.extra?.find(([n]) => n === name)?.[2], at = args?.indexOf('--only') ?? -1;
+    return at >= 0 ? args[at + 1].split(',').map(c => `xctest:macos:${c}`) : null;
+  }
+  if (name === 'other-glue') {
+    const args = selection.extra?.find(([n]) => n === name)?.[2];
+    return args?.filter(a => a.startsWith('./')).map(a => `bun:${a.slice(2)}`) ?? null;
+  }
   if (name === 'glue') return selection.glue.map(f => `bun:${f.slice(2)}`);
   if (name.startsWith('conform')) return selection.conform.map(a => `conform:${a}`);
   return null;
@@ -194,11 +226,15 @@ export function checks(sha, since, selection = {}) {
   const conform = selection.conform;
   const when = (condition, steps) => condition ? steps : [];
   return [
-    ['build', 'cargo', ['build', ...workspace, '--all-targets', '--keep-going']],
+    ['build', 'cargo', ['build', '--all-targets', '--keep-going']],
+    // Workspace feature unification differs from the default-member graph. Qualify both hourly.
+    ['workspace-build', 'cargo', ['build', ...workspace, '--all-targets', '--keep-going']],
+    ['workspace', 'cargo', ['check', ...workspace, '--all-targets', '--keep-going']],
     // This commit's web builds for the tests that drive one (below): Caltrain wasm with every
     // capability linked (the document, placement, motion, focusout and no-GPU tests) and JS,
     // and Fieldnotes as the dev loop builds it (its Rust drive, in `test`).
-    ...when(rust || glue.length || selection.webAx, [prepareCheck]),
+    prepareCheck,
+    ['default-test', 'env', ['EXACT_REQUIRED=1', ...distsOf('test'), 'cargo', 'test', '--tests', '--no-fail-fast']],
     ...when(rust, [['test', 'env', ['EXACT_REQUIRED=1', ...distsOf('test'), ...cargoTests()]]]),
     ...when(selection.game, [
       ['game-lock', 'bun', ['game/app/shells.mjs', '--update-lock']],
@@ -210,13 +246,15 @@ export function checks(sha, since, selection = {}) {
       gameScaffoldCheck,
       ['game-assets-scaffold', 'bun', ['test', 'game/new.test.mjs', '--timeout', '3600000', '--test-name-pattern', 'assets scaffold']],
     ]),
+    ...when(selection.gameApple, [gameAppleCheck]),
     ...(lane.length ? [(([command, ...args]) => ['lane', command, args])(cargoTests('--', '--ignored', ...lane))] : []),
-    ['clippy', 'cargo', ['clippy', ...workspace, '--all-targets', '--keep-going', '--', '-D', 'warnings']],
+    ['clippy', 'cargo', ['clippy', '--all-targets', '--keep-going', '--', '-D', 'warnings']],
+    ['workspace-clippy', 'cargo', ['clippy', ...workspace, '--all-targets', '--keep-going', '--', '-D', 'warnings']],
     ['fmt', 'cargo', ['fmt', '--all', '--', '--check']],
     ['caps', 'bun', ['scripts/caps.mjs']],
     ['boot', 'bun', ['scripts/boot.mjs']],
-    // The bytes each web app ships against its budget (LLP 1047.002 D5), in seconds here rather
-    // than after `metrics --long`'s macOS build, so a VIOLATION is filed in the commit's first minute.
+    ['wasm', 'bun', ['scripts/wasm-check.mjs']],
+    // Shared runtime and app byte ceilings fail this step (LLP 1172.011 E1), before metrics --long's native builds.
     ['web-bytes', 'bun', ['scripts/metrics.mjs', '--web-bytes']],
     // Every web host unit test (LLP 1012.001.000 D9; Charlie, 2026-09-30)
     // and the source capture fixtures, in the existing async glue step.
@@ -237,14 +275,18 @@ export function checks(sha, since, selection = {}) {
     // The web build's JS target against the wasm runner, step by step (LLP
     // 1071 §4; Charlie, 2026-09-28): minutes and a network, so never blocking.
     ...when(conform.length, [['conform', 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--build', '--linux', '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--out', resolve(STATE_DIR, 'conform')]]]),
+    // These drives build their own external fixtures and launch the pinned Chromium (notifications needs its full
+    // build). Missing build tools or browsers fail the step; neither drive skips an unavailable prerequisite.
+    ...when(selection.moduleSeams, [['module-seams', 'env', [...required, 'bun', 'contract/cli/tests/bell/seams.mjs']]]),
+    ...when(selection.notificationsWeb, [['notifications-web', 'env', [...required, 'bun', 'packages/notifications/test/drive.mjs', 'web']]]),
     // `tree --ax` against Chrome's own tree (LLP 1080.002 §3), and the wasm
     // host's presence preload and zero-viewport recovery, over this commit's
     // Caltrain dists; a missing dist fails it.
     ...when(selection.webAx, [['web-ax-test', 'env', [...required, ...distEnv, 'bun', 'test', ...WEB_AX]]]),
-    // The JS target in the other browser engines, with Chrome as its oracle.
+    // The JS target in both other engines, sharing one live Chrome oracle per target.
     // These remain async-only; a missing Playwright browser is a named failure
     // whose log gives the exact outside-the-repo install command.
-    ...when(conform.length, ['firefox', 'webkit'].map(browser => [`conform-${browser}`, 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--browser', browser, '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--js-from', resolve(STATE_DIR, 'conform'), '--out', resolve(STATE_DIR, `conform-${browser}`)]])),
+    ...when(conform.length, [['conform-browsers', 'bun', ['host/web-js/conform.mjs', ...conform, '--synthetic', '--browser', 'firefox,webkit', '--strict', '--wasm-root', resolve(STATE_DIR, 'conform-wasm'), '--js-from', resolve(STATE_DIR, 'conform'), '--out', resolve(STATE_DIR, 'conform-browsers')]]]),
     // The paint walk's pixels against Chrome's (Charlie, 2026-11-11; LLP 1159.000 D6): each gallery on the Linux
     // host, whose walk Windows and Android paint with too. Seconds once the gallery is built; no window, no simulator.
     ...selection.parity.map(smoke => [`parity-${smoke}`, 'sh', ['-c', parityLeg(smoke)]]),
@@ -262,6 +304,9 @@ export function checks(sha, since, selection = {}) {
     // builds Caltrain's watch bundle with the pinned nightly and rust-src
     // (webToolchainEnv names their install), and no simulator.
     ...when(selection.watchos, [watchosCompile]),
+    ...(selection.extra ?? []),
+    ...tierTwoChecks().map(([name, ...command]) => [name === 'tvos' ? 'tvos-install' : name, ...command]),
+    ['difftest-quick', 'cargo', ['run', '-q', '-p', 'contract-difftest', '--', 'quick', '--base', since ?? `${sha}^`]],
     ...semanticsChecks(),
     ['metrics', 'bun', ['scripts/metrics.mjs', '--long']],
   ];
@@ -275,13 +320,24 @@ export const changedPaths = (sha, since, diff) => diff(['diff', '-z', '--name-on
 // of skipping it.
 const required = ['EXACT_REQUIRED=1'];
 const DIST_DIR = resolve(STATE_DIR, 'dists');
+// The dists are made read-only once built, and the directory that holds them too. Every step that reads one shares
+// it, so a test that writes over one (a build or dev loop given the lane's EXACT_WEB_DIST) fails itself, by name, at
+// the build's lock beside the dist, instead of every test that reads the dist after it (2026-11-13: a JS build over
+// caltrain-wasm mid-glue failed some 30 tests as a "stale receipt"). A drive's lease beside a dist
+// (host/web/generations.mjs) is a reader's write, so each dist's `.leases` directory stays writable.
+const DISTS = ['caltrain-wasm', 'caltrain-js', 'fieldnotes'];
 export const prepareCheck = ['prepare', 'sh', ['-c', [
+  `if [ -d ${JSON.stringify(DIST_DIR)} ]; then chmod -R u+w ${JSON.stringify(DIST_DIR)}; fi`,
   `rm -rf ${JSON.stringify(DIST_DIR)} && mkdir -p ${JSON.stringify(DIST_DIR)}`,
   `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'caltrain-wasm'))} bun host/web/build.mjs caltrain-web --wasm`,
   `EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'caltrain-js'))} bun host/web/build.mjs caltrain-web`,
-  `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'fieldnotes'))} bun host/web/build.mjs fieldnotes-web`,
+  // apps/fieldnotes/web/tests/worker.rs drives a wasm build (its app.module.json and bake.json).
+  `EXACT_WEB_LINK=all EXACT_WEB_DIST=${JSON.stringify(resolve(DIST_DIR, 'fieldnotes'))} bun host/web/build.mjs fieldnotes-web --wasm`,
   // The bounded feed's data, which host/web-js/lower-equal.test.mjs requires (LLP 1071.001 part B, B5).
   'bench/dioxus/prepare.sh',
+  `chmod -R a-w ${DISTS.map(d => JSON.stringify(resolve(DIST_DIR, d))).join(' ')}`,
+  `mkdir -p ${DISTS.map(d => JSON.stringify(resolve(DIST_DIR, `${d}.leases`))).join(' ')}`,
+  `chmod a-w ${JSON.stringify(DIST_DIR)}`,
 ].join(' && ')]];
 /** The dists a step reads, as its variables (`LANE_DISTS`). */
 const distsOf = step => LANE_DISTS.filter(d => d.steps.includes(step)).map(d => `${d.name}=${resolve(DIST_DIR, d.dist)}`);
@@ -327,6 +383,14 @@ export function semanticsChecks(base = process.env) {
   ];
 }
 
+/** Replay the full corpus and logged seed; quick would skip a clean baseline. */
+export function quickProbe(log, base = process.env) {
+  const seed = /quick: random --seed (\d+)/.exec(log)?.[1];
+  return ['difftest-quick', ...script(['corpus', ...(seed ? [
+    `random --seed ${seed} --count 40`, `lowering --seed ${seed} --count 8 --batch 2`,
+  ] : [])].map(difftest)), { env: semanticsEnv(base, { DIFFTEST_CACHE: '1' }) }];
+}
+
 /** What the semantics checks read at the worktree's checkout, read once for all four. */
 const semanticsInputs = () => new Inputs(WT, semanticsEnv(process.env));
 
@@ -341,7 +405,7 @@ export function retainSkippedFailures(previous, result, owners = {}, steps = TIE
   const found = new Set(result.failures);
   for (const f of previous) {
     const name = f.split(': ', 1)[0], check = result.checks[name], owner = owners[f];
-    if (found.has(f) || !steps.has(name)) continue;
+    if (found.has(f) || !(steps.has(name) || name === 'other-glue' || name === 'bundle-fixture' || name === 'macos' || name.startsWith('app:') || name.startsWith('build-app:'))) continue;
     // What ran it again: its check whole, or the part of it that holds its suites (one it cannot name: any part).
     const ran = check && !check.skipped && check.complete !== false && (!check.covers || (owner?.length && owner.every(o => check.covers.includes(o))));
     if (ran) continue;
@@ -360,15 +424,15 @@ export function owners(name, log, found) {
   const own = (f, id) => { if (!(out[f] ??= []).includes(id)) out[f].push(id); };
   for (const f of found) {
     const pkg = /^\S+: -p (\S+) /.exec(f)?.[1] ?? /^\S+: (\S+) (?:\([^)]*\) does not compile|build script failed)$/.exec(f)?.[1];
-    if (pkg && (name === 'test' || name === 'lane')) own(f, `cargo:${pkg}`);
+    if (pkg && ['test', 'lane', 'default-test', 'build', 'workspace-build', 'workspace', 'clippy', 'workspace-clippy', 'linux', 'windows', 'windows-arm64'].includes(name)) own(f, `cargo:${pkg}`);
     const app = name.startsWith('conform') && f.slice(name.length + 2).split(' ').slice(0, 2).find(w => WEB_APPS.includes(w));
     if (app) own(f, `conform:${app}`);
     const errored = /^\S+: (\S+\.test\.\w+): an error between tests$/.exec(f)?.[1];
     if (errored) own(f, `bun:${errored}`);
-    const xctest = /^ios: ExactKitTests\.(\w+) \w+ failed$/.exec(f)?.[1];
-    if (xctest) own(f, `xctest:ios:${xctest}`);
+    const xctest = /^(?:ios|macos): ExactKitTests\.(\w+) \w+ failed$/.exec(f)?.[1];
+    if (xctest) own(f, `xctest:${name}:${xctest}`);
   }
-  if (name !== 'glue') return out;
+  if (!['glue', 'other-glue'].includes(name)) return out;
   let file = null;
   for (const line of log.split('\n')) {
     const header = /^(?:\.\/)?(\S+\.test\.\w+):$/.exec(line);
@@ -399,8 +463,13 @@ export function failures(name, log, status) {
   // metrics rows: a VIOLATION, or a measurement whose build FAILED.
   if (name === 'metrics' || name === 'web-bytes') for (const m of log.matchAll(/^[ \t]+(\S[^\n]*?)[ \t]{2,}(?:FAILED\b|[^\n]*\bVIOLATION\b)/gm)) found.add(`${name}: ${m[1]} ${/\bVIOLATION\b/.test(m[0]) ? 'VIOLATION' : 'FAILED'}`);
   for (const m of log.matchAll(/Test Case '-\[(\S+) (\S+)\]' failed/g)) found.add(`${name}: ${m[1]} ${m[2]} failed`);
-  // xcodebuild's parallel testing names a failure by class and method only.
-  for (const m of log.matchAll(/^Test case '(\w+)\.(\w+)\(\)' failed on /gm)) found.add(`${name}: ExactKitTests.${m[1]} ${m[2]} failed`);
+  // xcodebuild's parallel testing names a failure by class and method only. A test it reports failed in 0.000 s did
+  // not run: its test process had crashed, and xcodebuild fails each test that process still held (2026-11-12: 377
+  // of them for 15 crashes in XCTest's own launch, "bundleProxyForCurrentProcess is nil"). Those are one failure, the
+  // crash; its xcresult says what crashed.
+  for (const m of log.matchAll(/^Test case '(\w+)\.(\w+)\(\)' failed on [^\n]*?(?:\((\d+\.\d+) seconds\))?$/gm)) {
+    found.add(m[3] !== undefined && Number(m[3]) === 0 ? `${name}: a test process crashed` : `${name}: ExactKitTests.${m[1]} ${m[2]} failed`);
+  }
   // Swift diagnostics by file and message: line numbers move with every edit.
   for (const m of log.replace(/\x1b\[[0-9;]*m/g, '').matchAll(/(?:^|\/)Sources\/(\S+?\.swift):\d+:\d+: error: (.+)$/gm)) found.add(`${name}: ${m[1]}: ${m[2].trim()}`);
   for (const m of log.matchAll(/^Diff in (\S+?):\d+:/gm)) found.add(`${name}: ${m[1].replace(WT + '/', '')} is not formatted`);
@@ -437,7 +506,12 @@ export function failures(name, log, status) {
 const HANG_MS = 2 * 60 * 60 * 1000;
 /** How often the first lane runs every suite, whatever changed. */
 const FULL_EVERY_MS = 24 * 60 * 60 * 1000;
-function run(command, args, env, fd) {
+export function run(command, args, env, fd, { platform } = {}) {
+  if (platform && platform !== process.platform) {
+    const notRun = `needs a ${platform === 'win32' ? 'Windows' : platform} worker`;
+    writeSync(fd, `not run: ${notRun}\n`);
+    return Promise.resolve({ status: 77, hung: false, notRun });
+  }
   return new Promise((done) => {
     const child = spawn(command, args, { cwd: WT, env, stdio: ['ignore', fd, fd], detached: true });
     let hung = false;
@@ -462,30 +536,41 @@ function prune() {
 
 /** Check `sha`: on a full run every suite, else those that the files changed since `base` (the last commit checked)
  * affect. */
-async function check(sha, since, { base, full }) {
-  const dir = resolve(STATE_DIR, sha.slice(0, 12));
+async function check(sha, since, { base, full, selection: given, only, probe = false, overrides = {} }) {
+  checkout(sha);
+  return withLaneEdits(WT, () => checkAt(sha, since, { base, full, selection: given, only, probe, overrides }));
+}
+
+async function checkAt(sha, since, { base, full, selection: given, only, probe, overrides }) {
+  const dir = resolve(STATE_DIR, sha.slice(0, 12), ...(probe ? ['bisect'] : []));
   mkdirSync(dir, { recursive: true });
   prune();
-  git(['checkout', '--detach', '--force', sha], WT);
   const env = laneEnv(process.env);
+  const installStart = performance.now(), installLoad = loadavg()[0];
   const installed = spawnSync('bun', ['install', '--frozen-lockfile'], { cwd: WT, env, encoding: 'utf8' });
   const result = { sha, subject: git(['log', '-1', '--format=%s', sha]), checks: {}, failures: [], owners: {} };
+  writeFileSync(resolve(dir, 'install.log'), `${installed.stdout ?? ''}${installed.stderr ?? ''}${installed.error?.message ?? ''}`);
+  result.checks.install = { command: 'bun install --frozen-lockfile', status: installed.status ?? 127,
+    complete: installed.status === 0, seconds: (performance.now() - installStart) / 1000, load: installLoad };
   if (installed.status !== 0) result.failures.push(`install: bun install --frozen-lockfile exit ${installed.status}`);
   let selection = null;
   if (TIER === 1) {
-    try { selection = laneSelection(full ? [] : changedPaths(sha, base, git), { full }); }
+    try { selection = given ?? laneSelection(full ? [] : changedPaths(sha, base, git), { full }); }
     catch (e) {
       console.log(`${sha.slice(0, 8)}: every suite runs, since the selection (scripts/affected.mjs) failed: ${e.message}`);
+      result.selectionError = e.message;
+      result.failures.push('selection: could not select every suite (see result.json)');
       selection = everything(WT);
     }
-    Object.assign(result, { full: selection.full, selected: selection.ids });
+    Object.assign(result, { full: selection.full && !result.selectionError, selected: selection.ids });
   }
   const store = new Store(resolve(STATE_DIR, 'fingerprints'));
   let inputs;
-  for (const [name, command, args, opts] of checks(sha, since, selection ?? undefined)) {
+  for (const [name, command, args, opts] of checks(sha, since, selection ?? undefined).map(step => overrides[step[0]] ?? step)) {
+    if (only && !only.has(name)) continue;
     const ran = { command: [command, ...args].join(' ') };
     let gated = null;
-    if (opts) {
+    if (opts?.inputs && !probe) {
       const start = performance.now();
       gated = await decide(store, inputs ??= semanticsInputs(), name, command, args, opts);
       Object.assign(ran, gated.error ? { gateError: gated.error } : { fingerprint: gated.fp.digest, changed: gated.changed },
@@ -495,14 +580,15 @@ async function check(sha, since, { base, full }) {
         continue;
       }
     }
-    const logPath = resolve(dir, `${name}.log`), fd = openSync(logPath, 'w');
+    const logPath = resolve(dir, `${name.replaceAll(/[^a-zA-Z0-9_.-]/g, '_')}.log`), fd = openSync(logPath, 'w');
     const load = loadavg()[0], start = performance.now();
-    const r = await run(command, args, opts?.env ?? env, fd);
+    const r = await run(command, args, opts?.env ?? env, fd, opts);
     closeSync(fd);
     const seconds = (performance.now() - start) / 1000, log = readFileSync(logPath, 'utf8');
     const part = covers(name, selection);
-    result.checks[name] = { ...ran, status: r.status, seconds, load, ...(r.hung ? { hung: true } : {}), ...(part ? { covers: part } : {}) };
-    const outcome = gated && outcomeOf(r.status, r.hung);
+    result.checks[name] = { ...ran, status: r.status, seconds, load, ...(r.hung ? { hung: true } : {}), ...(r.notRun ? { notRun: r.notRun } : {}), ...(part ? { covers: part } : {}) };
+    if (r.notRun) console.log(`${sha.slice(0, 8)} ${name}: not run: ${r.notRun}`);
+    const outcome = outcomeOf(r.status, r.hung);
     if (gated?.fp) store.record(name, gated.fp, outcome, { sha });
     // A check that could not run here found nothing.
     if (outcome !== 'unavailable') {
@@ -514,23 +600,99 @@ async function check(sha, since, { base, full }) {
       const slow = [...new Set([...log.matchAll(/^test (\S+) has been running for over 60 seconds/gm)].map(m => m[1]))];
       result.failures.push(...(slow.length ? slow.map(t => `${name}: ${t} hung`) : [`${name}: hung past ${HANG_MS / 60000} min`]));
     }
-    result.checks[name].complete = !stoppedEarly(name, result.failures);
+    result.checks[name].complete = r.status !== 77 && !stoppedEarly(name, result.failures);
   }
   writeFileSync(resolve(dir, 'result.json'), JSON.stringify(result, null, 2));
   return result;
 }
 
+/** Unavailable steps cannot qualify the daily full run (LLP 1172.010 E13). */
+export const fullCoverage = result => result.full && !Object.values(result.checks).some(c => c.status === 77);
+
 function file(result, fresh, since, lastFull) {
   const short = result.sha.slice(0, 8);
-  const timing = Object.entries(result.checks).map(([n, c]) => c.skipped ? `${n} skipped (${c.skipped})` : `${n} ${c.seconds.toFixed(0)} s (exit ${c.status}, load ${c.load.toFixed(0)})`).join(' · ');
-  const what = since ? `that ${since.slice(0, 8)} (the last commit it checked) did not have, from a commit in ${since.slice(0, 8)}..${short}` : `that ${short}'s parent did not have`;
+  const timing = Object.entries(result.checks).map(([n, c]) => c.notRun ? `${n} not run: ${c.notRun}` : c.skipped ? `${n} skipped (${c.skipped})` : `${n} ${c.seconds.toFixed(0)} s (exit ${c.status}, load ${c.load.toFixed(0)})`).join(' · ');
+  const what = since ? `while checking ${since.slice(0, 8)}..${short}` : `at baseline ${short}`;
   // A suite left out since the last full run may have broken in any commit since.
-  const full = result.full && lastFull ? [`This run checked every suite, as the lane does at least daily: one the selection had left out (scripts/affected.mjs) may have failed since ${lastFull.slice(0, 8)}, the last such run.`, ''] : [];
+  const full = fullCoverage(result) && lastFull ? [`This run checked every suite, as the lane does at least daily: one the selection had left out (scripts/affected.mjs) may have failed since ${lastFull.slice(0, 8)}, the last such run.`, ''] : [];
   const body = [`The tier ${TIER} async lane found ${fresh.length} failure(s) ${what}:`, '',
-    ...fresh.map(f => `- ${f}`), '', ...full, `Commit: ${short} ${result.subject}`, `Checks: ${timing}`,
+    ...fresh.map(f => {
+      const a = result.attribution?.[f];
+      return `- ${f}${a?.commit ? ` — introduced by ${a.commit}` : a?.preexisting ? ` — already present at ${a.preexisting}` : ` — attribution unresolved: ${a?.unresolved ?? 'not probed'} (${a?.good ?? since}..${a?.bad ?? result.sha})`}`;
+    }), '', ...full, `Commit: ${short} ${result.subject}`, `Checks: ${timing}`,
     `Logs: ${resolve(STATE_DIR, result.sha.slice(0, 12))}/`].join('\n');
   issue(['new', `Async lane${TIER === 2 ? ' (tier 2)' : ''}: ${fresh.length} new failure(s) at ${short}`, '--systems', 'async lane',
     '--slug', `async${TIER === 2 ? '2' : ''}-${short}`, '--author', 'async lane (scripts/async.mjs)', '--body', body, '--quiet'], ROOT);
+}
+
+/** The failing suites, found by affected.mjs on the complete hourly range, stay fixed across probes. */
+export function failureSelection(selection, wanted, owners) {
+  const named = name => wanted.filter(f => f.startsWith(`${name}: `));
+  const ids = name => named(name).flatMap(f => owners[f] ?? []);
+  const allOwned = name => named(name).length && named(name).every(f => owners[f]?.length);
+  const out = { ...selection };
+  if (allOwned('test') && !named('lane').length || allOwned('lane') && !named('test').length
+    || allOwned('test') && allOwned('lane')) {
+    out.full = false;
+    out.cargo = [...new Set([...ids('test'), ...ids('lane')].filter(id => id.startsWith('cargo:')).map(id => id.slice(6)))];
+  }
+  if (allOwned('other-glue')) out.extra = (out.extra ?? []).map(step => step[0] === 'other-glue'
+    ? [step[0], step[1], [...step[2].filter(a => !a.startsWith('./')), ...ids('other-glue').map(id => `./${id.slice(4)}`)]] : step);
+  if (allOwned('glue')) out.glue = ids('glue').filter(id => id.startsWith('bun:')).map(id => `./${id.slice(4)}`);
+  if (allOwned('macos')) out.extra = (out.extra ?? []).map(step => step[0] === 'macos'
+    ? ['macos', 'bun', ['host/apple/build.mjs', '--test', '--only', ids('macos').map(id => id.slice('xctest:macos:'.length)).join(',')]] : step);
+  if (allOwned('ios')) out.iosOnly = ids('ios').filter(id => id.startsWith('xctest:ios:')).map(id => id.slice(11));
+  for (const name of ['conform', 'conform-browsers']) if (allOwned(name)) {
+    out.conform = [...new Set([...ids('conform'), ...ids('conform-browsers')].map(id => id.slice('conform:'.length)))];
+  }
+  return out;
+}
+
+export function probeSteps(wanted, selection) {
+  const names = new Set(wanted.map(f => f.split(': ', 1)[0]));
+  if (['test', 'default-test', 'lane', 'glue', 'web-ax-test'].some(n => names.has(n))) names.add('prepare');
+  if (names.has('conform-browsers')) names.add('conform');
+  if (names.has('other-glue')) names.add('bundle-fixture');
+  if ([...names].some(name => name === 'game' || name.startsWith('game-'))
+    || names.has('other-glue') && selection?.extra?.some(([name, , args]) => name === 'other-glue' && args.some(a => a.startsWith('./game/')))) names.add('game-lock');
+  for (const name of [...names]) if (name.startsWith('app:')) names.add(`build-${name.slice(0, name.lastIndexOf(':'))}`);
+  return names;
+}
+
+/** A known suite must read something this commit changed; unknown coverage cannot exclude a commit. */
+export function failureAffected(selection, ownerIds, catalogue, name) {
+  if (!ownerIds.length) return name === 'install' || checks('', null, { ...selection, lane: [] }).some(([step]) => step === name);
+  return ownerIds.some(id => {
+    const suite = id.startsWith('xctest:') ? id.split(':').slice(0, 2).join(':') : id;
+    if (!catalogue.has(suite)) return true;
+    if (!selection.ids.includes(suite)) return false;
+    if (suite === id) return true;
+    const ran = covers(suite.slice('xctest:'.length), selection);
+    return !ran || ran.includes(id);
+  });
+}
+
+async function attribute(result, fresh, base, pending) {
+  if (!base) return {};
+  const changes = changedPaths(result.sha, base, git);
+  const repo = TIER === 1 ? new Repo(WT, { also: changes }) : null;
+  const catalogue = repo && new Set(suites(repo).map(s => s.id));
+  // Read the tip's graph before probes move the worktree. Renames include both paths.
+  const graphs = new Map();
+  const selections = repo && new Map(pending.map(sha => [sha, laneSelection(changedPaths(sha, null, git), { repo, graphs })]));
+  const candidates = new Map(fresh.map(f => [f, pending.filter(sha => !repo
+    || failureAffected(selections.get(sha), result.owners[f] ?? [], catalogue, f.split(': ', 1)[0]))]));
+  const eligible = fresh.filter(f => candidates.get(f).length);
+  const selection = repo ? laneSelection(changes, { full: result.full, repo, graphs }) : undefined;
+  const selected = selection && failureSelection(selection, eligible, result.owners);
+  const only = probeSteps(eligible, selected);
+  const overrides = eligible.some(f => f.startsWith('difftest-quick: '))
+    ? { 'difftest-quick': quickProbe(readFileSync(resolve(STATE_DIR, result.sha.slice(0, 12), 'difftest-quick.log'), 'utf8')) } : {};
+  return bisectAffected(base, result.sha, fresh, candidates, async (sha, wanted) => {
+    console.log(`bisect ${sha.slice(0, 8)}: ${[...only].join(', ')}`);
+    const found = await check(sha, null, { base, full: false, selection: selected, only, probe: true, overrides });
+    return probeOutcomes(found, wanted);
+  }, sha => git(['rev-parse', `${sha}^`]));
 }
 
 async function once(state) {
@@ -539,35 +701,31 @@ async function once(state) {
   const pending = state.last
     ? git(['rev-list', '--first-parent', '--reverse', `${state.last}..${tip}`]).split('\n').filter(Boolean)
     : [tip];
-  // The second lane, and the first under --newest, coalesces: only the newest commit is checked.
-  const newest = TIER === 2 || process.argv.includes('--newest');
-  for (const sha of newest ? pending.slice(-1) : pending) {
-    const since = newest && pending.length > 1 ? state.last : null;
-    // Every suite runs on the first commit, with --full, and at least once a day, which bounds what a read the
-    // selection misses can hide; else those the files changed since the last commit checked affect.
-    const full = TIER === 1 && (!state.last || process.argv.includes('--full') || !(Date.now() - Date.parse(state.fullAt ?? 0) < FULL_EVERY_MS));
-    const result = await check(sha, since, { base: state.last, full });
-    // A failure nothing ran to find again is kept.
-    retainSkippedFailures(state.failures ?? [], result, state.owners ?? {});
-    // The first commit checked has no parent result: it sets the baseline,
-    // since its failures cannot be attributed to it.
-    const baseline = state.failures === undefined;
-    const before = new Set(state.failures ?? []);
-    const fresh = result.failures.filter(f => !before.has(f));
-    console.log(`${sha.slice(0, 8)} ${result.subject}: ${result.failures.length} failure(s), ${baseline ? 'baseline' : `${fresh.length} new`}`);
-    if (fresh.length && !baseline) file(result, fresh, since, state.fullSha);
-    // What it found, on the commit as a git note other checkouts read (LLP 1146 D1, `known.mjs`).
-    const unpublished = publish(noteOf(result, TIER));
-    if (unpublished) console.log(`${sha.slice(0, 8)}: the note was not published: ${unpublished}`);
-    Object.assign(state, { last: sha, failures: result.failures, owners: result.owners },
-      result.full ? { fullAt: new Date().toISOString(), fullSha: sha } : {});
-    writeFileSync(STATE, JSON.stringify(state, null, 2));
+  const full = TIER === 1 && (!state.last || process.argv.includes('--full') || !(Date.now() - Date.parse(state.fullAt ?? 0) < FULL_EVERY_MS));
+  if (!pending.length && !full) return;
+  const since = state.last, result = await check(tip, since, { base: since, full });
+  retainSkippedFailures(state.failures ?? [], result, state.owners ?? {});
+  const baseline = state.failures === undefined, before = new Set(state.failures ?? []);
+  const fresh = result.failures.filter(f => !before.has(f));
+  console.log(`${tip.slice(0, 8)} ${result.subject}: ${result.failures.length} failure(s), ${baseline ? 'baseline' : `${fresh.length} new`}`);
+  if (fresh.length && !baseline) {
+    try { result.attribution = await attribute(result, fresh, since, pending); }
+    catch (e) { result.attribution = Object.fromEntries(fresh.map(f => [f, { unresolved: e.message, good: since, bad: tip }])); }
+    writeFileSync(resolve(STATE_DIR, tip.slice(0, 12), 'result.json'), JSON.stringify(result, null, 2));
+    file(result, fresh, since, state.fullSha);
   }
+  // Bisection leaves the lane's own worktree at a probe. Restore the checked tip before the next run.
+  checkout(tip);
+  const unpublished = publish(noteOf(result, TIER));
+  if (unpublished) console.log(`${tip.slice(0, 8)}: the note was not published: ${unpublished}`);
+  Object.assign(state, { last: tip, failures: result.failures, owners: result.owners },
+    fullCoverage(result) ? { fullAt: new Date().toISOString(), fullSha: tip } : {});
+  writeFileSync(STATE, JSON.stringify(state, null, 2));
 }
 
 if (import.meta.main) {
   if (process.argv.includes('--help')) {
-    console.log('Usage: bun scripts/async.mjs [--once] [--from <rev>] [--worktree <dir>] [--interval <s>] [--branch <ref>] [--tier 1|2] [--newest] [--full] [--explain [<rev>]]');
+    console.log('Usage: bun scripts/async.mjs [--once] [--from <rev>] [--worktree <dir>] [--interval <s>] [--branch <ref>] [--tier 1|2] [--full] [--explain [<rev>]]');
     process.exit(0);
   }
   if (!existsSync(WT)) git(['worktree', 'add', '--detach', WT, BRANCH]);
@@ -578,7 +736,7 @@ if (import.meta.main) {
     const at = process.argv[process.argv.indexOf('--explain') + 1];
     git(['fetch', '-q', 'origin']);
     const sha = git(['rev-parse', at && !at.startsWith('--') ? at : BRANCH]);
-    git(['checkout', '--detach', '--force', sha], WT);
+    checkout(sha);
     const store = new Store(resolve(STATE_DIR, 'fingerprints')), inputs = semanticsInputs();
     for (const [name, command, args, opts] of semanticsChecks()) {
       const { error, passed, changed } = await decide(store, inputs, name, command, args, opts);
@@ -586,10 +744,16 @@ if (import.meta.main) {
     }
     process.exit(0);
   }
-  const interval = Number(option('--interval', TIER === 2 ? 3600 : 300)) * 1000;
+  const interval = Number(option('--interval', 3600)) * 1000;
+  if (!Number.isFinite(interval) || interval <= 0) throw new Error('--interval must be a positive number of seconds');
   for (;;) {
-    await once(state);
+    const started = Date.now();
+    try { await once(state); }
+    catch (error) {
+      console.error(`hourly lane: ${error.message}`);
+      if (process.argv.includes('--once')) process.exitCode = 1;
+    }
     if (process.argv.includes('--once')) break;
-    await new Promise(done => setTimeout(done, interval));
+    await new Promise(done => setTimeout(done, Math.max(0, interval - (Date.now() - started))));
   }
 }

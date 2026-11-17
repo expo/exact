@@ -30,7 +30,7 @@ export function chosenDiffSources(call: Call, cards: () => Card[], chosen: (prop
         if (!items.length) return { ...shownAs, diff: '', note: 'Nothing is chosen, so accepting it would write nothing.' };
         let got = planned.get(key);
         if (!got) {
-          const { error, reply } = await call('/__tamber', { method: 'propose', client, ops: items.map(i => ops[i]) }, 15000, bound());
+          const { error, reply } = await call('/__forma', { method: 'propose', client, ops: items.map(i => ops[i]) }, 15000, bound());
           got = error ? { diff: h.diff, note: `The diff of only what is chosen could not be planned (${error}): this is the diff of all of it.` } : { diff: String(reply.ok?.diff ?? ''), note: '' };
           // (kept only when it was planned on exactly the files the changes know: a write in between plans another)
           if (!error && digests(reply.ok?.files ?? {}) === digests(now)) planned.set(key, got);

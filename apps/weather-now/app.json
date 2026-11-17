@@ -1,0 +1,27 @@
+{
+  "$schema": "../../scripts/app.schema.json",
+  "name": "Weather Now",
+  "short_name": "Weather Now",
+  "id": "com.exact.weathernow",
+  "start_url": "/",
+  "display": "standalone",
+  "app": {
+    "id": "com.exact.weathernow",
+    "name": "Weather Now"
+  },
+  "host": {
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": ["iphone", "ipad"]
+    },
+    "macos": {
+      "minimumOS": "14.0",
+      "window": { "width": 420, "height": 640, "minWidth": 320, "minHeight": 420 }
+    },
+    "web": {}
+  },
+  "deploy": {
+    "store": { "web": "0", "macos": "0", "ios": "0" }
+  },
+  "rust": { "data": { "crate": "hello-data", "type": "hello_data::Hello", "source": "hello_data::Hello" } }
+}

@@ -75,6 +75,10 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     return { available: true, state: track ? 'granted' : 'unknown', inputs: track ? ['track', 'microphone'] : ['microphone'], local: 'processLocally' in Recognition.prototype, apple: null, android: null };
   }
   const status = () => agent ? { ...AGENT_STATUS, ...overlay } : browserStatus();
+  /** Whether this recognition's audio may leave the device (D9). Only `processLocally=true` makes the browser keep it
+   * there: with it false or omitted the browser may choose its remote service, though `status.local` says it could
+   * run on the device (Web Speech API, `processLocally`). The agent's recognizer is local where its status says so. */
+  const leaves = (args, s) => !args.processLocally && (!agent || !s.local);
 
   // ------------------------------------------------------------ results and the transcript (D7)
   const info = r => ({ id: r.id, leavesDevice: r.leavesDevice, finalCount: r.finalCount, transcript: r.transcript, files: r.files, error: r.state === 'ended' ? r.error : null });
@@ -181,7 +185,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     const r = {
       id: `recognition-${++next}`, input, state: 'starting', audio: false, sound: false, speech: false, results: [], finalCount: 0, interim: null,
       error: null, message: null, continuous: !!args.continuous, interimResults: !!args.interimResults,
-      history: Math.max(1, Math.min(MAX_HISTORY, args.history ?? HISTORY)), leavesDevice: args.processLocally ? false : !s.local,
+      history: Math.max(1, Math.min(MAX_HISTORY, args.history ?? HISTORY)), leavesDevice: leaves(args, s),
       transcript: args.transcript ?? null, files: 0, fileSize: 0, writing: Promise.resolve(), began: now(), cursor: now(), heard: 0, seen: 0, file: input === 'file',
     };
     if (input === 'track') {

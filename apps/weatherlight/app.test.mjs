@@ -146,12 +146,45 @@ for (const offline of [false, true]) {
       } else {
         expect((await session.state()).resources.outlook.hours).toHaveLength(24);
         await check('loaded forecast');
+        // Exercise illuminated sky even when WebGPU falls back to the darker solid fill.
+        const sky = [80, 110, 130];
+        for (const scheme of ['light', 'dark']) {
+          await session.prefer({ 'prefers-color-scheme': scheme });
+          const ink = await session.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="selected-label"]')).color.match(/[\\d.]+/g).map(Number)`);
+          const alpha = ink[3] ?? 1;
+          const painted = sky.map((channel, i) => ink[i] * alpha + channel * (1 - alpha));
+          expect(ratio(painted, sky)).toBeGreaterThanOrEqual(3);
+        }
         const hour = (await session.state()).resources.outlook.hours[0].id;
         await session.tap(`hour-${hour}`);
         await session.clock('settle');
         expect((await session.state()).slots.selected).toBe(hour);
         await session.tree('back-now');
         await check('selected hour');
+        const hours = (await session.state()).resources.forecast.hours;
+        const scenes = new Set([
+          ...[0, 6, 12, 18].map(hour => hours.find(h => h.hour === hour)),
+          hours.reduce((a, b) => a.cloud < b.cloud ? a : b),
+          hours.reduce((a, b) => a.cloud > b.cloud ? a : b),
+          hours.find(h => h.rain > 0),
+        ]);
+        for (const scene of scenes) {
+          expect(scene).toBeDefined();
+          await session.tap(`hour-${scene.id}`);
+          await session.clock('settle');
+          const { cloud, rain, day, hour } = (await session.state()).resources.outlook;
+          expect({ cloud, rain, day, hour }).toEqual({
+            cloud: scene.cloud, rain: scene.rain, day: scene.day, hour: scene.hour,
+          });
+          for (const elapsed of [0, 15000, 60000]) {
+            if (elapsed) await session.clock(`+${elapsed}`);
+            await check(`hour ${scene.id}, animation +${elapsed}ms`);
+          }
+        }
+        await session.tap('pause-sky');
+        await session.clock('+60000');
+        expect((await session.state()).slots.skyChoice).toBe('pause');
+        await check('paused sky');
       }
       await session.prefer({ 'permission.geolocation': 'denied' });
       await session.clock('settle');
@@ -209,4 +242,46 @@ test('a read counts on from the file, and the build reads empty', async () => {
   expect(await answer('deliverPurchases', [], {}, storage)).toEqual({ tips: 8 });
   expect(await answer('visits', [864000000], {}, storage)).toEqual({ days: 4, ask: false });
   expect(await answer('tips', [], {}, store('bake').storage)).toEqual({ tips: 0 });
+});
+
+// The delivering task asks again when a consume changes the queue, so a
+// second delivery can start while the first is in its loop. Neither may
+// write a count that misses a tip the other counted.
+test('overlapping deliveries count every tip once', async () => {
+  const queue = ['t2', 't3'];
+  const held = { unfinished: [], consume: [] };
+  const hold = (list, value) => new Promise(resolve => list.push(() => resolve(value())));
+  mock.module('@exact/purchases', () => ({
+    acknowledge: async () => {},
+    consume: ({ purchaseToken }) => hold(held.consume, () => { queue.splice(queue.indexOf(purchaseToken), 1); }),
+    unfinishedPurchases: () => hold(held.unfinished, () => queue.map(purchaseToken => ({ purchaseState: 'purchased', itemId: 'tip.small', purchaseToken }))),
+  }));
+  const { answer } = await import('./app.ts?case=overlap');
+  let file = JSON.stringify({ tips: 7, tokens: ['t1'] });
+  const storage = { fs: {
+    readFile: async () => new TextEncoder().encode(file).buffer,
+    atomicWriteFile: async (_path, bytes) => { file = new TextDecoder().decode(bytes); },
+  } };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const release = list => { const next = list.shift(); next?.(); return Boolean(next); };
+  // Both deliveries start before either has the queue; the second's queue is
+  // read after the first consumed t2 but before it consumed t3.
+  const first = answer('deliverPurchases', [], {}, storage);
+  await settle();
+  const second = answer('deliverPurchases', [], {}, storage);
+  await settle();
+  release(held.unfinished);
+  await settle();
+  release(held.consume);
+  await settle();
+  release(held.unfinished);
+  await settle();
+  let done = false;
+  Promise.all([first, second]).then(() => { done = true; });
+  for (let i = 0; i < 50 && !done; i++) {
+    if (!release(held.consume)) release(held.unfinished);
+    await settle();
+  }
+  expect(done).toBe(true);
+  expect(JSON.parse(file)).toEqual({ tips: 9, tokens: ['t1', 't2', 't3'] });
 });

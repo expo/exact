@@ -13,9 +13,33 @@ use crate::generated::{
 };
 use crate::id::ViewId;
 use crate::kernel::{Kernel, NodeRef};
-use crate::style::{ColorValue, Env};
+use crate::style::ColorValue;
+
+/// Box styles a standard cell cannot preserve (LLP 1084 D7, LLP 1115 D1).
+/// A row's minimum height remains UIKit's; a column's alignment is authored.
+/// Lowering uses the same rule before adding the subtitle sheet.
+pub fn authored_row_box(written: StyleMask, column: bool) -> bool {
+    [
+        StyleId::Height,
+        StyleId::BackgroundColor,
+        StyleId::BorderRadiusTopLeft,
+        StyleId::BorderRadiusTopRight,
+        StyleId::BorderRadiusBottomLeft,
+        StyleId::BorderRadiusBottomRight,
+    ]
+    .iter()
+    .any(|&id| written.has(id))
+        || column && (written.has(StyleId::AlignItems) || written.has(StyleId::JustifyContent))
+}
+
+/// A nested subtitle column's minimum height also needs its own views.
+pub fn authored_subtitle_box(written: StyleMask) -> bool {
+    authored_row_box(written, true) || written.has(StyleId::MinHeight)
+}
 
 mod separator;
+#[cfg(test)]
+mod tests;
 pub use separator::GroupedSeparator;
 
 /// A grouped list as a host draws it.
@@ -48,6 +72,8 @@ pub struct GroupedSection {
     /// Whether its rows sit on a card: false when the section's group has a
     /// transparent background (`section background-color="transparent"`).
     pub card: bool,
+    /// The group holding the rows, whose style defines the card.
+    pub card_view: ViewId,
     /// The space above it, in points, when the author wrote a margin at
     /// that boundary (its `margin-top`, or the previous section's
     /// `margin-bottom`): the web's, the two margins collapsed. `None` keeps
@@ -76,8 +102,8 @@ pub enum Accessory {
     Detail(ViewId),
 }
 
-/// A row. A custom row carries nothing but its node, its press and its
-/// state: the host shows its views as they are.
+/// A row. A custom row keeps its views, with a radio's selection target or
+/// platform accessories when only Markdown prevents standard text content.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupedRow {
     /// The row's node.
@@ -87,9 +113,11 @@ pub struct GroupedRow {
     /// The leading symbol's Apple name ("" for an icon token with none).
     pub symbol: Option<String>,
     /// The leading symbol's icon token form (after `symbol:`) when it has
-    /// no Apple name but a template path, which the host draws as the
-    /// cell's template image (LLP 1121 D10, stage 9 A2); `None` otherwise.
+    /// no Apple name but an SVG source: a template path or a raster asset
+    /// in the Apple catalog (LLP 1121 D10); `None` otherwise.
     pub icon: Option<String>,
+    /// Whether the leading icon retains its file's colours.
+    pub icon_multicolor: bool,
     /// The title.
     pub title: Option<String>,
     /// The second text: a value beside the title, or a subtitle under it.
@@ -98,6 +126,9 @@ pub struct GroupedRow {
     pub subtitle: bool,
     /// The trailing accessory.
     pub accessory: Accessory,
+    /// The authored view replaced by the platform accessory. A custom row
+    /// has one only when Markdown alone prevents standard text content.
+    pub accessory_view: Option<ViewId>,
     /// Whether the row is a button, so a tap presses it.
     pub pressable: bool,
     /// Whether it is an action cell: a `button` (no `href`) of a title, a
@@ -242,14 +273,14 @@ fn apple_symbol(node: &NodeRef<'_>) -> Option<String> {
         .then(|| name.to_owned())
 }
 
-/// The icon token form `role` is when it has no SF Symbol and a template
-/// path: the host draws that path where Apple has no symbol (stage 9 A2).
+/// An SVG icon with no SF Symbol: Apple draws its template path or its
+/// build-time raster asset.
 fn drawn_icon(role: &str) -> Option<&str> {
     let icon = crate::Icon::parse(role)?;
-    (icon.sf.is_empty() && !icon.path.is_empty()).then_some(role)
+    (icon.sf.is_empty() && (!icon.path.is_empty() || !icon.svg.is_empty())).then_some(role)
 }
 
-/// The icon token form a symbol image draws by its path (`drawn_icon`).
+/// The icon token form a symbol image draws (`drawn_icon`).
 fn icon_of(node: &NodeRef<'_>) -> Option<String> {
     let role = node
         .props
@@ -281,19 +312,61 @@ pub(crate) fn text_of(node: &NodeRef<'_>) -> Option<String> {
 impl GroupedRow {
     /// A standard cell's title and second text, and how each is set: the
     /// second a subtitle under the title, else a value beside it.
-    fn texts(&mut self, title: &NodeRef<'_>, second: Option<&NodeRef<'_>>, subtitle: bool) {
+    /// Neither is set when either text is Markdown: the cell's strings are
+    /// plain, so the row keeps its views, which draw the Markdown (LLP 1045 D3).
+    /// Returns whether Markdown alone prevents standard text content.
+    fn texts(&mut self, title: &NodeRef<'_>, second: Option<&NodeRef<'_>>, subtitle: bool) -> bool {
+        let markdown = |n: &NodeRef<'_>| {
+            crate::text::Markup::from_prop(n.props.str(PropId::Markup))
+                == crate::text::Markup::Markdown
+        };
+        if markdown(title) || second.is_some_and(markdown) {
+            return text_of(title).is_some();
+        }
         self.title = text_of(title);
         self.title_look = TextLook::of(title);
         self.secondary = second.and_then(text_of);
         self.secondary_look = second.map(TextLook::of).unwrap_or_default();
         self.subtitle = subtitle;
+        false
     }
 }
 
 impl Kernel {
+    /// The card receiving a grouped section's shadow paint. The section
+    /// retains its own hover and focus predicates (LLP 1084 D7, LLP 1121 D8).
+    pub fn grouped_section_card(&self, view: ViewId) -> Option<ViewId> {
+        let section = self.node(view)?;
+        self.node(section.parent?)?.props.str(PropId::ListStyle)?;
+        section.children().into_iter().find(|id| {
+            self.node(*id).is_some_and(|n| {
+                !matches!(n.props.str(PropId::SemanticTag), Some("header" | "footer"))
+            })
+        })
+    }
+
+    /// The section whose host-state shadow this card paints, if it is a card.
+    pub fn grouped_card_section(&self, view: ViewId) -> Option<ViewId> {
+        let section = self.node(view)?.parent?;
+        (self.grouped_section_card(section) == Some(view)).then_some(section)
+    }
+
     /// The grouped list `view` is, as it now stands; `None` for a node
-    /// without `listStyle`.
+    /// without `listStyle`. No text or image in it has a press of its own
+    /// ([`Kernel::grouped_list_with`]).
     pub fn grouped_list(&self, view: ViewId) -> Option<GroupedList> {
+        self.grouped_list_with(view, &|_| false)
+    }
+
+    /// [`Kernel::grouped_list`] for a host that knows its handlers: `acts`
+    /// says whether a node has a `press` of its own, which the plan holds
+    /// and the tree does not. A text or an image with one is its own
+    /// element in its row.
+    pub fn grouped_list_with(
+        &self,
+        view: ViewId,
+        acts: &dyn Fn(ViewId) -> bool,
+    ) -> Option<GroupedList> {
         let list = self.node(view)?;
         let style = list.props.str(PropId::ListStyle)?.to_owned();
         // What `display: none` hides on the web is no section or row here.
@@ -329,10 +402,14 @@ impl Kernel {
                                 .map_or((None, TextLook::default()), |(t, l)| (Some(t), l))
                         }
                         _ => {
+                            out.card_view = part.id;
                             out.card = part.style.background_color.is_none_or(|c| {
                                 c.resolve(false).a() != 0 || c.resolve(true).a() != 0
                             });
-                            out.rows = nodes(&part).iter().map(|r| self.grouped_row(r)).collect()
+                            out.rows = nodes(&part)
+                                .iter()
+                                .map(|r| self.grouped_row(r, acts))
+                                .collect()
                         }
                     }
                 }
@@ -346,11 +423,36 @@ impl Kernel {
         };
         // A section's percentage margin is of the list's content box
         let basis = crate::svg::scene::content_box(self, &self.node(view)?).2;
-        authored_space(&mut list, &shown, self.arena().env(), basis);
+        authored_space(&mut list, &shown, self.arena(), basis);
         Some(list)
     }
 
-    fn grouped_row(&self, row: &NodeRef<'_>) -> GroupedRow {
+    /// The control a grouped list's row shows as its switch
+    /// (`Accessory::Toggle`), for a host that paints the row: the row and
+    /// its switch are one accessibility element there, as the platform's
+    /// list item with a trailing switch is. `None` for any other node.
+    /// `acts` is [`Kernel::grouped_list_with`]'s.
+    pub fn grouped_toggle(&self, row: ViewId, acts: &dyn Fn(ViewId) -> bool) -> Option<ViewId> {
+        let node = self.node(row)?;
+        let group = self.node(node.parent?)?;
+        if matches!(
+            group.props.str(PropId::SemanticTag),
+            Some("header" | "footer")
+        ) {
+            return None;
+        }
+        let section = self.node(group.parent?)?;
+        self.node(section.parent?)?.props.str(PropId::ListStyle)?;
+        match self.grouped_row(&node, acts) {
+            GroupedRow {
+                accessory: Accessory::Toggle(control),
+                ..
+            } => Some(control),
+            _ => None,
+        }
+    }
+
+    fn grouped_row(&self, row: &NodeRef<'_>, acts: &dyn Fn(ViewId) -> bool) -> GroupedRow {
         let mut out = GroupedRow {
             view: row.id,
             pressable: row.node_type == NodeType::Pressable,
@@ -373,6 +475,33 @@ impl Kernel {
                 .collect()
         };
         let parts = shown(row);
+        // A text with inline runs, a link or a press of its own is more
+        // than a cell's one label or switch can stand for: the runs keep
+        // their styles, and each action stays its own element. So does an
+        // image with a press of its own: the cell's symbol or accessory
+        // would stand in for it and press nothing. Only what is shown
+        // counts: a `display: none` text, run or image changes no row.
+        fn stands_alone(
+            kernel: &Kernel,
+            node: &NodeRef<'_>,
+            acts: &dyn Fn(ViewId) -> bool,
+        ) -> bool {
+            if node.style.display == Display::None {
+                return false;
+            }
+            let mut children = (node.children().into_iter()).filter_map(|id| kernel.node(id));
+            if node.node_type == NodeType::Text {
+                return children.any(|run| run.style.display != Display::None)
+                    || node.props.link().is_some()
+                    || acts(node.id);
+            }
+            if node.node_type == NodeType::Image {
+                return acts(node.id);
+            }
+            children.any(|child| stands_alone(kernel, &child, acts))
+        }
+        out.custom = parts.iter().any(|part| stands_alone(self, part, acts));
+        let mut markdown = false;
         // A row that lays out as a column (a `column`, LLP 1116 D2) stacks
         // its parts: one or two texts are the subtitle cell's lines, and
         // anything else is its own layout.
@@ -382,11 +511,13 @@ impl Kernel {
                 FlexDirection::Column | FlexDirection::ColumnReverse
             )
         {
-            if (1..=2).contains(&parts.len()) && parts.iter().all(|p| p.node_type == NodeType::Text)
+            if (1..=2).contains(&parts.len())
+                && parts.iter().all(|p| p.node_type == NodeType::Text)
+                && !authored_row_box(row.style.written, true)
             {
-                out.texts(&parts[0], parts.get(1), true);
+                markdown = out.texts(&parts[0], parts.get(1), true);
             }
-            if out.title.is_none() {
+            if out.custom || markdown || out.title.is_none() {
                 return GroupedRow {
                     custom: true,
                     ..out
@@ -408,6 +539,15 @@ impl Kernel {
                 Some(ControlKind::Radio)
             )
             .then(|| Accessory::Radio(n.id, n.props.bool(PropId::Checked) == Some(true)))
+        };
+        // An accessory its author hid (`visibility`, its own or inherited),
+        // or a detail button whose symbol is, is not the platform's to
+        // show: its row keeps every part as written (LLP 1084 D7).
+        let unseen = |n: &NodeRef<'_>| {
+            let hidden = |n: &NodeRef<'_>| {
+                n.computed_row(StyleId::Visibility, |s| s.visibility) != crate::Visibility::Visible
+            };
+            hidden(n) || shown(n).iter().any(hidden)
         };
         // The trailing accessory, then the leading symbol, then the texts.
         if let Some((last, before)) = rest.split_last() {
@@ -432,12 +572,16 @@ impl Kernel {
             };
             if let Some(found) = found {
                 out.accessory = found;
+                out.accessory_view = Some(last.id);
+                out.custom |= unseen(last);
                 rest = before;
             }
         }
         if let (Accessory::None, Some((first, after))) = (out.accessory, rest.split_first()) {
             if let Some(found) = radio(first) {
                 out.accessory = found;
+                out.accessory_view = Some(first.id);
+                out.custom |= unseen(first);
                 rest = after;
             }
         }
@@ -445,15 +589,21 @@ impl Kernel {
             if let Some(symbol) = apple_symbol(first) {
                 out.symbol = Some(symbol);
                 out.icon = icon_of(first);
+                let mut rows = StyleMask::EMPTY;
+                rows.set(StyleId::SymbolRendering);
+                out.icon_multicolor = first.computed_style(rows).symbol_rendering
+                    == crate::generated::SymbolRendering::Multicolor;
                 rest = after;
             }
         }
         match rest {
-            [title] if title.node_type == NodeType::Text => out.texts(title, None, false),
+            [title] if title.node_type == NodeType::Text => {
+                markdown = out.texts(title, None, false);
+            }
             [title, value]
                 if title.node_type == NodeType::Text && value.node_type == NodeType::Text =>
             {
-                out.texts(title, Some(value), false)
+                markdown = out.texts(title, Some(value), false);
             }
             // A `column`, as Contract's sheet styles one; a `row` or a box
             // of texts is the row's own layout.
@@ -465,22 +615,23 @@ impl Kernel {
                 let lines = shown(stack);
                 if lines.iter().all(|l| l.node_type == NodeType::Text)
                     && (1..=2).contains(&lines.len())
+                    && !authored_subtitle_box(stack.style.written)
                 {
-                    out.texts(&lines[0], lines.get(1), true);
+                    markdown = out.texts(&lines[0], lines.get(1), true);
                 } else {
                     out.custom = true;
                 }
             }
             _ => out.custom = true,
         }
-        if out.title.is_none() {
+        if out.title.is_none() && !markdown {
             out.custom = true;
         }
         // UIKit's content configuration draws none of the row's box: a row
-        // whose author wrote an edge of it, or its background image, is its
-        // own views, carried, as every other host draws it (LLP 1084 D7).
+        // with an authored box or edge keeps its views (LLP 1084 D7).
         let w = &row.style.written;
         if out.authored_edge
+            || authored_row_box(row.style.written, false)
             || [
                 (StyleId::BorderWidthTop, StyleId::BorderStyleTop),
                 (StyleId::BorderWidthRight, StyleId::BorderStyleRight),
@@ -504,9 +655,11 @@ impl Kernel {
             && out.accessory == Accessory::None
             && out.secondary.is_none()
             && !out.subtitle
-            && !out.custom;
+            && !out.custom
+            && !markdown;
         if out.custom {
-            // A custom row is its views, accessory and all.
+            // A custom row draws its own controls. Keep a radio's target
+            // so selecting the cell still checks it.
             out = GroupedRow {
                 view: out.view,
                 custom: true,
@@ -515,9 +668,15 @@ impl Kernel {
                 disabled: out.disabled,
                 authored_edge: out.authored_edge,
                 next_authored_top: out.next_authored_top,
+                accessory: match out.accessory {
+                    radio @ Accessory::Radio(..) => radio,
+                    _ => Accessory::None,
+                },
                 ..GroupedRow::default()
             };
         }
+        // Markdown needs carried text, but does not change the row's accessory.
+        out.custom |= markdown;
         out
     }
 }
@@ -631,8 +790,8 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
         // Its widest, the card less its insets, moves with its inset.
         if let crate::style::Dimension::Calc(percent, points) = arena.style(slot).max_width {
             if !written.has(StyleId::MaxWidth) {
-                s.max_size.width =
-                    crate::style::Dimension::Calc(percent, points - by).floor_lpa(arena.env());
+                s.max_size.width = crate::style::Dimension::Calc(percent, points - by)
+                    .floor_taffy(&arena.env_of(slot));
             }
         }
     } else if !content && !control && !written.has(StyleId::PaddingLeft) {
@@ -753,11 +912,13 @@ fn collapse(a: f32, b: f32) -> f32 {
 /// margins that meet there collapsed, as block margins do (§6.4). A margin
 /// is the author's when its row says so (LLP 1115.000 D2), whatever its
 /// number; the sheet's (LLP 1084 §2) stands in for the platform's gap.
-fn authored_space(list: &mut GroupedList, shown: &[NodeRef<'_>], env: &Env, basis: f32) {
+fn authored_space(list: &mut GroupedList, shown: &[NodeRef<'_>], arena: &NodeArena, basis: f32) {
     use crate::style::Dimension;
     let mut below: Option<(f32, bool)> = None;
     for (section, node) in list.sections.iter_mut().zip(shown) {
-        let points = |d: Dimension| d.at_basis(env, basis);
+        // Each section's margins are its own lengths (LLP 1123 D9)
+        let env = arena.env_of(node.key.index);
+        let points = |d: Dimension| d.at_basis(&env, basis);
         let top = points(node.style.margin_top.clone());
         let authored = node.style.written.has(StyleId::MarginTop);
         section.space_above = match below {

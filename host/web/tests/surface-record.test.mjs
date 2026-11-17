@@ -2,9 +2,10 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { fixture } from './surface.mjs';
 
-test('a connected registered publisher is duplicate even before the GPU gives it an id', async () => {
+test('a connected registered publisher keeps the name even before the GPU gives it an id', async () => {
   const f = await fixture({ duplicateDuringLoad: true });
-  assert.equal(f.diagnostics.filter(line => line.includes('duplicate live publisher')).length, 1);
+  assert.deepEqual(f.records, ['world\0{"value":1}']);
+  assert.deepEqual(f.diagnostics, []);
 });
 
 test('player restore flushes its public record before reporting success', async () => {
@@ -28,6 +29,25 @@ test('a retired surface ticket is checked again before capture', async () => {
   let carries=0;f.gpu.gpu_carry=()=>{carries++;return new Uint8Array([1]);};
   await assert.rejects(f.exact.gpu.surfaceWork('world','capture',null,()=>false),error=>error.kind===4);
   assert.equal(carries,0);
+});
+
+test('surface work refuses pending presentation before capture or restore', async () => {
+  let clock = 0, pending = true, carries = 0, restores = 0;
+  const f = await fixture({performance:{now:()=>clock, getEntriesByName:()=>[]}});
+  f.create(1);
+  f.gpu.gpu_dirty = () => pending;
+  f.gpu.gpu_render = () => { clock += 3000; return 0; };
+  f.gpu.gpu_carry = () => { carries++; return new Uint8Array([1]); };
+  f.gpu.gpu_restore = () => { restores++; return true; };
+  for (const mode of ['capture', 'restore']) {
+    await assert.rejects(f.exact.gpu.surfaceWork('world', mode, new Uint8Array([7]), () => true),
+      error => error.kind === 3 && /not settled.*GPU presentation world/.test(error.message));
+  }
+  assert.deepEqual([carries, restores], [0, 0]);
+  pending = false;
+  assert.deepEqual(await f.exact.gpu.surfaceWork('world', 'capture', null, () => true), new Uint8Array([1]));
+  await f.exact.gpu.surfaceWork('world', 'restore', new Uint8Array([7]), () => true);
+  assert.deepEqual([carries, restores], [1, 1]);
 });
 
 test('surface replacement while host work settles retires the request before its effect', async () => {
@@ -84,13 +104,12 @@ for (const stale of ['detached', 'unregistered']) test(`a ${stale} publisher yie
   assert.equal(f.records.at(-1), 'glass\0{"value":2}');
 });
 
-test('first live canvas alone publishes and clears, with one named duplicate diagnostic', async () => {
+test('first live canvas alone publishes and clears; a second canvas of the surface is no fault', async () => {
   const f = await fixture();
   f.create(1); f.create(2);
   f.exact.gpu.surface(2, 'world', []);
   assert.deepEqual(f.records, ['world\0{"value":1}']);
-  assert.equal(f.diagnostics.length, 1);
-  assert.match(f.diagnostics[0], /world.*duplicate/);
+  assert.deepEqual(f.diagnostics, []);
   f.destroy(2);
   assert.equal(f.records.length, 1);
   f.create(3); f.destroy(1);
@@ -127,6 +146,79 @@ test('failed initial load can bootstrap a swap with pending surfaces', async () 
   const f = await fixture({loadFail:true}); f.create(1);
   await f.exact.gpu.swap(1);
   assert.ok(f.exact.gpu.agent(1, {op:'state'}));
+});
+test('a successful swap after failure can apply fallback to its replacement canvas', async () => {
+  const f = await fixture({loadFail:true, createFail:true});
+  const old = f.create(1).canvas;
+  assert.deepEqual([old.width, old.height], [1, 1]);
+  await assert.rejects(f.exact.gpu.swap(1), /create/);
+  assert.ok(old.isConnected);
+  let replacement;
+  f.nextGpu.gpu_create = (_name, canvas) => { replacement = canvas; return 1; };
+  let renders = 0;
+  f.nextGpu.gpu_render = () => ++renders === 1 ? 1 : 0;
+  await f.exact.gpu.swap(2);
+  assert.ok(!old.isConnected);
+  assert.deepEqual([replacement.width, replacement.height], [30, 30]);
+  assert.equal(renders, 1);
+  f.frame();
+  assert.equal(renders, 2, 'the replacement receives the frame its staged render requested');
+  f.nextGpu.gpu_recover = async () => '{"status":"no device","code":"no-adapter","error":"no adapter"}';
+  f.exact.gpu.deviceLost();
+  assert.deepEqual(await f.exact.gpu.settled(), []);
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+  assert.deepEqual([replacement.width, replacement.height], [1, 1]);
+  const writes = f.sizeWrites.length;
+  f.nextGpu.gpu_dirty = () => true;
+  f.nextGpu.gpu_render = () => { throw new Error('terminal surface rendered'); };
+  f.frame();
+  assert.deepEqual(await f.exact.gpu.settled(), []);
+  assert.equal(f.sizeWrites.length, writes);
+});
+test('a successful swap clears the failed load it replaced', async () => {
+  const f = await fixture({loadFail:true}); f.create(1);
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+  await f.exact.gpu.swap(1);
+  assert.equal(f.exact.gpu.recovery, undefined);
+});
+test('a swap whose staged render finds the device gone recovers it once committed', async () => {
+  const f = await fixture(); f.create(1);
+  let recovers = 0;
+  f.nextGpu.gpu_render = () => 3;
+  f.nextGpu.gpu_recover = async () => { recovers++; f.nextGpu.gpu_render = () => 0; return '{"status":"healthy"}'; };
+  await f.exact.gpu.swap(1);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(recovers, 1, 'recovery needs no later frame or agent settle to start it');
+  assert.equal(f.exact.gpu.recovery.status, 'healthy');
+});
+test('a terminal surface still delivers its world\'s publications, messages and input', async () => {
+  let respond;
+  const f = await fixture({input:true, delivery:{fetch:() => new Promise(resolve => { respond = resolve; })}});
+  const said = [];
+  f.exact.message = (_host, text) => said.push(text);
+  let requests = ['map.bin'];
+  f.gpu.gpu_assets = () => { const out = JSON.stringify({requests, retired:[]}); requests = []; return out; };
+  f.gpu.gpu_asset_failed = () => true;
+  f.gpu.gpu_asset = () => true;
+  const canvas = f.create(1);
+  assert.ok(respond, 'the asset is in flight');
+  f.gpu.gpu_recover = async () => '{"status":"failed","code":"no-adapter","error":"no adapter"}';
+  f.exact.gpu.deviceLost();
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+  assert.equal(f.exact.gpu.recovery.status, 'no device');
+  assert.equal(f.exact.gpu.agent(1, {op:'state'}), null, 'the agent is refused');
+  f.publish(1, {late:true});
+  f.gpu.gpu_messages = () => '["score 3"]';
+  respond(new Response(new Uint8Array([1])));
+  await f.exact.gpu.settled();
+  assert.equal(f.records.at(-1), 'world\0{"late":true}');
+  assert.deepEqual(said, ['score 3']);
+  f.gpu.gpu_messages = () => undefined;
+  canvas.listeners.keydown({target:canvas, code:'KeyW', key:'w', timeStamp:0, preventDefault() {}});
+  f.document.activeElement = null;
+  canvas.listeners.focusout({target:canvas, relatedTarget:null, timeStamp:0});
+  await Promise.resolve();
+  assert.deepEqual(f.events.map(e => [e.t, e.down]), [['key', true], ['blur', undefined]]);
 });
 test('forwarded keyups survive focus changes; editable focus blurs; shortcuts stay local', async () => {
   const f = await fixture({input:true}), el = f.create(1), button = new f.Element('button'), input = new f.Element('input');
@@ -311,11 +403,12 @@ test('failed recovery removes clones and backs off instead of retrying each fram
 });
 
 test('a missing adapter leaves a settled fallback through dirty frames and agent settle', async () => {
-  const f=await fixture();
+  const f=await fixture({input:true,metricsName:'world', snapshot:()=>'{"fps":60}'});
   // This recovery test has no runner record consumer; keep creation local to
   // the GPU harness instead of entering glue.js's extracted batch fixture.
   f.gpu.gpu_published=()=>undefined;
   const host=f.create(1), canvas=host.canvas;
+  assert.equal(f.exact.gpu.wantsInput(1),true);
   host.style.background='#123456';
   let attempts=0, renders=0, dirty=true;
   f.gpu.gpu_dirty=()=>dirty;
@@ -328,6 +421,15 @@ test('a missing adapter leaves a settled fallback through dirty frames and agent
   assert.equal(renders,1);
   assert.equal(attempts,1);
   assert.equal(f.exact.gpu.recovery.status,'no device');
+  assert.equal(f.exact.gpu.agent(1,{op:'state'}),null);
+  const reply=f.exact.gpu.handle({id:1,op:'state',world:true},null,x=>x);
+  assert.equal(reply.refused?.subsystem,'gpu');
+  assert.match(reply.error,/no adapter/);
+  assert.equal(f.exact.gpu.wantsInput(1),false);
+  await assert.rejects(f.exact.gpu.surfaceWork('world','capture',null,()=>true),
+    error=>error.kind===2&&/found 0/.test(error.message));
+  assert.equal(f.metrics.at(-1),'world', 'a lost device leaves metrics unavailable');
+  assert.equal(f.metricTimers.size,0);
   assert.equal(f.diagnostics.filter(line=>line.includes('exact gpu recovery')).length,1);
   assert.deepEqual([canvas.width,canvas.height],[1,1]);
   const writes=f.sizeWrites.length;
@@ -703,6 +805,26 @@ test('a named update sends the module only the arguments that changed since its 
   assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
 });
 
+test('R14 the canvas size reaches the module before its first bind, which may tick a new world, and then as it changes',async()=>{
+  const f=await fixture(), calls=[];
+  let reads=0;
+  f.gpu.gpu_size=(id,w,h)=>{calls.push(['size',id,w,h]);return true;};
+  f.gpu.gpu_bind_at=id=>{calls.push(['bind',id]);return true;};
+  f.gpu.gpu_bind_changed_at=id=>{calls.push(['changed',id]);return true;};
+  const host=f.create(1), read=host.getBoundingClientRect;
+  host.getBoundingClientRect=function(){reads++;return read.call(this);};
+  const size=['size',1,10,10];
+  assert.deepEqual(calls,[size,['bind',1]]);
+  // A bind in a batch reads no geometry, which would force the layout of what the batch wrote before it (#533).
+  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
+  assert.equal(reads,0);
+  // The ResizeObserver, after layout, tells a new size.
+  host.getBoundingClientRect=()=>({width:30,height:20});
+  f.resize();
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  assert.deepEqual(calls,[size,['bind',1],['bind',1],['changed',1],['size',1,30,20],['changed',1]]);
+});
+
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
   const f = await fixture({input:true}), canvas=f.create(1), pause=new f.Element('button');
   let prevented=0; pause.click=()=>{};
@@ -767,4 +889,54 @@ test('the canvas backing store is the raster the module draws, at its render sca
   dirty=true; f.gpu.gpu_render_scale=()=>1;
   f.frame();
   assert.deepEqual([canvas.width,canvas.height],[30,30]);
+});
+
+
+test('canvas metrics opt in only the named first publisher and clear on disposal', async () => {
+  let reads = 0;
+  const off = await fixture({ snapshot: () => { reads++; return '{"frames":1}'; } });
+  off.create(1);
+  assert.deepEqual(off.reporting, []);
+  assert.equal(reads, 0);
+  assert.equal(off.metricTimers.size, 0);
+  const on = await fixture({ metricsName: 'world', snapshot: () => { reads++; return '{"frames":1}'; } });
+  on.create(1); on.create(2); on.create(3, 'other');
+  assert.deepEqual(on.reporting, [[1, true]]);
+  assert.ok(on.metrics.includes('world\0{"frames":1}'));
+  assert.equal(on.metricTimers.size, 1);
+  const idle = on.metrics.length; on.pollMetrics();
+  assert.equal(on.metrics.length, idle + 1, 'an idle canvas is sampled without rendering');
+  const before = on.metrics.length;
+  on.destroy(2);
+  assert.equal(on.metrics.length, before);
+  on.destroy(1);
+  assert.equal(on.metrics.at(-1), 'world');
+  assert.equal(on.metricTimers.size, 0);
+  const disposed = reads; on.pollMetrics(); assert.equal(reads, disposed);
+});
+
+test('canvas metrics start and stop after a commit without rebinding the canvas', async () => {
+  const options = { metricsName: null, snapshot: () => '{"frames":1}' };
+  const f = await fixture(options);
+  f.create(1);
+  assert.deepEqual(f.reporting, []);
+  assert.equal(f.metricTimers.size, 0);
+  for (let i = 0; i < 3; i++) {
+    options.metricsName = 'world';
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, true]);
+    assert.equal(f.metricTimers.size, 1);
+    f.pollMetrics();
+    assert.equal(f.metrics.at(-1), 'world\0{"frames":1}');
+    options.metricsName = null;
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, false]);
+    assert.equal(f.metricTimers.size, 0);
+    const before = f.metrics.length;
+    f.frame(); f.pollMetrics();
+    assert.equal(f.metrics.length, before);
+  }
+  assert.equal(f.reporting.length, 6);
+  f.destroy(1);
+  assert.equal(f.metrics.at(-1), 'world');
 });

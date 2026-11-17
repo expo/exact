@@ -1,5 +1,5 @@
 ```prompt Add a number field
-Add a number field to the Exact app in this folder. Use https://github.com/expo/exact/blob/main/docs/recipes/number-field.md as the source for each step. The exact2 checkout has the same page at docs/recipes/number-field.md.
+Add a number field to the Exact app in this folder. Use https://github.com/expo/exact/blob/main/docs/recipes/number-field.md as the source for each step. The Exact checkout has the same page at docs/recipes/number-field.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say what the field holds, ask me before you write code: a count, an amount of money, or a value in a unit, and whether it can be negative.

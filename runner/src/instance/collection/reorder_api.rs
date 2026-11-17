@@ -1,6 +1,9 @@
 //! Fixed collection-owned Arrange capability and bounded host snapshots.
 use exact_kernel::{CommitReceipt, NodeKey};
 
+/// How long a committed drop waits for its move, on the session clock (LLP 1094 D8).
+pub(crate) const HOLD_MS: f64 = 1000.0;
+
 /// Generational source binding; the actual string key stays private.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReorderBinding {

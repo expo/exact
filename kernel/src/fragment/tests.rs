@@ -54,6 +54,7 @@ fn para(flow: &mut Flow, top: f32, lines: usize, orphans: u32, widows: u32) {
     flow.paras.push(Para {
         slot: 0,
         content_top: top,
+        line_offset: 0.0,
         width: 100.0,
         orphans,
         widows,
@@ -294,6 +295,7 @@ fn a_paragraph_the_host_cannot_break_is_never_cut_shorter() {
     flow.paras.push(Para {
         slot: 0,
         content_top: 0.0,
+        line_offset: 0.0,
         width: 100.0,
         orphans: 2,
         widows: 2,

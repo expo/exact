@@ -7,7 +7,7 @@
 //! asks for local network access, so the state is `granted` and a typed
 //! address under `net.fetch local-network` is reached as on any host.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 
 /// The session's instance; it holds nothing.
 pub struct LocalNetwork;

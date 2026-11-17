@@ -11,10 +11,12 @@ extension NodeView {
     /// A button with no name that shows only a symbol is named by it, as a
     /// `UIButton` whose image is an SF Symbol is: UIKit's own name for the
     /// symbol ("Share", "add"), which its accessibility runtime gives the
-    /// image. Read when asked, since the runtime loads with VoiceOver.
+    /// image. Read when asked, since the runtime loads with VoiceOver. A
+    /// table cell that is one element is named by its words.
     package override var accessibilityLabel: String? {
         get {
             let said = super.accessibilityLabel
+            if said?.isEmpty ?? true, isTableCellElement { return accessibleText }
             guard said?.isEmpty ?? true, actsAsButton, !isNativeButton, authoredLabel == nil else { return said }
             return onlySymbol?.image?.accessibilityLabel ?? said
         }
@@ -32,6 +34,10 @@ extension NodeView {
         walk(self)
         return !other && symbols.count == 1 ? symbols[0] : nil
     }
+    /// VoiceOver's swipe up and down on a drawn `slider` or `spinbutton`,
+    /// which has the adjustable trait (`stepRange`).
+    package override func accessibilityIncrement() { stepRange(up: true) }
+    package override func accessibilityDecrement() { stepRange(up: false) }
 }
 #endif
 
@@ -54,11 +60,13 @@ extension NodeView {
     #endif
 
     /// Its words: the text it shows, its descendants' joined.
-    var accessibleText: String { contentText(naming: false) }
+    package var accessibleText: String { contentText(naming: false) }
     /// `naming`: accname's name from content (step 2F), in which a
     /// descendant's own label stands for its content, so a labelled image
     /// inside a link counts in the link's name, as on the web.
-    private func contentText(naming: Bool) -> String {
+    /// `unshown`: the words of a subtree CSS or `aria-hidden` hides are read
+    /// too, which only an explicit reference to it asks for (`labelledBy`).
+    private func contentText(naming: Bool, unshown: Bool = false) -> String {
         // A Markdown text reads as the words it draws, its syntax hidden (LLP 1045,
         // "Accessibility"), each inline atom its accessible name (LLP 1045.000 D8).
         if let text = props["text"], props["markup"] == "markdown", let plain = MarkdownLink.installed?.plain(text, range: nil, atoms: props["atoms"] ?? "", faces: props["atomFaces"] ?? "", spoken: true) { return plain }
@@ -67,20 +75,33 @@ extension NodeView {
         // read from the kernel, current on its first batch (LLP 1069.011.000 D1).
         if isNativeButton { return face?.title ?? "" }
         if isParagraph { return visibleParagraphText }
-        // accname: an `aria-hidden` child names nothing (habits F16: a tab's icon glyph).
-        let children = container.subviews.compactMap { $0 as? NodeView }.filter { $0.props["accessibilityElementsHidden"] != "true" }
-        return children.map { naming ? $0.authoredLabel ?? $0.contentText(naming: true) : $0.accessibleText }.filter { !$0.isEmpty }.joined(separator: " ")
+        // accname step 2A: a child that is not rendered, or is `aria-hidden`, names
+        // nothing (habits F16: a tab's icon glyph). One the host hides still
+        // names: a native control draws its words (a grouped list's sections,
+        // a segmented control's tabs).
+        let children = container.subviews.compactMap { $0 as? NodeView }.filter { unshown || !$0.leftOut }
+        return children.map { naming ? $0.authoredLabel ?? $0.contentText(naming: true) : $0.contentText(naming: false, unshown: unshown) }.filter { !$0.isEmpty }.joined(separator: " ")
     }
+    /// Not rendered (`display: none`) or left out of the accessibility tree (`aria-hidden`).
+    private var leftOut: Bool { style["display"]?.string == "none" || props["accessibilityElementsHidden"] == "true" }
     /// Its `aria-labelledby` text, else its `aria-label`, unless empty
     /// (accname: an empty label names nothing).
-    var authoredLabel: String? { labelledBy ?? props["accessibilityLabel"].flatMap { $0.isEmpty ? nil : $0 } }
-    /// accname's first step (ledger2 Rough 3): the text of the elements
+    package var authoredLabel: String? { labelledBy ?? props["accessibilityLabel"].flatMap { $0.isEmpty ? nil : $0 } }
+    /// accname's step 2B (ledger2 Rough 3): the text of the elements
     /// `aria-labelledby` names, in order — each by its own label or content,
-    /// never its own `aria-labelledby`, as accname does not recurse.
+    /// never its own `aria-labelledby`, as accname does not recurse. An
+    /// element that is itself hidden, or is inside a hidden one, still names:
+    /// all its words are read, shown or not (step 2A's exception for a hidden
+    /// node the relation references directly). Hidden by CSS or `aria-hidden`,
+    /// never by a host that draws the element some other way.
     var labelledBy: String? {
         guard let refs = props["accessibilityLabelledBy"], let presenter else { return nil }
         let text = refs.split(separator: " ").compactMap { presenter.chrome.named[String($0)]?.min().flatMap { presenter.views[$0] } }
-            .map { $0.props["accessibilityLabel"].flatMap { $0.isEmpty ? nil : $0 } ?? $0.accessibleText }
+            .map { named -> String in
+                if let label = named.props["accessibilityLabel"], !label.isEmpty { return label }
+                let hidden = sequence(first: named as PlatformView, next: \.superview).contains { ($0 as? NodeView)?.leftOut == true }
+                return named.contentText(naming: false, unshown: hidden)
+            }
             .filter { !$0.isEmpty }.joined(separator: " ")
         return text.isEmpty ? nil : text
     }
@@ -98,6 +119,7 @@ extension NodeView {
     #endif
     /// ARIA disabled applies to focusable descendants, without changing input.
     package var ariaUnavailable: Bool {
+        guard AriaCarriers.any else { return false }
         #if os(macOS)
         var ancestor: NSView? = self
         #else
@@ -272,6 +294,40 @@ extension NodeView {
         let fraction = high > low ? (Swift.min(Swift.max(n.now, low), high) - low) / (high - low) : 0
         return NumberFormatter.localizedString(from: NSNumber(value: fraction), number: .percent)
     }
+    /// A drawn `slider` or `spinbutton`: one an assistive app may step, which
+    /// the author's key handler does (`stepRange`).
+    var adjustsRange: Bool { rangeRole == "slider" || rangeRole == "spinbutton" }
+    /// An assistive app's increment (`up`) or decrement of a drawn `slider` or
+    /// `spinbutton`, which only its author's keys move (`adjustKeys`): ArrowUp
+    /// or ArrowDown for a spin button (ARIA's keys for one) or an
+    /// `aria-orientation="vertical"` slider. False where there is nothing to step.
+    @discardableResult
+    func stepRange(up: Bool) -> Bool {
+        guard adjustsRange, !inert, presenter?.views[id] === self else { return false }
+        adjustKeys(up: up, vertical: rangeRole == "spinbutton" || props["accessibilityOrientation"] == "vertical")
+        return true
+    }
+    /// An assistive app's increment (`up`) or decrement as the range's arrow
+    /// key: a keydown and a keyup at this node for the author's `key` and
+    /// `keyup` handlers, as WebKit adjusts an ARIA range
+    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
+    /// ArrowDown for a `vertical` one, else ArrowRight or ArrowLeft, swapped
+    /// where the node's computed `direction` is `rtl`. `step` is the key's
+    /// default action, a native range's own move: it runs between the two, as
+    /// a keyboard's does, unless a handler called `preventDefault()` on the
+    /// keydown (LLP 1069.001, amended 2026-11-16). The agent's held key sends
+    /// one half at a time: `phase` "down" is the keydown and its `step`, a
+    /// repeated one where `repeats`, and "up" the keyup.
+    func adjustKeys(up: Bool, vertical: Bool = false, phase: String? = nil, repeats: Bool = false, step: () -> Void = {}) {
+        guard let presenter else { return }
+        let key = if vertical {
+            up ? "ArrowUp" : "ArrowDown"
+        } else {
+            up == ((style["direction"]?.string ?? presenter.documentDirection) != "rtl") ? "ArrowRight" : "ArrowLeft"
+        }
+        if phase != "up", !presenter.keyDown(at: self, key, code: key, repeats: repeats) { step() }
+        if phase != "down" { presenter.keyUp(at: self, key, code: key) }
+    }
     var accessibilityVisible: Bool {
         guard paragraphOwner.window != nil, !inert, accessibilityExposed else { return false }
         #if os(macOS)
@@ -429,7 +485,8 @@ extension NodeView {
     /// come from `syncAccessibility`.
     func updateRoleAccessibility() {
         let role = props["accessibilityRole"]
-        if actsAsButton {
+        // A role over a paragraph writes over its text's (`updateTextAccessibility`).
+        if actsAsButton { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if let checked = checkedRole { setAccessibilityChecked(checked.role, checked.checked) }
             else { setAccessibilityToggle(pressedState, else: buttonRole) }
@@ -438,15 +495,15 @@ extension NodeView {
             if accessibilityURL() != url { setAccessibilityURL(url) }
             setAccessibilitySelected(props["accessibilitySelected"] == "true")
             if let expanded = props["accessibilityExpanded"] { setAccessibilityExpanded(expanded == "true") }
-        } else if kind == "image" || role == "img" {
+        } else if kind == "image" || role == "img" { lastAccessibilityWrite.text = nil
             let labelled = authoredLabel != nil
             setAccessibilityElement(labelled)
             setAccessibilityRole(labelled ? .image : nil)
-        } else if let container = role.flatMap({ Self.containerRoles[$0] }) {
+        } else if let container = role.flatMap({ Self.containerRoles[$0] }) { lastAccessibilityWrite.text = nil
             setAccessibilityElement(true)
             if accessibilityRole() != container { setAccessibilityRole(container) }
             if accessibilitySubrole() != nil { setAccessibilitySubrole(nil) }
-        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) {
+        } else if let subrole = groupSubrole.map(NSAccessibility.Subrole.init(rawValue:)) { lastAccessibilityWrite.text = nil
             // A live-region, dialog or region role as WebKit serves it (Core-AAM): a
             // group whose subrole is the role, named only by its author, a
             // paragraph's words its children (`textAccessibilityChildren`).
@@ -454,7 +511,7 @@ extension NodeView {
             if accessibilityRole() != .group { setAccessibilityRole(.group) }
             if accessibilitySubrole() != subrole { setAccessibilitySubrole(subrole) }
             if isParagraph, accessibilityValue() != nil { setAccessibilityValue(nil); setAccessibilityLabel(props["accessibilityLabel"]) }
-        } else if let range = rangeRole {
+        } else if let range = rangeRole { lastAccessibilityWrite.text = nil
             // A range role is one element, its value between its bounds and
             // its `aria-valuetext` the description, as WebKit serves a drawn
             // one (LLP 1116 D8). Only a change is written: each posts.
@@ -468,7 +525,7 @@ extension NodeView {
             if (accessibilityMaxValue() as? NSNumber) != high { setAccessibilityMaxValue(high) }
             let text = props["accessibilityValueText"].flatMap { $0.isEmpty ? nil : $0 }
             if accessibilityValueDescription() != text { setAccessibilityValueDescription(text) }
-        } else if let table = tableRole {
+        } else if let table = tableRole { lastAccessibilityWrite.text = nil
             // A table's or a description list's element (`TableAccessibility`).
             setAccessibilityElement(true)
             if accessibilityRole() != table.role { setAccessibilityRole(table.role) }
@@ -505,13 +562,13 @@ extension NodeView {
 /// words), where a web area served as a child was a stop VoiceOver's
 /// cursor did not move on from. A dialog in a sheet or in AppKit's popover
 /// has none: VoiceOver reads it by its window ("In dialog", "In popover").
-final class DialogWebArea: NSAccessibilityElement, AgentOwned {
+final class DialogWebArea: NSAccessibilityElement, InspectionOwned {
     weak var dialog: NodeView?
     init(_ dialog: NodeView) {
         self.dialog = dialog
         super.init()
     }
-    var agentViewId: UInt32? { dialog?.id }
+    var inspectionViewId: UInt32? { dialog?.id }
     override func accessibilityRole() -> NSAccessibility.Role? { .init(rawValue: "AXWebArea") }
     override func accessibilityParent() -> Any? { dialog?.pageAccessibilityParent }
     override func accessibilityChildren() -> [Any]? { dialog.map { [$0] } }
@@ -581,11 +638,17 @@ extension NodeView {
     /// show menu there all the same when another process asks (measured on
     /// macOS 27.2: `AXUIElementPerformAction` succeeds on an element that
     /// does not list it), though an assistive app reading the element's
-    /// actions does not see it there.
+    /// actions does not see it there. Increment and decrement only on a
+    /// drawn `slider` or `spinbutton` (`stepRange`).
     package override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
-        guard selector == #selector(accessibilityPerformShowMenu) else { return super.isAccessibilitySelectorAllowed(selector) }
-        return showMenuTarget != nil || offersUnansweredMenu
+        switch selector {
+        case #selector(accessibilityPerformShowMenu): return showMenuTarget != nil || offersUnansweredMenu
+        case #selector(accessibilityPerformIncrement), #selector(accessibilityPerformDecrement): return adjustsRange
+        default: return super.isAccessibilitySelectorAllowed(selector)
+        }
     }
+    package override func accessibilityPerformIncrement() -> Bool { stepRange(up: true) }
+    package override func accessibilityPerformDecrement() -> Bool { stepRange(up: false) }
     package override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? { treeNavigationOrder }
     /// A menu's selected child is the row that holds the focus, and that row
     /// is selected, as AppKit's menu serves its highlighted item (measured:
@@ -1176,6 +1239,73 @@ extension Presenter {
     }
 }
 
+#if os(macOS)
+extension Presenter {
+    /// AppKit's answers. A view and an element answer through their typed
+    /// accessors; any other participant (a control's cell, AppKit's own
+    /// parts) through the attribute protocol every AX client is served by.
+    /// `enabled` is the attribute a client is sent: a view that is not a
+    /// control has none, and its accessor's default `false` is not a state.
+    struct AxFacts {
+        var role: String?, subrole: String?, label: String?, title: String?, help: String?, value: Any?
+        var enabled = true, focused = false, selected = false, element = false, expanded = false
+        var frame: NSRect = .zero, identifier: String?, children: [Any] = []
+        /// `aria-required`, `aria-invalid` and `aria-haspopup` as browsers serve them.
+        var required = false, invalid: String?, popup: String?
+        mutating func aria(_ a: (String) -> Any?) {
+            invalid = a("AXInvalid").map { "\($0)" }
+            popup = (a("AXHasPopup") as? Bool) == true ? (a("AXPopupValue") as? String ?? "true") : nil
+        }
+    }
+    /// AppKit's navigation order, read untyped: it is declared as elements
+    /// of the `NSAccessibilityElement` protocol, which the class of that name
+    /// (a paragraph's links and words) does not formally adopt, and an
+    /// unoptimized build traps on a typed read holding one.
+    static func navigationOrder(_ o: NSObject) -> [Any]? {
+        let read = NSSelectorFromString("accessibilityChildrenInNavigationOrder")
+        return o.responds(to: read) ? o.perform(read)?.takeUnretainedValue() as? [Any] : nil
+    }
+    static func axFacts(_ obj: AnyObject) -> AxFacts? {
+        if let v = obj as? NSView {
+            var f = AxFacts(role: v.accessibilityRole()?.rawValue, subrole: v.accessibilitySubrole()?.rawValue, label: v.accessibilityLabel(), title: v.accessibilityTitle(),
+                           help: v.accessibilityHelp(), value: v.accessibilityValue(), enabled: v.accessibilityAttributeValue(.enabled) as? Bool ?? true, focused: v.isAccessibilityFocused(),
+                           selected: v.isAccessibilitySelected(), element: v.isAccessibilityElement(), expanded: v.isAccessibilityExpanded(), frame: v.accessibilityFrame(), identifier: v.accessibilityIdentifier(),
+                           children: navigationOrder(v) ?? v.accessibilityChildren() ?? [], required: v.isAccessibilityRequired())
+            f.aria { v.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: $0)) }
+            return f
+        }
+        if let e = obj as? NSAccessibilityElement {
+            return AxFacts(role: e.accessibilityRole()?.rawValue, subrole: e.accessibilitySubrole()?.rawValue, label: e.accessibilityLabel(), title: e.accessibilityTitle(),
+                           help: e.accessibilityHelp(), value: e.accessibilityValue(), enabled: e.accessibilityAttributeValue(.enabled) as? Bool ?? true, focused: e.isAccessibilityFocused(),
+                           selected: e.isAccessibilitySelected(), element: e.isAccessibilityElement(), expanded: e.isAccessibilityExpanded(), frame: e.accessibilityFrame(), identifier: e.accessibilityIdentifier(),
+                           children: navigationOrder(e) ?? e.accessibilityChildren() ?? [])
+        }
+        guard let o = obj as? NSObject else { return nil }
+        func a(_ name: String) -> Any? { o.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: name)) }
+        // AXPosition is the top-left corner in global display points, y down from the primary screen's top.
+        // A cell fills its control: the control's frame is the cell's.
+        var frame = (obj as? NSCell)?.controlView?.accessibilityFrame() ?? .zero
+        if frame.isEmpty, let p = (a("AXPosition") as? NSValue)?.pointValue, let s = (a("AXSize") as? NSValue)?.sizeValue {
+            let top = NSScreen.screens.first?.frame.maxY ?? 0
+            frame = NSRect(x: p.x, y: top - p.y - s.height, width: s.width, height: s.height)
+        }
+        // A cell is served its control's typed label, help and required
+        // (AppKit's dispatcher prefers them); the cell's own attributes
+        // answer "" or nothing (onboarding F16: every named pop-up,
+        // checkbox, slider and date read unnamed here).
+        let control = (obj as? NSCell)?.controlView
+        let nonEmpty = { (s: String?) in s.flatMap { $0.isEmpty ? nil : $0 } }
+        var f = AxFacts(role: a("AXRole") as? String, subrole: a("AXSubrole") as? String, label: nonEmpty(control?.accessibilityLabel()) ?? a("AXDescription") as? String, title: a("AXTitle") as? String,
+                        help: nonEmpty(control?.accessibilityHelp()) ?? a("AXHelp") as? String, value: a("AXValue"), enabled: a("AXEnabled") as? Bool ?? true, focused: a("AXFocused") as? Bool ?? false,
+                        selected: a("AXSelected") as? Bool ?? false, element: !o.accessibilityIsIgnored(), expanded: a("AXExpanded") as? Bool ?? false, frame: frame, identifier: a("AXIdentifier") as? String,
+                        children: a("AXChildren") as? [Any] ?? [], required: control?.isAccessibilityRequired() == true || a("AXRequired") as? Bool == true)
+        f.aria(a)
+        return f
+    }
+}
+#endif
+
+#if EXACT_AGENT
 extension Agent {
     /// Host facts and pending requests accompanying a normal tree read.
     func decorateTree(_ reply: [String: Any]) -> [String: Any] {
@@ -1206,6 +1336,7 @@ extension Agent {
         return reply
     }
 }
+#endif
 
 #if os(macOS)
 /// What `Presenter.tellLanding` tells VoiceOver on the turn after a commit.
@@ -1221,3 +1352,38 @@ struct VoiceOverLanding {
     weak var toldFocus: NSView?
 }
 #endif
+
+/// The views whose props carry `accessibilityDisabled`, in every presenter,
+/// noted as their props change: while there are none, no view is
+/// unavailable to assistive technology, and `ariaUnavailable` answers
+/// without walking a row's ancestors, which a list's fills asked for each
+/// view they set props on. A view stays noted after its presenter lets it
+/// go (an exiting view, a popped route UIKit still shows, a parked row keep
+/// their props) until its props drop the prop, or it is freed, or its
+/// presenter resets and it is in no window. Main thread only.
+enum AriaCarriers {
+    private struct Carrier { weak var view: NodeView?; let presenter: ObjectIdentifier }
+    nonisolated(unsafe) private static var carriers: [ObjectIdentifier: Carrier] = [:]
+    nonisolated(unsafe) private static var asked = 0
+    /// Whether a view may carry it. Freed carriers are let go every so
+    /// often, so one that went with its prop does not keep every walk on.
+    static var any: Bool {
+        guard !carriers.isEmpty else { return false }
+        asked &+= 1
+        if asked & 255 == 0 { prune() }
+        return !carriers.isEmpty
+    }
+    static var count: Int { carriers.count }
+    static func prune() {
+        if carriers.values.contains(where: { $0.view == nil }) { carriers = carriers.filter { $0.value.view != nil } }
+    }
+    static func note(_ view: NodeView, of presenter: Presenter) {
+        if view.props["accessibilityDisabled"] != nil { carriers[ObjectIdentifier(view)] = Carrier(view: view, presenter: ObjectIdentifier(presenter)) }
+        else if !carriers.isEmpty { carriers.removeValue(forKey: ObjectIdentifier(view)) }
+    }
+    /// A reset presenter's carriers that are freed or out of every window.
+    static func forget(presenter: Presenter) {
+        let reset = ObjectIdentifier(presenter)
+        carriers = carriers.filter { $0.value.view != nil && ($0.value.presenter != reset || $0.value.view?.window != nil) }
+    }
+}

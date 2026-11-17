@@ -9,6 +9,7 @@ import Contract.Route
 import Contract.Sort
 import Contract.SortFacts
 import Contract.Eval
+import Contract.Settle
 import Contract.Runtime
 import Contract.Observe
 import Contract.Big
@@ -16,6 +17,7 @@ import Contract.Axiomatic
 import Contract.Invariant
 import Contract.OracleText
 import Contract.Vm
+import Contract.VmRows
 import Contract.Lower
 import Contract.LowerCheck
 import Contract.VmFacts
@@ -44,6 +46,9 @@ import Contract.ExpandCheck
 import Contract.CompSemFacts
 import Contract.ExpandSubst
 import Contract.ExpandSubstRev
+import Contract.FvWeakening
+import Contract.VmRowsProof
+import Contract.LowerSharing
 import Contract.ExpandFrame
 import Contract.ExpandInstance
 import Contract.ExpandMap

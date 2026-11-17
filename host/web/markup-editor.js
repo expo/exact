@@ -51,7 +51,9 @@ const CSS = `
 `;
 
 let wasm;
-const utf16 = new TextDecoder('utf-16le');
+// Without `ignoreBOM` a leading U+FEFF is dropped, and the copy read back would be
+// one unit shorter than the source every editor offset counts.
+const utf16 = new TextDecoder('utf-16le', { ignoreBOM: true });
 /** Write a string into the editor's input buffer; returns its length. */
 function put(s) {
   const at = wasm.mde_input(s.length), m = new Uint16Array(wasm.memory.buffer, at, s.length);

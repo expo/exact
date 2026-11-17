@@ -150,6 +150,17 @@ final class KnobDrag {
 }
 
 extension Presenter {
+    /// A batch that says only where lists stand (a report's answer that
+    /// moved no view: in a fling, the measurement a slice's rows sent, half
+    /// its batches) and nothing of the page's. It changes no view, so none of
+    /// a batch's passes over the views runs (`apply`): each list takes its
+    /// snapshot and its corrections as in any batch, and its table the rows
+    /// the snapshot places.
+    static func onlySnapshots(_ batch: Batch) -> Bool {
+        !batch.ops.isEmpty && batch.ops.allSatisfy { $0.op == .collections } && batch.error == nil && batch.wakelock == nil
+            && batch.orientation == nil && !batch.layoutProvisional && !batch.controls
+    }
+
     /// Charge the report (decode, layout and apply) to the
     /// rows it created. Cheap rows share those fixed costs in the next report.
     /// Grow at most twofold and retain recent expensive samples conservatively.
@@ -187,10 +198,14 @@ extension CollectionHost {
         let horizontal = entry.snapshot.horizontal
         let lo = { (r: NSRect) in horizontal ? r.minX : r.minY }, hi = { (r: NSRect) in horizontal ? r.maxX : r.maxY }
         let port = scroll.contentView.bounds, whole = document.bounds
-        let frames = entry.snapshot.rows.compactMap { row -> (index: Int, frame: NSRect)? in
+        var frames = entry.snapshot.rows.compactMap { row -> (first: Bool, last: Bool, frame: NSRect)? in
             guard let view = presenter?.views[row.view], view.isDescendant(of: document) else { return nil }
-            return (row.index, view.superview === document ? view.frame : view.convert(view.bounds, to: document))
+            return (row.index == 0, row.index == entry.snapshot.count - 1, view.superview === document ? view.frame : view.convert(view.bounds, to: document))
         }.sorted { lo($0.frame) < lo($1.frame) }
+        let origin = node.contentBox().minY
+        frames += fixedSpans(id).map { (first: $0.first, last: $0.last, frame: NSRect(x: whole.minX, y: origin + CGFloat($0.start),
+            width: whole.width, height: CGFloat($0.end - $0.start))) }
+        frames.sort { lo($0.frame) < lo($1.frame) }
         var start = 0
         while start < frames.count {
             var end = start
@@ -199,8 +214,8 @@ extension CollectionHost {
                 end += 1
                 reached = max(reached, hi(frames[end].frame))
             }
-            let first = frames[start].index == 0 ? lo(whole) : lo(frames[start].frame)
-            let last = frames[end].index == entry.snapshot.count - 1 ? hi(whole) : reached
+            let first = frames[start].first ? lo(whole) : lo(frames[start].frame)
+            let last = frames[end].last ? hi(whole) : reached
             if first <= lo(port) + 0.5 && last > lo(port) {
                 return horizontal
                     ? NSRect(x: first, y: whole.minY, width: last - first, height: whole.height)

@@ -34,7 +34,14 @@ pub(crate) fn css_rows(css: &str) -> Rows {
         // Keywords, and `line-height` in pixels (a bare number multiplies).
         let text = matches!(
             name,
-            "aspect-ratio" | "column-fill" | "break-before" | "break-after" | "break-inside"
+            "aspect-ratio"
+                | "column-fill"
+                | "break-before"
+                | "break-after"
+                | "break-inside"
+                | "overflow"
+                | "overflow-x"
+                | "overflow-y"
         );
         let v = match (px, percent, value) {
             (Ok(_), _, _) if name == "line-height" => t(value),

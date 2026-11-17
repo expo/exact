@@ -195,7 +195,10 @@ impl<D: DataSource> Runner<D> {
         if self.ids.work.sites.is_empty() {
             return;
         }
-        let i = self.member(i).map_or(i, |m| m.family);
+        let i = match self.owned_row(i) {
+            Some(o) => o.site,
+            None => self.member(i).map_or(i, |m| m.family),
+        };
         let asked = &mut self.ids.work.asked;
         if asked.len() <= i {
             asked.resize(self.plan.resources.len(), 0);

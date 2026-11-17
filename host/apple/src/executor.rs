@@ -1,14 +1,21 @@
 //! Bounded native I/O (LLP 1016 / 1041 / 1162). Reads and parallel sends
 //! overlap on six shared HTTP workers while retaining ordered delivery.
 //! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
+pub(crate) use exact_executor::preload::{launch_fetch, valid_request};
+pub use exact_executor::preload::{
+    Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
+    Observation as PreloadObservation, Observer as PreloadObserver, Preloads,
+};
+pub use exact_executor::pump;
+use exact_executor::{Core, WorkerBudget};
 use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
-#[path = "executor_core.rs"]
-mod core;
-#[path = "executor_pump.rs"]
-pub mod pump;
-/// A new executor waits for a native-worker slot only under test (the core's `reserve`).
-const WAIT_FOR_SLOT: bool = cfg!(test);
+/// Independent tests have separate worker budgets; production shares one process bound.
+const BUDGET: WorkerBudget = if cfg!(test) {
+    WorkerBudget::Thread
+} else {
+    WorkerBudget::Process
+};
 
 /// Schedule a pump on the presenter's thread. Must enqueue asynchronously;
 /// called under the retirement guard, never synchronously reenter Exact.
@@ -16,7 +23,7 @@ pub type WakeFn = extern "C" fn(ctx: *mut c_void);
 
 /// Native executor with admission reservations through undrained outcomes.
 pub struct Executor {
-    core: core::Core,
+    core: Core,
 }
 
 /// What the process an executor starts in is (LLP 1133.007 §8, D6).
@@ -57,7 +64,7 @@ impl Executor {
         launch: Launch,
     ) -> Self {
         Self::start_with(wake, launch, |wake| {
-            core::Core::start_switched(bindings, grants, wake)
+            Core::start_switched(bindings, grants, wake, BUDGET)
         })
     }
     /// [`Executor::start`] with every owner's transport made by `host`. A
@@ -70,13 +77,24 @@ impl Executor {
         host: impl Fn() -> ibex2::host::Host + Send + Sync + 'static,
     ) -> Self {
         Self::start_with(wake, Launch::here(), |wake| {
-            core::Core::start_on(bindings, grants, wake, std::sync::Arc::new(host))
+            Core::start_on(bindings, grants, wake, std::sync::Arc::new(host), BUDGET)
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn test_start(
+        asynchronous: bool,
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Option<(WakeFn, *mut c_void)>,
+    ) -> Self {
+        Self::start_with(wake, Launch::here(), |wake| {
+            Core::test_start(asynchronous, bindings, grants, wake, BUDGET)
         })
     }
     fn start_with(
         wake: Option<(WakeFn, *mut c_void)>,
         launch: Launch,
-        core: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> core::Core,
+        core: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> Core,
     ) -> Self {
         exact_runner::local_network::launch_once(local_network_prompts);
         let wake = wake.map(|(f, ctx)| (f, ctx as usize));
@@ -99,6 +117,22 @@ impl Executor {
         }
         Self { core }
     }
+    /// Adopt launch work before dispatching any request (LLP 1162.000 D4).
+    pub fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        self.core.adopt_preloads(preloads)
+    }
+    /// Cancel and discard preloads that used a changed secret before returning.
+    pub fn drop_preload_secret(&self, name: &str) {
+        self.core.drop_preload_secret(name);
+    }
+    /// Facts are returned to the host for its journal (LLP 1162.000 D3).
+    pub fn take_preload_journal(&self) -> Vec<PreloadFact> {
+        self.core.take_preload_journal()
+    }
+    /// Take an already complete reply before the boot's first commit, without waiting.
+    pub fn settle_preload(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
+        self.core.settle_preload(request)
+    }
     /// Where the app's files are, for a request whose body is one of them
     /// (LLP 1108 D6 R2): set before the first request.
     pub fn set_app_roots(&self, roots: [std::path::PathBuf; 3]) {
@@ -115,8 +149,12 @@ impl Executor {
         self.core.resume_ordered()
     }
     /// Let go of the work for tickets the runner no longer holds.
-    pub fn forget(&self, held: impl Fn(u64) -> bool) {
-        self.core.forget(held);
+    pub fn forget(&self, held: impl Fn(u64) -> bool, suspending: bool) {
+        if suspending {
+            self.core.forget_before_suspend(held);
+        } else {
+            self.core.forget(held);
+        }
     }
     /// The uploads let go that had begun to go out, for
     /// `Runner::uploads_started` (LLP 1016.000 D10).
@@ -170,6 +208,10 @@ impl Executor {
     pub fn retry_reader(&self) -> exact_runner::RetryReader {
         self.core.retry_reader()
     }
+    /// The session's live driver faults for individual long-poll attempts.
+    pub fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        self.core.set_fetch_fault(fault);
+    }
     /// Each listener's address and connections, by its stream ticket, live.
     pub fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         self.core.listen_reader()
@@ -184,6 +226,10 @@ impl Executor {
 /// own methods, behind a trait so that an archive that links no I/O names
 /// none of them, nor the transports and stores they reach.
 pub trait Io {
+    /// Adopt launch requests before dispatch.
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Err(preloads)
+    }
     /// [`Executor::set_app_roots`].
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]);
     /// [`Executor::ordered_idle`].
@@ -191,7 +237,7 @@ pub trait Io {
     /// [`Executor::resume_ordered`].
     fn resume_ordered(&self) -> Vec<(u64, &'static str)>;
     /// [`Executor::forget`].
-    fn forget(&self, held: &dyn Fn(u64) -> bool);
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool);
     /// [`Executor::let_go_started`].
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64>;
     /// [`Executor::cancel`].
@@ -214,6 +260,8 @@ pub trait Io {
     fn socket_reader(&self) -> exact_runner::SocketReader;
     /// [`Executor::retry_reader`].
     fn retry_reader(&self) -> exact_runner::RetryReader;
+    /// [`Executor::set_fetch_fault`].
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault);
     /// [`Executor::listen_reader`]; none by default.
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         std::sync::Arc::new(|_| None)
@@ -223,6 +271,9 @@ pub trait Io {
 }
 
 impl Io for Executor {
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Executor::adopt_preloads(self, preloads)
+    }
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]) {
         Executor::set_app_roots(self, roots)
     }
@@ -232,8 +283,8 @@ impl Io for Executor {
     fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
         Executor::resume_ordered(self)
     }
-    fn forget(&self, held: &dyn Fn(u64) -> bool) {
-        Executor::forget(self, held)
+    fn forget(&self, held: &dyn Fn(u64) -> bool, suspending: bool) {
+        Executor::forget(self, held, suspending)
     }
     fn let_go_started(&self, held: &dyn Fn(u64) -> bool) -> Vec<u64> {
         Executor::let_go_started(self, held)
@@ -267,6 +318,9 @@ impl Io for Executor {
     }
     fn retry_reader(&self) -> exact_runner::RetryReader {
         Executor::retry_reader(self)
+    }
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        Executor::set_fetch_fault(self, fault)
     }
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         Executor::listen_reader(self)
@@ -370,7 +424,9 @@ mod resource_tests {
 
     #[test]
     fn the_declared_resources_are_the_bundle_folder_beside_the_executable() {
-        let app = std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id()));
+        let app = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&app);
         std::fs::create_dir_all(&app).unwrap();
         let executable = Some(app.join("App"));

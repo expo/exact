@@ -40,5 +40,17 @@ test "tapbacks have names for their meanings"
   clock data
   expect text "reaction-demo-1" == "❓"
 
+test "a dismissed New Message leaves the next send in its conversation"
+  tap "conversation-demo"
+  tap "add"
+  tap "new-ai-chat"
+  tap "close-models"
+  type "composer" "Still here"
+  tap "send"
+  clock data
+  clock +500
+  expect state draftThread == "demo"
+  expect tree has "composer"
+
 after "dismiss" "dismiss writes only choosing panel selected"
   only writes choosing panel selected

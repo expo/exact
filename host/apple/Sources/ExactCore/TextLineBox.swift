@@ -38,6 +38,22 @@ package struct TextLineBox: Sendable {
         else if other.below == below { belowExplicit = belowExplicit && other.belowExplicit }
         baseline = max(baseline, other.baseline)
     }
+
+    /// Explicit inline boxes keep their authored extents; normal ones include
+    /// the actual fallback face. CoreText may coalesce differently sized boxes.
+    package static func paragraph(_ line: CTLine, strut: TextLineBox, scale: CGFloat,
+                                  authored: (CFRange) -> [TextLineBox]) -> TextLineBox {
+        var box = strut
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let boxes = authored(CTRunGetStringRange(run))
+            for explicit in boxes where explicit.explicit { box.include(explicit) }
+            if boxes.isEmpty && strut.explicit { continue }
+            if !boxes.isEmpty && boxes.allSatisfy(\.explicit) { continue }
+            let font = (CTRunGetAttributes(run) as NSDictionary)[kCTFontAttributeName] as! CTFont
+            box.include(TextLineBox(font, height: nil, scale: scale))
+        }
+        return box
+    }
 }
 
 /// CSS line heights use the web host's metrics and Chrome's rounding, which

@@ -819,3 +819,52 @@ fn a_measured_release_follows_the_moves_and_tracked_heights() {
         .unwrap();
     assert!(velocity < -1000.0, "{velocity}");
 }
+
+#[test]
+fn overdue_timer_motion_starts_before_the_height_release_sample() {
+    let source = r#"component App
+  state alpha = 1
+  state speed = 0
+  task fadeLater mount
+    after(100, fade)
+  action fade
+    alpha = 0
+  action release(height: number, velocity: number)
+    speed = velocity
+  view
+    column id="sheet" testId="sheet" height=200 box-sizing="border-box" opacity=alpha transition="opacity -exact-spring(180, 12, 1)"
+      box testId="handle" heightDragFor="sheet" heightrelease=release
+"#;
+    let (mut host, _) = boot_source(source);
+    let held = begin(&mut host, "handle", 200., 50.);
+    host.update_hold(held.token.serial(), MotionValue::scalar(210.), 60.)
+        .unwrap()
+        .unwrap();
+    for now in [f64::NAN, f64::INFINITY, 59.] {
+        assert!(host
+            .dispatch_height_measured(held.token.serial(), id(&host, "handle"), 300., 0., now)
+            .is_err());
+        assert_eq!(host.springs().engine().now(), 0.06);
+        assert_eq!(host.runner().slot("alpha"), Some(&Value::Number(1.)));
+    }
+    let reply = host
+        .dispatch_height_measured(held.token.serial(), id(&host, "handle"), 300., 0., 150.)
+        .unwrap()
+        .unwrap();
+    assert!(reply.contains("\"error\":null"), "{reply}");
+    let node = motion_node(key(&host, "sheet"));
+    let engine = host.springs().engine();
+    let curve = engine.spring_descriptor(node, Property::Opacity).unwrap();
+    assert_eq!(curve.start, 0.1);
+    let shown = engine.value(node, Property::Opacity).unwrap().x;
+    assert!(shown > 0. && shown < 1., "{shown}");
+    assert_eq!(
+        engine.value(node, Property::Height),
+        Some(MotionValue::scalar(300.))
+    );
+    assert!(host.has_hold(held.token.serial()));
+    let Some(Value::Number(speed)) = host.runner().slot("speed") else {
+        panic!()
+    };
+    assert!((*speed - 1000.).abs() < 1e-6, "{speed}");
+}

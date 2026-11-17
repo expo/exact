@@ -5,7 +5,6 @@
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod signals;
 
-use std::path::PathBuf;
 use std::process::Command;
 #[cfg(unix)]
 use std::{
@@ -18,15 +17,11 @@ use std::{
 };
 
 /// An entry file holding `source`.
-fn entry(name: &str, source: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "exact-terminal-input-{}-{name}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("app.contract");
-    std::fs::write(&path, source).unwrap();
-    path
+fn entry(name: &str, source: &str) -> crate::Temp {
+    crate::Temp::entry(
+        format!("exact-terminal-input-{}-{name}", std::process::id()),
+        source,
+    )
 }
 
 /// The app on a pseudo-terminal, its output read into a terminal emulator.
@@ -37,6 +32,8 @@ struct Pty {
     output: Vec<u8>,
     child: Child,
     screen: vt100::Parser,
+    /// The entry the child runs, removed after it.
+    _entry: crate::Temp,
 }
 
 #[cfg(unix)]
@@ -46,6 +43,16 @@ impl Pty {
     }
 
     fn spawn_mode(name: &str, source: &str, mode: &str) -> Pty {
+        Self::spawn_with(name, source, mode, |_| {})
+    }
+
+    /// The app, its command first passed to `configure`.
+    fn spawn_with(
+        name: &str,
+        source: &str,
+        mode: &str,
+        configure: impl FnOnce(&mut Command),
+    ) -> Pty {
         let path = entry(name, source);
         let (mut master_fd, mut slave_fd) = (-1, -1);
         let mut size = libc::winsize {
@@ -72,8 +79,10 @@ impl Pty {
             unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
             0
         );
-        let child = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
-            .arg(path)
+        let mut command = Command::new(env!("CARGO_BIN_EXE_exact-terminal"));
+        configure(&mut command);
+        let child = command
+            .arg(&*path)
             .arg(mode)
             .process_group(0)
             .stdin(slave.try_clone().unwrap())
@@ -87,6 +96,7 @@ impl Pty {
             output: Vec::new(),
             child,
             screen: vt100::Parser::new(6, 40, 0),
+            _entry: path,
         }
     }
 
@@ -229,6 +239,55 @@ fn a_held_escape_waits_its_time_whatever_wakes_the_loop() {
         waited >= Duration::from_millis(25),
         "Escape after {waited:?}"
     );
+}
+
+/// A URL a timer asks for reaches the system's opener with no input to
+/// follow it: here the opener on `PATH` records what it was given.
+#[cfg(unix)]
+#[test]
+fn a_timer_opens_its_url_without_waiting_for_input() {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = crate::Temp::dir(format!(
+        "exact-terminal-input-{}-opener",
+        std::process::id()
+    ));
+    let opened = bin.join("opened");
+    let _ = std::fs::remove_file(&opened);
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n",
+        opened.display()
+    );
+    for opener in ["open", "xdg-open"] {
+        let path = bin.join(opener);
+        std::fs::write(&path, &script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let opens = |name: &str, then: &str| {
+        let _ = std::fs::remove_file(&opened);
+        let source = format!(
+            "component App\n  action opened\n    openURL(\"https://example.invalid/{name}\")\n{then}  task later mount\n    after(50, opened)\n  view\n    text \"Waiting\"\n"
+        );
+        let mut pty = Pty::spawn_with(name, &source, "--fullscreen", |c| {
+            c.env("PATH", &path);
+        });
+        pty.until("Waiting");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let text = std::fs::read_to_string(&opened).unwrap_or_default();
+            if text == format!("https://example.invalid/{name}\n") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{name}: the opener was given {text:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    opens("timer", "");
+    // The action that asks also closes the app.
+    opens("timer-close", "    close()\n");
 }
 
 #[cfg(unix)]
@@ -575,8 +634,8 @@ fn a_driven_key_is_the_chord_it_names() {
     );
     let drive = |keys: &[&str]| {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
-            .arg(&path)
-            .args(["--size", "120x4"])
+            .arg(&*path)
+            .args(["--size", "120x4", "--drive"])
             .args(keys.iter().flat_map(|k| ["key", k]))
             .arg("print")
             .output()

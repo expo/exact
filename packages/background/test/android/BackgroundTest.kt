@@ -52,8 +52,10 @@ class BackgroundTest {
 
     @Before fun clear() {
         prefs.edit().clear().commit()
-        WorkManager.instance.requests.clear()
+        androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(app)
     }
+
+    @After fun closeDatabase() { androidx.work.testing.WorkManagerTestInitHelper.closeWorkDatabase() }
 
     @After fun stop() {
         BackgroundModule.live?.get()?.let { module ->
@@ -62,6 +64,12 @@ class BackgroundTest {
         }
         shadowOf(connectivity).networkCallbacks.toList().forEach { connectivity.unregisterNetworkCallback(it) }
         BackgroundModule.live = null
+    }
+
+    private fun scheduledDelay(): Long {
+        val work = WorkManager.getInstance(app) as androidx.work.impl.WorkManagerImpl
+        val info = work.getWorkInfosForUniqueWork(BackgroundModule.work("sync", "outbox")).get().single { !it.state.isFinished }
+        return work.workDatabase.workSpecDao().getWorkSpec(info.id.toString())!!.initialDelay
     }
 
     private fun launch(elapsed: Long, wall: Long): BackgroundModule {
@@ -97,7 +105,7 @@ class BackgroundTest {
         call(module, "registerSync")
         finish(module, "expired")
         main.idle()
-        assertEquals(5 * minute, WorkManager.instance.requests.getValue(BackgroundModule.work("sync", "outbox")).delay)
+        assertEquals(5 * minute, scheduledDelay())
         return module
     }
 
@@ -140,7 +148,7 @@ class BackgroundTest {
         assertEquals(true, completed)
         assertTrue(Session.wakes.isEmpty())
         call(module, "registerSync")
-        assertEquals(3 * minute, WorkManager.instance.requests.getValue(BackgroundModule.work("sync", "outbox")).delay)
+        assertEquals(3 * minute, scheduledDelay())
         Session.elapsed = (3 * minute - 1).toDouble()
         main.idleFor(java.time.Duration.ofMillis(3 * minute - 1))
         assertTrue(Session.wakes.isEmpty())

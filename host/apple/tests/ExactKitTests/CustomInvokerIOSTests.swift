@@ -83,7 +83,7 @@ final class CustomInvokerIOSTests: XCTestCase {
         // Agent needs a session, but this wire tree has no corresponding runner plan.
         // Layout covers, intrinsic reports and events must not apply that plan here.
         p.session = nil
-        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil
+        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil; p.onCancel = nil
         p.onPress = nil; p.onFocus = nil; p.onBlur = nil; p.onFocusEvent = nil; p.onKey = nil
         p.buttonFace = { _ in ButtonFace() }
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first

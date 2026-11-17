@@ -236,7 +236,7 @@ pub(crate) fn check_plan(
 mod tests {
     use super::*;
 
-    fn app(rows: &str) -> std::path::PathBuf {
+    fn app(rows: &str) -> crate::TempDir {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "exact-colors-{}-{}",
@@ -248,7 +248,7 @@ mod tests {
             "shape D\n  colorGamut: string\nstyle Brand\n  color=\"color(display-p3 0 0.5 1)\"\ncomponent A\n  resource d = exactViewport() as shape D\n  view\n    column\n      {rows}\n"
         );
         std::fs::write(dir.join("app.contract"), src).unwrap();
-        dir
+        crate::TempDir(dir)
     }
 
     #[test]
@@ -323,6 +323,40 @@ mod tests {
         assert!(check(&declared, "ios")
             .unwrap_err()
             .contains("takes 3 components, not 4"));
+    }
+
+    /// A profile's name is a dashed ident, so its case is its own: `--Brand`
+    /// and `--brand` are two profiles, and each colour binds the one it names.
+    #[test]
+    fn a_profiles_name_keeps_its_case() {
+        let with = |row: &str| {
+            let dir = app(row);
+            let src = std::fs::read_to_string(dir.join("app.contract")).unwrap();
+            std::fs::write(
+                dir.join("app.contract"),
+                format!("color-profile --Brand src=\"assets/cmyk.icc\"\ncolor-profile --brand src=\"assets/rgb.icc\"\n{src}"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(dir.join("assets")).unwrap();
+            for (file, space) in [("cmyk.icc", b"CMYK"), ("rgb.icc", b"RGB ")] {
+                let mut icc = vec![0u8; 132];
+                icc[16..20].copy_from_slice(space);
+                icc[36..40].copy_from_slice(b"acsp");
+                std::fs::write(dir.join("assets").join(file), &icc).unwrap();
+            }
+            check(&dir, "ios")
+        };
+        let box_ = |color: &str| format!("box width=4 height=4 background-color=\"{color}\"");
+        assert_eq!(with(&box_("color(--Brand 0.1 0.8 0.2 0.05)")), Ok(()));
+        assert_eq!(with(&box_("color(--brand 1 0 0)")), Ok(()));
+        let e = with(&box_("color(--Brand 1 0 0)")).unwrap_err();
+        assert!(e.contains("`--Brand` takes 4 components, not 3"), "{e}");
+        // Neither profile is `--BRAND`: the compiler refuses the colour.
+        let e = with(&box_("color(--BRAND 1 0 0)")).unwrap_err();
+        assert!(
+            e.contains("`background-color=\"color(--BRAND 1 0 0)\"` is not a valid"),
+            "{e}"
+        );
     }
 
     #[test]

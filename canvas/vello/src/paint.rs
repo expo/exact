@@ -11,7 +11,9 @@
 //!   shadowBlur / 2 device pixels: canvas units × the scale, never the
 //!   author matrix), coloured, and drawn beneath the shape at the offset
 //!   (also canvas units × the scale), inside one layer composited with the
-//!   operator and global alpha: Core Graphics' transparency layer.
+//!   operator and global alpha: Core Graphics' transparency layer. A wide
+//!   or over-budget shadow is blurred at a lower resolution and drawn back
+//!   at full size (`Replayer::shadow`).
 //! - Gradients interpolate unpremultiplied, as Core Graphics' do; one stop
 //!   fills with its colour, none (or a degenerate gradient) paints nothing.
 //! - Patterns tile in pattern space (author ∘ the pattern's transform); a
@@ -290,7 +292,7 @@ impl Replayer {
         } else {
             None
         };
-        if let Some((_, at)) = &shadow_at {
+        if let Some((_, at, _)) = &shadow_at {
             clip = clip.union(*at);
         }
         let layer = op != 0 || shadow;
@@ -307,11 +309,12 @@ impl Replayer {
                 &region,
             );
         }
-        if let Some((image, at)) = shadow_at {
+        if let Some((image, at, scale)) = shadow_at {
             let brush = ImageBrush::new(image).with_quality(ImageQuality::Medium);
-            frame
-                .scene
-                .draw_image(&brush, Affine::translate((at.x0, at.y0)));
+            frame.scene.draw_image(
+                &brush,
+                Affine::translate((at.x0, at.y0)) * Affine::scale(scale),
+            );
         }
         Self::draw(&mut frame.scene, Affine::IDENTITY, &geom, &r, brush_alpha);
         if layer {
@@ -319,15 +322,26 @@ impl Replayer {
         }
     }
 
-    /// The shadow of `geom`: an offscreen job and where its image lands
-    /// (device pixels), or none when it cannot reach the canvas.
+    /// The shadow of `geom`: an offscreen job, where its image lands (device
+    /// pixels) and the scale it lands at, or none when it cannot reach the
+    /// canvas.
+    ///
+    /// A shadow whose σ passes `MAX_SIGMA` is drawn and blurred at 1/f of
+    /// the device resolution, f the least whole factor that brings σ/f
+    /// within it, and its image drawn f times larger (bilinear: a blur that
+    /// wide holds no finer detail). So its texture is about the region over
+    /// f², and each blur pass reads at most `2 * ceil(3 * MAX_SIGMA) + 1`
+    /// texels a pixel, however large `shadowBlur` is. A frame's shadow
+    /// textures together stay within `SHADOW_CANVASES` canvases' pixels (or
+    /// `SHADOW_FLOOR`): a shadow past what is left is drawn coarser still,
+    /// in at most `SHADOW_LEAST` pixels once nothing is left.
     fn shadow(
         &self,
         frame: &mut Frame,
         geom: &Geom<'_>,
         r: &Resolved,
         alpha: f64,
-    ) -> Option<(ImageData, Rect)> {
+    ) -> Option<(ImageData, Rect, f64)> {
         let s = &self.state;
         let sigma = (s.shadow_blur * self.scale / 2.0).max(0.0);
         let margin = (3.0 * sigma).ceil() + 1.0;
@@ -343,18 +357,32 @@ impl Replayer {
             .inflate(margin, margin)
             .intersect(limit)
             .expand();
-        if region.width() < 1.0
-            || region.height() < 1.0
-            || region.width() > 16384.0
-            || region.height() > 16384.0
-        {
+        let (rw, rh) = (region.width(), region.height());
+        let used: f64 = (frame.shadows.iter())
+            .map(|job| f64::from(job.width) * f64::from(job.height))
+            .sum();
+        let budget = (SHADOW_CANVASES * self.whole().area()).max(SHADOW_FLOOR);
+        let left = (budget - used).max(SHADOW_LEAST);
+        if rw < 1.0 || rh < 1.0 {
             return None;
         }
-        let (w, h) = (region.width() as u32, region.height() as u32);
+        let size = |f: f64| ((rw / f).ceil(), (rh / f).ceil());
+        let fits = |f: f64| {
+            let (w, h) = size(f);
+            w * h <= left && w <= 16384.0 && h <= 16384.0
+        };
+        let mut f = (sigma / MAX_SIGMA)
+            .ceil()
+            .max((rw * rh / left).sqrt().ceil())
+            .max(1.0);
+        while !fits(f) {
+            f = (f * 1.25).ceil();
+        }
+        let (w, h) = (size(f).0 as u32, size(f).1 as u32);
         let mut scene = vello::Scene::new();
         Self::draw(
             &mut scene,
-            Affine::translate((-region.x0, -region.y0)),
+            Affine::scale(1.0 / f) * Affine::translate((-region.x0, -region.y0)),
             geom,
             r,
             alpha,
@@ -371,7 +399,7 @@ impl Replayer {
             scene,
             width: w,
             height: h,
-            sigma,
+            sigma: sigma / f,
             color: [
                 (c[0] / 255.0) as f32,
                 (c[1] / 255.0) as f32,
@@ -380,9 +408,22 @@ impl Replayer {
             ],
             image: image.clone(),
         });
+        let at = Point::new(region.x0 + off.0, region.y0 + off.1);
         Some((
             image,
-            region.with_origin(Point::new(region.x0 + off.0, region.y0 + off.1)),
+            Rect::from_origin_size(at, (f64::from(w) * f, f64::from(h) * f)),
+            f,
         ))
     }
 }
+
+/// The widest blur the shaders run, σ in texture pixels; past it a shadow is
+/// blurred at a lower resolution (`Replayer::shadow`).
+const MAX_SIGMA: f64 = 16.0;
+/// A frame's shadow texture pixels, in canvases' worth of pixels, and the
+/// least it may use however small the canvas (four megabytes of output).
+const SHADOW_CANVASES: f64 = 4.0;
+const SHADOW_FLOOR: f64 = (1 << 20) as f64;
+/// The pixels a shadow past the frame's budget may still use: each draw
+/// keeps its shadow, coarsely, rather than losing it.
+const SHADOW_LEAST: f64 = 64.0 * 64.0;

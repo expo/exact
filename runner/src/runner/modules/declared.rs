@@ -65,6 +65,8 @@ pub(in crate::runner) struct Declared {
     app: Option<AppState>,
     /// Effects held on a permission ticket.
     held: Vec<HeldEffect>,
+    /// Native statements still awaiting the platform, counted by invocation.
+    pub(super) statements: Arc<Mutex<BTreeMap<u64, usize>>>,
     /// What a bound implementation's refusals said, for the journal.
     lines: Arc<Mutex<Vec<String>>>,
     /// What a registration a wake runs for keeps beside its options, by `ref`.
@@ -173,6 +175,9 @@ impl<D: DataSource> Runner<D> {
             self.log(format!("{}: refused, {why}", self.key(row)));
             return Effect::Now(json!({ "error": code, "message": why }));
         }
+        if let Some(refused) = self.undeclared(row, &args) {
+            return Effect::Now(refused);
+        }
         if let Err(why) = self.admit(row, &args, origin) {
             self.log(format!("{}: refused, {why}", self.key(row)));
             let message = why
@@ -196,10 +201,21 @@ impl<D: DataSource> Runner<D> {
             let Some(handler) = slot.handler() else {
                 return Effect::Now(json!({ "error": "NotSupportedError" }));
             };
-            // A data-code call settles from the implementation's reply, so
-            // it is the caller's work until the platform has the effect (LLP
-            // 1133.004 D5; LLP 1133.021 §9 item 10): a wake does not end on
-            // the handoff. A Contract statement answers nothing to wait for.
+            // A background action owns a native statement until its reply;
+            // ordinary wakes keep fire-and-forget statements (LLP 1133.004 stage 2).
+            let owner = if reply.is_none() && origin == CallOrigin::Action {
+                self.invocation_id()
+            } else {
+                0
+            };
+            let statements = self.extensions.declared.statements.clone();
+            if owner != 0 {
+                *statements
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entry(owner)
+                    .or_default() += 1;
+            }
             let pending = reply.clone();
             handler(
                 request.body,
@@ -219,6 +235,17 @@ impl<D: DataSource> Runner<D> {
                     }
                     if let Some(pending) = &pending {
                         Pending::complete(pending, outcome);
+                    }
+                    if owner != 0 {
+                        let mut owned = statements.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(count) = owned.get_mut(&owner) {
+                            *count -= 1;
+                            if *count == 0 {
+                                owned.remove(&owner);
+                            }
+                        }
+                        drop(owned);
+                        slot.changed("");
                     }
                 }),
             );
@@ -781,6 +808,11 @@ impl<D: DataSource> Runner<D> {
         if self.substitute(&row)["list"]["tap"]["as"] == "wake" {
             return self.tap_wake(&state, at);
         }
+        if let Some(choice) =
+            choice.filter(|_| self.substitute(&row)["list"]["tap"]["actions"].is_string())
+        {
+            return self.tap_action(&row, &state, at, choice);
+        }
         let entry = self
             .extensions
             .declared
@@ -791,6 +823,84 @@ impl<D: DataSource> Runner<D> {
         let row = self.module_row(&entry.source);
         self.log(format!("{state} @{reference}: tapped"));
         self.activate_entry(&row, &Json::Object(entry.fields), reference)
+    }
+
+    /// `tap @ref <action>[=<reply>]` on an entry that shows actions (LLP
+    /// 1133.004 stage 2): the person chose one of the entry's actions, and
+    /// typed `reply` into a text action. The event carries the action's
+    /// name and the reply, and never opens the entry's `navigate`. A
+    /// foreground action is the click's activation; one with `foreground`
+    /// false runs as a background action, as the host raises it.
+    fn tap_action(
+        &mut self,
+        row: &ModulesRow,
+        state: &str,
+        at: usize,
+        choice: &str,
+    ) -> Result<String, String> {
+        let entry = &self.extensions.declared.lists[state][at];
+        let reference = entry.reference;
+        let tap = self.substitute(row)["list"]["tap"].clone();
+        let field = tap["actions"].as_str().unwrap_or_default();
+        let actions = entry.fields.get(field).cloned().unwrap_or(Json::Null);
+        let (name, typed) = match choice.split_once('=') {
+            Some((name, typed)) => (name, Some(typed)),
+            None => (choice, None),
+        };
+        let names: Vec<&str> = (actions.as_array().into_iter().flatten())
+            .filter_map(|a| a["action"].as_str())
+            .collect();
+        let Some(action) = (actions.as_array().into_iter().flatten()).find(|a| a["action"] == name)
+        else {
+            let shows = match names.is_empty() {
+                true => "it shows none".to_owned(),
+                false => format!("it shows {}", names.join(", ")),
+            };
+            return Err(format!("@{reference}: no action `{name}`; {shows}"));
+        };
+        let reply = match (action["placeholder"].is_string(), typed) {
+            (true, typed) => json!(typed.unwrap_or_default()),
+            (false, None) => Json::Null,
+            (false, Some(_)) => return Err(format!("@{reference}: `{name}` takes no typed reply")),
+        };
+        let foreground = action["foreground"] != false;
+        let mut fields = self
+            .extensions
+            .declared
+            .lists
+            .get_mut(state)
+            .expect("found above")
+            .remove(at)
+            .fields;
+        fields.remove("navigate");
+        fields.insert("action".into(), json!(name));
+        fields.insert("reply".into(), reply);
+        self.log(format!("{state} @{reference}: {name} chosen"));
+        if foreground {
+            return self.activate_entry(row, &Json::Object(fields), reference);
+        }
+        let Some(event) = tap["event"].as_str() else {
+            return Err(format!("@{reference}: its list raises no event"));
+        };
+        let args = Json::Array(entry_args(&tap, &Json::Object(fields))).to_string();
+        let extension = self.plan.str(row.extension).to_owned();
+        let how = super::WakeHow {
+            id: 0,
+            cold: false,
+            hidden: true,
+        };
+        self.queue_action(
+            &extension,
+            event,
+            &args,
+            how,
+            &format!("@{reference}"),
+            false,
+        )?;
+        Ok(
+            json!({ "ref": reference, "event": event, "as": "action", "delivery": "substituted" })
+                .to_string(),
+        )
     }
 
     /// A relaunched app's launch flag (`--notification '<entry>'`): the

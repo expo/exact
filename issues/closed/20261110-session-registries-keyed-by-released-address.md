@@ -47,4 +47,4 @@ Remove the session's key from each set in `destroy()`, or hold the observer toke
 
 ## Related
 
-`issues/closed/20261014-macos-a-reinserted-autofocus-node-is.md` fixed the same mechanism for a view's identifier in `autofocusProcessed`. `Tambers.bySession` (`Tamber.swift:327`) checks the object's identity and is not affected.
+`issues/closed/20261014-macos-a-reinserted-autofocus-node-is.md` fixed the same mechanism for a view's identifier in `autofocusProcessed`. `Formas.bySession` (`Forma.swift:327`) checks the object's identity and is not affected.

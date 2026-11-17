@@ -11,17 +11,75 @@ const scratch = () => {
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Render Storage', app: { id: 'test.render-storage', name: 'Render Storage' }, host: { web: {} } }));
   return dir;
 };
-// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure.
+// The scratch app's Rust data crate `krate` at data/, a member of the workspace exact2 generates, and app.json naming
+// it and its source (LLP 1153.003 D2); the test writes data/src/lib.rs.
+const rustData = (dir, krate, type, source) => {
+  const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, rust: { data: { crate: krate, type, ...(source ? { source } : {}) } } }));
+  mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+  writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
+name = "${krate}"
+version.workspace = true
+edition.workspace = true
+workspace = "../.exact/shells"
+[dependencies]
+exact-runner.workspace = true
+`);
+};
+// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure. A Rust module
+// builds into the checkout's target, warm from the last run, rather than cold into the app's own.
 async function build(dir) {
   const dist = resolve(dir, 'dist');
   const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'render-storage-test', '--out', dist, '--render', 'js'], {
-    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe',
   });
   const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
   expect(status, stdout + stderr).toBe(0);
   expect(stdout + stderr).not.toMatch(/failed|structuredClone|dynamic import/);
   return dist;
 }
+
+test('a caught canvas capture stays pending in a render and captures after adoption', async () => {
+  const dir = scratch();
+  let site, browser;
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=build
+
+component App
+  resource image = capture() as shape string else empty()
+  view
+    main
+      canvas surface=ink() width=20 height=20
+      text image testId="image"
+      text (pending(image) ? "pending" : "answered") testId="state"
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `import type { Ctx2D } from './app.contract.d.ts';
+export const appId = 'test.render-storage';
+export const grants = 'fs.write app:/tmp';
+export const answer = () => captureCanvas('ink', 'app:/tmp/ink.png').then(c => c.path).catch(() => '');
+export const surfaces = { ink: 0 };
+export function draw(name: string, args: unknown[], ctx: Ctx2D) { ctx.fillStyle = 'red'; ctx.fillRect(0, 0, 20, 20); return false; }
+`);
+    const dist = await build(dir), html = readFileSync(resolve(dist, 'index.html'), 'utf8');
+    const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(html)[1]);
+    expect(checkpoint.pending).toEqual(['image']);
+    expect(checkpoint.answers).toEqual([]);
+    expect(html).toMatch(/data-testid="state"[^>]*>pending</);
+    site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === '/') return new Response(html, { headers: { 'content-type': 'text/html' } });
+      const asset = Bun.file(resolve(dist, path.slice(1)));
+      return await asset.exists() ? new Response(asset) : new Response(null, { status: 404 });
+    } });
+    browser = await open({ host: 'web', url: new URL('/?storage=render-capture', site.url).href });
+    await browser.clock('settle');
+    const journal = await browser.carrier.evaluate('globalThis.exact.journal');
+    expect(journal.some(l => l.endsWith('adopted the document')), journal.join('\n')).toBe(true);
+    expect(await browser.carrier.evaluate(`['image', 'state'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`), journal.join('\n'))
+      .toEqual(['app:/tmp/ink.png', 'answered']);
+  } finally { await browser?.close(); site?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 120000);
 
 test.each(['TypeScript', 'Rust'])('a JavaScript render refuses %s store writes and deletions on every request', async language => {
   const dir = scratch();
@@ -73,17 +131,7 @@ export function answer(name: string, [route]: string[], store: any): any {
 }
 `);
     else {
-      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-      mkdirSync(resolve(dir, 'web'));
-      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_store_data::Reader::default()); }\n');
-      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
-name = "render-store-data"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-exact-runner = { path = "${root}/runner" }
-[workspace]
-`);
+      rustData(dir, 'render-store-data', 'render_store_data::Reader');
       writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
 
 fn write(store: &mut Store, route: &str) -> Result<Answer, DataError> {
@@ -262,17 +310,7 @@ component App
 `);
     // On the reader's device the file is not there yet: the source says so, which shows that storage was asked.
     if (language === 'Rust') {
-      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
-      mkdirSync(resolve(dir, 'web'));
-      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_storage_data::Prefs); }\n');
-      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
-name = "render-storage-data"
-version = "0.1.0"
-edition = "2021"
-[dependencies]
-exact-runner = { path = "${root}/runner" }
-[workspace]
-`);
+      rustData(dir, 'render-storage-data', 'render_storage_data::Prefs', 'render_storage_data::Prefs');
       writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
 
 pub struct Prefs;
@@ -487,7 +525,7 @@ export const answer = (name: string, _args: unknown[], store: any, storage: any)
     await browser.clock('settle');
     expect(await browser.carrier.evaluate(`['writer', 'reader', 'seen'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`), (await browser.logs()).lines.join('\n'))
       .toEqual(['started', 'started', 'written: device prefs']);
-    expect(checkpoint.open).toEqual(['writer', 'reader']);
+    expect(checkpoint.open.map(k => checkpoint.answers[k][0])).toEqual(['writer', 'reader']);
   } finally {
     await browser?.close(); site?.stop(true);
     rmSync(dir, { recursive: true, force: true });
@@ -649,7 +687,7 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       const reply = await render(path);
       const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
       const text = id => new RegExp(`data-testid="${id}"[^>]*>([^<]*)<`).exec(reply.html)[1];
-      return { status: reply.status, settled: reply.settled, live: text('live'), pending: checkpoint.pending, open: checkpoint.open ?? [],
+      return { status: reply.status, settled: reply.settled, live: text('live'), pending: checkpoint.pending, open: (checkpoint.open ?? []).map(k => checkpoint.answers[k][0]),
         refused: reply.refused, failed: reply.failed.map(f => f.split(':')[0]), quick: reply.render < 1500 };
     };
     const seen = {}, wanted = {};

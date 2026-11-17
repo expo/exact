@@ -140,6 +140,26 @@ fn skip_too_narrow_slots_then_overflow_only_when_clear() {
     assert_eq!(out[1].x, 70.0);
 }
 #[test]
+fn a_slot_takes_the_line_the_walker_fits_within_its_tolerance() {
+    // "aa bb" is 12.5 wide; the walker fits it to an offer 0.005 narrower.
+    let text = "aa bb";
+    let mut measure = |r: std::ops::Range<usize>| text[r].chars().count() as f32 * 2.5;
+    let p = exact_textflow::Prepared::new(text, Options::default(), &mut measure);
+    let mut out = Vec::new();
+    let beside = |slot: f32| rect(slot, 0.0, 100.0 - slot, 66.0);
+    let options = FlowOptions {
+        min_fragment: 8.0,
+        ..opts(100.0)
+    };
+    let result = flow(&p, &[beside(12.499)], &options, &mut out);
+    assert!(result.complete);
+    assert_eq!(out.len(), 1);
+    assert_eq!((out[0].line, out[0].width), (0, 12.5));
+    // Further past the slot than the tolerance, the line breaks in it.
+    flow(&p, &[beside(12.494)], &options, &mut out);
+    assert_eq!((out[0].line, out[0].end), (0, 3));
+}
+#[test]
 fn max_lines_includes_skipped_bands_and_invalid_height_is_empty() {
     let p = prepare("a b c d e", Options::default());
     let mut out = Vec::new();

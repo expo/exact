@@ -67,7 +67,12 @@ addEventListener('keydown', e => {
   if (!codes.includes(e.code) || e.target instanceof HTMLButtonElement) return;
   e.preventDefault(); key(state, e.code, true);
 });
-addEventListener('keyup', e => { if (codes.includes(e.code)) { e.preventDefault(); key(state, e.code, false); } });
+// A focused button takes Space on keyup, its click's default action, so no key it gets is prevented.
+addEventListener('keyup', e => {
+  if (!codes.includes(e.code)) return;
+  if (!(e.target instanceof HTMLButtonElement)) e.preventDefault();
+  key(state, e.code, false);
+});
 addEventListener('blur', () => { state.keys = []; state.jump = false; state.interact = false; });
 addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); sync(); });
 renderer.setSize(innerWidth, innerHeight);

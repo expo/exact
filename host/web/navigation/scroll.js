@@ -1,5 +1,5 @@
 // The eager scrollFollowEnd projection also belongs to this DOM controller.
-export function scrollFollowers(positionContexts) {
+export function scrollFollowers(positionContexts, schedule = (fn, ms) => setTimeout(fn, ms), cancel = (t) => clearTimeout(t)) {
   // An explicit chat/log policy, not CSS overflow anchoring: keep the end
   // visible across resizing only while the reader is already there.
   const followedScrolls = new Map();
@@ -9,13 +9,45 @@ export function scrollFollowers(positionContexts) {
     s.port = s.el.clientHeight;
     s.end = s.top >= s.height - s.port - 1;
   }
+  // A scroll the app makes (`scrollIntoView`, a `scrollTop` write) owns the
+  // offset until it settles, as UIKit's `setContentOffset(_:animated:)` runs
+  // on to its target: the follow moves nothing meanwhile, `scrollFollowEnd`
+  // turning true included, and where the scroll rests decides whether the
+  // end is followed (LLP 1070.000 §15). It settles at its `scrollend`, or
+  // 300 ms after its last move (§2.6's quiet interval), which covers a
+  // browser without `scrollend` and a scroll that moved nothing.
+  const QUIET_MS = 300;
+  function quiet(s) {
+    cancel(s.owned.quiet);
+    s.owned.quiet = schedule(() => release(s), QUIET_MS);
+  }
+  function release(s) {
+    if (!s.owned) {
+      return;
+    }
+    cancel(s.owned.quiet);
+    s.owned = null;
+    rememberScroll(s);
+  }
+  /** The followed scrollers an authored scroll of `el` (a scroller, or an element in them) moves, now owned by it. */
+  function own(el) {
+    const owned = [];
+    for (const s of followedScrolls.values()) {
+      if (s.el === el || s.el.contains(el)) {
+        s.owned ??= { quiet: null };
+        quiet(s);
+        owned.push(s);
+      }
+    }
+    return owned;
+  }
   function settleFollow(s) {
     if (!s.el.isConnected) {
       return;
     }
     // A reader above the end uses the browser's CSS scroll anchoring. Writing the remembered numeric offset here would
     // undo its adjustment when content above the visible message changes.
-    if (s.end) {
+    if (s.end && !s.owned) {
       s.el.scrollTop = s.el.scrollHeight - s.el.clientHeight;
     }
     rememberScroll(s);
@@ -35,6 +67,10 @@ export function scrollFollowers(positionContexts) {
       if (old && !enabled) {
         old.observer.disconnect();
         el.removeEventListener("scroll", old.scrolled);
+        el.removeEventListener("scrollend", old.ended);
+        if (old.owned) {
+          cancel(old.owned.quiet);
+        }
         followedScrolls.delete(el);
       }
       return;
@@ -45,41 +81,58 @@ export function scrollFollowers(positionContexts) {
       height: 0,
       port: 0,
       end: true,
+      owned: null,
       children: []
     };
-    s.scrolled = () => {
-      // ResizeObserver settles a changed geometry before a queued scroll
-      // notification is allowed to change whether the reader follows the end.
+    // Where the port is, before a commit changes the content and on a
+    // `scroll`. ResizeObserver settles a changed geometry before a queued scroll
+    // notification is allowed to change whether the reader follows the end.
+    s.observed = () => {
       if (el.scrollHeight === s.height && el.clientHeight === s.port) {
         rememberScroll(s);
       }
     };
+    // Only a move renews an authored scroll's quiet interval: a commit that
+    // moves nothing does not hold the follow off.
+    s.scrolled = () => {
+      if (s.owned) {
+        quiet(s);
+      }
+      s.observed();
+    };
+    s.ended = () => release(s);
     s.observer = new ResizeObserver(() => {
       settleFollow(s);
       positionContexts();
     });
     s.observer.observe(el);
     el.addEventListener("scroll", s.scrolled, { passive: true });
+    el.addEventListener("scrollend", s.ended, { passive: true });
     followedScrolls.set(el, s);
   }
   return {
     followedScrolls,
     followScroll,
     settleFollow,
-    rememberScroll
+    rememberScroll,
+    own,
+    release
   };
 }
 export function scrollDrag(el, listen, began, ended) {
   const o = { passive: true };
   let down = 0, finger = null, dragging = false, from = [0, 0], seen = [];
+  // `touches` is every finger on the surface; one outside `el` is no part of its drag, and its lift is never heard here.
+  const own = (e) => [...e.touches].filter((t) => el.contains(t.target));
   const follow = (e) => {
     if (!down) {
       from = [el.scrollLeft, el.scrollTop];
       finger = null;
     }
-    down = e.touches.length;
-    if (![...e.touches].some((t) => t.identifier === finger)) {
-      finger = e.touches[0]?.identifier ?? null;
+    const touches = own(e);
+    down = touches.length;
+    if (!touches.some((t) => t.identifier === finger)) {
+      finger = touches[0]?.identifier ?? null;
       seen = [];
     }
   };
@@ -107,7 +160,7 @@ export function scrollDrag(el, listen, began, ended) {
     }
   }, o);
   const lift = (e) => {
-    if (e.touches.length) {
+    if (own(e).length) {
       return follow(e);
     }
     down = 0;

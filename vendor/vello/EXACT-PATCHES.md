@@ -39,6 +39,16 @@ are gone, so the module carries no WGSL front end and compiles no shader source.
 image (the canvas's previous pixels), writing premultiplied colour, so a
 canvas keeps its bitmap without a copy pass. A scene of solid paths keeps the
 image atlas instead of shrinking it (an upstream bug that blanked images).
+It also takes the canvas's persistent clip masks, a storage buffer the area
+fine stage reads (binding 9) apart from the image atlas, so their size and
+lifetime do not compete with decoded images for atlas space.
+
+## Lint attributes (`src/scene.rs`)
+
+Five `#[expect(single_use_lifetimes)]` attributes are `#[allow]`. The false
+positive they expect ([rust-lang/rust#129255](https://github.com/rust-lang/rust/issues/129255))
+is not reported by the pinned toolchain (`rust-toolchain.toml`, Rust 1.97), so
+an `expect` warns that it is unfulfilled.
 
 ## Cargo workspace boundary
 

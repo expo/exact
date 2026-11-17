@@ -40,9 +40,9 @@ pub(in super::super) struct GridItem {
     /// The item's size style
     pub size: Size<Dimension>,
     /// The item's min_size style
-    pub min_size: Size<LengthPercentageAuto>,
+    pub min_size: Size<Dimension>,
     /// The item's max_size style
-    pub max_size: Size<LengthPercentageAuto>,
+    pub max_size: Size<Dimension>,
     /// The item's aspect_ratio style
     pub aspect_ratio: Option<f32>,
     /// EXACT PATCH 12: whether the ratio relates content-box sizes (`compute::ratio`).
@@ -594,10 +594,11 @@ impl GridItem {
                 continue;
             }
             let stretch_size = grid_area_size.get(axis).maybe_sub(margins.get(axis));
-            if let Some(SizingKeywordResolution::Measure(available)) =
-                resolve_sizing_keyword(size_style, stretch_size, grid_area_size.get(axis))
-            {
-                adjusted.set(axis, available);
+            // EXACT PATCH 77: `fit-content` offers its stretch size, as a measurement does.
+            if let Some(resolution) = resolve_sizing_keyword(size_style, stretch_size, grid_area_size.get(axis)) {
+                if !matches!(resolution, SizingKeywordResolution::Exact(_)) {
+                    adjusted.set(axis, resolution.available());
+                }
             }
         }
         adjusted

@@ -37,6 +37,297 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Android initialization
+
+`dlopen` runs no `JNI_OnLoad`, so a module that calls into Java exports the
+optional `uint32_t gpu_android_init(JavaVM *vm, JNIEnv *env, jobject context)`,
+which `exact_gpu::android_init!` defines
+(`docs/recipes/gpu-module-android.md`). The Android host calls it once for each loaded
+image in a process, on the thread that opens the module, after verifying the
+module's baked identity and before any other export. `context` is the
+application `Context`, a global reference the host keeps for the process. It
+returns 0, or nonzero with its reason in `gpu_error` on the same thread; a
+failure or a pending Java exception refuses the module, then and at every later
+open. The host keeps an image whose entry ran loaded for the life of the
+process. A module without the export is opened as before. See LLP 1009 D11.
+
+## Target color space
+
+`Surface::color_space()` requests `ColorSpace::Srgb` (the default) or
+`ColorSpace::DisplayP3` for SDR. The module grants P3 only when the target
+advertises it for the selected format. Metal configures the `CAMetalLayer`
+with Display P3 and keeps its 8-bit format without EDR. WebGPU uses the same
+capability check and configures the canvas with `colorSpace: "display-p3"`.
+Other targets fall back to sRGB unless they advertise P3. Android's buffered
+canvas and offscreen targets always use sRGB; Android wide-color windows and
+hardware-buffer tagging are outside this API's implementation.
+
+`Surface::color_space_granted(space)` reports the actual RGB primaries after
+`device_ready`, before preparation or drawing, including on reattachment and
+device restoration and renderer rebuilding after a GPU tier change. Choose
+shader output from the grant, not the request. Every native RGBA8 readback
+grants sRGB before capture, including after detachment, then restores any P3
+presentation grant; captured bytes remain suitable for the host's sRGB images.
+A granted `high_dynamic_range()` request takes precedence: it stays
+`Rgba16Float` in extended sRGB, reports `ColorSpace::Srgb`, and uses the
+existing `Frame::headroom` range. It never selects extended Display P3.
+
+For a P3 target, the shader writes Display P3 RGB components. With an ordinary
+`*Unorm` render target, write sRGB-transfer-encoded Display P3 in `[0, 1]`.
+When `srgb_target()` obtains an `*Srgb` view, write linear-light Display P3;
+the view applies the sRGB transfer function, which Display P3 also uses.
+The `Srgb` texture-format suffix chooses the transfer function, not the
+primaries. Always honor the format passed to `render`: a backend that cannot
+supply the requested view still needs encoded output. A fallback target needs
+sRGB components, with any conversion from P3 performed by the surface.
+HDR keeps D12b's encoded extended-sRGB output, including values above 1.
+
+`apps/caltrain/gpu` is a complete GPU module; the
+[GPU module recipe](../docs/recipes/gpu-module.md) shows a minimal surface.
+
+## Dynamic buffer offsets
+
+Shader reflection (`exact-gpu-reflect`) emits a constant per binding and a `GROUP_n`
+layout descriptor per group. Buffer entries disable dynamic offsets by default.
+To bind different slots of one buffer, enable offsets on the reflected entry:
+
+```rust
+const STEP: wgpu::BindGroupLayoutEntry = exact_gpu::dynamic_offset(shader::S);
+let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    label: Some("step"),
+    entries: &[STEP, shader::STATE],
+});
+```
+
+`dynamic_offset` preserves every other field, including the buffer type and minimum
+size. It panics on a non-buffer entry, a compile error in a `const` initializer.
+Bind a range sized to one slot (`BufferBinding::size`), align each offset to the
+device's uniform or storage buffer alignment, and pass it with
+`set_bind_group(0, &group, &[offset])`. `GROUP_n` and the shader's interface digest
+stay unchanged: dynamic offsets are the surface's binding choice.
+
+## A fragment shader on a canvas
+
+`exact_gpu::wgpu` is wgpu 30, the version this crate pins; use it rather than a
+`wgpu` dependency of the module's own. Code written for another wgpu release
+does not compile as written: in wgpu 30 a render pass and a render pipeline
+take `multiview_mask`, a pipeline layout takes `immediate_size` (immediate
+data, which replaced push constants) and its `bind_group_layouts` are
+`Option`s, and a colour attachment takes `depth_slice`. The surface below runs one WGSL fragment
+shader over a full-screen triangle with one uniform, as `aurora.rs` in
+`apps/caltrain/gpu` does with the canvas's children and a reflected shader
+beside. It rebuilds its pipeline when the target format changes, and writes
+the uniform through a `FrameUniform`, which writes Apple's and Vulkan's buffers
+in place instead of staging a copy each frame:
+
+```rust
+use exact_gpu::{wgpu, Frame, FrameUniform, Surface, SurfaceError, Value};
+
+const WGSL: &str = r#"
+struct U { time: f32, width: f32, height: f32, pad: f32 }
+@group(0) @binding(0) var<uniform> u: U;
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+  let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+  return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+  let uv = at.xy / vec2<f32>(u.width, u.height);
+  return vec4<f32>(uv, 0.5 + 0.5 * sin(u.time / 1000.0), 1.0);
+}
+"#;
+
+#[derive(Default)]
+pub struct Field {
+    gpu: Option<Gpu>,
+}
+
+struct Gpu {
+    format: wgpu::TextureFormat,
+    pipeline: wgpu::RenderPipeline,
+    uniform: FrameUniform,
+    groups: Vec<wgpu::BindGroup>,
+}
+
+impl Surface for Field {
+    fn bind(&mut self, _inputs: &[Value], _at_ms: Option<f64>) -> Result<(), SurfaceError> {
+        Ok(())
+    }
+
+    fn render(&mut self, frame: &Frame, device: &wgpu::Device, queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView, format: wgpu::TextureFormat) -> bool {
+        if self.gpu.as_ref().map(|g| g.format) != Some(format) {
+            self.gpu = Some(build(device, format));
+        }
+        let gpu = self.gpu.as_mut().unwrap();
+        let (w, h) = frame.pixels();
+        let bytes: Vec<u8> = [frame.now_ms as f32, w as f32, h as f32, 0.0]
+            .iter().flat_map(|f| f.to_le_bytes()).collect();
+        let slot = gpu.uniform.write(queue, &bytes);
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target, depth_slice: None, resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+            })],
+            ..Default::default()
+        });
+        pass.set_pipeline(&gpu.pipeline);
+        pass.set_bind_group(0, &gpu.groups[slot], &[]);
+        pass.draw(0..3, 0..1);
+        // Another frame: the shader reads the clock.
+        true
+    }
+}
+
+fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Gpu {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("field"), source: wgpu::ShaderSource::Wgsl(WGSL.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("field"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0, visibility: wgpu::ShaderStages::FRAGMENT, count: None,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None,
+            },
+        }],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("field"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("field"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader, entry_point: Some("fs"), targets: &[Some(format.into())],
+            compilation_options: Default::default(),
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+    // Four f32s: 16 bytes, a uniform's alignment.
+    let uniform = FrameUniform::new(device, 16, "field uniform");
+    // One bind group per slot of the uniform.
+    let groups = (0..uniform.slots()).map(|slot| device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("field"),
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.buffer(slot).as_entire_binding() }],
+    })).collect();
+    Gpu { format, pipeline, uniform, groups }
+}
+```
+
+Register it as the recipe's `clear` is (`("field", 0, field)` with
+`fn field() -> Box<dyn Surface> { Box::new(Field::default()) }`), and draw it
+with `canvas surface=field() width="100%" height=240`. Its pixels follow the
+canvas's device pixels (`frame.pixels()`); `Frame` has the rest of what the
+host knows (its points, scale, the display's frame period).
+
+## Reading GPU results
+
+Record a copy into a `MAP_READ | COPY_DST` buffer in `Surface::render`, then
+call `map_async` in `Surface::submitted`, after the module submits the copy.
+On native hosts a surface may call `device.poll(wgpu::PollType::Poll)` to
+deliver ready callbacks. It does not wait for the GPU; one call need not finish
+the map. Return `true` from `render` while a result is pending so later frames
+can poll and consume it. The host schedules no frames for a resting surface
+just because it has a pending map.
+
+What drives completion depends on the path:
+
+| Path | Device progress |
+|---|---|
+| Native, all rendering paths | wgpu's later `Queue::submit` calls also poll and deliver ready callbacks. The submit preceding `submitted()` cannot deliver a map registered there. |
+| Apple direct presentation, Android `SurfaceView`, Windows direct window | No additional unconditional per-frame `Device::poll`. A surface can poll in `render` using the supplied device. |
+| Android buffered canvas | `Module::render_to_buffer` and `Module::buffer` poll with `PollType::Poll` while retiring frames. |
+| Native capture/readback (including Linux and Windows's composed canvases, Apple nested canvases and fixtures) | Readback waits on the module's device. Apple also uses `Module::sync` before reusing a child texture the module may still read. These waits are specific to those operations. |
+| Web | WebGPU delivers callbacks through the browser event loop; `Device::poll` is a no-op. Return control to the browser. |
+
+Keep live frame callbacks non-blocking: use `PollType::Poll`, never a
+`PollType::Wait`, a blocking channel receive or a loop waiting for completion.
+The map callback should only post its result; inspect bytes after success,
+drop every mapped view, then unmap before copying into the buffer again. See
+wgpu's [mapping contract](https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async)
+and [`Device::poll`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html#method.poll).
+
+For example, these fields and methods read one little-endian `u32` from an
+existing surface's `source` buffer (`COPY_SRC`, at least four bytes). Create
+`staging` with size 4, usage `MAP_READ | COPY_DST` and `mapped_at_creation: false`;
+initialize `copied` to false and `pending` and `value` to `None`. The surface's
+ordinary drawing passes are omitted:
+
+```rust
+use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+use std::sync::mpsc;
+
+struct Status {
+    source: wgpu::Buffer,
+    staging: wgpu::Buffer,
+    copied: bool,
+    pending: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    value: Option<u32>,
+}
+
+impl Surface for Status {
+    fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+        Ok(())
+    }
+
+    fn render(
+        &mut self,
+        _frame: &Frame,
+        device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        _target: &wgpu::TextureView,
+        _format: wgpu::TextureFormat,
+    ) -> bool {
+        if self.pending.is_some() {
+            device.poll(wgpu::PollType::Poll).expect("poll status");
+        }
+        if let Some(rx) = &self.pending {
+            if let Ok(result) = rx.try_recv() {
+                result.expect("status map");
+                let view = self.staging.get_mapped_range(..).expect("status bytes");
+                self.value = Some(u32::from_le_bytes(view[..4].try_into().unwrap()));
+                drop(view);
+                self.staging.unmap();
+                self.pending = None;
+            }
+        } else if self.value.is_none() {
+            encoder.copy_buffer_to_buffer(&self.source, 0, &self.staging, 0, 4);
+            self.copied = true;
+        }
+        self.value.is_none()
+    }
+
+    fn submitted(&mut self) {
+        if std::mem::take(&mut self.copied) {
+            let (tx, rx) = mpsc::channel();
+            self.staging
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |r| {
+                    let _ = tx.send(r);
+                });
+            self.pending = Some(rx);
+        }
+    }
+}
+```
+
+An application reports poll/map errors through `Surface::take_error` rather
+than panicking as this small example does. Drop these device resources and
+pending results in `device_lost`, then recreate them on the new device. For
+continuous readback, use several staging buffers and skip any still awaiting
+a map or still mapped; each copied slot starts its map in `submitted()`.
+
 ## Frame pacing and timing
 
 A surface that rests returns `false` from `render`; the host then asks for no
@@ -65,8 +356,30 @@ the web, Android, Linux and Windows report unknown.
 |---|---|---|---|
 | web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
 | iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
-| Android | yes | `gpu_due` per canvas | none |
-| Linux, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
+| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one drawn from its buffers in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
+| Linux (display) | no: a rendered canvas repaints every display frame | no | `gpu_period`: the DRM mode's pixel clock over its total pixels |
+| Linux headless, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
+
+Android canvas caps use an interactive-content vote: AOSP suppresses global touch boost when a
+`DEFAULT` vote is present and still favors refresh rates that are exact multiples of the requested rate.
+`FIXED_SOURCE` describes video-like content and permits touch boost to select a higher multiple.
+The request is a hint, so competing layers and device policy can still choose another rate; even
+presentation needs a device measurement. See [Surface.setFrameRate](https://developer.android.com/reference/android/view/Surface#setFrameRate(float,%20int))
+and [AOSP's refresh-rate selector](https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/surfaceflinger/Scheduler/RefreshRateSelector.cpp).
+
+A canvas composed into the reader's window has no layer of its own, so its cap is a view's vote
+([View.setRequestedFrameRate](https://developer.android.com/reference/android/view/View#setRequestedFrameRate(float))),
+cast with each new canvas frame and sent by the window as a `FIXED_SOURCE` rate for its whole
+layer. The window has one rate, so capped canvases beside each other vote the highest cap of
+those still drawing: one that rests leaves the vote an interval of its cap and 100 ms after its
+last frame. The window keeps the rate between those frames, and drops it at a frame it draws
+with no such vote more than 100 ms after the last, so a cap under 10 fps holds only while nothing
+else in the window is drawn. Whatever else the window draws (a scroll, a playing layer, an uncapped
+canvas, a repaint of the page) casts a category as any view's does, beside which a panel of fixed
+modes ignores the rate, and a touch boosts the window's rate as it does any app's. So this cap
+can hold the panel only while the capped canvases are all that draws and nothing is touched. A
+full-window canvas that must hold its cap through touches returns `true` from `Surface::opaque`
+and gets a layer of its own (below).
 
 ## Performance
 
@@ -97,17 +410,56 @@ it declared itself opaque. Return `true` when every pixel the surface writes
 has alpha one.
 
 **The pipeline cache.** `exact_gpu::PipelineCache::new(device)` gives a renderer
-the cache Exact installs for its module's device. Pass its `handle` as the
+the cache Exact installs for its module's device. On Vulkan, pass its `handle` as the
 `cache` of every render and compute pipeline descriptor, and after each submit
 call `save(work)` with the number of pipelines the renderer has created so far;
 a write happens on a worker thread only when that number has grown. On Android
 (Vulkan) the cache is kept on disk per app build and GPU, so a warm launch
 builds its pipelines from it: the reporter's 90 pipelines took 0.32 s warm and
-5.9 s cold; the log says `GPU module pipeline cache: hit`, `miss` or
+5.9 s cold; the log says `GPU module pipeline cache: loaded`, `miss` or
 `unavailable` when the module loads. On Vulkan elsewhere the cache lives only in
-memory, and on other backends `handle` is `None` (wgpu has a pipeline cache only
-on Vulkan), so the same code runs everywhere. `game/render` is a whole user
+memory. Other backends have no wgpu cache `handle`; Apple uses the Metal archive
+below through the same `PipelineCache` owner. `game/render` is a whole user
 (`pipeline.rs`, `renderer/draw.rs`).
+
+### Metal pipeline archives
+
+Apple GPU modules keep a Metal binary archive in the app's cache directory,
+shared by their surfaces and written by the module itself after each submitted
+frame when the archive has additions; a renderer does nothing for it. The cache key
+includes the module name/version, app identity, GPU registry identity, OS build and archive
+encoding version. Metal matches shader functions and complete pipeline descriptors;
+a shader or specialization change misses the archive and compiles normally.
+Invalid or incompatible data falls back to an empty archive. Writes use the same
+checksummed envelope and atomic replacement as Vulkan's pipeline cache.
+
+On Apple, the default directory is `~/Library/Caches/exact-gpu-<app hash>`;
+`XDG_CACHE_HOME` replaces its parent for a controlled run. To preseed a matching
+installation, copy its `exact-*.bin` files into the app bundle's resources under
+`exact-pipelines/`, or point `EXACT_GPU_CACHE_SEED` at that directory. The seed is
+read-only and is used when no valid writable cache exists. It must match the cache
+key, including device and OS build; this is not a portable archive for every GPU.
+A fresh installation without a matching seed still compiles its initial pipelines,
+but not their MSL when the build shipped it compiled (below).
+
+**Shader libraries compiled at build time.** wgpu writes each pipeline's MSL at run
+time. A development build on a Mac or a simulator records each source it compiled in
+the app's `.exact/metal/` (the bundle's `ExactMetalSources`); the next Apple build
+compiles those for its SDK (`host/apple/shader-libraries.mjs`, kept in
+`target/metal-kept/shaders`) into the bundle's `exact-metal/`, and the module loads
+a library in place of a source whose text and options match its name
+(`vendor/wgpu-hal/EXACT-PATCHES.md` 16). A changed shader, layout or OS that writes
+different MSL compiles at run time and is recorded for the next build. So a build
+ships what development runs drew: run the app's screens before building a release.
+`EXACT_METAL_LIBRARIES` and `EXACT_METAL_SOURCES` replace either directory. On an
+M5 Max, a fresh install's 28 first-frame pipelines took 0.8 to 1.1 s instead of 3.7
+to 3.9 s; on the iOS simulator, whose GPU compile no archive keeps, 3.8 to 4.0 s
+instead of 4.0 to 4.3.
+Render and compute pipelines participate; mesh-shader pipelines do not yet.
+
+The backend's `BinaryArchive::counts` reports successful binary lookups and misses.
+The process-isolated Metal test renders and reads pixels after both cold and warm
+loads, and covers a seed, a changed shader, a changed key and corrupt data.
 
 ## A module's own audio output
 
@@ -126,9 +478,52 @@ Immediately before a GPU module makes a surface on iOS or tvOS, the owner
 sets an unclaimed session to `.ambient`, without activating it. Output opened
 before its request is handled therefore mixes with other apps' audio and
 obeys the ring/silent switch until the request takes the app's configuration.
+Under `"playback-mix"` the owner sets the app's own configuration instead
+(`.playback` with `.mixWithOthers`), so output may start before the request
+and the request only activates: a category change while output plays
+interrupts other apps' audio, even toward a mixing category. Under
+`"playback"` an early `.playback` would stop other apps' audio before the
+request, so that app is prepared in `.ambient`; its category rises when the
+request is handled, which is what `"playback"` does anyway.
 A held or claimed session stays as it is. This preparation does not run for
 Canvas 2D, an app with no GPU canvas, or the driver's frozen clock, which
 makes surfaces seekable and opens no output. Under `EXACT_AGENT_TIMING=platform`
 the owner prepares too: surfaces can open output, but the driver drops
 `exact:audio` requests, so they do not raise the prepared ambient session.
-macOS, the web and Linux consume the request without configuring a session.
+macOS, the web, Linux and Android consume the request without configuring a session.
+On Android that means a module's output gets no audio focus and no interruption
+report from Exact: the module asks Android for focus and handles its loss itself.
+
+## A module's own haptics
+
+A surface plays haptics from its own callbacks, where the gesture and the
+physics are, by returning `exact_gpu::haptics::Haptic::message()` strings from
+`Surface::messages` (LLP 1009 D10). The host consumes them; the app never sees
+them. The names are Core Haptics':
+
+- `Haptic::texture(intensity, sharpness)` starts the surface's texture, a
+  continuous vibration, or moves it to new values. Send it as often as every
+  frame while the finger drags; each value is 0–1. `Haptic::Stop` stops it.
+  A surface has one texture.
+- `Haptic::Pattern` plays a short pattern now, beside the texture: transient
+  events (taps) and continuous ones, each at its time with its intensity and
+  sharpness, and curves over the pattern that multiply its intensity or add to
+  its sharpness (`CHHapticParameterCurve`). A pattern lasts at most 30 s.
+
+The host owns their life. A surface's texture stops when the surface is
+destroyed, and every texture stops while the canvases are hidden or interrupted
+(iOS) or the activity is paused (Android); a later texture message starts it
+again, so a surface that sends one each frame resumes by itself. The person's
+system haptics setting applies, as it does to `haptic()`.
+
+- **iOS**: Core Haptics, one `CHHapticEngine` for the process, haptics only, so
+  no audio session is involved. A texture is a looping continuous event moved by
+  `hapticIntensityControl` and `hapticSharpnessControl`; a pattern is a
+  `CHHapticPattern` played at once. A device without a haptic engine plays
+  nothing.
+- **Android**: the vibrator (`host/android/README.md`, "Haptics"). A texture is
+  an amplitude, so its sharpness is not played, and a device without amplitude
+  control plays no texture; a pattern is click and tick primitives, or a
+  waveform. The shell's manifest asks for `VIBRATE`.
+- **macOS, tvOS, the web, Linux, Windows**, and every host under the driver,
+  consume the messages and play nothing.

@@ -18,5 +18,6 @@
     "android": {
       "minimumOS": "10"
     }
-  }
+  },
+  "rust": { "data": { "crate": "photos-fixture-data", "type": "photos_fixture_data::Fixture" } }
 }

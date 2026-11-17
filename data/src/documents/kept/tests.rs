@@ -4,14 +4,15 @@ use super::*;
 
 /// A scratch folder and a kept set's file for one test.
 #[cfg(unix)]
-fn scratch(name: &str) -> (PathBuf, PathBuf) {
+fn scratch(name: &str) -> (crate::TempDir, PathBuf) {
     let root = std::env::temp_dir().join(format!("exact-kept-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("notes")).unwrap();
     std::fs::write(root.join("notes/a.md"), "a").unwrap();
     std::fs::write(root.join("notes/b.md"), "b").unwrap();
     let canonical = std::fs::canonicalize(&root).unwrap();
-    (canonical.clone(), canonical.join("kept.json"))
+    let file = canonical.join("kept.json");
+    (crate::TempDir(canonical), file)
 }
 
 #[cfg(unix)]
@@ -193,7 +194,7 @@ fn the_platforms_list_and_the_apps_forget_drop_an_entry_and_its_own_save_keeps_i
     );
     std::fs::write(root.join("notes/.b.md.new"), "saved").unwrap();
     std::fs::rename(root.join("notes/.b.md.new"), root.join("notes/b.md")).unwrap();
-    carry(7521, replaced);
+    carry(7521, replaced).unwrap();
     relaunch(app);
     launch(7522, app, &file);
     assert_eq!(
@@ -342,7 +343,7 @@ fn a_replacement_chosen_is_its_own_document_and_a_save_in_a_subfolder_is_carried
         root.join("notes/moved/c.md"),
     )
     .unwrap();
-    carry(7571, replaced);
+    carry(7571, replaced).unwrap();
     relaunch(app);
     open(7572, app, &file);
     let found: Vec<_> = to_restore(7572)
@@ -361,6 +362,61 @@ fn a_replacement_chosen_is_its_own_document_and_a_save_in_a_subfolder_is_carried
         paths(7572).contains(&c),
         "the save in a moved subfolder is carried"
     );
+    relaunch(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Chosen again when the set cannot be written, a kept document stays kept:
+/// the set on disk still holds it, and the next save that does write keeps it.
+#[test]
+#[cfg(unix)]
+fn a_kept_document_chosen_again_stays_kept_when_the_set_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = scratch("unwritable");
+    let file = root.join("set/kept.json");
+    let app = "test.kept.unwritable";
+    launch(7581, app, &file);
+    let a = keep(7581, &root.join("notes/a.md"), "bm", "readwrite").unwrap();
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(root.join("set"), mode(0o555)).unwrap();
+    let again = keep(7581, &root.join("notes/a.md"), "bm2", "readwrite");
+    std::fs::set_permissions(root.join("set"), mode(0o755)).unwrap();
+    assert!(again.is_none(), "not written is not chosen again");
+    assert_eq!(paths(7581), std::slice::from_ref(&a), "still kept");
+    let b = keep(7581, &root.join("notes/b.md"), "", "readwrite").unwrap();
+    relaunch(app);
+    launch(7582, app, &file);
+    assert_eq!(paths(7582), [b, a], "the next save writes it");
+    relaunch(app);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// An atomic save of a kept file whose set cannot be written says so, and
+/// writing it again carries it.
+#[test]
+#[cfg(unix)]
+fn an_atomic_save_that_cannot_write_the_set_fails_and_its_retry_keeps_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let (root, _) = scratch("carry-unwritable");
+    let file = root.join("set/kept.json");
+    let app = "test.kept.carry-unwritable";
+    launch(7591, app, &file);
+    let a = keep(7591, &root.join("notes/a.md"), "", "readwrite").unwrap();
+    let save = |text: &str| {
+        let replaced = before_write(7591, &a).expect("a.md is kept");
+        std::fs::write(root.join("notes/.a.md.new"), text).unwrap();
+        std::fs::rename(root.join("notes/.a.md.new"), root.join("notes/a.md")).unwrap();
+        carry(7591, replaced)
+    };
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(root.join("set"), mode(0o555)).unwrap();
+    let refused = save("first");
+    std::fs::set_permissions(root.join("set"), mode(0o755)).unwrap();
+    assert!(refused.is_err(), "the set was not written");
+    save("again").unwrap();
+    relaunch(app);
+    launch(7592, app, &file);
+    assert_eq!(paths(7592), [a], "the retry kept it");
     relaunch(app);
     let _ = std::fs::remove_dir_all(root);
 }

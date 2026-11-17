@@ -1,0 +1,35 @@
+shape Item
+  state: enum<"first", "second">
+  count: number
+
+shape Settings
+  item: Item
+  items: Item[]
+  chosen: option<Item>
+  enabled: bool
+  unused: unit
+
+component App
+  view
+    column
+      SettingsView(id="late")
+      if true
+        SettingsView(id="owned")
+
+component SettingsView
+  props
+    id: string
+  resource settings = settings() when false as shape Settings else empty(item=empty(count=-2.5), items=[empty(state="second", count=7)], chosen=some(empty(state="second")), enabled=true)
+  view
+    column
+      text `${settings.item.state} ${settings.item.count} ${settings.enabled}` testId=`${id}-item`
+      text (match settings.items.at(0) { case some(item) => `${settings.items.length} ${item.state} ${item.count}`, case none => "empty" }) testId=`${id}-items`
+      text (match settings.chosen { case some(item) => item.state, case none => "none" }) testId=`${id}-chosen`
+
+test "nested constants are placeholders in late and owned resources"
+  expect text "late-item" == "first -2.5 true"
+  expect text "owned-item" == "first -2.5 true"
+  expect text "late-items" == "1 second 7"
+  expect text "owned-items" == "1 second 7"
+  expect text "late-chosen" == "second"
+  expect text "owned-chosen" == "second"

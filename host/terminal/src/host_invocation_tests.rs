@@ -122,16 +122,22 @@ fn caltrain_builds_in_the_terminal_and_refuses_activity_sends_at_runtime() {
     let mut host =
         crate::host::Host::boot(plan, data, crate::host::Mode::Fullscreen, 80, 24).unwrap();
     assert!(host.runner.resource("activities").is_some());
+    host.act("startTracking");
+    let refused = |host: &crate::host::Host<_>, send: &str| {
+        host.runner
+            .journal()
+            .any(|line| line.contains(&format!("{send} is not linked into this artifact")))
+    };
+    assert!(refused(&host, "startActivity"));
+    assert!(!host.runner.has_pending());
+    // With the start refused nothing is followed, so Delay and End name no
+    // activity and send nothing.
     for (action, send) in [
-        ("startTracking", "startActivity"),
         ("delayTrain", "updateActivity"),
         ("endTracking", "endActivity"),
     ] {
         host.act(action);
-        assert!(host
-            .runner
-            .journal()
-            .any(|line| line.contains(&format!("{send} is not linked into this artifact"))));
+        assert!(!refused(&host, send));
         assert!(!host.runner.has_pending());
     }
 }
@@ -162,4 +168,51 @@ fn an_open_is_answered_at_the_named_element() {
         host.runner.slot("heard"),
         Some(&exact_plan::Value::from("opened failed "))
     );
+}
+
+/// A URL whose characters straddle a scheme's length is refused, not a
+/// panic, and Unicode after an allowed scheme is handed on.
+#[test]
+fn a_unicode_url_is_checked_without_slicing_a_character() {
+    let source = r#"component App
+  state heard = ""
+  action burst
+    openURL("💥💥", "opened")
+  action answered(value: string)
+    heard = heard + value + " "
+  view
+    column
+      input id="opened" display="none" change=answered
+      text "x"
+"#;
+    let mut host =
+        Host::boot(contract::compile(source).unwrap(), (), Mode::Inline, 40, 10).unwrap();
+    host.act("burst");
+    assert_eq!(
+        host.runner.slot("heard"),
+        Some(&exact_plan::Value::from("failed "))
+    );
+    // Each prefix length, 4 to 8 bytes, ends inside a character.
+    for refused in [
+        "é💥",
+        "💥é",
+        "a💥💥",
+        "ab💥💥",
+        "abc💥💥",
+        "htt💥",
+        "mail💥x",
+        "te💥",
+    ] {
+        assert!(!host.open_url(refused), "{refused}");
+    }
+    let handed = [
+        "https://例え.jp/パス",
+        "HTTP://é.example/",
+        "mailto:名前@example.jp",
+        "tel:☎",
+    ];
+    for url in handed {
+        assert!(host.open_url(url), "{url}");
+    }
+    assert_eq!(host.outbound, handed);
 }

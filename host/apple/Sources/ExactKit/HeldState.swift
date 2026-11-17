@@ -154,8 +154,8 @@ enum HeldState {
         while let n = at {
             if let view = presenter.views[n] {
                 if view.disabled { return (nil, "disabled", false) }
-                // Active feedback follows the nearest declared press handler.
-                if state != "active" || view.handlers.contains("press") { found = view; break }
+                // Active feedback follows the nearest press: a declared handler or a link (LLP 1121 D8).
+                if state != "active" || view.handlers.contains("press") || view.defaultLink != nil { found = view; break }
             } else if state != "active" { return (nil, "gone", false) }
             at = presenter.logicalParent(of: n)
         }
@@ -196,7 +196,7 @@ enum HeldState {
             return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         }
         let own = state == "active" ? node?["style"] as? [String: Any] : (node?["looks"] as? [String: Any])?[state == "hover" ? "hover" : "focus_visible"] as? [String: Any]
-        let names = state == "active" ? ["press_scale", "press_opacity", "press_opacity_to", "press_background_color", "press_color"] : (own ?? [:]).keys.sorted()
+        let names = state == "active" ? ["press_translate", "press_translate_percent", "press_scale", "press_opacity", "press_opacity_to", "press_background_color", "press_color"] : (own ?? [:]).keys.sorted()
         var rows: [[String: Any]] = []
         for name in names {
             if let row = own?[name] as? [String: Any], let value = row["value"] {
@@ -298,6 +298,7 @@ extension ExactApp {
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// The agent's `{"op":"tap","id":V,"holdState":…}` (LLP 1012, LLP 1122
     /// D8): the state held on the node as the real one, or let go (null).
@@ -314,3 +315,4 @@ extension Agent {
         return ["tapped": id, "holdState": r.held ?? NSNull(), "delivery": "recognized"]
     }
 }
+#endif

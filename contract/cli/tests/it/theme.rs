@@ -159,17 +159,17 @@ fn a_theme_name_is_a_colour_in_every_colour_row_and_embedded_colour() {
 #[test]
 fn a_theme_is_checked_where_it_is_declared() {
     for (body, id) in [
-        ("  a = \"b\"\n  b = \"a\"\n", "tamber-cycle"),
+        ("  a = \"b\"\n  b = \"a\"\n", "forma-cycle"),
         (
             "  secondary-label = \"-exact-secondary-label\"\n",
-            "tamber-cycle",
+            "forma-cycle",
         ),
         (
             "  label = \"-exact-platform-color(ios labelColor, label)\"\n",
-            "tamber-cycle",
+            "forma-cycle",
         ),
-        ("  brand = \"blurple\"\n", "tamber-unknown-token"),
-        ("  red = \"#c8102e\"\n", "tamber-name-reserved"),
+        ("  brand = \"blurple\"\n", "forma-unknown-token"),
+        ("  red = \"#c8102e\"\n", "forma-name-reserved"),
         (
             "  brand = \"#000\"\n  brand = \"#111\"\n",
             "syntax-duplicate-declaration",
@@ -177,12 +177,12 @@ fn a_theme_is_checked_where_it_is_declared() {
         ("  brand = 3\n", "syntax-theme-entry"),
         (
             "  secondary-label = \"#000\"\n  -exact-secondary-label = \"#111\"\n",
-            "tamber-duplicate",
+            "forma-duplicate",
         ),
         ("  LinkText = \"#000\"\n", "lower-theme-tint"),
         ("  link = \"#000\"\n", "lower-theme-tint"),
-        ("  none = \"#000\"\n", "tamber-name-reserved"),
-        ("  inherit = \"#000\"\n", "tamber-name-reserved"),
+        ("  none = \"#000\"\n", "forma-name-reserved"),
+        ("  inherit = \"#000\"\n", "forma-name-reserved"),
         ("  top = \"#000\"\n", "lower-theme-name"),
         ("  srgb = \"#000\"\n", "lower-theme-name"),
         ("  AccentColor = \"LinkText\"\n", "lower-theme-tint"),
@@ -193,7 +193,7 @@ fn a_theme_is_checked_where_it_is_declared() {
     }
     // A row naming no token, role or colour (LLP 1121 D3).
     let src = format!("{THEME}component App\n  view\n    text \"a\" color=\"brnad\"\n");
-    assert!(format!("{:?}", contract::compile(&src).unwrap_err()).contains("tamber-unknown-token"));
+    assert!(format!("{:?}", contract::compile(&src).unwrap_err()).contains("forma-unknown-token"));
 }
 
 /// A role the theme replaces is replaced where the kernel resolves it: its
@@ -340,6 +340,35 @@ fn white_on_an_accent_fill_is_not_one_scheme() {
         lint("      row background-color=\"AccentColor\"\n        text \"Hi\" color=\"#ffeeee\"\n")
             > 0,
         "only white"
+    );
+    // The fill a `style` gives, with the white in the style or on the text.
+    let styled = |style: &str, body: &str| {
+        let src = format!("style Primary\n{style}component App\n  view\n    column\n      box class=Primary\n{body}");
+        let (result, warnings) = contract::compile_warned(&src);
+        result.unwrap();
+        warnings
+            .iter()
+            .filter(|w| w.id == "lower-colour-one-scheme")
+            .count()
+    };
+    let fill = "  background-color=\"AccentColor\"\n";
+    let text = "        text \"Go\"\n";
+    assert_eq!(
+        styled(&format!("{fill}  color=\"#fff\"\n"), text),
+        0,
+        "both in the style"
+    );
+    assert_eq!(
+        styled(fill, "        text \"Go\" color=\"white\"\n"),
+        0,
+        "the class's fill over it"
+    );
+    assert!(
+        styled(
+            "  background-color=\"-exact-fill\"\n  color=\"#fff\"\n",
+            text
+        ) > 0,
+        "a style's other fill"
     );
 }
 

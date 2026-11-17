@@ -52,6 +52,7 @@ fn adopted_then_aborted(m: &mut Module, s: &mut Store) -> u64 {
     assert!(matches!(a, Ok(Answer::Later(_))), "{a:?}");
     let (_, parked) = m.parked.remove(0);
     assert_eq!(adopt(m, parked.call, parked.ticket), "adopted");
+    m.work.keep_ticket(parked.ticket);
     m.forget_calls(vec![parked.call]);
     let _ = m.answer_for(Target::Resource(2), s, "cancelAwait", &[Value::Number(2.0)]);
     parked.ticket

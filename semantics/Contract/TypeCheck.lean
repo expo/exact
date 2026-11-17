@@ -66,13 +66,16 @@ theorem boundedTy_some {p : Program} {o : Option Ty} {t : Ty} (h : boundedTy p o
     · simp at h
   · simp at h
 
-/-- `formatNumber`'s literal parameters (`type-format-style`). The
-embedding fills an omitted code with `""`; only non-currency styles take
-that default. `Format.currencies` has the roster's admitted code literals. -/
+/-- `formatNumber`'s literal parameters (`type-format-style`), then the
+format locale. The embedding fills an omitted code with `""`; only
+non-currency styles take that default. `Format.currencies` has the roster's admitted code literals.
+`decimal` may take a fraction digit count instead; one past 0–100 or not whole is refused when
+evaluated, as `toFixed`'s is. -/
 def numberFormatArgs : List Expr → Bool
-  | [_, .str style, .str code] =>
+  | [_, .str style, .str code, _] =>
     if style == "currency" then Format.currencies.any (fun c => c.1 == code)
     else ["compact", "decimal", "percent"].contains style && code == ""
+  | [_, .str "decimal", .num _, _] => true
   | _ => false
 
 mutual
@@ -437,13 +440,14 @@ def taskGate (p : Program) (t : TaskDecl) : Bool :=
     | .none => true)
 def checkTask (p : Program) (t : TaskDecl) : Bool :=
   inferLe p (compScope p) [] t.ms .number && taskAction p t && (t.ms matches .num _) && taskGate p t
-/-- A mutation's `then`, if any, names an action of no parameters. -/
+/-- A mutation's `then`, if any, names an action of as many parameters as
+its `then` arguments. -/
 def thenAction (p : Program) (m : MutationDecl) : Bool :=
   match m.andThen with
   | .none => true
   | .some a =>
     match p.actions.find? (·.name == a) with
-    | .some ad => ad.params.isEmpty
+    | .some ad => ad.params.length == m.thenArgs.length
     | .none => false
 
 /-- The checker: every part well typed. -/
@@ -1067,10 +1071,11 @@ theorem check_sound {p : Program} (h : check p = true) : WellTyped p := by
     · simp at this
 
 -- Reduced from the seed-7 `number-styled.contract` mutant, which drops USD from `usd`.
--- The emitter fills an omitted code with the roster's empty-string default.
+-- The emitter fills an omitted code with the roster's empty-string default, then
+-- the format locale (`""` in a program without format data).
 private def numberFormatProgram (args : List Expr) : Program :=
   { fns := [{ name := "usd", params := [("x", .number), ("s", .string)], ret := .string,
-              body := .call "formatNumber" args }] }
+              body := .call "formatNumber" (args ++ [.str ""]) }] }
 
 #guard !check (numberFormatProgram [.var "x", .str "currency", .str ""])
 #guard Format.currencies.all fun c =>

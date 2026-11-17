@@ -5,34 +5,34 @@
 
 use crate::machine::Instruction;
 
-/// The longest code kept, in bytes: a plan is untrusted, and its position
-/// table costs two bytes a byte. euxy's activity log is 2,714.
-const CODE: usize = 1 << 16;
+/// The longest code kept by either operand cache, in bytes: a plan is
+/// untrusted, and each position table costs two bytes a byte.
+/// euxy's activity log is 2,714.
+pub(super) const CODE: usize = 1 << 16;
 
-/// The most instructions kept; past them the rest decode as they are read.
+/// The most instructions either cache keeps; the rest decode as they are read.
 /// The activity log keeps 703.
-const KEPT: usize = 4096;
+pub(super) const KEPT: usize = 4096;
 
 /// What [`super::Run::fetch`] decoded, by position, once
 /// [`Decoded::start`] has been called (a callback's first item begins).
 #[derive(Default)]
 pub(super) struct Decoded {
+    len: usize,
     /// By byte position: 1 + the instruction's index in `list`, or 0; empty
-    /// until started.
+    /// until an instruction needs keeping.
     at: Vec<u16>,
     /// Each decoded instruction and the position after it.
     list: Vec<(Instruction, usize)>,
 }
 
 impl Decoded {
-    /// Keep instructions from now on, for code of `len` bytes, if it is not
-    /// longer than [`CODE`].
+    /// Enable caching for code no longer than [`CODE`]. Storage is allocated
+    /// only when a fetch misses the shared pool.
     #[inline]
     pub(super) fn start(&mut self, len: usize) {
-        if self.at.is_empty() && len <= CODE {
-            // Exact: storage reused for a longer body would otherwise double.
-            self.at.reserve_exact(len);
-            self.at.resize(len, 0);
+        if len <= CODE {
+            self.len = len;
         }
     }
 
@@ -49,16 +49,21 @@ impl Decoded {
     /// [`KEPT`] are.
     #[inline]
     pub(super) fn keep(&mut self, pos: usize, ins: Instruction, next: usize) {
-        if self.list.len() < KEPT {
-            if let Some(slot) = self.at.get_mut(pos) {
-                self.list.push((ins, next));
-                *slot = self.list.len() as u16;
-            }
+        if self.list.len() >= KEPT || pos >= self.len {
+            return;
         }
+        if self.at.is_empty() {
+            // Exact: storage reused for a longer body would otherwise double.
+            self.at.reserve_exact(self.len);
+            self.at.resize(self.len, 0);
+        }
+        self.list.push((ins, next));
+        self.at[pos] = self.list.len() as u16;
     }
 
     /// Empty, its storage kept for the next evaluation.
     pub(super) fn clear(&mut self) {
+        self.len = 0;
         self.at.clear();
         self.list.clear();
     }
@@ -67,9 +72,38 @@ impl Decoded {
 #[cfg(test)]
 mod tests {
     use super::super::tests::run;
+    use super::*;
     use crate::machine::Trap;
     use exact_plan::asm::Asm;
     use exact_plan::{Opcode, Value};
+
+    #[test]
+    fn callback_storage_is_lazy_bounded_and_cleared_between_evaluations() {
+        let mut decoded = Decoded::default();
+        decoded.start(CODE);
+        assert_eq!(decoded.at.capacity(), 0);
+        let ins = Instruction {
+            op: Opcode::Return,
+            pc: 0,
+            args: [0; 3],
+            number: 0.0,
+        };
+        for pos in 0..=KEPT {
+            decoded.keep(pos, ins, pos + 1);
+        }
+        assert!(decoded.get(0).is_some());
+        assert!(decoded.get(KEPT).is_none());
+        assert_eq!(decoded.at.len(), CODE);
+        assert_eq!(decoded.list.len(), KEPT);
+        decoded.clear();
+        for len in [0, CODE + 1] {
+            decoded.start(len);
+            decoded.keep(0, ins, 1);
+            assert!(decoded.get(0).is_none());
+            assert!(decoded.at.is_empty());
+            assert!(decoded.list.is_empty());
+        }
+    }
 
     /// `map([1, 2, …, n], x => x == 3 ? none! : x * 10)`: an arm first taken
     /// at the third item, once the body is kept decoded, traps at its own pc.

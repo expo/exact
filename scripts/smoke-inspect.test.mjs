@@ -2,7 +2,108 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { formControlsSmoke, isDeckURL } from './smoke-inspect.mjs';
+import { chromium, suiteBrowser } from './agent-launch.mjs';
+import { need } from './coverage.mjs';
+import { formControlsSmoke, isDeckURL, rebooted } from './smoke-inspect.mjs';
+
+test('web smoke builds keep module apps separate from generic fixture carriers', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { existsSync } from 'node:fs';
+    import { resolve } from 'node:path';
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    const builds = [], sweeps = [];
+    mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args, options) {
+      if (command === 'cargo') {
+        assert.deepEqual(args, ['test', '-p', 'exact-web', '--test', 'it', 'navigation::', '--', '--ignored', '--nocapture']);
+        sweeps.push(options.env);
+      } else {
+        assert.ok(args[0].endsWith('/host/web/build.mjs'));
+        builds.push({ args, env: options.env });
+      }
+      return { status: 0 };
+    } }));
+    const { resolveApp } = await import('./scripts/app.mjs');
+    const { webSmokeBuild, webSmokeSweep } = await import('./scripts/smoke-inspect.mjs');
+    for (const app of [resolveApp(resolve('apps/messages')), resolveApp(resolve('apps/fieldnotes'))]) {
+      process.env.EXACT_APP_DIR = app.dir;
+      builds.length = 0;
+      const result = webSmokeBuild(app, false);
+      assert.equal(builds[0].env.EXACT_APP_DIR, app.dir);
+      assert.equal(builds[0].env.EXACT_WEB_DIST, result.selectedWebDist);
+      const fixture = resolveApp(result.fixtureOptions.app);
+      assert.notEqual(fixture.dir, app.dir, 'generic plans have their own app');
+      assert.equal(existsSync(resolve(fixture.dir, 'app.ts')), false);
+      assert.equal(fixture.manifest.rust?.module, undefined);
+      assert.notEqual(result.fixtureOptions.webDist, result.selectedWebDist);
+      const generic = builds.filter(build => build.env.EXACT_APP_DIR === fixture.dir);
+      assert.ok(generic.some(build => !build.args.includes('--wasm') && build.env.EXACT_WEB_DIST === result.fixtureOptions.webDist));
+      assert.ok(generic.some(build => build.args.includes('--wasm') && build.env.EXACT_WEB_LINK === 'all' && build.env.EXACT_WEB_DIST === result.fixtureWebDist));
+      assert.equal(webSmokeSweep(result.fixtureWebDist).status, 0);
+      assert.equal(sweeps.at(-1).EXACT_ROUTER_DIST, result.fixtureWebDist);
+      assert.ok(!sweeps.at(-1).EXACT_APP_DIR, 'the navigation fixtures choose their own app');
+      assert.equal(process.env.EXACT_APP_DIR, app.dir, 'the selected app stays in the parent environment');
+      builds.length = 0;
+      const only = webSmokeBuild(app, true);
+      assert.equal(builds.length, 1, '--app-only builds the selected app alone');
+      assert.equal(builds[0].env.EXACT_APP_DIR, app.dir);
+      assert.equal(only.fixtureOptions, null);
+      assert.equal(only.fixtureWebDist, null);
+    }
+  `;
+  const r = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 20_000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
+});
+
+need('chrome', chromium().unavailable)('a reload waits for the replacement document to define and resolve runtime readiness', async () => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+    if (new URL(req.url).pathname !== '/') return new Response('', { status: 404 });
+    return new Response(`<div id="exact-root" data-boot-ms="1"></div><script>
+      globalThis.defineRuntime = () => { globalThis.exact = { agentSettled() {}, ready: new Promise(done => {
+        globalThis.finishRuntime = () => { globalThis.launchFacts = location.search; done(); };
+      }) }; };
+    </script>`, { headers: { 'content-type': 'text/html' } });
+  } });
+  const browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    const evaluate = expression => page.evaluate(expression);
+    await page.goto(`${server.url}?locale=fr-CA&seed=42`);
+    await evaluate('defineRuntime(); finishRuntime()');
+    for (let n = 0; n < 3; n++) {
+      const before = await evaluate('performance.timeOrigin');
+      let finished = false, observed, observedRuntime, first = true;
+      const checked = new Promise(done => { observed = done; });
+      const runtimeChecked = new Promise(done => { observedRuntime = done; });
+      const carrier = { evaluate: async expression => {
+        const result = await evaluate(expression);
+        if (first) {
+          first = false;
+          // Commit the replacement between the old document's readiness read and its reply.
+          await page.reload();
+          observed();
+        } else if (await evaluate('!!globalThis.exact?.ready')) observedRuntime();
+        return result;
+      } };
+      const ready = rebooted(carrier, before).then(() => { finished = true; });
+      await checked;
+      await evaluate('true');
+      assert.equal(await evaluate('typeof exact'), 'undefined');
+      assert.equal(finished, false, 'the old document cannot establish readiness for the replacement');
+      await evaluate('defineRuntime()');
+      await runtimeChecked;
+      await evaluate('true');
+      assert.equal(finished, false, 'the replacement runtime has not resolved readiness');
+      await evaluate('finishRuntime()');
+      await ready;
+      assert.equal(await evaluate('launchFacts'), '?locale=fr-CA&seed=42');
+    }
+  } finally {
+    await page.close();
+    await browser.close();
+    await server.stop(true);
+  }
+}, 30_000);
 
 test('Apple keyboard smokes use the resolved app name while drives keep the app selector', () => {
   const root = resolve(import.meta.dir, '..');

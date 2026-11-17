@@ -115,6 +115,14 @@ impl<D: DataSource> Runner<D> {
             &p.args,
             outcome,
         );
+        let parsed = parsed.map(|answer| {
+            answer.map(|mut answer| {
+                if let Answer::Later(request) = &mut answer {
+                    request.module = p.module.clone();
+                }
+                answer
+            })
+        });
         self.store.end_socket_call(parsed)
     }
 
@@ -149,7 +157,7 @@ impl<D: DataSource> Runner<D> {
             return Ok(());
         }
         let ops = self.address(staged)?;
-        let mutation = self.plan.str(self.plan.mutations[m].name).to_string();
+        let mutation = self.mutation_name(m).to_string();
         let origin = SocketOrigin::Mutation(mutation);
         self.push_batch(SocketSend { origin, ops });
         Ok(())

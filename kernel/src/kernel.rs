@@ -30,20 +30,29 @@ mod geometry;
 mod history;
 use history::RetainedReceipt;
 mod intrinsic;
+pub(crate) mod observe;
+pub(crate) mod owner;
+mod provenance;
+pub(crate) mod readers;
+pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod sticky;
+mod table;
 mod trim;
 mod wide;
 
 pub(crate) use block::{apply as apply_block, publication_start, Blocks};
 pub use block::{BlockAxis, BlockMeasure, HostBlock};
-pub use cover::HostCover;
 pub(crate) use cover::{
-    applied_padding as cover_padding, apply as apply_cover, chain_changed as cover_chain_changed,
-    children_changed as cover_children_changed, style_changed as cover_style_changed,
+    apply as apply_cover, chain_changed as cover_chain_changed,
+    children_changed as cover_children_changed, contributed_padding as cover_padding,
+    style_changed as cover_style_changed,
 };
+pub use cover::{credited_edges, HostCover};
+pub use provenance::{Contribution, Operation};
 pub use sticky::StickyConstraint;
+pub use table::TablePlace;
 
 /// How many receipts the kernel retains for late readers.
 pub const RECEIPT_RING: usize = 64;
@@ -207,6 +216,11 @@ impl<'a> NodeRef<'a> {
     /// copying unrelated style rows.
     pub fn paragraph(&self) -> crate::text::Paragraph {
         self.arena.paragraph(self.slot)
+    }
+
+    /// [`crate::text::Paragraph::natural`] alone, without the paragraph.
+    pub fn is_natural_text(&self) -> bool {
+        crate::text::natural::is_natural(self.arena, self.slot)
     }
 
     /// The nearest explicit HTML spelling-check hint in the logical tree.
@@ -480,6 +494,11 @@ impl Kernel {
         &self.arena
     }
 
+    /// The arena, for a crate module that keeps a registry in it.
+    pub(crate) fn arena_mut(&mut self) -> &mut NodeArena {
+        &mut self.arena
+    }
+
     /// The arena, the engine tree and the measurer, for the multicol probe.
     #[cfg(test)]
     pub(crate) fn parts(&mut self) -> (&NodeArena, &LayoutTree, &mut dyn TextMeasurer) {
@@ -542,8 +561,6 @@ impl Kernel {
             })
             .transpose()?;
         self.region = next;
-        // A popover under the region stays in its trial; one it no longer
-        // holds is in the viewport again (`imply_blocks`).
         self.imply_blocks();
         // The previous region cut its owner's ordinary child edge. Restore
         // current authored topology when replacing or removing it, only AFTER
@@ -575,6 +592,20 @@ impl Kernel {
         }
         self.replace_env(self.arena.env().with_viewport(offer))?;
         self.imply_blocks();
+        let withheld = self.withhold_observations();
+        let mut result = self.region_pass(slot, offer, inputs)?;
+        self.solve_region_observations(slot, offer, inputs, &withheld, &mut result)?;
+        Ok(result)
+    }
+
+    /// One layout of the root `slot` with its content region: the region's
+    /// shell and content, then the top-layer subtrees.
+    fn region_pass(
+        &mut self,
+        slot: u32,
+        offer: Offer,
+        inputs: crate::RegionInputs,
+    ) -> Result<crate::RegionLayoutReceipt, KernelError> {
         let region = self
             .region
             .as_mut()
@@ -597,8 +628,7 @@ impl Kernel {
             self.provisional_layouts += 1;
         }
         let mut result = result?;
-        // The shell's popovers, each in its block: recovered, and counted
-        // when provisional, as the region's own pass is.
+        // Top-layer subtrees are independent of the region's publication.
         if let Err(e) = self.lay_out_blocks(slot, &mut result.shell) {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
             return Err(e.into());
@@ -670,6 +700,7 @@ impl Kernel {
         presented: &[PresentedHeight],
     ) -> Result<LayoutReceipt, KernelError> {
         self.mirror();
+        engine(&mut self.layout).reset_size_cache_counts();
         let slot = self.layout_root_slot(root, offer)?;
         for (i, sample) in presented.iter().enumerate() {
             self.validate_presented_height(slot, *sample)?;
@@ -701,6 +732,8 @@ impl Kernel {
                 return Err(e.into());
             }
         };
+        let relayout = &mut |k: &mut Kernel| Ok(k.lay_out_roots(slot, offer)?);
+        self.solve_observations(slot, relayout, &[], &mut receipt)?;
         receipt.epoch = self.epoch;
         if engine(&mut self.layout).provisional_chrome() {
             self.provisional_layouts += 1;
@@ -909,6 +942,7 @@ impl Kernel {
             return Err(LayoutError::InvalidDisplayScale.into());
         }
         if self.display_scale() == scale {
+            self.arena.display_scale_next = Some(scale);
             return Ok(false);
         }
         self.arena.display_scale_next = Some(scale);
@@ -932,6 +966,11 @@ impl Kernel {
             .display_scale_next
             .or(arena.display_scale)
             .unwrap_or(1.0)
+    }
+
+    /// The display scale the host reported, without the layout fallback.
+    pub fn reported_display_scale(&self) -> Option<f32> {
+        self.arena.display_scale_next.or(self.arena.display_scale)
     }
 
     /// The EXNODE envelope for `root`, or for every root when `None`.
@@ -1147,34 +1186,7 @@ mod presented_height_tests;
 mod top_layer_tests;
 
 #[cfg(test)]
-mod paragraph_domain_tests {
-    use super::*;
-    #[test]
-    fn derived_layout_fault_rebuild_keeps_authored_paragraph_stamp() {
-        let mut k = Kernel::with_monospace();
-        k.apply(
-            0,
-            0,
-            &[
-                Op::CreateView {
-                    id: 1,
-                    node_type: NodeType::Text,
-                },
-                Op::SetProp {
-                    id: 1,
-                    prop: crate::PropId::Text,
-                    value: "preserve identity".into(),
-                },
-                Op::AttachRoot { id: 1 },
-            ],
-        )
-        .unwrap();
-        let before = k.node(1).unwrap().paragraph_stamp().unwrap();
-        k.arena.set_taffy(before.owner().index, None);
-        k.compute_layout(1, Offer::definite(300.0, 200.0)).unwrap();
-        assert_eq!(before, k.node(1).unwrap().paragraph_stamp().unwrap());
-    }
-}
+mod paragraph_domain_tests;
 
 #[cfg(test)]
 mod locality_tests {

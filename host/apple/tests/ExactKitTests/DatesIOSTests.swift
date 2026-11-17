@@ -10,7 +10,13 @@ import XCTest
 /// and never a browser's `mm/dd/yyyy`. It still takes the tap that opens it.
 /// UIKit, so a simulator runs it: bun host/apple/build.mjs --test --ios
 final class DatesIOSTests: XCTestCase {
+    /// `sendActions(for:)` reaches the picker's target through the
+    /// application, which the bare XCTest agent does not have: there it
+    /// sends nothing, so these run hosted.
+    static let actions = "UIKit sends a control's actions through the app, which only a hosted run has"
+
     func testAFocusHandlerDisablingOrMakingThePickerInertLeavesItEmpty() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", Self.actions) }
         for prop in ["disabled", "inert"] {
             let p = Presenter()
             let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
@@ -58,6 +64,7 @@ final class DatesIOSTests: XCTestCase {
     }
 
     func testAFocusHandlerGivingThePickerTheAuthorsLookLeavesItEmpty() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", Self.actions) }
         let p = Presenter()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         defer { window.isHidden = true; p.onFocus = nil; p.onControlValue = nil }
@@ -87,6 +94,7 @@ final class DatesIOSTests: XCTestCase {
     }
 
     func testAFocusHandlerReplacingThePickerDoesNotAcceptTheDetachedPickersValue() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", Self.actions) }
         let p = Presenter()
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         defer { window.isHidden = true; p.onFocus = nil; p.onControlValue = nil }
@@ -130,6 +138,7 @@ final class DatesIOSTests: XCTestCase {
     }
 
     func testOpeningAnEmptyPickerAcceptsItsInitialValueAndCanRepeatAfterClearing() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", Self.actions) }
         let p = Presenter()
         // A picker accepts a value only on screen, as a tap requires.
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))

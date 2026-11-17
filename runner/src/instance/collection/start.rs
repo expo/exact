@@ -4,6 +4,16 @@
 //! window there is measured or the reader moves it.
 use super::*;
 
+/// What a list that opens at its end holds before an update
+/// ([`Collection::bottom_anchor`]).
+pub(super) struct BottomAnchor {
+    anchor: index::Anchor,
+    /// The first row the port showed, and where it was.
+    first: Option<(usize, Rc<str>)>,
+    /// Where the last row it showed was.
+    last: usize,
+}
+
 impl Collection {
     /// Whether the window anchors the end: the list follows it, or it is
     /// still opening there. Not while a `scrollIntoView` is under way: the
@@ -14,7 +24,10 @@ impl Collection {
     /// Before any host report: the window is the last rows, and the host is
     /// told to start at the end (it clamps the offset to its extent).
     pub(super) fn start_at_end(&mut self) {
-        if !self.at_end || self.geometry.is_some() || self.index.len() == 0 {
+        if !self.at_end
+            || self.geometry.is_some()
+            || (self.index.len() == 0 && self.fixed.is_none())
+        {
             return;
         }
         let offset = self.index.scroll_extent();
@@ -55,6 +68,74 @@ impl Collection {
             self.at_end = false;
         }
     }
+    /// @ref LLP 1168.000 D1.2 — before an update to a list that opens at its
+    /// end (`scroll-start: end`, `opens_at_end`), the anchor at its last
+    /// visible row ([`SizeIndex::capture_bottom_anchor`]); none while the
+    /// list follows its end, which wins.
+    pub(super) fn bottom_anchor(&self) -> Result<Option<BottomAnchor>, InstanceError> {
+        let Some(g) = self.geometry.as_ref().filter(|_| self.opens_at_end) else {
+            return Ok(None);
+        };
+        let offset = self.anchor_offset(g.offset, g.port_main);
+        let anchor = self
+            .index
+            .capture_bottom_anchor(offset, g.port_main, self.follows())
+            .map_err(index_error)?;
+        if SizeIndex::follows_end(&anchor) {
+            return Ok(None);
+        }
+        let first = self
+            .index
+            .row_at(offset.clamp(0.0, self.index.max_offset(g.port_main).max(0.0)))
+            .map_err(index_error)?
+            .and_then(|p| Some((p, self.index.shared_key(p)?.clone())));
+        let last = SizeIndex::anchor_row(&anchor).unwrap_or(0);
+        Ok(Some(BottomAnchor {
+            anchor,
+            first,
+            last,
+        }))
+    }
+    /// The anchor an update to a list that opens at its end restores: the
+    /// last visible row's (`bottom`) when the update put rows before the
+    /// window, else `ordinary`, as in every other list. Rows landed before it
+    /// when the first row the port showed is kept further down (with `old`
+    /// the keys before the update), or, at the list's start, when a page
+    /// landed there ([`Collection::page_before_start`]: after a leading row
+    /// that stays first too), or, while a `reachstart` is unanswered, rows
+    /// landed after a leading run there (a "Loading" row, then a day's
+    /// separator that stays). An edit inside the window moves none of that
+    /// unless it is taken for that page.
+    pub(super) fn end_list_anchor(
+        &self,
+        old: &[Rc<str>],
+        ordinary: Option<index::Anchor>,
+        bottom: Option<BottomAnchor>,
+    ) -> Option<index::Anchor> {
+        let Some(BottomAnchor {
+            anchor,
+            first: Some((was, key)),
+            last,
+        }) = bottom
+        else {
+            return ordinary;
+        };
+        let before = self.index.position(&key).is_some_and(|now| now > was)
+            || (was == 0 && self.page_before_start(old))
+            || (was == 0
+                && self.start_asked
+                && reach::page_after_leading_run(
+                    old,
+                    last,
+                    |k| self.index.position(k),
+                    |i| self.index.key(i),
+                ));
+        if before {
+            Some(anchor)
+        } else {
+            ordinary
+        }
+    }
     /// The offset an opening list's anchor is taken at: its end, in a port of
     /// `port`, and no overshoot past it.
     pub(super) fn anchor_offset(&self, offset: f64, port: f64) -> f64 {
@@ -77,7 +158,7 @@ impl Collection {
         let total = self.index.total_height();
         // An empty list has not opened: its rows are yet to come.
         if self.at_end
-            && self.index.len() > 0
+            && (self.index.len() > 0 || self.fixed.is_some())
             && !self.pending
             && self.correction.is_none()
             && (total - extent).abs() < 0.01
@@ -100,14 +181,16 @@ impl Collection {
 /// never settled (LLP 1010 §6.8). An end that moved is sent once; a row
 /// anchor keeps 0.01, since its moves add up report on report. A port in
 /// the padding before the first row is at the rows' start, unless the
-/// target is in that padding too (a short list's end, LLP 1010 §6.9).
+/// target is in that padding too (a short list's end, LLP 1010 §6.9) or the
+/// anchor is held by the port's bottom, which the padding moves (LLP
+/// 1168.000 D1.2).
 pub(super) fn at_target(
     anchor: &super::index::Anchor,
     corrected: f64,
     offset: f64,
     sent: f64,
 ) -> bool {
-    let offset = if corrected < 0.0 {
+    let offset = if corrected < 0.0 || anchor.bottom {
         offset
     } else {
         offset.max(0.0)

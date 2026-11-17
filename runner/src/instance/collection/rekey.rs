@@ -61,7 +61,17 @@ impl Collection {
                 u.work.rows_keyed += 1;
                 inner.last_mut().unwrap().item = Some(item.clone());
                 inner.last_mut().unwrap().index = Some(position);
-                u.eval(key_code, &inner)?
+                u.eval_named(key_code, &inner, || "each key".into())
+                    .map_err(|e| {
+                        e.at_view(
+                            self.view,
+                            u.env
+                                .plan
+                                .region(self.region)
+                                .parent
+                                .expect("collection parent"),
+                        )
+                    })?
             };
             if !changed && same_key(&key, &self.keys[position]) {
                 continue;
@@ -141,7 +151,7 @@ impl Collection {
         }
         // Shared objects can move. A positional key must be evaluated at
         // the new position, including the otherwise-reused suffix.
-        if vm::instructions(u.env.plan.code(key))
+        if vm::transitive_instructions(u.env.plan, u.env.plan.code(key))
             .any(|i| i.is_ok_and(|i| i.op == exact_plan::Opcode::LoadIndex))
         {
             return Ok(false);
@@ -175,7 +185,18 @@ impl Collection {
                     u.work.rows_keyed += 1;
                     inner.last_mut().unwrap().item = Some(items[start + k].clone());
                     inner.last_mut().unwrap().index = Some(start + k);
-                    let value = u.eval(key, &inner)?;
+                    let value = u
+                        .eval_named(key, &inner, || "each key".into())
+                        .map_err(|e| {
+                            e.at_view(
+                                self.view,
+                                u.env
+                                    .plan
+                                    .region(self.region)
+                                    .parent
+                                    .expect("collection parent"),
+                            )
+                        })?;
                     let text = key_text(&value).ok_or(InstanceError::KeyKind {
                         region: self.region,
                     })?;

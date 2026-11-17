@@ -4,6 +4,62 @@ import XCTest
 @testable import ExactKit
 
 @MainActor final class RegionReuseTests: XCTestCase {
+    func testIncompleteFlowReturnsNativePresentationInsteadOfRefusal() {
+        let h = RegionReuseHarness(), s = source(String(repeating: "x", count: 5_000), wrap: 2)
+        defer { h.service.close() }
+        let obstruction = [TextFlowShape(kind: 2, a: 360, b: 1e9)]
+        let answer = h.perform(.shape(RegionShapeRequest(id: 1, sourceID: 7, source: s,
+            width: 360, height: -1, generation: 1, exclusions: obstruction)))
+        if case .nativeFlow(let request) = answer { XCTAssertEqual(request.id, 1); XCTAssertEqual(request.generation, 1) }
+        else { XCTFail("incomplete flow must return native ownership: \(answer)") }
+        let recovered = h.shape(2, source: s, exclusions: [TextFlowShape(kind: 0, x: 150, y: 50, a: 20)])
+        XCTAssertFalse(recovered.metadata.fragments.isEmpty)
+    }
+    func testMovingExclusionsKeepExactArtifactsAndRegistrationLifetimes() {
+        let gate = RegionReuseGate(blockAdmission: 2)
+        let h = RegionReuseHarness(admission: { gate.enter() })
+        let s = source("characteristically incomprehensible typography ", wrap: 1)
+        defer { h.service.close() }
+        let a = [TextFlowShape(kind: 0, x: 140, y: 60, a: 36)]
+        let b = [TextFlowShape(kind: 0, x: 190, y: 60, a: 36)]
+        h.service.updateShapeRequest(1, generation: 1)
+        let old = h.shape(1, source: s, exclusions: a)
+        let profile = h.profile(), raster = h.raster(1, publication: 1, artifact: old, profile: profile)
+        let bytes = raster.image()!.dataProvider!.data! as Data
+        h.service.updateShapeRequest(2, generation: 1)
+        h.service.submit(.shape(RegionShapeRequest(id: 2, sourceID: 7, source: s, width: 320,
+            height: -1, generation: 1, exclusions: b)))
+        XCTAssertEqual(gate.started.wait(timeout: .now() + 2), .success)
+        h.service.updateShapeRequest(3, generation: 1)
+        gate.release.signal()
+        if case .abandoned(let id, _) = h.receive() { XCTAssertEqual(id, 2) }
+        else { XCTFail("superseded flowed work must abandon its geometry") }
+        let moved = h.shape(3, source: s, exclusions: b)
+        XCTAssertFalse(old.metadata === moved.metadata, "equal source and width do not prove equal exclusions")
+        XCTAssertEqual(old.metadata.exclusions, a)
+        XCTAssertEqual(moved.metadata.exclusions, b)
+        XCTAssertEqual(old.sourceID, moved.sourceID)
+        XCTAssertEqual(old.metadata.sourceSHA256, moved.metadata.sourceSHA256)
+        h.service.updateShapeRequest(4, generation: 1)
+        let alias = h.shape(4, source: s, height: 400, exclusions: b)
+        XCTAssertTrue(alias.metadata === moved.metadata, "an equal geometry may share the live layout")
+        h.service.updateShapeRequest(5, generation: 1)
+        let plain = h.shape(5, source: s)
+        XCTAssertTrue(plain.metadata.fragments.isEmpty)
+        XCTAssertFalse(plain.metadata === moved.metadata)
+        XCTAssertTrue(old.metadata.inserted.isEmpty, "the flow walker takes manual opportunities")
+        #if os(iOS)
+        XCTAssertFalse(plain.metadata.inserted.isEmpty, "ordinary iOS breaking keeps its emergency opportunities")
+        #endif
+        let retained = h.raster(2, publication: 1, artifact: old, profile: profile)
+        XCTAssertEqual(retained.image()!.dataProvider!.data! as Data, bytes)
+        h.service.reset()
+        let fresh = h.shape(6, source: s, generation: 2, exclusions: a)
+        XCTAssertFalse(fresh.metadata === old.metadata, "a new registration cannot borrow old layout bindings")
+        XCTAssertEqual(fresh.metadata.exclusions, a)
+        XCTAssertEqual(old.metadata.copy(NSRange(location: 0, length: s.utf16Count)), s.text)
+        withExtendedLifetime((old, moved, alias, plain, fresh, raster, retained)) {}
+    }
     func testObsoleteDefiniteTurnAbandonsOnceThenProtectsACompleteShape() {
         let gate = RegionReuseGate(blockAdmission: 2)
         let h = RegionReuseHarness(admission: { gate.enter() }), s = source()
@@ -335,11 +391,11 @@ import XCTest
         XCTAssertEqual(h.service.pixels.stats.owners,0)
     }
 
-    private func source(_ text: String = "ffi e\u{301} אבג 👩🏽‍🚀 wrapped link words ", color: [Double] = [20,40,60,255], size: CGFloat = 16, clamp: Int = 0) -> RegionTextSource {
+    private func source(_ text: String = "ffi e\u{301} אבג 👩🏽‍🚀 wrapped link words ", color: [Double] = [20,40,60,255], size: CGFloat = 16, clamp: Int = 0, wrap: Int = 0) -> RegionTextSource {
         let run = Run(text: String(repeating: text, count: 4), size: size, weight: 400, family: 0,
                       italic: true, lineHeight: 26.25, letterSpacing: 0,
                       decoration: "underline", href: "https://example.invalid/reuse")
-        return RegionTextSource.capture(Spec(runs: [run], align: 0, lineClamp: clamp, color: color, strut: run),
+        return RegionTextSource.capture(Spec(runs: [run], align: 0, lineClamp: clamp, color: color, overflowWrap: wrap, strut: run),
                                         engine: TextEngine(resolve: { _ in nil }))
     }
     func testThreeExactHeightRequestsShareOneConstructionButKeepFreshIdentities() {
@@ -627,9 +683,10 @@ private final class RegionReuseGate: @unchecked Sendable {
     }
     func perform(_ job: RegionJob) -> RegionAnswer { service.submit(job); return receive() }
     func shape(_ id: UInt64, source: RegionTextSource, sourceID: UInt64 = 7,
-               width: CGFloat = 320, height: CGFloat = -1, generation: Int = 1) -> RegionArtifact {
+               width: CGFloat = 320, height: CGFloat = -1, generation: Int = 1,
+               exclusions: [TextFlowShape] = []) -> RegionArtifact {
         let answer = perform(.shape(RegionShapeRequest(id: id,sourceID: sourceID,source: source,
-                                                      width: width,height: height,generation: generation)))
+                                                      width: width,height: height,generation: generation, exclusions: exclusions)))
         guard case .shape(let value) = answer else { preconditionFailure("expected shape, got \(answer)") }
         return value
     }

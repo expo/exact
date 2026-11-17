@@ -19,8 +19,8 @@ rendered ahead or per request, sent whole, then a small script for its links and
   `border-bottom="1px solid var(--line)"`. A bare number is pixels; quote units and
   keywords. `row` and `column` are a flex `view`, `view` a `div`. `style Card` with its rows,
   then `class=Card`, is a class.
-- **A design's tokens** come in with `bun exact.mjs tamber import css tokens.css`, which
-  writes `app.tamber`; a row names one as `var(--ink)` or `ink`, also inside `calc()`.
+- **A design's tokens** come in with `bun exact.mjs forma import css tokens.css`, which
+  writes `app.forma`; a row names one as `var(--ink)` or `ink`, also inside `calc()`.
 - **A page is a route**, so Back, reload, a shared link and a new tab work.
 - **The page's colour is the root's `background-color`**, on the `App` view's outermost node. The
   browser paints it wherever the page does not reach: behind an iPhone's status bar, in the
@@ -37,7 +37,8 @@ bun exact.mjs pattern site   # a tested website: start from it
 The pattern writes `app.contract` (the pages), `app.ts` (the data module), `app.test.contract`
 (its tests), `server.ts` (a stand-in for its API) and `.env` (the API's origin). Its comments
 say why each line is so: keep its shape, replace its content. Read
-[a website](recipes/website.md) next: when a page is made, serving it, the markup.
+[a website](recipes/website.md) next: when a page is made, serving it, the markup,
+and [hosting below a path](recipes/website-hosting.md) such as `/app/`.
 
 |`bun exact.mjs …`|What it does|
 |---|---|
@@ -46,6 +47,9 @@ say why each line is so: keep its shape, replace its content. Read
 |`test web`|Runs `app.test.contract` in Chrome.|
 
 Keep scratch files in `.exact/` and helper scripts in `tools/`: neither makes the build stale.
+
+On a new machine, `bun <exact2>/scripts/exact.mjs setup --platform web` installs the
+web prerequisites. See [web CI preparation](reference.md#web-ci-preparation) for a Linux test runner.
 
 ## The language
 
@@ -153,4 +157,5 @@ name, not a chapter. `bun exact.mjs contract vocab <name> …` answers for any t
 function or recipe in one call (`contract vocab head select table media`); `contract vocab`
 alone prints the card, every name on one page. `bun exact.mjs docs <heading words>` prints the
 one section of the long guides that answers a question. Recipes: `website`, `web-look` and `responsive-columns` (wide layouts), `select`,
-`fetch-loading-error`, `rest-backend`, `tamber` (a brand), `tests`.
+`fetch-loading-error`, `rest-backend`, `forma` (a brand), `tools` (what a browser's agent may
+call, through WebMCP), `tests`.

@@ -11,9 +11,9 @@
 //!   (five seconds at most), where the text has URBs reaped by a thread with `USBDEVFS_DISCARDURB` for a call let go.
 //! - The painted presenter draws no chooser (D2): `requestDevice` fails `NotSupportedError`.
 //!
-//! The package names only `exact_linux` and `std`, so the ioctls and their structures are declared here.
+//! The package names only `exact_painted` and `std`, so the ioctls and their structures are declared here.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;
@@ -71,11 +71,25 @@ fn hex(p: &Path) -> u64 {
 fn dec(p: &Path) -> u64 {
     text(p).and_then(|v| v.parse().ok()).unwrap_or(0)
 }
+/// The device's `bcdUSB`, from sysfs's `version`, which prints it as `"%2x.%02x"` (` 2.10` is 0x0210): sysfs has no
+/// `bcdUSB` file (`version_show`, drivers/usb/core/sysfs.c).
+fn bcd_usb(p: &Path) -> u64 {
+    let v = text(&p.join("version")).unwrap_or_default();
+    let (major, minor) = v.split_once('.').unwrap_or_default();
+    let field = |f: &str| u64::from_str_radix(f, 16).unwrap_or(0) & 0xFF;
+    field(major) << 8 | field(minor)
+}
+/// The device's active configuration, none while it is unconfigured (`bConfigurationValue` 0 or empty).
+fn configured(p: &Path) -> Option<u64> {
+    Some(dec(&p.join("bConfigurationValue"))).filter(|&v| v > 0)
+}
 
 #[derive(Clone)]
 struct Device {
     id: String,
     node: String,
+    /// Its sysfs directory, `/sys/bus/usb/devices/1-2`.
+    sys: PathBuf,
     record: Json,
 }
 
@@ -119,8 +133,8 @@ fn devices() -> Vec<Device> {
             continue;
         }
         let (bus, num) = (dec(&p.join("busnum")), dec(&p.join("devnum")));
-        let (usb, bcd) = (hex(&p.join("bcdUSB")), hex(&p.join("bcdDevice")));
-        let configuration = dec(&p.join("bConfigurationValue"));
+        let (usb, bcd) = (bcd_usb(&p), hex(&p.join("bcdDevice")));
+        let configuration = configured(&p);
         let id = format!("{:04x}:{:04x}@{}", hex(&p.join("idVendor")), hex(&p.join("idProduct")), e.file_name().to_string_lossy());
         let node = format!("/dev/bus/usb/{bus:03}/{num:03}");
         let granted = OpenOptions::new().read(true).write(true).open(&node).map_or_else(|e| e.kind() != ErrorKind::PermissionDenied, |_| true);
@@ -130,11 +144,11 @@ fn devices() -> Vec<Device> {
             "deviceClass": hex(&p.join("bDeviceClass")), "deviceSubclass": hex(&p.join("bDeviceSubClass")), "deviceProtocol": hex(&p.join("bDeviceProtocol")),
             "deviceVersionMajor": bcd >> 8, "deviceVersionMinor": (bcd >> 4) & 0xF, "deviceVersionSubminor": bcd & 0xF,
             "manufacturerName": text(&p.join("manufacturer")).unwrap_or_default(), "productName": text(&p.join("product")).unwrap_or_default(),
-            "serialNumber": text(&p.join("serial")), "configuration": (configuration > 0).then_some(configuration),
-            "configurations": [{ "configurationValue": configuration.max(1), "configurationName": text(&p.join("configuration")), "interfaces": interfaces(&p) }],
+            "serialNumber": text(&p.join("serial")), "configuration": configuration,
+            "configurations": [{ "configurationValue": configuration.unwrap_or(1), "configurationName": text(&p.join("configuration")), "interfaces": interfaces(&p) }],
             "connected": true, "granted": granted,
         });
-        out.push(Device { id, node, record });
+        out.push(Device { id, node, sys: p, record });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
@@ -241,7 +255,10 @@ impl Usb {
         }
         let kind = match setup["requestType"].as_str() { Some("class") => 1, Some("vendor") => 2, _ => 0 };
         let recipient = match setup["recipient"].as_str() { Some("interface") => 1, Some("endpoint") => 2, Some("other") => 3, _ => 0 };
-        let mut data = if incoming { vec![0u8; args["length"].as_u64().unwrap_or(0) as usize] } else { args["data"].as_str().and_then(unbase64).unwrap_or_default() };
+        let mut data = match buffer(args, incoming, u16::MAX as u64, "control transfer") {
+            Ok(data) => data,
+            Err(e) => return e,
+        };
         let mut t = CtrlTransfer {
             request_type: (if incoming { 0x80 } else { 0 }) | kind << 5 | recipient,
             request: setup["request"].as_u64().unwrap_or(0) as u8,
@@ -264,7 +281,10 @@ impl Usb {
         if o.claims.is_empty() {
             return json!({ "error": "InvalidStateError", "message": "no interface is claimed" });
         }
-        let mut data = if incoming { vec![0u8; args["length"].as_u64().unwrap_or(0) as usize] } else { args["data"].as_str().and_then(unbase64).unwrap_or_default() };
+        let mut data = match buffer(args, incoming, bulk_most(), "transfer") {
+            Ok(data) => data,
+            Err(e) => return e,
+        };
         let endpoint = args["endpointNumber"].as_u64().unwrap_or(0) as u32 | if incoming { 0x80 } else { 0 };
         let mut t = BulkTransfer { endpoint, length: data.len() as u32, timeout: 5000, data: data.as_mut_ptr() };
         // SAFETY: as for a control transfer.
@@ -303,6 +323,34 @@ impl Usb {
         self.context.changed("usb.usbConnection");
         Json::Null
     }
+}
+
+/// A transfer's buffer: `length` bytes to read, or the bytes to write, at most `most` either way; else the call's
+/// `TypeError`, before anything the size of `length` is allocated. A control transfer's `wLength` is 16 bits, so its
+/// `most` is 65,535, as macOS has it.
+fn buffer(args: &Json, incoming: bool, most: u64, what: &str) -> Result<Vec<u8>, Json> {
+    if incoming {
+        return match args["length"].as_f64() {
+            Some(n) if n >= 0.0 && n.fract() == 0.0 && n <= most as f64 => Ok(vec![0u8; n as usize]),
+            _ => Err(json!({ "error": "TypeError", "message": format!("{what} length must be an integer from 0 to {most}") })),
+        };
+    }
+    let data = args["data"].as_str().and_then(unbase64).unwrap_or_default();
+    if data.len() as u64 > most {
+        return Err(json!({ "error": "TypeError", "message": format!("{what} data must contain at most {most} bytes") }));
+    }
+    Ok(data)
+}
+
+/// The longest bulk or interrupt transfer usbfs takes: the memory its transfers may hold at once,
+/// `usbcore.usbfs_memory_mb` (16 MB by default; https://docs.kernel.org/admin-guide/kernel-parameters.html), past
+/// which the ioctl fails `ENOMEM`. Its 0, no limit, reads as a gibibyte: the ioctl's buffer is one allocation.
+fn bulk_most() -> u64 {
+    let mb = std::fs::read_to_string("/sys/module/usbcore/parameters/usbfs_memory_mb")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(16);
+    if mb == 0 { 1 << 30 } else { (mb << 20).min(1 << 30) }
 }
 
 fn transferred(n: i32, incoming: bool, data: &[u8]) -> Json {
@@ -364,7 +412,7 @@ impl Package for Usb {
                 }
             }
             "usbConnection" => match self.handle(args) {
-                Ok((h, _, o)) => json!({ "open": true, "connected": true, "configuration": null, "claimed": o.claims.iter().filter(|(_, c)| **c == h).map(|(n, _)| *n).collect::<Vec<_>>() }),
+                Ok((h, c, o)) => json!({ "open": true, "connected": true, "configuration": configured(&c.device.sys), "claimed": o.claims.iter().filter(|(_, c)| **c == h).map(|(n, _)| *n).collect::<Vec<_>>() }),
                 Err(_) => json!({ "open": false, "connected": false, "configuration": null, "claimed": [] }),
             },
             "selectConfiguration" => self.uint(args, SETCONFIGURATION, args["configurationValue"].as_u64().unwrap_or(1) as u32),
@@ -448,5 +496,44 @@ impl Package for Usb {
             _ => json!({ "error": "NotSupportedError" }),
         };
         reply.send(if answer.is_null() { json!({}) } else { answer });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_usb_version_and_configuration_are_read_as_sysfs_writes_them() {
+        let dir = std::env::temp_dir().join(format!("exact-usb-sysfs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |version: &str, configuration: &str| {
+            std::fs::write(dir.join("version"), version).unwrap();
+            std::fs::write(dir.join("bConfigurationValue"), configuration).unwrap();
+            (bcd_usb(&dir), configured(&dir))
+        };
+        assert_eq!(read(" 2.00\n", "1\n"), (0x0200, Some(1)));
+        assert_eq!(read(" 2.10\n", "2\n"), (0x0210, Some(2)));
+        assert_eq!(read(" 1.10\n", "\n"), (0x0110, None), "a device with no active configuration");
+        assert_eq!(read(" 3.20\n", "0\n"), (0x0320, None));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!((bcd_usb(&dir), configured(&dir)), (0, None));
+    }
+
+    /// A control transfer's `wLength` is 16 bits: 65,536 would ask the device for 0 bytes, so it is refused, as a
+    /// length past a bulk transfer's bound is, before a buffer that long is allocated.
+    #[test]
+    fn a_transfer_longer_than_its_ioctl_takes_is_refused_before_allocating() {
+        let read = |length: Json, most: u64| buffer(&json!({ "length": length }), true, most, "transfer").map(|b| b.len());
+        assert_eq!(read(json!(0), 65535), Ok(0));
+        assert_eq!(read(json!(65535), 65535), Ok(65535));
+        assert_eq!(read(json!(64.0), 65535), Ok(64));
+        for refused in [json!(65536), json!(1u64 << 40), json!(-1), json!(1.5), json!(null), json!("8")] {
+            assert_eq!(read(refused.clone(), 65535).unwrap_err()["error"], "TypeError", "{refused}");
+        }
+        assert_eq!(read(json!(u64::MAX), bulk_most()).unwrap_err()["error"], "TypeError");
+        let write = |bytes: usize| buffer(&json!({ "data": base64(&vec![7u8; bytes]) }), false, 65535, "transfer");
+        assert_eq!(write(65535).map(|b| b.len()), Ok(65535));
+        assert_eq!(write(65536).unwrap_err()["error"], "TypeError");
     }
 }

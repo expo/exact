@@ -1,6 +1,9 @@
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { hostFixtureFile } from './tests/glue-fixture.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 // LLP 1020.002 §11's web subset in real browsers: a same-origin guest's
 // navigations as FrameNavigation records, the commands a page has over its
@@ -42,7 +45,7 @@ const count = page => page.evaluate(() => events.length);
 // A capture is refused on the web (LLP 1020.002 D7): the frame answers its
 // `capture=` with `NotSupportedError` and the path it named, same-origin or not.
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`captureScreenshot answers NotSupportedError (${engine})`, async () => {
+  engineTest[engine](`captureScreenshot answers NotSupportedError (${engine})`, async () => {
     const servers = serve();
     let browser;
     try {
@@ -70,7 +73,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
 // scheme emulation, and first: Chrome's applies to every frame and hides
 // the frame's own, and it outlives a context of the shared browser.
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`color-scheme and zoom on the frame reach the guest (${engine})`, async () => {
+  engineTest[engine](`color-scheme and zoom on the frame reach the guest (${engine})`, async () => {
     const servers = serve();
     let browser;
     try {
@@ -89,7 +92,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
 }
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`a frame's navigation records and commands on the web (${engine})`, async () => {
+  engineTest[engine](`a frame's navigation records and commands on the web (${engine})`, async () => {
     const servers = serve();
     let browser;
     try {

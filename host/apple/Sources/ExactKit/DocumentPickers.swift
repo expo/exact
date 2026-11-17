@@ -84,23 +84,82 @@ extension ExactSession {
 
 extension Picker {
     /// `showOpenFilePicker(id[, multiple])`, `showDirectoryPicker(id)`,
-    /// `showSaveFilePicker(id, suggestedName)`, from any action.
+    /// `showSaveFilePicker(id, suggestedName)`, from any action, each with a
+    /// trailing `startIn` when the call names one (LLP 1173 D2).
     func document(_ name: String, _ args: [Any]) {
         var request: [String: Any] = ["command": name, "agent": ExactEnv.agentMode]
         if ExactEnv.agentMode && !ExactEnv.agentPaints { request["present"] = true }
         if let id = args.first as? String { request["id"] = id }
-        if args.count > 1 {
+        let directory = name == "showDirectoryPicker"
+        if args.count > 1, !directory {
             if let multiple = args[1] as? Bool { request["multiple"] = multiple }
             if let suggested = args[1] as? String { request["suggestedName"] = suggested }
         }
+        let start = directory ? 1 : 2
+        if args.count > start, let startIn = args[start] as? String { request["startIn"] = startIn }
         let ruling = session.runtime.command(request)
         let view = (ruling["view"] as? NSNumber)?.uint32Value
         if ruling["refused"] != nil { if let view { documentCancelled(view, name) }; return }
         guard ruling["present"] as? Bool == true, let view else { return }
         if let ticket = (ruling["ticket"] as? NSNumber)?.uint64Value { documentTickets[view] = ticket }
         presentDocument(name, view: view, multiple: ruling["multiple"] as? Bool ?? false,
-                        suggestedName: ruling["suggestedName"] as? String ?? "")
+                        suggestedName: ruling["suggestedName"] as? String ?? "",
+                        startIn: startFolder(ruling["startIn"] as? String, name))
     }
+
+    /// Where a picker or save panel opens for `startIn` (LLP 1173 D2): a
+    /// `doc:` handle's folder, or on a Mac the well-known folder of that
+    /// name; iOS has none of those, and opens where it would. One that does
+    /// not resolve is refused into the journal, and the panel opens where
+    /// the platform would.
+    func startFolder(_ start: String?, _ name: String) -> URL? {
+        guard let start else { return nil }
+        if start.hasPrefix("doc:/") {
+            if let folder = session.documentCall(["op": "documentFolder", "path": start])["folder"] as? String {
+                return URL(fileURLWithPath: folder, isDirectory: true)
+            }
+            session.log("\(name): startIn: refused: \(start) is not a document this session holds")
+            return nil
+        }
+        #if os(macOS)
+        if let folder = Picker.knownFolder(start) { return folder }
+        session.log("\(name): startIn: refused: \(start) is not a folder here")
+        #endif
+        return nil
+    }
+
+    #if os(macOS)
+    /// The well-known folder `name` names (LLP 1173 D4's table), asked at
+    /// each use: the home's Desktop, Documents, Downloads, Music, Pictures
+    /// and Movies, and `screenshots` where the Screenshot app saves
+    /// (`com.apple.screencapture`'s `location-screenshot`, which macOS 27's
+    /// `screencapture` reads, else `location`, else the Desktop). Nil for a
+    /// destination that is not a folder (the Clipboard, Mail, an app).
+    static func knownFolder(_ name: String) -> URL? {
+        let directory: FileManager.SearchPathDirectory
+        switch name {
+        case "desktop": directory = .desktopDirectory
+        case "documents": directory = .documentDirectory
+        case "downloads": directory = .downloadsDirectory
+        case "music": directory = .musicDirectory
+        case "pictures": directory = .picturesDirectory
+        case "videos": directory = .moviesDirectory
+        case "screenshots":
+            let screenshots = UserDefaults(suiteName: "com.apple.screencapture")
+            if let set = screenshots?.string(forKey: "location-screenshot") ?? screenshots?.string(forKey: "location") {
+                return folder(URL(fileURLWithPath: (set as NSString).expandingTildeInPath, isDirectory: true))
+            }
+            directory = .desktopDirectory
+        default: return nil
+        }
+        return FileManager.default.urls(for: directory, in: .userDomainMask).first.flatMap(folder)
+    }
+
+    private static func folder(_ url: URL) -> URL? {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue ? url : nil
+    }
+    #endif
 
     /// `requestPermission(id, path, mode)` (LLP 1069.010.000 D7): the
     /// runner's rule, then `granted` at `id` for a document that resolves
@@ -189,7 +248,7 @@ extension Picker {
 
 #if os(tvOS)
 extension Picker {
-    func presentDocument(_ name: String, view: UInt32, multiple _: Bool, suggestedName _: String) {
+    func presentDocument(_ name: String, view: UInt32, multiple _: Bool, suggestedName _: String, startIn _: URL?) {
         // tvOS has no document picker.
         session.log("\(name): refused: no document picker"); documentCancelled(view, name)
     }
@@ -197,7 +256,7 @@ extension Picker {
 }
 #elseif canImport(UIKit)
 extension Picker {
-    func presentDocument(_ name: String, view: UInt32, multiple: Bool, suggestedName: String) {
+    func presentDocument(_ name: String, view: UInt32, multiple: Bool, suggestedName: String, startIn: URL?) {
         guard let controller = ViewPresentation.presenter(for: session.presenter.views[view] ?? session.presenter.root) else {
             session.log("\(name): refused: no window"); documentCancelled(view, name); return
         }
@@ -220,6 +279,7 @@ extension Picker {
             picker = UIDocumentPickerViewController(forOpeningContentTypes: types.isEmpty ? [.item] : types, asCopy: false)
             picker.allowsMultipleSelection = multiple
         }
+        picker.directoryURL = startIn
         picker.delegate = self
         documentRequests[ObjectIdentifier(picker)] = (view, name)
         if documentTickets[view] != nil { documentShown[view] = picker }
@@ -259,7 +319,7 @@ extension Picker {
     /// AppKit's panels are never shown beside a hold: no drive shows them (`--touch platform` is iOS's).
     func closeDocument(_: UInt32) {}
 
-    func presentDocument(_ name: String, view: UInt32, multiple: Bool, suggestedName: String) {
+    func presentDocument(_ name: String, view: UInt32, multiple: Bool, suggestedName: String, startIn: URL?) {
         let panel: NSSavePanel
         if name == "showSaveFilePicker" {
             panel = NSSavePanel()
@@ -275,6 +335,7 @@ extension Picker {
             if open.canChooseFiles && !types.isEmpty { open.allowedContentTypes = types }
             panel = open
         }
+        if let startIn { panel.directoryURL = startIn }
         let finish: (NSApplication.ModalResponse) -> Void = { [weak self, weak panel] response in
             guard let self, let panel else { return }
             let urls = (panel as? NSOpenPanel)?.urls ?? panel.url.map { [$0] } ?? []

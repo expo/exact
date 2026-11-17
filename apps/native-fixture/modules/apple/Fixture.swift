@@ -18,13 +18,16 @@
 // gives the stack a cross-fade through the forwarded delegate.
 //
 // On every Apple host, nodes the Contract marks `hatch` (LLP 1075.003.000)
-// reach `element`: the `badge` gets a context menu, an interaction Exact
-// leaves to the app; each list row's `dot` hatch does nothing, so what a
-// hatched node costs is the cost of being hatched; with `data-violate` the
-// detail's scroller (`detail-list`) gets an inset Exact owns; the `frame`
-// hatch names the app in its web view's user agent before the view is made.
+// reach `element`: the `badge` gets a seal and, on iOS and macOS, a context
+// menu, an interaction Exact leaves to the app; each list row's `dot` hatch
+// does nothing, so what a hatched node costs is the cost of being hatched;
+// with `data-violate` the detail's scroller (`detail-list`) gets an inset
+// Exact owns; the `frame` hatch names the app in its web view's user agent
+// before the view is made, on hosts with WebKit.
 import Foundation
+#if canImport(WebKit)
 import WebKit
+#endif
 #if os(macOS)
 import AppKit
 #else
@@ -188,17 +191,19 @@ final class FixtureModule: ExactModule {
         guard element.isNew else { return }
         #if os(iOS)
         view.addInteraction(UIContextMenuInteraction(delegate: badgeMenu))
-        #else
+        #elseif os(macOS)
         view.menu = NSMenu(title: "Badge \(element.data[.tone] ?? "")")
         #endif
     }
 
+    #if canImport(WebKit)
     /// The frame's configuration before its web view is made (LLP 1020.002 §9).
     override func elementConfiguration(_ element: ExactElement, _ configuration: AnyObject) {
         guard element.hatch == .frame, let configuration = configuration as? WKWebViewConfiguration else { return }
         element.diagnostics.count("configuring")
         configuration.applicationNameForUserAgent = "NativeFixture/1"
     }
+    #endif
 
     override func elementEnded(_ element: ExactElement) {
         element.diagnostics.count("ended")
@@ -266,15 +271,31 @@ final class FixtureModule: ExactModule {
     }
 
     /// The app's own container, when the environment asks for it (the UIKit
-    /// tests': `EXACT_FIXTURE_CONTAINER=app`): a segmented control over the
-    /// selected tab's stack, through the seam alone.
+    /// tests'): `EXACT_FIXTURE_CONTAINER=app`, a segmented control over the
+    /// selected tab's stack, through the seam alone; `tab-bar`, a tab bar
+    /// controller that is its own delegate.
     override func tabContainer(_ contents: ExactTabContents) -> UIViewController? {
-        return ProcessInfo.processInfo.environment["EXACT_FIXTURE_CONTAINER"] == "app" ? FixtureTabs(contents) : nil
+        switch ProcessInfo.processInfo.environment["EXACT_FIXTURE_CONTAINER"] {
+        case "app": return FixtureTabs(contents)
+        case "tab-bar": return FixtureTabBar(contents)
+        default: return nil
+        }
     }
     #endif
 }
 
 #if os(iOS)
+/// A tab bar controller the app owns, its delegate slot its own.
+final class FixtureTabBar: UITabBarController, UITabBarControllerDelegate {
+    init(_ contents: ExactTabContents) {
+        super.init(nibName: nil, bundle: nil)
+        setViewControllers(contents.tabs.map(\.controller), animated: false)
+        selectedIndex = contents.selected
+        delegate = self
+    }
+    required init?(coder: NSCoder) { nil }
+}
+
 /// A container the app owns: every tab's stack a child, the selected one
 /// shown; its control asks Exact to select, and Exact says what it chose.
 final class FixtureTabs: UIViewController {
@@ -315,7 +336,9 @@ final class FixtureTabs: UIViewController {
         control.selectedSegmentIndex = contents.selected
     }
 }
+#endif
 
+#if os(iOS) || os(tvOS)
 /// A native screen: a whole controller in the node's box, a child of the
 /// route's controller (LLP 1075.003 §3.6).
 final class Screen: ExactNativeScreen {
@@ -327,7 +350,9 @@ final class Screen: ExactNativeScreen {
         label.frame = controller.view.bounds
         label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         controller.view.addSubview(label)
+        #if os(iOS)
         controller.view.backgroundColor = .secondarySystemBackground
+        #endif
         super.init(screen: controller, events: events)
     }
 }

@@ -11,7 +11,7 @@ extension PopoverSheetIOSTests {
         kept = p
         // Agent's observations need a session, but the fixture owns this wire tree.
         p.session = nil
-        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil
+        p.onIntrinsic = nil; p.onCovers = nil; p.onClipboard = nil; p.onClose = nil; p.onCancel = nil
         p.onPress = nil; p.onFocus = nil; p.onBlur = nil; p.onFocusEvent = nil; p.onKey = nil
         window.frame = scene.screen.bounds
         let controller = UIViewController()

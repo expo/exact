@@ -78,7 +78,7 @@ internal class Bounds {
                     i += 2 + b.get(i + 1)
                 }
                 46 -> { clips.add(clips.lastOrNull()?.let { RectF(it) }); i += 1 }
-                47 -> i += 2
+                47, 49 -> i += 2
                 6 -> { if (clips.isNotEmpty()) clips.removeAt(clips.size - 1); i += 1 }
                 7 -> { clips.add(clips.lastOrNull()?.let { RectF(it) }); i += 2 }
                 8 -> { add(out, f(b, i + 2), f(b, i + 3), f(b, i + 2) + f(b, i + 4), f(b, i + 3) + f(b, i + 5)); i += 6 }
@@ -99,8 +99,9 @@ internal class Bounds {
                 11 -> i += 4
                 12 -> i += 2
                 13 -> {
-                    val w = f(b, i + 2) * 2f + 1f
-                    val e = path(b, i + 5, local); if (local.left <= local.right) add(out, local.left - w, local.top - w, local.right + w, local.bottom + w); i = e
+                    // A miter's tip reaches half the miter limit times the width from its corner.
+                    val w = f(b, i + 2) * maxOf(2f, f(b, i + 5) / 2f) + 1f
+                    val e = path(b, i + 6, local); if (local.left <= local.right) add(out, local.left - w, local.top - w, local.right + w, local.bottom + w); i = e
                 }
                 14 -> { add(out, f(b, i + 6), f(b, i + 7), f(b, i + 6) + f(b, i + 8), f(b, i + 7) + f(b, i + 9)); i += 18 }
                 15 -> i += 6 + b.get(i + 5)

@@ -152,6 +152,11 @@ fn every_form_parses_into_its_own_space_and_serialises() {
     );
     assert_eq!(wide("lab(50% 40 59.5)").css(), "lab(50 40 59.5)");
     assert_eq!(wide("color(xyz 0 0 0)").css(), "color(xyz-d65 0 0 0)");
+    // Components are written as JavaScript's `String(n)` writes them.
+    assert_eq!(
+        wide("color(xyz 1e-7 0.5 1.5e21)").css(),
+        "color(xyz-d65 1e-7 0.5 1.5e+21)"
+    );
 }
 
 #[test]
@@ -413,7 +418,7 @@ fn folding_keeps_the_same_bits_on_every_host() {
         0x3f76_f5ad_db50_c914
     );
 
-    // Tamber's mix.tamber: color-mix(in oklab, #1083fe 88%, #0b0f14).
+    // Forma's mix.forma: color-mix(in oklab, #1083fe 88%, #0b0f14).
     // Its a component differed by one ulp between the Linux run and the golden.
     let lab = |rgb: [f64; 3]| {
         MixSpace::Oklab.from_linear_srgb(
@@ -876,4 +881,19 @@ fn a_component_missing_from_both_stays_missing() {
         ("oklch(none 0.1 30)", "lab(none 20 20)", Oklch, [0.0, 0.286536, 21.1934], 1.0),
     ];
     chrome_mixes(&cases, 5e-4);
+}
+
+/// A dashed ident keeps its case, as CSS's does; the function's name and a
+/// standard space's are matched in any case.
+#[test]
+fn a_profile_name_keeps_its_case() {
+    let name = |s| parse_profiled(s).map(|p| p.0);
+    assert_eq!(name("color(--Brand 1 0 0)").as_deref(), Some("--Brand"));
+    assert_eq!(name("COLOR(--Brand 1 0 0)").as_deref(), Some("--Brand"));
+    assert_eq!(name("color(--brand 1 0 0)").as_deref(), Some("--brand"));
+    assert_eq!(name("color(--DCI-P3 1 0 0)").as_deref(), Some("--dci-p3"));
+    assert_eq!(
+        parse_profiled("color(--Brand 50% 0 1E0 / 50%)"),
+        Some(("--Brand".to_string(), vec![0.5, 0.0, 1.0], 0.5))
+    );
 }

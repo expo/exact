@@ -5,6 +5,7 @@ use exact_kernel::{RegionInputs, RegionTextRequest, TextMetrics};
 use std::{any::Any, rc::Rc};
 impl<D: DataSource> Host<D> {
     /// Boot one explicitly registered content region before any text layout.
+    /// `facts` supplies the date, place and clock before settlement (LLP 1027.000.000 D2).
     pub fn boot_region(
         plan: &[u8],
         data: D,
@@ -12,28 +13,31 @@ impl<D: DataSource> Host<D> {
         width: f32,
         height: f32,
         registration: ContentRegionRegistration,
+        facts: exact_runner::time::Launch,
     ) -> Result<(Self, String), HostError> {
-        let (mut host, batch) = Self::boot_stored_after_decode(
-            crate::host::PlanBytes::Copied(plan),
-            data,
-            measurer,
-            crate::host::LaunchLayout::NONE,
-            exact_runner::Viewport::sized(width as f64, height as f64),
-            None,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            "/",
-            false,
-            Some(registration),
-            crate::link::Links::ALL,
-            None,
-            |_| Ok(()),
-        )?;
-        host.commit_boot();
-        Ok((host, batch))
+        exact_runner::time::launching_with(facts, || {
+            let (mut host, batch) = Self::boot_stored_after_decode(
+                crate::host::PlanBytes::Copied(plan),
+                data,
+                measurer,
+                crate::host::LaunchLayout::NONE,
+                exact_runner::Viewport::sized(width as f64, height as f64),
+                None,
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                "/",
+                false,
+                Some(registration),
+                crate::link::Links::ALL,
+                None,
+                |_| Ok(()),
+            )?;
+            host.commit_boot();
+            Ok((host, batch))
+        })
     }
     /// The one current request. The source/ticket retains no Arena/Runtime.
     pub fn pending_region_request(&self) -> Option<(u64, &RegionTextRequest)> {
@@ -48,7 +52,12 @@ impl<D: DataSource> Host<D> {
         self.content_region
             .as_ref()
             .ok_or("no content region")?
-            .request_json(self.runner.kernel(), id, known)
+            .request_json(
+                self.runner.kernel(),
+                id,
+                known,
+                self.runner.resolved_locale(),
+            )
     }
     /// Selected immutable publication identity, including retained old content.
     pub fn region_publication_id(&self) -> Option<u64> {
@@ -91,6 +100,146 @@ impl<D: DataSource> Host<D> {
             Err(e) => self.finish(Batch::new(), Some(format!("region completion: {e:?}"))),
         }
     }
+    /// Return a current worker request to native layout. A superseded answer
+    /// cannot retire a successor registration or its accepted publication.
+    pub fn fallback_region_text(&mut self, id: u64) -> String {
+        if self
+            .pending_region_request()
+            .is_none_or(|(current, _)| current != id)
+        {
+            return self.finish(Batch::new(), None);
+        }
+        let mut batch = Batch::new();
+        let error = self
+            .retire_region(&mut batch, "incomplete text flow uses native layout")
+            .and_then(|()| self.layout(&mut batch))
+            .err();
+        self.finish(batch, error)
+    }
+    fn retire_region(&mut self, batch: &mut Batch, reason: &str) -> Result<(), String> {
+        self.runner
+            .kernel_mut()
+            .set_content_region(None)
+            .map_err(|e| format!("region native fallback: {e:?}"))?;
+        let region = self.content_region.take().unwrap();
+        batch.region(&format!("{{\"op\":\"region\",\"disabled\":\"{reason}\"}}"));
+        if let Some(native) = region.native {
+            let headers = native.selected.map_or_else(Vec::new, |a| a.headers);
+            for header in &headers {
+                if self.runner.kernel().node_by_key(header.key).is_none() {
+                    self.mirror.remove(&header.id);
+                    if header.inline_owner.is_none() {
+                        batch.destroy(header.id);
+                    }
+                }
+            }
+            // Native projection suppressed creates and edits while B was pending.
+            // Replay the live subtree before ordinary layout publishes its flow.
+            let order: Vec<_> = self
+                .preorder()
+                .into_iter()
+                .filter(|id| {
+                    self.runner.kernel().node(*id).is_some_and(|n| {
+                        within(self.runner.kernel(), n.key, region.binding.content)
+                            || headers.iter().any(|h| h.key == n.key)
+                    })
+                })
+                .collect();
+            let handlers = self.runner.handlers();
+            for id in &order {
+                if self.mirror.get(id).is_none_or(|m| m.style.is_empty()) {
+                    self.create(*id, handlers.get(id).map_or(&[], Vec::as_slice), batch);
+                } else {
+                    self.update(*id, batch);
+                }
+            }
+            for id in order {
+                self.emit_children(id, batch);
+            }
+            if let Some(owner) = self.runner.kernel().node_by_key(region.binding.owner) {
+                self.emit_children(owner.id, batch);
+            }
+            self.emit_paragraphs(batch);
+            self.collections_json.clear();
+            self.collection_heads = None;
+        }
+        Ok(())
+    }
+    fn unsupported_region_paint(&self) -> bool {
+        use exact_kernel::{StyleId as S, WrapFlow};
+        let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_none()) else {
+            return false;
+        };
+        let kernel = self.runner.kernel();
+        let mut stack: Vec<_> = kernel
+            .roots()
+            .into_iter()
+            .filter_map(|id| kernel.node(id).map(|n| n.key))
+            .collect();
+        while let Some(node) = stack.pop().and_then(|key| kernel.node_by_key(key)) {
+            let owner = node.key == region.binding.owner;
+            let content = within(kernel, node.key, region.binding.content);
+            let exclusion = node.layout_position() == exact_kernel::PositionType::Absolute
+                && node.style.wrap_flow == WrapFlow::Both
+                && (content
+                    || node
+                        .parent
+                        .and_then(|id| kernel.node(id))
+                        .is_some_and(|parent| within(kernel, region.binding.owner, parent.key)));
+            if owner || content || exclusion {
+                // The opaque surface draws only text over the owner/page ground.
+                if !matches!(
+                    node.node_type,
+                    NodeType::View | NodeType::Text | NodeType::ScrollView
+                ) || exclusion
+                    && (node.node_type != NodeType::View || !node.children().is_empty())
+                    || !node.looks().is_empty()
+                    || node.props.str(PropId::BackgroundMaterial).is_some()
+                    // The worker draws glyph fills only; a stroke is inherited.
+                    || node.computed_row(S::TextStrokeWidth, |s| s.text_stroke_width > 0.)
+                    // It clips lines to the owner and the scroll port alone.
+                    || content
+                        && node.node_type != NodeType::ScrollView
+                        && style::effective_overflow(&node) != (Overflow::Visible, Overflow::Visible)
+                    || [
+                        S::BackgroundColor,
+                        S::BackgroundImage,
+                        S::BackgroundClip,
+                        S::BoxShadow,
+                        S::BackdropFilter,
+                        S::BorderStyleTop,
+                        S::BorderStyleRight,
+                        S::BorderStyleBottom,
+                        S::BorderStyleLeft,
+                        S::OutlineWidth,
+                        S::OutlineStyle,
+                        S::TextShadow,
+                        S::Opacity,
+                        S::Visibility,
+                        S::Translate,
+                        S::Scale,
+                        S::Rotate,
+                        S::Transform,
+                        S::ClipPath,
+                        S::Filter,
+                    ]
+                    .into_iter()
+                    .any(|id| {
+                        !(owner && id == S::BackgroundColor)
+                            && node.computed_row(id, |s| s.mask.has(id))
+                    })
+                {
+                    return true;
+                }
+            }
+            stack.extend(
+                node.children()
+                    .into_iter()
+                    .filter_map(|id| kernel.node(id).map(|n| n.key)),
+            );
+        }
+        false
+    }
     pub(super) fn region_layout(
         &mut self,
         root: ViewId,
@@ -98,6 +247,14 @@ impl<D: DataSource> Host<D> {
         batch: &mut Batch,
     ) -> Result<(), String> {
         self.native_prepare_candidate()?;
+        if self.unsupported_region_paint() {
+            return self.region_native_layout(
+                root,
+                offer,
+                batch,
+                "unsupported content paint uses native views",
+            );
+        }
         let Some(region) = self.content_region.as_mut() else {
             return Ok(());
         };
@@ -127,30 +284,21 @@ impl<D: DataSource> Host<D> {
                 .chain(&receipt.shell.flow_changed)
                 .copied(),
         );
-        // @ref LLP 1043.000 §3 D7 — the opt-in worker surface is opaque and
-        // has a separate paragraph artifact. Retire it before any flowed ink:
-        // ordinary native views own the region until its next registration.
-        // This costs a normal O(tree) layout once, never stale cached pixels.
-        if receipt.shell.flow_changed.iter().any(|key| {
-            self.runner
-                .kernel()
-                .node_by_key(*key)
-                .is_some_and(|n| !n.flow_shapes().is_empty())
-        }) {
-            self.runner
-                .kernel_mut()
-                .set_content_region(None)
-                .map_err(|e| format!("region flow fallback: {e:?}"))?;
-            self.content_region = None;
-            batch.region("{\"op\":\"region\",\"disabled\":\"flowed text uses native fragments\"}");
-            self.runner.count_kernel_layout();
-            let receipt = self
-                .runner
-                .kernel_mut()
-                .compute_layout(root, offer)
-                .map_err(|e| format!("region flow layout: {e:?}"))?;
-            self.record_layout(&receipt);
-            return Ok(());
+        if region.native.is_some()
+            && receipt.shell.flow_changed.iter().any(|key| {
+                self.runner
+                    .kernel()
+                    .node_by_key(*key)
+                    .is_some_and(|n| !n.flow_shapes().is_empty())
+            })
+        {
+            // Native projections do not retain flow geometry with selected A.
+            return self.region_native_layout(
+                root,
+                offer,
+                batch,
+                "native flow uses ordinary views",
+            );
         }
         // Final shell/native flow is published by emit_layout against its mirror.
         region.observe(self.runner.kernel(), receipt)?;
@@ -166,6 +314,25 @@ impl<D: DataSource> Host<D> {
         batch.region(&region.json(self.runner.kernel()));
         result
     }
+    fn region_native_layout(
+        &mut self,
+        root: ViewId,
+        offer: Offer,
+        batch: &mut Batch,
+        reason: &str,
+    ) -> Result<(), String> {
+        self.retire_region(batch, reason)?;
+        self.runner.count_kernel_layout();
+        let receipt = self
+            .runner
+            .kernel_mut()
+            .compute_layout(root, offer)
+            .map_err(|e| format!("region native layout: {e:?}"))?;
+        self.runner.report_flow_skipped(&receipt.flow_skipped);
+        self.runner.moved(&receipt.changed);
+        self.record_layout(&receipt);
+        Ok(())
+    }
 }
 
 use crate::content_region::{
@@ -177,7 +344,9 @@ use exact_kernel::RegionSelection;
 impl<D: DataSource> Host<D> {
     /// Explicit native-subtree projection. Existing opaque registration and ABI
     /// entry points do not opt in. This is a Rust producer seam, not a Swift
-    /// realization/retained-action implementation.
+    /// realization/retained-action implementation. `facts` supplies the date,
+    /// place and clock before settlement (LLP 1027.000.000 D2).
+    #[allow(clippy::too_many_arguments)]
     pub fn boot_native_region(
         plan: &[u8],
         data: D,
@@ -186,29 +355,32 @@ impl<D: DataSource> Host<D> {
         height: f32,
         registration: ContentRegionRegistration,
         limits: NativeProjectionLimits,
+        facts: exact_runner::time::Launch,
     ) -> Result<(Self, String), HostError> {
-        let (mut host, batch) = Self::boot_stored_after_decode_mode(
-            crate::host::PlanBytes::Copied(plan),
-            data,
-            measurer,
-            crate::host::LaunchLayout::NONE,
-            exact_runner::Viewport::sized(width as f64, height as f64),
-            None,
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            "/",
-            false,
-            Some(registration),
-            Some(limits),
-            crate::link::Links::ALL,
-            None,
-            |_| Ok(()),
-        )?;
-        host.commit_boot();
-        Ok((host, batch))
+        exact_runner::time::launching_with(facts, || {
+            let (mut host, batch) = Self::boot_stored_after_decode_mode(
+                crate::host::PlanBytes::Copied(plan),
+                data,
+                measurer,
+                crate::host::LaunchLayout::NONE,
+                exact_runner::Viewport::sized(width as f64, height as f64),
+                None,
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                "/",
+                false,
+                Some(registration),
+                Some(limits),
+                crate::link::Links::ALL,
+                None,
+                |_| Ok(()),
+            )?;
+            host.commit_boot();
+            Ok((host, batch))
+        })
     }
     pub(super) fn native_mode(&self) -> bool {
         self.content_region
@@ -228,15 +400,16 @@ impl<D: DataSource> Host<D> {
             .is_some_and(|a| a.headers.iter().any(|h| h.id == id))
     }
     pub(super) fn native_protected_id(&self, id: ViewId) -> bool {
+        self.native_selected_id(id) || self.native_captured_id(id)
+    }
+    pub(super) fn native_captured_id(&self, id: ViewId) -> bool {
         let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_some()) else {
             return false;
         };
-        self.native_selected_id(id)
-            || self
-                .runner
-                .kernel()
-                .node(id)
-                .is_some_and(|n| within(self.runner.kernel(), n.key, region.binding.content))
+        self.runner
+            .kernel()
+            .node(id)
+            .is_some_and(|n| within(self.runner.kernel(), n.key, region.binding.content))
     }
     pub(super) fn native_retire_removed_owner(&mut self, batch: &mut Batch) {
         let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_some()) else {
@@ -341,10 +514,15 @@ impl<D: DataSource> Host<D> {
         let collection_wire = collections
             .iter()
             .try_fold(2usize, |n, c| {
+                let roots = c
+                    .fixed
+                    .iter()
+                    .try_fold(0usize, |n, f| n.checked_add(f.roots.len()))?;
                 c.rows
                     .len()
                     .checked_add(1)
                     .and_then(|rows| rows.checked_mul(1024))
+                    .and_then(|bytes| roots.checked_mul(12).and_then(|r| bytes.checked_add(r)))
                     .and_then(|bytes| n.checked_add(bytes))
             })
             .ok_or("native collection wire overflow")?;
@@ -395,21 +573,32 @@ impl<D: DataSource> Host<D> {
             .map_err(|_| "native node stack allocation")?;
         stack.push(content.index);
         while let Some(slot) = stack.pop() {
-            let arena = self.runner.kernel().arena();
-            if arena.children(slot).len() > charge.nodes.saturating_sub(stack.len()) {
+            let kernel = self.runner.kernel();
+            let arena = kernel.arena();
+            if !within(kernel, arena.key(slot), content) {
+                continue;
+            }
+            let children = arena
+                .children(slot)
+                .iter()
+                .rev()
+                .copied()
+                .filter(|s| within(kernel, arena.key(*s), content));
+            if children.clone().count() > charge.nodes.saturating_sub(stack.len()) {
                 return Err("native stack capacity".into());
             }
-            stack.extend(arena.children(slot).iter().rev().copied());
+            stack.extend(children);
             let node = self
                 .runner
                 .kernel()
                 .node_by_key(arena.key(slot))
                 .ok_or("native removed node")?;
             let props = props_for(&node);
-            let (style, _) = style::style_json_for(&node, &self.runner.kernel().env());
+            let (style, _) = style::style_json_for(&node, &self.runner.kernel().env_of(node.id));
             let children = arena
                 .children(slot)
                 .iter()
+                .filter(|s| within(kernel, arena.key(**s), content))
                 .map(|s| arena.local_id(*s))
                 .collect();
             let handlers = self
@@ -570,9 +759,34 @@ impl<D: DataSource> Host<D> {
                 return Ok(());
             }
         }
+        let returning: Vec<_> = native
+            .selected
+            .iter()
+            .flat_map(|a| &a.headers)
+            .filter(|h| {
+                kernel.node_by_key(h.key).is_some()
+                    && !within(kernel, h.key, region.binding.content)
+            })
+            .map(|h| h.id)
+            .collect();
+        // Presenters keep an open popover only if its home is known when
+        // its former publication removes it from the parent's child list.
+        let attachments: Vec<_> = returning
+            .iter()
+            .filter_map(|&id| {
+                let node = kernel.node(id)?;
+                let parent = self.props_of(&node).remove("popoverParent")?;
+                (self.mirror.get(&id)?.props.get("popoverParent") != Some(&parent))
+                    .then_some((id, parent))
+            })
+            .collect();
+        for (id, parent) in &attachments {
+            staged.props(*id, &[("popoverParent", parent.clone())], &[]);
+        }
         if let Some(old) = &native.selected {
             for header in &old.headers {
                 if header.inline_owner.is_none()
+                    && !returning.contains(&header.id)
                     && !candidate.nodes.iter().any(|n| {
                         n.header.key == header.key
                             && n.header.id == header.id
@@ -584,6 +798,7 @@ impl<D: DataSource> Host<D> {
             }
         }
         // All creates precede final children; no Host.mirror mutation yet.
+        // Layout may reserve an empty mirror before its native view exists.
         for node in candidate
             .nodes
             .iter()
@@ -598,7 +813,12 @@ impl<D: DataSource> Host<D> {
                 if h.kind != node.header.kind || h.handlers != node.header.handlers {
                     return Err("native listener/kind replacement needs binding handoff".into());
                 }
-            } else {
+            } else if self.native_selected_id(node.header.id)
+                || self
+                    .mirror
+                    .get(&node.header.id)
+                    .is_none_or(|m| m.style.is_empty())
+            {
                 let pairs: Vec<_> = node
                     .mirror
                     .props
@@ -619,12 +839,20 @@ impl<D: DataSource> Host<D> {
             .iter()
             .filter(|n| n.header.inline_owner.is_none())
         {
-            let same = native.selected.as_ref().is_some_and(|a| {
-                a.headers.iter().any(|h| {
-                    h.id == node.header.id && h.key == node.header.key && h.inline_owner.is_none()
+            let old = self
+                .mirror
+                .get(&node.header.id)
+                .filter(|_| {
+                    !self.native_selected_id(node.header.id)
+                        || native.selected.as_ref().is_some_and(|a| {
+                            a.headers.iter().any(|h| {
+                                h.id == node.header.id
+                                    && h.key == node.header.key
+                                    && h.inline_owner.is_none()
+                            })
+                        })
                 })
-            });
-            let old = same.then(|| self.mirror.get(&node.header.id)).flatten();
+                .filter(|m| !m.style.is_empty());
             if let Some(old) = old {
                 if old.props != node.mirror.props {
                     let set: Vec<_> = node
@@ -667,7 +895,7 @@ impl<D: DataSource> Host<D> {
             }
             if self.layout_withheld || old.is_none_or(|m| m.content != node.mirror.content) {
                 if let Some((w, h)) = node.mirror.content {
-                    staged.content(node.header.id, w, h);
+                    staged.content(node.header.id, w, h, None);
                 }
             }
         }
@@ -732,6 +960,13 @@ impl<D: DataSource> Host<D> {
             .map_err(|_| "native header allocation")?;
         // Last fallible step precedes any mutation of selected A.
         batch.append_checked(staged, limits.diff_wire_bound)?;
+        for (id, parent) in attachments {
+            self.mirror
+                .get_mut(&id)
+                .unwrap()
+                .props
+                .insert("popoverParent", parent);
+        }
         let native = self
             .content_region
             .as_mut()
@@ -741,7 +976,9 @@ impl<D: DataSource> Host<D> {
             .unwrap();
         if let Some(old) = native.selected.take() {
             for h in old.headers {
-                self.mirror.remove(&h.id);
+                if !returning.contains(&h.id) {
+                    self.mirror.remove(&h.id);
+                }
             }
         }
         for node in candidate.nodes {
@@ -761,6 +998,13 @@ impl<D: DataSource> Host<D> {
             collections: candidate.collections,
             charge: candidate.charge,
         });
+        // Selected views leaving the publication keep their native identity.
+        // Replay their suppressed edits only after the new membership takes over.
+        for id in returning {
+            self.update(id, batch);
+            self.emit_children(id, batch);
+        }
+        self.emit_paragraphs(batch);
         Ok(())
     }
     fn native_collections_with(
@@ -858,6 +1102,7 @@ mod selected_current_tests {
             600.,
             registration,
             Default::default(),
+            exact_runner::time::Launch::NONE,
         )
         .unwrap();
         settle(&mut host);
@@ -1015,6 +1260,7 @@ mod selected_current_tests {
                     pending: "pending",
                 },
                 limits,
+                exact_runner::time::Launch::NONE,
             )
             .unwrap()
         };
@@ -1184,6 +1430,7 @@ mod selected_current_tests {
             600.,
             registration,
             Default::default(),
+            exact_runner::time::Launch::NONE,
         )
         .unwrap();
         let (id, _) = host.pending_region_request().unwrap();

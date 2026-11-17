@@ -143,29 +143,34 @@ fn answer(r: &mut Runner<Later>, target: &str, body: &str) {
     by(r, 0.0);
 }
 
+/// How the agent's door hands a call.
+fn agent() -> CallHow {
+    CallHow {
+        door: "agent".into(),
+        ..Default::default()
+    }
+}
+
 fn call(r: &mut Runner<Later>, tool: &str, args: &str) {
-    r.call_tool(
-        tool,
-        args,
-        CallHow {
-            door: "agent".into(),
-            ..Default::default()
-        },
-    )
-    .unwrap();
+    r.call_tool(tool, args, agent()).unwrap();
     by(r, 0.0);
 }
 
 #[test]
 fn the_tool_line_is_the_plans_tools_row() {
     let plan = contract::compile(APP).unwrap();
-    let rows: Vec<String> = (plan.tools.iter())
-        .map(|t| {
+    let rows: Vec<String> = (plan.tools.iter().enumerate())
+        .map(|(i, t)| {
             format!(
                 "{} {} {:?} {} {} {}",
                 plan.str(t.name),
                 plan.str(t.consequence),
-                [t.additive, t.idempotent, t.closed],
+                [
+                    t.additive,
+                    t.idempotent,
+                    t.closed,
+                    exact_runner::tools::sends(&plan, i)
+                ],
                 plan.str(plan.action(t.action).name),
                 t.returns.is_some(),
                 t.fails.is_some()
@@ -175,10 +180,20 @@ fn the_tool_line_is_the_plans_tools_row() {
     assert_eq!(
         rows,
         [
-            "bump writes [false, false, true] bump true true",
-            "look reads [false, false, false] look false false",
+            "bump writes [false, false, true, true] bump true true",
+            "look reads [false, false, false, false] look false false",
         ]
     );
+    // A `reads` tool whose reach sends, here through an action its action
+    // calls, is not read-only (LLP 1111 D3).
+    let peeks = APP.replacen(
+        "  action bump",
+        "  tool peek reads \"Peek.\" = peek\n  action peek\n    turn()\n  action bump",
+        1,
+    );
+    let plan = contract::compile(&peeks).unwrap_or_else(|e| panic!("{e:?}"));
+    let peek = plan.tools.iter().position(|t| plan.str(t.name) == "peek");
+    assert!(exact_runner::tools::sends(&plan, peek.unwrap()));
     for (line, id) in [
         ("  tool x reads \"X.\" = nothing\n", "tool-action"),
         (
@@ -342,4 +357,70 @@ fn arguments_that_are_not_the_actions_are_refused() {
         );
     }
     assert!(r.call_tool("nothing", "{}", CallHow::default()).is_err());
+}
+
+/// LLP 1133.023 D7: a call its caller cancels while it waits never runs and
+/// ends `refused`, `none` (`cancelled`); one cancelled after dispatch runs to
+/// its end, and its record says the caller left.
+#[test]
+fn a_cancelled_call_is_dropped_while_it_waits_and_finished_once_it_runs() {
+    let (mut r, _) = boot();
+    let cancel = |r: &mut Runner<Later>, id: u64| -> serde_json::Value {
+        let reply = r.call_agent("cancel", &format!(r#"{{"op":"cancel","id":{id}}}"#));
+        serde_json::from_str(&reply.unwrap().unwrap()).unwrap()
+    };
+    call(&mut r, "bump", r#"{"by":2}"#);
+    let waiting = r.call_tool("look", "{}", agent()).unwrap();
+    by(&mut r, 0.0);
+    assert_eq!(calls(&r)[1]["state"], "waiting", "{}", logs(&r));
+    assert_eq!(cancel(&mut r, waiting)["state"], "ended");
+    let c = calls(&r)[0].clone();
+    assert_eq!(
+        (
+            c["tool"].as_str(),
+            c["outcome"].as_str(),
+            c["certainty"].as_str(),
+            c["reason"].as_str()
+        ),
+        (
+            Some("look"),
+            Some("refused"),
+            Some("none"),
+            Some("cancelled")
+        ),
+        "{c}"
+    );
+    assert_eq!(c["cancelled"], true);
+    answer(&mut r, "logged", "ok");
+    answer(&mut r, "count", "5");
+    assert_eq!(calls(&r)[1]["outcome"], "ok", "{}", logs(&r));
+    // `look` never ran: its commit's `focus` was never skipped.
+    assert!(!logs(&r).contains("focus: skipped"), "{}", logs(&r));
+
+    let running = r.call_tool("bump", r#"{"by":1}"#, agent()).unwrap();
+    by(&mut r, 0.0);
+    assert_eq!(calls(&r)[2]["state"], "running", "{}", calls(&r));
+    assert_eq!(cancel(&mut r, running)["state"], "running");
+    assert!(
+        logs(&r).contains("bump: its caller cancelled; it runs to its end"),
+        "{}",
+        logs(&r)
+    );
+    answer(&mut r, "logged", "ok");
+    answer(&mut r, "count", "6");
+    let c = calls(&r)[2].clone();
+    assert_eq!(
+        (
+            c["outcome"].as_str(),
+            c["certainty"].as_str(),
+            c["cancelled"].as_bool()
+        ),
+        (Some("ok"), Some("applied"), Some(true)),
+        "{c}"
+    );
+    assert_eq!(cancel(&mut r, running)["state"], "ended");
+    assert!(r
+        .call_agent("cancel", r#"{"op":"cancel","id":99}"#)
+        .unwrap()
+        .is_err());
 }

@@ -1,0 +1,4 @@
+{
+  "app": { "id": "com.exact.corpus.localized-formats", "name": "Localized formats" },
+  "strings": { "base": "de" }
+}

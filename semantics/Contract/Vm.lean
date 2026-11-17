@@ -12,10 +12,10 @@ instruction-aligned jumps; the decoder checks the same). Each step is one
 iteration of the runner's loop: a callback body's end (collect what the run
 left, start the next item or finish the list), else the instruction at `pc`.
 
-What the model leaves out are the runner's resource bounds (string length,
-value size and depth, list steps): a program that hits one traps on the
-runner and not here, as in `Contract.Eval`. The roster is `Contract.stdlib`,
-the semantics' own, so a `Call` means what `eval` means by the entry.
+This instruction model leaves out the runner's resource bounds, as
+`Contract.Eval` does. `Contract.VmRows` adds them around `step` when it models
+an executable-row evaluation. The roster is `Contract.stdlib`, the
+semantics' own, so a `Call` means what `eval` means by the entry.
 -/
 import Contract.Eval
 

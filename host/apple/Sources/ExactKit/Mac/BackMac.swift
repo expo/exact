@@ -101,14 +101,22 @@ extension NavigationHost {
     /// it, as SwiftUI's does: a list beside its detail has no Back to show,
     /// and a chevron that is never enabled is not in a hand-built window.
     /// Nor is one in an app with nowhere to go back to (`backPossible`).
+    /// Where the bar's Back is the back/forward group, a location ahead
+    /// (`forwardPossible`) keeps it too: after Back to a one-screen app's
+    /// root or to a detail's base, its Forward still goes.
     var backInToolbar: Bool {
-        guard hasStack, backPossible else { return false }
+        let forward = forwardPossible
+        guard hasStack, backPossible || forward else { return false }
         guard let selection, selection.stack.indices.contains(selection.at) else { return true }
         let route = windowRoute
         let owner = route?.route ?? presenter.views[selection.stack[selection.at]]
         guard owner?.props["navigationBar"] != "none" else { return false }
-        return !split.active || route?.pushed == true
+        return !split.active || route?.pushed == true || forward
     }
+
+    /// Whether the root offers Forward and the runner has a location ahead,
+    /// whatever is over the page now (`canGoForward` says whether it goes).
+    var forwardPossible: Bool { offers(back: false) && ahead != nil }
 
     /// The first navigation root when it has no routes, as an app whose one
     /// view follows the router, and hears `navigate`: Back and Forward then
@@ -172,6 +180,10 @@ extension NavigationHost {
         }
     }
 
+    /// Whether the selected route is a sheet or a full-screen cover over
+    /// the route beneath it, whose bar the window keeps.
+    var covered: Bool { sheetRoute != nil }
+
     /// The selected route when it is a sheet (a modal route over the route
     /// beneath it), with its navigation root.
     private var sheetRoute: (root: NodeView, route: NodeView)? {
@@ -192,8 +204,8 @@ extension NavigationHost {
     /// modal over the page (an alert, a dialog in the top layer, a sheet on
     /// the window).
     var canGoForward: Bool {
-        offers(back: false) && presenter.alerts.modal == nil && presenter.dialogs.active == nil
-            && presenter.viewport.window?.attachedSheet == nil && ahead != nil
+        forwardPossible && presenter.alerts.modal == nil && presenter.dialogs.active == nil
+            && presenter.viewport.window?.attachedSheet == nil
     }
 
     /// The platform's Forward, taken as the web host takes a browser's (LLP

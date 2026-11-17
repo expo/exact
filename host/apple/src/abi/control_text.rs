@@ -68,7 +68,9 @@ impl<D: DataSource> Bridge<D> {
     /// and height (nonpositive clears it), the insets top, right, bottom and
     /// left, the viewport's width and height, the regions' count (20, or 0
     /// when every region is the safe area) and their insets, then, with 16,
-    /// the segments' count and their `x y w h`.
+    /// the segments' count and their `x y w h`, then, with 32, the software
+    /// keyboard's overlap (LLP 1039 D9), then, with 64, owner block and
+    /// placement records in `exact_host_covers`' format.
     pub fn view(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let word = |i: usize| {
@@ -89,11 +91,33 @@ impl<D: DataSource> Bridge<D> {
         };
         let length = rects.and_then(|n| {
             n.checked_mul(4)?
-                .checked_add(10 + count + usize::from(given(16)))?
+                .checked_add(10 + count + usize::from(given(16)) + usize::from(given(32)))?
                 .checked_mul(4)
         });
-        if (count != 0 && count != 20) || length != Some(bytes.len()) {
+        if (count != 0 && count != 20)
+            || !length.is_some_and(|n| {
+                if given(64) {
+                    n <= bytes.len()
+                } else {
+                    n == bytes.len()
+                }
+            })
+        {
             return self.refuse("view: malformed");
+        }
+        let end = length.unwrap();
+        let mut owners = super::collections::BlockChanges::default();
+        if given(64) {
+            let Ok(records) = super::collections::records(&bytes[end..]) else {
+                return self.refuse("view: malformed blocks");
+            };
+            for record in records {
+                match owners.push(record) {
+                    Ok(true) => {}
+                    Ok(false) => return self.refuse("view: invalid block record"),
+                    Err(_) => return self.refuse("view: invalid try tactic"),
+                }
+            }
         }
         let rects = rects.unwrap_or(0);
         let (width, height) = (float(1), float(2));
@@ -102,15 +126,35 @@ impl<D: DataSource> Bridge<D> {
         let size = given(8).then(|| (float(7), float(8)));
         let values: Vec<f32> = (10..10 + count).map(float).collect();
         let regions = given(4).then(|| crate::Host::<D>::regions_from(&values));
+        let last = end - usize::from(given(32)) * 4;
         let segments = given(16)
-            .then(|| super::segments::segment_rects(&bytes[(11 + count) * 4..], rects as u32));
+            .then(|| super::segments::segment_rects(&bytes[(11 + count) * 4..last], rects as u32));
+        let keyboard = given(32).then(|| float(last / 4));
+        let observed = size.and(self.live_clock).map(|clock| clock());
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.set_view(screen, insets, regions, size, segments)
+            h.set_view_at(
+                screen,
+                insets,
+                regions,
+                size,
+                segments,
+                keyboard,
+                &owners.blocks,
+                &owners.placements,
+                observed,
+            )
         });
         self.emit(out)
     }
-    /// The safe-area insets changed.
+    /// The safe-area insets changed. Before a boot, the next boot's first
+    /// layout takes them (the latest told).
     pub fn insets(&mut self, top: f32, right: f32, bottom: f32, left: f32) -> u32 {
+        if self.host.is_none() {
+            if ![top, right, bottom, left].iter().all(|v| v.is_finite()) {
+                return self.refuse("insets must be finite");
+            }
+            self.launch_layout.insets = Some([top, right, bottom, left]);
+        }
         let out = self
             .host
             .as_mut()

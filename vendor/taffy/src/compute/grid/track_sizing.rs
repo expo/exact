@@ -284,6 +284,7 @@ pub(super) fn track_sizing_algorithm<Tree: LayoutPartialTree>(
     items: &mut [GridItem],
     get_track_size_estimate: fn(&GridTrack, Option<f32>, &Tree) -> Option<f32>,
     has_baseline_aligned_item: bool,
+    invalidate_baseline: Option<crate::NodeId>,
 ) {
     // 11.4 Initialise Track sizes
     // Initialize each track’s base size and growth limit.
@@ -292,7 +293,7 @@ pub(super) fn track_sizing_algorithm<Tree: LayoutPartialTree>(
 
     // 11.5.1 Shim item baselines
     if has_baseline_aligned_item {
-        resolve_item_baselines(tree, axis, items, inner_node_size);
+        resolve_item_baselines(tree, axis, items, inner_node_size, invalidate_baseline);
     }
 
     // If all tracks have a fixed min track sizing function and base_size = growth_limit,
@@ -460,6 +461,7 @@ fn resolve_item_baselines(
     axis: AbstractAxis,
     items: &mut [GridItem],
     inner_node_size: Size<Option<f32>>,
+    invalidate_baseline: Option<crate::NodeId>,
 ) {
     // Sort items by track in the other axis (row) start position so that we can iterate items in groups which
     // are in the same track in the other axis (row)
@@ -468,6 +470,7 @@ fn resolve_item_baselines(
 
     // Iterate over grid rows
     let mut remaining_items = &mut items[0..];
+    let mut laid_out_children = false;
     while !remaining_items.is_empty() {
         // Get the row index of the current row
         let current_row = remaining_items[0].placement(other_axis).start;
@@ -530,6 +533,8 @@ fn resolve_item_baselines(
             );
         }
 
+        laid_out_children = true;
+
         // Compute the max baseline of all items in the row participating in baseline alignment
         let row_max_baseline = row_items
             .iter()
@@ -544,6 +549,10 @@ fn resolve_item_baselines(
                 item.baseline_shim = row_max_baseline - item.baseline.unwrap_or(0.0);
             }
         }
+    }
+    // EXACT PATCH 72: all rows share one ancestor walk after their baseline layouts.
+    if laid_out_children {
+        if let Some(node) = invalidate_baseline { tree.invalidate_final_layout(node); }
     }
 }
 

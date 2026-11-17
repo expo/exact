@@ -5,6 +5,49 @@
 //! type a row alike.
 
 use crate::{Ref, Scope, Shapes, Ty};
+use contract_syntax::Node;
+use std::sync::Arc;
+
+/// The scopes under a node, shared by parameter inference and checking.
+/// An untyped subject skips only its binding arm; the none arm is independent.
+/// Kept below checking because action parameter inference needs it before `Checked` exists.
+pub fn view_frames(node: &Node, scope: &Arc<Scope>, shapes: &Shapes) -> [Option<Arc<Scope>>; 2] {
+    match node {
+        Node::When { .. } => {
+            let mut inner = (**scope).clone();
+            inner.push_none();
+            let inner = Arc::new(inner);
+            [Some(inner.clone()), Some(inner)]
+        }
+        Node::Each {
+            var, index, list, ..
+        } => {
+            let inner = match crate::infer(list, scope, shapes) {
+                Ok(Ty::List(item)) => {
+                    let mut inner = (**scope).clone();
+                    inner.push_each(var, index.as_deref(), *item);
+                    Some(Arc::new(inner))
+                }
+                _ => None,
+            };
+            [inner, None]
+        }
+        Node::Match { subject, some, .. } => {
+            let inner = match crate::infer(subject, scope, shapes) {
+                Ok(Ty::Option(item)) => {
+                    let mut inner = (**scope).clone();
+                    inner.push_region(Some((some.0.clone(), Ref::Bound(0), *item)));
+                    Some(Arc::new(inner))
+                }
+                _ => None,
+            };
+            let mut none = (**scope).clone();
+            none.push_none();
+            [inner, Some(Arc::new(none))]
+        }
+        _ => [Some(scope.clone()), Some(scope.clone())],
+    }
+}
 
 impl Scope {
     /// A `for`'s frame over a list typed `list`: its item the `t` of `[t]`,

@@ -67,6 +67,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
     mut fq: Query<'a>,
     styles: &'a [ResolvedStyle<B>],
     inline_boxes: &[InlineBox],
+    shaping_breaks: &[usize],
     infos: &[(CharInfo, u16)],
     levels: &[u8],
     scx: &mut ShapeContext,
@@ -159,6 +160,9 @@ pub(crate) fn shape_text<'a, B: Brush>(
         }
 
         if level != item.level || (script != item.script && !settles) {
+            break_run = true;
+        }
+        if shaping_breaks.binary_search(&byte_index).is_ok() {
             break_run = true;
         }
 

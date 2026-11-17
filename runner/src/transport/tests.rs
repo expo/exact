@@ -11,7 +11,6 @@ use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use std::path::PathBuf;
 
 pub(crate) const SOURCE: &str = r#"sound "assets/kick.wav"
 sound "assets/hat.wav"
@@ -209,11 +208,11 @@ fn compiled(source: &str) -> Plan {
     if let Some((_, plan)) = plans.iter().find(|(s, _)| s == source) {
         return plan.clone();
     }
-    let dir: PathBuf = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-transport-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
-    ));
+    )));
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     wav(&dir.join("assets/kick.wav"), 250);
     wav(&dir.join("assets/hat.wav"), 100);
@@ -388,6 +387,42 @@ fn an_edit_retracts_what_has_not_started_and_expands_from_its_commit() {
         .sounds()
         .haptics()
         .any(|h| h.at == 2000.0 && h.state(3000.0) == "played"));
+}
+
+/// A tempo edit committed at a hit's time: the old segment and the new one
+/// round that time to either side of the edit, and the hit still plays
+/// once (LLP 1125 D3).
+#[test]
+fn a_tempo_edit_on_a_hit_plays_it_once() {
+    let shapes = SOURCE.split("component Seq").next().unwrap();
+    for (from, bpm, beat, faster, t) in [
+        (0, 100, "13 / 6", 110, 1300.0),
+        (-4, 60, "7 / 5", 50, 5400.0),
+        (-4, 80, "2 / 3", 70, 3500.0),
+        (0, 120, "2", 150, 1000.0),
+    ] {
+        let mut r = boot_with(&format!(
+            "{shapes}component Seq
+  state bpm = {bpm}
+  action edit
+    bpm = {faster}
+  sequence s when true
+    play([Track(beats=16, loops=0, offset=0, output=\"\", steps=[hit({beat}, \"assets/click.wav\")])], bpm=bpm, from={from})
+  view
+    text \"click\"
+"
+        ));
+        r.advance(t).unwrap();
+        r.act("edit", vec![]).unwrap();
+        r.advance(t + 1000.0).unwrap();
+        let clicks = at(&r, "assets/click.wav");
+        assert_eq!(
+            clicks.len(),
+            1,
+            "beat {beat}, bpm {faster} at {t}: {clicks:?}"
+        );
+        assert!((clicks[0] - t).abs() < 1e-6, "{clicks:?}");
+    }
 }
 
 fn grouped_sequence() -> Runner<NoData> {
@@ -932,7 +967,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
     r.act("start", vec![]).unwrap();
     r.advance(1000.0).unwrap();
     let page = crate::Page {
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).unwrap().is_some());
@@ -945,7 +980,7 @@ fn the_background_stops_it_until_its_gate_turns_true_again() {
         .count();
     assert_eq!(waiting, 0);
     let page = crate::Page {
-        suspended: false,
+        frozen: false,
         ..r.page()
     };
     r.set_page(page).unwrap();
@@ -984,14 +1019,14 @@ fn a_refused_background_stop_stops_nothing() {
     let before = (voices(&r), r.transport().answer());
     let page = crate::Page {
         hidden: true,
-        suspended: true,
+        frozen: true,
         ..r.page()
     };
     assert!(r.set_page(page).is_err());
     assert!(r.transport().playing());
     assert_eq!((voices(&r), r.transport().answer()), before);
     assert!(r.take_sounds().is_empty(), "no End reached the output");
-    assert!(!r.page().suspended);
+    assert!(!r.page().frozen);
 }
 
 /// Review A1: a refused commit with a keyed sequence and no gated task puts

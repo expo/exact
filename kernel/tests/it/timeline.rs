@@ -5,9 +5,7 @@
 //! back to the clock when its row is cleared, and has no effect once the
 //! source its parent's scope found is destroyed.
 
-use exact_kernel::timeline::{
-    AnimationRange, AnimationTimeline, Axis, DragTimeline, TimelineScope,
-};
+use exact_kernel::timeline::{AnimationTimeline, Axis, DragTimeline, TimelineScope};
 use exact_kernel::{
     motion_node, wire, CommitReceipt, Kernel, NodeType, Op, StyleId, StyleProps, StyleValue,
     StyleValueError,
@@ -30,7 +28,8 @@ fn rows(pairs: &[(StyleId, &str)]) -> Box<StyleProps> {
 fn fade() -> Box<StyleProps> {
     let mut s = StyleProps::default();
     s.animation =
-        crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}");
+        crate::keyframed("fade 1s linear both @keyframes fade{from{opacity:1}to{opacity:0}}")
+            .into();
     s.mask.set(StyleId::Animation);
     Box::new(s)
 }
@@ -99,12 +98,31 @@ fn the_rows_are_css_text_and_refuse_what_is_not_their_grammar() {
         (StyleId::TimelineScope, "--a,--b", "--a, --b"),
         (StyleId::TimelineScope, "all", "all"),
         (StyleId::TimelineScope, "none", "none"),
+        (
+            StyleId::AnimationTimeline,
+            "scroll(x root)",
+            "scroll(root x)",
+        ),
+        (StyleId::AnimationTimeline, "view(20%)", "view(20%)"),
+        (StyleId::AnimationRange, "0px", "0px normal"),
+        (StyleId::AnimationRange, "0% 100%", "normal"),
+        (
+            StyleId::AnimationRange,
+            "exit -100% exit 0%",
+            "exit -100% exit 0%",
+        ),
+        (StyleId::ScrollTimelineName, "--cols", "--cols"),
+        (StyleId::ViewTimelineName, "none", "none"),
+        (StyleId::ViewTimelineInset, "auto 10px", "auto 10px"),
     ] {
         s.set_dynamic(id, &StyleValue::Text(css.into())).unwrap();
         let written = match id {
             StyleId::DragTimeline => s.rare.drag_timeline.css(),
             StyleId::AnimationTimeline => s.rare.animation_timeline.css(),
             StyleId::TimelineScope => s.rare.timeline_scope.css(),
+            StyleId::ScrollTimelineName => s.rare.scroll_timeline_name.css(),
+            StyleId::ViewTimelineName => s.rare.view_timeline_name.css(),
+            StyleId::ViewTimelineInset => s.rare.view_timeline_inset.css(),
             _ => s.animation_range.css(),
         };
         assert_eq!(written, canonical, "{css}");
@@ -114,12 +132,16 @@ fn the_rows_are_css_text_and_refuse_what_is_not_their_grammar() {
         (StyleId::DragTimeline, "dismiss"),
         (StyleId::DragTimeline, "--dismiss z"),
         (StyleId::DragTimeline, "--dismiss y x"),
-        (StyleId::AnimationTimeline, "scroll()"),
-        (StyleId::AnimationRange, "0px"),
+        (StyleId::AnimationTimeline, "scroll(far)"),
+        (StyleId::AnimationTimeline, "--a, --b"),
         (StyleId::AnimationRange, "10px 10px"),
-        (StyleId::AnimationRange, "0% 100%"),
+        (StyleId::AnimationRange, "exit 0% exit 0%"),
+        (StyleId::AnimationRange, "exit 1em"),
         (StyleId::TimelineScope, "--a --b"),
         (StyleId::TimelineScope, "--a, all"),
+        (StyleId::ScrollTimelineName, "--a, --b"),
+        (StyleId::ViewTimelineName, "card"),
+        (StyleId::ViewTimelineInset, "1px 2px 3px"),
     ] {
         let refused = s.set_dynamic(id, &StyleValue::Text(css.into()));
         assert!(
@@ -128,7 +150,9 @@ fn the_rows_are_css_text_and_refuse_what_is_not_their_grammar() {
                 Err(StyleValueError::BadDragTimeline { .. }
                     | StyleValueError::BadAnimationTimeline { .. }
                     | StyleValueError::BadAnimationRange { .. }
-                    | StyleValueError::BadTimelineScope { .. })
+                    | StyleValueError::BadTimelineScope { .. }
+                    | StyleValueError::BadTimelineName { .. }
+                    | StyleValueError::BadViewTimelineInset { .. })
             ),
             "{css}: {refused:?}"
         );
@@ -150,6 +174,10 @@ fn the_rows_round_trip_through_the_wire() {
                 (StyleId::AnimationTimeline, "--dismiss"),
                 (StyleId::AnimationRange, "-40px 260.5px"),
                 (StyleId::TimelineScope, "--pan, --dismiss"),
+                (StyleId::ScrollTimelineName, "--cols"),
+                (StyleId::ScrollTimelineAxis, "x"),
+                (StyleId::ViewTimelineName, "--card"),
+                (StyleId::ViewTimelineInset, "10% auto"),
             ]),
         },
         Op::AttachRoot { id: 1 },
@@ -167,7 +195,21 @@ fn the_rows_round_trip_through_the_wire() {
         style.rare.animation_timeline,
         AnimationTimeline(Some("--dismiss".into()))
     );
-    assert_eq!(style.animation_range, AnimationRange(Some([-40.0, 260.5])));
+    assert_eq!(style.animation_range.lengths(), Some([-40.0, 260.5]));
+    assert_eq!(
+        (
+            style.rare.scroll_timeline_name.css(),
+            style.rare.scroll_timeline_axis,
+            style.rare.view_timeline_name.css(),
+            style.rare.view_timeline_inset.css(),
+        ),
+        (
+            "--cols".into(),
+            exact_kernel::TimelineAxis::X,
+            "--card".into(),
+            "10% auto".into()
+        )
+    );
     assert_eq!(
         style.rare.timeline_scope,
         TimelineScope::Names("--pan, --dismiss".into())
@@ -258,4 +300,93 @@ fn a_consumer_whose_scoped_source_is_destroyed_has_no_effect() {
         None,
         "and the clock moves nothing"
     );
+}
+
+#[test]
+fn default_scroll_containers_drive_descendant_timelines() {
+    exact_kernel::timeline::link();
+    for kind in [NodeType::ScrollView, NodeType::List] {
+        for timeline in ["--scroll", "scroll()"] {
+            let mut k = Kernel::with_monospace();
+            let mut consumer_style = fade();
+            for (id, css) in [
+                (StyleId::Width, "100px"),
+                (StyleId::Height, "100px"),
+                (StyleId::AnimationTimeline, timeline),
+                (StyleId::AnimationRange, "0px 200px"),
+            ] {
+                consumer_style
+                    .set_dynamic(id, &StyleValue::Text(css.into()))
+                    .unwrap();
+            }
+            let receipt = k
+                .apply(
+                    0,
+                    1,
+                    &[
+                        Op::CreateView {
+                            id: 1,
+                            node_type: NodeType::View,
+                        },
+                        Op::CreateView {
+                            id: 2,
+                            node_type: kind,
+                        },
+                        Op::CreateView {
+                            id: 3,
+                            node_type: NodeType::View,
+                        },
+                        Op::CreateView {
+                            id: 4,
+                            node_type: NodeType::View,
+                        },
+                        Op::SetStyle {
+                            id: 2,
+                            patch: rows(&[
+                                (StyleId::Width, "300px"),
+                                (StyleId::Height, "500px"),
+                                (StyleId::ScrollTimelineName, "--scroll"),
+                            ]),
+                        },
+                        Op::SetStyle {
+                            id: 3,
+                            patch: rows(&[(StyleId::Height, "1400px")]),
+                        },
+                        Op::SetStyle {
+                            id: 4,
+                            patch: consumer_style,
+                        },
+                        Op::SetChildren {
+                            id: 1,
+                            children: vec![2],
+                        },
+                        Op::SetChildren {
+                            id: 2,
+                            children: vec![4, 3],
+                        },
+                        Op::AttachRoot { id: 1 },
+                    ],
+                )
+                .unwrap();
+            k.compute_layout(1, exact_kernel::Offer::definite(300., 778.))
+                .unwrap();
+            let mut engine = Engine::new();
+            k.motion_sync(&receipt).apply(&mut engine).unwrap();
+            for (node, binding) in k.place_timelines() {
+                engine.set_animation_timeline(node, binding);
+            }
+            let source = motion_node(k.node(2).unwrap().key);
+            let consumer = motion_node(k.node(4).unwrap().key);
+            engine.set_scroll_offset(source, 0., 100.);
+            assert_eq!(
+                opacity(&mut engine, consumer),
+                Some(0.5),
+                "{kind:?} {timeline}"
+            );
+            let scrollers = k.timeline_scrollers();
+            assert_eq!(scrollers.len(), 1);
+            assert_eq!(scrollers[0].view, 2);
+            assert!(!scrollers[0].page);
+        }
+    }
 }

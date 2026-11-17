@@ -60,6 +60,88 @@ final class PressPaintTests: XCTestCase {
     private func layer(_ v: NodeView) -> CALayer? { v.layer }
     private func fade(_ v: NodeView) -> CABasicAnimation? { layer(v)?.animation(forKey: "pressOpacity") as? CABasicAnimation }
 
+    private func translation(_ animation: CABasicAnimation) -> CGPoint? {
+        #if os(macOS)
+        (animation.toValue as? NSValue)?.pointValue
+        #else
+        (animation.toValue as? NSValue)?.cgPointValue
+        #endif
+    }
+
+    func testTranslationComposesWithTheModelAndReleases() throws {
+        let (p, v) = try fixture(["press_translate": [4, 6], "press_translate_percent": [10, 20]])
+        v.translatePx = CGPoint(x: 30, y: 40)
+        v.rotate = 30
+        v.scale = 1.2
+        v.applyTransform()
+        let transform = try XCTUnwrap(layer(v)).transform
+        let before = try XCTUnwrap(layer(v)).position
+        v.pressed = true
+        let animation = try XCTUnwrap(layer(v)?.animation(forKey: "pressTranslation") as? CABasicAnimation)
+        XCTAssertTrue(animation.isAdditive)
+        XCTAssertEqual(translation(animation), CGPoint(x: 24, y: 26))
+        XCTAssertEqual(animation.duration, PressFeedback.duration)
+        XCTAssertEqual(layer(v)?.position, before, "the model and tracking box do not move")
+        XCTAssertTrue(CATransform3DEqualToTransform(try XCTUnwrap(layer(v)).transform, transform))
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["press_translate": [8, 9]]]]))
+        let changed = try XCTUnwrap(layer(v)?.animation(forKey: "pressTranslation") as? CABasicAnimation)
+        XCTAssertEqual(translation(changed), CGPoint(x: 8, y: 9))
+        v.pressPaint.at -= 1
+        v.pressed = false
+        let released = try XCTUnwrap(layer(v)?.animation(forKey: "pressTranslation") as? CABasicAnimation)
+        XCTAssertEqual(translation(released), .zero)
+        XCTAssertTrue(released.isRemovedOnCompletion)
+        v.dropPressPaint()
+        XCTAssertNil(layer(v)?.animation(forKey: "pressTranslation"))
+    }
+
+    #if os(iOS)
+    func testTranslationFollowsLayoutWithoutRestartingItsEase() throws {
+        let (_, v) = try fixture(["press_translate_percent": [50, 25]])
+        v.bounds.size = .zero
+        v.layoutSubviews()
+        v.pressed = true
+        let start = v.pressPaint.ease.start
+        XCTAssertNil(v.layer.animation(forKey: "pressTranslation"))
+        for size in [CGSize(width: 100, height: 80), CGSize(width: 200, height: 160)] {
+            v.bounds.size = size
+            v.layoutSubviews()
+            let animation = try XCTUnwrap(v.layer.animation(forKey: "pressTranslation") as? CABasicAnimation)
+            XCTAssertEqual(translation(animation), CGPoint(x: size.width / 2, y: size.height / 4))
+            XCTAssertEqual(v.pressPaint.ease.start, start)
+        }
+        v.pressed = false
+    }
+    #endif
+
+    func testTranslationKeepsTheStationaryTrackingPointInside() throws {
+        let (_, v) = try fixture(["press_translate": [40, 40]])
+        let point = v.convert(CGPoint(x: 2, y: 2), to: nil)
+        #if os(macOS)
+        window.orderFront(nil)
+        #endif
+        let model = try XCTUnwrap(layer(v))
+        CATransaction.flush()
+        waitFor("the unpressed presentation layer") { model.presentation() != nil }
+        let before = try XCTUnwrap(model.presentation()).position
+        v.pressed = true
+        CATransaction.flush()
+        waitFor("the pressed presentation offset") {
+            guard let position = model.presentation()?.position else { return false }
+            return abs(position.x - before.x - 40) < 0.1 && abs(position.y - before.y - 40) < 0.1
+        }
+        let shifted = try XCTUnwrap(model.presentation()).position
+        XCTAssertEqual(shifted.x - before.x, 40, accuracy: 0.1)
+        XCTAssertEqual(shifted.y - before.y, 40, accuracy: 0.1)
+        #if os(iOS)
+        XCTAssertTrue(v.pressInside(at: point))
+        #else
+        XCTAssertTrue(v.pressInside(point))
+        #endif
+        v.pressed = false
+
+    }
+
     func testAFirstPaintTargetAppearingDuringAPressIsShown() throws {
         let (p, v) = try fixture([:])
         v.pressed = true
@@ -612,7 +694,10 @@ final class PressPaintTests: XCTestCase {
         XCTAssertTrue(own.showsOwnTextColor, "its own press's colour is its own")
         XCTAssertEqual(rgba(own.fieldInk.cgColor), green)
     }
-    func testAPresslessLinkTracksActivationWithoutShowingActivePaintOrPlatformFeedback() throws {
+    /// A link with no `press` is pressed as CSS's `:active` holds on it
+    /// (LLP 1121 D8): the platform's press where it declares none, its own
+    /// active paint where it does.
+    func testAPresslessLinkShowsItsPressAsALinksActiveDoes() throws {
         let (p, _) = try fixture([:])
         p.apply(wireBatch([
             ["op": "create", "id": 4, "kind": "button", "props": ["href": "/destination"]],
@@ -620,27 +705,25 @@ final class PressPaintTests: XCTestCase {
             ["op": "roots", "ids": [1, 4]]
         ]))
         let link = try XCTUnwrap(p.views[4])
-        for authored in [false, true] {
-            link.applyStyle(authored ? ["press_scale": .number(0.9), "press_background_color": ink(navy)] : [:])
-            link.pressed = true
-            XCTAssertEqual(link.defaultLink, "/destination")
-            XCTAssertEqual(link.press.to, 1)
-            XCTAssertFalse(link.pressPaint.down)
-            #if os(iOS)
-            XCTAssertFalse(link.platformPressDims)
-            XCTAssertNil(link.press.dimmedAt)
-            #else
-            XCTAssertFalse(link.pressTinted)
-            #endif
-            link.pressFollows(inside: true)
-            XCTAssertEqual(link.press.to, 1)
-            XCTAssertFalse(link.pressPaint.down)
-            link.pressed = false
-        }
-        link.handlers = ["press"]
+        XCTAssertEqual(link.defaultLink, "/destination")
         link.pressed = true
-        XCTAssertEqual(link.press.to, 0.9, "a declared handler gets its active feedback")
-        XCTAssertTrue(link.pressPaint.down)
+        XCTAssertFalse(link.pressPaint.down)
+        #if os(iOS)
+        XCTAssertTrue(link.platformPressDims)
+        XCTAssertNotNil(link.press.dimmedAt, "the platform's dim, as a pressable with none of its own")
+        #else
+        XCTAssertTrue(link.pressTinted, "the platform's pressed look")
+        #endif
+        link.pressed = false
+        link.applyStyle(["press_scale": .number(0.9), "press_background_color": ink(navy)])
+        link.pressed = true
+        XCTAssertEqual(link.press.to, 0.9, "its `:active` scale")
+        XCTAssertTrue(link.pressPaint.down, "its `:active` paint")
+        link.pressFollows(inside: false)
+        XCTAssertEqual(link.press.to, 1, "let go while the pointer is outside, as any press")
+        link.pressFollows(inside: true)
+        XCTAssertEqual(link.press.to, 0.9, "and pressed again back inside")
+        link.pressed = false
     }
 
 }

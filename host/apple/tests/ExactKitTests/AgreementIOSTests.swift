@@ -167,6 +167,42 @@ final class AgreementIOSTests: XCTestCase {
         withExtendedLifetime(controller) {}
     }
 
+    /// A paragraph's words are painted in a text box view of its own
+    /// (`NodeView.makeTextBox`), which the walk accounts to the paragraph:
+    /// not a stray, and `text` of it in the dump.
+    func testAParagraphsTextBoxIsItsOwnNotAStray() throws {
+        let session = ExactApp.shared.makeSession(label: "agreement-text")
+        defer { session.destroy() }
+        let p = session.presenter
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Library", "role": "heading"], "style": ["font_size": 20.0]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0],
+            ["op": "fieldContent", "id": 2, "rect": [0.0, 0.0, 400.0, 40.0]],
+        ]))
+        let text = try XCTUnwrap(p.views[2])
+        p.paintVisibleText()
+        p.textRasters.settleVisible([text])
+        let end = Date().addingTimeInterval(2)
+        while !text.textRasterReady, Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+        let box = try XCTUnwrap(text.specs?.rasterView)
+        XCTAssertTrue(box.superview === text, "the words hang in the paragraph's own view")
+        let k = KernelFrames([KernelFrame(id: 1, parent: nil, rect: CGRect(x: 0, y: 0, width: 400, height: 400), bits: 0),
+                              KernelFrame(id: 2, parent: 1, rect: CGRect(x: 0, y: 0, width: 400, height: 40), bits: 0)])
+        let r = agree(p, k)
+        XCTAssertEqual(r.counts, [:], "\(r.found)")
+        let entries = try XCTUnwrap(p.inspectionDump(text, kind: "view", depth: 2, limit: 50, flatOnly: nil) { v, r in v.convert(r ?? v.bounds, to: p.viewport) }["entries"] as? [[String: Any]])
+        let entry = try XCTUnwrap(entries.first { $0["class"] as? String == "TextBoxView" })
+        XCTAssertEqual(entry["role"] as? String, "text")
+        XCTAssertEqual(entry["owner"] as? Int, 2)
+    }
+
     /// Flat leaves (LLP 1068 §6.1) under a box: two alike bars of `size`.
     private func flats(size: Double) -> Presenter {
         let p = Presenter()

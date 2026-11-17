@@ -486,7 +486,7 @@ fn affine_attachment_pixels_match_transformed_vertices_and_detach_cleanly() {
             .collect();
         let mut indices = indices;
         if sign < 0. {
-            for face in indices.chunks_exact_mut(3) {
+            for face in indices.as_chunks_mut::<3>().0 {
                 face.swap(0, 2);
             }
         }

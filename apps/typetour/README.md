@@ -26,6 +26,13 @@ data crate to speak of (`data/` answers nothing) and no JavaScript.
 
 The home indicator at the bottom of every screen goes home.
 
+The lock screen is `/`, the home screen `/home`, Settings `/settings`, its
+specimen `/settings/display`, and Messages `/messages`, with conversations at
+`/messages/:thread`. Each URL opens directly and survives reload with its declared
+parents. The Type Tour icon opens Display with Settings beneath it. Later and
+Install return to Settings. Other in-app transitions keep the preceding screen
+for Back, and browser Forward revisits the screen left behind.
+
 The faces are copies of `fonts/exciting-lilt/ExcitingLilt-{Semibold,Bold}.ttf`
 (v10, 2026-09-29) and `fonts/exposure-sans/original-10/*.ttf` (0.010) from the
 Expose repository, MIT-licensed there; re-copy them into `assets/` when a new

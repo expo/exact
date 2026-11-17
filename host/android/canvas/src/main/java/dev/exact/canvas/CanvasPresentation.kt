@@ -38,4 +38,13 @@ internal class CanvasPresentation {
     }
 
     fun canAttach(hasImage: Boolean): Boolean = hasImage && !failed
+
+    /** Whether a window that presented reads [status] 0, preparing, again: the host was replaced (a reload, an
+     * activated update) and a new canvas has the window. The retained image covers it again, and its status is
+     * observed again, until that canvas presents or is refused. */
+    fun replaced(status: Int): Boolean {
+        if (!ready || status != 0) return false
+        clear()
+        return true
+    }
 }

@@ -42,7 +42,7 @@ text size. `bun exact.mjs test web` also passes all 8 tests.
 - **Rows the test can't reach:** in a virtualized list, a row outside the visible window isn't in
   the tree. One test asserted a new row that was off-screen on iOS, so it checks counts instead.
 - **Small things:** `Entry` is a name the router reserves. There's no `.replace` or `unwrapOr`, and
-  a `derive` must fit on one line. Apple-only SF symbols need tamber icon tokens with SVG
+  a `derive` must fit on one line. Apple-only SF symbols need forma icon tokens with SVG
   fallbacks for web and Linux; I drew small SVGs for the tray and list-bullet icons.
 - **Guesses:** The data has only `none`, `low` and `high` priorities, so I offered those three, not
   Medium. Lists keep the order in which they first appear in the data. New tasks join the end of

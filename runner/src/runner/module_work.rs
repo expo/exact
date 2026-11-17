@@ -8,16 +8,20 @@
 //! and the commit after it reaches the host as any reply's does, presented
 //! and persisted.
 use super::modules::{CallOrigin, Causes};
-use super::{CommitReceipt, DataSource, InFlight, PendingReq, Runner, RunnerError, Target};
-use crate::request::{Outcome, RequestOut};
+use super::{
+    CommitReceipt, DataSource, InFlight, PendingReq, Reporter, Runner, RunnerError, Target,
+};
+use crate::request::{Outcome, RequestClass, RequestOut};
 use crate::store::StoreCheckpoint;
 use std::collections::BTreeMap;
 
 /// What the journal and `state.pending` call a kept request.
 pub(super) const NAME: &str = "module work";
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Authority {
+    completion: Option<super::CompletionReply>,
+    module: Option<super::ModuleInstance>,
     origin: CallOrigin,
     invocation: u64,
     causes: Causes,
@@ -37,14 +41,40 @@ pub(super) struct ModuleWork {
     /// a refused commit goes back to here, not to before the reply.
     pub(super) standing: Option<StoreCheckpoint>,
     /// The resource whose reply's turn read the store in the commit being
-    /// made: a refusal keeps that read, as it keeps the reply's failure.
-    pub(super) reply_reader: Option<usize>,
+    /// made, and whether it read what the store holds, not only randomness:
+    /// a refusal keeps that read, as it keeps the reply's failure.
+    pub(super) reply_reader: Option<(usize, bool)>,
     /// Kept tickets the host refused at admission, settled as failures, and
     /// whether each was ordered.
     refused: Vec<(u64, &'static str, bool)>,
 }
 
+impl ModuleWork {
+    pub(super) fn completion(
+        &mut self,
+        ticket: u64,
+    ) -> Option<&mut Option<super::CompletionReply>> {
+        Some(&mut self.tickets.get_mut(&ticket)?.1.completion)
+    }
+}
+
 impl<D: DataSource> Runner<D> {
+    pub(super) fn failed_module_work(&self) -> Vec<(u64, String)> {
+        self.module_work
+            .tickets
+            .iter()
+            .filter_map(|(ticket, (_, authority))| {
+                Some((*ticket, authority.module.as_ref()?.failure()?.to_owned()))
+            })
+            .collect()
+    }
+
+    pub(super) fn drop_module_work(&mut self, ticket: u64) {
+        self.module_work.tickets.remove(&ticket);
+        self.module_work.fetches.retain(|_, t| *t != ticket);
+        self.module_work.refused.retain(|(t, ..)| *t != ticket);
+    }
+
     /// Whether `ticket` is a kept request's.
     pub(super) fn is_module_work(&self, ticket: u64) -> bool {
         self.module_work.tickets.contains_key(&ticket)
@@ -98,7 +128,21 @@ impl<D: DataSource> Runner<D> {
     /// the answer without it (`data_timers.rs`). A module's send in it is
     /// not cancelled: as a browser's `Promise.race`, the loser runs on.
     pub(super) fn keep_running(&mut self, ticket: u64, token: u64, fetch: Option<u64>) {
+        let completion = self
+            .pending
+            .iter()
+            .find(|p| p.ticket == ticket)
+            .and_then(|p| p.completion.clone());
+        if let Some(reply) = &completion {
+            reply.retain();
+        }
         let authority = Authority {
+            completion,
+            module: self
+                .pending
+                .iter()
+                .find(|p| p.ticket == ticket)
+                .and_then(|p| p.module.clone()),
             origin: self.ticket_origin(ticket),
             invocation: self.ticket_id(ticket),
             causes: self.ticket_causes(ticket),
@@ -108,6 +152,92 @@ impl<D: DataSource> Runner<D> {
             self.module_work.fetches.insert(fetch, ticket);
         }
         self.keep_send(ticket);
+    }
+
+    /// The source's reports (LLP 1175 D3), each sent now as module work: no
+    /// answer waits for it, and its reply reaches the listener's continuation
+    /// in a module turn. Taken after every call into the source and before an
+    /// origin's commit ends, so that `by`'s records are still the runner's.
+    pub(super) fn take_reports(&mut self) {
+        let reports = self.data.take_reports();
+        // A poisoned runner sends nothing more.
+        if self.poisoned {
+            return;
+        }
+        for report in reports {
+            let (origin, invocation, causes) = self.report_authority(report.by);
+            let mut request = report.request;
+            let ticket = self.next_ticket;
+            self.next_ticket += 1;
+            request.reach = self.reach_of(origin);
+            self.log(super::lines::enqueued(ticket, NAME, &request));
+            let authority = Authority {
+                completion: None,
+                module: request.module.clone(),
+                origin,
+                invocation,
+                causes,
+            };
+            self.module_work
+                .tickets
+                .insert(ticket, (report.token, authority));
+            if let Some(fetch) = request.fetch {
+                self.module_work.fetches.insert(fetch, ticket);
+            }
+            self.requests.push(RequestOut {
+                completion: None,
+                class: RequestClass::Ordered,
+                ticket,
+                target: NAME.into(),
+                request,
+                forced: false,
+            });
+        }
+        // An abort the module heard before the report was taken waited for
+        // its request; it is named now, so the report is never handed out.
+        if !self.heard_aborts.is_empty() {
+            self.match_aborts();
+        }
+    }
+
+    /// A report's origin, invocation and causes, from the runner's records,
+    /// never the module's word. An answer's are those of its requests in
+    /// flight and, when none is, of the commit asking it now; where the two
+    /// differ the least privileged origin wins and the causes join. A tool's
+    /// handler's are its invocation's. With no answer running, a report gets
+    /// what any data-code call in the commit being made gets
+    /// ([`Self::data_origin`]), a fresh invocation and no causes.
+    fn report_authority(&mut self, by: Reporter) -> (CallOrigin, u64, Causes) {
+        match by {
+            Reporter::Answer(target) => {
+                let mut origin = self.origin_for(Some(target));
+                let mut invocation = self.invocation_id();
+                let mut causes = self.causes_for(target);
+                let tickets: Vec<u64> = (self.pending.iter())
+                    .filter(|p| p.target == target && p.reask_at.is_none())
+                    .map(|p| p.ticket)
+                    .collect();
+                for ticket in tickets {
+                    let theirs = self.ticket_origin(ticket);
+                    if theirs <= origin {
+                        origin = theirs;
+                        invocation = self.ticket_id(ticket);
+                    }
+                    causes = causes.union(self.ticket_causes(ticket));
+                }
+                (origin, invocation, causes)
+            }
+            Reporter::Tool => {
+                let now = self.call_origin();
+                let origin = self.tool_origin().map_or(now, |tool| tool.min(now));
+                (origin, self.invocation_id(), self.commit_causes())
+            }
+            Reporter::None => (
+                self.data_origin(),
+                self.next_invocation(),
+                Causes::default(),
+            ),
+        }
     }
 
     /// Request `p` is let go by the commit being made: one with effects is
@@ -126,6 +256,8 @@ impl<D: DataSource> Runner<D> {
         }
         if p.admitted_effects() && !self.poisoned {
             let authority = Authority {
+                completion: p.completion.clone(),
+                module: p.module.clone(),
                 origin: self.ticket_origin(p.ticket),
                 invocation: self.ticket_id(p.ticket),
                 causes: self.ticket_causes(p.ticket),
@@ -172,7 +304,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn ask_failed_readers(&mut self, except: Option<Target>) {
         for i in 0..self.resources.len() {
             // (an upload's failure is never asked again at its arguments: D10)
-            let failed = self.resources[i].store_reader
+            let failed = self.asks_on_store_change(i)
                 && self.resources[i].failed_args.is_some()
                 && !self.upload_failed(i);
             if failed && except != Some(Target::Resource(i)) {
@@ -202,9 +334,12 @@ impl<D: DataSource> Runner<D> {
         let kept = self.data.keep_sent(&self.store, &in_flight, refused);
         for ((p, authority), token) in letting.iter().zip(kept) {
             if let Some(token) = token {
+                if let Some(reply) = &authority.completion {
+                    reply.retain();
+                }
                 self.module_work
                     .tickets
-                    .insert(p.ticket, (token, *authority));
+                    .insert(p.ticket, (token, authority.clone()));
                 if let Some(fetch) = p.fetch {
                     self.module_work.fetches.insert(fetch, p.ticket);
                 }
@@ -245,8 +380,11 @@ impl<D: DataSource> Runner<D> {
                         let next = r.next_ticket;
                         r.next_ticket += 1;
                         request.reach = r.reach_of(authority.origin);
-                        r.module_work.tickets.insert(next, (token, authority));
+                        let mut next_authority = authority.clone();
+                        next_authority.completion = None;
+                        r.module_work.tickets.insert(next, (token, next_authority));
                         r.requests.push(RequestOut {
+                            completion: None,
                             class: crate::RequestClass::Ordered,
                             ticket: next,
                             target: NAME.into(),
@@ -316,3 +454,7 @@ impl<D: DataSource> Runner<D> {
         self.commit_again(now, NAME)
     }
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod report_tests;

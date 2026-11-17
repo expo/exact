@@ -57,7 +57,20 @@ async function overlap(n: number): Promise<string> {
   return "o".repeat(65536) + n;
 }
 
+declare const scheduler: { yield(): Promise<void> };
+
+async function holdObjects(count: number): Promise<string> {
+  const kept: { id: number; title: string; done: boolean }[] = [];
+  for (let i = 0; i < count; i += 1) {
+    for (let j = 0; j < 30000; j += 1)
+      kept.push({ done: false, id: i * 30000 + j, title: `task ${j}` });
+    await scheduler.yield();
+  }
+  return `${kept.length} objects`;
+}
+
 function answer(source: string, args: unknown[]): unknown {
+  if (source === "holdObjects") return holdObjects(args[0] as number);
   if (source === "overlap") return overlap(args[0] as number);
   if (source === "overlapCollected") return String(overlapCollected);
   if (source === "overlapCleared") return state(`overlap ${args[0]}`);

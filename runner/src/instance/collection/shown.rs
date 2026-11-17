@@ -70,7 +70,8 @@ impl Collection {
         };
         let start = self.index.prefix(position).unwrap_or(0.0);
         let size = self.index.height(position).unwrap_or(0.0);
-        start < g.offset + g.port_main && start + size > g.offset
+        let offset = self.view_offset.unwrap_or(g.offset);
+        start < offset + g.port_main && start + size > offset
     }
 
     /// A row just built or bound to another item: it waits when it is out

@@ -93,7 +93,24 @@ pub type NativeCall = std::sync::Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 
 /// JSON body and the reply to send when it is done.
 pub type NativeHandler = std::sync::Arc<dyn Fn(Vec<u8>, crate::Reply) + Send + Sync>;
 
+thread_local! {
+    static LIBRARY_LOAD_TIME: std::cell::Cell<std::time::Duration> = const {
+        std::cell::Cell::new(std::time::Duration::ZERO)
+    };
+}
+
 impl Native {
+    /// The host's library mapping inside this thread's synchronous calls
+    /// (LLP 1067.000.001 D7), excluded only from a turn's wall backstop.
+    pub fn record_library_load(time: std::time::Duration) {
+        LIBRARY_LOAD_TIME.with(|total| total.set(total.get().saturating_add(time)));
+    }
+
+    /// Cumulative mapping time on the calling thread, independent of its source.
+    pub fn library_load_time() -> std::time::Duration {
+        LIBRARY_LOAD_TIME.with(std::cell::Cell::get)
+    }
+
     /// Fill the slot (activation) or empty it (unload).
     pub fn set(&self, handler: Option<NativeHandler>) {
         *self.0.handler.lock().unwrap_or_else(|e| e.into_inner()) = handler;
@@ -143,9 +160,13 @@ impl Native {
                 .ok()
                 .and_then(|v| {
                     Some(format!(
-                        "{}.{}",
+                        "{}.{}{}",
                         v.get("extension")?.as_str()?,
-                        v.get("sync")?.as_str()?
+                        v.get("sync")?.as_str()?,
+                        v["owner"]
+                            .as_str()
+                            .map(|s| format!("#{s}"))
+                            .unwrap_or_default()
                     ))
                 });
             let Some(key) = named else { return call(body) };
@@ -271,6 +292,32 @@ pub struct Overlaid {
     pub value: Value,
     /// The ids of answered writes still to show.
     pub keep: Vec<u64>,
+}
+
+/// A data module's report (LLP 1175 D3): a plain HTTP request a listener for
+/// its global's error events made while it was dispatched. No answer waits
+/// for it. The runner runs it as module work ([`DataSource::take_reports`]),
+/// with the authority its own records give `by`.
+#[derive(Debug)]
+pub struct Report {
+    /// The source's token for the reply ([`DataSource::module_delivery`]).
+    pub token: u64,
+    /// The request, with no reach yet: the runner stamps it.
+    pub request: crate::request::Request,
+    /// Whose turn the listener interrupted.
+    pub by: Reporter,
+}
+
+/// Whose turn a report was made in, as the source knows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reporter {
+    /// The answer for this target was running when the event was dispatched.
+    Answer(Target),
+    /// A tool's handler was running.
+    Tool,
+    /// No answer was: a background round, a module turn, or a step of an
+    /// answer outside its own turn.
+    None,
 }
 
 /// What a request answers: a runtime resource row, a plan mutation, or one
@@ -471,6 +518,12 @@ data_source! {
         let _ = owner;
     }
 
+    /// This source answers a process that renders the web's pages, at build
+    /// or while serving: what it renders must be what the browser's bundle
+    /// reads, so a setting a launch may give reads the build's value (LLP
+    /// 1153.002 D2). Called before activation; a wrapper passes it on.
+    fn render_web(&mut self) {}
+
     /// Host-selected application directories. Configuration records paths only;
     /// implementations must defer opening storage until after first pixel.
     fn configure_storage(
@@ -595,7 +648,10 @@ data_source! {
     /// go. A call this source set aside is dropped unless `let_go` names it;
     /// after a `refused` commit, one whose request is in flight again is put
     /// back instead, and its replacement dropped. A source that forwards
-    /// `background` forwards this and `module_landed`.
+    /// `background` forwards this and `module_landed`. `store` is the Store
+    /// as committed when the requests were let go, read-only and outside a
+    /// worker's ordered set (LLP 1027.002 Change 2): nothing here may depend on
+    /// what a turn still in flight could change.
     fn keep_sent(
         &mut self,
         store: &Store,
@@ -638,6 +694,15 @@ data_source! {
         Ok(())
     }
 
+    /// The reports the module made since the last take (LLP 1175 D3). The
+    /// runner takes them after every call into the source and runs each as
+    /// module work, its reply delivered under its token
+    /// ([`DataSource::module_delivery`]). A source that forwards
+    /// `module_landed` forwards this.
+    fn take_reports(&mut self) -> Vec<Report> {
+        Vec::new()
+    }
+
     /// The module's background storage now, or `None` for a source that
     /// has none (LLP 1097 D8).
     fn background_state(&self) -> Option<BackgroundState> {
@@ -648,6 +713,10 @@ data_source! {
     /// D8): console output, including a refused answer's turn, plus failed
     /// storage and unhandled rejections. The runner writes them to the
     /// journal after each answer and reply, and after a background round.
+    /// A line the app's `console` wrote is marked with its method
+    /// ([`Console::mark`](crate::Console::mark)): the runner journals it as
+    /// `console: …` and hands it to the host's sink
+    /// ([`Runner::set_console`](crate::Runner::set_console), LLP 1027.009).
     fn take_logs(&mut self) -> Vec<String> {
         Vec::new()
     }
@@ -661,6 +730,26 @@ data_source! {
     /// nothing. Taken after each answer and reply, where the logs are.
     fn take_aborted(&mut self) -> Vec<u64> {
         Vec::new()
+    }
+
+    /// Resume one untargeted tool invocation by the request the runner holds.
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let _ = (fetch, continuation);
+        self.parse(store, source, args, outcome)
+    }
+
+    /// The module owning `source`; an empty name selects background work.
+    fn module_identity(&self, source: &str) -> Option<super::ModuleIdentity> {
+        let _ = source;
+        None
     }
 
     /// The host's wake, for a source that hears an abort off the host's
@@ -712,7 +801,9 @@ data_source! {
     /// The app identity, reverse-DNS (LLP 1023 D5) — the one declaration:
     /// bake writes it into the plan header, and boot refuses a plan whose
     /// header names a different app. Empty is unnamed — a fixture or a
-    /// stand-in — and unnamed matches anything.
+    /// stand-in — and unnamed matches anything. An app's generated entry
+    /// gives an unnamed source its manifest's `app.id`
+    /// (`exact_logic::Swappable::named`), which names its storage.
     fn app_id(&self) -> &str {
         ""
     }
@@ -796,6 +887,16 @@ data_source! {
     /// and on a device grants nothing.
     fn grants(&self) -> &str {
         ""
+    }
+
+    /// Optional binary-bound Rust entry point, without activating this source (LLP 1162.000 D2).
+    fn launch(&self) -> Option<crate::request::Launch> {
+        None
+    }
+
+    /// Checked process-start definitions, without activating this source (LLP 1162.000 D2).
+    fn preloads(&self) -> &[crate::request::Preload] {
+        &[]
     }
 
     /// Identity of replaceable logic, if any. A changed identity invalidates
@@ -980,8 +1081,12 @@ pub enum DataError {
     UnknownSource(String),
     BadArguments(String),
     Unavailable(String),
-    /// Build-time storage cannot answer; use the resource placeholder until activation.
-    DeferredAtBake(String),
+    /// A build-time call cannot answer; use the resource placeholder until activation.
+    DeferredAtBake {
+        message: String,
+        /// An invalid option needs a build warning; ordinary deferral does not.
+        warning: bool,
+    },
     /// The seam to a loaded Rust module could not carry the call (an
     /// answer over its bound, a trap): the source is there but cannot
     /// answer now. A resource asked this fails; it does not refuse the
@@ -1008,7 +1113,9 @@ impl std::fmt::Display for DataError {
             Self::UnknownSource(name) => write!(f, "unknown source: {name}"),
             Self::BadArguments(reason)
             | Self::Unavailable(reason)
-            | Self::DeferredAtBake(reason)
+            | Self::DeferredAtBake {
+                message: reason, ..
+            }
             | Self::Interface(reason)
             | Self::Overrun(reason)
             | Self::Failed(_, reason, _) => f.write_str(reason),

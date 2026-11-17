@@ -141,6 +141,10 @@ impl<D: DataSource> Runner<D> {
             }
             let action_name = self.plan.str(action.name).to_owned();
             self.log(format!("{key}: heard by {action_name}"));
+            // Only an activation the host raised is queued as the app's.
+            if raised.origin == CallOrigin::App {
+                self.note_activation();
+            }
             let result = self.as_origin(raised.origin, |r| r.run_action(row.action, args, &[]));
             match result {
                 Ok(receipt) => receipts.push(receipt),

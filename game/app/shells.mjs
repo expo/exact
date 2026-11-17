@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { shaderFiles } from '../../scripts/app.mjs';
+import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
+import { lockBlocks, lockChanges, lockSeed, memberRefusal, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory; only the bake writes the resolved manifest.
 const merge = (base, overrides) => {
@@ -29,7 +30,9 @@ const writeChanged = (path, text, authored = true) => {
 export function gameDefaults(dir) {
   const source = resolve(dir, 'logic/src/lib.rs'), path = resolve(dir, 'app.json');
   if (!existsSync(source)) return null;
-  const authored = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+  let authored = {};
+  try { if (existsSync(path)) authored = parseManifest(readFileSync(path, 'utf8')); }
+  catch (error) { throw new Error(`${path}: ${error.message}`); }
   const overrides = authored;
   const rust = readFileSync(source, 'utf8');
   const declaration = /impl\s+(?:exact_game::)?Game\s+for\s+(\w+)\s*\{[^{}]*?\bconst\s+ID\s*:\s*&'static\s+str\s*=\s*"([a-z][a-z0-9-]*)"/.exec(rust);
@@ -89,7 +92,8 @@ function renderDeclaration(dir, render) {
   if (!existsSync(manifest)) throw new Error(`game.render.crate ${render.crate} requires ${manifest}`);
   const declared = Bun.TOML.parse(readFileSync(manifest, 'utf8')).package;
   if (declared?.name !== render.crate) throw new Error(`game.render.crate ${render.crate} must name the package in ${folder}`);
-  if (declared.workspace !== '../.shells') throw new Error(`${manifest}: set package.workspace = "../.shells" so the app owns its render hooks`);
+  const refused = memberRefusal(manifest, declared, '../.shells', 'its render hooks');
+  if (refused) throw new Error(refused);
   return folder;
 }
 
@@ -122,7 +126,20 @@ export function renderGraph(metadata, game) {
   }
 }
 
-export function gameShells(dir, game, workspace) {
+/** Whether a game without a data crate bakes, for Apple, the entry `exact-game-apple` holds (`SHARED_ENTRY`,
+ * game/app/src/lib.rs), given the build's environment. The shared entry registers SQLite and names no preloads, native
+ * source or Rust bundle. An archive linked by plan (production, or `EXACT_APPLE_LINK=plan`: bake/src/link.rs) registers
+ * SQLite only if the plan uses it, which is unknown before the bake; `link` naming it settles it. */
+export function sharesAppleEntry(app, env = process.env) {
+  if (Object.keys(app.preload ?? {}).length || env.EXACT_NATIVE_SOURCE || env.EXACT_RUST_BUNDLE) return false;
+  const byPlan = env.EXACT_APPLE_LINK !== undefined ? env.EXACT_APPLE_LINK === 'plan' : env.EXACT_UPDATE_TRUST === 'production';
+  return !byPlan || (app.link ?? []).includes('sqlite');
+}
+
+/** `env` is the build's: whether the Apple shell shares `exact-game-apple` follows from it (`sharesAppleEntry`).
+ * `updateLock`: the workspace is generated for a lock refresh (`prepareGame`), which takes the shared Apple host
+ * whenever the game can have it. */
+export function gameShells(dir, game, workspace, {env = process.env, updateLock = false} = {}) {
   // Relative paths are written from the real directory: /tmp is a symlink on macOS.
   dir = realpathSync(dir);
   // Only this app is materialized. Each bake owns a generated Cargo workspace.
@@ -133,6 +150,12 @@ export function gameShells(dir, game, workspace) {
   // Reject authored declaration errors before touching even an old generated workspace.
   if (app.game.presentation !== undefined) {
     throw new Error('game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)');
+  }
+  // The shells below link no update store on any platform, so a game baked with a store level other than "0" would
+  // build and then refuse to boot (each native host checks the level against its linked delivery, LLP 1030 D4).
+  const stores = Object.entries(app.deploy?.store ?? {}).filter(([, level]) => level !== '0');
+  if (stores.length) {
+    throw new Error(`${resolve(dir, 'app.json')}: ${stores.map(([platform, level]) => `deploy.store.${platform} is ${JSON.stringify(level)}`).join(', ')}, but games take no over-the-air updates today: their hosts link no update store, and every change ships as a new binary. Set ${stores.length === 1 ? 'it' : 'each'} to "0" or remove ${stores.length === 1 ? 'it' : 'them'}.`);
   }
   const renderDir = renderDeclaration(dir, render);
   const root = resolve(dir, '.shells');
@@ -204,7 +227,8 @@ export function gameShells(dir, game, workspace) {
   if (authoredLogic) {
     const declared = Bun.TOML.parse(readFileSync(manifest, 'utf8')).package;
     if (declared?.name !== crate) throw new Error(`game.crate ${crate} must name the package in ${appDir}/logic`);
-    if (declared.workspace !== '../.shells') throw new Error(`${manifest}: set package.workspace = "../.shells" so the app owns its logic`);
+    const refused = memberRefusal(manifest, declared, '../.shells', 'its logic');
+    if (refused) throw new Error(refused);
     rmSync(resolve(root, 'logic'), {recursive:true, force:true});
   } else {
     mkdirSync(logicDir, {recursive:true});
@@ -254,9 +278,8 @@ fn main() {
     if (declared?.name !== data.crate) {
       throw new Error(`game.data.crate ${data.crate} must name the package in ${dataDir}`);
     }
-    if (declared.workspace !== '../.shells') {
-      throw new Error(`${dataManifest}: set package.workspace = "../.shells" so the app owns its data`);
-    }
+    const refused = memberRefusal(dataManifest, declared, '../.shells', 'its data');
+    if (refused) throw new Error(refused);
   }
   if (app.game.audio !== undefined && typeof app.game.audio !== "boolean") throw new Error("game.audio must be a boolean");
   if (app.game.assets !== undefined && typeof app.game.assets !== "boolean") throw new Error("game.assets must be a boolean");
@@ -267,13 +290,19 @@ fn main() {
   const bakeArt = hasArt(appDir);
   // The snapshot excludes this entire generated root, including its gitignore.
   if (!existsSync(resolve(root, '.gitignore'))) writeFileSync(resolve(root, '.gitignore'), '*\n!.gitignore\n');
+  // A game without a data crate can take its Apple host from exact-game-apple, compiled once
+  // for every such game, when its entry would be that crate's. A lock captured before that
+  // crate existed would refuse it under --locked, so a build keeps such a game on its own host;
+  // refreshing the lock resolves it with the shared host, which moves it there.
+  const sharedApple = !data && sharesAppleEntry(app, env) && (updateLock || !existsSync(lock) || /^name = "exact-game-apple"$/m.test(readFileSync(lock, 'utf8')));
   for (const kind of ['gpu', 'web', 'apple', 'linux', 'windows', 'android']) {
-    const shell = resolve(root, kind);
+    const shell = resolve(root, kind), shared = kind === 'apple' && sharedApple;
     // A cached build script can run from either the game or its deeper proof copy.
     const levelBake = resolve(source, 'bake/src/files.rs');
-    // These adapters contain entry points only; tests live in authored crates.
+    const tests = kind === 'linux' && existsSync(resolve(appDir, 'linux/tests'))
+      ? readdirSync(resolve(appDir, 'linux/tests')).filter(file => file.endsWith('.rs')).sort() : [];
     const target = ['linux', 'windows'].includes(kind)
-      ? `[[bin]]\nname = "${name}-${kind}"\npath = "src/main.rs"\ntest = false`
+      ? `[[bin]]\nname = "${name}-${kind}"\npath = "src/main.rs"${tests.length ? '' : '\ntest = false'}`
       : `[lib]\ncrate-type = ["${kind === 'apple' ? 'staticlib' : 'cdylib'}"]\ntest = false\ndoctest = false`
         // A game with data of its own bakes with it in the web dev loop, as an app's web crate does: host/web/dev.mjs
         // takes a web crate's `<app>-dev` bin, else the generic compiler, which has no game's data.
@@ -284,12 +313,13 @@ fn main() {
     const renderDependency = render ? `game-render = { package = "${render.crate}", path = ${JSON.stringify(relative(shell, renderDir))} }\n` : '';
     const dependencies = kind === 'gpu'
       ? `exact-game-render.workspace = true\n${app.game.audio === true ? "exact-game-audio.workspace = true\n" : ""}${renderDependency}game-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n\n[target.'cfg(target_arch = "wasm32")'.dependencies]\nwasm-bindgen.workspace = true\nwasm-bindgen-futures.workspace = true\nweb-sys.workspace = true\n\n[build-dependencies]\nexact-game.workspace = true\nserde_json = "1"\ngame-logic = { package = "${crate}", path = ${JSON.stringify(relative(shell, logicDir))} }\n${bakeArt ? 'exact-game-bake.workspace = true\n' : ''}`
-      // Android's Canvas host is the Linux host's (exact_linux::canvas_jni!), linked only on Android.
-      : kind === 'android' ? `\n[target.'cfg(target_os = "android")'.dependencies]\nibex2-sqlite.workspace = true\nexact-logic.workspace = true\nexact-runner.workspace = true\nexact-linux.workspace = true\n${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`
-      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : kind === 'windows' ? 'exact-linux.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
+      // Android's Canvas host is the Linux host's (exact_painted::canvas_jni!), linked only on Android.
+      : kind === 'android' ? `\n[target.'cfg(target_os = "android")'.dependencies]\nibex2-sqlite.workspace = true\nexact-logic.workspace = true\nexact-runner.workspace = true\nexact-painted.workspace = true\n${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`
+      : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${shared ? 'exact-game-apple.workspace = true\n' : ''}${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : ['linux', 'windows'].includes(kind) ? 'exact-painted.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
     const files = {
       ...(kind === 'web' && data ? { [`src/bin/${name}-dev.rs`]: `//! The resident dev driver for the game's web shell: \`${name}-dev <source> <out>\`, baking with its data.\n\nfn main() -> std::process::ExitCode {\n    exact_web::dev::main::<app_data::${data.type}>()\n}\n` } : {}),
-      'Cargo.toml': header + dependencies,
+      'Cargo.toml': header + dependencies + (tests.length ? `\n[dev-dependencies]\nserde_json.workspace = true\nexact-update = { path = ${JSON.stringify(relative(shell, resolve(gameRoot, '../update')))} }\n` : ''),
+      ...Object.fromEntries(tests.map(file => [`tests/${file}`, readFileSync(resolve(appDir, 'linux/tests', file), 'utf8')])),
       [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: kind === 'gpu' ? `exact_game_render::module!(game_logic::${type}${app.game.audio === true ? ", audio" : ""}${app.game.assets === true ? ", assets" : ""}${render ? `, hooks = game_render::${render.hooks}${render.shaders ? `, shaders = game_render::${render.shaders}` : ''}` : ''});\n` : (kind === 'windows' ? '#![cfg_attr(\n    all(target_os = "windows", not(debug_assertions)),\n    windows_subsystem = "windows"\n)]\n' : '') + 'include!(concat!(env!("OUT_DIR"), "/entry.rs"));\n',
       'build.rs': kind === 'gpu'
         ? `use exact_game::{Args, Game, Value};
@@ -342,9 +372,12 @@ ${bakeArt ? `    exact_game_bake::bake_art(${JSON.stringify(relative(shell, appD
 `
         : data
           ? `fn main() {\n    exact_game_app::bake_data_declaration::<app_data::${data.type}>("${kind}", ${JSON.stringify(relative(shell, appDir))}, "app_data::${data.type}");\n}\n`
+          : shared ? `fn main() {\n    exact_game_app::bake_shared_declaration(${JSON.stringify(relative(shell, appDir))});\n}\n`
           : `fn main() {\n    exact_game_app::bake_declaration("${kind}", ${JSON.stringify(relative(shell, appDir))});\n}\n`,
     };
-    if (Object.entries(files).every(([file, bytes]) => existsSync(resolve(shell, file)) && readFileSync(resolve(shell, file), 'utf8') === bytes)) continue;
+    const generatedTests = existsSync(resolve(shell, 'tests')) ? readdirSync(resolve(shell, 'tests')).sort() : [];
+    const sameTests = tests.length === generatedTests.length && tests.every((file, i) => file === generatedTests[i]);
+    if (sameTests && Object.entries(files).every(([file, bytes]) => existsSync(resolve(shell, file)) && readFileSync(resolve(shell, file), 'utf8') === bytes)) continue;
     const stage = mkdtempSync(resolve(root, '.shell-stage-'));
     try {
       const replacement = resolve(stage, 'new'), backup = resolve(stage, 'old');
@@ -373,11 +406,6 @@ const sdkLockFile = source => [resolve(source, 'app/shells.lock'), resolve(gameR
 // game resolves offline before anyone refreshes the SDK lock. A new root crate
 // (00d37ef9f: exact-svg-filter under the kernel) is one too: the root lock's
 // path packages, which carry no source or checksum, seed it the same way.
-// By name and semver series (Cargo's compatibility: 1.x, 0.37.x, 0.0.3): one
-// graph holds at most one version of a package per series.
-const series = version => { const [major, minor, patch] = String(version).split('.'); return major !== '0' ? major : minor !== '0' ? `0.${minor}` : `0.0.${patch}`; };
-const seriesId = block => `${/^name = "([^"]+)"/m.exec(block)?.[1]} ${series(/^version = "([^"]+)"/m.exec(block)?.[1])}`;
-const lockBlocks = text => text.split(/\n(?=\[\[package\]\]\n)/).slice(1).map(block => block.trimEnd());
 export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.lock')) ? readFileSync(resolve(gameRoot, '../Cargo.lock'), 'utf8') : '') {
   // A root's new major of a package the SDK lock holds is a pin too; a compatible one is not.
   const held = new Set((Bun.TOML.parse(sdk).package ?? []).map(pkg => `${pkg.name} ${series(pkg.version)}`));
@@ -385,29 +413,7 @@ export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.
     .filter(block => (/^source = "registry\+/m.test(block) || !/^source = /m.test(block)) && !held.has(seriesId(block)));
   return pins.length ? `${sdk.trimEnd()}\n\n${pins.join('\n\n')}\n` : sdk;
 }
-/** `lock`'s starting point for a game with its own lock (LLP 1046.011 D2): the
- * SDK lock decides every name and series it holds, a same-series bump included,
- * and the game's lock keeps the rest (its own packages, git and path ones too),
- * so Cargo prefers exactly these versions and fetches only what they lack. */
-export function lockSeed(sdk, own) {
-  // The same crate from another source (a git fork, a path) is another package:
-  // the SDK's supersedes only its own source's, whatever the git revision.
-  const key = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.exec(block)?.[1] ?? ''}`;
-  const held = new Set(lockBlocks(sdk).map(key));
-  const kept = lockBlocks(own).filter(block => !held.has(key(block)));
-  return kept.length ? `${sdk.trimEnd()}\n\n${kept.join('\n\n')}\n` : sdk;
-}
 const cargoMetadata = (cwd, flags, env) => spawnSync('cargo', ['metadata', ...flags, '--format-version', '1'], {cwd, env, encoding:'utf8', maxBuffer:64 * 1024 * 1024});
-// A lock's packages by identity. Dependency edges follow from the versions
-// and the activated features, so a game's subset keeps every version but may
-// drop edges; the versions and checksums are what the SDK lock decides.
-const lockIds = text => new Map((Bun.TOML.parse(text).package ?? []).map(pkg => [`${pkg.name} ${pkg.version} ${pkg.source ?? ''}`.trim(), pkg.checksum ?? null]));
-/** Packages of `derived` (members excepted) whose version the SDK lock does not hold.
- * A root path crate new since the SDK lock is held through `withRootPins`. */
-export function outsideSdkLock(derived, sdk, members) {
-  const known = lockIds(sdk);
-  return [...lockIds(derived)].filter(([id, checksum]) => !members.has(id.split(' ')[0]) && (!known.has(id) || known.get(id) !== checksum)).map(([id]) => id);
-}
 // A lock's versions by package name.
 const lockVersions = text => (text ? Bun.TOML.parse(text).package ?? [] : [])
   .reduce((map, pkg) => map.set(pkg.name, [...(map.get(pkg.name) ?? []), pkg.version].sort()), new Map());
@@ -460,32 +466,7 @@ export function lockDrift(captured, sdk) {
   const updated = [...moved];
   return {added:[...added].sort(), updated:updated.sort()};
 }
-/** What a lock refresh changed, by package name, for `lock` to print: the
- * versions (or a git or path package's source) that moved, then what was
- * added, then what was removed; with none of those, the dependencies a package
- * gained or lost (Cargo rewrites them when a manifest gains or drops a package the lock already holds). */
-export function lockChanges(before, after) {
-  // As an author reads a package: its version, and where it comes from unless crates.io.
-  const shown = pkg => `${pkg.version}${!pkg.source ? ' (path)' : pkg.source === CRATES_IO ? '' : ` (${pkg.source})`}`;
-  const read = text => (text ? Bun.TOML.parse(text).package ?? [] : []).reduce((map, pkg) => map.set(pkg.name, [...(map.get(pkg.name) ?? []), shown(pkg)].sort()), new Map());
-  const was = read(before), now = read(after), moved = [], added = [];
-  for (const [name, versions] of now) {
-    const old = was.get(name);
-    if (!old) added.push(`added ${name} ${versions.join(', ')}`);
-    else if (old.join() !== versions.join()) moved.push(`${name} ${old.join(', ')} → ${versions.join(', ')}`);
-  }
-  const changes = [...moved, ...added, ...[...was].filter(([name]) => !now.has(name)).map(([name, versions]) => `removed ${name} ${versions.join(', ')}`)];
-  if (changes.length) return changes;
-  const lists = text => new Map((text ? Bun.TOML.parse(text).package ?? [] : []).map(pkg => [`${pkg.name} ${shown(pkg)}`, pkg.dependencies ?? []]));
-  const had = lists(before);
-  return [...lists(after)].flatMap(([pkg, deps]) => [...deps.filter(dep => !had.get(pkg)?.includes(dep)).map(dep => `${pkg} now depends on ${dep}`),
-    ...(had.get(pkg) ?? []).filter(dep => !deps.includes(dep)).map(dep => `${pkg} no longer depends on ${dep}`)]);
-}
-const CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index';
 const listed = (items, most = 6) => items.length > most ? `${items.slice(0, most).join(', ')}, … (${items.length} in all)` : items.join(', ');
-/** Whether Cargo refused a locked graph because the lock no longer matches the
- * manifests, a lock to refresh, rather than for a crate missing from its cache. */
-export const staleLock = stderr => /cannot update the lock file|lock file \S+ needs to be updated/.test(stderr ?? '');
 // The refresh as an author runs it: the game's runner when it has the verb (a launcher
 // of exact2's app-cli.mjs has; one generated before either has not, and `update`
 // rewrites it), else this script from exact2.
@@ -544,7 +525,7 @@ export function prepareGame(dir, game, source = gameRoot, {updateLock = false, f
   // an app object from before app.json gained game.render.
   game = gameDefaults(dir)?.game ?? game;
   const root = resolve(dir, '.shells'), own = resolve(dir, 'Cargo.lock'), shell = resolve(root, 'Cargo.lock');
-  const name = gameShells(dir, game, source), members = shellMembers(game, name);
+  const name = gameShells(dir, game, source, {env, updateLock}), members = shellMembers(game, name);
   const metadata = locked => (locked ? lockedMetadata : cargoMetadata)(root, ['--offline', ...(locked ? ['--locked'] : []), ...(target ? ['--filter-platform', target] : [])], env);
   const refused = result => new Error(`game Cargo graph: ${result.stderr || result.error?.message || ''}${result.status === null ? ` (cargo metadata ended by ${result.signal})` : ''}\nCrates missing from Cargo's cache, the lock unchanged: cargo fetch --manifest-path ${JSON.stringify(resolve(root, 'Cargo.toml'))}\nA dependency change (or both): ${lockCommand(dir)} fetches, resolves again and captures this game's lock`);
   if (fetch) {
@@ -749,8 +730,15 @@ if (import.meta.main) {
         const env = {...process.env, CARGO_TARGET_DIR:process.env.CARGO_TARGET_DIR ?? resolve(dir,'target')};
         bakeGameArt(dir, env);
         try { lintGame(dir, game, {env}); } catch (error) { console.error(error.message); failed = true; }
-        // The author's crates only: generated adapters are products, built by bakes.
-        const result=spawnSync('cargo',['test',...[game.crate, game.data?.crate, game.render?.crate].filter(Boolean).flatMap(crate => ['-p', crate]),'--locked','--offline','--no-fail-fast'], {
+        const name = game.crate.slice(0, -'-logic'.length);
+        const linuxTests = existsSync(resolve(dir, '.shells/linux/tests'));
+        if (linuxTests) {
+          const built = spawnSync('cargo', ['build', '-p', `${name}-gpu`, '--locked', '--offline', '--keep-going'], {
+            cwd:resolve(dir, '.shells'), env, stdio:'inherit',
+          });
+          failed ||= built.status !== 0;
+        }
+        const result=spawnSync('cargo',['test',...[game.crate, game.data?.crate, game.render?.crate, linuxTests ? `${name}-linux` : null].filter(Boolean).flatMap(crate => ['-p', crate]),'--locked','--offline','--no-fail-fast'], {
           cwd:resolve(dir,'.shells'),env,stdio:'inherit',
         });
         failed ||= result.status !== 0;

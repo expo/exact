@@ -83,6 +83,25 @@ final class Canvas2DFontTests: XCTestCase {
         host.forget(7)
     }
 
+    func testASpaceTakesWordSpacingBesideLetterSpacing() {
+        let engine = TextEngine(resolve: { _ in nil })
+        func width(_ text: String, size: Double, letter: Double, word: Double, kerning: Int = 0) -> Double {
+            var f = Canvas2DFont()
+            f.size = size; f.families = ["system-ui"]; f.letterSpacing = letter; f.wordSpacing = word; f.kerning = kerning
+            return engine.canvasText.measure(f, text, rtl: false)[0]
+        }
+        // Chrome: 164.570, 204.570, 174.570 and 214.570 for these four.
+        let plain = width("AVAVA To", size: 40, letter: 0, word: 0)
+        XCTAssertEqual(width("AVAVA To", size: 40, letter: 0, word: 10) - plain, 10, accuracy: 0.01)
+        let tracked = width("AVAVA To", size: 40, letter: 5, word: 0)
+        XCTAssertEqual(tracked - plain, 40, accuracy: 0.01)
+        XCTAssertEqual(width("AVAVA To", size: 40, letter: 5, word: 10) - tracked, 10, accuracy: 0.01)
+        XCTAssertEqual(width("AVAVA To", size: 40, letter: 5, word: 10, kerning: 2)
+                       - width("AVAVA To", size: 40, letter: 5, word: 0, kerning: 2), 10, accuracy: 0.01, "without kerning")
+        XCTAssertEqual(width("a b c d", size: 20, letter: 2, word: 8) - width("a b c d", size: 20, letter: 2, word: 0),
+                       24, accuracy: 0.01, "three spaces")
+    }
+
     func testKeptListsRetainTheirFontsUntilCoveredAndResetDropsSavedFonts() throws {
         let host = Canvas2DHost(), parent = CALayer(), engine = TextEngine(resolve: { _ in nil })
         host.textEngine = { engine }

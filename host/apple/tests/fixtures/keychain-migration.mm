@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
     assert(prepared == (failure ? -1 : 0));
     assert((error != nullptr) == failure); free(error);
     assert(migrations == (app ? 1 : 0));
-    int status = ibex2_darwin_keychain_get("dev.exact.migration", "session", &value, &length, &error);
+    int status = ibex2_darwin_keychain_get("dev.exact.migration", "session", &value, &length, &error, nullptr);
     if ([mode isEqual:@"extension"]) {
       assert(status == 1 && migrations == 0 && login_items.count == 2);
       return 0;
@@ -123,11 +123,11 @@ int main(int argc, char **argv) {
     if (![mode isEqual:@"locked-list"]) assert(login_items.count == (failure ? 1 : 0));
     assert([shared_items[@"updated"] isEqual:bytes(@"new")]);
     const int reads = legacy_reads;
-    assert(ibex2_darwin_keychain_set("dev.exact.migration", "fresh", (const unsigned char *)"new", 3, &error) == 0);
+    assert(ibex2_darwin_keychain_set("dev.exact.migration", "fresh", (const unsigned char *)"new", 3, &error, nullptr) == 0);
     assert([shared_items[@"fresh"] isEqual:bytes(@"new")]);
-    assert(ibex2_darwin_keychain_get("dev.exact.migration", "fresh", &value, &length, &error) == 0);
+    assert(ibex2_darwin_keychain_get("dev.exact.migration", "fresh", &value, &length, &error, nullptr) == 0);
     assert(length == 3 && memcmp(value, "new", 3) == 0); free(value);
-    assert(ibex2_darwin_keychain_forget("dev.exact.migration", "fresh", &error) == 0);
+    assert(ibex2_darwin_keychain_forget("dev.exact.migration", "fresh", &error, nullptr) == 0);
     assert(!shared_items[@"fresh"]);
     assert(prepare_service("dev.exact.migration") == errSecSuccess && migrations == 1 && legacy_reads == reads);
     if (failure) return 0;

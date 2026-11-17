@@ -42,6 +42,29 @@ pub(super) fn shader_tree(
     Some(optional_tree(path, outputs))
 }
 
+/// The notification service input for an iOS bake. A complete selection is
+/// its own invalidation input; without one, an absent convention directory is
+/// not a missing Cargo input. watchOS and tvOS bakes never consume the tree.
+pub(crate) fn notification_service_tree(
+    path: &Path,
+    outputs: &[PathBuf],
+    selected: Option<&str>,
+    platform: &str,
+    target: &str,
+) -> Option<PathBuf> {
+    if platform != "ios"
+        || target.contains("-tvos")
+        || target.contains("-watchos")
+        || selected.is_some_and(|names| !names.split(',').any(|entry| entry == "notifications"))
+        || (selected.is_none()
+            && !std::fs::symlink_metadata(path)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink()))
+    {
+        return None;
+    }
+    Some(optional_tree(path, outputs))
+}
+
 /// A missing Cargo input is perpetually dirty. Watch its nearest existing
 /// ancestor instead, unless Cargo's recursive scan would include build output.
 /// In that layout keep the conservative missing input: first creation must
@@ -288,6 +311,75 @@ fn main() {{
             shader_tree(&shaders, &[app.join("target")], Some("deck")),
             Some(shaders)
         );
+    }
+
+    #[test]
+    fn notification_service_watches_stay_warm_for_unset_ios_and_watch_bakes() {
+        let f = Fixture::new();
+        let app = f.0.join("app");
+        let package = app.join("consumer");
+        fs::write(package.join("Cargo.toml"), "[package]\nname='notification-service-watch-fixture'\nversion='0.0.0'\nedition='2024'\n[workspace]\n").unwrap();
+        fs::create_dir(package.join("src")).unwrap();
+        fs::write(package.join("src/lib.rs"), "pub fn value() {}\n").unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/receipt/watch.rs");
+        fs::write(package.join("build.rs"), format!(r#"
+#[path = {source:?}] mod watch;
+use std::path::PathBuf;
+fn main() {{
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=EXACT_APPLE_EXTENSIONS");
+    println!("cargo:rerun-if-env-changed=WATCH_TARGET");
+    let app = PathBuf::from("..");
+    let service = app.join("modules/apple/notification-service");
+    let selected = std::env::var("EXACT_APPLE_EXTENSIONS").ok();
+    let target = std::env::var("WATCH_TARGET").unwrap();
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    if let Some(path) = watch::notification_service_tree(&service, &[out], selected.as_deref(), "ios", &target) {{
+        println!("cargo:rerun-if-changed={{}}", path.display());
+    }}
+    let record = PathBuf::from(std::env::var_os("WATCH_RECORD").unwrap());
+    let previous = std::fs::read_to_string(&record).unwrap_or_default();
+    std::fs::write(record, format!("{{previous}}baked\n")).unwrap();
+}}
+"#)).unwrap();
+        let record = app.join("builds");
+        let build = |expected: usize, target: &str, selected: Option<&str>| {
+            let mut command = std::process::Command::new(env!("CARGO"));
+            command
+                .args(["build", "--quiet", "--offline", "--manifest-path"])
+                .arg(package.join("Cargo.toml"))
+                .arg("--target-dir")
+                .arg(app.join("target"))
+                .env("WATCH_RECORD", &record)
+                .env("WATCH_TARGET", target)
+                .env("RUSTC_WRAPPER", "")
+                .env("RUSTC_WORKSPACE_WRAPPER", "")
+                .env_remove("CARGO_BUILD_BUILD_DIR")
+                .env_remove("CARGO_ENCODED_RUSTFLAGS")
+                .env_remove("RUSTFLAGS");
+            if let Some(selected) = selected {
+                command.env("EXACT_APPLE_EXTENSIONS", selected);
+            } else {
+                command.env_remove("EXACT_APPLE_EXTENSIONS");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                fs::read_to_string(&record).unwrap().lines().count(),
+                expected
+            );
+        };
+        build(1, "aarch64-apple-ios", None);
+        build(1, "aarch64-apple-ios", None);
+        build(2, "aarch64-apple-watchos-sim", None);
+        build(2, "aarch64-apple-watchos-sim", None);
+        fs::create_dir_all(app.join("modules/apple/notification-service")).unwrap();
+        build(3, "aarch64-apple-ios", Some("notifications"));
+        build(3, "aarch64-apple-ios", Some("notifications"));
     }
 
     #[test]

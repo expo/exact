@@ -172,13 +172,19 @@ export async function authPopupWeb({ webDist, check: record }) {
       if (!box) throw new Error(`no button ${label}`);
       for (const type of ['mousePressed', 'mouseReleased']) await call('Input.dispatchMouseEvent', { type, x: box[0], y: box[1], button: 'left', clickCount: 1 });
     };
-    const approve = async () => {
+    const approve = async (coop) => {
       for (const end = Date.now() + 10000; !popups.length && Date.now() < end;) await sleep(50);
       const popup = popups.shift();
       if (!popup) return check(false, 'no popup opened');
       const { sessionId: p } = await cdp.send('Target.attachToTarget', { targetId: popup.targetId, flatten: true });
       const ready = () => cdp.send('Runtime.evaluate', { expression: '!!document.getElementById("approve")', returnByValue: true }, p).then((r) => r.result.value, () => false);
       for (const end = Date.now() + 10000; Date.now() < end && !(await ready());) await sleep(50);
+      if (coop) {
+        // Exercise a person taking longer than the former closed-window grace period.
+        await sleep(6000);
+        check(await evaluate("document.querySelector('[data-testid=sign-in]').disabled"),
+          'the COOP provider stays pending after six seconds with no callback');
+      }
       await cdp.send('Runtime.evaluate', { expression: 'document.getElementById("approve").click()' }, p).catch(() => {});
       return true;
     };
@@ -204,7 +210,7 @@ export async function authPopupWeb({ webDist, check: record }) {
       await fetch(`${ISSUER}/fixture/coop?on=${coop ? 1 : 0}`);
       await prepare();
       await press('Sign in');
-      await approve();
+      await approve(coop);
       if (await until(is('session', 'Signed in as fixture.test'), `signed in${coop ? ' (COOP)' : ''}`)) {
         check(true, `signed in through the popup${coop ? ', the provider severing its opener (COOP): the BroadcastChannel' : ', by opener'}`);
       }

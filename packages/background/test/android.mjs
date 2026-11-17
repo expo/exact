@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import { checker } from '../../camera/test/fixture.mjs';
 import { texts, until } from '../../photos/test/fixture.mjs';
 import { ensureShells } from '../../../scripts/app-shells.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const argv = process.argv.slice(2), emulator = argv.includes('--emulator') ? argv[argv.indexOf('--emulator') + 1] : null;
@@ -57,11 +58,11 @@ try {
   const sums = existsSync(checksums) ? readFileSync(checksums, 'utf8') : '';
   check('android', 'the checksums cover it', /<component group="androidx\.work" name="work-runtime" version="2\.12\.0">/.test(sums) && /sha256/.test(sums), sums.slice(0, 400) || `no ${checksums}`);
 
-  const generated = resolve(root, 'host/android/app/build', name, 'extensions/exact/app/ExactExtensions.kt');
+  const out = apkBuildDir(app), generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('android', 'the roster binds the implementation', roster.includes('exact.background.BackgroundModule'), roster || `no ${generated}`);
-  const merged = readdirSync(resolve(root, 'host/android/app/build', name), { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
-  const xml = merged ? readFileSync(resolve(root, 'host/android/app/build', name, merged), 'utf8') : '';
+  const merged = readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
+  const xml = merged ? readFileSync(resolve(out, merged), 'utf8') : '';
   check('android', "the manifest carries WorkManager's job service and the network state permission", xml.includes('androidx.work.impl.background.systemjob.SystemJobService')
     && xml.includes('android.permission.ACCESS_NETWORK_STATE'), merged ?? 'no merged manifest');
 

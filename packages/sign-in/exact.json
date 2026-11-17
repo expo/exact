@@ -177,7 +177,7 @@
                 "withPublicKey": true
               },
               "google": {
-                "active": true
+                "active": false
               }
             }
           },
@@ -185,7 +185,7 @@
             "available": true,
             "providers": {
               "google": {
-                "active": true
+                "active": false
               }
             }
           },

@@ -11,7 +11,7 @@
 //   the system's own failure (never the package's 60 s bound); then a
 //   relaunch that only reads `pushSubscription()` answers the same token.
 //
-// - On this Mac (`word.swift`): the branch `subscribePush()` takes for each
+// - On this Mac (`word.swift`, `service-reference.swift`): the branch `subscribePush()` takes for each
 //   notification authorization, from the function it switches on, and the
 //   state `pushPermissionState()` reads: only `notDetermined` asks;
 //   provisional and ephemeral register without asking, as authorized does.
@@ -47,12 +47,29 @@ const check = (name, ok, detail) => {
   rmSync(out, { recursive: true, force: true });
 }
 
+// The service handler's completion and fallback cases run directly, distinct from a system invocation below.
+{
+  const out = mkdtempSync(join(tmpdir(), 'exact-push-service-'));
+  const service = resolve(here, 'fixture/modules/apple/notification-service/NotificationService.swift');
+  const r = spawnSync('swiftc', [service, resolve(here, 'service-reference.swift'), '-o', join(out, 'reference')], { encoding: 'utf8' });
+  if (r.status === 0) {
+    const reference = spawnSync(join(out, 'reference'), [], { encoding: 'utf8' });
+    for (const line of reference.stdout.trim().split('\n')) check(line.replace(/^(PASS|FAIL) /, ''), line.startsWith('PASS'), line);
+    if (reference.status !== 0 && !reference.stdout.includes('FAIL')) check('notification service reference ran', false, reference.stderr);
+  } else check('notification service reference compiled', false, r.stderr);
+  rmSync(out, { recursive: true, force: true });
+}
+
 const scratch = mkdtempSync(join(tmpdir(), 'exact-push-')), app = join(scratch, 'pushfixture');
 run('bun', [resolve(root, 'scripts/exact.mjs'), 'new', app], root);
-for (const f of ['app.contract', 'app.ts', 'strings']) cpSync(join(here, 'fixture', f), join(app, f), { recursive: true });
+for (const f of ['app.contract', 'app.ts', 'strings', 'modules']) cpSync(join(here, 'fixture', f), join(app, f), { recursive: true });
 rmSync(join(app, 'app.test.contract'), { force: true });
-const id = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')).app.id;
+const appManifest = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')), id = appManifest.app.id;
+appManifest.share_target = { action: '/', method: 'GET', params: { text: 'text' } };
+writeFileSync(join(app, 'app.json'), JSON.stringify(appManifest, null, 2));
 writeFileSync(join(app, 'app.ts'), readFileSync(join(app, 'app.ts'), 'utf8').replace('__APP_ID__', id));
+const serviceSource = join(app, 'modules/apple/notification-service/NotificationService.swift');
+writeFileSync(serviceSource, readFileSync(serviceSource, 'utf8').replaceAll('__APP_ID__', id));
 const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
 manifest.dependencies = { ...manifest.dependencies, '@exact/push': `file:${pkg}` };
 writeFileSync(join(app, 'package.json'), JSON.stringify(manifest, null, 2));
@@ -64,7 +81,7 @@ const text = (tree, testId) => tree?.nodes?.find((n) => n.props?.testId === test
 
 {
   // The web has no implementation: its declared absence, not an error, whatever the permission.
-  const onWeb = (...ops) => JSON.parse(`[${run('bun', ['exact.mjs', 'agent', 'web', '--json', ...ops], app).trim().split('\n').filter((l) => l.startsWith('{"slots"')).join(',')}]`);
+  const onWeb = (...ops) => JSON.parse(`[${run('bun', ['exact.mjs', 'agent', 'web', '--json', ...ops], app).trim().split('\n').filter((l) => l.startsWith('{')).join(',')}]`);
   for (const state of ['prompt', 'denied', 'granted']) {
     const [web] = onWeb('--permission', `notifications=${state}`, 'state');
     check(`on the web, ${state}, pushSubscription() reads none and pushPermissionState() its declared absence`,

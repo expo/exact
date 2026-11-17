@@ -10,8 +10,6 @@ pub(super) struct Preview {
     pub(super) before: Option<String>,
     pub(super) height: f64,
     pub(super) terminal: bool,
-    /// A dispatched drop whose move has not yet selected its data anchor.
-    pub(super) dropped: bool,
     pub(super) pin_owned: bool,
     pub(super) handle: ViewId,
     pub(super) certified: Option<ReorderGeometry>,
@@ -111,7 +109,6 @@ impl Collection {
             before,
             height: self.index.height(position).unwrap(),
             terminal: false,
-            dropped: false,
             pin_owned: true,
             handle,
             certified,
@@ -180,7 +177,7 @@ impl Collection {
             None => None,
         };
         let item = self.keys[source].as_str().unwrap().to_owned();
-        self.preview.as_mut().unwrap().dropped = true;
+        self.remember_drop(u.env.now_ms);
         self.end_preview(u)?;
         Ok(Some((item, before)))
     }
@@ -375,72 +372,124 @@ impl Offsets {
 }
 
 pub(super) struct DropAnchor {
+    drops: Vec<(String, Option<String>)>,
+    anchors: Vec<index::Anchor>,
+}
+
+/// Anchor eligibility outlives the visual preview, without keeping its row pinned.
+#[derive(Debug)]
+pub(super) struct PendingDrop {
+    token: ReorderToken,
     source: String,
     before: Option<String>,
-    anchor: index::Anchor,
+    deadline_ms: f64,
 }
 
 impl Collection {
+    pub(super) fn remember_drop(&mut self, now_ms: f64) {
+        let p = self.preview.as_ref().unwrap();
+        let drop = PendingDrop {
+            token: p.token,
+            source: p.source.clone(),
+            before: p.before.clone(),
+            deadline_ms: now_ms + HOLD_MS,
+        };
+        self.expire_drop_anchors(now_ms);
+        self.pending_drops.push(drop);
+        self.settle_drop_anchors(None);
+    }
+
     pub(crate) fn cancel_drop_anchor(&mut self, token: ReorderToken) {
-        if let Some(p) = self
+        if !self
             .preview
-            .as_mut()
-            .filter(|p| p.token == token && !p.holding)
+            .as_ref()
+            .is_some_and(|p| p.token == token && p.holding)
         {
-            p.dropped = false;
+            self.end_drop_anchor(token);
         }
+    }
+
+    pub(super) fn end_drop_anchor(&mut self, token: ReorderToken) {
+        self.pending_drops.retain(|p| p.token != token);
     }
 
     /// A same-slot drop can finish without changing the collection's data.
-    pub(crate) fn settle_drop_anchor(&mut self, refused: bool) {
-        if let Some(p) = self.preview.as_mut().filter(|p| p.dropped) {
+    pub(crate) fn settle_drop_anchors(&mut self, refused: Option<ReorderToken>) {
+        self.pending_drops.retain(|p| {
             let at = self.index.position(&p.source);
-            if refused || at.is_none_or(|i| self.index.key(i + 1) == p.before.as_deref()) {
-                p.dropped = false;
-            }
-        }
+            !(Some(p.token) == refused
+                || at.is_none_or(|i| self.index.key(i + 1) == p.before.as_deref())
+                || p.before
+                    .as_ref()
+                    .is_some_and(|k| self.index.position(k).is_none()))
+        });
     }
 
-    pub(super) fn drop_anchor(&self) -> Result<Option<DropAnchor>, InstanceError> {
-        let Some(p) = self.preview.as_ref().filter(|p| p.dropped) else {
+    fn expire_drop_anchors(&mut self, now_ms: f64) {
+        // No pin or presentation needs a timer for expiry.
+        self.pending_drops.retain(|p| now_ms < p.deadline_ms);
+    }
+
+    pub(super) fn drop_anchor(&mut self, now_ms: f64) -> Result<Option<DropAnchor>, InstanceError> {
+        self.expire_drop_anchors(now_ms);
+        let Some(g) = self
+            .geometry
+            .as_ref()
+            .filter(|_| !self.pending_drops.is_empty())
+        else {
             return Ok(None);
         };
-        let Some(g) = &self.geometry else {
-            return Ok(None);
-        };
+        let dropped: Vec<&str> = self
+            .pending_drops
+            .iter()
+            .map(|p| p.source.as_str())
+            .collect();
+        let anchors = self
+            .index
+            .capture_drop_anchors(
+                self.anchor_offset(g.offset, g.port_main),
+                g.port_main,
+                self.follows(),
+                &dropped,
+            )
+            .map_err(index_error)?;
+        let drops = self
+            .pending_drops
+            .iter()
+            .map(|p| (p.source.clone(), p.before.clone()));
         Ok(Some(DropAnchor {
-            source: p.source.clone(),
-            before: p.before.clone(),
-            anchor: self
-                .index
-                .capture_anchor_excluding(
-                    self.anchor_offset(g.offset, g.port_main),
-                    g.port_main,
-                    self.follows(),
-                    Some(&p.source),
-                )
-                .map_err(index_error)?,
+            drops: drops.collect(),
+            anchors,
         }))
     }
 
+    /// Drops that land in the same update all move, so the anchor is a row
+    /// none of them moved.
     pub(super) fn committed_anchor(
         &mut self,
         ordinary: Option<index::Anchor>,
         drop: Option<DropAnchor>,
     ) -> Option<index::Anchor> {
-        let Some(drop) = drop else {
+        self.settle_drop_anchors(None);
+        let Some(DropAnchor { drops, mut anchors }) = drop else {
             return ordinary;
         };
-        let at = self.index.position(&drop.source);
-        if at.is_some_and(|i| self.index.key(i + 1) != drop.before.as_deref()) {
+        let landed: Vec<&str> = drops
+            .iter()
+            .filter(|(source, before)| {
+                let at = self.index.position(source);
+                at.is_some_and(|i| self.index.key(i + 1) == before.as_deref())
+                    && self.index.moved_since(&anchors[0], source)
+            })
+            .map(|(source, _)| source.as_str())
+            .collect();
+        if landed.is_empty() {
+            // An update that does not move a surviving source keeps the ordinary anchor.
             return ordinary;
         }
-        self.settle_drop_anchor(false);
-        if self.index.moved_since(&drop.anchor, &drop.source) {
-            Some(drop.anchor)
-        } else {
-            // An update that does not move a surviving source keeps the ordinary anchor.
-            ordinary
-        }
+        let at = anchors
+            .iter()
+            .position(|a| SizeIndex::anchor_key(a).is_none_or(|k| !landed.contains(&k)));
+        Some(anchors.swap_remove(at.unwrap_or(anchors.len() - 1)))
     }
 }

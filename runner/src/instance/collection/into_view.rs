@@ -265,6 +265,8 @@ impl Collection {
                 .clamp(-self.index.leading(), self.index.max_offset(port));
         }
         let (before, after) = self.root_margins(u, position);
+        // The gap after the row is in its extent, not its box.
+        let after = after + self.index.item_gap();
         let start = self.index.prefix(position).unwrap_or(0.0) + before;
         let size = (self.index.height(position).unwrap_or(0.0) - before - after).max(0.0);
         let port = self.geometry.as_ref().map_or(0.0, |g| g.port_main);

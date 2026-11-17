@@ -107,8 +107,11 @@ fn raw_symbols_prerender_as_nonfetching_decorative_images() {
     assert_eq!(doc.matches("src=\"data:image/svg+xml,").count(), 3, "{doc}");
     assert!(!doc.contains("src=\"symbol:"), "{doc}");
     assert_eq!(doc.matches("width='28' height='28'").count(), 3, "{doc}");
-    assert_eq!(doc.matches("data-symbol-path=\"\"").count(), 3, "{doc}");
-    assert_eq!(doc.matches("alt=\"\"").count(), 3, "{doc}");
+    assert_eq!(
+        doc.matches("<img alt data-symbol-path ").count(),
+        3,
+        "{doc}"
+    );
 }
 
 /// A role's natural size is the neutral look's `symbol-scale` ems, as the
@@ -202,7 +205,7 @@ fn caltrain_document_is_the_first_batch_as_html() {
     // The canvas's surface element comes first, as the glue creates it.
     let sky = doc.find("data-testid=\"sky\"").unwrap();
     assert!(doc[sky..].split_once('>').unwrap().1.starts_with(
-        "<canvas data-surface=\"\" style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>"
+        "<canvas data-surface style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>"
     ));
 }
 
@@ -762,6 +765,40 @@ component App
     }
 }
 
+// A header of buttons alone is the bar when it places all of them: a button
+// that shows a dialog by its command, pressing nothing, is one of its items
+// (#387), and one whose command only closes the dialog is not.
+#[test]
+fn a_button_that_shows_a_dialog_by_its_command_is_a_bar_item() {
+    let src = |command: &str| {
+        format!(
+            r#"
+routes nav
+  tab home "/"
+component App
+  view
+    main navigationKey=`${{top(nav).id}}` navigationBack="back" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${{e.id}}`
+          header testId="header"
+            button commandfor="clear" command="{command}" aria-label="Clear"
+              text "Clear"
+          dialog id="clear" role="alertdialog" aria-label="Clear History?"
+            text "Every conversation will be deleted."
+            button commandfor="clear" command="close"
+              text "Cancel"
+"#
+        )
+    };
+    for (command, bar) in [("show-modal", true), ("close", false)] {
+        let doc = host(&src(command), Says(""), "/").document().unwrap().root;
+        let at = doc.find("data-testid=\"header\"").unwrap();
+        let start = doc[..at].rfind('<').unwrap();
+        let tag = &doc[start..at + doc[at..].find('>').unwrap() + 1];
+        assert_eq!(tag.contains("data-exact-bar"), bar, "{command}: {tag}");
+    }
+}
+
 // @ref LLP 1075.003 §3.3, §3.7 — with tabs, each tab's panel holds its own
 // stack, built when the tab is first selected: the unselected panel is
 // hidden and inert; an app's data-* words are attributes of their own. Both are linked
@@ -970,11 +1007,11 @@ component App
                 .id
         };
         let row = opening(&doc.root, id("rows").into());
-        assert!(row.contains("data-exact-list=\"\""), "{row}");
+        assert!(row.contains(" data-exact-list "), "{row}");
         assert!(row.contains(&format!("role=\"{role}\"")), "{row}");
         assert!(!row.contains("data-exact-estimated-item-width"), "{row}");
         let strip = opening(&doc.root, id("strip").into());
-        assert!(strip.contains("data-exact-list=\"\""), "{strip}");
+        assert!(strip.contains(" data-exact-list "), "{strip}");
         assert!(
             strip.contains("data-exact-estimated-item-width=\"180\""),
             "{strip}"

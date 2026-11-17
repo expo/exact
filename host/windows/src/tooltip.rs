@@ -3,7 +3,7 @@
 //! https://learn.microsoft.com/windows/win32/controls/tooltip-controls
 #![allow(unsafe_code)]
 use exact_kernel::{NodeKey, PropId};
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 use exact_runner::DataSource;
 
 type Tip = (NodeKey, String);
@@ -132,6 +132,11 @@ impl Tooltip {
         point: Option<(f32, f32)>,
         moved: bool,
     ) {
+        // A move Windows made from a touch or a pen shows no tip, as touch
+        // hosts show none; it reads the message being dispatched.
+        let point = point.filter(|_| {
+            !(moved && crate::touch::from_touch_or_pen(unsafe { GetMessageExtraInfo() }))
+        });
         let tip = point.and_then(|point| title_at(p, point));
         let Ok(handle) = window.window_handle() else {
             return;
@@ -234,7 +239,7 @@ mod tests {
                     (300., 200.),
                     1.,
                     Default::default(),
-                    exact_linux::presenter::PainterChoice::Cpu,
+                    exact_painted::presenter::PainterChoice::Cpu,
                 )
                 .unwrap();
                 assert!(error.is_none(), "{error:?}");
@@ -374,7 +379,7 @@ mod tests {
                 (400., 300.),
                 1.,
                 Default::default(),
-                exact_linux::presenter::PainterChoice::Cpu,
+                exact_painted::presenter::PainterChoice::Cpu,
             )
             .unwrap();
             assert!(error.is_none(), "{error:?}");

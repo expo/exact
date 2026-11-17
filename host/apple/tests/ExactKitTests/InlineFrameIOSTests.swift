@@ -7,6 +7,10 @@ final class InlineFrameIOSTests: XCTestCase {
     func testEmptyRunHasAnEncodableFrameAtItsInsertionPoint() throws { try checkEdgeCase("empty") }
     func testSmallRunUsesItsOwnFontMetrics() throws { try checkEdgeCase("small") }
     func testHangingSpaceDoesNotAddAClientRect() throws { try checkEdgeCase("wrap") }
+    func testPaddedRunAnswersItsBorderBox() throws { try checkEdgeCase("padded") }
+    func testBoxAroundBoxesAnswersItsBorderBox() throws { try checkEdgeCase("nested") }
+    func testEmptyPaddedRunAnswersItsBorderBox() throws { try checkEdgeCase("padded-empty") }
+    func testRightToLeftWrappedRunAnswersItsBorderBox() throws { try checkEdgeCase("rtl-wrap") }
 
     private func checkEdgeCase(_ name: String) throws {
         let session = ExactApp.shared.makeSession(label: "inline-edge")

@@ -97,11 +97,14 @@ fn run(op: u32, args: &[HostArg], state: Option<&RuntimeState>) -> Result<HostVa
                 Some(HostArg::Number(n)) => *n as usize,
                 _ => return Err(HostError::InvalidArgument("expected an index".into())),
             };
-            let entry = state
-                .with_headers(handle, |h| h.sorted_entries().get(index).cloned())
+            let text = state
+                .with_headers(handle, |h| {
+                    h.sorted_entry(index)
+                        .map(|(name, value)| if op == 47 { name } else { value }.to_string())
+                })
                 .ok_or_else(missing)?
                 .ok_or_else(|| HostError::Failed("index out of range".into()))?;
-            Ok(HostValue::Str(if op == 47 { entry.0 } else { entry.1 }))
+            Ok(HostValue::Str(text))
         }
         51 => {
             state.drop_headers(handle);

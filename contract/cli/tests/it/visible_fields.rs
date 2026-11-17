@@ -312,9 +312,72 @@ fn excluded_text_inputs_and_markdown_editor_always_get_none() {
 }
 
 #[test]
+fn non_native_fields_keep_authored_appearance_only_when_it_is_always_none() {
+    let cases = [
+        ("default", "", false),
+        ("literal", "appearance=\"none\"", true),
+        ("computed", "appearance=(on ? \"none\" : \"none\")", true),
+        (
+            "nested",
+            "appearance=(on ? (on ? \"none\" : \"none\") : \"none\")",
+            true,
+        ),
+        (
+            "matched",
+            "appearance=(match (on ? some(1) : none) { case some(n) => \"none\", case none => \"none\" })",
+            true,
+        ),
+        ("classed", "class=Bare", true),
+        ("class-choice", "class=(on ? Bare : AlsoBare)", true),
+        ("mixed", "appearance=(on ? \"none\" : \"auto\")", false),
+        (
+            "mixed-match",
+            "appearance=(match (on ? some(1) : none) { case some(n) => \"none\", case none => \"auto\" })",
+            false,
+        ),
+        ("cleared", "appearance=(on ? \"none\" : none)", false),
+        ("partial-class", "class=(on ? Bare : Plain)", false),
+    ];
+    for tag in ["textarea markup=\"markdown\"", "input type=\"hidden\""] {
+        let body = cases
+            .iter()
+            .map(|(name, attrs, _)| format!("{tag} {attrs} testId=\"{name}\"\n"))
+            .collect::<String>();
+        let plan = compile(
+            "style Bare\n  appearance=\"none\"\nstyle AlsoBare\n  appearance=\"none\"\nstyle Plain\n  opacity=1\n",
+            &body,
+        );
+        let mut r = Runner::boot(
+            Plan::decode(&plan.encode()).unwrap(),
+            NoData,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        for _ in 0..2 {
+            for (name, _, written) in cases {
+                let field = r.kernel().node(id(&r, name)).unwrap();
+                assert_eq!(field.node_type, NodeType::TextInput, "{tag}: {name}");
+                assert_eq!(field.style.appearance, Appearance::None, "{tag}: {name}");
+                assert!(field.style.mask.has(StyleId::Appearance), "{tag}: {name}");
+                assert_eq!(
+                    field.style.written.has(StyleId::Appearance),
+                    written,
+                    "{tag}: {name} ownership"
+                );
+                assert_eq!(field.says(StyleId::Appearance), written, "{tag}: {name}");
+            }
+            r.act("flip", vec![]).unwrap();
+        }
+    }
+}
+
+#[test]
 fn fields_and_buttons_share_the_literal_appearance_error() {
     for tag in ["input", "textarea", "button"] {
         for (styles, row) in [
+            ("", "appearance=(on ? \"none\" : \"none\")"),
             ("", "appearance=(on ? \"none\" : \"auto\")"),
             (
                 "style A\n  appearance=\"auto\"\nstyle B\n  opacity=1\n",
@@ -551,6 +614,86 @@ fn a_placeholder_part_colours_a_text_field_and_nothing_else() {
             "input\n  ::placeholder\n    color=\"red\"\n  ::placeholder\n    color=\"blue\"",
             "syntax-duplicate-attr",
             "::placeholder",
+        ),
+    ] {
+        let e = contract::compile(&app(styles, body)).unwrap_err();
+        assert_eq!(e.id, refusal, "{body}: {}", e.message);
+        assert!(e.message.contains(says), "{body}: {}", e.message);
+    }
+}
+
+/// LLP 1035.001 D11 (amended 2026-11-14, expo/exact#490): CSS's
+/// `::backdrop { background-color }`, a part block in a `style` or on the
+/// dialog itself, where its value may be computed. The dialog's own wins over
+/// its class's, an unset arm gives the platform's dim back, and a dialog
+/// without it has no row. Only `background-color`, only on a `dialog`.
+#[test]
+fn a_backdrop_part_colours_beneath_a_dialog_and_nothing_else() {
+    use exact_kernel::{Color, ColorValue};
+    let mut r = boot(
+        "style Dim\n  ::backdrop\n    background-color=\"#00000080\"\n",
+        "dialog id=\"a\" class=Dim testId=\"class\"\n  text \"A\"\ndialog id=\"b\" class=Dim testId=\"own\"\n  ::backdrop\n    background-color=\"transparent\"\n  text \"B\"\ndialog id=\"c\" testId=\"arm\"\n  ::backdrop\n    background-color=(on ? \"#ff000040\" : none)\n  text \"C\"\ndialog id=\"d\" testId=\"plain\"\n  text \"D\"\nbutton press=flip testId=\"flip\"\n  text \"Flip\"",
+    );
+    let colour = |r: &Runner<NoData>, name: &str| {
+        let node = r.kernel().node(id(r, name)).unwrap();
+        assert!(
+            !node.style.mask.has(StyleId::BackgroundColor),
+            "{name}: the dialog's own background is untouched"
+        );
+        node.style
+            .mask
+            .has(StyleId::BackdropColor)
+            .then_some(node.style.rare.backdrop_color)
+    };
+    let fixed = |r, g, b, a| Some(ColorValue::Fixed(Color::rgba(r, g, b, a)));
+    assert_eq!(colour(&r, "class"), fixed(0, 0, 0, 0x80));
+    assert_eq!(
+        colour(&r, "own"),
+        fixed(0, 0, 0, 0),
+        "the dialog's own part wins"
+    );
+    assert_eq!(
+        colour(&r, "arm"),
+        fixed(0xff, 0, 0, 0x40),
+        "its own alpha, kept"
+    );
+    assert_eq!(colour(&r, "plain"), None, "no part: the platform's dim");
+    r.dispatch(id(&r, "flip"), Event::Press).unwrap();
+    assert_eq!(
+        colour(&r, "arm"),
+        None,
+        "an unset arm gives the platform's dim back"
+    );
+    for (styles, body, refusal, says) in [
+        (
+            "",
+            "dialog id=\"d\"\n  ::backdrop\n    opacity=0.5\n  text \"D\"",
+            "lower-unknown-attr",
+            "only `background-color`",
+        ),
+        (
+            "style S\n  ::backdrop\n    backdrop-filter=\"blur(4px)\"\n",
+            "dialog id=\"d\" class=S\n  text \"D\"",
+            "lower-unknown-attr",
+            "only `background-color`",
+        ),
+        (
+            "",
+            "column\n  ::backdrop\n    background-color=\"red\"",
+            "lower-attr-tag",
+            "modal `dialog`",
+        ),
+        (
+            "",
+            "input\n  ::selection\n    color=\"red\"",
+            "syntax-part",
+            "::backdrop",
+        ),
+        (
+            "",
+            "dialog id=\"d\"\n  ::backdrop\n    background-color=\"red\"\n  ::backdrop\n    background-color=\"blue\"\n  text \"D\"",
+            "syntax-duplicate-attr",
+            "::backdrop",
         ),
     ] {
         let e = contract::compile(&app(styles, body)).unwrap_err();

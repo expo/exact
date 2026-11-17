@@ -1,0 +1,454 @@
+{
+  "actions": {
+    "NativeAction": {
+      "assistantDefinedSchemaTraits": [],
+      "assistantDefinedSchemas": [],
+      "authenticationPolicy": 0,
+      "availabilityAnnotations": {
+        "LNPlatformNameIOS": {
+          "introducedVersion": "18.0"
+        },
+        "LNPlatformNameMACOS": {
+          "introducedVersion": "15.0"
+        },
+        "LNPlatformNameWildcard": {
+          "introducedVersion": "*"
+        }
+      },
+      "effectiveBundleIdentifiers": [],
+      "fullyQualifiedTypeName": "ExactAppModules.NativeAction",
+      "identifier": "NativeAction",
+      "isAuthPolExplicit": false,
+      "isDiscoverable": false,
+      "mangledTypeName": "15ExactAppModules12NativeActionV",
+      "mangledTypeNameByBundleIdentifier": {},
+      "mangledTypeNameByBundleIdentifierV2": {},
+      "mangledTypeNameV2": "15ExactAppModules12NativeActionV",
+      "openAppWhenRun": true,
+      "outputFlags": 0,
+      "parameters": [
+        {
+          "capabilities": 0,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": false,
+          "name": "image",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "intents": {
+                  "wrapper": {
+                    "typeIdentifier": 12
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Screenshot"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeMetadataKeyFileSupportedTypes",
+            {
+              "array": {
+                "elements": [
+                  {
+                    "string": {
+                      "wrapper": "public.image"
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "valueType": {
+            "intents": {
+              "wrapper": {
+                "typeIdentifier": 12
+              }
+            }
+          }
+        }
+      ],
+      "presentationStyle": 0,
+      "requiredCapabilities": [],
+      "supportedModes": 2,
+      "systemProtocolMetadata": [],
+      "systemProtocolMetadataV2": [],
+      "systemProtocols": [],
+      "title": {
+        "alternatives": [],
+        "key": "Native action"
+      },
+      "typeSpecificMetadata": [],
+      "visibilityMetadata": {
+        "assistantOnly": false,
+        "isDiscoverable": false
+      }
+    },
+    "ShortcutAction": {
+      "assistantDefinedSchemaTraits": [],
+      "assistantDefinedSchemas": [],
+      "authenticationPolicy": 0,
+      "availabilityAnnotations": {
+        "LNPlatformNameWildcard": {
+          "introducedVersion": "*"
+        }
+      },
+      "effectiveBundleIdentifiers": [],
+      "fullyQualifiedTypeName": "ExactAppModules.ShortcutAction",
+      "identifier": "ShortcutAction",
+      "isAuthPolExplicit": false,
+      "isDiscoverable": true,
+      "mangledTypeName": "15ExactAppModules14ShortcutActionV",
+      "mangledTypeNameByBundleIdentifier": {},
+      "mangledTypeNameByBundleIdentifierV2": {},
+      "mangledTypeNameV2": "15ExactAppModules14ShortcutActionV",
+      "openAppWhenRun": false,
+      "outputFlags": 0,
+      "parameters": [
+        {
+          "capabilities": 1,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": false,
+          "name": "count",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 2
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 7
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 0
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Count"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeSpecificMetadataKeyDefaultValue",
+            {
+              "int": {
+                "wrapper": 5
+              }
+            }
+          ],
+          "valueType": {
+            "primitive": {
+              "wrapper": {
+                "typeIdentifier": 2
+              }
+            }
+          }
+        },
+        {
+          "capabilities": 1,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": false,
+          "name": "ratio",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 2
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 7
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 0
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Ratio"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeSpecificMetadataKeyDefaultValue",
+            {
+              "double": {
+                "wrapper": 2.5
+              }
+            }
+          ],
+          "valueType": {
+            "primitive": {
+              "wrapper": {
+                "typeIdentifier": 7
+              }
+            }
+          }
+        },
+        {
+          "capabilities": 1,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": false,
+          "name": "enabled",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 1
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Enabled"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeSpecificMetadataKeyDefaultValue",
+            {
+              "int": {
+                "wrapper": 0
+              }
+            }
+          ],
+          "valueType": {
+            "primitive": {
+              "wrapper": {
+                "typeIdentifier": 1
+              }
+            }
+          }
+        },
+        {
+          "capabilities": 1,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": false,
+          "name": "name",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "array": {
+                  "wrapper": {
+                    "capabilities": 3,
+                    "memberValueType": {
+                      "primitive": {
+                        "wrapper": {
+                          "typeIdentifier": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 2
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 0
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Name"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeSpecificMetadataKeyDefaultValue",
+            {
+              "string": {
+                "wrapper": ""
+              }
+            }
+          ],
+          "valueType": {
+            "primitive": {
+              "wrapper": {
+                "typeIdentifier": 0
+              }
+            }
+          }
+        },
+        {
+          "capabilities": 1,
+          "dynamicOptionsSupport": 0,
+          "inputConnectionBehavior": 0,
+          "isInput": false,
+          "isOptional": true,
+          "name": "optionalCount",
+          "resolvableInputTypes": [
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 2
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 7
+                  }
+                }
+              }
+            },
+            {
+              "kindValue": 0,
+              "valueType": {
+                "primitive": {
+                  "wrapper": {
+                    "typeIdentifier": 0
+                  }
+                }
+              }
+            }
+          ],
+          "title": {
+            "alternatives": [],
+            "key": "Optional count"
+          },
+          "typeSpecificMetadata": [
+            "LNValueTypeSpecificMetadataKeyDefaultValue",
+            {
+              "int": {
+                "wrapper": 0
+              }
+            }
+          ],
+          "valueType": {
+            "primitive": {
+              "wrapper": {
+                "typeIdentifier": 2
+              }
+            }
+          }
+        }
+      ],
+      "presentationStyle": 0,
+      "requiredCapabilities": [],
+      "supportedModes": 1,
+      "systemProtocolMetadata": [],
+      "systemProtocolMetadataV2": [],
+      "systemProtocols": [],
+      "title": {
+        "alternatives": [],
+        "key": "Shortcut action"
+      },
+      "typeSpecificMetadata": [],
+      "visibilityMetadata": {
+        "assistantOnly": false,
+        "isDiscoverable": true
+      }
+    }
+  },
+  "assistantEntities": [],
+  "assistantIntentNegativePhrases": [],
+  "assistantIntents": [],
+  "autoShortcutProviderMangledName": "15ExactAppModules15NativeShortcutsV",
+  "autoShortcuts": [
+    {
+      "actionIdentifier": "ShortcutAction",
+      "availabilityAnnotations": {
+        "LNPlatformNameIOS": {
+          "introducedVersion": "18.0"
+        },
+        "LNPlatformNameMACOS": {
+          "introducedVersion": "15.0"
+        },
+        "LNPlatformNameWildcard": {
+          "introducedVersion": "*"
+        }
+      },
+      "phraseTemplates": [
+        {
+          "alternatives": [],
+          "key": "Native in ${applicationName}"
+        }
+      ],
+      "shortTitle": {
+        "alternatives": [],
+        "key": "Native"
+      },
+      "systemImageName": "app"
+    }
+  ],
+  "entities": {},
+  "enums": [],
+  "generator": {
+    "name": "xcode-tools",
+    "version": "27B52"
+  },
+  "negativePhrases": [],
+  "queries": {},
+  "shortcutTileColor": 14,
+  "version": 1
+}

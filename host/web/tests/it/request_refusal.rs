@@ -69,6 +69,7 @@ fn batch_refuses_invalid_annotations_before_serializing_any_effect() {
     for request in invalid_requests() {
         let mut batch = Batch::new();
         batch.request(&RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 8,
             target: "reply".into(),
@@ -80,6 +81,7 @@ fn batch_refuses_invalid_annotations_before_serializing_any_effect() {
     for limit in [1, 64 * 1024 * 1024] {
         let mut batch = Batch::new();
         batch.request(&RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 9,
             target: "reply".into(),

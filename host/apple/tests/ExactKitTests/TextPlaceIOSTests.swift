@@ -54,9 +54,9 @@ final class TextPlaceIOSTests: XCTestCase {
         // A frame shows it: its ink has a presentation copy, and the view is
         // shown (`Presenter.unshown`), so UIKit's animations move it
         let end = Date().addingTimeInterval(2)
-        while node.textRasterLayer?.presentation() == nil || !node.showed, Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+        while node.textRasterLayer?.presentation() == nil || node.shown != .showed, Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
         XCTAssertTrue(node.textRasterReady, "painted")
-        XCTAssertTrue(node.showed, "shown")
+        XCTAssertEqual(node.shown, .showed, "shown")
         return (p, node)
     }
 
@@ -719,6 +719,8 @@ final class TextPlaceIOSTests: XCTestCase {
         let (p, node) = try paragraph("text-relaid-pixels", text: Self.fuji, height: 200, box: [16, 0, 368, 200])
         XCTAssertTrue(node.textRasterLayer?.delegate is CoverageImageView, "one colour, drawn by its own layer")
         let window = try XCTUnwrap(window)
+        // Compare the lines without UIKit's status-bar edge blur over them.
+        p.viewport.frame = window.bounds.inset(by: window.safeAreaInsets)
         let old = try screen(window)
         try stop(p, node)
         UIView.animate(springDuration: 0.5, bounce: 0) {

@@ -41,9 +41,9 @@ impl World {
     ) {
         self.leases.restructure();
         self.register::<P>();
-        self.components
-            .entry(P::NAME)
-            .or_insert_with(|| storage::make::<P>(P::NAME, self.presentation_epoch.clone()));
+        self.components.get_or_insert::<P>(P::NAME, || {
+            storage::make::<P>(P::NAME, self.presentation_epoch.clone())
+        });
         let mut next = 0;
         while let Some(index) = self.storage::<C>().and_then(|s| s.next_index(next)) {
             next = index + 1;
@@ -59,7 +59,7 @@ impl World {
             if let Some(value) = value {
                 if P::accepts(self, e) {
                     self.components
-                        .get_mut(P::NAME)
+                        .typed_mut::<P>()
                         .unwrap()
                         .any_mut()
                         .downcast_mut::<Storage<P>>()

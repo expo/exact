@@ -5,7 +5,9 @@ use std::{fs, process::Command, time::Instant};
 #[test]
 #[ignore = "async lane: compiles a native module fixture"]
 fn native_image_settle_preserves_input_after_preparation() {
-    let dir = std::env::temp_dir().join(format!("exact-apple-settle-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-apple-settle-{}", std::process::id())),
+    );
     fs::create_dir_all(&dir).unwrap();
     let entered = dir.join("entered");
     let release = dir.join("release");

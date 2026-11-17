@@ -4,11 +4,12 @@
 // and the checkout's node_modules, installed from its lock when it has none or one did not finish (`installedModules`).
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { RustMissing, fromSets, rustMissing } from './tools.mjs';
 
 // The macOS deployment target every cargo call on a Mac gives what it builds for the Mac
 // itself: build scripts, proc macros and the developer tools (the bake tool, the filesystem
@@ -33,7 +34,7 @@ export function freeSpace(path, places = [resolve(homedir(), '.cache/exact')]) {
 // write a dylib that dyld on macOS 27.0.1 refuses: "mis-aligned LINKEDIT string pool". rustc then fails
 // on the proc macro it cannot load, with that message or as "can't find crate for `zerofrom_derive`".
 // A deployment target is not in a proc macro's fingerprint, so a plain cargo call sharing the target
-// directory (caps' wasm check, a release build) takes such a dylib too. So the scripts' cargo calls run
+// directory (the hourly wasm check, a release build) takes such a dylib too. So the scripts' cargo calls run
 // rustc through `scripts/rustc/exact-rustc`, which links proc macros with `-no_fixup_chains`. Cargo
 // leaves RUSTC_WRAPPER out of its fingerprints, so plain and scripted calls still share every unit; it
 // is a name found on PATH so that kept modules' groups, which read it (scripts/kept.mjs), are the same
@@ -53,13 +54,22 @@ export function withHostDeployment(env) {
 }
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+/** What an offline Cargo says when a source it needs is not in its cache. */
+export const OFFLINE_MISSING = /--offline was specified|attempting to make an HTTP request|in the offline mode|offline mode \(via `--offline`\)/;
 let binary;
 const HELPER = 'EXACT_FILESYSTEM_HELPER';
 /** The helper this process runs, checked current: the bake names it to the Bun processes it spawns. */
 export const filesystemHelper = () => executable();
-function executable() {
+/** The helper as Cargo builds it here, never a tool set's: what `tools.mjs keep` keeps, with the directory it built in. */
+export const builtFilesystemHelper = () => ({ path: executable(false), directory: helperDirectory() });
+// A deploy recreates its capture but keeps its Cargo cache. Separate each
+// checkout's bootstrap there, including when that cache holds several apps.
+const helperDirectory = () => process.env.CARGO_TARGET_DIR
+  ? resolve(process.env.CARGO_TARGET_DIR, 'exact-filesystem-tool', createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 24))
+  : resolve(root, 'target/exact-filesystem-tool');
+function executable(fromSet = true) {
   if (binary) return binary;
-  const directory = resolve(root, 'target/exact-filesystem-tool');
+  const directory = helperDirectory();
   const suffix = process.platform === 'win32' ? '.exe' : '';
   // A caller that checked the helper itself may name its captured copy in `EXACT_FILESYSTEM_HELPER`
   // for the processes it spawns (the bake does, once per process, for its many Bun calls). The copy
@@ -70,20 +80,6 @@ function executable() {
     const digest = new RegExp(`^exact-filesystem-([0-9a-f]{64})${suffix.replace('.', '\\.')}$`).exec(basename(inherited))?.[1];
     if (digest && existsSync(inherited) && createHash('sha256').update(readFileSync(inherited)).digest('hex') === digest) return binary = inherited;
   }
-  // A helper another process checked from these same inputs: a record named by the digest of what the build reads
-  // (`helperInputs`, never trusted by time), naming a capture whose bytes still have the digest its name gives.
-  const inputs = helperInputs(), record = inputs && resolve(directory, `checked-${inputs}`);
-  if (record) try {
-    const named = readFileSync(record, 'utf8').trim(), digest = new RegExp(`^exact-filesystem-([0-9a-f]{64})${suffix.replace('.', '\\.')}$`).exec(named)?.[1];
-    const captured = resolve(directory, named);
-    if (digest && createHash('sha256').update(readFileSync(captured)).digest('hex') === digest) return binary = captured;
-  } catch { /* none checked yet */ }
-  const target = resolve(directory, `debug/exact-filesystem${suffix}`);
-  // A separate tooling target also permits calls from an active app Cargo
-  // build script: the helper has no compiler/app dependency and never waits
-  // on that app build directory lock. Otherwise Cargo checks sources, lockfile
-  // and toolchain, once per Bun process.
-  // An mtime-only shortcut can silently reuse an obsolete helper dependency.
   // The host's deployment target always, whether a build script's (an app's macOS minimum) or not: its own target directory.
   const own = { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1' };
   delete own.MACOSX_DEPLOYMENT_TARGET;
@@ -93,6 +89,22 @@ function executable() {
     if (env[name] && basename(env[name]) === 'clippy-driver') delete env[name];
   }
   delete env.CLIPPY_ARGS;
+  // A helper another process checked from these same inputs: a record named by the digest of what the build reads
+  // (`helperInputs`, never trusted by time), naming a capture whose bytes still have the digest its name gives.
+  const checked = helperCapture(directory, suffix, helperInputs(env));
+  if (checked) return binary = checked;
+  // Else a tool set's whose inputs are this checkout's, and Cargo only after it (LLP 1174 D5).
+  if (fromSet) {
+    const set = fromSets('exact-filesystem');
+    if (set) return binary = set.path;
+    if (rustMissing()) throw new RustMissing('exact-filesystem');
+  }
+  const target = resolve(directory, `debug/exact-filesystem${suffix}`);
+  // A separate tooling target also permits calls from an active app Cargo
+  // build script: the helper has no compiler/app dependency and never waits
+  // on that app build directory lock. Otherwise Cargo checks sources, lockfile
+  // and toolchain when no checked capture is available.
+  // An mtime-only shortcut can silently reuse an obsolete helper dependency.
   // Cargo protects compilation, but releases its lock before we can exec.
   // Another profile can replace its public binary in that gap. Hold this
   // bootstrap claim through capture, then execute immutable captured bytes.
@@ -111,7 +123,20 @@ function executable() {
   };
   process.once('exit', release);
   try {
-    const built = spawnSync('cargo', ['build', '--quiet', '--locked', '--offline', '-p', 'exact-filesystem', '--target-dir', directory], { cwd: root, env, encoding: 'utf8' });
+    // A builder ahead of us may have published a capture. Inputs may have changed while we waited.
+    const inputs = helperInputs(env), record = inputs && resolve(directory, `checked-${inputs}`);
+    const checked = helperCapture(directory, suffix, inputs);
+    if (checked) return binary = checked;
+    const build = () => spawnSync('cargo', ['build', '--quiet', '--locked', '--offline', '-p', 'exact-filesystem', '--target-dir', directory], { cwd: root, env, encoding: 'utf8' });
+    let built = build();
+    // Offline Cargo resolves the whole workspace's lock, so one crate missing from Cargo's cache stops even this
+    // small build (a clean CI worker's: "no matching package named `wat` found"). Fetch the lock's sources once
+    // and build again, as an app's build does (scripts/app.mjs buildCommand).
+    if (built.status !== 0 && OFFLINE_MISSING.test(built.stderr ?? '')) {
+      console.error(`exact2's Cargo sources are not all fetched; fetching the locked ones (cargo fetch --locked --manifest-path ${resolve(root, 'Cargo.toml')}) and building the filesystem helper again`);
+      const fetched = spawnSync('cargo', ['fetch', '--locked'], { cwd: root, env, stdio: ['ignore', 'inherit', 'inherit'] });
+      if (fetched.status === 0) built = build();
+    }
     if (built.error) throw built.error;
     if (built.status !== 0) throw new Error(built.stderr || `could not build exact-filesystem (status ${built.status}, signal ${built.signal ?? 'none'})`);
     const bytes = readFileSync(target), digest = createHash('sha256').update(bytes).digest('hex');
@@ -125,7 +150,7 @@ function executable() {
     }
     binary = captured;
     // Recorded only when the inputs are what they were before the build: an edit while it ran could be in either.
-    if (record && helperInputs() === inputs) {
+    if (record && helperInputs(env) === inputs) {
       const temporary = `${record}.${owner}.tmp`;
       try { writeFileSync(temporary, basename(captured)); renameSync(temporary, record); } catch { rmSync(temporary, { force: true }); }
     }
@@ -133,15 +158,25 @@ function executable() {
   } finally { release(); }
 }
 
-/** The digest of what building the helper reads: its crate's files, the workspace manifest, lock and toolchain pin,
- * and Cargo's configuration (the checkout's, its parents', `CARGO_HOME`'s), with the platform it is built for; null
- * where the checkout has no helper crate to read. */
-function helperInputs() {
+function helperCapture(directory, suffix, inputs) {
+  if (inputs) try {
+    const named = readFileSync(resolve(directory, `checked-${inputs}`), 'utf8').trim();
+    const digest = new RegExp(`^exact-filesystem-([0-9a-f]{64})${suffix.replace('.', '\\.')}$`).exec(named)?.[1];
+    const captured = resolve(directory, named);
+    if (digest && createHash('sha256').update(readFileSync(captured)).digest('hex') === digest) return captured;
+  } catch { /* none checked yet */ }
+}
+
+/** The digest of what building the helper with `env` reads: its crate's files, the workspace manifest, lock and
+ * toolchain pin, the compiler Cargo runs and Cargo's configuration (the checkout's, its parents', `CARGO_HOME`'s), with
+ * the platform it is built for; null where the checkout has no helper crate to read. */
+function helperInputs(env) {
   const hash = createHash('sha256').update(`${process.platform} ${process.arch} ${HOST_MACOS}\n`);
   const files = (dir) => readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
     .flatMap((entry) => entry.isDirectory() ? files(resolve(dir, entry.name)) : [resolve(dir, entry.name)]);
   let crate;
   try { crate = files(resolve(root, 'filesystem')); } catch { return null; }
+  hash.update(`${env.RUSTUP_TOOLCHAIN ?? ''}\n${compilerIdentity(env)}\n`);
   const configs = [];
   for (let at = root; ; at = dirname(at)) { configs.push(resolve(at, '.cargo/config.toml'), resolve(at, '.cargo/config')); if (at === dirname(at)) break; }
   const home = process.env.CARGO_HOME ?? resolve(homedir(), '.cargo');
@@ -151,6 +186,19 @@ function helperInputs() {
     hash.update('\n');
   }
   return hash.digest('hex').slice(0, 32);
+}
+
+// What `rustc -vV` says of the compiler Cargo would run with `env` from the checkout: by `RUSTC`, or the toolchain
+// rustup resolves there, which names its release and commit, so a `stable` that an update moved is another compiler.
+// One process asks once (about 20 ms through rustup); `build.rustc` in a Cargo config is hashed as the file only.
+let compiler;
+function compilerIdentity(env) {
+  const rustc = env.RUSTC || env.CARGO_BUILD_RUSTC || 'rustc';
+  if (compiler?.rustc !== rustc) {
+    const run = spawnSync(rustc, ['-vV'], { cwd: root, env, encoding: 'utf8' });
+    compiler = { rustc, identity: `${rustc}\n${run.status ?? run.error?.code}\n${run.stdout ?? ''}` };
+  }
+  return compiler.identity;
 }
 
 /** The wait for the helper's build claim. It ends when the owner releases the claim, and
@@ -270,6 +318,17 @@ export function filesystem(input) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`exact-filesystem exited before replying (status ${result.status}, signal ${result.signal ?? 'none'})${result.stderr ? `: ${result.stderr}` : ''}`);
   return decode(JSON.parse(result.stdout));
+}
+/** Every file under `root` (null when it is absent), read in pages: one reply cannot hold a large tree. */
+export function filesystemTree(root, limit = 64 * 1024 * 1024) {
+  const files = new Map();
+  for (let page = filesystem({ op: 'tree', root, optionalRoot: true, limit }); page; ) {
+    const rest = [];
+    for (const [name, bytes] of Object.entries(page)) if (bytes === null) rest.push(name); else files.set(name, Buffer.from(bytes, 'base64'));
+    if (!rest.length) return files;
+    page = filesystem({ op: 'tree', root, limit, paths: rest });
+  }
+  return null;
 }
 /** One child owns the root and OS lock throughout the asynchronous callback. */
 export async function filesystemLock(root, path, fn) {
@@ -392,35 +451,29 @@ export function removePrivateTree(path) {
 
 if (import.meta.main && process.argv[2] === '--helper') process.stdout.write(filesystemHelper());
 
+/** `body`'s result, run while holding the install lock `lock`: one process installs into a `node_modules` at a time,
+ * and the others wait for as long as it takes. The lock is the OS's on a file that is never removed, released when
+ * its holder's descriptor closes, so a slow install keeps it and a killed one gives it up. */
+export function withInstallLock(lock, body) {
+  // Required when used: the tests' fixtures copy this file without host/.
+  const { takeLock } = import.meta.require('../host/web/build-lock.mjs');
+  const release = takeLock(lock, { waitMs: Infinity });
+  try { return body(); } finally { release(); }
+}
+/** The install lock of the `node_modules` in `dir`. */
+export const installLock = (dir) => resolve(tmpdir(), `exact-install-${createHash('sha256').update(dir).digest('hex').slice(0, 16)}.lock`);
+
 /** This checkout's node_modules, installed from its lock when it has none (a new worktree's) or when an
  * install of ours did not finish. The install is complete when node_modules has no `.exact-install` in it:
  * the directory appears with that marker already inside (made aside, then renamed into place), and only a
  * successful `bun install` removes it, so one killed partway leaves it and is installed again, while one made
- * by hand (`bun install`, deploy's capture) has none. One process installs at a time, holding a lock file of
- * its pid and a token; the others wait. A lock whose process is gone, or older than any install, is taken
- * over by renaming exactly what was read aside, never by deleting a path read earlier. */
-export function installedModules(modules = resolve(root, 'node_modules'), lock = resolve(tmpdir(), `exact-install-${createHash('sha256').update(root).digest('hex').slice(0, 16)}.lock`)) {
-  const marker = resolve(modules, '.exact-install'), mine = `${process.pid} ${randomBytes(8).toString('hex')}`;
-  const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } };
-  // Removes `path` only while it still holds `seen`: renamed aside, compared, and put back when another's.
-  const drop = (path, seen) => {
-    const aside = `${path}.${process.pid}`;
-    try { renameSync(path, aside); } catch { return; }
-    if (read(aside) !== seen) try { linkSync(aside, path); } catch { /* a newer lock stands */ }
-    rmSync(aside, { force: true });
-  };
-  const stale = (seen) => {
-    try { if (Date.now() - statSync(lock).mtimeMs > 600_000) return true; process.kill(Number(seen.split(' ')[0]), 0); return false; }
-    catch (e) { return e.code === 'ESRCH'; }
-  };
-  while (!existsSync(modules) || existsSync(marker)) {
-    try { writeFileSync(lock, mine, { flag: 'wx' }); } catch {
-      const seen = read(lock);
-      if (seen !== null && stale(seen)) drop(lock, seen); else Bun.sleepSync(200);
-      continue;
-    }
-    try {
-      if (existsSync(modules) && !existsSync(marker)) break;
+ * by hand (`bun install`, deploy's capture) has none. One process installs at a time (`withInstallLock`). */
+export function installedModules(modules = resolve(root, 'node_modules'), lock = installLock(root)) {
+  const marker = resolve(modules, '.exact-install');
+  const whole = () => existsSync(modules) && !existsSync(marker);
+  if (whole() && !lockMismatches(dirname(modules)).length) return;
+  withInstallLock(lock, () => {
+    if (!whole()) {
       if (!existsSync(modules)) {
         const made = `${modules}.${process.pid}`;
         rmSync(made, { recursive: true, force: true });
@@ -430,15 +483,15 @@ export function installedModules(modules = resolve(root, 'node_modules'), lock =
       console.error(`${resolve(root)}: ${existsSync(resolve(modules, '.bin')) ? 'an install of node_modules did not finish' : 'no node_modules'}; bun install --frozen-lockfile there`);
       if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${resolve(root)}: bun install --frozen-lockfile failed (above); run it there, then this again`);
       rmSync(marker, { force: true });
-    } finally { drop(lock, mine); }
-  }
-  // What is installed is what `bun.lock` says (LLP 1133.001 D9): installed again from it when not, and
-  // refused by name when that does not mend it.
-  if (!lockMismatches(dirname(modules)).length) return;
-  console.error(`${resolve(root)}: node_modules differs from bun.lock (${lockMismatches(dirname(modules)).join('; ')}); bun install --frozen-lockfile there`);
-  if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: dirname(modules), stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${dirname(modules)}: bun install --frozen-lockfile failed (above)`);
-  const left = lockMismatches(dirname(modules));
-  if (left.length) throw new Error(`${dirname(modules)}: node_modules still differs from bun.lock: ${left.join('; ')}`);
+    }
+    // What is installed is what `bun.lock` says (LLP 1133.001 D9): installed again from it when not, and
+    // refused by name when that does not mend it.
+    if (!lockMismatches(dirname(modules)).length) return;
+    console.error(`${resolve(root)}: node_modules differs from bun.lock (${lockMismatches(dirname(modules)).join('; ')}); bun install --frozen-lockfile there`);
+    if (spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: dirname(modules), stdio: ['ignore', 2, 2] }).status !== 0) throw new Error(`${dirname(modules)}: bun install --frozen-lockfile failed (above)`);
+    const left = lockMismatches(dirname(modules));
+    if (left.length) throw new Error(`${dirname(modules)}: node_modules still differs from bun.lock: ${left.join('; ')}`);
+  });
 }
 
 /** Each package `dir/bun.lock` pins at the top of its `node_modules` that is installed at another version,

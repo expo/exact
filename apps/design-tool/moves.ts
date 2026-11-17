@@ -8,8 +8,8 @@ export const NUMBER = /^-?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
 
 // A param named in full, as `describe` gives a default that reads one: `card.contract#Card.fill`; and a
 // param's own full name, whole (its file's path may hold any character, a space too).
-const FULL = /([\w./-]+\.(?:contract|tamber))#([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)/;
-const PARAM = /^(.+\.(?:contract|tamber))#([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)$/;
+const FULL = /([\w./-]+\.(?:contract|forma))#([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)/;
+const PARAM = /^(.+\.(?:contract|forma))#([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)$/;
 
 /** A param's value as a literal a row can take: its default where the design sets none; through a
  * default that is one other param, that one's (a chain `b → a`, whose closure the detach removes);
@@ -44,8 +44,8 @@ export function moveOps(file: string, kind: string, t: any, name: string, params
 }
 
 /** What a detach's refusal says of its params (diagnostics naming them in full or by component):
- * the ones left unread (`tamber-param-unused`), of the detached param's own component and file, not
- * yet removed; and whether the detached param is still read by another row (`tamber-param-unknown`
+ * the ones left unread (`forma-param-unused`), of the detached param's own component and file, not
+ * yet removed; and whether the detached param is still read by another row (`forma-param-unknown`
  * for it once removed), so it is kept. */
 export const unread = (error: string, target: string, ops: Record<string, unknown>[]) => {
   const [, file, component, short] = PARAM.exec(JSON.parse(target).param) ?? [];
@@ -53,8 +53,8 @@ export const unread = (error: string, target: string, ops: Record<string, unknow
   const named = (line: string) => [...line.matchAll(/`(?:([^`#]+)#)?([A-Za-z_][\w-]*)\.([A-Za-z_][\w-]*)`/g)].filter(m => m[2] === component && (!m[1] || m[1] === file)).map(m => m[3]);
   const lines = error.split('\n');
   return {
-    more: [...new Set(lines.filter(l => l.includes('tamber-param-unused')).flatMap(named))].filter(n => !gone.has(n)),
-    keep: gone.has(short) && lines.some(l => l.includes('tamber-param-unknown') && (named(l).includes(short) || l.includes(`param.${short}`))),
+    more: [...new Set(lines.filter(l => l.includes('forma-param-unused')).flatMap(named))].filter(n => !gone.has(n)),
+    keep: gone.has(short) && lines.some(l => l.includes('forma-param-unknown') && (named(l).includes(short) || l.includes(`param.${short}`))),
   };
 };
 

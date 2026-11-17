@@ -61,7 +61,7 @@ fn a_spring_reaches_the_page_as_frames_and_the_easing_beside_it_as_css() {
     let (mut host, first) = boot();
     assert!(!first.contains("animate"), "nothing moves at boot: {first}");
     assert!(
-        first.contains("transition:opacity 0.2s linear 0s;"),
+        first.contains("transition:scale 0s ease 0s,opacity 0.2s linear 0s;"),
         "the easing is CSS, the spring is not: {first}"
     );
     assert!(first.contains("scale:1;"));
@@ -152,6 +152,42 @@ fn the_clock_alone_says_nothing_and_a_finished_spring_is_silent() {
     let (_, _, _, _, values) = animate(&batch);
     assert_eq!(values[0], 1.5);
     assert_eq!(*values.last().unwrap(), 1.0);
+}
+
+#[test]
+fn a_declaration_only_commit_cancels_a_spring_even_at_an_unchanged_target() {
+    for next in ["none", "opacity 1s", "unset", "all 0s"] {
+        let source = format!(
+            r#"component App
+  state big = false
+  state curve = "scale -exact-spring()"
+  action toggle
+    big = true
+  action declare
+    curve = "{next}"
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      button "Declare" press=declare testId="declare"
+      box testId="moving" scale=(big ? 2 : 1) transition=curve
+"#
+        );
+        let plan = contract::compile(&source).unwrap().encode();
+        exact_web::link(exact_web_capabilities::ALL);
+        let (mut host, _) = Host::boot(&plan, NoData, Default::default(), "/").unwrap();
+        let toggle = view(&host, "toggle");
+        let declare = view(&host, "declare");
+        host.dispatch_at(toggle, Event::Press, 0.0);
+        assert_eq!(host.springs().playing_count(), 1);
+        let batch = host.dispatch_at(declare, Event::Press, 100.0);
+        if matches!(next, "none" | "opacity 1s") {
+            assert!(batch.contains("\"values\":[]"), "{next}: {batch}");
+            assert_eq!(host.springs().playing_count(), 0);
+        } else {
+            assert!(!batch.contains("\"op\":\"animate\""), "{next}: {batch}");
+            assert_eq!(host.springs().playing_count(), 1);
+        }
+    }
 }
 
 #[test]

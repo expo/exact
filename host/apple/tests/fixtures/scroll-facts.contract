@@ -1,0 +1,20 @@
+component App
+  state observing = true
+  state sampled = 0
+  action seen(e: IntersectionObserverEntry)
+    sampled = sampled
+  action stop
+    observing = false
+  action sample
+    sampled = frame("target").y
+  view
+    column
+      scroll width=200 height=100 testId="port"
+        box height=150 flex-shrink=0
+        box id="target" width=100 height=50 flex-shrink=0
+        if observing
+          box width=100 height=50 intersect=seen
+        box height=300 flex-shrink=0
+      button "Stop observing" press=stop testId="stop"
+      button "Sample" press=sample testId="sample"
+      text `${sampled}` testId="sampled"

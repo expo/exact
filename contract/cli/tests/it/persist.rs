@@ -156,6 +156,81 @@ fn a_stored_value_of_another_shape_keeps_the_initial_value_and_says_so() {
     );
 }
 
+/// An enum is a string with a vocabulary: it persists, and a stored member
+/// a later version dropped falls back to the initializer.
+#[test]
+fn enum_settings_persist_and_a_dropped_member_keeps_the_initial_value() {
+    // The second member is the one `dim` chooses.
+    let src = |other: &str| {
+        format!(
+            r#"
+component App
+  state mode: enum<"light", "{other}"> = "light" persist
+  state chosen: option<enum<"light", "{other}">> = some("light") persist
+  state modes: enum<"light", "{other}">[] = ["light"] persist
+  action dim
+    mode = "{other}"
+    chosen = some("{other}")
+    modes = ["light", "{other}"]
+  view
+    text "Settings"
+"#
+        )
+    };
+    let boot = |src: &str, snapshot| {
+        Runner::boot_stored(
+            contract::compile(src).unwrap(),
+            (),
+            Kernel::with_monospace(),
+            snapshot,
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    };
+    let mut first = boot(&src("dark"), vec![]);
+    first.act("dim", vec![]).unwrap();
+    let snapshot = first.store().snapshot();
+    assert!(snapshot.contains(&pair("mode", "\"dark\"")));
+    assert!(snapshot.contains(&pair("modes", "[\"light\",\"dark\"]")));
+
+    let second = boot(&src("dark"), snapshot.clone());
+    assert_eq!(second.slot("mode"), Some(&Value::str("dark")));
+    assert_eq!(
+        second.slot("chosen"),
+        Some(&Value::Option(Some(Value::str("dark").into())))
+    );
+    assert_eq!(
+        second.slot("modes"),
+        Some(&Value::list(vec![Value::str("light"), Value::str("dark")]))
+    );
+
+    let narrowed = boot(&src("sepia"), snapshot);
+    assert_eq!(narrowed.slot("mode"), Some(&Value::str("light")));
+    assert_eq!(
+        narrowed.slot("chosen"),
+        Some(&Value::Option(Some(Value::str("light").into())))
+    );
+    assert_eq!(
+        narrowed.slot("modes"),
+        Some(&Value::list(vec![Value::str("light")]))
+    );
+    let lines: Vec<&str> = narrowed
+        .journal()
+        .filter(|l| l.contains("persisted state"))
+        .collect();
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    let fits = |line: &str, name: &str, ty: &str| {
+        assert!(
+            line.contains(&format!("{name}: the stored value does not fit {ty}:")),
+            "{line}"
+        );
+    };
+    fits(lines[0], "mode", r#"enum<"light", "sepia">"#);
+    fits(lines[1], "chosen", r#"option<enum<"light", "sepia">>"#);
+    fits(lines[2], "modes", r#"enum<"light", "sepia">[]"#);
+}
+
 #[test]
 fn an_oversized_value_is_not_kept_and_is_reported_only_when_it_changes() {
     let src = r#"

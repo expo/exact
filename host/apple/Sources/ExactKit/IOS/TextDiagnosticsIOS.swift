@@ -29,7 +29,7 @@ final class TextDiagnostics {
         origin = CACurrentMediaTime(); written = 0; saved = nil
         let screen = FrameHealthScreen()
         screen.workload = { [weak session] in session.map { FrameHealth.workload($0.frames, session: $0) } ?? 0 }
-        screen.completedUpdate = { [weak self] scheduled, start, deadline, before, finished, waited in
+        screen.completedUpdate = { [weak self] scheduled, start, deadline, before, finished, waited, _ in
             guard let self else { return }
             updates[written % updates.count] = Update(scheduled: scheduled, start: start, deadline: deadline, beforeCommit: before,
                 finished: finished, waited: waited)

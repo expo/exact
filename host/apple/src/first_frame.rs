@@ -39,7 +39,7 @@ impl<D: DataSource> Host<D> {
         if self.arrange_settled() {
             return self.arrange_settle();
         }
-        let error = self.height_layout_if_needed(&mut batch).err();
+        let mut error = self.height_layout_if_needed(&mut batch).err();
         self.runner.canvas_frame();
         // A tick is never waited for where draws are deferred (LLP 1072
         // §9): it draws in its own turn.
@@ -49,8 +49,53 @@ impl<D: DataSource> Host<D> {
         if self.transform_drags.mapping_pending {
             self.emit_transform_drags(&mut batch);
         }
+        match self.heard_present() {
+            Ok(Some(receipt)) => {
+                let at_ms = self.now_ms;
+                return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
+            }
+            Ok(None) => {}
+            Err(e) => error = error.or(Some(format!("presented: {e:?}"))),
+        }
         self.present(&mut batch, false);
         self.finish(batch, error)
+    }
+
+    /// The present of the page's first picture since its runner booted
+    /// (LLP 1069.000 D2 r7, LLP 1003.001 D9's table): the display-link tick
+    /// at its target, or any tick once the agent's clock owns time, where
+    /// each frame is presented at its commit. `presented` is true from the
+    /// commit this returns, at the runner's clock.
+    fn heard_present(&mut self) -> Result<Option<CommitReceipt>, exact_runner::RunnerError> {
+        if self.runner.presented().seen
+            || (self.engine.starts_on_frame() && self.presence.frame.is_none())
+        {
+            return Ok(None);
+        }
+        self.runner.page_presented()
+    }
+
+    /// Whether the page waits for the present of its first picture: the
+    /// display link runs for it whether or not anything animates.
+    pub(super) fn awaits_present(&self) -> bool {
+        self.engine.starts_on_frame() && self.engine.presentable() && !self.runner.presented().seen
+    }
+
+    /// The page hid, froze or came back (LLP 1003.001 D9, "The bound"):
+    /// while nothing will present, every hold is released at its commit and
+    /// none is made. Whether a hold was released, so the caller presents it.
+    pub(super) fn page_presentable(&mut self, page: exact_runner::Page) -> bool {
+        let held = self.engine.held_since().is_some();
+        match self.engine.set_presentable(!page.hidden && !page.frozen) {
+            Ok(started) => {
+                self.lower_started(&started);
+                held && self.engine.held_since().is_none()
+            }
+            Err(e) => {
+                debug_assert!(false, "releasing holds at their begin: {e:?}");
+                false
+            }
+        }
     }
 
     /// [`Host::tick`] for the display frame presented at `frame_ms`
@@ -135,7 +180,7 @@ impl<D: DataSource> Host<D> {
         let Some(frame) = self.presence.frame else {
             return;
         };
-        match self.engine.present_frame(frame) {
+        match self.engine.present_frame(frame, frame) {
             Ok(started) => self.lower_started(&started),
             Err(e) => debug_assert!(false, "a frame instant is finite: {e:?}"),
         }

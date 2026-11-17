@@ -87,8 +87,8 @@ final class AtomPictureTests: XCTestCase {
     }
 
     /// A text area's Markdown is measured as its editor lays it out: an
-    /// atom is its pill (its padding and its icon's room), wider than the
-    /// reader's label, so a line the reader keeps whole wraps; a link's
+    /// atom is its pill (its padding and its icon's room), with the editor's
+    /// padding, so a line the reader keeps whole wraps; a link's
     /// destination takes no room.
     func testATextAreasMarkdownMeasuresItsPills() throws {
         let session = ExactApp.shared.makeSession(label: "atom-measure")
@@ -97,7 +97,7 @@ final class AtomPictureTests: XCTestCase {
         let text = "Fix the flaky test in " + cite + " now", icon = face("symbol:sf/circle.fill")
         let reader = measured(engine, text, markup: 1, width: -1, faces: icon)
         let editor = measured(engine, text, markup: 2, width: -1, faces: icon)
-        XCTAssertGreaterThan(editor.width, reader.width + 12, "the icon's room and the pill's padding")
+        XCTAssertGreaterThan(editor.width, reader.width, "the editor's wider padding; both reserve the icon")
         XCTAssertEqual(editor.height, reader.height, "a pill keeps its line's height")
         let width = reader.width + 2
         XCTAssertEqual(measured(engine, text, markup: 1, width: width, faces: icon).height, reader.height, "the reader's one line")

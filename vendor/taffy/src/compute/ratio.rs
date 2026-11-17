@@ -217,6 +217,7 @@ pub(crate) fn percentage_height(style: &impl CoreStyle, pb: Size<f32>, width: Op
 /// The automatic inline minimum of a non-replaced ratio box combines its
 /// min-content width with the definite height's transfer, capped by max-width.
 /// A flexed border-box height replaces the preferred height when supplied.
+/// An auto-height content probe retains the maximum transferred from height.
 pub(crate) fn minimum_ratio_width(
     tree: &mut impl crate::LayoutPartialTree,
     node: crate::NodeId,
@@ -225,7 +226,10 @@ pub(crate) fn minimum_ratio_width(
 ) -> Option<f32> {
     use crate::{LayoutPartialTreeExt, MaybeResolve, ResolveOrZero};
     let style = tree.get_core_container_style(node);
-    if style.aspect_ratio().is_none() || !style.size().width.is_auto()
+    // EXACT PATCH 78: a content keyword width is sized as `auto` is for a box with a ratio.
+    let width = style.size().width;
+    let auto_width = width.is_auto() || (width.is_sizing_keyword() && !width.is_stretch());
+    if style.aspect_ratio().is_none() || !auto_width
         || !style.min_size().width.is_auto() || style.is_compressible_replaced()
         || style.overflow().x.is_scroll_container() || style.overflow().y.is_scroll_container() {
         return None;
@@ -245,10 +249,11 @@ pub(crate) fn minimum_ratio_width(
             .map(|height| (height + adjustment.height).maybe_clamp(min_height, max.height))
     })?;
     let transferred = ratio.width(height);
+    let content_height = if style.size().height.is_auto() { None } else { Some(height) };
     drop(style);
-    // EXACT PATCH 64: leaves and containers both use the supplied height
-    // as an inline floor while measuring content beyond its transferred cap.
-    let known = Size { width: None, height: Some(height) };
+    // A flexed auto height supplies the ratio transfer without making the
+    // intrinsic content probe definite and discarding its transferred cap.
+    let known = Size { width: None, height: content_height };
     let intrinsic = tree.measure_child_size(
         node,
         known,

@@ -22,6 +22,7 @@ use std::sync::Arc;
 pub(crate) mod case;
 pub mod decorations;
 pub mod inline_box;
+pub mod natural;
 
 /// A payload-free lifetime namespace. Allocation identity is valid only while
 /// retained: it is never a wire id, address handle, or serialized cache key.
@@ -218,8 +219,14 @@ pub struct Paragraph {
     pub markup: Markup,
     /// The paragraph strut: minimum line box even when all inline runs are smaller.
     pub strut: TextStyle,
-    /// Base direction.
+    /// Base direction, and the direction `start` and `end` resolve against;
+    /// under `natural`, the layout direction alone.
     pub direction: Direction,
+    /// The direction is unsaid on a host whose text is natural, and the text
+    /// is not Markdown (LLP 1060.000 D3): each paragraph's base is its first
+    /// strong character's, `direction`'s where it has none
+    /// ([`natural::paragraph_bases`]).
+    pub natural: bool,
     /// Horizontal alignment, physical: `start` and `end` are resolved
     /// against `direction` ([`TextAlign::physical`]), so a host never sees them.
     pub text_align: TextAlign,
@@ -287,6 +294,7 @@ impl Paragraph {
             markup: Markup::None,
             strut: t.style(),
             direction: p.direction,
+            natural: false,
             text_align: p.text_align.physical(p.direction),
             line_clamp: p.line_clamp,
             text_overflow: p.text_overflow,
@@ -306,6 +314,7 @@ impl Paragraph {
             markup: Markup::None,
             strut: TextStyle::from_style(s),
             direction: s.direction,
+            natural: false,
             text_align: s.text_align.physical(s.direction),
             line_clamp: s.line_clamp,
             text_overflow: s.text_overflow,
@@ -344,6 +353,39 @@ pub struct TextRun<'a> {
     /// An image in the paragraph (LLP 1011.002): the box a measurer reserves
     /// in place of this run's text, which is [`inline_box::INLINE_BOX_TEXT`].
     pub inline: Option<inline_box::InlineBox>,
+    /// The room its inline boxes' padding, border and margin take along the
+    /// line before and after its text ([`InlineEdges`]).
+    pub edges: InlineEdges,
+}
+
+/// What a run's inline boxes (the `text` nodes it is in, within its
+/// paragraph) take along the line beside its text, in points: their
+/// inline-axis padding, border and margin (CSS 2 §8.3, §10.3.1), a box's
+/// start side before its first run and its end side after its last, as a
+/// box broken across lines takes them (`box-decoration-break: slice`).
+/// `start` and `end` follow the paragraph's direction. A measurer adds
+/// `start` before the run's first glyph and `end` after its last.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct InlineEdges {
+    /// Before the run's first glyph.
+    pub start: f32,
+    /// After its last.
+    pub end: f32,
+}
+
+impl InlineEdges {
+    /// Whether it takes no room.
+    pub fn is_empty(self) -> bool {
+        self.start == 0.0 && self.end == 0.0
+    }
+
+    /// At `scale` of its size: a fitted paragraph's (LLP 1116.001 D1.4).
+    pub fn scaled(self, scale: f32) -> Self {
+        Self {
+            start: self.start * scale,
+            end: self.end * scale,
+        }
+    }
 }
 
 impl<'a> TextRun<'a> {
@@ -352,6 +394,7 @@ impl<'a> TextRun<'a> {
         TextRun {
             text: text.into(),
             style,
+            edges: Default::default(),
             inline: None,
         }
     }
@@ -402,6 +445,9 @@ pub struct TextMetrics {
     pub height: f32,
     /// Distance from the top to the first line's alphabetic baseline, if known.
     pub first_baseline: Option<f32>,
+    /// Geometry is estimated until the host accepts a measurement (LLP 1051.000 D5).
+    /// Pending metrics must not enter a scalar measurement cache.
+    pub pending: bool,
 }
 
 impl TextMetrics {
@@ -599,7 +645,9 @@ pub trait TextMeasurer {
     /// Size a paragraph under an offer.
     fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics;
 
-    /// Size presentation-only width candidates without retaining a paragraph artifact.
+    /// Size text the kernel lays out but never paints as a paragraph (width
+    /// candidates, a host-drawn alert title) without retaining a paragraph
+    /// artifact.
     fn measure_reservation(&mut self, request: &TextMeasureRequest<'_>) -> Option<TextMetrics> {
         Some(self.measure(request))
     }
@@ -730,8 +778,13 @@ impl MonospaceMeasurer {
         let mut text = String::new();
         let mut ends = Vec::with_capacity(request.runs.len());
         for run in request.runs {
+            let start = text.len();
             text.push_str(&run.text);
-            ends.push((text.len(), self.advance(&run.style)));
+            let last = text[start..]
+                .char_indices()
+                .last()
+                .map_or(start, |(i, _)| start + i);
+            ends.push((start, last, text.len(), self.advance(&run.style), run.edges));
             line_height = line_height.max(self.line_height(&run.style));
         }
         let mut measure = |range: std::ops::Range<usize>| {
@@ -739,7 +792,14 @@ impl MonospaceMeasurer {
                 .char_indices()
                 .map(|(i, _)| {
                     let at = range.start + i;
-                    ends.iter().find(|(end, _)| at < *end).map_or(0.0, |r| r.1)
+                    ends.iter().find(|r| at < r.2).map_or(
+                        0.0,
+                        |&(first, last, _, advance, edges)| {
+                            advance
+                                + if at == first { edges.start } else { 0.0 }
+                                + if at == last { edges.end } else { 0.0 }
+                        },
+                    )
                 })
                 .sum::<f32>()
         };
@@ -776,6 +836,7 @@ impl MonospaceMeasurer {
             width: fragments.iter().map(|f| f.x + f.width).fold(0.0, f32::max),
             height: result.height,
             // No line, no first baseline
+            pending: false,
             first_baseline: (!fragments.is_empty()).then_some(line_height * self.baseline_frac),
         }
     }
@@ -898,6 +959,7 @@ impl MonospaceMeasurer {
         TextMetrics {
             width: laid.lines.iter().map(|l| l.width).fold(0f32, f32::max),
             height: laid.bottoms.last().copied().unwrap_or(0.0),
+            pending: false,
             first_baseline: laid.lines.first().map(|l| l.above),
         }
     }
@@ -942,12 +1004,16 @@ impl MonospaceMeasurer {
                 continue;
             }
             line_height = line_height.max(self.line_height(&run.style));
-            let advance = self.advance(&run.style);
             let text = collapsed
                 .as_ref()
                 .map_or(&*run.text, |c| c.runs[index].as_str());
-            for ch in text.chars() {
+            let count = text.chars().count();
+            for (i, ch) in text.chars().enumerate() {
                 any_text = true;
+                // Its boxes' edges ride on its first and last glyphs, as a kern does.
+                let advance = self.advance(&run.style)
+                    + if i == 0 { run.edges.start } else { 0.0 }
+                    + if i + 1 == count { run.edges.end } else { 0.0 };
                 if ch == '\n' {
                     if !pending_word.is_empty() {
                         tokens.push(Token::Word {

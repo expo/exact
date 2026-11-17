@@ -2,6 +2,11 @@ import Foundation
 
 /// The metric half of a node's paragraph, shared by every Apple presentation.
 package enum TextStyle {
+    /// Natural text (LLP 1060.000 D3): the kernel says so beside the style.
+    package static func isNatural(_ style: NodeStyle) -> Bool {
+        if case .bool(true)? = style["direction_natural"] { return true }
+        return false
+    }
     package static func alignment(_ style: NodeStyle) -> Int {
         let rtl = style["direction"]?.string == "rtl"
         switch style["text_align"]?.string {
@@ -28,7 +33,8 @@ package enum TextStyle {
                    variations: FontAxis.of(style), features: FontFeature.of(style))
     }
     package static func spec(runs input: [Run], style: NodeStyle, props: [String: String], strut: Run,
-                             color: [Double] = [0, 0, 0, 255], language: String = "", flow: Bool = false) -> Spec {
+                             color: [Double] = [0, 0, 0, 255], language: String = "", flow: Bool = false,
+                             resolveRuns: ([Run]) -> [Run] = { $0 }) -> Spec {
         var runs = input
         let align = alignment(style), rtl = style["direction"]?.string == "rtl"
         func number(_ name: String) -> Double { style[name]?.number ?? 0 }
@@ -36,6 +42,7 @@ package enum TextStyle {
         // for it, as it was measured (`-exact-fit`, LLP 1116.001 D1.4).
         let fit = props["fitScale"].flatMap(Float.init) ?? 1
         if fit != 1 { runs = runs.map { $0.scaled(fit) } }
+        runs = resolveRuns(runs)
         let whiteSpace = ["pre-wrap": 1, "nowrap": 2, "pre-line": 3, "pre": 4][style["white_space"]?.string ?? ""] ?? 0
         // CSS collapses white space before shaping, as the measurer does in
         // Rust with the same function (LLP 1053 G5); Markdown keeps its lines.
@@ -47,6 +54,7 @@ package enum TextStyle {
                         color: color,
                         overflowWrap: style["overflow_wrap"]?.string == "anywhere" ? 2 : style["overflow_wrap"]?.string == "break-word" ? 1 : 0, direction: rtl ? 1 : 0, whiteSpace: whiteSpace, strut: strut.scaled(fit))
         spec.ellipsis = lineClamp == 0 && clips && style["text_overflow"]?.string == "ellipsis"
+        spec.natural = isNatural(style) && props["markup"] != "markdown" // its source is not what it shows, as the kernel measures it
         spec.source = source
         spec.textIndent = CGFloat(Float(number("text_indent")))
         spec.hyphens = ["none": 1, "auto": 2][style["hyphens"]?.string ?? ""] ?? 0

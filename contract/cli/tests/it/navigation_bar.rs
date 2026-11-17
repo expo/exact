@@ -19,7 +19,7 @@ impl DataSource for NoData {
 /// navigation root, of each route and of a box inside each.
 fn stack(root: &str, route: &str, inner: &str) -> String {
     format!(
-        "routes nav\n  home \"/\"\n    viewer \"/viewer\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\" {root}\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` testId=`route-${{e.name}}` position=\"absolute\" inset=0 {route}\n          column {inner}\n            text e.name\n"
+        "routes nav\n  home \"/\"\n    viewer \"/viewer\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` {root}\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` testId=`route-${{e.name}}` position=\"absolute\" inset=0 {route}\n          column {inner}\n            text e.name\n"
     )
 }
 
@@ -121,6 +121,10 @@ fn a_header_button_that_presses_nothing_is_named() {
         "{says}"
     );
     assert!(says.contains("give it `role=\"status\"`"), "{says}");
+    assert!(
+        says.contains("say `navigationBar=\"none\"` on the route's element and draw the row yourself (docs/recipes/chat-header.md"),
+        "{says}"
+    );
     // A disabled one is UIKit's disabled bar item, shown dimmed: no warning.
     let disabled = src.replace("button aria-label", "button disabled=true aria-label");
     let (result, warnings) = contract::compile_warned(&disabled);
@@ -131,4 +135,79 @@ fn a_header_button_that_presses_nothing_is_named() {
     let (result, warnings) = contract::compile_warned(&enabled);
     result.unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
+}
+
+/// A symbol image in the heading's own flex row is drawn in the iOS title,
+/// before or after its text (`HeaderTitle`): no warning names it. One in a
+/// column, a picture, or one beside a text the title does not take is.
+#[test]
+fn a_symbol_beside_the_heading_in_its_row_is_the_titles() {
+    let header = |row: &str, image: &str, extra: &str| {
+        format!("header display=\"flex\" align-items=\"center\"\n            {row}\n              image \"{image}\"\n              text \"Detail\" role=\"heading\" aria-level=2{extra}")
+    };
+    let unplaced = |header: String| {
+        let src = stack("", "", "").replace("column \n", &format!("{header}\n          column\n"));
+        let (result, warnings) = contract::compile_warned(&src);
+        result.unwrap();
+        warnings
+            .iter()
+            .filter(|w| w.id == "lower-header-unplaced")
+            .map(|w| w.span.line)
+            .collect::<Vec<_>>()
+    };
+    assert!(unplaced(header("row align-items=\"center\" gap=6", "symbol:add", "")).is_empty());
+    assert!(unplaced(header("box display=\"flex\"", "symbol:add", "")).is_empty());
+    assert_eq!(unplaced(header("column", "symbol:add", "")), [11]);
+    assert_eq!(unplaced(header("row", "photo.png", "")), [11]);
+    let beside = "\n              text \"draft\"";
+    assert_eq!(
+        unplaced(header("row", "symbol:add", beside)),
+        [11],
+        "a text in the row is the subtitle"
+    );
+}
+
+/// Issue #364: a route's first `header` that holds buttons and no heading is
+/// the bar with no title, so the compiler says nothing of it; one that also
+/// holds a text is not, and `lower-header-no-bar` names the text and both
+/// repairs.
+#[test]
+fn a_header_of_buttons_alone_is_the_bar_and_one_with_a_text_is_named() {
+    let route = |header: &str| {
+        let header: String = header.lines().map(|l| format!("          {l}\n")).collect();
+        format!("routes nav\n  home \"/\"\ncomponent App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    main navigationKey=`${{top(nav).id}}` width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` position=\"absolute\" inset=0\n          header\n{header}          scroll flex=1\n            text \"body\"\n")
+    };
+    for header in [
+        "  button press=go aria-label=\"Add\"\n    image \"symbol:add\"",
+        "  row\n    button press=go aria-label=\"Add\"\n      image \"symbol:add\"\n  view flex=1\n  text \"Live\" role=\"status\"",
+    ] {
+        assert_eq!(crate::warnings::warned(&route(header)), [], "{header}");
+    }
+    let src =
+        route("  text \"Inbox\"\n  button press=go aria-label=\"Add\"\n    image \"symbol:add\"");
+    assert_eq!(
+        crate::warnings::warned(&src),
+        [("lower-header-no-bar".to_string(), 11)]
+    );
+    let (_, warnings) = contract::compile_warned(&src);
+    let m = &warnings[0].message;
+    assert!(
+        m.contains("holds no heading, and this text in it is not a bar item")
+            && m.contains("one `text role=\"heading\"`")
+            && m.contains("a header of buttons alone is the bar"),
+        "{m}"
+    );
+    // A heading that presses is still the heading, as the kernel's bar
+    // reads it: one is the title, the text after it its subtitle, and two
+    // are two headings.
+    let heading = "  text \"Inbox\" role=\"heading\" press=go\n";
+    let subtitle = format!("{heading}  text \"3 unread\"\n");
+    assert_eq!(crate::warnings::warned(&route(&subtitle)), []);
+    let (_, warnings) = contract::compile_warned(&route(&heading.repeat(2)));
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].message.contains("holds 2 headings"),
+        "{}",
+        warnings[0].message
+    );
 }

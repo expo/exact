@@ -270,6 +270,12 @@ impl<'a> Layout<'a> {
                 self.ty(ty);
             }
         }
+        for source in &file.sources {
+            self.ty(&source.shape);
+            for ty in source.params.iter().filter_map(|p| p.ty.as_ref()) {
+                self.ty(ty);
+            }
+        }
         for style in file
             .styles
             .iter()
@@ -577,8 +583,8 @@ impl<'a> Layout<'a> {
                         .span
                         .line as usize
                         - 1;
-                    for following in line + 1..=last_line {
-                        self.indents[following] += delta;
+                    for indent in &mut self.indents[line + 1..=last_line] {
+                        *indent += delta;
                     }
                 }
             }

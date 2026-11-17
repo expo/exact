@@ -857,7 +857,7 @@ fn commands_exit_the_side_and_refusals_leave_the_kernel_untouched() {
     let err = r.act("rogue", vec![]).unwrap_err();
     assert!(matches!(
         err,
-        RunnerError::Trap(Trap::WriteNotDeclared { slot: 2, .. })
+        RunnerError::Evaluation { ref error, .. } if matches!(**error, RunnerError::Trap(Trap::WriteNotDeclared { slot: 2, .. }))
     ));
     assert_eq!(r.slot("nowMs"), Some(&Value::Number(0.0)));
     assert_eq!(r.kernel().export(None).unwrap(), before);
@@ -1155,9 +1155,16 @@ fn app_identity_gate() {
         Default::default(),
         "/",
     ) {
-        Err(RunnerError::AppMismatch { plan, host }) => {
+        Err(RunnerError::AppMismatch { plan, host, fix }) => {
             assert_eq!(plan, "com.exact.other");
             assert_eq!(host, "com.exact.mine");
+            // The refusal names both causes: the data source's declaration, and a plan from elsewhere.
+            assert!(
+                fix.contains("`fn app_id`")
+                    && fix.contains("must say \"com.exact.other\"")
+                    && fix.contains("the plan is the wrong one"),
+                "{fix}"
+            );
         }
         Err(other) => panic!("expected AppMismatch, got {other:?}"),
         Ok(_) => panic!("expected AppMismatch, got a boot"),

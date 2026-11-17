@@ -15,7 +15,7 @@ enum Inspect {
     /// (an exit names it, so a later owner's command is not undone).
     nonisolated(unsafe) static var on = false
     nonisolated(unsafe) static var seq: Int?
-    /// This inspect session's click tokens (tamber/1.7): a random prefix
+    /// This inspect session's click tokens (forma/1.7): a random prefix
     /// and a counter, so the outline answering a click of the session is
     /// known however many are on their way.
     nonisolated(unsafe) static var session: String?
@@ -27,15 +27,15 @@ enum Inspect {
     /// server hears it: a replay of that command on registering again is
     /// the exit again, not on (as host/web/dev.js does). Process memory: a
     /// relaunched app is a new build id, which the server never tells an
-    /// earlier build's command (scripts/tamber-builds.mjs keys inspect mode
+    /// earlier build's command (scripts/forma-builds.mjs keys inspect mode
     /// by build id), so nothing is left to replay, and no seq a restarted
     /// server reuses is mistaken for it.
     nonisolated(unsafe) static var left: Int?
-    /// Each plan site's copy (tamber/1.17 `inspect`'s `copies`), for the plan it came with: sent with inspect mode on,
+    /// Each plan site's copy (forma/1.17 `inspect`'s `copies`), for the plan it came with: sent with inspect mode on,
     /// once per plan; a `select` walks by it.
     nonisolated(unsafe) static var copies: (plan: String?, list: [Int])?
     /// `copies`' encoding (`r1:`, base64 of LEB128 varints, `[copy, run length]` pairs in site order) back to one copy
-    /// per site, as scripts/tamber-inspect.mjs `copiesOf` writes it; nil for an encoding it does not know.
+    /// per site, as scripts/forma-inspect.mjs `copiesOf` writes it; nil for an encoding it does not know.
     static func decodeCopies(_ text: String) -> [Int]? {
         guard text.hasPrefix("r1:"), let bytes = Data(base64Encoded: String(text.dropFirst(3))) else { return nil }
         // (Bounded: a varint of at most 4 bytes, 2^20 sites in all, whole pairs; anything else is no copies.)
@@ -108,7 +108,7 @@ enum Inspect {
         return body
     }
 
-    /// `{select: {up, plan, from, instance}}` (tamber/1.16; 1.17 by this app's own tree), as the web pages' (host/web/dev.js
+    /// `{select: {up, plan, from, instance}}` (forma/1.16; 1.17 by this app's own tree), as the web pages' (host/web/dev.js
     /// `selectUp`): the selection moves up `up` copies, reported as the node it lands on, with no click token (the move
     /// is no press: its outline scrolls the copy into view) and with `moved: {up, stepped}`. Walking out from the
     /// selection, its own copy seen, each ancestor of a copy not yet seen is one step (a slot's host among them); at
@@ -209,7 +209,7 @@ extension ExactApp {
         if let c = frame["copies"] as? [String: Any] { Inspect.copies = (c["data"] as? String).flatMap(Inspect.decodeCopies).map { (c["plan"] as? String, $0) } }
         // (Copies alone, a plan known after registering: kept, inspect mode as it is.)
         if frame["copies"] != nil, frame["on"] == nil, frame["select"] == nil, frame["refresh"] == nil { return }
-        // `select: {up, levels, plan, from, instance}` (tamber/1.16): the selection moves up its call sites. Any
+        // `select: {up, levels, plan, from, instance}` (forma/1.16): the selection moves up its call sites. Any
         // other `select` the web pages take too (JavaScript's truthy: not null, false, 0 or "") is no move: the
         // selection said as it is, inspect mode left on, never read as `on` missing.
         if let select = frame["select"], Inspect.truthy(select) {
@@ -332,7 +332,7 @@ extension ExactApp {
         report(r.reason.map { ["kind": "held", "state": NSNull(), "reason": $0] } ?? ["kind": "held", "state": state])
     }
 
-    /// `{select: {up, …}}` (tamber/1.16) on the selection's session: the node it lands on reported as a
+    /// `{select: {up, …}}` (forma/1.16) on the selection's session: the node it lands on reported as a
     /// tap would report it, or the selection as it is now (Inspect.selectUp).
     func selectUp(_ select: [String: Any]) {
         guard Inspect.on, let was = Inspect.selected, let s = sessions.first(where: { ObjectIdentifier($0) == was.session }),

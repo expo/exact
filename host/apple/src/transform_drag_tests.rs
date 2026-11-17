@@ -218,6 +218,41 @@ fn binding_follows_complete_tree_and_fractional_geometry_is_deduplicated() {
 }
 
 #[test]
+fn geometry_keeps_running_transforms_when_the_transition_is_unset() {
+    for easing in ["400ms linear", "-exact-spring(180, 12, 1)"] {
+        let source = SOURCE
+            .replace("  state zoom = 1", &format!("  state curve = \"all {easing}\"\n  state zoom = 1"))
+            .replace("    zoom = 2", "    zoom = 2\n    x = 100")
+            .replace("  action unbind", "  action clear\n    curve = \"unset\"\n  action unbind")
+            .replace("      button testId=\"zoom\"", "      button \"Clear\" testId=\"clear\" press=clear\n      button testId=\"zoom\"")
+            .replace("transition=\"translate -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)\"", "transition=curve");
+        let (mut host, mut packet, _) = boot_source(&source);
+        accepted(&packet.send(&mut host));
+        press(&mut host, "zoom", 0.);
+        host.tick(100.);
+        let node = packet.identity[2];
+        let before = current(&host, node);
+        let ends = host.engine().settle_time();
+        assert!(ends.is_some());
+        press(&mut host, "clear", 100.);
+        assert_eq!(current(&host, node), before);
+        packet.identity[4] += 1;
+        packet.now = 100.;
+        accepted(&packet.send(&mut host));
+        assert_eq!(current(&host, node), before, "{easing}: geometry");
+        assert_eq!(host.engine().settle_time(), ends);
+        host.tick(200.);
+        assert_ne!(current(&host, node), before);
+        host.tick(ends.unwrap() * 1000.);
+        assert_eq!(
+            current(&host, node),
+            [MotionValue::new(100., 0.), MotionValue::scalar(2.)]
+        );
+        assert!(host.engine().quiescent());
+    }
+}
+
+#[test]
 fn begin_requires_positive_current_geometry_and_invalidations_do_not_fake_actions() {
     let (mut host, mut p, _) = boot();
     p.op = 11;
@@ -1141,6 +1176,17 @@ fn a_timer_that_unbinds_the_photo_before_its_release_ends_the_gesture() {
         Some(&Value::str("absent")),
         "the timer's commit is kept"
     );
+    let engine = host.engine();
+    assert_eq!(engine.now(), 1.2);
+    assert_eq!(
+        engine
+            .spring_descriptor(p.identity[2], Property::Translate)
+            .unwrap()
+            .start,
+        1.1
+    );
+    let shown = engine.value(p.identity[2], Property::Translate).unwrap().y;
+    assert!(shown > 0.0 && shown < 40.0, "{shown}");
 }
 
 #[test]
@@ -1267,4 +1313,177 @@ fn passed_over_transform_target_is_journaled_until_its_binding_disappears() {
     press(&mut host, "remove", 6.0);
     host.advance(7.0);
     assert_eq!(reports(&host), 3, "the remaining target becomes owner");
+}
+
+fn overdue_timer_motion(op: u32, changed: bool) {
+    let source = r#"component App
+  state alpha = 1
+  state released = 0
+  task fadeLater mount
+    after(100, fade)
+  action fade
+    alpha = 0
+  action geometry(w: number, h: number, pw: number, ph: number)
+    released = released
+  action finish(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    released = released + 1
+  view
+    column width=320.25 height=200.5 overflow="hidden" padding=0 border-width=0
+      column id="photo" testId="photo" width="100%" height="100%" box-sizing="border-box" padding=0 border-width=0 opacity=alpha transition="opacity -exact-spring(180, 12, 1), translate -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)"
+        column testId="handle" transformDragFor="photo" transformgeometry=geometry transformrelease=finish
+"#;
+    let (mut host, mut p, _) = boot_source(source);
+    accepted(&p.send(&mut host));
+    p.op = 11;
+    p.now = 50.0;
+    p.values = [0.0, 10.0, 1.0, 0.0, 0.0, 0.0];
+    let reply = p.send(&mut host);
+    accepted(&reply);
+    let tokens = [
+        quoted(&reply, "translateToken"),
+        quoted(&reply, "scaleToken"),
+    ];
+    p.op = 12;
+    p.tokens = tokens;
+    p.now = 60.0;
+    p.values[1] = 20.0;
+    accepted(&p.send(&mut host));
+    p.op = op;
+    p.now = 150.0;
+    if op == 13 {
+        p.values[1] = 110.0;
+    } else {
+        p.identity[4] = 2;
+        p.tokens = [0; 2];
+        p.values = if op == 14 {
+            [0.0; 6]
+        } else {
+            [
+                if changed { 300.0 } else { 320.25 },
+                200.5,
+                320.25,
+                200.5,
+                0.0,
+                0.0,
+            ]
+        };
+    }
+    let reply = p.send(&mut host);
+    accepted(&reply);
+    let engine = host.engine();
+    let curve = engine
+        .spring_descriptor(p.identity[2], Property::Opacity)
+        .unwrap();
+    assert_eq!(curve.start, 0.1, "op {op}, changed {changed}");
+    let shown = engine.value(p.identity[2], Property::Opacity).unwrap().x;
+    assert!(shown > 0.0 && shown < 1.0, "op {op}: {shown}");
+    assert_eq!(engine.now(), 0.15);
+    assert_eq!(count(&host, "released"), if op == 13 { 1.0 } else { 0.0 });
+    assert!(tokens
+        .into_iter()
+        .all(|token| host.has_hold(token) == (op == 13)));
+    let payload: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    let present = payload["batch"]["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|op| op["op"] == "present" && op["property"] == "opacity")
+        .unwrap();
+    assert!(
+        (present["x"].as_f64().unwrap() - shown).abs() < 1e-9,
+        "{reply}"
+    );
+    if op == 13 {
+        assert_eq!(
+            current(&host, p.identity[2])[0],
+            MotionValue::new(0.0, 110.0)
+        );
+        let velocity = payload["velocity"][1].as_f64().unwrap();
+        assert!((velocity - 1000.0).abs() < 1e-6, "{reply}");
+    }
+}
+
+#[test]
+fn overdue_timer_motion_starts_before_release_presentation() {
+    overdue_timer_motion(13, false);
+}
+
+#[test]
+fn overdue_timer_motion_starts_before_geometry_presentation() {
+    for (op, changed) in [(10, true), (10, false), (14, false)] {
+        overdue_timer_motion(op, changed);
+    }
+}
+
+#[test]
+fn overdue_timer_rebind_preserves_the_new_targets_initial_geometry() {
+    let source = r#"component App
+  state reference = "photo"
+  state measured = 0
+  task switchLater mount
+    after(100, switchPhoto)
+  action switchPhoto
+    reference = "other-photo"
+  action geometry(w: number, h: number, pw: number, ph: number)
+    measured = measured + 1
+  action finish(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    measured = measured
+  view
+    column width=320.25 height=200.5 overflow="hidden" padding=0 border-width=0
+      column id="photo" testId="photo" width="100%" height="100%" box-sizing="border-box" overflow="hidden" padding=0 border-width=0
+        column id="other-photo" testId="other-photo" width="100%" height="100%" box-sizing="border-box" padding=0 border-width=0
+          column testId="handle" transformDragFor=reference transformgeometry=geometry transformrelease=finish
+"#;
+    for (op, changed) in [(10, false), (10, true), (14, false)] {
+        let (mut host, mut p, _) = boot_source(source);
+        accepted(&p.send(&mut host));
+        let dimensions = p.values;
+        p.op = op;
+        p.now = 150.0;
+        p.identity[4] = 2;
+        if op == 14 {
+            p.values = [0.0; 6];
+        } else if changed {
+            p.values[0] = 300.0;
+        }
+        let reply = p.send(&mut host);
+        assert_eq!(count(&host, "measured"), 1.0, "{reply}");
+        assert_eq!(
+            host.runner().slot("reference"),
+            Some(&Value::str("other-photo"))
+        );
+        let binding = reply
+            .split("\"op\":\"transform-drag\"")
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing new binding: {reply}"));
+        p.identity[2] = quoted(binding, "targetKey");
+        p.identity[3] = quoted(binding, "clipKey");
+        p.op = 11;
+        p.values = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        let begin = p.send(&mut host);
+        let previous_reply = reply;
+
+        p.op = 10;
+        p.identity[4] = 3;
+        p.values = dimensions;
+        let reply = p.send(&mut host);
+        accepted(&reply);
+        assert!(reply.contains("\"committed\":true"), "{reply}");
+        assert_eq!(count(&host, "measured"), 2.0, "{reply}");
+        assert!(begin.contains("\"accepted\":false"), "{begin}");
+        assert!(
+            previous_reply.contains("\"committed\":false"),
+            "{previous_reply}"
+        );
+        assert!(
+            previous_reply.contains("binding changed before its event"),
+            "{previous_reply}"
+        );
+        accepted(&p.send(&mut host));
+        assert_eq!(count(&host, "measured"), 2.0);
+        p.op = 11;
+        p.values = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0];
+        accepted(&p.send(&mut host));
+    }
 }

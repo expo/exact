@@ -21,7 +21,18 @@ pub struct Advised {
 
 /// Compile and collect CLI advice from one source load. Syntax refusals still
 /// allow partial checking, but suppress advice about the incomplete program.
-pub fn compile_path_advised(path: &Path, mapped: bool) -> Advised {
+///
+/// Under `Profile::Terminal` the plan is lowered for the terminal and says
+/// `surface terminal` (LLP 1101.003 D9), and what the terminal profile
+/// refuses (LLP 1101 D2) is a warning: this is `contract build --surface
+/// terminal`, which measures a GUI source on the terminal host (LLP 1121
+/// stage 11 C). A terminal entry compiles through
+/// [`crate::compile_path_terminal`], which refuses it.
+pub fn compile_path_advised(
+    path: &Path,
+    mapped: bool,
+    profile: contract_lower::Profile,
+) -> Advised {
     let mut refused = sources::Refused::default();
     let loaded = read_source(path).map_err(|e| vec![e]).and_then(|src| {
         let root = app_root(path)?;
@@ -48,6 +59,13 @@ pub fn compile_path_advised(path: &Path, mapped: bool) -> Advised {
         (Err(refused.errors.clone()), Vec::new())
     };
     let mut warnings = Vec::new();
+    if profile == contract_lower::Profile::Terminal {
+        let unadmitted = crate::terminal::check(&file).err().unwrap_or_default();
+        warnings.extend(unadmitted.into_iter().map(|e| CompileError {
+            pass: "warning",
+            ..sources.resolve(e)
+        }));
+    }
     let compiled = compile_loaded(
         path,
         &root,
@@ -55,7 +73,7 @@ pub fn compile_path_advised(path: &Path, mapped: bool) -> Advised {
         sources,
         mapped,
         false,
-        contract_lower::Profile::Web,
+        profile,
         Some(&mut warnings),
     );
     if !refused.errors.is_empty() {
@@ -110,13 +128,17 @@ fn clock_advice(file: &File, sources: &sources::Sources) -> Vec<CompileError> {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/it/scratch.rs"]
+mod scratch;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn shared_loading_keeps_the_independent_passes_results() {
-        let dir = std::env::temp_dir().join(format!("contract-advice-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = super::scratch::Scratch::new(format!("contract-advice-{}", std::process::id()));
         let path = dir.join("app.contract");
         let diagnostics =
             |errors: &[CompileError]| errors.iter().map(CompileError::to_json).collect::<Vec<_>>();
@@ -129,7 +151,7 @@ mod tests {
         ] {
             std::fs::write(&path, source).unwrap();
             sources::LOADS.with(|loads| loads.set(0));
-            let advised = compile_path_advised(&path, true);
+            let advised = compile_path_advised(&path, true, contract_lower::Profile::Web);
             assert_eq!(sources::LOADS.with(|loads| loads.get()), 1);
             let (compiled, warnings) = crate::compile_path_all_warned(&path, true);
             assert_eq!(diagnostics(&warnings), diagnostics(&advised.compiled.1));
@@ -152,6 +174,5 @@ mod tests {
             }
             assert_eq!(diagnostics(&resource_clock_warnings(&path).unwrap_or_default()), diagnostics(&advised.clocks));
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

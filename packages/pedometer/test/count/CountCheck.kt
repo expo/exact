@@ -60,23 +60,52 @@ fun main() {
     }
     val epoch = 1794268800000.0
     Subscription().run {
-        checkThat("subscription: the first request checks Play services", begin())
-        checkThat("subscription: concurrent requests share the pending check", !begin())
-        complete(existing = true, epoch = epoch)
+        checkThat("subscription: the first request subscribes", begin())
+        checkThat("subscription: concurrent requests share the pending subscription", !begin())
+        val first = epoch - 12 * 86_400_000
+        checkThat("subscription: an earlier process's start is kept", complete(first, epoch) == first)
         val start = epoch - 30 * 60_000
         val restored = Count(start).range(since, epoch)!!
         checkThat("subscription: a restored walk reads from its saved start",
             restored.from == start && restored.endSeconds - restored.startSeconds == 1801L)
-        checkThat("subscription: an existing subscription is remembered without a new start", since == null && !begin())
+        checkThat("subscription: a later request keeps the stored start", since == first && !begin())
         val retained = Count(epoch - 11 * 86_400_000).range(since, epoch)!!
-        checkThat("subscription: an existing subscription retains the last ten days",
+        checkThat("subscription: a subscription older than ten days retains the last ten",
             retained.from == epoch - 10 * 86_400_000 && retained.endSeconds - retained.startSeconds == 864001L)
     }
     Subscription().run {
         begin()
+        complete(epoch - 60 * 60_000, epoch)
+        val older = Count(epoch - 2 * 60 * 60_000).range(since, epoch)!!
+        checkThat("subscription: a walk older than the stored start reads from that start", older.from == epoch - 60 * 60_000)
+    }
+    Subscription().run {
+        val walk = Count(epoch - 30 * 60_000)
+        checkThat("subscription: no Recording read before the subscription is asked", range(walk, epoch) == null)
+        begin()
+        checkThat("subscription: none while it is pending, so no empty total is kept", range(walk, epoch) == null)
+        complete(null, epoch)
+        checkThat("subscription: a read once it is made", range(walk, epoch + 60_000)?.from == epoch)
+    }
+    run {
+        val dir = kotlin.io.path.createTempDirectory("pedometer-marker").toFile()
+        try {
+            val marker = java.io.File(dir, "subscribed")
+            checkThat("marker: a new installation has no start", Subscription(marker).stored() == null)
+            Subscription(marker).store(epoch)
+            checkThat("marker: a later process reads the start stored", Subscription(marker).stored() == epoch)
+            marker.writeText("garbled")
+            checkThat("marker: one it cannot read is no start", Subscription(marker).stored() == null)
+            Subscription(java.io.File(dir, "gone/subscribed")).store(epoch)
+            checkThat("marker: a store that cannot write is no start, and no failure",
+                Subscription(java.io.File(dir, "gone/subscribed")).stored() == null)
+        } finally { dir.deleteRecursively() }
+    }
+    Subscription().run {
+        begin()
         failed()
-        checkThat("subscription: a failed check can be retried", begin())
-        complete(existing = false, epoch = epoch)
+        checkThat("subscription: a failed subscription can be retried", begin())
+        checkThat("subscription: the first subscription's start is now", complete(null, epoch) == epoch)
         val fresh = Count(epoch - 30 * 60_000).range(since, epoch + 60_000)!!
         checkThat("subscription: a new subscription bounds an older walk",
             fresh.from == epoch && fresh.endSeconds - fresh.startSeconds == 61L)

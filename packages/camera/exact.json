@@ -15,6 +15,14 @@
       "width": "number",
       "height": "number"
     },
+    "Video": {
+      "path": "string",
+      "type": "string",
+      "size": "number",
+      "duration": "number",
+      "width": "number",
+      "height": "number"
+    },
     "PhotoCapabilities": {
       "redEyeReduction": "enum<never|always|controllable>",
       "imageWidth": "PhotoRange",
@@ -68,6 +76,71 @@
         }
       },
       "answers": "Photo"
+    },
+    {
+      "send": "takePhotoWithCameraApp",
+      "grants": [],
+      "origin": "app",
+      "foreground": true,
+      "gesture": true,
+      "options": {
+        "facingMode": "option<enum<user|environment>>",
+        "path": {
+          "type": "path",
+          "access": "write",
+          "optional": true
+        }
+      },
+      "answers": "Photo",
+      "substitute": {
+        "choose": {
+          "ticket": "camera-app",
+          "choices": [
+            "take"
+          ],
+          "typed": false
+        },
+        "unsupported": [
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "recordVideoWithCameraApp",
+      "grants": [],
+      "origin": "app",
+      "foreground": true,
+      "gesture": true,
+      "options": {
+        "facingMode": "option<enum<user|environment>>",
+        "maxDuration": "option<number>",
+        "path": {
+          "type": "path",
+          "access": "write",
+          "optional": true
+        }
+      },
+      "answers": "Video",
+      "substitute": {
+        "choose": {
+          "ticket": "camera-app",
+          "choices": [
+            "take"
+          ],
+          "typed": false
+        },
+        "unsupported": [
+          "macos",
+          "linux",
+          "tvos",
+          "windows",
+          "terminal"
+        ]
+      }
     },
     {
       "source": "getPhotoCapabilities",

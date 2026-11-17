@@ -1,19 +1,107 @@
 //! Concrete app composition selected at bake, never a Cargo feature on a host.
 //! @ref LLP 1029.000 — disabling replacement removes its reachable loader code.
 
-/// Generate `AppData` and `app_data()` for a host's source type and constructor.
-/// `inputs` are the actual target bake's compatibility inputs.
+/// A Rust-only app's source type and constructor as `rust.placement` places them (LLP 1027.002): on `worker`, the
+/// source in `exact_data::Placed`, which moves it to an owner of its own at activation; on `main`, unchanged. A
+/// mixed app places its own children (`js/bake`'s embedded data) and never comes here. A Rust worker is native
+/// only (LLP 1027.002 §7): the web's source stays inline, and the bake says so. A Rust update module (`mode` other
+/// than `off`) runs in the swappable's executor, not under `Placed`, so `worker` there is refused, not dropped.
+fn placed_source(
+    data: &str,
+    constructor: &str,
+    mode: &str,
+    inputs: &serde_json::Value,
+) -> Result<(String, String), String> {
+    if inputs["rustPlacement"].as_str() != Some("worker") {
+        return Ok((data.to_owned(), constructor.to_owned()));
+    }
+    if inputs["platform"] == "web" {
+        println!("cargo:warning=rust.placement worker runs inline on web: a Rust worker is native only (LLP 1027.002 §7)");
+        return Ok((data.to_owned(), constructor.to_owned()));
+    }
+    if mode != "off" {
+        return Err(format!(
+            "rust.placement worker with Rust updates (rust mode {mode}): an update module runs inline, so its placement would be lost. Set rust.placement to main, or turn Rust updates off"
+        ));
+    }
+    Ok((
+        format!("exact_logic::exact_data::Placed<{data}>"),
+        format!("exact_logic::exact_data::Placed::new({constructor}, exact_logic::exact_runner::Placement::Worker)"),
+    ))
+}
+
+/// [`rust_entry`] over a source a mixed app's composer built (`js/bake`'s embedded data), which places its own
+/// children: never wrapped again.
+/// `app` names an unnamed source as in [`rust_entry_naming`]; `None` takes the manifest's.
+pub fn rust_entry_composed(
+    data: &str,
+    constructor: &str,
+    mode: &str,
+    inputs: &serde_json::Value,
+    app: Option<&str>,
+) -> Result<String, String> {
+    let manifest = inputs["app"].as_str().map(|app| format!("{app:?}"));
+    entry(
+        data,
+        constructor,
+        mode,
+        inputs,
+        app.or(manifest.as_deref()),
+        false,
+    )
+}
+
+/// Generate `AppData` and `app_data()` for a host's source type and constructor, placed as `rust.placement` says
+/// ([`placed_source`]). `inputs` are the actual target bake's compatibility inputs.
+/// A data source that names no app id takes the manifest's (`inputs["app"]`),
+/// so a native host gives it the app's storage roots (`Swappable::named`).
 pub fn rust_entry(
     data: &str,
     constructor: &str,
     mode: &str,
     inputs: &serde_json::Value,
 ) -> Result<String, String> {
+    let app = inputs["app"].as_str().map(|app| format!("{app:?}"));
+    rust_entry_naming(data, constructor, mode, inputs, app.as_deref())
+}
+
+/// `rust_entry`, where `app` is the Rust expression (a `&str`) that names a
+/// data source naming no app id, or `None` to leave it unnamed. A linked
+/// Apple bake passes the id the link carries in the executable
+/// (`exact_apple::baked::identity`), so the compiled entry is the same for
+/// apps that differ only in identity, and an app repacked onto another's
+/// executable is named by its own compat.json, not the other's code.
+pub fn rust_entry_naming(
+    data: &str,
+    constructor: &str,
+    mode: &str,
+    inputs: &serde_json::Value,
+    app: Option<&str>,
+) -> Result<String, String> {
+    entry(data, constructor, mode, inputs, app, true)
+}
+
+fn entry(
+    data: &str,
+    constructor: &str,
+    mode: &str,
+    inputs: &serde_json::Value,
+    app: Option<&str>,
+    place: bool,
+) -> Result<String, String> {
+    declared_source(data, constructor, inputs)?;
     let constructor = native_storage_constructor(constructor, inputs)?;
+    let (data, constructor) = if place {
+        placed_source(data, &constructor, mode, inputs)?
+    } else {
+        (data.to_owned(), constructor)
+    };
+    let data = data.as_str();
     let constructor = constructor.as_str();
     // The digest of the source this binary compiles `constructor`'s crate
-    // from (`scripts/app.mjs` `nativeSource`): a Rust update built from the
-    // same source then runs this native code, not the module.
+    // from (`scripts/rust.mjs` `nativeSource`): a Rust update built from the
+    // same source then runs this native code, not the module. Routing compares
+    // source digests, never the wasm module's (LLP 1030 D3a, amended 2026-11-12).
     println!("cargo:rerun-if-env-changed=EXACT_NATIVE_SOURCE");
     let native = match std::env::var("EXACT_NATIVE_SOURCE") {
         Ok(source) if !source.is_empty() => {
@@ -24,7 +112,14 @@ pub fn rust_entry(
         }
         _ => String::new(),
     };
-    let supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
+    // Under a variant a source naming the base app's id takes the variant's
+    // (LLP 1030.008 D2); `inputs` carries the base beside the id.
+    let named = match (app, inputs["variant"]["base"].as_str()) {
+        (Some(app), Some(base)) => format!(".named_variant({app}, {base:?})"),
+        (Some(app), None) => format!(".named({app})"),
+        (None, _) => String::new(),
+    };
+    let mut supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
         let receipt: serde_json::Value = serde_json::from_slice(
             &std::fs::read(std::path::Path::new(&directory).join("app.module.json"))
                 .map_err(|e| e.to_string())?,
@@ -43,12 +138,21 @@ pub fn rust_entry(
         ) {
             return Err("invalid supplemental Rust module filename".into());
         }
-        format!("{{ use exact_logic::exact_runner::DataSource; exact_logic::Swappable::{mode}({constructor}){native}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
+        format!("{{ use exact_logic::exact_runner::DataSource; exact_logic::Swappable::{mode}({constructor}){native}{named}.replacement(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/app.plan\")), include_str!(concat!(env!(\"OUT_DIR\"), \"/rust/app.module.json\")), include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rust/{file}\")).to_vec()).expect(\"validated baked Rust pair\") }}")
     } else {
-        format!("exact_logic::Swappable::{mode}({constructor}){native}")
+        format!("exact_logic::Swappable::{mode}({constructor}){native}{named}")
     };
+    let has_preloads = inputs["preload"]
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty());
+    if has_preloads {
+        supplemental = format!(
+            "({supplemental}).with_preloads({})",
+            crate::preload_expression(&inputs["preload"])
+        );
+    }
     match mode {
-        "off" if inputs["platform"] == "web" => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
+        "off" if inputs["platform"] == "web" && !has_preloads => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
         "off" | "native" | "tiered" | "wasm" | "browser" => Ok(format!(
             "exact_logic::configured!(AppData, {data}, || {supplemental});\n#[allow(dead_code)]\nfn app_data() -> AppData {{ Default::default() }}\n"
         )),
@@ -73,11 +177,174 @@ pub fn native_storage_constructor(
     if !linked && required.has(exact_runner::Capability::Sqlite) {
         return Err("Unlinked(\"sqlite\")".into());
     }
+    if linked {
+        if let Some(refused) = shell_without_sqlite() {
+            return Err(refused);
+        }
+    }
     Ok(if linked {
         format!("{{ #[cfg(not(target_arch = \"wasm32\"))] ibex2_sqlite::link(); {constructor} }}")
     } else {
         constructor.to_owned()
     })
+}
+
+/// The build script's own crate, when the entry it generates calls `ibex2_sqlite::link()` and the crate depends on a
+/// native host but names no `ibex2-sqlite`: an app crate written before native apps selected SQLite (2099b23460)
+/// declares only its host. rustc would refuse the entry with E0433 and Cargo's hint to `cargo add` a crates.io crate,
+/// where the fix is the SDK's vendored one (expo/exact-build#147). Only from a build script (`CARGO_CFG_TARGET_ARCH`
+/// is a build script's) for a native target. A crate without a host (a render crate) writes the entry but never
+/// compiles it, so it is left alone. A host is found where `exact.mjs update` looks for one
+/// (`game/update-manifests.mjs`, `nativeHosts`), so the update the message names adds the line.
+fn shell_without_sqlite() -> Option<String> {
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").ok()?;
+    if arch == "wasm32" {
+        return None;
+    }
+    let manifest =
+        std::path::Path::new(&std::env::var_os("CARGO_MANIFEST_DIR")?).join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest).ok()?;
+    lacks_sqlite(&text).then(|| sqlite_refusal(&manifest))
+}
+
+/// The host crates `exact.mjs update` adds `ibex2-sqlite` beside (`game/update-manifests.mjs`).
+const NATIVE_HOSTS: [&str; 6] = [
+    "exact-apple",
+    "exact-apple-update",
+    "exact-linux",
+    "exact-painted",
+    "exact-linux-update",
+    "exact-windows",
+];
+
+/// Whether a manifest declares a native host as a dependency and names no `ibex2-sqlite`. A host counts only as a
+/// key or `package` in `[dependencies]` or a `[target.….dependencies]` table, the tables `exact.mjs update` edits.
+/// SQLite counts anywhere outside a comment, as `ibex2-sqlite` or as the `ibex2_sqlite` the entry names (a renamed or
+/// inherited key), so a crate that may have it is left to Cargo. The scan reads one line at a time, so a manifest
+/// with a multi-line string, whose lines it cannot tell from declarations, or an escape (`\\`), which may spell a key
+/// it does not decode, is left to Cargo too.
+fn lacks_sqlite(manifest: &str) -> bool {
+    if manifest.contains("\"\"\"") || manifest.contains("'''") || manifest.contains('\\') {
+        return false;
+    }
+    let mut host = false;
+    let mut sqlite = false;
+    let mut table = None::<bool>; // Some(true): a dependency table; Some(false): one dependency's own table.
+    for line in manifest.lines().map(uncommented) {
+        sqlite |= line
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .any(|w| w.replace('-', "_") == "ibex2_sqlite");
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_matches(|c| c == '[' || c == ']' || c == ' ');
+            let (path, name) = match header.rsplit_once("dependencies") {
+                Some((before, after))
+                    if before.is_empty()
+                        || before.starts_with("target.") && before.ends_with('.') =>
+                {
+                    (true, after.strip_prefix('.'))
+                }
+                _ => (false, None),
+            };
+            table = path.then_some(name.is_none());
+            host |= name.is_some_and(is_host);
+        } else if let Some((key, value)) = line.split_once('=') {
+            let key = key
+                .trim()
+                .split('.')
+                .next()
+                .unwrap_or("")
+                .trim_matches(|c| c == '"' || c == '\'');
+            host |= match table {
+                Some(true) => is_host(key) || package(value).is_some_and(is_host),
+                Some(false) => {
+                    key == "package"
+                        && is_host(value.trim().trim_matches(|c| c == '"' || c == '\''))
+                }
+                None => false,
+            };
+        }
+    }
+    host && !sqlite
+}
+
+fn is_host(name: &str) -> bool {
+    NATIVE_HOSTS.contains(&name)
+}
+
+/// The `package = "…"` an inline dependency table renames.
+fn package(value: &str) -> Option<&str> {
+    let (_, rest) = value.split_once("package")?;
+    let rest = rest.trim_start().strip_prefix('=')?.trim_start();
+    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    rest[1..].split(quote).next()
+}
+
+/// A manifest line without its comment: from the first `#` outside a quoted string.
+fn uncommented(line: &str) -> &str {
+    let mut quote = None;
+    for (i, c) in line.char_indices() {
+        match (quote, c) {
+            (None, '#') => return line[..i].trim(),
+            (None, '"' | '\'') => quote = Some(c),
+            (Some(q), _) if c == q => quote = None,
+            _ => {}
+        }
+    }
+    line.trim()
+}
+
+fn sqlite_refusal(manifest: &std::path::Path) -> String {
+    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vendor/ibex/crates/ibex2-sqlite");
+    let vendored = vendored.canonicalize().unwrap_or(vendored);
+    format!(
+        "{}: this native app crate's entry links SQLite storage (ibex2_sqlite::link) but the crate does not depend on ibex2-sqlite. \
+         Run `bun exact.mjs update` in the app, which adds it beside the host crate, or add under [dependencies]: \
+         ibex2-sqlite = {{ path = '{}' }}. Not `cargo add`: the crate is Exact's vendored copy.",
+        manifest.display(),
+        vendored.display()
+    )
+}
+
+/// Refuse an entry whose source is not the one app.json's `rust.data` names (LLP 1153.003 D2), as the compatibility
+/// inputs carry it (`rustData`): the web build runs the manifest's, so a build script that passed another would run
+/// one source natively and another on the web. A source the host storage wraps (`exact_data_host::Storage`) is read
+/// inside it. An entry over a source the crate composes itself (`ExactEmbeddedData`, `ExactEmptyData`) names no
+/// constructor of the data crate's; the mixed bake checks that one's type.
+fn declared_source(
+    data: &str,
+    constructor: &str,
+    inputs: &serde_json::Value,
+) -> Result<(), String> {
+    let declared = &inputs["rustData"];
+    let (Some(ty), Some(source)) = (declared["type"].as_str(), declared["source"].as_str()) else {
+        return Ok(());
+    };
+    if matches!(data, "ExactEmbeddedData" | "ExactEmptyData") {
+        return Ok(());
+    }
+    let compact = |text: &str| text.split_whitespace().collect::<String>();
+    let (data, constructor) = (compact(data), compact(constructor));
+    let inner = |text: &str, open: &str, close: char| {
+        text.strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+            .map(str::to_owned)
+    };
+    let data = inner(&data, "exact_data_host::Storage<", '>').unwrap_or(data);
+    let constructor =
+        inner(&constructor, "exact_data_host::Storage::new(", ')').unwrap_or(constructor);
+    if data == compact(ty) && constructor == compact(source) {
+        return Ok(());
+    }
+    // A native host crate the app wrote may run another source of the same crate (markdown-stress's Apple host runs
+    // its native document lane); the web's entry runs the module the manifest names, so it must name the same.
+    let library = |path: &str| path.split("::").next().map(str::to_owned);
+    if inputs["platform"] != "web" && library(&data) == library(ty) {
+        return Ok(());
+    }
+    Err(format!(
+        "app.json's rust.data names the source `{source}` (`{ty}`), and this build passes `{constructor}` (`{data}`): pass the source the manifest names, which the web build also runs"
+    ))
 }
 
 /// A Linux app's whole `entry.rs`: [`rust_entry`], its `launch_parts()`, its
@@ -150,14 +417,14 @@ fn launch_parts() -> Result<String, String> {
             file.canonicalize().map_err(|e| e.to_string())?
         ));
         calls.push_str(&format!(
-            "    {ident}::launch(exact_linux::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
+            "    {ident}::launch(exact_painted::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
         ));
     }
     if calls.is_empty() {
         return Ok("fn launch_parts() {}\n".into());
     }
     Ok(format!(
-        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_linux::journal::launch_parts_ran(started.elapsed());\n}}\n"
+        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_painted::journal::launch_parts_ran(started.elapsed());\n}}\n"
     ))
 }
 
@@ -258,8 +525,9 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
     // A grouped list is its authored nodes on the web, and the browser does
     // its own I/O and plays CSS's transitions (LLP 1047.001 D2); its file
     // input is the media picker, `auth` below is the sign-in sheet, and its
-    // numerals roll in the runtime's text (LLP 1077 D15), and its date and
-    // time controls are the browser's own (LLP 1115.001.000 D2).
+    // numerals roll in the runtime's text (LLP 1077 D15), its date and
+    // time controls are the browser's own (LLP 1115.001.000 D2), and it
+    // shows no tips (LLP 1035.006.000 D4).
     let names: Vec<&str> = uses
         .iter()
         .filter(|c| {
@@ -270,9 +538,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
                     | Capability::Transitions
                     | Capability::MediaPicker
                     | Capability::AuthSession
+                    | Capability::Presence
                     | Capability::Numerals
                     | Capability::Dates
                     | Capability::Sqlite
+                    | Capability::Tips
             )
         })
         .map(|c| c.name())
@@ -313,6 +583,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Animations
             | Capability::Gradients
             | Capability::Grid
+            | Capability::Shadows
+            | Capability::Corners
+            | Capability::Rotate
+            | Capability::TextStroke
+            | Capability::SymbolPalette
             | Capability::Geometry
             | Capability::Segments
             | Capability::Dataset
@@ -322,9 +597,11 @@ pub fn web_linked(plan: &exact_plan::Plan, inputs: &serde_json::Value) -> String
             | Capability::Transitions
             | Capability::MediaPicker
             | Capability::AuthSession
+            | Capability::Presence
             | Capability::Numerals
             | Capability::Dates
-            | Capability::Sqlite => {}
+            | Capability::Sqlite
+            | Capability::Tips => {}
         }
     }
     entry
@@ -352,6 +629,7 @@ pub fn apple_linked(uses: exact_runner::Uses, host: &str) -> String {
     for (capability, group) in [
         (Capability::GroupedLists, "grouped_list_exports"),
         (Capability::Markdown, "markup_exports"),
+        (Capability::Presence, "presence_exports"),
     ] {
         if uses.has(capability) {
             entry.push_str(&format!("{apple}::{group}!();\n"));
@@ -385,6 +663,167 @@ mod tests {
             .contains("ibex2_sqlite::link();"));
     }
 
+    /// LLP 1027.002: a Rust-only app's entry places its source as `rust.placement` says, natively; `main`, a mixed
+    /// app's entry (`rust_entry`) and the web are today's entry.
+    #[test]
+    fn a_rust_only_entry_places_its_source_as_the_manifest_says() {
+        let inputs = |platform: &str, placement: &str| serde_json::json!({ "platform": platform, "rustMode": "off", "rustPlacement": placement, "app": "com.example.placed" });
+        let worker = super::rust_entry("Data", "data()", "off", &inputs("ios", "worker")).unwrap();
+        assert!(
+            worker.contains(
+                "exact_logic::configured!(AppData, exact_logic::exact_data::Placed<Data>,"
+            ),
+            "{worker}"
+        );
+        // The constructor the entry writes (here with its native storage link) is the one placed.
+        assert!(
+            worker.contains("exact_logic::exact_data::Placed::new({ #[cfg(not(target_arch = \"wasm32\"))] ibex2_sqlite::link(); data() }, exact_logic::exact_runner::Placement::Worker)"),
+            "{worker}"
+        );
+        for (platform, placement) in [("ios", "main"), ("macos", "main"), ("web", "worker")] {
+            let inputs = inputs(platform, placement);
+            assert_eq!(
+                super::rust_entry("Data", "data()", "off", &inputs).unwrap(),
+                super::rust_entry_composed("Data", "data()", "off", &inputs, None).unwrap(),
+                "{platform} {placement}"
+            );
+        }
+        // Rust updates run their module inline: worker is refused there, not dropped.
+        let tiered =
+            super::rust_entry("Data", "data()", "tiered", &inputs("ios", "worker")).unwrap_err();
+        assert!(
+            tiered.contains("rust.placement worker with Rust updates"),
+            "{tiered}"
+        );
+        // A mixed app's composer places its own children: its entry is never wrapped.
+        assert!(!super::rust_entry_composed(
+            "Data",
+            "data()",
+            "off",
+            &inputs("ios", "worker"),
+            None
+        )
+        .unwrap()
+        .contains("Placed"));
+    }
+
+    /// LLP 1153.003 D2: a build script passes the source app.json's `rust.data` names, which the web build runs.
+    #[test]
+    fn an_entry_over_another_source_than_the_manifests_is_refused() {
+        let inputs = serde_json::json!({
+            "platform": "web", "rustMode": "off",
+            "rustData": {"crate": "pins-data", "type": "pins_data::Pins", "source": "pins_data::Pins::new(3)"}
+        });
+        let entry = |data, constructor| super::rust_entry(data, constructor, "off", &inputs);
+        assert!(entry("pins_data::Pins", "pins_data::Pins::new(3)").is_ok());
+        assert!(entry(
+            "exact_data_host::Storage<pins_data::Pins>",
+            "exact_data_host::Storage::new(pins_data::Pins::new( 3 ))"
+        )
+        .is_ok());
+        let refused = entry("pins_data::Pins", "pins_data::Pins::default()").unwrap_err();
+        assert!(
+            refused.contains("rust.data names the source `pins_data::Pins::new(3)`"),
+            "{refused}"
+        );
+        assert!(entry("other_data::Other", "pins_data::Pins::new(3)").is_err());
+        // A source the crate composes itself is the mixed bake's to check.
+        assert!(entry("ExactEmbeddedData", "embedded_data()").is_ok());
+        // A native host may run another source of the manifest's crate, never another crate's.
+        let native = serde_json::json!({ "platform": "macos", "rustMode": "off", "rustData": inputs["rustData"] });
+        let entry = |data, constructor| super::rust_entry(data, constructor, "off", &native);
+        assert!(entry("pins_data::NativePins", "pins_data::NativePins::default()").is_ok());
+        assert!(entry("other_data::Other", "other_data::Other::default()").is_err());
+    }
+
+    #[test]
+    fn a_native_crate_without_ibex2_sqlite_is_named_with_the_fix() {
+        // expo/exact-build#147: an outside app's apple crate from before SQLite was selected.
+        let before = "[package]\nname = \"notes-apple\"\n\n[dependencies]\n# ibex2-sqlite comes later\nexact-apple = { path = \"../exact2/host/apple\" }\n";
+        assert!(super::lacks_sqlite(before));
+        // A render crate writes a native entry it never compiles (apps/expose/linux), and a renamed host still counts.
+        let render = "[dependencies]\nexact-js = { path = \"../../../js\" }\nexact-render = { path = \"../../../host/render\" }\n";
+        assert!(!super::lacks_sqlite(render));
+        assert!(super::lacks_sqlite(
+            "[dependencies]\nhost = { package = \"exact-linux\", path = \"x\" }\n"
+        ));
+        assert!(!super::lacks_sqlite(
+            "[dependencies]\n# exact-apple = { path = \"x\" }\n"
+        ));
+        // A host only in a comment, another field or a table `exact.mjs update` does not edit is no host.
+        for not_host in [
+            "[package]\ndescription = \"beside exact-apple\"\n[dependencies]\nexact-render = { path = \"x\" } # with exact-apple\n",
+            "[dev-dependencies]\nexact-apple = { path = \"x\" }\n",
+            "[build-dependencies]\nexact-linux = { path = \"x\" }\n",
+            "[package.metadata]\nexample = \"\"\"\n[dependencies.exact-apple]\n\"\"\"\n",
+            // TOML decodes this key to `ibex2-sqlite`.
+            "[dependencies]\nexact-apple = { path = \"x\" }\n\"ibex2\\u002dsqlite\".workspace = true\n",
+        ] {
+            assert!(!super::lacks_sqlite(not_host), "{not_host}");
+        }
+        for host in [
+            "[dependencies.exact-apple]\npath = \"x\"\n",
+            "[target.'cfg(target_os = \"ios\")'.dependencies]\nexact-apple.workspace = true\n",
+            "[dependencies.host]\npackage = \"exact-windows\"\npath = \"x\"\n",
+        ] {
+            assert!(super::lacks_sqlite(host), "{host}");
+        }
+        for named in [
+            "ibex2-sqlite = { path = \"../exact2/vendor/ibex/crates/ibex2-sqlite\" }",
+            "ibex2-sqlite.workspace = true",
+            "[dependencies.ibex2-sqlite]",
+            "sql = { package = \"ibex2-sqlite\", path = \"x\" }",
+            // The workspace root renames it to the name the entry uses.
+            "ibex2_sqlite.workspace = true",
+        ] {
+            assert!(
+                !super::lacks_sqlite(&format!("{before}{named}\n")),
+                "{named}"
+            );
+        }
+        let refused = super::sqlite_refusal(std::path::Path::new("/app/apple/Cargo.toml"));
+        assert!(refused.starts_with("/app/apple/Cargo.toml: "), "{refused}");
+        assert!(
+            refused.contains("bun exact.mjs update")
+                && refused.contains("vendor/ibex/crates/ibex2-sqlite'"),
+            "{refused}"
+        );
+        // A test is no build script: the entry is unchanged there.
+        assert!(
+            super::shell_without_sqlite().is_none()
+                || std::env::var_os("CARGO_CFG_TARGET_ARCH").is_some()
+        );
+    }
+
+    /// The entry gives a data source the manifest's app id, which a source
+    /// that names none takes (`Swappable::named`), in every native mode.
+    #[test]
+    fn an_entry_names_the_manifests_app() {
+        let inputs = serde_json::json!({"app": "com.example.notes", "linked": []});
+        for mode in ["off", "native", "tiered", "wasm"] {
+            let entry = super::rust_entry("Data", "data()", mode, &inputs).unwrap();
+            let named = format!("Swappable::{mode}(data()).named(\"com.example.notes\")");
+            assert!(entry.contains(&named), "{entry}");
+            let linked =
+                super::rust_entry_naming("Data", "data()", mode, &inputs, Some("linked_app()"))
+                    .unwrap();
+            assert!(
+                linked.contains(&format!("Swappable::{mode}(data()).named(linked_app())")),
+                "{linked}"
+            );
+            assert!(!linked.contains("com.example.notes"), "{linked}");
+            let unnamed = super::rust_entry_naming("Data", "data()", mode, &inputs, None).unwrap();
+            assert!(!unnamed.contains(".named("), "{unnamed}");
+        }
+        // Under a variant (LLP 1030.008 D2) a source naming the base app takes the variant's id.
+        let variant = serde_json::json!({"app": "com.example.notes.dev", "linked": [], "variant": {"name": "dev", "base": "com.example.notes"}});
+        let entry = super::rust_entry("Data", "data()", "off", &variant).unwrap();
+        assert!(
+            entry.contains(".named_variant(\"com.example.notes.dev\", \"com.example.notes\")"),
+            "{entry}"
+        );
+    }
+
     /// LLP 1047.001 D3: the entry names its set and invokes the export
     /// groups of what it names, through whichever host crate it calls.
     #[test]
@@ -411,6 +850,12 @@ mod tests {
             markdown.contains("::exact_apple::markup_exports!();"),
             "{markdown}"
         );
+        let presence = Uses::NONE.with_grants("secret.keep token user-presence optional");
+        for host in ["exact_apple", "exact_apple_update"] {
+            let entry = super::apple_linked(presence, host);
+            assert!(entry.contains("::presence_exports!();"), "{entry}");
+            assert!(entry.contains("::Capability::Presence"), "{entry}");
+        }
     }
 
     #[test]

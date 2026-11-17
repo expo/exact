@@ -1,6 +1,9 @@
 //! Optional Rust data executors: embedded first frame, replacement after first pixel.
 //! @ref LLP 1029.000 — independently built data modules, one encoded seam on every host.
 
+/// The placement proxy a Rust-only app's generated entry wraps its source in (`rust.placement`).
+#[cfg(not(target_arch = "wasm32"))]
+pub use exact_data;
 use exact_logic_abi as abi;
 #[doc(hidden)]
 pub use exact_plan;
@@ -40,11 +43,6 @@ pub const MAX_MODULE: usize = 32 << 20;
 
 trait Executor {
     fn call(&mut self, bytes: &[u8]) -> Result<Vec<u8>, String>;
-    /// Whether a call trapped. A trapped instance's memory and state are
-    /// undefined, so it takes no further calls.
-    fn trapped(&self) -> bool {
-        false
-    }
     #[cfg(any(
         target_os = "macos",
         target_os = "linux",
@@ -65,7 +63,12 @@ type Preloader = fn(&[u8]) -> Result<bool, String>;
 pub struct Swappable<D> {
     embedded: Option<D>,
     app_id: String,
+    /// Under a variant, the base app's id (LLP 1030.008 D2): a module's own
+    /// crate names it, and it is admitted where `app_id` is.
+    base: Option<String>,
     grants: String,
+    preloads: Vec<exact_runner::request::Preload>,
+    launch: Option<exact_runner::request::Launch>,
     mode: &'static str,
     loader: Option<Loader>,
     preloader: Option<Preloader>,
@@ -88,7 +91,10 @@ impl<D: DataSource> Swappable<D> {
     fn configured(embedded: D, mode: &'static str, loader: Option<Loader>) -> Self {
         Self {
             app_id: embedded.app_id().into(),
+            base: None,
             grants: embedded.grants().into(),
+            preloads: embedded.preloads().to_vec(),
+            launch: embedded.launch(),
             canvas_surfaces: embedded.canvas_surfaces(),
             embedded: Some(embedded),
             mode,
@@ -101,10 +107,50 @@ impl<D: DataSource> Swappable<D> {
             native: None,
         }
     }
-    /// Name the source digest (`scripts/app.mjs` `nativeSource`) the binary
+    /// The app's identity from its manifest (`app.json`'s `app.id`), for an
+    /// embedded source that names none (`DataSource::app_id`'s default). The
+    /// hosts key the app's storage roots, kept answers and persisted states by
+    /// this id; without one a native host gives the app no storage, and an
+    /// agent drive's named store (`--storage`) would be memory. A source that
+    /// names its own id keeps it: its users' files are already under it.
+    pub fn named(mut self, app: &str) -> Self {
+        if self.app_id.is_empty() {
+            self.app_id = app.into();
+        }
+        self
+    }
+    /// [`Self::named`] for a variant (LLP 1030.008 D2): `app` is the
+    /// variant's identity and `base` the app's, which a source naming its own
+    /// id names. Both take the variant's, so its storage is its own.
+    pub fn named_variant(mut self, app: &str, base: &str) -> Self {
+        if self.app_id.is_empty() || self.app_id == base {
+            self.app_id = app.into();
+        }
+        self.base = Some(base.into());
+        self
+    }
+    /// A replacement's source keeps the identity this one was admitted under.
+    fn admitted(mut self, app: &str, base: &Option<String>) -> Self {
+        self.app_id = app.into();
+        self.base = base.clone();
+        self
+    }
+    /// Whether `id`, as a module or candidate names itself, is this app.
+    fn names_this_app(&self, id: &str) -> bool {
+        id == self.app_id || self.base.as_deref() == Some(id)
+    }
+    /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
+    pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
+        self.preloads = preloads.to_vec();
+        self
+    }
+
+    /// Name the source digest (`scripts/rust.mjs` `nativeSource`) the binary
     /// compiled `make`'s data crate from. A Rust candidate whose receipt names
     /// the same source is that code already: replacement makes it natively,
     /// so a module costs interpretation only while it differs from the binary.
+    /// The comparison is of source, never of the wasm module, whose bytes can
+    /// stay the same while a native-only arm changed (LLP 1030 D3a).
     pub fn with_native(mut self, source: &'static str, make: fn() -> D) -> Self {
         self.native = Some((source, make));
         self
@@ -192,19 +238,23 @@ impl<D: DataSource> Swappable<D> {
     }
     fn call(
         &mut self,
+        target: Option<Target>,
         store: &mut Store,
         source: &str,
         args: &[Value],
         outcome: Option<&Outcome>,
     ) -> Result<Answer, DataError> {
-        let request =
-            abi::call_request(store, source, args, outcome).map_err(DataError::Interface)?;
+        let request = abi::call_request(target, store, source, args, outcome)
+            .map_err(DataError::Interface)?;
         let bytes = self.run(&request)?;
         abi::call_reply(&bytes, store)
     }
-    /// Run one request on the active executor. After a trap the instance is
-    /// discarded and the module activated afresh, so the trap costs that call
-    /// only (LLP 1029.000 §3: module-local caches may be discarded).
+    /// Run one request on the active executor. A call that fails may have
+    /// run, and changed the module's own state, before it failed: a trap
+    /// leaves the instance's memory undefined, and a reply over the seam's
+    /// bound is refused after its answer ran. So the instance is discarded
+    /// and the module activated afresh, and the failure costs that call only
+    /// (LLP 1029.000 §3: module-local caches may be discarded).
     fn run(&mut self, request: &[u8]) -> Result<Vec<u8>, DataError> {
         let engine = self.executor.as_mut().ok_or_else(|| {
             DataError::Unavailable("Rust module awaits post-pixel activation".into())
@@ -213,13 +263,11 @@ impl<D: DataSource> Swappable<D> {
             Ok(bytes) => return Ok(bytes),
             Err(error) => error,
         };
-        if engine.trapped() {
-            self.executor = None;
-            if let Err(again) = self.activate_module() {
-                return Err(DataError::Interface(format!(
-                    "{error}; activating the module again failed: {again}"
-                )));
-            }
+        self.executor = None;
+        if let Err(again) = self.activate_module() {
+            return Err(DataError::Interface(format!(
+                "{error}; activating the module again failed: {again}"
+            )));
         }
         Err(DataError::Interface(error))
     }
@@ -237,7 +285,7 @@ impl<D: DataSource> Swappable<D> {
             .loader
             .ok_or("Rust executor is disabled for this client")?(bytes)?;
         let (app, grants) = abi::metadata_reply(&engine.call(&abi::metadata_request())?)?;
-        if app != self.app_id || grants.trim() != self.grants.trim() {
+        if !self.names_this_app(&app) || grants.trim() != self.grants.trim() {
             return Err("loaded Rust module changes admitted app identity or grants".into());
         }
         if let Some(plan) = &self.plan {
@@ -279,6 +327,12 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         }
     }
 
+    fn render_web(&mut self) {
+        if let Some(embedded) = &mut self.embedded {
+            embedded.render_web();
+        }
+    }
+
     fn preload(&self) -> Result<bool, DataError> {
         if let Some(embedded) = &self.embedded {
             return embedded.preload();
@@ -306,6 +360,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     fn app_id(&self) -> &str {
         &self.app_id
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.launch.clone()
+    }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &self.preloads
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }
@@ -382,7 +443,6 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         let bytes = self.run(&request)?;
         abi::overlay_reply(&bytes)
     }
-    /// A replaced Rust module parks nothing.
     fn forgotten(&mut self, store: &exact_runner::Store, in_flight: &[exact_runner::InFlight<'_>]) {
         if let Some(embedded) = &mut self.embedded {
             embedded.forgotten(store, in_flight);
@@ -458,6 +518,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             None => Ok(()),
         }
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.embedded
+            .as_mut()
+            .map_or_else(Vec::new, |embedded| embedded.take_reports())
+    }
     fn module_delivery(
         &mut self,
         store: &mut Store,
@@ -475,6 +540,28 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             .map(DataSource::take_logs)
             .unwrap_or_default()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        if let Some(source_impl) = &mut self.embedded {
+            source_impl.parse_tool(fetch, continuation, store, source, args, outcome)
+        } else {
+            self.call(None, store, source, args, Some(&outcome))
+        }
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.embedded
+            .as_ref()
+            .and_then(|m| m.module_identity(source))
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.embedded
             .as_mut()
@@ -528,7 +615,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 let embedded = embedded
                     .replacement(plan, receipt, module)
                     .map_err(|e| format!("{e:?}"))?;
-                let mut source = Self::configured(embedded, self.mode, self.loader);
+                let mut source = Self::configured(embedded, self.mode, self.loader)
+                    .admitted(&self.app_id, &self.base);
                 source.preloader = self.preloader;
                 source.native = self.native;
                 return Ok(source);
@@ -540,7 +628,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             {
                 return Err("unsupported Rust receipt or seam ABI".into());
             }
-            if self.app_id.is_empty() || meta["appId"].as_str() != Some(&self.app_id) {
+            if self.app_id.is_empty()
+                || !meta["appId"]
+                    .as_str()
+                    .is_some_and(|id| self.names_this_app(id))
+            {
                 return Err("Rust candidate names another app".into());
             }
             if meta["grants"].as_str().map(str::trim) != Some(self.grants.trim()) {
@@ -586,7 +678,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             }
             if let Some((source, make)) = self.native {
                 if meta["source"].as_str() == Some(source) {
-                    let mut native = Self::configured(make(), self.mode, self.loader);
+                    let mut native = Self::configured(make(), self.mode, self.loader)
+                        .admitted(&self.app_id, &self.base);
+                    native.preloads = self.preloads.clone();
                     native.preloader = self.preloader;
                     native.native = self.native;
                     return Ok(native);
@@ -598,7 +692,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             Ok(Self {
                 embedded: None,
                 app_id: self.app_id.clone(),
+                base: self.base.clone(),
                 grants: self.grants.clone(),
+                preloads: self.preloads.clone(),
+                launch: self.launch.clone(),
                 mode: self.mode,
                 loader: self.loader,
                 preloader: self.preloader,
@@ -653,7 +750,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             return embedded.query(source, args);
         }
         let mut store = Store::new(&self.grants, []);
-        match self.call(&mut store, source, args, None)? {
+        match self.call(None, &mut store, source, args, None)? {
             Answer::Now(v) => Ok(v),
             Answer::Later(_) => Err(DataError::Unavailable(
                 "Rust query needs a host request executor".into(),
@@ -669,7 +766,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.answer(store, source, args)
         } else {
-            self.call(store, source, args, None)
+            self.call(None, store, source, args, None)
         }
     }
     fn parse(
@@ -682,11 +779,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse(store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome))
+            self.call(None, store, source, args, Some(&outcome))
         }
     }
-    /// The embedded source keys by target; a replaced module's seam carries
-    /// no target, and a Rust source parks nothing between its calls.
     fn answer_for(
         &mut self,
         target: Target,
@@ -697,7 +792,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.answer_for(target, store, source, args)
         } else {
-            self.call(store, source, args, None)
+            self.call(Some(target), store, source, args, None)
         }
     }
     fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
@@ -718,7 +813,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse_fetch_for(target, fetch, store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome)).map(Some)
+            self.call(Some(target), store, source, args, Some(&outcome))
+                .map(Some)
         }
     }
     fn parse_for(
@@ -732,7 +828,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         if let Some(embedded) = &mut self.embedded {
             embedded.parse_for(target, store, source, args, outcome)
         } else {
-            self.call(store, source, args, Some(&outcome))
+            self.call(Some(target), store, source, args, Some(&outcome))
         }
     }
 }
@@ -740,5 +836,35 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod target_tests;
+
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod native_tests;
+
+/// A test's directory, removed when dropped, so a test that fails or panics
+/// leaves nothing in the system temp directory.
+#[cfg(test)]
+pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

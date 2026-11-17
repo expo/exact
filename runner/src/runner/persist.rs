@@ -24,6 +24,11 @@ pub(crate) fn state_name(name: &str) -> String {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Refuse writes to phone-owned watch values before deferred data runs.
+    pub fn read_only_store(&mut self, names: Vec<String>) {
+        self.store.read_only(names);
+    }
+
     /// Slot `i`'s boot value: the store's, when slot `i` is persisted and the
     /// stored text decodes to its type; else `v`, the initializer's.
     pub(super) fn restore_persisted(&mut self, i: usize, v: Value) -> Value {
@@ -152,7 +157,14 @@ fn type_name(plan: &Plan, ty: TypesId) -> String {
     let elem = || t.elem.map(|e| type_name(plan, e)).unwrap_or_default();
     match t.kind {
         TypeKind::Number => "number".into(),
-        TypeKind::String => "string".into(),
+        TypeKind::String if t.fields.is_empty() => "string".into(),
+        // An enum's members are its string type's fields.
+        TypeKind::String => {
+            let members: Vec<String> = (t.fields.iter())
+                .map(|f| format!("{:?}", plan.str(plan.field(f).name)))
+                .collect();
+            format!("enum<{}>", members.join(", "))
+        }
         TypeKind::Bool => "bool".into(),
         TypeKind::Option => format!("option<{}>", elem()),
         TypeKind::List => format!("{}[]", elem()),

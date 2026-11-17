@@ -235,3 +235,23 @@ fn a_refused_commit_puts_back_only_the_first_of_several_equal_calls() {
         "{a:?}"
     );
 }
+
+/// A stream queried in-process, where no host can run it, is let go whole:
+/// nothing of it stays in flight, so an answer pending on nothing is still
+/// refused as one rather than held for a stream that will never come.
+#[test]
+fn an_in_process_query_of_a_stream_leaves_nothing_in_flight() {
+    use exact_plan::Value;
+    use exact_runner::{DataError, DataSource};
+    let mut m = super::castle::module();
+    m.bind(&contract::compile("component App\n  resource feed = events(\"0\") as shape string\n  action stuck\n    send probe = stuck()\n  mutation probe as shape string\n  view\n    text feed\n").unwrap());
+    assert!(matches!(
+        m.query("events", &[Value::str("0")]),
+        Err(DataError::Unavailable(ref e)) if e.contains("no host to run it")
+    ));
+    assert_eq!(m.in_flight(), 0);
+    assert!(matches!(
+        m.answer(&mut super::castle::store(), "stuck", &[]),
+        Err(DataError::Failed(_, ref e, _)) if e.contains("pending on nothing")
+    ));
+}

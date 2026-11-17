@@ -402,7 +402,8 @@ class SpeechSynthesisModule(context: ExtensionContext) : ExactExtension(context)
     /** Utterances whose reply was dropped: never the app's (D2). */
     override fun dispose(ids: List<String>) {
         advance()
-        for (id in ids) {
+        // The speaking one last: ending it begins the next queued, which must not be one dropped with it.
+        for (id in ids.filter { it != current } + ids.filter { it == current }) {
             val u = utterances[id] ?: continue
             if (u.state == "ended") continue
             say("$id: its reply was dropped")

@@ -49,13 +49,15 @@ build counter, submit with `bunx eas build --platform ios --profile exact
 --non-interactive`. `out.ipa` is relative to the app directory;
 `artifact.json` reports its absolute path, production trust and signing
 identity. Build logs go to stderr. Missing inputs fail rather than prompt.
-Keep credentials out of caches; [cache guidance](../reference.md#native-ci-preparation)
-explains why restoring `target/` need not avoid compilation.
+Keep credentials out of caches; the [cache guidance](../reference.md#native-ci-preparation)
+says when a restored `target/` spares compiling Exact again.
 
 To check packaging locally without Apple credentials, omit the signing
 step and add `--unsigned`. That archive has an ad-hoc signature and must
 be re-signed before distribution. It is not a store submission.
 
-A real EAS worker, distribution signing, upload and store submission
-remain unverified. Store records, capabilities, credentials and submission
-remain the publisher's work.
+On an EAS worker these steps have built an `.ipa` signed with EAS-managed
+credentials, with the build number from EAS's counter. An upload, a store
+submission and a start on a device have not been run with them. Store
+records, capabilities, credentials and submission remain the publisher's
+work.

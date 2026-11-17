@@ -66,9 +66,19 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
     const [[lock], [engine], [free]] = await phases('lock', 'engine', 'free');
     expect(apart(lock, engine)).toBeLessThan(1);
     expect(apart(lock, free)).toBeGreaterThan(200); // no clock: CSS's own start
-    // A lone pulse on an idle clock starts at its first keyframe: now, read in the evaluation that adds it.
-    const [now, alone] = await evaluate(`(() => { const now = document.timeline.currentTime; add('alone', 'pulse 800ms infinite alternate', 'Other'); return [now, anim('alone').startTime]; })()`);
-    expect(apart(alone, now)).toBeLessThan(1);
+    // A lone pulse on an idle clock starts when the browser presents it, at its ready time (LLP 1003.001 D9), and
+    // one that joins before then starts there too.
+    const [now, pending, alone, joined] = await evaluate(`(async () => {
+      const now = document.timeline.currentTime;
+      add('alone', 'pulse 800ms infinite alternate', 'Other');
+      add('joined', 'pulse 800ms infinite alternate', 'Other');
+      const pending = anim('alone').startTime;
+      await Promise.all([anim('alone').ready, anim('joined').ready]);
+      return [now, pending, anim('alone').startTime, anim('joined').startTime];
+    })()`);
+    expect(pending).toBeNull();
+    expect(alone).toBeGreaterThanOrEqual(now);
+    expect(apart(joined, alone)).toBeLessThan(1);
 
     // The CSS play state still applies after `startTime` was set.
     await evaluate(`document.getElementById('engine').style.animationPlayState = 'paused'; sync()`);
@@ -82,7 +92,7 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
     // A lone member keeps its clock busy while paused: a joiner then, and
     // the member's own resume, both take the phase it started on.
     await evaluate(`add('solo', 'pulse 800ms infinite alternate', 'Solo')`);
-    const origin = await evaluate(`anim('solo').startTime`);
+    const origin = await evaluate(`anim('solo').ready.then(a => a.startTime)`);
     await twoFrames();
     await evaluate(`document.getElementById('solo').style.animationPlayState = 'paused'; sync()`);
     await twoFrames();
@@ -108,7 +118,8 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
     expect(await evaluate(`anim('done').playState`)).toBe('finished');
 
     // Two commits at one time: the second still lets go of a member the
-    // first kept, so a replacement on an idle clock starts now.
+    // first kept, so a replacement on an idle clock waits for its own ready
+    // time rather than taking the departed member's phase.
     await evaluate(`add('gone', 'pulse 800ms infinite alternate', 'Same')`);
     await twoFrames();
     const [t, fresh] = await evaluate(`(() => {
@@ -122,7 +133,8 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
       syncAt(t);
       return [t, anim('fresh').startTime];
     })()`);
-    expect(Math.abs(fresh - t)).toBeLessThan(1);
+    expect(fresh).toBeNull();
+    expect(await evaluate(`anim('fresh').ready.then(a => a.startTime)`)).toBeGreaterThanOrEqual(t);
 
     // A finite one joining late ends on a cycle boundary of the clock.
     await evaluate(`add('three', 'pulse 800ms 3 alternate')`);
@@ -140,6 +152,23 @@ check('pulses that mount apart share a phase, and a resumed one rejoins it', asy
     await evaluate(`add('back2', 'pulse 800ms infinite alternate', 'Back')`);
     const [back, back2] = await evaluate(`[anim('back').startTime, anim('back2').startTime]`);
     expect(apart(back2, back)).toBeLessThan(1);
+
+    const revealed = await evaluate(`(async () => {
+      const { animationClock } = await import('./navigation.js');
+      document.getElementById('exact-root').replaceChildren();
+      add('waiting', 'pulse 1s linear both paused', '');
+      add('authored', 'pulse 1s linear -500ms both paused', '');
+      let t = 0;
+      const clock = animationClock(() => t, () => null, () => {});
+      clock.register(t);
+      t = 500; clock.seek(t);
+      const held = [anim('waiting').currentTime, anim('authored').currentTime, clock.settle()];
+      document.getElementById('waiting').style.animationPlayState = 'running';
+      clock.register(t);
+      t = 750; clock.seek(t);
+      return { held, times: [anim('waiting').currentTime, anim('authored').currentTime], end: clock.settle() };
+    })()`);
+    expect(revealed).toEqual({ held: [0, 0, 500], times: [250, 0], end: 1500 });
   } finally {
     await suite.close();
     server.close();

@@ -69,6 +69,19 @@ for (const kind of kinds) test(`${kind}: a request renders and the adopted butto
     await page.mouse.up();
     await page.waitForFunction(() => document.querySelector('[data-testid="result"]').textContent === 'heard=1, pressed=1');
     expect(await page.locator('[data-testid="result"]').textContent()).toBe('heard=1, pressed=1');
+    if (kind === 'pointermove') {
+      // The first move in a frame goes out in its own event; later ones in that frame wait for the next, which
+      // sends the latest (#543).
+      const sent = await page.evaluate(() => new Promise(done => requestAnimationFrame(() => {
+        const el = document.querySelector('[data-testid="target"]'), r = el.getBoundingClientRect(), s = el.$pointer, send = s.pointermove;
+        const xs = [];
+        s.pointermove = (record, ...rest) => { xs.push(Math.round(record[0])); return send(record, ...rest); };
+        const move = x => el.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.x + x, clientY: r.y + 5 }));
+        move(1); const first = xs.length; move(2); move(3); const held = xs.length;
+        requestAnimationFrame(() => { s.pointermove = send; done([first, held, xs]); });
+      })));
+      expect(sent).toEqual([1, 1, [1, 3]]);
+    }
     expect(errors).toEqual([]);
   } finally { await browser.close(); }
 }, 30000);

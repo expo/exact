@@ -62,6 +62,8 @@ pub(crate) struct Sources {
     /// Each `var()` whose fallback the loader dropped (LLP 1153 D6): one
     /// warning says them.
     pub(crate) var_fallbacks: Vec<(Span, String)>,
+    /// Each `var()` of a runtime custom property nothing declares (LLP 1123 D5).
+    pub(crate) var_undeclared: Vec<(Span, contract_lower::var_tokens::Undeclared)>,
 }
 
 /// One name a `use` brought: where it is written, and the declaration it
@@ -275,11 +277,14 @@ impl Loader<'_> {
             &params,
             &identities,
         );
-        self.vars = Some(contract_lower::var_tokens::Tokens::of(
-            design.as_ref().map(|d| d.text.as_str()),
-            &package_designs,
-            self.units.first().and_then(|u| u.file.theme.as_ref()),
-        ));
+        self.vars = Some(
+            contract_lower::var_tokens::Tokens::of(
+                design.as_ref().map(|d| d.text.as_str()),
+                &package_designs,
+                self.units.first().and_then(|u| u.file.theme.as_ref()),
+            )
+            .with_runtime(self.units.iter().map(|u| &u.file)),
+        );
         let library = library::read(&self.sources, self.app_root);
         match self.scope() {
             Ok((mut file, scopes)) => {
@@ -310,17 +315,46 @@ fn unnamed(package: &str) -> String {
 }
 
 /// Where the app's design is (LLP 1121 D2): the file `app.json`'s
-/// `"tamber"` names, else `app.tamber` beside the app's `app.contract`.
+/// `"forma"` names, else `app.forma` beside the app's `app.contract`.
 pub fn design_path(root: &Path) -> Option<PathBuf> {
     let dir = root.parent()?;
     let named = std::fs::read_to_string(dir.join("app.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|app| app.get("tamber")?.as_str().map(|p| dir.join(p)));
+        .and_then(|app| app.get("forma")?.as_str().map(|p| dir.join(p)));
     named.or_else(|| {
-        let beside = dir.join("app.tamber");
+        let beside = dir.join("app.forma");
         (root.file_name()? == "app.contract" && beside.is_file()).then_some(beside)
     })
+}
+
+/// A former design name must not silently leave an app without its design.
+pub fn design_name_error(root: &Path) -> Option<String> {
+    let dir = root.parent()?;
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let mut former: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file() || t.is_symlink()))
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "tamber"))
+        .collect();
+    former.sort();
+    if let Some(path) = former.first() {
+        return Some(format!(
+            "rename {} to {}",
+            path.file_name()?.to_string_lossy(),
+            path.with_extension("forma").file_name()?.to_string_lossy()
+        ));
+    }
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("app.json")).ok()?).ok()?;
+    manifest.get("tamber")?;
+    Some("rename app.json's tamber key to forma".into())
 }
 
 std::thread_local! {
@@ -389,9 +423,33 @@ fn design(
     root: &Path,
     sources: &mut Sources,
 ) -> Result<Option<contract_syntax::DesignSource>, CompileError> {
+    if let Some(message) = design_name_error(root) {
+        return Err(CompileError {
+            pass: "use",
+            id: "forma-name".into(),
+            message,
+            span: Span::default(),
+            file: Some(root.into()),
+            related: Box::new([]),
+        });
+    }
     let Some(path) = design_path(root) else {
         return Ok(None);
     };
+    if path.extension().is_some_and(|e| e == "tamber") {
+        return Err(CompileError {
+            pass: "use",
+            id: "forma-name".into(),
+            message: format!(
+                "rename {} to {}",
+                path.display(),
+                path.with_extension("forma").display()
+            ),
+            span: Span::default(),
+            file: Some(path.into()),
+            related: Box::new([]),
+        });
+    }
     let key = path.canonicalize().unwrap_or_else(|_| path.clone());
     let scrubbed = DESIGN_TEXT.with(|t| {
         t.borrow()
@@ -401,7 +459,7 @@ fn design(
     let read = scrubbed.map_or_else(|| std::fs::read_to_string(&path), Ok);
     let text = read.map_err(|e| CompileError {
         pass: "use",
-        id: "tamber-unreadable".into(),
+        id: "forma-unreadable".into(),
         message: format!("the app's design `{}`: {e}", path.display()),
         span: Span::default(),
         file: Some(path.clone().into()),
@@ -526,9 +584,16 @@ pub(crate) fn graph_base(path: &Path, src: &str, app_root: &Path) -> GraphBase {
         .iter()
         .flat_map(|u| contract_lower::params::identities(&u.file))
         .collect();
+    let mut images = Vec::new();
     let errors = match loaded {
         Err(all) => all,
-        Ok(()) if loader.refused.errors.is_empty() => loader.scope().err().unwrap_or_default(),
+        Ok(()) if loader.refused.errors.is_empty() => loader
+            .scope()
+            .map(|(file, _)| {
+                images = contract_lower::image_svg_paths(&file);
+            })
+            .err()
+            .unwrap_or_default(),
         Ok(()) => Vec::new(),
     };
     let errors = std::mem::take(&mut loader.refused.errors)
@@ -555,6 +620,7 @@ pub(crate) fn graph_base(path: &Path, src: &str, app_root: &Path) -> GraphBase {
         root_key,
         sources: loader.sources,
         base,
+        images: images.into_iter().map(|path| app_root.join(path)).collect(),
         params: contract_params,
         loaded_identities,
         identities,
@@ -620,6 +686,7 @@ impl<'a> Loader<'a> {
                 consulted: Vec::new(),
                 motion: Vec::new(),
                 var_fallbacks: Vec::new(),
+                var_undeclared: Vec::new(),
             },
             active: vec![root_key.to_path_buf()],
             units: Vec::new(),
@@ -787,7 +854,18 @@ impl Loader<'_> {
                 self.sources.packages.push(package);
             }
         }
+        if let Some(to) = self.sources.paths.iter().position(|p| *p == resolved.key) {
+            if self.active.contains(&resolved.key) && self.declaration_shapes(index, to, u) {
+                self.units[index].targets.push(to);
+                return Ok(());
+            }
+        }
         let used = self.load_resolved(resolved, &described(u), u.span)?;
+        if !self.declaration_shapes(index, used, u) {
+            for m in &mut self.units[used].file.modules {
+                m.view_only = false;
+            }
+        }
         self.units[index].targets.push(used);
         Ok(())
     }
@@ -803,6 +881,7 @@ impl Loader<'_> {
         let refused = found.refused.into_iter();
         (self.refused.errors).extend(refused.map(|e| sources.resolve(e.into())));
         self.sources.var_fallbacks.extend(found.fallbacks);
+        self.sources.var_undeclared.extend(found.undeclared);
     }
 
     /// Give every declaration its program-unique name (D4), rewrite each
@@ -980,6 +1059,10 @@ impl Loader<'_> {
                 .chain(refused)
                 .collect());
         }
+        if let Some(s) = (self.units.iter().skip(1)).find_map(|u| u.file.sources.first()) {
+            let why = format!("`source {}` is declared outside the app's root file: a declared source is `app.contract`'s, as its resources are (LLP 1162.001 D1)", s.name);
+            return Err(vec![name_error("contract-source-root", why, s.span)]);
+        }
         self.splice_members();
         Ok((self.merge(), scopes))
     }
@@ -1107,135 +1190,6 @@ impl Loader<'_> {
             .collect()
     }
 
-    /// A unit's scope: its own declarations and the names its uses bring.
-    /// A used file's scope is what can be named from it, its uses included,
-    /// so a file can gather a library's names for others (LLP 1091 D3).
-    fn scope_of(
-        &mut self,
-        index: usize,
-        unique: &[HashMap<(Kind, String), String>],
-        scopes: &mut [Option<Scope>],
-        by_local: &mut [Option<ByLocal>],
-    ) -> Result<(), CompileError> {
-        if scopes[index].is_some() {
-            return Ok(());
-        }
-        let targets = self.units[index].targets.clone();
-        for &target in &targets {
-            self.scope_of(target, unique, scopes, by_local)?;
-        }
-        let mut names = unique[index].clone();
-        let unit = &self.units[index];
-        for (u, &target) in unit.file.uses.iter().zip(&targets) {
-            let from = scopes[target]
-                .as_ref()
-                .expect("a used file is scoped before its user");
-            let index_of_from = by_local[target]
-                .as_ref()
-                .expect("a used file is indexed with its scope");
-            for n in &u.names {
-                let found: Vec<_> = index_of_from
-                    .get(n.name.as_str())
-                    .cloned()
-                    .unwrap_or_default();
-                if found.is_empty() {
-                    return Err(unknown(u, n, from));
-                }
-                if let Some(m) = self.data_only(unique, &found) {
-                    // Bytes are data code's (LLP 1133.006 D8 item 1; LLP
-                    // 1133.022 D19 item 4).
-                    if m.substitute.contains(r#""bytes":true"#) {
-                        return Err(name_error(
-                            "contract-module-bytes",
-                            format!(
-                                "`{}` of `{}` carries bytes, which Contract has none of: call it in `app.ts` and send Contract what it needs (LLP 1133.006 D8)",
-                                m.declared, m.package
-                            ),
-                            n.span,
-                        ));
-                    }
-                    return Err(name_error(
-                        "module-name-data-only",
-                        format!(
-                            "`{}` of `{}` is called from data code alone (LLP 1133.011 D12): its answer would become a mutation's value in `state`; call it in `app.ts`, and send what the server answers",
-                            m.declared, m.package
-                        ),
-                        n.span,
-                    ));
-                }
-                for (kind, to) in found {
-                    let key = (kind, n.local().to_owned());
-                    match names.get(&key) {
-                        Some(prior) if *prior == to => {}
-                        Some(_) if unique[index].contains_key(&key) => {
-                            return Err(name_error(
-                                "contract-use-shadows",
-                                format!(
-                                    "`use {}` brings a {} `{}` that this file declares too; rename one with `as`",
-                                    n.name,
-                                    kind.what(),
-                                    n.local()
-                                ),
-                                n.span,
-                            ))
-                        }
-                        Some(prior) => {
-                            // Named by the files that declare them: two
-                            // files' declarations are two however alike
-                            // their text (LLP 1091 D7; splitter rough 1
-                            // read "different" as a different text).
-                            let file = |name: &str| {
-                                unique
-                                    .iter()
-                                    .position(|own| own.values().any(|v| v == name))
-                                    .map(|i| self.shown(i))
-                                    .unwrap_or_default()
-                            };
-                            return Err(name_error(
-                                "contract-use-duplicate",
-                                format!(
-                                    "`use {}` brings the {} `{}` declared in {}, and another `use` already brought the one declared in {}: a declaration is its file's, however alike the two read (LLP 1091 D7); declare it once and `use` it from that file, or rename one with `as`",
-                                    n.name,
-                                    kind.what(),
-                                    n.local(),
-                                    file(&to),
-                                    file(prior)
-                                ),
-                                n.span,
-                            ))
-                        }
-                        None => {
-                            names.insert(key, to.clone());
-                        }
-                    }
-                    self.sources.imports.push(Import {
-                        span: n.span,
-                        kind,
-                        name: to,
-                    });
-                }
-            }
-        }
-        // Preserve namespace order when one spelling has several meanings.
-        let mut local: ByLocal = HashMap::new();
-        for ((kind, name), to) in &names {
-            local
-                .entry(name.clone())
-                .or_default()
-                .push((*kind, to.clone()));
-        }
-        by_local[index] = Some(local);
-        // The program-wide tables (what is declared elsewhere, the shapes,
-        // the modules, the compiler's types) are set by `scope`, shared.
-        scopes[index] = Some(Scope {
-            names,
-            // The roster plus the intrinsics (`pending`, `failed`, `path`, `t`).
-            roster: Some(compiler_call),
-            ..Scope::default()
-        });
-        Ok(())
-    }
-
     /// Every declared name, by namespace, to the first unit that declares it
     /// and that unit's path, for refusing a name a file does not see — the
     /// generated ones too, so `Helper__ui` is no way around a `use`.
@@ -1356,6 +1310,8 @@ impl Loader<'_> {
             library: Vec::new(),
             library_packages: Vec::new(),
             fns: all!(fns),
+            // A declared source is the root file's (LLP 1162.001 D1).
+            sources: std::mem::take(&mut files[0].sources),
             modules: all!(modules),
             components: all!(components),
             // Each block is spliced into its component (LLP 1091.002 D4).

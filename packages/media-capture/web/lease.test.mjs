@@ -71,3 +71,59 @@ test('a camera moved while idle is the one the next lease opens', async () => {
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: saved });
   }
 });
+
+// A lease given back while its reopen is pending, then taken again: the two reopens complete in either order, each
+// opening or failing. Only the newer decides the track, which captures with the newer browser track or ends with its
+// failure; the superseded reopen leaves nothing capturing and ends nothing.
+for (const kind of ['audio', 'video']) {
+  for (const older of ['opens', 'fails']) {
+    for (const newer of ['opens', 'fails']) {
+      for (const first of ['older', 'newer']) {
+        test(`${kind}: the older reopen ${older} and the newer ${newer}, the ${first} completing first`, async () => {
+          const made = [], pending = [];
+          const stream = () => {
+            const t = { label: `Fake ${kind}`, readyState: 'live', getSettings: () => ({}), stop() { this.readyState = 'ended'; } };
+            made.push(t);
+            return { getAudioTracks: () => [t], getVideoTracks: () => [t], getTracks: () => [t] };
+          };
+          const saved = globalThis.navigator;
+          Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: {
+            // The first open answers at once; each reopen waits for the test to settle it.
+            getUserMedia: () => (made.length === 0 ? Promise.resolve(stream()) : new Promise((resolve, reject) => pending.push({
+              opens: () => { const s = stream(); resolve(s); return s.getTracks()[0]; },
+              fails: () => reject(Object.assign(new Error('busy'), { name: 'NotReadableError' })),
+            }))),
+          } } });
+          try {
+            const { implementation } = await import('./index.js');
+            const added = [];
+            const impl = implementation({ changed() {}, agent: false, log() {}, tracks: { add: (row) => added.push(row), held: () => false } });
+            const opened = await impl.getUserMedia({ [kind]: true });
+            const id = opened.tracks.find((t) => t.kind === kind).id, owner = added.find((row) => row.id === id).owner;
+            // Used once, so idle; then a reopen given back while pending, and another taken.
+            owner.subscribe(id, {}, { start: true })();
+            owner.subscribe(id, {}, { start: true })();
+            let ended = 0;
+            const leave = owner.subscribe(id, { ended: () => ended++ }, { start: true });
+            expect(pending.length).toBe(2);
+            const outcome = { older: () => pending[0][older](), newer: () => pending[1][newer]() };
+            const tracksOf = {};
+            tracksOf[first] = outcome[first]();
+            await Bun.sleep(0);
+            const second = first === 'older' ? 'newer' : 'older';
+            tracksOf[second] = outcome[second]();
+            await Bun.sleep(0);
+            const now = await impl.mediaStreamTrack({ track: id });
+            const live = made.filter((t) => t.readyState === 'live');
+            if (newer === 'opens') expect([now.readyState, ended, live.length, live[0] === tracksOf.newer]).toEqual(['live', 0, 1, true]);
+            else expect([now.readyState, ended, live.length]).toEqual(['ended', 1, 0]);
+            leave();
+            expect(made.filter((t) => t.readyState === 'live')).toEqual([]);
+          } finally {
+            Object.defineProperty(globalThis, 'navigator', { configurable: true, value: saved });
+          }
+        });
+      }
+    }
+  }
+}

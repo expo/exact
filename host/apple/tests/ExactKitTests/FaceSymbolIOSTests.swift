@@ -102,7 +102,7 @@ final class FaceSymbolIOSTests: XCTestCase {
     @MainActor func testARootTabsPathIsItsInstalledTabBarItemImage() throws {
         let session = try fixture("face-symbol-tab")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController, "the fixture's root tabs")
-        func home() -> UITabBarItem? { tabs.viewControllers?.first?.tabBarItem }
+        func home() -> UITabBarItem? { tabs.tabControllers?.first?.tabBarItem }
         XCTAssertTrue(home()?.image?.isSymbolImage == true)
         try drawPath(session, under: "tab-home")
         until("the tab bar item is drawn again from the path") { home()?.image?.isSymbolImage == false }
@@ -110,7 +110,7 @@ final class FaceSymbolIOSTests: XCTestCase {
         XCTAssertEqual(home()?.image?.size.width, FaceSymbol.tabBarPoints(tabs.traitCollection))
         XCTAssertTrue(home()?.selectedImage?.isSymbolImage == false, "no `.fill` variant: the path in both states")
         XCTAssertEqual(home()?.selectedImage?.size, home()?.image?.size)
-        XCTAssertEqual(tabs.viewControllers?.first?.tabBarItem.accessibilityIdentifier, "tab-home", "its test id, not the token")
+        XCTAssertEqual(tabs.tabControllers?.first?.tabBarItem.accessibilityIdentifier, "tab-home", "its test id, not the token")
         // An iPhone's glyph is 23 points at both widths
         tabs.tabBar.traitOverrides.userInterfaceIdiom = .phone
         for size in [UIUserInterfaceSizeClass.compact, .regular] {

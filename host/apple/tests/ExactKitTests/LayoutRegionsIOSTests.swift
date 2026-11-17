@@ -73,7 +73,7 @@ final class LayoutRegionsIOSTests: XCTestCase {
         let env = try XCTUnwrap(reply["env"] as? [String: Any])
         for (r, prefix) in LayoutRegions.prefixes.enumerated() {
             for (e, edge) in ["top", "right", "bottom", "left"].enumerated() {
-                XCTAssertEqual(env[prefix + edge] as? Double, Agent.r2(regions[r * 4 + e]), prefix + edge)
+                XCTAssertEqual(env[prefix + edge] as? Double, InspectionValue.r2(regions[r * 4 + e]), prefix + edge)
             }
         }
     }

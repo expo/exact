@@ -93,8 +93,8 @@ fn identity_and_grants_are_the_bakes_and_the_modules_agree() {
     assert!(abi_supported("1") && abi_supported(&ABI.to_string()));
     let mut names = m.sources();
     names.sort_unstable();
-    // `exactDelivery` (LLP 1030 D7), `exactViewport` (the TV fit,
-    // 1e6cb3bb0), `exactActivities` and the three activity sends (LLP
+    // `exactDelivery` (LLP 1030 D7), `exactTime`, `exactViewport` (the TV
+    // fit, 1e6cb3bb0), `exactActivities` and the three activity sends (LLP
     // 1126.001 WP9) are the plan's too: the runner answers them before the
     // data seam, so the module is never asked for them and need not
     // export them.
@@ -106,6 +106,7 @@ fn identity_and_grants_are_the_bakes_and_the_modules_agree() {
             "endActivity",
             "exactActivities",
             "exactDelivery",
+            "exactTime",
             "exactViewport",
             "nearest",
             "search",

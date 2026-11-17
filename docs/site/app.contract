@@ -1,9 +1,9 @@
-// The Exact docs: exact2's own Markdown, one page per route, rendered at build.
+// The Exact docs: Exact's own Markdown, one page per route, rendered at build.
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
-use Page, Nav, Moved, Markdown, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
-use Sidebar from "./components/sidebar.contract"
+use Page, Nav, Moved, Markdown, Address, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
+use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
 font "Inter"
@@ -61,6 +61,7 @@ routes nav
   recipeBackgroundTransfers "/recipes/background-transfers" render=build activate=idle
   recipeBackgroundWork "/recipes/background-work" render=build activate=idle
   recipeChatThread "/recipes/chat-thread" render=build activate=idle
+  recipeCombobox "/recipes/combobox" render=build activate=idle
   recipeContentDesign "/recipes/content-design" render=build activate=idle
   recipeConvex "/recipes/convex" render=build activate=idle
   recipeDatesAndDays "/recipes/dates-and-days" render=build activate=idle
@@ -108,9 +109,10 @@ routes nav
   recipeSnapbackTests "/recipes/snapback-tests" render=build activate=idle
   recipeSnapback "/recipes/snapback" render=build activate=idle
   recipeSocketTicket "/recipes/socket-ticket" render=build activate=idle
+  recipeSuspendingFeed "/recipes/suspending-feed" render=build activate=idle
   recipeSymbols "/recipes/symbols" render=build activate=idle
   recipeTabs "/recipes/tabs" render=build activate=idle
-  recipeTamber "/recipes/tamber" render=build activate=idle
+  recipeForma "/recipes/forma" render=build activate=idle
   recipeTests "/recipes/tests" render=build activate=idle
   recipeTheme "/recipes/theme" render=build activate=idle
   recipeTimerInAComponent "/recipes/timer-in-a-component" render=build activate=idle
@@ -134,10 +136,14 @@ routes nav
   referenceContractGrammarSemanticRestrictions "/reference/contract-grammar/semantic-restrictions" render=build activate=idle
   reference "/reference/developer" render=build activate=idle
   referenceDeveloperRuntimeFontFamiliesAndAriaDisabled "/reference/developer/runtime-font-families-and-aria-disabled" render=build activate=idle
+  referenceDeveloperGroupedSectionShadows "/reference/developer/grouped-section-shadows" render=build activate=idle
   referenceDeveloperServeRealworld "/reference/developer/serve-realworld" render=build activate=idle
   referenceDeveloperInspectAndFormatContract "/reference/developer/inspect-and-format-contract" render=build activate=idle
+  referenceDeveloperContractEvaluationLimits "/reference/developer/contract-evaluation-limits" render=build activate=idle
   referenceDeveloperRunATerminalApp "/reference/developer/run-a-terminal-app" render=build activate=idle
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
+  referenceDeveloperAppleBundleMetadata "/reference/developer/apple-bundle-metadata" render=build activate=idle
+  referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
   referenceDeveloperOpenTheSameDevelopmentUrlOnAppleHosts "/reference/developer/open-the-same-development-url-on-apple-hosts" render=build activate=idle
   referenceDeveloperGenerateTypescriptDataSourceTypes "/reference/developer/generate-typescript-data-source-types" render=build activate=idle
   referenceDeveloperAccessHatches "/reference/developer/access-hatches" render=build activate=idle
@@ -149,6 +155,7 @@ routes nav
   referenceDeveloperTimerOptions "/reference/developer/timer-options" render=build activate=idle
   referenceDeveloperLiveTimeAndProgress "/reference/developer/live-time-and-progress" render=build activate=idle
   agentPitfalls "/reference/pitfalls" render=build activate=idle
+  referencePitfallsComponentCalculations "/reference/pitfalls/component-calculations" render=build activate=idle
   referencePitfallsLayout "/reference/pitfalls/layout" render=build activate=idle
   referencePitfallsListsAndScrolling "/reference/pitfalls/lists-and-scrolling" render=build activate=idle
   referencePitfallsNativePresentationAndNavigationIos "/reference/pitfalls/native-presentation-and-navigation-ios" render=build activate=idle
@@ -159,7 +166,7 @@ routes nav
   referencePitfallsInput "/reference/pitfalls/input" render=build activate=idle
   referencePitfallsDrivingAndTesting "/reference/pitfalls/driving-and-testing" render=build activate=idle
   referencePitfallsWebsites "/reference/pitfalls/websites" render=build activate=idle
-  referencePitfallsWorkingOnExact2Itself "/reference/pitfalls/working-on-exact2-itself" render=build activate=idle
+  referencePitfallsWorkingOnExactItself "/reference/pitfalls/working-on-exact-itself" render=build activate=idle
   referencePitfallsGames "/reference/pitfalls/games" render=build activate=idle
   referencePitfallsAccessHatches "/reference/pitfalls/access-hatches" render=build activate=idle
   referencePitfallsTransformdragforHasOneOwnerAtATime "/reference/pitfalls/transformdragfor-has-one-owner-at-a-time" render=build activate=idle
@@ -180,9 +187,12 @@ component App
   // out of the tab order and the accessibility tree.
   resource viewport = exactViewport() as shape Viewport
   derive wide = viewport.width >= 960
+  // The tab that holds the page; a route no tab holds (the not-found page) is shown under Home.
+  derive tab = site.tabs.filter(t => t.routes.includes(top(nav).name)).map(t => t.id).concat(["home"]).slice(0, 1).join("")
   derive roomy = viewport.width >= 1280
   resource moved = resolveMoved(top(nav).name == "notfound" ? top(nav).url : "") as shape Moved else empty()
   mutation markdown as shape Markdown then copyFetched
+  mutation address as shape Address then copyAddress
   state query = ""
   state term = ""
   state chosen = 0
@@ -194,15 +204,17 @@ component App
   state opened: string[] = []
   state navToggled: string[] = []
   state copied = false
+  state linked = false
   state voted = ""
   state active = ""
   state visible: string[] = []
-  derive from = searchParam(top(nav), "from")
+  derive from = page.movedFrom.includes(searchParam(top(nav), "from")) ? searchParam(top(nav), "from") : ""
   derive slashless = top(nav).name == "notfound" and top(nav).url.length > 1 and top(nav).url.endsWith("/") ? top(nav).url.slice(0, top(nav).url.length - 1) : ""
   derive destination = moved.go != "" ? moved.go : slashless
   action follow(url: string)
     menu = false
     copied = false
+    linked = false
     voted = ""
     visible = []
     active = ""
@@ -219,12 +231,23 @@ component App
       scrollIntoView(`nav-${top(nav).name}`, block="center", behavior="instant")
   action vote(answer: string)
     voted = answer
+  action retryPage
+    refresh page
   action toggle(id: string)
     opened = opened.includes(id) ? opened.filter(x => x != id) : opened.concat([id])
   action pick(set: string, id: string)
     opened = opened.filter(x => not x.startsWith(`${set}|`)).concat([id])
   action copyMarkdown
     send markdown = fetchMarkdown(top(nav).name)
+  action copyLink
+    send address = pageAddress(page.path)
+  action copyAddress
+    match address
+      case some(a)
+        copyText(a.url)
+        linked = true
+      case none
+        linked = false
   action seen(id: string, entry: IntersectionObserverEntry)
     let now = entry.isIntersecting ? (visible.includes(id) ? visible : visible.concat([id])) : visible.filter(x => x != id)
     visible = now
@@ -240,10 +263,6 @@ component App
         copied = true
       case none
         copied = false
-  task theming mount
-    after(1, applyTheme)
-  action applyTheme
-    setScheme(theme)
   action chooseTheme(value: string)
     theme = value
     setScheme(value)
@@ -289,7 +308,7 @@ component App
   view
     view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="var(--color-background-screen)" font-family="var(--font-sans)" color="var(--color-text-default)"
       for e in stack(nav).slice(-1) key=e.id
-        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0
+        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
           padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(234px - clamp(0px, (960px - 100vw) * 1000, 234px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
             head title=page.title description=page.description status=404
@@ -299,7 +318,7 @@ component App
             head title=page.title description=page.description
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
             margin="calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
-            Article(page=page, nav=site, missing=(e.name == "notfound"), url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
+            Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
       header appearance="none" inert=wide display="flex" align-items="center" justify-content="space-between" flex-shrink=0 overflow="hidden" position="absolute" top=0 left=0 right=0
         height="clamp(0px, (960px - 100vw) * 1000, 57px)" padding="0 16px" border-bottom="1px solid var(--color-border-secondary)" background-color="var(--color-background-default)"
         link href="/" class=Hit testId="home-bar"
@@ -307,7 +326,7 @@ component App
             image "symbol:icon.exactmark" aria-hidden=true width="1.625rem" height="1rem" color="var(--color-text-default)"
             text "Exact Docs" font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
         row gap=8 align-items="center"
-          button press=openSearch appearance="none" aria-label="Search the docs" padding=6 border-radius="var(--radius-lg)" testId="search-bar"
+          button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" padding=6 border-radius="var(--radius-lg)" testId="search-bar"
             image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
           button press=toggleMenu appearance="none" aria-expanded=menu aria-controls="site-menu" padding="6px 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" testId="menu"
             row gap=6 align-items="center"
@@ -321,31 +340,34 @@ component App
               text "Exact Docs" font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
           button press=toggleSidebar appearance="none" aria-label="Hide the sidebar" title="Hide the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-hide"
             image "symbol:icon.panelclose" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
-        row padding="12px 12px 4px 12px" min-width=234 box-sizing="border-box"
+        row padding="10px 12px" min-width=234 box-sizing="border-box"
           button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" testId="search-open"
-            flex=1 display="flex" align-items="center" gap=8 padding="6px 10px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" background-color="var(--color-background-default)"
-            image "symbol:search" aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-tertiary)"
-            text "Search" flex=1 text-align="left" font-size="var(--text-sm)" color="var(--color-text-secondary)"
-            row aria-hidden=true gap=4
-              text "⌘" class=Key
-              text "K" class=Key
+            flex=1 display="flex" align-items="center" gap=8 padding="8px 16px 8px 8px" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)" background-color="var(--color-background-default)" box-shadow="0 1px 1px rgba(0, 0, 0, 0.05), 0 1px 1.5px rgba(0, 0, 0, 0.03)"
+            image "symbol:search" aria-hidden=true width="1.25rem" height="1.25rem" color="var(--color-icon-default)"
+            text "Search" flex=1 text-align="left" font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-secondary)"
+            text "⌘K" aria-hidden=true font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-quaternary)"
+        row min-width=234 box-sizing="border-box" border-bottom="0.5px solid var(--color-border-default)"
+          Tabs(nav=site, tab=tab, prefix="")
         scroll flex=1 min-height=0 min-width=234
-          Sidebar(nav=site, current=top(nav).name, toggled=navToggled, toggle=toggleNav, prefix="")
+          Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="")
       column width=(sidebar ? "0px" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or sidebar) padding-top=12 align-items="center" testId=(sidebar ? "sidebar-rail" : "sidebar-rail-shown") position="absolute" top=0 bottom=0 left=0
         button press=toggleSidebar appearance="none" aria-label="Show the sidebar" title="Show the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-show"
           image "symbol:icon.panelopen" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
-        button press=openSearch appearance="none" aria-label="Search the docs" title="Search" padding=6 margin-top=8 border-radius="var(--radius-lg)" testId="search-rail"
+        button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" title="Search" padding=6 margin-top=8 border-radius="var(--radius-lg)" testId="search-rail"
           image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
       if menu
         scroll id="site-menu" flex=1 min-width=0 background-color="var(--color-background-screen)" testId="site-menu" position="absolute" top="clamp(0px, (960px - 100vw) * 1000, 57px)" left=0 right=0 bottom=0
-          Sidebar(nav=site, current=top(nav).name, toggled=navToggled, toggle=toggleNav, prefix="menu-")
+          row padding-top=10 border-bottom="0.5px solid var(--color-border-default)"
+            Tabs(nav=site, tab=tab, prefix="menu-")
+          Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="menu-")
       dialog id="search" closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"
         column height="100%"
           row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
             row position="relative" flex=1 align-items="center" margin="16px 0 12px"
-              input id="search-input" type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
+              input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
+                aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
                 flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
               image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
               button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
@@ -359,9 +381,9 @@ component App
             else if hits.length == 0 and not searching
               text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
             else
-              column role="list" gap=2
+              column id="search-hits" role="listbox" aria-label="Search results" gap=2
                 for h, i in hits key=h.id
-                  link href=h.href role="listitem" display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
+                  link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
                     if h.nested
                       row align-items="center" gap=8
                         text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"

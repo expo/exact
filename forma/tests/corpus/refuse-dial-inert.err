@@ -1,0 +1,4 @@
+5:3: forma-dial-inert: `shade` moves no token; every dial moves at least one (D4)
+6:3: forma-dial-inert: `tint` moves no token; every dial moves at least one (D4)
+7:3: forma-dial-inert: `roundness` moves no token; every dial moves at least one (D4)
+8:3: forma-dial-inert: `gap` moves no token; every dial moves at least one (D4)

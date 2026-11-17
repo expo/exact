@@ -601,3 +601,68 @@ fn measured_release_velocity_follows_the_constrained_height_shown() {
         "the shown height stopped at 230: {clamped}"
     );
 }
+
+#[test]
+fn overdue_timer_motion_starts_before_the_height_release_sample() {
+    let plan = contract::compile(r#"component App
+  state alpha = 1
+  state speed = 0
+  state seen = 0
+  task fadeLater mount
+    after(100, fade)
+  action fade
+    alpha = 0
+  action release(height: number, velocity: number)
+    speed = velocity
+    seen = height
+  view
+    column id="sheet" testId="sheet" height=200 max-height=250 box-sizing="border-box" opacity=alpha transition="opacity -exact-spring(180, 12, 1)"
+      box testId="header" heightDragFor="sheet" heightrelease=release
+"#).unwrap().encode();
+    let (mut h, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        800.,
+        900.,
+    )
+    .unwrap();
+    let target = key(&h, "sheet");
+    let hold = token(&h.height_drag_begin(key(&h, "header"), target, 50.));
+    good(&h.height_drag_update(hold, 210., 60.));
+    for now in [f64::NAN, f64::INFINITY, 59.] {
+        assert!(!h
+            .dispatch_height_measured(hold, 300., now)
+            .contains("\"error\":null"));
+        assert_eq!(h.engine().now(), 0.06);
+        assert_eq!(
+            h.runner().slot("alpha"),
+            Some(&exact_runner::Value::Number(1.))
+        );
+    }
+    good(&h.dispatch_height_measured(hold, 300., 150.));
+    let node = motion_node(target);
+    let curve = h
+        .engine()
+        .spring_descriptor(node, Property::Opacity)
+        .unwrap();
+    assert_eq!(curve.start, 0.1);
+    let shown = h.engine().value(node, Property::Opacity).unwrap().x;
+    assert!(shown > 0. && shown < 1., "{shown}");
+    assert_eq!(
+        h.engine().value(node, Property::Height),
+        Some(Value::scalar(300.))
+    );
+    assert!(h.has_hold(hold));
+    assert_eq!(
+        h.runner().slot("seen"),
+        Some(&exact_runner::Value::Number(250.))
+    );
+    let Some(exact_runner::Value::Number(speed)) = h.runner().slot("speed") else {
+        panic!()
+    };
+    assert!(
+        *speed > 0. && *speed < 1000.,
+        "the constrained height determines velocity: {speed}"
+    );
+}

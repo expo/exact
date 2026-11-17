@@ -33,6 +33,7 @@ pub const SKIPPED: &[&str] = &[
 pub const RUN: &[&str] = &[
     "postMessage",
     "stopSounds",
+    "setSounds",
     "preventDefault",
     "stopPropagation",
 ];

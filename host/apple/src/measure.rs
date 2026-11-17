@@ -75,6 +75,11 @@ pub struct CRun {
     pub box_height: f32,
     /// Its `vertical-align` length, points: how far it is raised.
     pub box_shift: f32,
+    /// Its inline boxes' padding, border and margin before its first glyph
+    /// and after its last, points (`TextRun::edges`).
+    pub inline_start: f32,
+    /// See `inline_start`.
+    pub inline_end: f32,
 }
 
 /// One request, as the callback sees it.
@@ -149,6 +154,10 @@ pub struct CRequest {
     pub faces: *const u8,
     /// Its length in bytes.
     pub faces_len: usize,
+    /// 1 for natural text (LLP 1060.000 D3): each paragraph's base is its
+    /// first strong character's (`exact_text_paragraph_bases`), `direction`
+    /// where it has none; `direction` still resolves alignment.
+    pub natural: u8,
 }
 
 /// What the callback returns.
@@ -159,7 +168,7 @@ pub struct CMetrics {
     pub width: f32,
     /// Points.
     pub height: f32,
-    /// Top to first alphabetic baseline, points; negative when unknown.
+    /// Top to first alphabetic baseline, points; -1 unknown, -2 pending geometry.
     pub baseline: f32,
 }
 
@@ -171,8 +180,9 @@ pub type MeasureFn = extern "C" fn(ctx: *mut c_void, request: *const CRequest) -
 pub type LinesFn =
     extern "C" fn(ctx: *mut c_void, request: *const CRequest, out: *mut f32, cap: usize) -> usize;
 
-/// A system symbol's natural size (an Apple symbol name, UTF-8, at a point
-/// size and CSS weight): writes width and height and answers 1, or 0 when it
+/// A symbol's natural size (an Apple name or `icon-asset:<SVG source>`,
+/// UTF-8, at a point size and CSS weight): writes width and height and
+/// answers 1, or 0 when it
 /// cannot say. Called on the runtime's thread with the context
 /// `exact_set_measure` was given.
 pub type SymbolFn = extern "C" fn(
@@ -371,6 +381,23 @@ fn offer(a: AxisOffer) -> f32 {
     }
 }
 
+pub(crate) fn c_hyphens(hyphens: exact_kernel::Hyphens) -> u8 {
+    match hyphens {
+        exact_kernel::Hyphens::Manual => 0,
+        exact_kernel::Hyphens::None => 1,
+        exact_kernel::Hyphens::Auto => 2,
+    }
+}
+
+/// A kernel run as the callback sees it, its edges with it.
+fn c_run_of(text: &str, run: &exact_kernel::TextRun<'_>) -> CRun {
+    CRun {
+        inline_start: run.edges.start,
+        inline_end: run.edges.end,
+        ..c_run(text, run.style, run.inline)
+    }
+}
+
 pub(crate) fn c_run(text: &str, style: exact_kernel::TextStyle, inline: Option<InlineBox>) -> CRun {
     let b = inline.unwrap_or(InlineBox {
         width: 0.0,
@@ -384,6 +411,8 @@ pub(crate) fn c_run(text: &str, style: exact_kernel::TextStyle, inline: Option<I
         box_width: b.width,
         box_height: b.height,
         box_shift: b.shift,
+        inline_start: 0.0,
+        inline_end: 0.0,
         text: text.as_ptr(),
         len: text.len(),
         font_size: style.font_size,
@@ -447,7 +476,7 @@ impl CallbackMeasurer {
         self
     }
 
-    /// Measure system symbols with `f` (`TextMeasurer::symbol_size`).
+    /// Measure symbols and catalog icons with `f` (`TextMeasurer::symbol_size`).
     pub fn with_symbol(mut self, f: Option<SymbolFn>) -> Self {
         self.symbol = f;
         self
@@ -500,14 +529,14 @@ impl CallbackMeasurer {
         let single;
         let owned;
         let runs: &[CRun] = if let [run] = request.runs {
-            single = c_run(text(0), run.style, run.inline);
+            single = c_run_of(text(0), run);
             std::slice::from_ref(&single)
         } else {
             owned = request
                 .runs
                 .iter()
                 .enumerate()
-                .map(|(i, r)| c_run(text(i), r.style, r.inline))
+                .map(|(i, r)| c_run_of(text(i), r))
                 .collect::<Vec<CRun>>();
             &owned
         };
@@ -541,11 +570,7 @@ impl CallbackMeasurer {
             exclusion_count: shapes.flat.len(),
             markup: u8::from(request.paragraph.markup == exact_kernel::Markup::Markdown),
             text_indent: request.paragraph.text_indent,
-            hyphens: match request.paragraph.hyphens {
-                exact_kernel::Hyphens::Manual => 0,
-                exact_kernel::Hyphens::None => 1,
-                exact_kernel::Hyphens::Auto => 2,
-            },
+            hyphens: c_hyphens(request.paragraph.hyphens),
             lang: self.language.as_ptr(),
             lang_len: self.language.len(),
             text_box_trim: request.paragraph.text_box_trim as u8,
@@ -556,6 +581,7 @@ impl CallbackMeasurer {
             atoms_len: request.atoms.kinds.len(),
             faces: request.atoms.faces.as_ptr(),
             faces_len: request.atoms.faces.len(),
+            natural: u8::from(request.paragraph.natural),
         };
         // The one foreign call: the app's function, with the structs above
         // alive for its duration and read-only.
@@ -576,6 +602,7 @@ fn sanitize(m: CMetrics) -> TextMetrics {
             0.0
         },
         first_baseline: (m.baseline.is_finite() && m.baseline >= 0.0).then_some(m.baseline),
+        pending: m.baseline == -2.0,
     }
 }
 
@@ -643,7 +670,10 @@ impl TextMeasurer for CallbackMeasurer {
             self.symbols_revision = revision;
             self.symbols.clear();
         }
-        let name = exact_kernel::apple_symbol_name(request.role);
+        let asset = crate::icon_path::asset(request.role).map(|svg| format!("icon-asset:{svg}"));
+        let name = asset
+            .as_deref()
+            .unwrap_or_else(|| exact_kernel::apple_symbol_name(request.role));
         let key = (
             name.to_string(),
             request.font_size.to_bits(),
@@ -702,7 +732,7 @@ impl TextMeasurer for CallbackMeasurer {
         });
         out.truncate(count.min(out.len()));
         // A non-finite pair is a box on no line, which the kernel hides.
-        origins.extend(out.chunks_exact(2).map(|p| (p[0], p[1])));
+        origins.extend(out.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])));
     }
 
     /// @ref LLP 1093 D6 — the paragraph's line boxes, from the app's hook.
@@ -744,7 +774,8 @@ impl TextMeasurer for CallbackMeasurer {
             return metrics;
         }
         let raw = self.foreign_measure(request, Some(stamp));
-        if raw.baseline == -2.0 {
+        let metrics = sanitize(raw);
+        if metrics.pending {
             self.memo.defer_to_owner(stamp);
         }
         let valid = raw.width.is_finite()
@@ -752,8 +783,7 @@ impl TextMeasurer for CallbackMeasurer {
             && raw.height.is_finite()
             && raw.height >= 0.0
             && raw.baseline.is_finite()
-            && raw.baseline != -2.0; // pending worker metrics are never memoized here
-        let metrics = sanitize(raw);
+            && !metrics.pending;
         // A negative finite baseline is the existing C "unknown" sentinel.
         // Invalid raw output keeps its existing sanitized return behavior, but
         // must retry the callback next time instead of caching a synthetic zero.

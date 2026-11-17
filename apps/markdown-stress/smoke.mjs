@@ -32,9 +32,10 @@ const report = {
   resizing: 'Column-width controls reflow content inside one window. This driver does not resize the OS window.',
 };
 let app;
+const commandMs = bytes === 4194304 ? 60000 : 30000;
 async function command(work) {
   let timer;
-  try { return await Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('command exceeded 30 seconds')), 30000); })]); }
+  try { return await Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(`command exceeded ${commandMs / 1000} seconds`)), commandMs); })]); }
   finally { clearTimeout(timer); }
 }
 const tap = name => command(app.tap(name));
@@ -56,11 +57,17 @@ try {
     if (mode === 'windowed') await tap('toggle-windowed');
     await tap(`profile-${profile}`);
     const before = performance.now();
-    await tap(`size-${bytes}`);
+    if (host === 'web') {
+      // A giant table can block the main thread past CDP's normal input
+      // deadline. Give its programmatic click the explicit workload bound.
+      await command(app.carrier.evaluate(`document.querySelector('[data-testid="size-${bytes}"]').click()`, commandMs));
+    } else await tap(`size-${bytes}`);
     await echo(`Reading ${profile}: café 🦀`);
     await tap('width-wide');
     await tap('reparse');
     await data();
+    // Rust loads after first paint; its baked answer can stand until ready.
+    await command(app.clock('until state resources.doc.revision == 1 within 20000'));
     const state = await command(app.state());
     const doc = state.resources.doc;
     assert.equal(state.slots.draft, `Reading ${profile}: café 🦀`);
@@ -68,6 +75,14 @@ try {
     assert.ok(doc.sourceBytes <= bytes && doc.sourceBytes > bytes * 0.9);
     if (mode === 'windowed') assert.equal(doc.materialized, doc.totalBlocks);
     else assert.ok(doc.materialized <= 40);
+    assert.equal(doc.end - doc.first, doc.materialized);
+    assert.equal(doc.blocks.length, doc.materialized);
+    if (profile === 'table') {
+      assert.equal(doc.totalBlocks, 2);
+      assert.equal(doc.blocks[1].kind, 'table');
+      assert.equal(doc.blocks[1].cells.length, doc.tableRows * 4);
+      assert.ok(doc.tableRows > 100);
+    }
     // Profile changes retain the reading position; each scroll check starts at the top.
     await command(app.tap('document', { wheel: [0, -1e9] }));
     const layoutBefore = (await command(app.layout())).nodes.find(n => n.testId === 'document');
@@ -108,16 +123,55 @@ try {
         // Account for three viewport heights, bootstrap and boundary rounding.
         const rowBound = Math.ceil(3 * after.port.h / 2) + 18;
         assert.ok(blocks.length > 0 && blocks.length <= rowBound, `${profile}: mounted ${blocks.length} blocks (bound ${rowBound})`);
-        assert.ok(tree.nodes.length <= rowBound * 80 + 300, `${profile}: mounted ${tree.nodes.length} nodes`);
-        windows.push({ phase, blocks: blocks.length, nodes: tree.nodes.length,
+        const mounted = new Set(blocks.map(n => n.props.testId));
+        const tables = doc.blocks.filter(b => b.kind === 'table' && mounted.has(`block-${b.id}`));
+        // One table is one virtual row, including all of its cells and runs.
+        // Keep that payload separate from the bound on viewport-sized blocks.
+        const tableNodes = tables.reduce((sum, b) => sum + 1 + b.tableGroups.length
+          + b.cells.reduce((n, c) => n + 1 + c.runs.length, 0)
+          + b.tableGroups.length * b.tableSizers.reduce((n, s) => n + 1 + s.lines.reduce((m, l) =>
+            m + 1 + (l.cell < 0 ? 0 : b.cells[l.cell].runs.length), 0), 0), 0);
+        assert.ok(tree.nodes.length - tableNodes <= rowBound * 80 + 300,
+          `${profile}: mounted ${tree.nodes.length} nodes (${tableNodes} table nodes)`);
+        windows.push({ phase, blocks: blocks.length, nodes: tree.nodes.length, tableNodes,
           rowBound, endpoint: expected, anchor, visibleAfterReflow: after.visible.map(n => n.testId),
           first: blocks[0]?.props.testId, last: blocks.at(-1)?.props.testId });
       }
     }
+    let table;
+    if (host === 'web' && profile === 'table') {
+      await tap('width-narrow');
+      table = await command(app.carrier.evaluate(() => {
+        const port = document.querySelector('[data-testid="table-1"]');
+        const grids = Array.from(port.children);
+        const cells = grids.flatMap(grid => Array.from(grid.children))
+          .filter(cell => cell.getAttribute('aria-hidden') !== 'true').map(cell => {
+          const rect = cell.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width,
+            fits: cell.scrollWidth <= cell.clientWidth + 1 };
+        });
+        const headers = cells.slice(0, 4);
+        const aligned = cells.every((cell, i) => Math.abs(cell.x - headers[i % 4].x) < 0.02
+          && Math.abs(cell.width - headers[i % 4].width) < 0.02);
+        port.scrollLeft = port.scrollWidth;
+        const ordered = cells.every((cell, i) => i < 4 || cell.y > cells[i - 4].y);
+        const reachedEnd = port.scrollLeft > 0
+          && Math.abs(grids.at(-1).lastElementChild.getBoundingClientRect().right - port.getBoundingClientRect().right) <= 1;
+        port.scrollLeft = 0;
+        return { aligned, ordered, groups: grids.length, fits: cells.every(cell => cell.fits), reachedEnd,
+          cells: cells.length, width: port.clientWidth, content: port.scrollWidth };
+      }));
+      assert.equal(table.cells, doc.tableRows * 4);
+      assert.ok(table.aligned, 'every table row must share column tracks');
+      assert.ok(table.ordered, 'every row must follow its predecessor across groups');
+      assert.ok(table.fits, 'unbreakable headers must fit their cells');
+      assert.ok(table.content > table.width, 'wide headers must overflow horizontally');
+      assert.ok(table.reachedEnd, 'horizontal scrolling must reach the final column');
+    }
     await app.screenshot(resolve(output, `${profile}.png`));
     report.results.push({ profile, status: 'passed', sourceBytes: doc.sourceBytes, totalBlocks: doc.totalBlocks,
       materialized: doc.materialized, largestBlock: doc.largestBlock, command_sequence_ack_ms: performance.now() - before,
-      scroll_before: layoutBefore.sy, scroll_after: layoutAfter.sy, windows });
+      scroll_before: layoutBefore.sy, scroll_after: layoutAfter.sy, windows, table });
   }
   // Keep eager correctness bounded regardless of the opt-in giant input above.
   await tap('reset');

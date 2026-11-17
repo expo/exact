@@ -18,6 +18,10 @@ and sheet/inner-scroll ownership transfer remain separate work.
   an authored drag surface targets the contained image's transform wrapper.
   On Web, AppKit and Linux, drag that surface to pan, including while its spring is running.
   Changing Fit/2× during a drag updates the destination used on release.
+  Below it the same photo sits alone in a zoomable scroller
+  (`-exact-max-zoom=4`, LLP 1057.001.000): the platform's pinch and double tap
+  on iOS, macOS and the web, and Fit/2× writing `scrollZoom`. Linux draws it
+  unzoomed until the painted hosts zoom.
 - **Arrange:** pick up, preview earlier/later or before another card, Place, and
   Cancel. Manual preview never changes order. Place consumes an interaction token
   once; stale callbacks are inert. Concurrent insertion preserves the destination

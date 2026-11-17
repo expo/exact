@@ -17,5 +17,14 @@
   "names": [],
   "views": [],
   "hatches": [],
-  "artifacts": []
+  "artifacts": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "com.google.mlkit:text-recognition:16.0.1"
+  ],
+  "class": "exact.textdetection.TextDetectionModule"
 }

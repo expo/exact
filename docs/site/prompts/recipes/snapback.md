@@ -1,7 +1,7 @@
 ```prompt Connect my app to a Snapback backend
-Give the Exact app in this folder shared server data from a Snapback backend. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback.md as the source for each step. The exact2 checkout has the same page at docs/recipes/snapback.md.
+Give the Exact app in this folder shared server data from a Snapback backend. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback.md as the source for each step. The Exact checkout has the same page at docs/recipes/snapback.md.
 
-1. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. Ask me where the Snapback backend is and which port its origin uses (the default is 4400), and whether the schema is server-only. Do not guess them.
+1. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. Ask me where the Snapback backend is and which port its origin uses (the default is 4400), and whether the schema is server-only. Do not guess them.
 2. If this folder is an Exact app (it has exact.mjs and app.contract), wire it: `bun exact.mjs snapback`. If it is not, ask me before you make one; then, from the backend's directory, run `bun <exact2>/scripts/exact.mjs new <name> --snapback`, with `--port <n>` if the port is not 4400. For a server-only schema, add `--online`.
 3. Select another local backend with `bun exact.mjs snapback --port <n>`, `EXACT_BACKEND_ORIGIN` or `bun exact.mjs test web --backend <url>`, not by an edit to app.ts or to the tests. A computed origin or grants declaration needs an explicit edit: tell me before you make it.
 4. Write the screens with the generated operations that `snapback` mounts. For password sign-in, guests or personas, use docs/recipes/snapback-auth.md and tell me first.

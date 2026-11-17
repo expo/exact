@@ -92,6 +92,22 @@ enum GuestURL {
         if scheme == "http" || scheme == "https" { return url.host == nil ? nil : url }
         return text.lowercased() == "about:blank" ? url : nil
     }
+
+    /// The request for a frame's page that the app's page asks for: its
+    /// `src`, a `navigate`, or either again. A browser asks for a
+    /// cross-origin frame's page with the parent's origin as its `Referer`
+    /// (`strict-origin-when-cross-origin`, the default policy). The parent is
+    /// the host's frame page at `exact.invalid`, in the guest's scheme
+    /// (`WebArm.serve`): WebKit sends that origin from it, but none for a
+    /// page the web view loads as its own, and an embed that requires one
+    /// refuses the load (YouTube's Error 153).
+    static func request(_ url: URL, cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy) -> URLRequest {
+        var request = URLRequest(url: url, cachePolicy: cachePolicy)
+        if let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            request.setValue("\(scheme)://exact.invalid/", forHTTPHeaderField: "Referer")
+        }
+        return request
+    }
 }
 
 /// The navigation state of one partitioned web view, reported as
@@ -177,7 +193,7 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
     func close(controller: WKUserContentController?) {
         guard !closed else { return }
         closed = true
-        recovery?.cancel()
+        cancelRecovery()
         observations = []
         controller?.removeScriptMessageHandler(forName: "exactIcons", contentWorld: Self.world)
     }
@@ -261,6 +277,7 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
     }
 
     func started(_ navigation: WKNavigation?) {
+        cancelRecovery()
         // WebKit's own navigation type wins, but for a reload by URL (crash
         // recovery, the reload of a load that failed), which it calls `other`;
         // so a stale command type never colours a link.
@@ -413,18 +430,21 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
                 let scheme = URL(string: text)?.scheme.map { "\($0):" } ?? "this URL"
                 return refuse("NotSupportedError", "navigate: \(scheme) is not a web page a partitioned frame shows (http, https or about:blank)")
             }
-            web.load(URLRequest(url: url))
+            cancelRecovery()
+            web.load(GuestURL.request(url))
         case "traverseHistory":
             let delta = (op["delta"] as? NSNumber)?.intValue ?? 0
             if delta == 0 { return reload(ignoreCache: false) }
             guard let item = web.backForwardList.item(at: delta) else {
                 return send("navigateerror", error: "InvalidStateError", message: "traverseHistory: no history entry at \(delta)")
             }
+            cancelRecovery()
             commandType = "traverse"
             web.go(to: item)
         case "reload":
             reload(ignoreCache: op["ignoreCache"] as? Bool ?? false)
         case "stopLoading":
+            cancelRecovery()
             guard let current = flight else { return }
             flight = nil
             web.stopLoading()
@@ -440,10 +460,10 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
     func reload(ignoreCache: Bool) {
         guard let web else { return }
         deaths = []
-        recovery?.cancel()
+        cancelRecovery()
         commandType = "reload"
         if let target = flight?.destination ?? (committed.isEmpty ? source() : dead ? committed : nil), let url = GuestURL.web(target) {
-            web.load(URLRequest(url: url, cachePolicy: ignoreCache ? .reloadIgnoringLocalAndRemoteCacheData : .useProtocolCachePolicy))
+            web.load(GuestURL.request(url, cachePolicy: ignoreCache ? .reloadIgnoringLocalAndRemoteCacheData : .useProtocolCachePolicy))
         } else if web.url != nil {
             if ignoreCache { web.reloadFromOrigin() } else { web.reload() }
         } else {
@@ -469,13 +489,22 @@ final class FrameBrowser: NSObject, WKScriptMessageHandler {
             return emitEnd(ending, "navigateerror", error: "crashed", message: "the web content process ended \(attempt) times in 30 s", recovering: false)
         }
         emitEnd(ending, "navigateerror", error: "crashed", message: "the web content process ended", recovering: true)
-        let work = DispatchWorkItem { [weak self, weak web] in
-            guard let self, let web, !self.closed else { return }
-            self.commandType = "reload"
-            if let target, let url = GuestURL.web(target) { web.load(URLRequest(url: url)) } else { web.reload() }
-        }
         recovery?.cancel()
+        let work = DispatchWorkItem { [weak self, weak web] in
+            // Only the latest crash's recovery loads, and only while nothing has taken the frame since.
+            guard let self, let web, !self.closed, self.recovery != nil, self.deaths.last == now else { return }
+            self.recovery = nil
+            self.commandType = "reload"
+            if let target, let url = GuestURL.web(target) { web.load(GuestURL.request(url)) } else { web.reload() }
+        }
         recovery = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.recoveryDelays[attempt - 1], execute: work)
+    }
+
+    /// A navigation, a new source or a stop owns the frame now: a crash's
+    /// queued recovery never loads over it.
+    func cancelRecovery() {
+        recovery?.cancel()
+        recovery = nil
     }
 }

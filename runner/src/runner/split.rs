@@ -274,7 +274,8 @@ impl<D: DataSource> Runner<D> {
                     if href.starts_with('/') && !href.starts_with("//") && self.route_matches(href)
                     {
                         *pushes = true;
-                        links.push((child, href.to_string()));
+                        // As a visit stores it, to compare with one.
+                        links.push((child, exact_route::canonical(href)));
                     }
                 }
                 (None, None) => self.row_presses(child, pushes, actionable, links),

@@ -20,7 +20,7 @@ pub(super) fn password_key(password: &[u8]) -> io::Result<[u8; 8]> {
 pub(super) fn response(key: &[u8; 8], challenge: [u8; 16]) -> [u8; 16] {
     let cipher = des::Des::new(key.into());
     let mut answer = challenge;
-    for chunk in answer.chunks_exact_mut(8) {
+    for chunk in answer.as_chunks_mut::<8>().0 {
         cipher.encrypt_block(chunk.into());
     }
     answer

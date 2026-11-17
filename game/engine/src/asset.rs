@@ -340,6 +340,17 @@ impl TextureFormat {
     }
 }
 impl TextureFamily {
+    /// The compressed families this target's native bundle holds, as
+    /// `scripts/texture-families.mjs` thins it: BC on a Mac, whose every GPU
+    /// reads it; ASTC on iOS and tvOS, whose every GPU reads it (an M-series
+    /// iPad reads BC too, but its bundle holds ASTC). Elsewhere both.
+    pub const BUNDLED: &'static [Self] = if cfg!(target_os = "macos") {
+        &[Self::Bc]
+    } else if cfg!(any(target_os = "ios", target_os = "tvos")) {
+        &[Self::Astc]
+    } else {
+        &[Self::Bc, Self::Astc]
+    };
     /// The family's name, as `state.world.gpu.textureFamily` reports it.
     pub fn label(self) -> &'static str {
         ["Rgba8", "Bc", "Astc"][self as usize]
@@ -508,7 +519,9 @@ impl Model {
                     || o.reach.len() * 3 != mesh.positions.len()
                     || o.normals.iter().any(|x| !x.is_finite())
                     || o.normals
-                        .chunks_exact(3)
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
                         .any(|n| glam::Vec3::from_slice(n).length_squared() < 1e-12)
                     || o.reach
                         .iter()
@@ -521,7 +534,9 @@ impl Model {
             }
             if mesh
                 .weights
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|w| w.iter().any(|v| *v < 0.) || (w.iter().sum::<f32>() - 1.).abs() > 1e-4)
             {
                 return fail("skin weights must be nonnegative and normalized");
@@ -758,7 +773,7 @@ pub enum AssetState {
 #[derive(Default, Clone)]
 pub(crate) struct Assets {
     pub models: map::AssetMap<ModelAsset>,
-    pub identities: std::collections::BTreeMap<String, u64>,
+    pub identities: std::collections::BTreeMap<String, generated::Identity>,
     pub levels: map::AssetMap<Arc<LevelValue>>,
     pub tables: Option<Arc<table::TableStore>>,
     pub sounds: map::AssetMap<Arc<SoundAsset>>,

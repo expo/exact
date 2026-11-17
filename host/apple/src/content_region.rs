@@ -29,7 +29,7 @@ pub struct ContentRegionRegistration {
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn serial() -> Result<u64, String> {
     SERIAL
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map(|n| n + 1)
         .map_err(|_| "region serial exhausted".into())
 }
@@ -174,23 +174,21 @@ impl RegionState {
         kernel: &Kernel,
         id: u64,
         known_source: u64,
+        language: &str,
     ) -> Result<String, String> {
         let p = self
             .pending
             .as_ref()
             .filter(|p| p.id == id)
             .ok_or("stale region request")?;
-        wire::request(kernel, p, known_source)
+        wire::request(kernel, p, known_source, language)
     }
     pub fn json(&self, kernel: &Kernel) -> String {
         wire::state(self, kernel)
     }
 }
 pub(crate) fn same(a: &RegionTextRequest, b: &RegionTextRequest) -> bool {
-    a.ticket() == b.ticket()
-        && a.stamp() == b.stamp()
-        && a.offer() == b.offer()
-        && a.catalog() == b.catalog()
+    a == b
 }
 fn unique(kernel: &Kernel, name: &str) -> Result<NodeKey, String> {
     if name.is_empty() {
@@ -329,6 +327,14 @@ pub(crate) fn within(kernel: &Kernel, key: NodeKey, root: NodeKey) -> bool {
     let arena = kernel.arena();
     let mut slot = Some(key.index);
     while let Some(s) = slot {
+        let id = arena.local_id(s);
+        // Capture precedes layout, which removes a stale implied block when
+        // a popover becomes sticky. A supplied block remains independent.
+        if kernel.is_top_layer(id)
+            || (kernel.host_block(id).is_some() && !kernel.host_block_implied(id))
+        {
+            return false;
+        }
         if arena.key(s) == root {
             return true;
         }
@@ -362,7 +368,14 @@ pub(crate) fn projection_size(
         size.nodes = size.nodes.checked_add(1).ok_or("native node overflow")?;
         size.child_edges = size
             .child_edges
-            .checked_add(kernel.arena().children(slot).len())
+            .checked_add(
+                kernel
+                    .arena()
+                    .children(slot)
+                    .iter()
+                    .filter(|s| within(kernel, kernel.arena().key(**s), root))
+                    .count(),
+            )
             .ok_or("native child overflow")?;
         if size.nodes > limits.nodes || size.child_edges > limits.child_edges {
             return Err("native structural capacity".into());
@@ -410,6 +423,8 @@ pub(crate) fn projection_size(
             // price their storage before that clone, even if the wire skips them.
             match node.computed(id) {
                 RowValue::ClipPath(p) => {
+                    bytes = add_wire(bytes, p.shape_value_count(), 96)?;
+
                     for (_, values) in p.commands() {
                         bytes = add_wire(bytes, values.len(), 96)?
                             .checked_add(64)
@@ -447,6 +462,8 @@ pub(crate) fn projection_size(
             }
             match node.style.get(id) {
                 RowValue::ClipPath(p) => {
+                    bytes = add_wire(bytes, p.shape_value_count(), 96)?;
+
                     for (_, values) in p.commands() {
                         bytes = add_wire(bytes, values.len(), 96)?
                             .checked_add(64)

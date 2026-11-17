@@ -1,3 +1,4 @@
+use crate::scratch::Scratch;
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, Value};
 struct NoData;
@@ -288,7 +289,9 @@ fn r13_colon_call_refuses_with_equals_hint() {
 /// game's Rust is newer, and never stops `contract rust`.
 #[test]
 fn a_stale_surface_declaration_warns_and_hides_nothing() {
-    let dir = std::env::temp_dir().join(format!("contract-stale-surfaces-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-stale-surfaces-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     std::fs::create_dir_all(dir.join("logic/src")).unwrap();
     let declaration = dir.join(".shells/surfaces.json");
@@ -337,9 +340,25 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
         "under --json the stale declaration's findings are the array's warnings"
     );
     assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+    // Printed as the editor's problem matcher reads a warning (editors/vscode,
+    // `$exact-contract`): `file:line:col warning [id] message`.
     let out = run(&["build", path.to_str().unwrap()]);
-    assert!(String::from_utf8_lossy(&out.stderr)
-        .contains("warning: .shells/surfaces.json is older than"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stale = format!(
+        "{}:1:1 warning [surface-declaration-stale] .shells/surfaces.json is older than this file",
+        lib.canonicalize().unwrap().display()
+    );
+    assert!(stderr.lines().any(|l| l.starts_with(&stale)), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|l| l.contains(" warning [analyze-surface-arguments] ")),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.lines().any(|l| l.starts_with("warning:")),
+        "{stderr}"
+    );
     // Without the type error the build passes, and `contract rust` writes its shapes either way.
     std::fs::write(
         &path,
@@ -363,7 +382,7 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("warning:"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(" warning [analyze-surface-arguments] "));
     let out = run(&["build", path.to_str().unwrap(), "--json"]);
     assert!(
         String::from_utf8_lossy(&out.stdout).contains("analyze-surface-arguments"),
@@ -374,7 +393,9 @@ fn a_stale_surface_declaration_warns_and_hides_nothing() {
 
 #[test]
 fn file_compilation_checks_surface_arguments_at_the_source() {
-    let dir = std::env::temp_dir().join(format!("contract-surfaces-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-surfaces-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     let declaration = dir.join(".shells/surfaces.json");
     std::fs::write(
@@ -522,7 +543,9 @@ component App
 /// key no action binds, or a game without the declaration, says nothing.
 #[test]
 fn a_shortcut_on_a_key_the_game_binds_warns() {
-    let dir = std::env::temp_dir().join(format!("contract-shortcut-keys-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("contract-shortcut-keys-{}", std::process::id())),
+    );
     std::fs::create_dir_all(dir.join(".shells")).unwrap();
     let path = dir.join("app.contract");
     std::fs::write(
@@ -663,4 +686,88 @@ fn a_chord_names_its_modifiers_and_the_physical_keys_that_type_it() {
     ] {
         assert!(names(chord).is_empty(), "{chord}: {:?}", names(chord));
     }
+}
+
+#[test]
+fn canvas_performance_is_optional_ephemeral_and_names_its_canvas() {
+    let source = r#"shape Metrics
+  frames: option<number>
+  gpuMs: option<number>
+component App
+  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  view
+    column
+      canvas surface=world
+      text "Metrics"
+"#;
+    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    assert!(!contract::typescript(&p)
+        .unwrap()
+        .contains("exactCanvasPerformance"));
+    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    let empty = Value::record(vec![Value::NONE, Value::NONE]);
+    assert_eq!(r.resource("metrics"), Some(&empty));
+    assert!(r.wants_canvas_performance("world"));
+    assert!(!r.wants_canvas_performance("unread"));
+    assert!(r
+        .set_canvas_performance("unread", Some("invalid"))
+        .unwrap()
+        .is_none());
+    r.set_canvas_performance("world", Some(r#"{"frames":60}"#))
+        .unwrap();
+    let sampled = Value::record(vec![Value::some(Value::Number(60.)), Value::NONE]);
+    assert_eq!(r.resource("metrics"), Some(&sampled));
+    assert!(r
+        .set_canvas_performance("world", Some(r#"{"frames":"bad"}"#))
+        .is_err());
+    assert_eq!(r.resource("metrics"), Some(&sampled));
+    assert!(r
+        .set_canvas_performance("world", Some(&" ".repeat(16385)))
+        .is_err());
+    assert!(r.take_store_writes().is_empty());
+    assert!(r.carry().store.is_empty());
+    r.set_canvas_performance("world", None).unwrap();
+    assert_eq!(r.resource("metrics"), Some(&empty));
+    for bad in [
+        source.replace("frames: option<number>", "frames: number"),
+        source.replace("frames", "unknown"),
+        source.replace("Performance(\"world\")", "Performance(\"missing\")"),
+    ] {
+        let p = contract::compile(&bad).unwrap();
+        assert!(contract::bake(p, NoData).is_err());
+    }
+}
+
+#[test]
+fn canvas_performance_follows_live_readers_and_their_when_conditions() {
+    let source = r#"shape Metrics
+  frames: option<number>
+component App
+  state perfHud = false
+  state secondHud = false
+  action toggle
+    perfHud = not perfHud
+  action second
+    secondHud = not secondHud
+  resource metrics = exactCanvasPerformance("world") when perfHud as shape Metrics
+  resource other = exactCanvasPerformance("world") when secondHud as shape Metrics
+  view
+    canvas surface=world
+"#;
+    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    assert!(
+        !r.wants_canvas_performance("world"),
+        "idle readers collect nothing"
+    );
+    r.act("toggle", vec![]).unwrap();
+    assert!(r.wants_canvas_performance("world"));
+    r.act("second", vec![]).unwrap();
+    r.act("toggle", vec![]).unwrap();
+    assert!(
+        r.wants_canvas_performance("world"),
+        "the other reader is still active"
+    );
+    r.act("second", vec![]).unwrap();
+    assert!(!r.wants_canvas_performance("world"));
 }

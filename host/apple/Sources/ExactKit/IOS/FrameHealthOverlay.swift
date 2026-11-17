@@ -20,7 +20,7 @@ final class FrameHealthOverlay: UIView {
     private let reader = FrameHealthCardReader()
     /// The screen's frames and the main thread's work, which the face shows while the card reads on iOS 18 and later
     /// and a second reader's place is free, and their reader
-    private var screen: FrameHealthScreen?
+    private(set) var screen: FrameHealthScreen?
     private let screenReader = FrameHealthCardReader()
     /// False keeps the face on Exact's own frames, as where the screen cannot be observed
     private let measuresScreen: Bool
@@ -31,6 +31,7 @@ final class FrameHealthOverlay: UIView {
     /// The card's resting position
     private var position = FrameHealthCardFace.Position()
     private var snap: UIViewPropertyAnimator?
+    var isSettling: Bool { snap != nil }
     /// While the card follows a finger or springs to its edge, the `UIUpdateLink` that states the display's highest
     /// rates as its preferred range
     private var motion: AnyObject?
@@ -48,6 +49,7 @@ final class FrameHealthOverlay: UIView {
     private var reading: Timer?
     private var keyboard: CGRect?
     private var availableFrame = CGRect.zero
+    private var fullCardFits = false
     private var notifications: [NSObjectProtocol] = []
     private(set) var desiredVisible = false
     private var dragging: Bool { card.drag?.moved == true }
@@ -212,7 +214,7 @@ final class FrameHealthOverlay: UIView {
     private func follow(_ on: Bool) {
         reading?.invalidate()
         reading = nil
-        card.chart.follow(on && !observing)
+        card.chart.follow(on && !observing && !card.minimized)
         guard on, observing else { return }
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -359,10 +361,25 @@ final class FrameHealthOverlay: UIView {
             frozen = paused ? nil : (rates, display, source)
             paused.toggle()
             card.chart.hold(paused, at: CACurrentMediaTime())
-            if !observing { card.chart.follow(!paused) }
+            if !observing { card.chart.follow(!paused && !card.minimized) }
             UIAccessibility.post(notification: .announcement, argument: paused ? "Paused" : "Resumed")
             if paused { render() } else { refresh() }
         case .close: hideReadout()
+        case .minimize:
+            guard !card.minimized || fullCardFits else {
+                UIAccessibility.post(notification: .announcement, argument: "Dismiss the keyboard or enlarge the window to restore frame health.")
+                return
+            }
+            card.cancelDrag()
+            stopSnap()
+            fast(false)
+            alone {
+                card.minimized.toggle()
+                card.chart.follow(!card.minimized && !paused && !observing)
+                setNeedsLayout()
+                layoutIfNeeded()
+            }
+            UIAccessibility.post(notification: .layoutChanged, argument: card.minimizeElement)
         case .title: DevMenu.showFrameHealthDefinitions(source, from: ViewPresentation.presenter(for: card))
         case .details:
             card.showDetails(!card.state.showsDetails)
@@ -379,8 +396,8 @@ final class FrameHealthOverlay: UIView {
     private func chooseShare() {
         guard let presenter = ViewPresentation.presenter(for: card) else { return }
         let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        for kind in FrameHealthShare.allCases {
-            sheet.addAction(UIAlertAction(title: kind.title, style: .default) { [weak self] _ in self?.share(kind) })
+        for kind in FrameHealthShare.choices(screen: observing) {
+            sheet.addAction(UIAlertAction(title: kind.title(screen: observing), style: .default) { [weak self] _ in self?.share(kind) })
         }
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         sheet.popoverPresentationController?.sourceView = card
@@ -401,11 +418,7 @@ final class FrameHealthOverlay: UIView {
             presenter.present(sheet, animated: !ExactEnv.agentFreezes)
         }
         switch kind {
-        case .report:
-            // The report is of what the face shows: the screen's frames, with their recent late frames, where it measures them
-            FrameHealthReport.prepare(health: observing ? screen?.health ?? health.reportSource : health.reportSource, session: session) {
-                present(String(decoding: $0, as: UTF8.self))
-            }
+        case .report, .clockReport: report(kind) { present(String(decoding: $0, as: UTF8.self)) }
         case .summary:
             present(FrameHealthCardText.summary(reader: shown.face, clock: shown.clock, rates: rates, display: display, source: source,
                 paused: paused, health: health).text)
@@ -416,31 +429,53 @@ final class FrameHealthOverlay: UIView {
         }
     }
 
+    /// The agent report of what the face shows, or of Exact's frames: measuring the screen, the card gives each as a report
+    /// of its own, which names the other. Exact's frames are its frame clock's, never the native scroll's, which a face
+    /// showing Exact's frames gives instead where its late frame is the newest (`reportSource`).
+    func report(_ kind: FrameHealthShare, completion: @escaping (Data) -> Void) {
+        guard let health else { return }
+        let screenHealth = observing ? screen?.health : nil
+        let shown = kind == .clockReport ? health : screenHealth ?? health.reportSource
+        FrameHealthReport.prepare(health: shown, session: session, beside: screenHealth.map { shown === $0 ? health : $0 },
+            completion: completion)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         var available = FrameHealthCardFace.restingArea(in: bounds)
         if let keyboard, keyboard.intersects(available), keyboard.maxY >= available.maxY {
             available.size.height = max(0, keyboard.minY - 8 - available.minY)
         }
-        availableFrame = available
+        // Touches within the status bar's frame reach the system, not the app, so the minimized card, all one control,
+        // rests below it
+        var resting = available
+        if card.minimized, let bar = window?.windowScene?.statusBarManager?.statusBarFrame, !bar.isEmpty {
+            let top = max(available.minY, convert(bar, from: nil).maxY)
+            resting = CGRect(x: available.minX, y: top, width: available.width, height: max(0, available.maxY - top))
+        }
+        availableFrame = resting
         // The card grows with the text size, as far as the window allows; where the whole card does
-        // not fit, it leaves out its toolbar and chart area
+        // not fit, it leaves out its charts and segmented control, keeping Minimize
         let text = max(1, UIFontMetrics(forTextStyle: .footnote).scaledValue(for: 1, compatibleWith: traitCollection))
         func scale(_ height: CGFloat) -> CGFloat? {
             let fitting = min(text, available.width / FrameHealthCardFace.minimumWidth, available.height / height)
             return fitting >= 1 ? fitting : nil
         }
         let full = scale(FrameHealthCardFace.height), compact = full == nil ? scale(FrameHealthCardFace.compactHeight) : nil
+        fullCardFits = full != nil || compact != nil
+        let minimizedScale = min(text, resting.width / FrameHealthCardFace.minimizedWidth, resting.height / FrameHealthCardFace.minimizedHeight)
         let wasHidden = card.isHidden
-        card.isHidden = full == nil && compact == nil
+        card.isHidden = card.minimized ? minimizedScale < 1 : full == nil && compact == nil
         card.compact = full == nil
-        card.scale = full ?? compact ?? 1
+        card.scale = card.minimized ? max(1, minimizedScale) : full ?? compact ?? 1
         health?.hudEffectiveVisible = canBeSeen
-        let size = CGSize(width: min(FrameHealthCardFace.width, available.width / card.scale) * card.scale,
-            height: (full == nil ? FrameHealthCardFace.compactHeight : FrameHealthCardFace.height) * card.scale)
+        let size = card.minimized
+            ? CGSize(width: FrameHealthCardFace.minimizedWidth * card.scale, height: FrameHealthCardFace.minimizedHeight * card.scale)
+            : CGSize(width: min(FrameHealthCardFace.width, available.width / card.scale) * card.scale,
+                height: (full == nil ? FrameHealthCardFace.compactHeight : FrameHealthCardFace.height) * card.scale)
         if card.frame.size != size { card.frame.size = size; card.setNeedsDisplay() }
         // Keep a dragged card under the press and retarget a spring when layout changes its destination
-        let target = position.origin(of: size, in: available)
+        let target = position.origin(of: size, in: resting)
         if !dragging, snap == nil { card.frame.origin = target }
         else if !dragging, card.frame.origin != target { stopSnap(); spring(velocity: .zero) }
         health?.hudBounds = window.map { card.convert(card.bounds, to: $0) }
@@ -449,7 +484,8 @@ final class FrameHealthOverlay: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // A springing card is where it is drawn, not where it will rest
-        guard !isHidden, !card.isHidden, (card.layer.presentation()?.frame ?? card.frame).contains(point) else { return nil }
+        let frame = snap == nil ? card.frame : card.layer.presentation()?.frame ?? card.frame
+        guard !isHidden, !card.isHidden, frame.contains(point) else { return nil }
         // Details rows that scroll take the touches on them; everywhere else the card takes them, to drag or press
         let scroll = card.detailsScroll
         return !scroll.isHidden && scroll.isScrollEnabled && scroll.frame.contains(convert(point, to: card)) ? scroll : card
@@ -534,16 +570,25 @@ final class FrameHealthCardView: UIView {
     /// Runs the face's drawing, which Core Animation asks for as it commits, so the card can count it as its own work
     var drawing: ((() -> Void) -> Void)?
     var compact = false { didSet { if compact != oldValue { setNeedsDisplay(); updateAccessibility(); updatePlots() } } }
+    var minimized = false {
+        didSet {
+            guard minimized != oldValue else { return }
+            setNeedsLayout()
+            setNeedsDisplay()
+            updateAccessibility()
+            updatePlots()
+        }
+    }
     var scale: CGFloat = 1 { didSet { if scale != oldValue { setNeedsDisplay(); updateAccessibility(); updatePlots() } } }
-    /// The charts, fed by each frame while the card reads, and the scales and view their labels were
-    /// last drawn for
+    /// The charts, fed by each frame while the card reads
     private(set) lazy var chart = FrameHealthChart(in: content.layer)
-    private var chartLabels: [Double?] = []
     /// The chart filling the chart area after a tap: 0 frame rate, 1 frame time
     private(set) var expanded: Int?
     private(set) var drag: FrameHealthCardFace.Drag?
     private(set) var presentation = FrameHealthCardPresentation()
     private(set) var palette: FrameHealthCardDrawing.Palette!
+    /// Counts the palettes the card has resolved, so a band drawn in an older one draws again
+    private var palettes = 0
     var grabbed: (() -> Void)?
     var moved: ((CGPoint) -> Void)?
     /// At the end of a press: with the release velocity in points a second after a drag, or nil
@@ -553,7 +598,7 @@ final class FrameHealthCardView: UIView {
     /// Toward an edge: a negative or positive component, or zero to keep that axis
     var accessibilityMove: ((CGVector) -> Bool)?
     private var elements: [Element] = []
-    /// Details in place of everything below the header, its rows drawn on one opaque view that scrolls
+    /// Details above Minimize, its rows drawn on one opaque view that scrolls
     /// where they outgrow the area; it shows no scroll indicator or edge effect, which would blend, and
     /// takes no safe-area inset, since the card can rest past the safe area
     let detailsScroll = UIScrollView()
@@ -562,7 +607,9 @@ final class FrameHealthCardView: UIView {
     /// its border, the hairline, and neither draws nor clips. Under a corner configuration's corners a border fades
     /// around them where its own layer clips drawn content (iOS 27.1).
     private let content = UIView()
-    private let faceView = Face()
+    /// The face, a view for each band, so a read draws only the bands whose figures changed
+    private let bands = FrameHealthCardFace.Band.allCases.map(BandView.init)
+    private let minimizeView = MinimizeView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -577,10 +624,16 @@ final class FrameHealthCardView: UIView {
         }
         detailsScroll.isOpaque = true
         detailsScroll.addSubview(detailsView)
-        (faceView.card, detailsView.card) = (self, self)
-        faceView.isUserInteractionEnabled = false
-        content.addSubview(faceView)
+        detailsView.card = self
+        for band in bands {
+            band.card = self
+            band.isUserInteractionEnabled = false
+            content.addSubview(band)
+        }
         content.addSubview(detailsScroll)
+        minimizeView.card = self
+        minimizeView.isUserInteractionEnabled = false
+        content.addSubview(minimizeView)
         addSubview(content)
         // The drawing fills the bounds; the content clips it to the card's rounded outline, which in a
         // corner of the screen follows the screen's own rounding, so that rounding never cuts the card
@@ -608,26 +661,35 @@ final class FrameHealthCardView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     var layout: FrameHealthCardFace.Layout {
-        .init(width: bounds.width / scale, compact: compact, showsDetails: state.showsDetails, corners: topCorners)
+        .init(width: bounds.width / scale, compact: compact, minimized: minimized, minimizable: true,
+            showsDetails: state.showsDetails, corners: corners)
     }
-    /// The radii of the card's top corners in the face's points, whole: they change only as the card comes to or leaves
+    /// The radii of the card's corners in the face's points, whole: they change only as the card comes to or leaves
     /// a corner of the screen, where it follows the screen's rounding
-    private var topCorners: (topLeft: CGFloat, topRight: CGFloat) = (12, 12)
+    private var corners: (topLeft: CGFloat, topRight: CGFloat, bottomRight: CGFloat, bottomLeft: CGFloat) = (12, 12, 12, 12)
     private func face(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x / scale, y: point.y / scale) }
     private func view(_ rect: CGRect) -> CGRect { rect.applying(CGAffineTransform(scaleX: scale, y: scale)) }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         content.frame = bounds
-        faceView.frame = bounds
-        // Redraw the header only when a top corner's radius changes: UIKit lays the card out again when it moves, with
-        // its corners already for where it is
+        for band in bands {
+            let span = band.band.span
+            band.isHidden = minimized && band.band != .header
+            band.frame = view(CGRect(x: 0, y: span.lowerBound, width: layout.width, height: span.upperBound - span.lowerBound))
+        }
+        minimizeView.isHidden = minimized
+        minimizeView.frame = view(layout.minimize)
+        detailsScroll.isHidden = minimized || !state.showsDetails
+        // UIKit lays the card out again when it moves, with its corners already for where it is; the bands beside a
+        // corner whose radius changed draw again (`subject`)
         if #available(iOS 26.0, *) {
-            let corners = (topLeft: (effectiveRadius(corner: .topLeft) / scale).rounded(),
-                           topRight: (effectiveRadius(corner: .topRight) / scale).rounded())
-            if corners != topCorners {
-                topCorners = corners
-                setNeedsDisplay(view(CGRect(x: 0, y: 0, width: layout.width, height: 44)))
+            let radius = { (corner: UIRectCorner) in (self.effectiveRadius(corner: corner) / self.scale).rounded() }
+            let corners = (topLeft: radius(.topLeft), topRight: radius(.topRight), bottomRight: radius(.bottomRight),
+                bottomLeft: radius(.bottomLeft))
+            if corners != self.corners {
+                self.corners = corners
+                setNeedsDisplay()
             }
         }
         layoutDetails()
@@ -635,10 +697,11 @@ final class FrameHealthCardView: UIView {
         updatePlots()
     }
 
-    /// Show Details in place of everything below the header, from its first row, or the charts or table again.
+    /// Show Details from its first row, or the charts or table again, keeping Minimize available.
     func showDetails(_ shown: Bool) {
         state.showsDetails = shown
-        detailsScroll.isHidden = !shown
+        setNeedsLayout()
+        detailsScroll.isHidden = minimized || !shown
         detailsScroll.contentOffset = .zero
         layoutDetails()
         setNeedsDisplay()
@@ -647,9 +710,10 @@ final class FrameHealthCardView: UIView {
     }
 
     private func layoutDetails() {
-        guard state.showsDetails, let palette else { return }
+        guard state.showsDetails, !minimized, let palette else { return }
         let l = layout, area = view(l.detailsArea)
-        let height = FrameHealthCardFace.detailsHeight(width: l.width, rows: presentation.details, caption: presentation.detailsCaption) * scale
+        let height = FrameHealthCardFace.detailsHeight(width: l.width, rows: presentation.details, caption: presentation.detailsCaption,
+            clearing: l) * scale
         detailsScroll.frame = area
         detailsScroll.backgroundColor = UIColor(cgColor: palette.background)
         detailsScroll.contentSize = CGSize(width: area.width, height: max(area.height, height))
@@ -665,6 +729,7 @@ final class FrameHealthCardView: UIView {
             separator: c(.separator), fill: c(.systemFill), secondaryFill: c(.secondarySystemFill),
             tertiaryFill: c(.tertiarySystemFill), quaternaryFill: c(.quaternarySystemFill), blue: c(.systemBlue),
             orange: c(.systemOrange), green: c(.systemGreen), gray: c(.systemGray), dark: t.userInterfaceStyle == .dark)
+        palettes += 1
         backgroundColor = UIColor(cgColor: palette.background)
         layer.borderWidth = 1 / max(1, t.displayScale)
         layer.borderColor = palette.separator
@@ -673,20 +738,12 @@ final class FrameHealthCardView: UIView {
         updatePlots(force: true)
     }
 
-    /// Show a presentation; only the regions it can change are drawn again.
+    /// Show a presentation; only the bands whose figures it changes are drawn again.
     func update(_ next: FrameHealthCardPresentation) {
-        let header = next.status != presentation.status
         presentation = next
         next.apply(to: &state)
         updateAccessibility()
-        // The table changes with each sample; the charts' labels only with their scales
-        let labels = [next.input?.rateTop, next.input?.timeTop, state.table ? 1 : 0]
-        // Under Details only the header shows, and Details draws its own rows
-        if header { setNeedsDisplay() } else if !state.showsDetails {
-            setNeedsDisplay(view(layout.figures))
-            if !compact, state.table || labels != chartLabels { setNeedsDisplay(view(layout.chartArea)) }
-        }
-        chartLabels = labels
+        setNeedsDisplay()
         layoutDetails()
         updatePlots()
     }
@@ -694,7 +751,7 @@ final class FrameHealthCardView: UIView {
     /// Place the shown plots' layers; a change of place, scale or palette draws them whole.
     private func updatePlots(force: Bool = false) {
         guard let palette else { return }
-        let shown = presentation.input.map { compact || state.table || state.showsDetails ? [] : FrameHealthCardDrawing.plots(layout.chartArea, $0, expanded: expanded) } ?? []
+        let shown = presentation.input.map { minimized || compact || state.table || state.showsDetails ? [] : FrameHealthCardDrawing.plots(layout.chartArea, $0, expanded: expanded) } ?? []
         chart.configure(shown, scale: scale, contentsScale: traitCollection.displayScale, palette: palette, force: force)
     }
 
@@ -704,19 +761,25 @@ final class FrameHealthCardView: UIView {
     /// Where Share is drawn, for the share sheet's popover
     var shareFrame: CGRect { view(layout.share) }
 
-    // Pass redraws to the face, since the card's own layer draws nothing
-    // The face's layer draws the whole face whatever part changed; a view that draws nothing of its own ignores
-    // `setNeedsDisplay()`, so the layer is asked directly
-    override func setNeedsDisplay() { faceView.layer.setNeedsDisplay() }
+    // Pass redraws to the face's bands, since the card's own layer draws nothing; each draws only when what it shows
+    // changed. A view that draws nothing of its own ignores `setNeedsDisplay()`, so the layers are asked directly
+    override func setNeedsDisplay() {
+        bands.forEach { $0.layer.setNeedsDisplay() }
+        minimizeView.layer.setNeedsDisplay()
+    }
 
     /// Lay out and draw now what needs it: the face, Details and the plots.
     func drawNow() {
         layoutIfNeeded()
-        faceView.layer.displayIfNeeded()
-        detailsView.layer.displayIfNeeded()
+        bands.filter { !$0.isHidden }.forEach { $0.layer.displayIfNeeded() }
+        if !minimizeView.isHidden { minimizeView.layer.displayIfNeeded() }
+        if !detailsScroll.isHidden { detailsView.layer.displayIfNeeded() }
         chart.drawNow()
     }
-    override func setNeedsDisplay(_ rect: CGRect) { faceView.layer.setNeedsDisplay() }
+    override func setNeedsDisplay(_ rect: CGRect) {
+        for band in bands where band.frame.intersects(rect) { band.layer.setNeedsDisplay() }
+        if minimizeView.frame.intersects(rect) { minimizeView.layer.setNeedsDisplay() }
+    }
 
     /// A view of the card's that renders its picture as an image, which Core Animation commits in the update that asks
     /// for it; drawn into a backing store by `draw(_:)`, it would take UIKit another update a refresh later to show
@@ -735,6 +798,10 @@ final class FrameHealthCardView: UIView {
 
         /// Draw the picture in the current context, in the view's points.
         func paint() {}
+        /// What the picture shows, which it draws again only when this changes; nil draws it whenever asked
+        var subject: String? { nil }
+        /// The subject last drawn, with the scale and size it was drawn at
+        fileprivate var drawn: String?
 
         final class Picture: CALayer {
             override func display() {
@@ -744,29 +811,66 @@ final class FrameHealthCardView: UIView {
                 // would hold in twice the bytes
                 let format = UIGraphicsImageRendererFormat(for: view.traitCollection)
                 (format.opaque, format.preferredRange) = (true, .standard)
-                contentsScale = format.scale
-                let draw = { self.contents = UIGraphicsImageRenderer(bounds: self.bounds, format: format).image { _ in view.paint() }.cgImage }
+                let draw = {
+                    // A band whose figures did not change keeps its picture; setting it ends the request to display,
+                    // which would otherwise stand
+                    let subject = view.subject.map { "\(format.scale) \(self.bounds.size) \($0)" }
+                    guard subject == nil || subject != view.drawn || self.contents == nil else { self.contents = self.contents; return }
+                    view.drawn = subject
+                    self.contentsScale = format.scale
+                    self.contents = UIGraphicsImageRenderer(bounds: self.bounds, format: format).image { _ in view.paint() }.cgImage
+                }
                 if let drawing = card.drawing { drawing(draw) } else { draw() }
             }
         }
     }
 
-    private final class Face: Pictured {
-        override func paint() { card?.drawFace() }
+    /// One band of the face.
+    private final class BandView: Pictured {
+        let band: FrameHealthCardFace.Band
+        init(band: FrameHealthCardFace.Band) {
+            self.band = band
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func paint() { card?.paint(band) }
+        override var subject: String? { card?.subject(band) }
     }
 
-    private func drawFace() {
+    /// What a band shows: the card's size, scale and palette, and the state it draws.
+    private func subject(_ band: FrameHealthCardFace.Band) -> String {
+        let s = state, p = presentation, d = { (value: Any?) in String(describing: value) }
+        let common = "\(layout.width) \(scale) \(compact) \(minimized) \(s.showsDetails) \(palettes)", bottom = "\(corners.bottomRight) \(corners.bottomLeft)"
+        switch band {
+        case .header:
+            return "\(common) \(s.status) \(d(s.pressed)) \(d(s.hovered)) \(corners.topLeft) \(corners.topRight) \(minimized ? "\(s.minimizedText) \(bottom)" : "")"
+        case .context: return "\(common) \(s.request) \(s.display)"
+        case .figures: return "\(common) \(s.rows) \(s.unit)"
+        case .pacing: return "\(common) \(s.pacing) \(s.pacingName) \(s.pacingWindow) \(compact ? bottom : "")"
+        case .toolbar: return "\(common) \(s.table) \(d(s.pressed)) \(d(s.hovered))"
+        case .charts:
+            return s.table ? "\(common) table \(p.columns) \(p.table) \(p.caption) \(bottom)"
+                : "\(common) \(d(expanded)) \(d(p.input.map { [$0.rateTop, $0.timeTop] })) \(d(p.input?.screen)) \(bottom)"
+        }
+    }
+
+    private func paint(_ band: FrameHealthCardFace.Band) {
         guard let ctx = UIGraphicsGetCurrentContext(), let palette else { return }
         ctx.setFillColor(palette.background)
-        ctx.fill(bounds)
+        ctx.fill(ctx.boundingBoxOfClipPath)
         ctx.scaleBy(x: scale, y: scale)
-        FrameHealthCardFace.draw(ctx, layout, state: state, palette: palette)
+        ctx.translateBy(x: 0, y: -band.span.lowerBound)
+        guard band == .charts else {
+            FrameHealthCardFace.draw(ctx, layout, state: state, palette: palette, bands: [band])
+            return
+        }
         guard !compact, !state.showsDetails else { return }
         let area = layout.chartArea, p = presentation
         if state.table {
-            FrameHealthCardFace.table(ctx, area, columns: p.columns, rows: p.table, caption: p.caption, palette: palette)
+            FrameHealthCardFace.table(ctx, area, columns: p.columns, rows: p.table, caption: p.caption, palette: palette,
+                within: layout.bottomOutline)
         } else if let input = p.input {
-            FrameHealthCardDrawing.charts(ctx, area, input, expanded: expanded, palette: palette)
+            FrameHealthCardDrawing.charts(ctx, area, input, expanded: expanded, palette: palette, within: layout.bottomOutline)
         }
     }
 
@@ -816,7 +920,7 @@ final class FrameHealthCardView: UIView {
         if current.moved { return }
         if let control = current.control {
             if layout.control(at: point) == control { activate?(control) }
-        } else if !compact, !state.table, !state.showsDetails, layout.chartArea.contains(point) {
+        } else if !minimized, !compact, !state.table, !state.showsDetails, layout.chartArea.contains(point) {
             // The frame-rate chart is the top 80 points with half the gap below it
             toggle(chart: point.y - layout.chartArea.minY < 88 ? 0 : 1)
         }
@@ -847,7 +951,7 @@ final class FrameHealthCardView: UIView {
     // MARK: Accessibility: an element for each region the card draws.
 
     fileprivate final class Element: UIAccessibilityElement {
-        enum Role { case close, title, status, details, share, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
+        enum Role { case close, title, status, details, share, minimize, context, figures, pacing, charts, table, rateChart, timeChart, tableView, detailsView }
         let role: Role
         weak var card: FrameHealthCardView?
         init(_ role: Role, card: FrameHealthCardView) {
@@ -856,7 +960,7 @@ final class FrameHealthCardView: UIView {
             super.init(accessibilityContainer: card)
         }
         static func all(_ card: FrameHealthCardView) -> [Element] {
-            [.close, .title, .status, .details, .share, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
+            [.close, .title, .status, .details, .share, .minimize, .context, .figures, .pacing, .charts, .table, .rateChart, .timeChart, .tableView,
              .detailsView].map { Element($0, card: card) }
         }
         override func accessibilityActivate() -> Bool {
@@ -867,6 +971,7 @@ final class FrameHealthCardView: UIView {
             case .status: card.activate?(.status)
             case .details: card.activate?(.details)
             case .share: card.activate?(.share)
+            case .minimize: card.activate?(.minimize)
             case .charts: card.activate?(.charts)
             case .table: card.activate?(.table)
             case .rateChart: card.toggle(chart: 0)
@@ -877,6 +982,8 @@ final class FrameHealthCardView: UIView {
         }
     }
 
+    var minimizeElement: UIAccessibilityElement? { elements.first { $0.role == .minimize } }
+
     private func updateAccessibility() {
         let l = layout, chartArea = l.chartArea, p = presentation
         for element in elements {
@@ -886,16 +993,18 @@ final class FrameHealthCardView: UIView {
             case .title:
                 frame = l.title; label = "Frame health"; traits = [.header, .button]
                 element.accessibilityHint = "Shows what these numbers mean. Actions move the card to an edge."
-                element.accessibilityCustomActions = [("Move up", CGVector(dx: 0, dy: -1)), ("Move down", CGVector(dx: 0, dy: 1)),
-                    ("Move left", CGVector(dx: -1, dy: 0)), ("Move right", CGVector(dx: 1, dy: 0))].map { name, edge in
-                    UIAccessibilityCustomAction(name: name) { [weak self] _ in self?.accessibilityMove?(edge) ?? false }
-                }
             case .status:
                 frame = l.status; traits = .button
                 label = state.status == .paused ? "Resume frame health" : "Pause frame health"
                 element.accessibilityValue = state.status == .paused ? "Paused" : state.status == .live ? "Live" : "Idle"
             case .details: frame = l.details; label = "Frame health details"; traits = state.showsDetails ? [.button, .selected] : .button
             case .share: frame = l.share; label = "Share frame health"; traits = .button
+            case .minimize:
+                frame = minimized ? CGRect(x: 0, y: 0, width: l.width, height: l.cardHeight) : l.minimize
+                label = minimized ? "Restore frame health" : "Minimize frame health"
+                traits = .button
+                element.accessibilityValue = minimized ? state.minimizedText : nil
+                element.accessibilityHint = "Actions move the card to an edge."
             case .context:
                 frame = CGRect(x: 0, y: 44, width: l.width, height: 36)
                 label = [state.request.0, state.request.1, state.display].filter { !$0.isEmpty }.joined(separator: ", ")
@@ -903,7 +1012,7 @@ final class FrameHealthCardView: UIView {
                 frame = CGRect(x: 0, y: 80, width: l.width, height: 45)
                 label = state.rows.map { "\($0.0): \($0.1) FPS, \($0.2) \(state.unit)" }.joined(separator: ". ")
             case .pacing:
-                frame = CGRect(x: 0, y: 125, width: l.width, height: 41)
+                frame = l.pacingArea
                 label = "\(state.pacingName), \(state.pacingWindow): " + [state.pacing.0, state.pacing.1].filter { !$0.isEmpty }.joined(separator: ", ")
             case .charts, .table:
                 let chosen = (element.role == .table) == state.table
@@ -928,9 +1037,16 @@ final class FrameHealthCardView: UIView {
                 frame = l.detailsArea
                 label = p.details.map { "\($0.name): \($0.value)" + ($0.reason.map { ", " + $0 } ?? "") }.joined(separator: ". ") + ". " + p.detailsCaption
             }
-            // Details takes the place of everything below the header
-            if state.showsDetails, ![.close, .title, .status, .details, .share, .detailsView].contains(element.role) { hidden = true }
+            // Details replaces the figures and charts, keeping Minimize available
+            if state.showsDetails, ![.close, .title, .status, .details, .share, .minimize, .detailsView].contains(element.role) { hidden = true }
             if element.role == .detailsView, !state.showsDetails { hidden = true }
+            if minimized { hidden = element.role != .minimize }
+            if element.role == .title || element.role == .minimize {
+                element.accessibilityCustomActions = [("Move up", CGVector(dx: 0, dy: -1)), ("Move down", CGVector(dx: 0, dy: 1)),
+                    ("Move left", CGVector(dx: -1, dy: 0)), ("Move right", CGVector(dx: 1, dy: 0))].map { name, edge in
+                    UIAccessibilityCustomAction(name: name) { [weak self] _ in self?.accessibilityMove?(edge) ?? false }
+                }
+            }
             element.accessibilityFrameInContainerSpace = view(frame)
             element.accessibilityLabel = label
             element.accessibilityTraits = traits
@@ -940,6 +1056,22 @@ final class FrameHealthCardView: UIView {
 }
 
 extension FrameHealthCardView {
+    /// Minimize, drawn by the face at its place on the card
+    private final class MinimizeView: Pictured {
+        override var subject: String? {
+            card.map { "\($0.scale) \($0.palettes) \(String(describing: $0.state.pressed)) \(String(describing: $0.state.hovered)) \($0.layout.minimize) \($0.corners.bottomRight)" }
+        }
+        override func paint() {
+            guard let ctx = UIGraphicsGetCurrentContext(), let card, let p = card.palette else { return }
+            ctx.setFillColor(p.background)
+            ctx.fill(bounds)
+            ctx.scaleBy(x: card.scale, y: card.scale)
+            let layout = card.layout
+            ctx.translateBy(x: -layout.minimize.minX, y: -layout.minimize.minY)
+            FrameHealthCardFace.minimize(ctx, layout, state: card.state, palette: p)
+        }
+    }
+
     /// Details' rows and caption on one opaque surface, at the card's scale.
     final class DetailsView: Pictured {
         /// What it shows, at the card's width and scale
@@ -965,6 +1097,9 @@ extension FrameHealthCardView {
         }
         override func paint() {
             guard let ctx = UIGraphicsGetCurrentContext(), let shown else { return }
+            // The picture is opaque: what it leaves unfilled shows black
+            ctx.setFillColor(shown.palette.background)
+            ctx.fill(bounds)
             ctx.scaleBy(x: shown.scale, y: shown.scale)
             FrameHealthCardFace.details(ctx, width: shown.width, rows: shown.rows, caption: shown.caption, palette: shown.palette)
         }

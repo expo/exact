@@ -1,0 +1,43 @@
+// The store update fixture (LLP 1133.038): the status in tier 1's words and each platform's, the store page, and
+// Play's flows, which a cross-platform app imports from the Android implementation and branches on.
+use storeUpdateStatus, openStorePage, StoreUpdateStatus from "@exact/store-update"
+use startStoreUpdate, completeStoreUpdate, StoreUpdateResult from "@exact/store-update/android"
+
+component Fixture
+  resource store = storeUpdateStatus() as shape StoreUpdateStatus else empty()
+  mutation started as shape StoreUpdateResult
+  action open
+    openStorePage()
+  action flexible
+    send started = startStoreUpdate(appUpdateType="flexible")
+  action immediate
+    send started = startStoreUpdate(appUpdateType="immediate")
+  action restart
+    completeStoreUpdate()
+  view
+    column padding=24 gap=12
+      text `Store: ${store.available ? "this install's" : "none"}` testId="available"
+      text `Update: ${store.updateAvailability}` testId="availability"
+      match store.apple
+        case some(a)
+          text `App Store: ${a.lookup}` testId="apple"
+        case none
+          text ""
+      match store.android
+        case some(p)
+          text `Play: ${p.installStatus} ${p.bytesDownloaded}/${p.totalBytesToDownload}` testId="android"
+        case none
+          text ""
+      match started
+        case some(s)
+          text `Flow: ${s.outcome}` testId="flow"
+        case none
+          text ""
+      button press=open testId="open"
+        text "Open the Store Page"
+      button press=flexible testId="flexible"
+        text "Update in the Background"
+      button press=immediate testId="immediate"
+        text "Update Now"
+      button press=restart testId="restart"
+        text "Restart to Update"

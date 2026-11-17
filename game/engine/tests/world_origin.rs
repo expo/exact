@@ -122,3 +122,13 @@ fn the_least_privileged_origin_wins_and_a_mark_cannot_raise_one() {
     post(&mut t, "\u{1}origin:root\u{1}x", 0.0);
     assert_eq!(t.origin(), "device");
 }
+
+#[test]
+fn a_paranoid_rebuild_leaves_pending_messages_unmarked() {
+    for mode in [Paranoid::Save, Paranoid::FreshGame] {
+        let mut s = sim().paranoid(mode);
+        post(&mut s, &format!("{TOOL}buzz"), 0.0);
+        s.advance(100.0, Clock::Seekable);
+        assert_eq!(s.take_messages(), [format!("{TOOL}heard buzz")], "{mode:?}");
+    }
+}

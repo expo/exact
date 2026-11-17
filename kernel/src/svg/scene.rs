@@ -51,6 +51,11 @@ pub trait Present {
     fn path(&self, _key: NodeKey) -> Option<exact_motion::PathValue> {
         None
     }
+    /// The presented `filter` of `key` while a transition moves it (LLP
+    /// 1003.002 D8).
+    fn filter(&self, _key: NodeKey) -> Option<exact_motion::FilterValue> {
+        None
+    }
 }
 
 impl<F: Fn(NodeKey, Property) -> Option<Value>> Present for F {
@@ -75,7 +80,7 @@ pub struct Scene {
     /// The elements, in paint order.
     pub items: Vec<Item>,
     /// What this host cannot draw and so leaves out, by name: a
-    /// `foreignObject` (LLP 1055.000 D13), which is the web's alone.
+    /// `foreignObject` or a basic clip shape on an SVG element.
     pub refused: Option<&'static str>,
     /// The cost limit the scene passed (LLP 1011.001 D2); `items` is then
     /// empty.
@@ -253,7 +258,9 @@ pub struct Shape {
 /// the engine's also holds a native field's chrome.
 pub fn content_box(kernel: &Kernel, node: &NodeRef<'_>) -> (f32, f32, f32, f32) {
     let (pl, pt, pr, pb) = kernel.resolved_padding(node.key).unwrap_or_default();
-    let [bt, br, bb, bl] = node.style.border_widths_in(kernel.arena().env());
+    let [bt, br, bb, bl] = node
+        .style
+        .border_widths_in(&kernel.arena().env_of(node.key.index));
     let (left, top) = (pl + bl, pt + bt);
     let w = node.frame.width - left - pr - br;
     let h = node.frame.height - top - pb - bb;
@@ -276,16 +283,18 @@ pub fn resolve(
         content.2,
         content.3,
     );
+    // Its lengths may read the safe area where the `svg` is (LLP 1123 D9)
+    let env = kernel.arena().env_of(node.slot);
     let vp = match vb {
         Some(v) => Viewport {
             width: v.width,
             height: v.height,
-            env: kernel.arena().env(),
+            env: &env,
         },
         None => Viewport {
             width: content.2,
             height: content.3,
-            env: kernel.arena().env(),
+            env: &env,
         },
     };
     let clip =
@@ -460,6 +469,11 @@ impl<'k> Resolver<'k, '_> {
                 style.stroke_dashoffset = v.x as f32;
             }
         }
+        // After `color`: a moving filter's share of `currentcolor` reads it
+        // (LLP 1003.002 D7).
+        if let Some(f) = self.presented.filter(key) {
+            style.filter = crate::motion::filter_list(&f, style.text_color);
+        }
     }
 
     fn children(
@@ -494,6 +508,9 @@ impl<'k> Resolver<'k, '_> {
         if !node.node_type.is_svg_element() || !node.node_type.renders() {
             return None;
         }
+        // Each element's lengths may read the safe area where it is (LLP 1123 D9)
+        let env = self.kernel.arena().env_of(node.slot);
+        let vp = Viewport { env: &env, ..vp };
         if !self.budget.cost(budget::ITEM) {
             return None;
         }
@@ -533,15 +550,15 @@ impl<'k> Resolver<'k, '_> {
                 Kind::Shape(Box::new(shape))
             }
         };
-        let clip = if style.rare.clip_path.url().is_some() {
-            let bbox = match &kind {
+        let bbox = if style.rare.clip_path.url().is_some() || style.rare.clip_path.has_path() {
+            match &kind {
                 Kind::Shape(s) => s.path.bounds(),
                 _ => self.bbox(node, &style, vp),
-            };
-            self.clip(node, bbox, vp, 0).map(Box::new)
+            }
         } else {
             None
         };
+        let clip = self.clip(node, bbox, vp, 0).map(Box::new);
         let mask = if style.rare.svg_mask.url().is_some() {
             let bbox = match &kind {
                 Kind::Shape(s) => s.path.bounds(),
@@ -614,9 +631,16 @@ impl<'k> Resolver<'k, '_> {
             ),
             |v| ((v.x as f32, v.y as f32), (v.z as f32, v.w as f32)),
         );
-        let rotate = self
-            .value(key, Property::Rotate)
-            .map_or(style.rotate, |v| v.x as f32);
+        let rotate = self.value(key, Property::Rotate).map_or_else(
+            || {
+                exact_motion::rotation::presented(exact_motion::rotation::value(
+                    style.rotate as f64,
+                    style.rotate_axis.0.map(f64::from),
+                ))
+                .x as f32
+            },
+            |v| v.x as f32,
+        );
         let scale = self
             .value(key, Property::Scale)
             .map_or(style.scale, |v| v.x as f32);
@@ -695,6 +719,8 @@ impl<'k> Resolver<'k, '_> {
         style: &StyleProps,
         vp: Viewport,
     ) -> Option<(f32, f32, f32, f32)> {
+        let env = self.kernel.arena().env_of(node.slot);
+        let vp = Viewport { env: &env, ..vp };
         match node.node_type {
             NodeType::SvgGroup => {
                 let mut acc: Option<(f32, f32, f32, f32)> = None;
@@ -922,7 +948,12 @@ impl<'k> Resolver<'k, '_> {
             .filter(|_| width > 0.0);
         let scale = dash_scale(&path, node.props);
         let offset = style.stroke_dashoffset;
-        let dash = style.stroke_dasharray.pattern(scale);
+        let mut dash = style.stroke_dasharray.pattern(scale);
+        // Zero-length geometry keeps its caps. Underflow on a nonzero path
+        // must still reach the dash budget, even when the scale is zero.
+        if !dash.is_empty() && dash.iter().all(|v| *v == 0.0) && path.length() == 0.0 {
+            dash.clear();
+        }
         if !self.budget.cost(dash.len() as u64) {
             return None;
         }

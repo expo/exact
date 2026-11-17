@@ -208,8 +208,9 @@ def ceval : Nat → CEnv → Frame → Locals → Expr → Result Value
   | .typed e _ => ceval fuel ce f ls e
 
 /-- A name an instance's frame reads that no local binds: a derive (its
-body, in the frame, with no locals), a state (the store), an inject or a
-prop (its thunk), or a device resource (the shared root resource). -/
+body, in the frame, with no locals), a state or a request of its own (the
+store), an inject or a prop (its thunk), or a device resource (the shared
+root resource). -/
 def cvar : Nat → CEnv → String → InstId → List (String × Expr × Frame × Locals) → String →
     Result Value
   | 0, _, _, _, _, _ => .error outOfFuel
@@ -218,7 +219,7 @@ def cvar : Nat → CEnv → String → InstId → List (String × Expr × Frame 
     match C.derives.find? (·.name == x) with
     | .some d => ceval fuel ce (.inst c id binds) [] d.body
     | .none =>
-      if C.states.any (·.name == x) then
+      if C.states.any (·.name == x) || C.ownedResources.any (·.name == x) then
         match ce.store.find id with
         | .some s => (lookup x s).elim (.error (.refused s!"instance slot `{x}` missing")) .ok
         | .none => .error (.refused s!"instance slot `{x}` read outside its instance")
@@ -235,15 +236,21 @@ def quiet (which : String) : Value := if which = "failure" then .none else .bool
 
 /-- `pending(x)` / `failed(x)` / `failure(x)` / `current(x)` in an instance's frame: about
 the resource the name stands for when it is a prop (or a derive) that is a
-name; a state or a local is no resource. -/
+name; a state or a local is no resource. A request of the instance's own
+is current while it holds arguments (`Runtime.settleOwned`), and never
+pending or failed. -/
 def cpending : Nat → CEnv → Frame → Locals → String → String → Result Value
   | 0, _, _, _, _, _ => .error outOfFuel
   | fuel + 1, ce, .root, ls, which, x => eval fuel ce.root false ls (.call which [.var x])
-  | fuel + 1, ce, f@(.inst c _ binds), ls, which, x =>
+  | fuel + 1, ce, f@(.inst c id binds), ls, which, x =>
     match lookup x ls with
     | .some _ => .ok (quiet which)
     | .none => do
       let C ← ce.comp c
+      if C.ownedResources.any (·.name == x) then
+        if which = "current" then
+          return .bool (((ce.store.find id).bind (lookup (ownedArgs x))).isSome)
+        else return quiet which
       match C.derives.find? (·.name == x) with
       | .some d =>
         match d.body with
@@ -344,6 +351,9 @@ structure CEffects where
   flat : Effects := {}
   /-- (instance, its component, state, value), in statement order. -/
   inst : List (InstId × String × String × Value) := []
+  /-- (instance, request) for each `refresh` of a request of an instance's
+  own: the request forgets its arguments (LLP 1035.005.004 D5). -/
+  forget : List (InstId × String) := []
   deriving Inhabited
 
 /-- The action `a` of a frame's component, its own calls made calls. -/
@@ -393,6 +403,9 @@ def cexec : Nat → CEnv → Frame → Locals → List Stmt → CEffects → Res
       let vs ← cevalList fuel ce f ls args
       cexec fuel ce f ls rest { fx with flat := { fx.flat with sends := fx.flat.sends ++ [(t, src, vs)] } }
     | .refresh t =>
+      if (lookup t ls).isNone && C.ownedResources.any (·.name == t) then
+        cexec fuel ce f ls rest { fx with forget := fx.forget ++ [(id, t)] }
+      else
       let target := if (lookup t ls).isSome then t else C.resourceName t
       cexec fuel ce f ls rest { fx with flat := { fx.flat with refreshes := fx.flat.refreshes ++ [target] } }
     | .call a args => do
@@ -460,6 +473,8 @@ structure RCx where
   provides : List Provided
   fill : Option Fill
   tabs : TabCx := {}
+  /-- What the instances' requests ask (LLP 1035.005.004 D2). -/
+  oracle : Oracle := {}
 
 def RCx.enter (cx : RCx) (node : Nat) (key : Value) (dup : Nat) : RCx :=
   { cx with
@@ -506,6 +521,43 @@ def instSlots (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : InstId)
       s := s ++ [(st.name, v)]
     pure s
 
+/-- An instance's requests, settled in its frame after its states, as
+`Runtime.settleOwned` settles an arm instance's: kept while their
+arguments are those their values answer, asked anew otherwise, idle (with
+their value, their placeholder before any) while their `when` is closed,
+passes repeating while one changes. -/
+def csettleOwned (fuel : Nat) (cx : RCx) (C : CComponent) (f : Frame) (id : InstId)
+    (slots : List (String × Value)) : Result (List (String × Value)) :=
+  let rp := rootProgram cx.env.prog
+  let rs := C.ownedResources
+  let rec go : Nat → List (String × Value) → Result (List (String × Value))
+    | 0, _ => .error (.refused "an instance's requests did not settle")
+    | n + 1, slots => do
+      let mut s := slots
+      let mut changed := false
+      for r in rs do
+        let ce := { cx.env with store := (id, s) :: cx.env.store }
+        let isOpen ← match r.gate with
+          | .none => pure true
+          | .some g => do pure ((← ceval fuel ce f [] g) matches .bool true)
+        if !isOpen then
+          let v := (lookup r.name s).getD (placeholderValue rp r)
+          if (lookup r.name s).isNone || (lookup (ownedArgs r.name) s).isSome then changed := true
+          s := (putSlot s r.name v).filter (·.1 != ownedArgs r.name)
+        else
+          let args ← cevalList fuel ce f [] r.args
+          let kept := match lookup r.name s, lookup (ownedArgs r.name) s with
+            | .some _, .some (.list old) => argsEq old args
+            | _, _ => false
+          if !kept then
+            let v ← cx.oracle.ask r.source args
+            if !conforms rp v r.ty then throw (.refused s!"resource `{r.name}` of the wrong shape")
+            s := putSlot (putSlot s r.name v) (ownedArgs r.name) (.list args)
+            changed := true
+      if !changed then return s
+      go n s
+  go (rs.length + 2) slots
+
 /-- Resolve literal props, injects and component derives as expansion
 does. A local or state read remains a read even when its value is constant. -/
 def cliteral : Nat → CProgram → Frame → Locals → Expr → Expr
@@ -542,12 +594,16 @@ def crender : Nat → RCx → Locals → List CNode → Store → Result (List C
           pure (name, ← unsetRefused (ceval fuel cx.env cx.frame ls e))
         let literals := props.map fun (name, e) => (name, cliteral fuel cx.env.prog cx.frame ls e)
         let navigation := cx.tabs.element literals (values.filterMap fun (n, v) => v.map (n, ·))
+        let windowed := tag == "list" && (lookupField "virtualized" literals matches .some (.bool true))
+        let kids := if windowed then kids.map (fun child => match child with
+          | .each .. => .element "#window" [] [] [] [child]
+          | _ => child) else kids
         let (kids, live) ← (if navigation.opened then
           crender fuel { cx with tabs := cx.tabs.children props } ls kids live
           else pure ([], live))
         pure ([{ tag, testId, text, handlers,
                  control := elementControl tag props,
-                 windowed := tag == "list" && (lookupField "virtualized" literals matches .some (.bool true)),
+                 windowed := tag == "#window",
                  navigation, children := kids : CVNode }], live)
       | .when id c thn els => do
         match ← ceval fuel cx.env cx.frame ls c with
@@ -575,6 +631,7 @@ def crender : Nat → RCx → Locals → List CNode → Store → Result (List C
           | .none => .error (.refused s!"nothing provides `{pd.name}`")
         let f := Frame.inst name path (ibinds ++ pbinds)
         let slots ← instSlots fuel cx C f path
+        let slots ← csettleOwned fuel cx C f path slots
         let cx' : RCx := { cx with
           env := { cx.env with store := (path, slots) :: cx.env.store },
           frame := f, comp := name, path, tabs := cx.tabs.enter,
@@ -650,11 +707,11 @@ def rootEnv (p : CProgram) (slots : List (String × Value)) (st : Settled) (now 
 keeping the instances `prev` holds; `every` when the host builds every tab
 panel (`Oracle.everyTab`). -/
 def renderRoot (p : CProgram) (slots : List (String × Value)) (st : Settled) (now : F64)
-    (prev : Store) (view : List CVNode := []) (every : Bool := false) :
+    (prev : Store) (view : List CVNode := []) (every : Bool := false) (oracle : Oracle := {}) :
     Result (List CVNode × Store) :=
   let env : CEnv := { prog := p, root := rootEnv p slots st now, store := [] }
   crenderTabs fuel {
-    env, prev, frame := .root, comp := p.root.name, path := [],
+    env, prev, oracle, frame := .root, comp := p.root.name, path := [],
     provides := p.root.provides.map fun (x, e) => (x, e, .root, []),
     fill := .none, tabs := { opened := Tabs.visited (ctabIndex view), every } }
 
@@ -698,11 +755,12 @@ def crunAction (p : CProgram) (o : Oracle) (c : CConfig) (f : Frame) (name : Str
           refuse (.refused "a write of the wrong type") else
         let slots := (answered ++ fx.writes).foldl (fun s (x, v) => setSlot s x v) c.slots
         if !routerValid rp slots then refuse (.refused "an invalid router value") else
-        let store := applyInstWrites c.store cfx.inst
+        let store := (applyInstWrites c.store cfx.inst).map fun (i, s) =>
+          (i, s.filter fun (y, _) => !cfx.forget.any fun (j, x) => InstId.same i j && y == ownedArgs x)
         match settle rp o slots c.now c.settled fx.refreshes with
         | .error e => refuse e
         | .ok st =>
-          match renderRoot p slots st c.now store c.view o.everyTab with
+          match renderRoot p slots st c.now store c.view o.everyTab o with
           | .ok (view, live) =>
             ({ c with slots, settled := st, store := live, view,
                       commands := c.commands ++ hostCommands fx.commands,
@@ -726,10 +784,13 @@ def cboot (p : CProgram) (o : Oracle) : CConfig × Outcome :=
       -- alone: `difftest expansion` writes programs without them.
       if rp.mutations.any (·.queue) || rp.tasks.any (fun t => t.gate.isSome || t.key.isSome) then
         (empty, .refused (.unsupported "queued sends and gated tasks")) else
+      -- So are a child's mutations (LLP 1035.005.004 D6).
+      if p.components.any (!·.mutations.isEmpty) then
+        (empty, .refused (.unsupported "a child's mutations")) else
       match settle rp o slots 0 with
       | .error e => (empty, .refused e)
       | .ok st =>
-        match renderRoot p slots st 0 [] [] o.everyTab with
+        match renderRoot p slots st 0 [] [] o.everyTab o with
         | .ok (view, live) => ({ slots, settled := st, store := live, view, now := 0, timers }, .ok)
         | .error e => (empty, .refused e)
 
@@ -764,7 +825,7 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Ou
       if tm.next ≤ t then
         match best with
         | .none => Option.some (tm, i)
-        | .some (b, j) => if tm.next < b.next then Option.some (tm, i) else Option.some (b, j)
+        | .some (b, j) => if tm.precedes b then Option.some (tm, i) else Option.some (b, j)
       else best) Option.none
   let pick (c : CConfig) : Option (String × F64 × String) :=
     match dueThen (rootProgram p) c.armed t, due c with
@@ -788,10 +849,15 @@ def cadvance (p : CProgram) (o : Oracle) (c : CConfig) (t : F64) : CConfig × Ou
       match due c with
       | .none => finish c
       | .some (tm, i) =>
+        -- A change task's commit is applied before anything later fires,
+        -- as `advance` and the runner's `needs_apply` return: one due after
+        -- other fires waits for the next step, and one that fires ends
+        -- this step at its own time, or at `now` when it is overdue.
+        if tm.change && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
-        let c := { c with timers, now := tm.next }
+        let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match crunAction p o c .root tm.action [] with
-        | (c, .ok) => go n c
+        | (c, .ok) => if tm.change then (c, .ok) else go n c
         | (c, out) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 

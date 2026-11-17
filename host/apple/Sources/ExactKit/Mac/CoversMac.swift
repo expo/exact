@@ -19,6 +19,7 @@ final class HostCovers {
     /// What the kernel was last told.
     private(set) var delivered: [UInt32: HostCover] = [:]
     private var queued = false
+    private var delivering = false
     init(_ presenter: Presenter) { self.presenter = presenter }
 
     /// `presentation` covers exactly these boxes now; an empty report ends
@@ -39,17 +40,29 @@ final class HostCovers {
             DispatchQueue.main.async { [weak self] in self?.deliver() }
             return
         }
-        queued = false
-        var wanted: [UInt32: HostCover] = [:]
-        // A replaced box leaves layout, including any scrollbar gutter.
-        // Other competing claims keep their stable order by name.
-        for name in claims.keys.sorted() { wanted.merge(claims[name] ?? [:]) { first, next in next == .whole ? next : first } }
-        wanted = wanted.filter { presenter.views[$0.key] != nil }
-        var changes: [(UInt32, HostCover?)] = []
-        for id in wanted.keys.sorted() where delivered[id] != wanted[id] { changes.append((id, wanted[id])) }
-        for id in delivered.keys.sorted() where wanted[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
-        delivered = wanted
-        if !changes.isEmpty { presenter.onCovers?(changes) }
+        // The batch a delivery causes can report again from its own after-batch
+        // work: this loop delivers that report once the delivery has returned.
+        guard !delivering else { return }
+        delivering = true
+        defer { delivering = false }
+        for _ in 0..<8 {
+            guard queued else { return }
+            queued = false
+            var wanted: [UInt32: HostCover] = [:]
+            // A replaced box leaves layout, including any scrollbar gutter.
+            // Other competing claims keep their stable order by name.
+            for name in claims.keys.sorted() { wanted.merge(claims[name] ?? [:]) { first, next in next == .whole ? next : first } }
+            wanted = wanted.filter { presenter.views[$0.key] != nil }
+            var changes: [(UInt32, HostCover?)] = []
+            for id in wanted.keys.sorted() where delivered[id] != wanted[id] { changes.append((id, wanted[id])) }
+            for id in delivered.keys.sorted() where wanted[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
+            delivered = wanted
+            if !changes.isEmpty { presenter.onCovers?(changes) }
+        }
+        if queued {
+            queued = false
+            presenter.session?.log("Covers did not settle after 8 deliveries")
+        }
     }
 
     /// A restart: the new runner knows no cover, and each presentation

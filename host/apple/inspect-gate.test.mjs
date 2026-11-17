@@ -13,6 +13,7 @@ import { test, expect } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { spawnSync as appleSpawnSync } from './toolchain.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const inspectNames = /\b(Inspect|InspectHost|InspectOverlay)\b|\binspect(Command|Tapped)\b|\bleaveInspect\b|\bgroupId\b|\bshownHeader\b|\bitemNodes\b/;
@@ -23,7 +24,7 @@ function swiftFiles(dir) {
 
 test('Package.swift defines EXACT_INSPECT for development and not for production', () => {
   const defines = (trust) => {
-    const out = spawnSync('swift', ['package', 'dump-package'], { cwd: resolve(root, 'host/apple'), env: { ...process.env, EXACT_UPDATE_TRUST: trust }, encoding: 'utf8' });
+    const out = appleSpawnSync('swift', ['package', 'dump-package'], { cwd: resolve(root, 'host/apple'), env: { ...process.env, EXACT_UPDATE_TRUST: trust }, encoding: 'utf8' });
     expect(out.status).toBe(0);
     return out.stdout.includes('"EXACT_INSPECT"');
   };

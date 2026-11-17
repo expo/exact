@@ -1,0 +1,35 @@
+component GroupedCard
+  state extra = false
+  state shadow = true
+  action toggleRow
+    extra = not extra
+  action toggleShadow
+    shadow = not shadow
+  view
+    column height="100%" padding-top="env(safe-area-inset-top)"
+      list appearance="auto" flex=1 testId="list" padding-bottom=900
+        section testId="section" box-shadow=(shadow ? "0 4px 14px rgb(0 0 0 / 0.35)" : "none")
+          header
+            text "Account"
+          button press=toggleRow testId="toggle-row"
+            text "Add or remove a row"
+          if extra
+            row testId="extra"
+              text "Notifications"
+          button press=toggleShadow testId="toggle-shadow"
+            text "Toggle shadow"
+          footer
+            text "The shadow follows the card, not this footer."
+        section box-shadow="inset 0 0 8px 2px rgb(0 80 200 / 0.6)"
+          row
+            text "An inset shadow"
+          row
+            text "Under the row content"
+        section box-shadow="0 176px 0 40px rgb(255 0 0)"
+          row
+            text "A hard shadow"
+        section margin-top=150
+          row
+            text "Over the hard shadow"
+          row
+            text "Its second row"

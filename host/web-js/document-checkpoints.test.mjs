@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { rootOf, tokens } from './page-style.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(root, 'target'));
@@ -61,10 +62,15 @@ component App
       ? [resolve(target, 'host-dev', process.platform === 'win32' ? 'caltrain-render.exe' : 'caltrain-render'), '--serve', dist, '--port', '0']
       : [process.execPath, resolve(root, 'host/web/serve.mjs'), dist, '--loopback', '--port', '0'];
     server = await start(command, root);
+    // A page made per request holds no element with a tag or an attribute the sheet was cut for (LLP 1047.003 D1).
+    const cut = new Set(JSON.parse(readFileSync(resolve(dist, '.gen/sheet-cut.json'), 'utf8')));
+    expect(cut.size).toBeGreaterThan(0);
     const get = async path => {
       const response = await fetch(new URL(path, server.url));
       expect(response.status).toBe(200);
-      return response.text();
+      const html = await response.text();
+      expect([path, [...tokens(rootOf(html))].filter(t => cut.has(t))]).toEqual([path, []]);
+      return html;
     };
     const checkpoint = html => /<script type="application\/vnd\.exact\.checkpoint"([^>]*)>([^<]*)<\/script>/.exec(html);
     const src = html => /data-src="([^"]+)"/.exec(checkpoint(html)[1])?.[1];
@@ -193,3 +199,55 @@ test('the wasm document entry preloads a deferred checkpoint’s data module bef
     await browser?.close(); server.stop(true);
   }
 }, 60000);
+
+test('production documents and deferred checkpoints omit signed intermediate URLs', async () => {
+  const { renderer, deferredAnswers } = await import('./render.mjs');
+  const dir = mkdtempSync(resolve(root, 'target/private-checkpoints-'));
+  let requests = 0;
+  const backend = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+    requests++;
+    const url = new URL(req.url);
+    if (url.pathname === '/discover') return Response.json({url: new URL('/download?signature=private-credential', backend.url).href});
+    expect(url.searchParams.get('signature')).toBe('private-credential');
+    return Response.json({text: 'Summary only'});
+  } });
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({name: 'Private Checkpoint', app: {id: 'test.private-checkpoint', name: 'Private Checkpoint'}, host: {web: {}}, rust: false}));
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=request activate=idle
+  large "/large" render=request activate=interaction
+shape Summary
+  text: string
+component App
+  resource summary = summary(top(nav).name == "large") as shape Summary
+  view
+    text summary.text
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'net.fetch ${backend.url.origin}';
+export async function answer(name: string, args: unknown[]) {
+  const {url} = await (await fetch('${backend.url}discover')).json();
+  const {text} = await (await fetch(url)).json();
+  return {text: args[0] ? text.repeat(200) : text};
+}`);
+    for (const production of [false, true]) {
+      const dist = resolve(dir, production ? 'production' : 'development');
+      const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'private-checkpoint', '--out', dist, '--render', 'js', ...(production ? ['--production'] : [])], {cwd: root, env: {...process.env, EXACT_APP_DIR: dir}, stdout: 'pipe', stderr: 'pipe'});
+      const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+      expect(status, stdout + stderr).toBe(0);
+      const render = renderer(dist); render.ahead = false;
+      for (const path of ['/', '/large']) {
+        const page = await render(path);
+        expect(page.failed).toEqual([]);
+        expect(page.html).toContain('Summary only');
+        const match = /<script type="application\/vnd\.exact\.checkpoint"([^>]*)>([^<]*)<\/script>/.exec(page.html);
+        const hash = /data-src="\/\.exact\/checkpoint\/([0-9a-f]+)\.json"/.exec(match[1])?.[1];
+        expect(!!hash).toBe(path === '/large');
+        const checkpoint = hash ? deferredAnswers(hash) : match[2];
+        expect(checkpoint.includes('private-credential')).toBe(!production);
+        expect(Object.hasOwn(JSON.parse(checkpoint), 'urls')).toBe(!production);
+        if (production) expect(page.html).not.toContain('private-credential');
+      }
+    }
+    expect(requests).toBe(8);
+  } finally { backend.stop(true); rmSync(dir, {recursive: true, force: true}); }
+}, 180_000);

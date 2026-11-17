@@ -262,6 +262,7 @@ final class SubtitleSegments: NSObject {
             if !pending, control.selectedSegmentIndex != selected { settled = selected; control.selectedSegmentIndex = selected }
             control.accessibilityLabel = list.props["accessibilityLabel"]
             control.segmentIDs = members.map { $0.props["testId"] }
+            control.segmentOwners = members.map(\.id)
         }
         if !pending, large.selectedSegmentIndex == selected { settled = selected }
     }

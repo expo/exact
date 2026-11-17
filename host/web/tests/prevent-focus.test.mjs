@@ -2,7 +2,7 @@
 // PreventFocusIOSTests): a `pointerdown` action that calls `preventDefault()` keeps the focus where it
 // is, places no caret and starts no selection, and the press still fires, by mouse and by touch, as
 // Chrome does for a prevented pointerdown. scripts/fixtures/prevent-focus.contract, built for the JS target.
-import { expect } from 'bun:test';
+import { afterAll, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -15,11 +15,15 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
 check('a prevented pointerdown keeps the focus and the press, by mouse and by touch', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-prevent-focus-')), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-prevent-focus-'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   const compile = spawnSync(compiler, ['build', resolve(ROOT, 'scripts/fixtures/prevent-focus.contract'), '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (compile.status !== 0) throw new Error(compile.stderr);
   const build = spawnSync(process.execPath, ['host/web-js/build.mjs', 'caltrain', '--plan', plan, '--out', dist, '--render', 'none'], { cwd: ROOT, encoding: 'utf8' });

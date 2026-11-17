@@ -4,16 +4,16 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createApp } from '../game/new.mjs';
 import { appVerbs } from './app-cli.mjs';
-import { HELP, helpText, indexText, knownFlags } from './help.mjs';
+import { HELP, appleBuildRefusal, guardFlags, helpText, indexText, knownFlags } from './help.mjs';
 import { scriptFlags } from './help-parity.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
-const APP_VERBS = ['status', 'web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'update', 'lock', 'add', 'contract', 'tamber', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
+const APP_VERBS = ['web', 'web-build', 'serve', 'test', 'agent', 'verify', 'ios', 'mac', 'share', 'linux', 'windows', 'android', 'deploy', 'push', 'update', 'lock', 'add', 'contract', 'forma', 'hatch', 'snapback', 'backend', 'pattern', 'docs', 'feedback'];
 const timed = (args, options) => {
   const t = performance.now(), r = spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 15_000, ...options });
   return { ...r, ms: performance.now() - t };
@@ -22,7 +22,7 @@ const timed = (args, options) => {
 test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2 and runs nothing', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-help-'));
   try {
-    const dir = resolve(parent, 'field-log'), sdk = resolve(parent, 'sdk'), started = resolve(parent, 'started');
+    const dir = resolve(parent, 'keygen'), sdk = resolve(parent, 'sdk'), started = resolve(parent, 'started');
     createApp(dir);
     const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, commands: { seed: ['bun', 'seed.mjs'] } }, null, 2));
@@ -30,7 +30,7 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
     mkdirSync(resolve(sdk, 'scripts'), { recursive: true });
     mkdirSync(resolve(sdk, 'js/bake/src'), { recursive: true });
     for (const file of ['scripts/help.mjs', 'scripts/app-cli.mjs', 'scripts/bun.mjs', 'js/bake/src/__exact_env.mjs']) copyFileSync(resolve(ROOT, file), resolve(sdk, file));
-    for (const file of ['host/web/dev.mjs', 'host/web/build.mjs', 'host/web/serve.mjs', 'host/apple/build.mjs', 'scripts/agent.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'scripts/exact.mjs', 'scripts/feedback.mjs', 'scripts/share.mjs']) {
+    for (const file of ['host/web/dev.mjs', 'host/web/build.mjs', 'host/web/serve.mjs', 'host/apple/build.mjs', 'scripts/agent.mjs', 'scripts/verify.mjs', 'scripts/build-linux.mjs', 'scripts/agent-android.mjs', 'scripts/exact.mjs', 'scripts/feedback.mjs', 'scripts/share.mjs', 'scripts/deploy.mjs', 'scripts/push.mjs']) {
       mkdirSync(resolve(sdk, file, '..'), { recursive: true });
       writeFileSync(resolve(sdk, file), `require('node:fs').appendFileSync(${JSON.stringify(started)}, ${JSON.stringify(file)} + '\\n');`);
     }
@@ -71,6 +71,14 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
     assert.equal(exact('help', 'all', 'nope').status, 2);
     assert.ok(!existsSync(started), `help ran ${existsSync(started) && readFileSync(started, 'utf8')}`);
     assert.ok(!existsSync(resolve(dir, '.exact/commands.jsonl')), 'help is not a logged command');
+    for (const verb of ['deploy', 'push']) {
+      writeFileSync(resolve(sdk, `scripts/${verb}.mjs`), 'console.log(JSON.stringify({args:process.argv.slice(2),app:process.env.EXACT_APP_DIR}));');
+      const args = verb === 'deploy' ? ['--dirty', '--origin', './origin'] : ['--watch', '--channel', 'preview'];
+      const result = timed([resolve(dir, 'exact.mjs'), verb, ...args], { cwd: parent, env: { ...process.env, EXACT: sdk, EXACT_FEEDBACK: '0' } });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { args: [verb === 'deploy' ? realpathSync(dir) : 'keygen', ...args], app: realpathSync(dir) });
+      assert.equal(appVerbs('game', dir, { game: true })[verb], undefined);
+    }
   } finally { rmSync(parent, { recursive: true, force: true }); }
 }, 60_000); // One offline Cargo resolution.
 
@@ -97,11 +105,36 @@ test('the scripts a verb runs answer --help and refuse a flag they do not take, 
   }
 });
 
-test('tamber help lists every binding language', () => {
-  assert.match(helpText('tamber'), /gen ts\|rust\|swift\|kotlin <app>/);
+// A script reading `args[i + 1]` took the next flag as the value (`--archive --unsigned` wrote the archive as
+// <cwd>/--unsigned) or, last, nothing and so its default (`--sim` last installed on EXACT_SIM's simulator).
+test('a flag that takes a value is refused by name when the value is missing or another flag', () => {
+  const guarded = (verb, argv) => {
+    const said = [];
+    const code = guardFlags(verb, argv, { fail: (line) => said.push(line), exit: (code) => code });
+    return [code === argv ? 0 : code, said.join('\n')];
+  };
+  for (const [verb, argv, flag] of [
+    ['ios', ['--device', '--archive'], '--archive <out.ipa>'], ['ios', ['--device', '--archive', '--unsigned'], '--archive <out.ipa>'],
+    ['ios', ['--ios', '--sim'], '--sim <udid|name>'], ['ios', ['--device', '--phone', '--run'], '--phone <udid|name>'],
+    ['ios', ['--ios', '--optimize'], '--optimize speed|size|balanced'], ['mac', ['hello-apple', '--optimize'], '--optimize speed|size|balanced'],
+    ['ios', ['--ios', '--link'], '--link <plan>'], ['web-build', ['--out', '--json'], '--out <dir>'], ['agent', ['web', 'tree', '--url'], '--url <url>'],
+  ]) assert.deepEqual(guarded(verb, argv), [2, `${verb}: ${flag.split(' ')[0]} needs a value (${flag})`], argv.join(' '));
+  // Every failure in one run: a missing value and an unknown flag are both said.
+  assert.match(guarded('ios', ['--sim', '--bogus'])[1], /^ios: --sim needs a value \(--sim <udid\|name>\)\nios: unknown flag --bogus\. /);
+  // A value is taken as before, a negative number among them; a value in brackets is optional.
+  for (const [verb, argv] of [['ios', ['--ios', '--sim', 'iPhone 17', '--optimize', 'size']], ['web', ['--port', '-1']], ['agent', ['macos', '--login']], ['agent', ['macos', '--login', 'hidden', 'tree']]]) {
+    assert.deepEqual(guarded(verb, argv), [0, ''], argv.join(' '));
+  }
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'all']), '--link takes plan, not all');
+  assert.equal(appleBuildRefusal(['--ios', '--link', 'plan']), null);
+});
+
+test('forma help lists every binding language', () => {
+  assert.match(helpText('forma'), /gen ts\|rust\|swift\|kotlin <app>/);
 });
 
 test('each verb\'s help names exactly the flags its script parses, in a short text', () => {
+  assert.match(helpText('android'), /--write-locks/, 'Android authors need the lock-writing command after a graph change');
   // The verbs' scripts and the flags each parses, read as caps.mjs reads them before a push (help-parity.mjs).
   for (const [verb, flags] of scriptFlags(ROOT)) assert.deepEqual([...knownFlags(verb).keys()].sort(), flags, `${verb}: the help's flags (documented and internal) against its script's`);
   for (const verb of Object.keys(HELP)) {
@@ -113,7 +146,7 @@ test('each verb\'s help names exactly the flags its script parses, in a short te
 test('contract help names the build and verify flags with their arguments and restrictions', () => {
   const text = helpText('contract');
   for (const [command, flags] of [
-    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]']],
+    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]', '[--surface terminal (no --entry)]']],
     ['verify', ['[--runner-only]', '[--js]', '[--walks N]', '[--steps M]', '[--walk-seed N]', '[--confirm N]', '[--types]', '[--prove <Module>]']],
   ]) {
     const line = text.split('\n').find(line => line.startsWith(`  ${command} <file.contract>`));
@@ -138,6 +171,12 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
   // LLP 1116.008 D2: web's help does not teach a background dev server (builders followed it into five steps).
   assert.match(helpText('web', { all: true }), /The dev loop is for a person watching\n\s+the app change: verify, test and agent build and serve their own copy, so checking\n\s+the app needs no dev server\./);
   assert.doesNotMatch(helpText('web', { all: true }), /web\.log| &\s|background|\$!/);
+  // The server restarts per test, including when it keeps its state only in memory.
+  assert.match(helpText('test'), /^Server +restarts empty per test .*database:false too/m);
+  assert.match(helpText('test'), /^Server +.*ancestor.*shared/m);
+  assert.match(helpText('verify', { all: true }), /Server +.*restarts empty per test/);
+  assert.match(helpText('verify', { all: true }), /relaunch replays the chosen test/);
+  assert.match(helpText('verify', { all: true }), /ancestor.*shared/);
   // LLP 1116.007 D2: a builder parses `agent` output, so the short text says --json is one object per line.
   assert.match(helpText('agent'), /^ {2}--json +one compact JSON object per op reply, one per line/m);
   // LLP 1116.007 D3.9: `state <name>` is a state or resource read down a dotted path; a big one prints its sizes.
@@ -148,7 +187,7 @@ test('a first build\'s helps are short, and --help all has every flag', () => {
 // The index is the one read: each verb, then the forms a build uses, in one screen, and every flag a form names is one its
 // verb's script parses (a form never names a flag that does not exist).
 test('help is the one read: the verbs and the forms a build uses, in one screen, naming only flags the verbs parse', () => {
-  assert.doesNotMatch(helpText('status'), /undefined/);
+  for (const verb of Object.keys(HELP)) for (const all of [false, true]) assert.doesNotMatch(helpText(verb, { all }), /undefined/, verb);
   // The index an app's exact.mjs prints, and a game's.
   const [text, gameText] = [false, true].map((game) => indexText({ verbs: Object.keys(appVerbs('app', '.', { game })) }));
   for (const index of [text, gameText]) {
@@ -173,4 +212,30 @@ test('help is the one read: the verbs and the forms a build uses, in one screen,
   }
   // Without a verb's forms (a game's own verbs have none), the index is the verbs.
   assert.doesNotMatch(indexText({ verbs: ['lock'] }), /The forms a build uses/);
+});
+
+test('unsigned device builds and archives refuse incompatible options before building', async () => {
+  const { appleBuildRefusal } = await import('./help.mjs');
+  for (const signed of [false, true]) for (let mask = 0; mask < 32; mask++) {
+    const flags = ['--unsigned', '--archive', '--run', '--device', '--host'];
+    const args = flags.filter((_, bit) => mask & (1 << bit));
+    const [unsigned, archive, run, device, host] = flags.map(flag => args.includes(flag));
+    const env = signed ? { EXACT_PROFILE: 'profile', EXACT_IDENTITY: 'identity' } : {};
+    const refusal = appleBuildRefusal(args, env, 'darwin');
+    assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
+  }
+  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}, 'darwin'), /ad-hoc signed device bundle cannot launch on a stock device/);
+  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--unsigned takes no --watchos/);
+  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--development needs --archive and --unsigned/);
+  const development = ['--device', '--archive', 'a.ipa', '--unsigned', '--development'];
+  assert.equal(appleBuildRefusal(development, {}, 'darwin'), null);
+  for (const [args, env] of [[[...development, '--release'], {}], [development, { EXACT_UPDATE_TRUST: 'production' }]]) assert.match(appleBuildRefusal(args, env, 'darwin'), /takes neither --release/);
+  assert.match(appleBuildRefusal(['--ios', '--run'], {}, 'linux'), /Linux has neither/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned'], {}, 'linux'), /--device on Linux needs --archive/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned'], {}, 'linux'), null);
+  assert.equal(appleBuildRefusal(['--ios'], {}, 'linux'), null);
+  const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, process.platform === 'linux' ? /--run needs an iOS simulator/ : /--unsigned takes no --run/);
+  assert.doesNotMatch(result.stderr, /no app at/);
 });

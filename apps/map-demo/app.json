@@ -51,5 +51,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "map-demo-data", "type": "map_demo_data::Map", "source": "map_demo_data::Map" } }
 }

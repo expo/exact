@@ -1,8 +1,10 @@
 // Embedded in bound transition mappers. SpringConfig::easing's unit release,
 // sample grid and thinning (motion/src/spring.rs); CSS plays the resulting curve.
+// Its entry is folded to ASCII lower case (style.rs), and a number is CSS's,
+// as motion/src/word.rs reads them.
 entry => {
   const properties = PROPERTIES, all = ALL_PROPERTIES;
-  const number = s => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ? Number(s) : NaN;
+  const number = s => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ? Number(s) : NaN;
   const parts = entry.split(/ (?![^(]*\))/).filter(Boolean);
   let property = 'all', named = false, config;
   const times = [];
@@ -19,12 +21,14 @@ entry => {
   }
   if (!config || config.length !== 3 || !config.every(Number.isFinite) || times.length > 2 || (times[0] ?? 0) !== 0 || (times[1] ?? 0) < 0) return [];
   const names = property === 'all' ? all : properties[property];
-  if (!names.length) return [];
   const [stiffness, damping, mass] = config;
   if (!(stiffness > 0 && damping >= 0 && mass > 0)) return [];
   const alpha = damping / (2 * mass), omegaSquared = stiffness / mass;
   const discriminant = alpha * alpha - omegaSquared, epsilon = omegaSquared * 1e-12;
   if (![alpha, omegaSquared, discriminant].every(Number.isFinite)) return [];
+  // Keep transition-property coverage while WAAPI plays physics springs.
+  const coverage = `${property} 0s ease 0s`;
+  if (!names.length) return [coverage];
   const sample = t => {
     const decay = Math.exp(-alpha * t);
     if (discriminant < -epsilon) {
@@ -80,5 +84,6 @@ entry => {
   for (let i = 0; i < count; i += step) stops.push(`${cssNumber(1 - sample(i / 240)[0])} ${cssNumber(Math.fround((i / 240) / duration) * 100)}%`);
   stops.push('1 100%');
   const timing = `${cssNumber(duration)}s linear(${stops.join(',')}) ${cssNumber(times[1] ?? 0)}s`;
-  return names.map(name => `${name} ${timing}`);
+  const curves = names.map(name => `${name} ${timing}`);
+  return property === 'all' ? [coverage, ...curves] : curves;
 }

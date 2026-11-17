@@ -46,13 +46,16 @@ impl<D: DataSource> Runner<D> {
 
     /// Boot fresh state at a supplied clock, before evaluating initializers
     /// and resource arguments. Rendering never advances it or fires timers.
+    /// Delivery facts are available to the first component state initializers.
+    #[allow(clippy::too_many_arguments)] // the host boot facts
     pub fn boot_at(
-        plan: Plan,
+        plan: impl Into<crate::Program>,
         data: D,
         kernel: Kernel,
         viewport: crate::Viewport,
         launch: &str,
         now_ms: f64,
+        delivery: Delivery,
     ) -> Result<Runner<D>, RunnerError> {
         Self::boot_inner(
             RunnerLinks::ALL,
@@ -61,7 +64,7 @@ impl<D: DataSource> Runner<D> {
             kernel,
             Seed::At(now_ms),
             Vec::new(),
-            Delivery::default(),
+            delivery,
             viewport,
             launch,
         )

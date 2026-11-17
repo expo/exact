@@ -66,11 +66,16 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** A call Telecom holds: its entry as last handed over, its scope once added, and what our own operations asked. */
-    private class Live(var entry: JSONObject) {
+    internal class Live(var entry: JSONObject) {
         var scope: CallControlScope? = null
         val ended = CompletableDeferred<Unit>()
         val asked = HashSet<String>()
         var claim: ForegroundClaim? = null
+        /** The cause of an end the list made, which Telecom is told; null for an end the person made on Telecom's
+         * side. */
+        var cause: Int? = null
+        /** A button of the call's notification pressed before Telecom added the call, pressed once it has. */
+        var pressed: String? = null
     }
 
     private val calls = LinkedHashMap<String, Live>()
@@ -129,10 +134,11 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
             call.entry = e
             claimChanged(call)
             if (state == before) continue
+            if (state == "ended") { work.launch { ended(id, call, e) }; continue }
+            // Before Telecom has added the call there is nothing to operate: [added] applies the entry as it is then.
             val scope = call.scope ?: continue
             work.launch {
                 when {
-                    state == "ended" -> ended(id, call, e)
                     before == "ringing" && state == "connected" ->
                         if (!call.asked.remove("answer-person")) failed(id, "answer", scope.answer(callType(e)))
                     before == "held" && state == "connected" ->
@@ -160,6 +166,7 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
                 "answeredElsewhere", "declinedElsewhere" -> DisconnectCause.ANSWERED_ELSEWHERE
                 else -> DisconnectCause.ERROR
             }
+            call.cause = cause
             call.scope?.disconnect(DisconnectCause(cause))
         }
         call.ended.complete(Unit)
@@ -194,11 +201,10 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
                     onSetActive = { if (call.entry.optString("state") == "held") { call.asked += "unhold-person"; choose(id, "unhold") } },
                     onSetInactive = { if (call.entry.optString("state") == "connected") { call.asked += "hold-person"; choose(id, "hold") } },
                 ) {
-                    call.scope = this
                     control?.invoke(this, e)
                     // The scope is a coroutine scope for the call's life; the call stays added until it ends.
                     launch {
-                        if (!incoming && call.entry.optString("state") == "connected") failed(id, "setActive", setActive())
+                        added(id, call, this@addCall, incoming)
                         call.ended.await()
                     }
                 }
@@ -209,6 +215,23 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
                 choose(id, "failed")
             }
         }
+    }
+
+    /** Telecom added the call: what the list and the notification did while it was being added, which had no call to
+     * operate, is done now. The scope is set here, on the main thread before the first suspension, so [follow] either
+     * left a change to this or operates it itself, never both. */
+    internal suspend fun added(id: String, call: Live, scope: CallControlScope, incoming: Boolean) {
+        call.scope = scope
+        if (call.ended.isCompleted) {
+            call.cause?.let { scope.disconnect(DisconnectCause(it)) }
+            return
+        }
+        call.pressed?.let { what -> call.pressed = null; return press(id, call, scope, what) }
+        val state = call.entry.optString("state")
+        if (state != "connected" && state != "held") return
+        val result = if (incoming) scope.answer(callType(call.entry)) else scope.setActive()
+        failed(id, if (incoming) "answer" else "setActive", result)
+        if (state == "held" && result is CallControlResult.Success) failed(id, "setInactive", scope.setInactive())
     }
 
     private fun claimChanged(call: Live) {
@@ -242,18 +265,20 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
     /** A button of the call's notification (D11): Telecom's operation first, then the person's choice. */
     internal fun notificationAction(id: String, what: String) {
         val call = calls[id] ?: return
-        val scope = call.scope ?: return
-        work.launch {
-            when (what) {
-                "answer" -> {
-                    val r = scope.answer(callType(call.entry))
-                    if (r is CallControlResult.Success) { call.asked += "answer-person"; choose(id, "answer") } else failed(id, "answer", r)
-                }
-                "decline", "hangup" -> {
-                    call.asked += "end-person"
-                    scope.disconnect(DisconnectCause(if (what == "decline") DisconnectCause.REJECTED else DisconnectCause.LOCAL))
-                    choose(id, "hangup")
-                }
+        val scope = call.scope ?: run { call.pressed = what; return }
+        work.launch { press(id, call, scope, what) }
+    }
+
+    private suspend fun press(id: String, call: Live, scope: CallControlScope, what: String) {
+        when (what) {
+            "answer" -> {
+                val r = scope.answer(callType(call.entry))
+                if (r is CallControlResult.Success) { call.asked += "answer-person"; choose(id, "answer") } else failed(id, "answer", r)
+            }
+            "decline", "hangup" -> {
+                call.asked += "end-person"
+                scope.disconnect(DisconnectCause(if (what == "decline") DisconnectCause.REJECTED else DisconnectCause.LOCAL))
+                choose(id, "hangup")
             }
         }
     }

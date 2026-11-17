@@ -132,3 +132,51 @@ fn vertical_align_is_an_inline_images_alone() {
     )
     .unwrap();
 }
+
+/// LLP 1011.002 D1: a `match` among a paragraph's runs is read as an `if`
+/// is, its arms' runs the paragraph's.
+#[test]
+fn a_match_among_a_paragraphs_runs_is_read_as_an_if() {
+    let app = |state: &str, choice: &str| {
+        format!("component App\n  {state}\n  action clear\n    {}\n  view\n    column\n      text testId=\"greeting\"\n        text \"Hello, \"\n{choice}      button \"Clear\" press=clear testId=\"clear\"\n",
+            if state.contains("name") { "name = none" } else { "known = false" })
+    };
+    let by_if = app(
+        "state known = true",
+        "        if known\n          text \"Ada\"\n        else\n          text \"stranger\"\n",
+    );
+    let by_match = app(
+        "state name = some(\"Ada\")",
+        "        match name\n          case some(n)\n            text n\n          case none\n            text \"stranger\"\n",
+    );
+    for source in [by_if, by_match] {
+        let plan = contract::compile(&source).unwrap_or_else(|e| panic!("{e}\n{source}"));
+        let mut r = Runner::boot(
+            contract::bake(plan, NoData).unwrap(),
+            NoData,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let runs = |r: &Runner<NoData>| -> Vec<String> {
+            let k = r.kernel();
+            let greeting = k.node_by_key(k.find_by_test_id("greeting")[0]).unwrap();
+            greeting
+                .text_runs()
+                .iter()
+                .map(|run| run.text.to_string())
+                .collect()
+        };
+        assert_eq!(runs(&r), ["Hello, ", "Ada"], "{source}");
+        let clear = {
+            let k = r.kernel();
+            k.node_by_key(k.find_by_test_id("clear")[0]).unwrap().id
+        };
+        r.dispatch(clear, exact_runner::Event::Press).unwrap();
+        assert_eq!(runs(&r), ["Hello, ", "stranger"], "{source}");
+    }
+    // A multi-column paragraph's image is refused under a `match` too.
+    let columns = "component App\n  state o: option<string> = none\n  view\n    text column-count=2\n      match o\n        case some(s)\n          image \"app:/a.png\"\n        case none\n          text \"a\"\n";
+    assert_eq!(contract::compile(columns).unwrap_err().id, "lower-attr-tag");
+}

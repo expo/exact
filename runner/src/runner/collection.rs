@@ -4,6 +4,12 @@ use crate::compare::{equivalent, equivalent_all};
 use crate::instance::collection::{CollectionFeedback, CollectionFill, CollectionSnapshot};
 
 impl<D: DataSource> Runner<D> {
+    /// Latest host travel, consumed before substantive work; no commit or edge.
+    pub fn collection_travel(&mut self, view: ViewId, revision: u64, sequence: u64, offset: f64) {
+        if let Some(tree) = &mut self.tree {
+            tree.collection_travel(view, revision, sequence, offset);
+        }
+    }
     /// Mounted collection metadata for a host's post-commit layout/measurement.
     pub fn collections(&self) -> Vec<CollectionSnapshot> {
         self.tree
@@ -98,7 +104,12 @@ impl<D: DataSource> Runner<D> {
         if self.poisoned {
             return Err(RunnerError::Poisoned);
         }
-        if feedback.validate().is_err() || !fill.velocity.is_finite() {
+        if feedback.validate().is_err()
+            || !fill.velocity.is_finite()
+            || fill
+                .view_offset
+                .is_some_and(|n| !n.is_finite() || n.abs() > f32::MAX as f64)
+        {
             return Err(RunnerError::Instance(InstanceError::Collection(
                 "invalid collection feedback".into(),
             )));
@@ -157,6 +168,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         // A row that showed with animations waiting on it is a commit of its
         // own when the report changed nothing else (LLP 1055 D13).
@@ -278,6 +290,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         if !offset.is_finite() {
             return Ok(result);
@@ -365,7 +378,7 @@ impl EdgeState {
             rows: frames
                 .iter()
                 .filter_map(|f| f.row.as_ref())
-                .map(|row| (row.clone(), row.borrow().clone()))
+                .map(|row| (row.clone(), row.borrow().slots.clone()))
                 .collect(),
             pending: r.pending.iter().map(|p| (p.target, p.ticket)).collect(),
             ticket: r.next_ticket,
@@ -396,7 +409,7 @@ impl EdgeState {
                     _ => true,
                 })
             || self.rows.iter().any(|(row, old)| {
-                let now = row.borrow();
+                let now = &row.borrow().slots;
                 old.len() != now.len()
                     || old
                         .iter()
@@ -437,7 +450,7 @@ pub(super) fn scroll_padding(kernel: &exact_kernel::Kernel, view: ViewId) -> [f6
     let Some(node) = kernel.node(view) else {
         return [0.0; 4];
     };
-    let env = kernel.arena().env();
+    let env = &*kernel.arena().env_of(node.key.index);
     let r = &node.style.rare;
     let sides = [
         r.scroll_padding_top.clone(),
@@ -479,7 +492,8 @@ pub(super) fn scroll_margin(kernel: &exact_kernel::Kernel, view: ViewId) -> [f64
     let Some(node) = kernel.node(view) else {
         return [0.0; 4];
     };
-    let (env, r) = (kernel.arena().env(), &node.style.rare);
+    let env = kernel.arena().env_of(node.key.index);
+    let (env, r) = (&*env, &node.style.rare);
     let sides = [
         r.scroll_margin_top.clone(),
         r.scroll_margin_right.clone(),

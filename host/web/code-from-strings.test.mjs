@@ -10,7 +10,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const realHelpers = `export { ownWithout, redirectOf, signalDeadline, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
+const realHelpers = `export { ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
 
 const STRING_CODE = `// A copy of the globals written back, as a module may: the module's own, never the page's.
 for (const name of ['Function', 'eval', 'Date']) globalThis[name] = globalThis[name];

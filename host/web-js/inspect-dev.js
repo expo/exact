@@ -236,7 +236,7 @@ async function nodeOf(el) {
       if (row) found = { at, ...ownRow(t, at, row, lv) };
       else if (e?.b && t.implied.includes(name)) { const row = impliedRow(t, at, name, lv); if (row) found = { at, ...row }; }
     }
-    // (And the ancestor's plan site, which the design server names by its source: tamber/1.16 `fromAt`.)
+    // (And the ancestor's plan site, which the design server names by its source: forma/1.16 `fromAt`.)
     if (found) { const { at, ...row } = found; style[name] = { ...row, source: "inherited", from: viewOf(at), ...(siteOf(at) != null ? { fromSite: siteOf(at) } : {}) }; continue; }
     style[name] = { value: t.initial[name], source: "initial" };
   }
@@ -285,7 +285,7 @@ async function selectedReport(el, click = null, moved = null) {
   return envelope(selected);
 }
 
-// A click's selection carries a token (tamber/1.7) the outline answering it
+// A click's selection carries a token (forma/1.7) the outline answering it
 // names: that one scrolls nothing. A selection is its element in a page: a
 // refresh after a reload finds it again by its site and instance path.
 let clicks = 0, asks = 0;
@@ -303,7 +303,7 @@ async function select(el, clicked = false, click = null, moved = null) {
   }
   env.report(r);
 }
-// `inspect` `{select: {up, plan, from, instance}}` (tamber/1.16; 1.17 by this page's own tree): the selection moves up
+// `inspect` `{select: {up, plan, from, instance}}` (forma/1.16; 1.17 by this page's own tree): the selection moves up
 // `up` copies, as a click on the node it lands on would select it, reported with `moved: {up, stepped}`. Walking up from
 // the selection, its own copy seen, each ancestor of a copy not yet seen is one step (a slot's host among them, a
 // component that only renders another none); at step `up` it lands on that copy's outermost ancestor; with fewer, on
@@ -535,8 +535,8 @@ const ended = new Set();
 let lastRevision = 0, epoch = 0, holdStream = null;
 const end = (revision, of) => { if (of !== epoch) return; ended.add(revision); if (ended.size > 64) ended.delete(ended.values().next().value); };
 const canonical = (v) => JSON.stringify(v ?? [], (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
-// The runtime the app runs (this module is served at /__dev/inspect.js): the one beside its app.js.
-const runtime = () => new URL("rt.js", document.querySelector('script[type="module"][src$="app.js"]')?.src ?? document.baseURI).href;
+// The runtime the app runs (this module is served at /__dev/inspect.js): the one beside its entry, at the document's base.
+const runtime = () => new URL("rt.js", document.baseURI).href;
 function hold(m) {
   // (A lower revision is a new server's: the revisions ended before are forgotten.)
   // (A new stream, which may be a new server's, likewise.)

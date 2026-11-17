@@ -4,7 +4,11 @@ import android.app.Activity
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Resources
+import android.database.ContentObserver
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.text.format.DateFormat
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -33,6 +37,8 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -105,7 +112,8 @@ private object MaterialPickers : Pickers {
 
 @Composable
 private fun Theme(activity: Activity, accent: Int?, content: @Composable () -> Unit) {
-    val dark = activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    // The activity keeps running across night mode (`configChanges`); the composition local is what recomposes then.
+    val dark = LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
     MaterialTheme(colorScheme = pickerColorScheme(activity, dark, accent), content = content)
 }
 
@@ -187,7 +195,11 @@ private fun DateDialog(picker: ExactPicker, drawn: () -> Unit, clear: () -> Unit
 @Composable
 private fun TimeDialog(picker: ExactPicker, day: LocalDate?, drawn: () -> Unit, clear: () -> Unit, done: (LocalTime?) -> Unit) {
     val t = picker.time()
-    val state = rememberTimePickerState(t.hour, t.minute, picker.hour24 ?: DateFormat.is24HourFormat(LocalContext.current))
+    val system = deviceHour24()
+    val hour24 = picker.hour24 ?: system
+    val state = rememberTimePickerState(t.hour, t.minute, hour24)
+    // The state takes its clock only as it is made: the setting changing under an open dial is told to it.
+    LaunchedEffect(hour24) { state.is24hour = hour24 }
     var mode by remember { mutableStateOf(if (picker.input) TimePickerDisplayMode.Input else TimePickerDisplayMode.Picker) }
     val title = picker.title
     // Material's clock offers no seconds: the held value's stay where its hour and minute are kept.
@@ -211,6 +223,24 @@ private fun TimeDialog(picker: ExactPicker, day: LocalDate?, drawn: () -> Unit, 
         val drawing = Modifier.drawWithContent { drawContent(); drawn() }
         if (mode == TimePickerDisplayMode.Picker) TimePicker(state, drawing) else TimeInput(state, drawing)
     }
+}
+
+/** Settings' "Use 24-hour format", else the locale's clock, followed while the picker is up: the setting is no
+ * part of a configuration, so it is watched as the activity watches it. */
+@Composable
+private fun deviceHour24(): Boolean {
+    val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    var hour24 by remember(configuration) { mutableStateOf(DateFormat.is24HourFormat(context)) }
+    DisposableEffect(context) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { hour24 = DateFormat.is24HourFormat(context) }
+        }
+        val uri = Settings.System.getUriFor(Settings.System.TIME_12_24)
+        context.contentResolver.registerContentObserver(uri, false, observer)
+        onDispose { context.contentResolver.unregisterContentObserver(observer) }
+    }
+    return hour24
 }
 
 /** Cancel, and Clear before it where the picker offers it (`ExactPicker.clear`). */

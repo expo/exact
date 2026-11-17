@@ -51,9 +51,10 @@ pub enum Capability {
     /// `input type="file"` and `showPicker` (LLP 1069.002): a plan with a
     /// file input, or whose code runs the command.
     Picker,
-    /// Drag timelines (LLP 1057.003): `-exact-drag-timeline`, `animation-timeline`,
-    /// `animation-range` and `timeline-scope`, their grammar, lowering and
-    /// name lookup. A timeline follows a held value, so it uses motion too.
+    /// Timelines (LLP 1057.003): `-exact-drag-timeline`, the scroll and view
+    /// timeline rows, `animation-timeline`, `animation-range` and
+    /// `timeline-scope`, their grammar, lowering, name lookup and placement.
+    /// A timeline follows a held value or a scroll, so it uses motion too.
     Timelines,
     /// `text-transform` (LLP 1064 D5): its Unicode case mapping, for a plan
     /// that binds the row.
@@ -65,8 +66,8 @@ pub enum Capability {
     /// `@keyframes`' grammars, for a plan that declares keyframes or binds
     /// `animation` or `-exact-exit-animation`.
     Animations,
-    /// `background-image`'s gradients (LLP 1066): its grammar, for a plan
-    /// that binds the row.
+    /// Gradient grammars (LLP 1066, LLP 1077 D2), for a plan that binds
+    /// `background-image` or `mask-image`.
     Gradients,
     /// CSS grid's track, placement and keyword grammars, for a plan that
     /// binds any of the six grid rows.
@@ -92,7 +93,7 @@ pub enum Capability {
     GroupedLists,
     /// The host's I/O: the requests a data source makes (fetch, sockets,
     /// files, SQLite) and the kept secrets and answers it stores. A plan
-    /// uses it when a resource keeps its answer (a reader); an app's grants
+    /// uses it for kept answers and surface records. An app's grants
     /// link it too, which the bake reads (LLP 1047.001). The browser does
     /// its own, so the web links nothing for it.
     Io,
@@ -125,11 +126,28 @@ pub enum Capability {
     /// SQL storage, selected by a data module's `sqlite.open` grants or by
     /// the manifest's `link`, since requests live below the plan.
     Sqlite,
+    /// A tip over an element (`tip`, LLP 1035.006.000): on Apple, TipKit's
+    /// popover, whose frameworks (TipKit, SwiftUI) an app links only for it.
+    /// Hosts with no tip system show none and link nothing for it.
+    Tips,
+    /// `box-shadow` and `text-shadow` grammars (LLP 1077 D3, D4).
+    Shadows,
+    /// `corner-shape`'s grammar (LLP 1077 D1).
+    Corners,
+    /// `rotate`'s angle and axis grammars (LLP 1077 D8).
+    Rotate,
+    /// `-webkit-text-stroke`'s shorthand grammar (LLP 1077 D7).
+    TextStroke,
+    /// `-exact-symbol-palette`'s grammar (LLP 1077 D10).
+    SymbolPalette,
+    /// Locked secrets (LLP 1133.010 D16), selected by `secret.keep` grants
+    /// with a presence policy, including names whose protection is optional.
+    Presence,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 30] = [
+    pub const ALL: [Capability; 37] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -160,6 +178,13 @@ impl Capability {
         Capability::Numerals,
         Capability::Dates,
         Capability::Sqlite,
+        Capability::Tips,
+        Capability::Shadows,
+        Capability::Corners,
+        Capability::Rotate,
+        Capability::TextStroke,
+        Capability::SymbolPalette,
+        Capability::Presence,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -195,6 +220,13 @@ impl Capability {
             Capability::Numerals => "numerals",
             Capability::Dates => "dates",
             Capability::Sqlite => "sqlite",
+            Capability::Tips => "tips",
+            Capability::Shadows => "shadows",
+            Capability::Corners => "corners",
+            Capability::Rotate => "rotate",
+            Capability::TextStroke => "text_stroke",
+            Capability::SymbolPalette => "symbol_palette",
+            Capability::Presence => "presence",
         }
     }
 
@@ -204,14 +236,14 @@ impl Capability {
         Capability::ALL.into_iter().find(|c| c.name() == name)
     }
 
-    const fn bit(self) -> u32 {
+    const fn bit(self) -> u64 {
         1 << self as u32
     }
 }
 
 /// A set of capabilities.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Uses(u32);
+pub struct Uses(u64);
 
 impl Uses {
     /// The core alone.
@@ -220,6 +252,12 @@ impl Uses {
     /// This set and `capability`.
     pub const fn with(self, capability: Capability) -> Uses {
         Uses(self.0 | capability.bit())
+    }
+
+    fn with_style(self, style: StyleId) -> Uses {
+        style.capability().map_or(self, |name| {
+            self.with(Capability::from_name(name).expect("schema style capability"))
+        })
     }
 
     /// Whether the set holds `capability`.
@@ -234,6 +272,9 @@ impl Uses {
             uses = uses.with(Capability::Io);
         }
         for line in grants.lines() {
+            if exact_grants::line_presence(line).is_some() {
+                uses = uses.with(Capability::Presence);
+            }
             uses = match line.split_whitespace().next() {
                 Some("sqlite.open") => uses.with(Capability::Sqlite),
                 Some("auth.session") => uses.with(Capability::AuthSession),
@@ -275,14 +316,32 @@ impl fmt::Display for Uses {
 /// The capabilities `plan` uses (LLP 1047 D2).
 pub fn uses(plan: &Plan) -> Uses {
     let mut uses = Uses::NONE;
+    if plan.tools.iter().any(|t| {
+        serde_json::from_str::<serde_json::Value>(plan.str(t.face)).is_ok_and(|face| {
+            face["doors"]
+                .as_array()
+                .is_some_and(|doors| doors.iter().any(|d| d == "apple"))
+                && face["parameters"].as_object().is_some_and(|params| {
+                    params
+                        .values()
+                        .any(|p| p.get("type").is_some_and(|t| t == "file"))
+                })
+        })
+    }) {
+        uses = uses.with(Capability::Picker);
+    }
     if !plan.keyframes.is_empty() {
         uses = uses.with(Capability::Animations);
     }
     if plan.router.is_some() {
         uses = uses.with(Capability::Router);
     }
-    // A reader's last answer is kept in the host's store (LLP 1027 D4).
-    if plan.resources.iter().any(|r| r.reader) {
+    // Kept answers and surface records both need the host's store, and a
+    // declared source its network (LLP 1162.001 D3).
+    if plan.resources.iter().any(|r| r.reader || r.keep)
+        || !plan.fetches.is_empty()
+        || plan.slots.iter().any(|s| s.persist)
+    {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -292,10 +351,12 @@ pub fn uses(plan: &Plan) -> Uses {
         uses = uses.with(Capability::Segments);
     }
     if !plan.surfaces.is_empty()
-        || plan
-            .resources
-            .iter()
-            .any(|r| plan.str(r.source) == crate::surface_record::SOURCE)
+        || plan.resources.iter().any(|r| {
+            matches!(
+                plan.str(r.source),
+                crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+            )
+        })
     {
         uses = uses.with(Capability::Surfaces);
     }
@@ -314,14 +375,40 @@ pub fn uses(plan: &Plan) -> Uses {
                 // A shared element flies between its two places (LLP 1013.000).
                 Some(PropId::SharedElement) => uses = uses.with(Capability::Transitions),
                 Some(PropId::Virtualized)
-                    if constant_bool(plan.code(binding.expr)).is_none_or(|on| on) =>
+                    if constant_bool(plan, plan.code(binding.expr)).is_none_or(|on| on) =>
                 {
                     uses = uses.with(Capability::Collections);
                 }
                 Some(PropId::BackgroundMaterial) => uses = uses.with(Capability::Materials),
+                Some(PropId::DecorationStyles) => {
+                    // The compiler puts decoration rows in a literal JSON table
+                    // rather than style bindings (LLP 1114.007 D1).
+                    if let Some(serde_json::Value::Object(table)) =
+                        constant_str(plan, plan.code(binding.expr))
+                            .and_then(|json| serde_json::from_str(json).ok())
+                    {
+                        for row in table
+                            .values()
+                            .filter_map(serde_json::Value::as_array)
+                            .flatten()
+                        {
+                            if let Some(style) = row
+                                .get(0)
+                                .and_then(serde_json::Value::as_u64)
+                                .and_then(|id| u32::try_from(id).ok())
+                                .and_then(StyleId::from_bit)
+                            {
+                                uses = uses.with_style(style);
+                            }
+                        }
+                    }
+                }
                 Some(PropId::ListStyle) => uses = uses.with(Capability::GroupedLists),
                 Some(PropId::Dataset) => uses = uses.with(Capability::Dataset),
                 Some(PropId::AccessibilityControls) => uses = uses.with(Capability::Tabs),
+                Some(PropId::Tip) if can_be(&binding, &|v| !v.is_empty()) => {
+                    uses = uses.with(Capability::Tips);
+                }
                 Some(PropId::Type) if can_be(&binding, &|v| v == "file") => {
                     uses = uses.with(Capability::Picker);
                 }
@@ -335,6 +422,9 @@ pub fn uses(plan: &Plan) -> Uses {
                 _ => {}
             },
             BindingKind::Style => {
+                if let Some(style) = StyleId::from_bit(u32::from(binding.id)) {
+                    uses = uses.with_style(style);
+                }
                 if StyleId::from_bit(u32::from(binding.id)) == Some(StyleId::BackdropFilter) {
                     uses = uses.with(Capability::Backdrop);
                 }
@@ -345,6 +435,11 @@ pub fn uses(plan: &Plan) -> Uses {
                             | StyleId::AnimationTimeline
                             | StyleId::AnimationRange
                             | StyleId::TimelineScope
+                            | StyleId::ScrollTimelineName
+                            | StyleId::ScrollTimelineAxis
+                            | StyleId::ViewTimelineName
+                            | StyleId::ViewTimelineAxis
+                            | StyleId::ViewTimelineInset
                     )
                 ) {
                     uses = uses.with(Capability::Timelines).with(Capability::Motion);
@@ -363,15 +458,14 @@ pub fn uses(plan: &Plan) -> Uses {
                 }
                 if matches!(
                     StyleId::from_bit(u32::from(binding.id)),
-                    Some(StyleId::Animation | StyleId::ExitAnimation)
+                    Some(
+                        StyleId::Animation
+                            | StyleId::ExitAnimation
+                            | StyleId::ViewTransitionNew
+                            | StyleId::ViewTransitionOld
+                    )
                 ) {
                     uses = uses.with(Capability::Animations);
-                }
-                if matches!(
-                    StyleId::from_bit(u32::from(binding.id)),
-                    Some(StyleId::BackgroundImage | StyleId::MaskImage)
-                ) {
-                    uses = uses.with(Capability::Gradients);
                 }
                 if matches!(
                     StyleId::from_bit(u32::from(binding.id)),
@@ -495,6 +589,28 @@ fn shows_media_picker(plan: &Plan) -> bool {
     })
 }
 
+/// Whether node `node` is a zoomable scroller (LLP 1057.001.000 D1): either
+/// range row written, literal or bound. The web loads its zoom module, and the
+/// wasm host names its absence, only for a plan with one.
+pub fn zoomable(plan: &Plan, node: exact_plan::NodesId) -> bool {
+    plan.node(node)
+        .bindings
+        .iter()
+        .map(|b| plan.binding(b))
+        .any(|b| {
+            b.kind == BindingKind::Style
+                && matches!(
+                    StyleId::from_bit(b.id as u32),
+                    Some(StyleId::MinZoom | StyleId::MaxZoom)
+                )
+        })
+}
+
+/// Whether `plan` has a zoomable scroller.
+pub fn zooms(plan: &Plan) -> bool {
+    (0..plan.nodes.len()).any(|i| zoomable(plan, exact_plan::NodesId(i as u32)))
+}
+
 /// Whether `plan` can show an SVG island (LLP 1055.000 D10, D14): a `mask`
 /// or `filter` element, or `filter` bound on an SVG element (its functions
 /// need no element). A host whose island module is loaded on demand (LLP
@@ -535,7 +651,7 @@ pub fn svg_filters(plan: &Plan) -> bool {
 fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
     let (mut format, mut geometry, mut lowercase) = (false, false, false);
     plan.each_code(&mut |code| {
-        for i in crate::vm::instructions(plan.code(code)).flatten() {
+        for i in crate::vm::instructions(plan.read_code(plan.code(code)).0).flatten() {
             if i.op == Opcode::Call {
                 match Stdlib::from_wire(i.args[0] as u8) {
                     Some(
@@ -545,6 +661,9 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
                         | Stdlib::FormatDecimal
                         | Stdlib::FormatDay,
                     ) => format = true,
+                    // The core formats `en-US`; another locale's time is
+                    // the capability's (LLP 1054.000.003 D6).
+                    Some(Stdlib::FormatTime) if plan.format.is_some() => format = true,
                     Some(
                         Stdlib::Frame
                         | Stdlib::RangeFrame
@@ -569,7 +688,10 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
 pub fn runs_sounds(plan: &Plan) -> bool {
     !plan.sounds.is_empty()
         || !plan.sequences.is_empty()
-        || runs_command(plan, &["playSound", "playSounds", "stopSounds"])
+        || runs_command(
+            plan,
+            &["playSound", "playSounds", "stopSounds", "setSounds"],
+        )
 }
 
 /// Whether `plan` asks for MIDI ports or hears an input (LLP 1125 D6–D8):
@@ -599,6 +721,22 @@ pub fn uses_picture_in_picture(plan: &Plan) -> bool {
     runs_command(plan, &["requestPictureInPicture"])
 }
 
+/// Whether an image's, a media element's or a frame's source can be remote:
+/// an `http:` or `https:` literal, or one computed at run time, which this
+/// cannot read. The Mac App Store sandbox loads such a source only with
+/// `network.client` (LLP 1030.005 D2).
+pub fn sources_can_be_remote(plan: &Plan) -> bool {
+    plan.bindings.iter().any(|binding| {
+        binding.kind == BindingKind::Prop
+            && matches!(
+                PropId::from_wire(binding.id),
+                Some(PropId::Src | PropId::ImageSource)
+            )
+            && constant_str(plan, plan.code(binding.expr))
+                .is_none_or(|src| src.starts_with("http:") || src.starts_with("https:"))
+    })
+}
+
 /// Whether the runner keeps a MIDI queue the agent shows (`state.midi`):
 /// for a plan that [`uses_midi`] or declares a sequence, whose notes and
 /// clock go on it. The JS target bundles midi.js then.
@@ -612,11 +750,17 @@ pub fn chooses_locale(plan: &Plan) -> bool {
     runs_command(plan, &["setLocale"])
 }
 
+/// Whether the plan runs `setScheme`: then the scheme it chose is kept
+/// across launches.
+pub fn chooses_scheme(plan: &Plan) -> bool {
+    runs_command(plan, &["setScheme"])
+}
+
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {
         runs = runs
-            || crate::vm::instructions(plan.code(code)).any(|i| {
+            || crate::vm::instructions(plan.read_code(plan.code(code)).0).any(|i| {
                 i.is_ok_and(|i| {
                     i.op == Opcode::Command
                         && plan
@@ -631,8 +775,8 @@ fn runs_command(plan: &Plan, names: &[&str]) -> bool {
 
 /// The boolean a binding always evaluates to, when its code is one constant:
 /// `Bool`, then `Return`.
-fn constant_bool(code: &[u8]) -> Option<bool> {
-    match code {
+fn constant_bool(plan: &Plan, code: &[u8]) -> Option<bool> {
+    match plan.read_code(code).0 {
         [op, value, ret] if *op == Opcode::Bool as u8 && *ret == Opcode::Return as u8 => {
             Some(*value != 0)
         }
@@ -643,7 +787,7 @@ fn constant_bool(code: &[u8]) -> Option<bool> {
 /// The string a binding always evaluates to, when its code is one constant:
 /// `Str`, then `Return`.
 fn constant_str<'a>(plan: &'a Plan, code: &[u8]) -> Option<&'a str> {
-    match code {
+    match plan.read_code(code).0 {
         [op, a, b, c, d, ret] if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 => {
             let id = u32::from_le_bytes([*a, *b, *c, *d]);
             plan.strings.get(id as usize).map(|_| plan.str(StrId(id)))
@@ -663,6 +807,88 @@ fn names_segment(s: &str) -> bool {
 #[cfg(test)]
 mod grant_tests {
     use super::{Capability, Uses};
+
+    #[test]
+    fn presence_grants_link_the_backend_including_optional_names() {
+        for policy in [
+            "user-presence",
+            "biometry-any",
+            "biometry-current-set",
+            "device-credential",
+        ] {
+            for optional in ["", " optional"] {
+                let grants =
+                    format!("secret.keep token {policy}{optional}\ndevice.local-auth purpose.lock");
+                let uses = Uses::NONE.with_grants(&grants);
+                assert!(uses.has(Capability::Io));
+                assert!(uses.has(Capability::Presence), "{grants}: {uses}");
+            }
+        }
+        for grants in ["", "secret.keep token", "device.local-auth purpose.lock"] {
+            assert!(!Uses::NONE.with_grants(grants).has(Capability::Presence));
+        }
+    }
+
+    #[test]
+    fn persisted_slots_link_storage_without_resources() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+        for persist in [false, true] {
+            let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let boolean = b.primitive(TypeKind::Bool);
+            let mut initial = Asm::new();
+            initial.bool(false);
+            let initial = b.code(initial);
+            let slot = b.slot("liked", boolean, initial);
+            b.set_slot_persist(slot, persist);
+            b.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            assert_eq!(
+                super::uses(&b.finish().unwrap()).has(Capability::Io),
+                persist
+            );
+        }
+    }
+
+    #[test]
+    fn kept_surfaces_link_storage_without_a_data_reader() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+
+        for keep in [false, true] {
+            let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let number = builder.primitive(TypeKind::Number);
+            let hud = builder.record("Hud", &[("count", number)]);
+            let world = builder.str("world");
+            let mut argument = Asm::new();
+            argument.str(world);
+            let argument = builder.code(argument);
+            let resource = builder.resource("hud", "exactSurface", &[argument], hud, None);
+            builder.surface("world", &[]);
+            if keep {
+                builder.set_resource_keep(resource);
+            }
+            builder.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            let plan = builder.finish().unwrap();
+            assert!(!plan.resources[resource.0 as usize].reader);
+            let uses = super::uses(&plan);
+            assert!(uses.has(Capability::Surfaces));
+            assert_eq!(uses.has(Capability::Io), keep);
+        }
+    }
 
     #[test]
     fn sqlite_grants_select_sql_storage_apart_from_other_io() {

@@ -136,7 +136,9 @@ impl Image {
         let gray;
         let pixels = if output.color_type == png::ColorType::GrayscaleAlpha {
             gray = rgba
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| [p[0], p[3]])
                 .collect::<Vec<_>>();
             &gray
@@ -229,7 +231,7 @@ fn dib_v5(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
         .rev()
         .zip(out[124..].chunks_exact_mut(stride))
     {
-        for (s, d) in source.chunks_exact(4).zip(dest.chunks_exact_mut(4)) {
+        for (s, d) in std::iter::zip(source.as_chunks::<4>().0, dest.as_chunks_mut::<4>().0) {
             let premul = |v: u8| ((u16::from(v) * u16::from(s[3]) + 127) / 255) as u8;
             d.copy_from_slice(&[premul(s[2]), premul(s[1]), premul(s[0]), s[3]]);
         }

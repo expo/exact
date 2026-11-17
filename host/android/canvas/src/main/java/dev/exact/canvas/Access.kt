@@ -19,9 +19,9 @@ import android.widget.FrameLayout
  * What the reader answers accessibility services with (LLP 1115.001 D13). What the reader shows is painted: the
  * page in one view, each bar and each surface of the top layer in a [Pane]. None of it says anything to TalkBack by
  * itself, so the view that holds it answers through an [AccessibilityNodeProvider] whose virtual nodes are exact2's
- * own statement of the tree ([Native.access], `host/linux/src/presenter/access.rs`): for each node its identity,
- * what it stands under, what it is, its state, its box, its range, its place in a set, and its name, value and
- * description, in the order a person reads.
+ * own statement of the tree ([Native.access], `host/painted/src/presenter/access.rs`): for each node its identity,
+ * what it stands under, what it is, its state, its box, its range, its place in a set and in a table, and its name,
+ * value and description, in the order a person reads.
  *
  * One [Access] answers for one view. The page's is the reader's root ([Root]), which holds the page's view, the
  * bars over it and the text fields under it: its nodes are the top app bar's, then the page's, then the navigation
@@ -35,8 +35,10 @@ import android.widget.FrameLayout
  *
  * **What reports itself is not reported twice.** A hosted text field is a real `EditText` ([Fields]): where
  * exact2's tree has it, this adds the field's own view as the child (no virtual node), and the field says it stands
- * there and is labelled by its accessible name ([Stand], [FieldText]). The page's view, the bars' panes and the
- * layers that hold them say nothing: they are not important for accessibility.
+ * there and is labelled by its accessible name ([Stand], [FieldText]). A media element's controller (Media3's
+ * `PlayerView`, LLP 1042.001 D11) stands at its node in the same way, named by its author's label over Media3's own
+ * words. The page's view, the bars' panes and the layers that hold them say nothing: they are not important for
+ * accessibility.
  *
  * **Nothing is asked while no service is on.** [Owner] calls [Native.access] only while the system says an
  * accessibility service is enabled ([ExactActivity]), and exact2 builds the tree only when asked.
@@ -57,6 +59,9 @@ internal class Access(private val host: View) {
         val id: Int, val parent: Int, val view: Int, val role: Int, val flags: Int,
         val x: Int, val y: Int, val w: Int, val h: Int,
         val min: Float, val max: Float, val now: Float, val at: Int, val of: Int,
+        /** Where a table's row or cell stands, from 1, and what it covers; a table's rows and columns in [rows] and
+         * [columns]. 0: none. */
+        val row: Int, val rows: Int, val column: Int, val columns: Int,
         val name: String, val value: String, val hint: String,
     ) {
         val children = ArrayList<Int>(0)
@@ -91,10 +96,11 @@ internal class Access(private val host: View) {
             val count = w[at++]
             repeat(count) {
                 val i = at
-                at += 14
+                at += 18
                 nodes.add(Node(
                     w[i], w[i + 1], w[i + 2], w[i + 3], w[i + 4], w[i + 5], w[i + 6], w[i + 7], w[i + 8],
-                    float(i + 9), float(i + 10), float(i + 11), w[i + 12], w[i + 13], string(), string(), string(),
+                    float(i + 9), float(i + 10), float(i + 11), w[i + 12], w[i + 13],
+                    w[i + 14], w[i + 15], w[i + 16], w[i + 17], string(), string(), string(),
                 ))
             }
         }
@@ -111,6 +117,13 @@ internal class Access(private val host: View) {
             if (parent == 0) info.setParent(host) else info.setParent(host, parent)
             if (name.isNotEmpty()) info.hintText = name
         }
+
+        /** A media controller's own node: its parent is the node it stands under, and the author's label, where
+         * there is one, is its description, over Media3's "Show player controls" (LLP 1115: the author's word wins). */
+        fun media(info: AccessibilityNodeInfo) {
+            if (parent == 0) info.setParent(host) else info.setParent(host, parent)
+            if (name.isNotEmpty()) info.contentDescription = name
+        }
     }
 
     private val manager = host.context.getSystemService(AccessibilityManager::class.java)
@@ -125,7 +138,11 @@ internal class Access(private val host: View) {
     var fields: Fields? = null
     /** Real views that report themselves and stand after the nodes (the page's hosted elements). */
     var others: () -> List<View> = { emptyList() }
+    /** A media node's controller, by the node's view id, where the reader hosts one ([Natives.controller]). */
+    var controller: (Int) -> View? = { null }
     private var placed = ArrayList<FieldText>()
+    /** Controllers told where they stand, and what each was told. */
+    private val standing = HashMap<View, Stand>()
     private val at = IntArray(2)
     private val box = Rect()
     /** `x_log_access=1` (exact2's EXACT_LOG_ACCESS): each statement, each node a service focuses or acts on and each
@@ -210,11 +227,34 @@ internal class Access(private val host: View) {
         for (n in nodes.values) if (n.role == FIELD) fields?.text(n.view)?.let { it.stand = Stand(host, n.parent, n.name); now.add(it) }
         for (f in placed) if (f !in now) f.stand = null
         placed = now
+        val held = HashSet<View>()
+        for (n in nodes.values) if (n.role == MEDIA) real(n)?.let { held.add(it) }
+        for (v in standing.keys.toList()) if (v !in held) { standing.remove(v); v.accessibilityDelegate = null }
+    }
+
+    /** The real view that stands for [n], if any: a hosted field's, or a media node's controller, which is told where
+     * it stands as it is found (a controller comes with `controls`, between statements). */
+    private fun real(n: Node): View? = when (n.role) {
+        FIELD -> fields?.text(n.view)
+        MEDIA -> controller(n.view)?.also { view ->
+            val stand = Stand(host, n.parent, n.name)
+            val was = standing[view]
+            if (was == null || was.parent != stand.parent || was.name != stand.name) {
+                standing[view] = stand
+                view.accessibilityDelegate = object : View.AccessibilityDelegate() {
+                    override fun onInitializeAccessibilityNodeInfo(v: View, info: AccessibilityNodeInfo) {
+                        super.onInitializeAccessibilityNodeInfo(v, info)
+                        standing[v]?.media(info)
+                    }
+                }
+            }
+        }
+        else -> null
     }
 
     val provider = object : AccessibilityNodeProvider() {
         override fun createAccessibilityNodeInfo(id: Int): AccessibilityNodeInfo? =
-            if (id == HOST) whole() else nodes[id]?.takeIf { it.role != FIELD }?.let { node(it) }
+            if (id == HOST) whole() else nodes[id]?.takeIf { real(it) == null }?.let { node(it) }
 
         override fun performAction(id: Int, action: Int, args: Bundle?): Boolean {
             if (id == HOST) return host.performAccessibilityAction(action, args)
@@ -238,7 +278,7 @@ internal class Access(private val host: View) {
                     n.has(BACKWARD) && Exact.accessAct(id, BACK, 0f)
                 android.R.id.accessibilityActionSetProgress -> {
                     val to = args?.takeIf { it.containsKey(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE) } ?: return false
-                    n.role == SLIDER && Exact.accessAct(id, SET, to.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE))
+                    n.has(SETTABLE) && Exact.accessAct(id, SET, to.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE))
                 }
                 else -> false
             }
@@ -260,15 +300,17 @@ internal class Access(private val host: View) {
     private fun under(info: AccessibilityNodeInfo, ids: List<Int>) {
         for (id in ids) {
             val n = nodes[id] ?: continue
-            // A hosted field is its own view, which says it stands here ([Stand]).
-            if (n.role == FIELD) fields?.text(n.view)?.let { info.addChild(it) } else info.addChild(host, id)
+            // A hosted field or a controller is its own view, which says it stands here ([Stand]).
+            val real = real(n)
+            if (real != null) info.addChild(real) else if (n.role != FIELD) info.addChild(host, id)
         }
     }
 
-    /** A one-cell item at [row], [column] of its collection, and a collection [rows] by [columns]. */
-    private fun item(row: Int, column: Int, selected: Boolean) =
-        if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.CollectionItemInfo(row, 1, column, 1, false, selected)
-        else Legacy.item(row, column, selected)
+    /** An item at [row], [column] of its collection, covering [rows] by [columns], and a collection [rows] by
+     * [columns]. */
+    private fun item(row: Int, column: Int, selected: Boolean, rows: Int = 1, columns: Int = 1, heading: Boolean = false) =
+        if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.CollectionItemInfo(row, rows, column, columns, heading, selected)
+        else Legacy.item(row, rows, column, columns, heading, selected)
     private fun collection(rows: Int, columns: Int, selection: Int) =
         if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.CollectionInfo(rows, columns, false, selection)
         else Legacy.collection(rows, columns, selection)
@@ -293,12 +335,14 @@ internal class Access(private val host: View) {
         info.addAction(if (focused == n.id) AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
         // Its words: what it says is its text, and what only names it is its description.
         when (n.role) {
-            IMAGE, SLIDER, PROGRESS, SCROLLER, TABLIST, GROUP, DROPDOWN -> if (n.name.isNotEmpty()) info.contentDescription = n.name
+            IMAGE, SLIDER, SPIN_BUTTON, PROGRESS, SCROLLER, TABLIST, GROUP, DROPDOWN, MEDIA -> if (n.name.isNotEmpty()) info.contentDescription = n.name
             UP -> info.contentDescription = n.name.ifEmpty { up(host.context) }
             EDIT -> { info.text = n.value; info.hintText = n.name; info.isEditable = true }
             else -> info.text = n.name
         }
-        if (n.role != EDIT && n.value.isNotEmpty()) { if (Build.VERSION.SDK_INT >= 30) info.stateDescription = n.value else Legacy.state(info, n.value) }
+        // A spin button's value is its number, as ARIA has it: TalkBack would read a float range's as "3.0".
+        val state = if (n.role == SPIN_BUTTON && n.value.isEmpty() && n.has(RANGE)) java.text.NumberFormat.getInstance().format(n.now.toDouble()) else n.value
+        if (n.role != EDIT && state.isNotEmpty()) { if (Build.VERSION.SDK_INT >= 30) info.stateDescription = state else Legacy.state(info, state) }
         if (n.hint.isNotEmpty()) info.tooltipText = n.hint
         when (n.role) {
             HEADING -> info.isHeading = true
@@ -309,7 +353,7 @@ internal class Access(private val host: View) {
                 if (n.of > 0) info.collectionItemInfo = item(0, n.at - 1, n.has(SELECTED))
             }
             TABLIST -> if (n.of > 0) info.collectionInfo = collection(1, n.of, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_SINGLE)
-            SLIDER, PROGRESS -> if (n.has(RANGE)) info.rangeInfo = if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.RangeInfo(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, n.min, n.max, n.now) else Legacy.range(n.min, n.max, n.now)
+            SLIDER, SPIN_BUTTON, PROGRESS -> if (n.has(RANGE)) info.rangeInfo = if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.RangeInfo(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, n.min, n.max, n.now) else Legacy.range(n.min, n.max, n.now)
             // An open select's menu, as a Spinner's popup list has it: all its options counted, one of them selected.
             LIST_BOX -> {
                 info.isScrollable = n.has(FORWARD) || n.has(BACKWARD)
@@ -321,8 +365,17 @@ internal class Access(private val host: View) {
                 val rows = n.children.maxOfOrNull { nodes[it]?.of ?: 0 } ?: 0
                 if (rows > 0) info.collectionInfo = collection(if (n.has(SIDEWAYS)) 1 else rows, if (n.has(SIDEWAYS)) rows else 1, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_NONE)
             }
+            // A table, as Chrome tells TalkBack an HTML table: its rows and columns, each cell its place and spans,
+            // a header cell a heading (LLP 1153 D7.3). A row is no item; its cells are.
+            TABLE -> if (n.rows > 0 && n.columns > 0) info.collectionInfo = collection(n.rows, n.columns, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_NONE)
+            CELL, COLUMN_HEADER, ROW_HEADER -> {
+                info.isHeading = n.role != CELL
+                if (n.row > 0 && n.column > 0) info.collectionItemInfo = item(n.row - 1, n.column - 1, false, n.rows, n.columns, n.role != CELL)
+            }
+            // A description list is a list of its terms, each placed among them below.
+            DESCRIPTION_LIST -> if (n.of > 0) info.collectionInfo = collection(n.of, 1, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_NONE)
         }
-        if (n.role != TAB && n.of > 0 && n.at > 0) {
+        if (n.role != TAB && n.role != CELL && n.role != COLUMN_HEADER && n.role != ROW_HEADER && n.of > 0 && n.at > 0) {
             val sideways = nodes[n.parent]?.has(SIDEWAYS) == true
             info.collectionItemInfo = item(if (sideways) 0 else n.at - 1, if (sideways) n.at - 1 else 0, n.role == OPTION && n.has(SELECTED))
         }
@@ -338,17 +391,18 @@ internal class Access(private val host: View) {
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
         if (n.has(EXPANDABLE) && n.has(CLICK)) info.addAction(if (n.has(EXPANDED)) AccessibilityAction.ACTION_COLLAPSE else AccessibilityAction.ACTION_EXPAND)
-        if (n.role == SCROLLER || n.role == SLIDER || n.role == LIST_BOX) {
+        // A range steps forward and back, as a SeekBar does; only a native one is set to a value (a drawn one steps by its author's keys).
+        if (n.role == SCROLLER || n.role == LIST_BOX || n.has(RANGE)) {
             val sideways = n.has(SIDEWAYS)
             if (n.has(FORWARD)) {
                 info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
-                if (n.role != SLIDER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_RIGHT else AccessibilityAction.ACTION_SCROLL_DOWN)
+                if (!n.has(RANGE)) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_RIGHT else AccessibilityAction.ACTION_SCROLL_DOWN)
             }
             if (n.has(BACKWARD)) {
                 info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
-                if (n.role != SLIDER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_LEFT else AccessibilityAction.ACTION_SCROLL_UP)
+                if (!n.has(RANGE)) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_LEFT else AccessibilityAction.ACTION_SCROLL_UP)
             }
-            if (n.role == SLIDER) info.addAction(AccessibilityAction.ACTION_SET_PROGRESS)
+            if (n.has(SETTABLE)) info.addAction(AccessibilityAction.ACTION_SET_PROGRESS)
         }
         under(info, n.children)
         return info
@@ -364,13 +418,29 @@ internal class Access(private val host: View) {
     fun ax(out: org.json.JSONArray, limit: Int): Int {
         val density = Device.scale(host.context)
         var more = 0
+        // What a controller holds, as Android reports it: each shown view a service would reach, under the nearest
+        // one above it that it reaches.
+        fun inside(view: View, parent: Int, n: Node) {
+            val group = view as? android.view.ViewGroup ?: return
+            for (k in 0 until group.childCount) {
+                val child = group.getChildAt(k)
+                if (!child.isShown) continue
+                if (!child.isImportantForAccessibility) { inside(child, parent, n); continue }
+                if (out.length() >= limit) { more++; continue }
+                val i = out.length()
+                out.put(element(i, parent, n, child.createAccessibilityNodeInfo(), density))
+                inside(child, i, n)
+            }
+        }
         fun walk(ids: List<Int>, parent: Int?) {
             for (id in ids) {
                 val n = nodes[id] ?: continue
-                val info = (if (n.role == FIELD) fields?.text(n.view)?.createAccessibilityNodeInfo() else provider.createAccessibilityNodeInfo(id)) ?: continue
+                val real = real(n)
+                val info = (if (real != null) real.createAccessibilityNodeInfo() else if (n.role == FIELD) null else provider.createAccessibilityNodeInfo(id)) ?: continue
                 if (out.length() >= limit) { more++; continue }
                 val i = out.length()
                 out.put(element(i, parent, n, info, density))
+                if (real != null && n.role == MEDIA) inside(real, i, n)
                 walk(n.children, i)
             }
         }
@@ -413,6 +483,8 @@ internal class Access(private val host: View) {
         said?.let { native.put("role", it) }
         if (info.isHeading) native.put("heading", true)
         info.rangeInfo?.let { native.put("range", org.json.JSONArray(listOf(it.min, it.max, it.current))) }
+        info.collectionInfo?.let { native.put("collection", org.json.JSONArray(listOf(it.rowCount, it.columnCount))) }
+        info.collectionItemInfo?.let { native.put("item", org.json.JSONArray(listOf(it.rowIndex, it.rowSpan, it.columnIndex, it.columnSpan))) }
         if (info.liveRegion != View.ACCESSIBILITY_LIVE_REGION_NONE) native.put("live", if (info.liveRegion == View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE) "assertive" else "polite")
         native.put("actions", org.json.JSONArray(info.actionList.mapNotNull { a ->
             when (a.id) {
@@ -479,7 +551,7 @@ internal class Access(private val host: View) {
             for (k in ids.indices.reversed()) {
                 val n = nodes[ids[k]] ?: continue
                 if (!inside(n)) continue
-                if (n.role == FIELD) return NONE
+                if (real(n) != null) return NONE
                 val inner = find(n.children)
                 if (inner != NONE) return inner
                 if (n.name.isNotEmpty() || n.has(CLICK) || n.role == UP || n.has(RANGE)) return n.id
@@ -537,8 +609,19 @@ internal class Access(private val host: View) {
         const val DROPDOWN = 16
         const val TOGGLE = 17
         const val UP = 18
+        const val TABLE = 19
+        const val ROW = 20
+        const val CELL = 21
+        const val COLUMN_HEADER = 22
+        const val ROW_HEADER = 23
+        const val CAPTION = 24
+        const val DESCRIPTION_LIST = 25
+        const val TERM = 26
+        const val DEFINITION = 27
         const val LIST_BOX = 28
         const val OPTION = 29
+        const val SPIN_BUTTON = 30
+        const val MEDIA = 31
 
         /** A node's flags (`presenter::access::flag`). */
         const val CLICK = 1
@@ -555,6 +638,7 @@ internal class Access(private val host: View) {
         const val POLITE = 1 shl 11
         const val ASSERTIVE = 1 shl 12
         const val RANGE = 1 shl 13
+        const val SETTABLE = 1 shl 14
 
         /** What changed of a node (`presenter::access::change`). */
         private const val SUBTREE = 1
@@ -578,6 +662,9 @@ internal class Access(private val host: View) {
             SWITCH -> "android.widget.Switch"
             RADIO -> "android.widget.RadioButton"
             SLIDER -> "android.widget.SeekBar"
+            // Android has no spin button. A SeekBar is what TalkBack steps by swiping up and down; it reads a
+            // NumberPicker that has no children of its own as a progress bar, which it does not step.
+            SPIN_BUTTON -> "android.widget.SeekBar"
             IMAGE -> "android.widget.ImageView"
             SCROLLER -> if (n.has(SIDEWAYS)) "android.widget.HorizontalScrollView" else "android.widget.ScrollView"
             PROGRESS -> "android.widget.ProgressBar"
@@ -587,7 +674,8 @@ internal class Access(private val host: View) {
             OPTION -> "android.widget.CheckedTextView"
             TOGGLE -> "android.widget.ToggleButton"
             UP -> "android.widget.ImageButton"
-            TAB -> "android.view.View"
+            // A video without a controller, as a hand-built app's TextureView is: its author's label alone.
+            TAB, MEDIA -> "android.view.View"
             else -> "android.view.ViewGroup"
         }
 
@@ -605,6 +693,12 @@ internal class Access(private val host: View) {
  * accessibility services for all of them ([Access]) while one is on. With none on it is a plain frame.
  */
 internal class Root(context: Context) : FrameLayout(context) {
+    init {
+        // The presenter supplies physical coordinates. An explicit direction survives locale changes;
+        // hosted EditTexts take their own computed direction from Fields.
+        layoutDirection = LAYOUT_DIRECTION_LTR
+    }
+
     val access = Access(this)
     /** Whether an accessibility service is on ([ExactActivity]). */
     var accessible = false

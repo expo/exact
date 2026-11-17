@@ -5,11 +5,20 @@ use super::*;
 mod advance_tests;
 #[path = "closed.rs"]
 pub(super) mod closed;
+#[cfg(test)]
+#[path = "inert_commit_tests.rs"]
+mod inert_commit_tests;
 #[path = "separator.rs"]
 pub(super) mod separator;
 
 /// The props `emit_layout` derives from a node's layout, not its author's.
-pub(super) const DERIVED_PROPS: [&str; 3] = ["fitScale", "flexGrows", "textOffset"];
+pub(super) const DERIVED_PROPS: [&str; 5] = [
+    "fitScale",
+    "flexGrows",
+    "textOffset",
+    "textLeft",
+    "textWidth",
+];
 
 impl<D: DataSource> Host<D> {
     /// Configure support, admit one batch, or run the frame tasks after admission.
@@ -35,13 +44,39 @@ impl<D: DataSource> Host<D> {
         out
     }
 
+    pub(super) fn write(&mut self, batch: Batch, error: Option<&str>) -> String {
+        self.write_batch(batch, error, false)
+    }
+
     /// Writes `batch` for the presenter; every batch with ops is written
     /// here. From a failed layout until one settles, whatever turn made the
     /// batch, its layout geometry is taken out, including what an earlier
     /// pass staged in it, and the settled layout sends it again. The failed
     /// layout's own batch also loses its motion samples; later batches keep
     /// theirs, as nothing would send them again.
-    pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
+    pub(super) fn write_batch(
+        &mut self,
+        mut batch: Batch,
+        error: Option<&str>,
+        finished: bool,
+    ) -> String {
+        self.quiet_collection = None;
+        #[cfg(test)]
+        {
+            self.batch_writes += 1;
+        }
+        if let Some(preloads) = &self.preloads {
+            if self.preload_accepted && !self.preload_content.is_empty() {
+                preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+            }
+            for fact in preloads.journal() {
+                self.runner.log(format!(
+                    "preload {} {} {:?}",
+                    fact.name, fact.origin, fact.outcome
+                ));
+            }
+            batch.journal.extend(self.runner.take_journal());
+        }
         if batch.layout_provisional {
             self.withhold_layout();
         }
@@ -50,25 +85,45 @@ impl<D: DataSource> Host<D> {
         }
         batch.facts = self.facts_moved();
         batch.landing = self.runner.data_timer_landing();
+        batch.stored = std::mem::take(&mut self.stored);
+        batch.announced = self.runner.store().take_announced();
         batch.wakelock = self.wakelock_moved();
         batch.orientationlock = self.orientation_moved();
         batch.must_finish = self.finish_moved();
         // A package view's displayed state, by the same rule, now the
         // presenter's covers are set (LLP 1133.008 D8 item 2).
         self.runner.report_views();
-        batch.finish(
-            self.runner.timer_due_ms(),
-            !self.engine.quiescent(),
+        // Every batch's exit, so an owed check is woken by whatever call comes at its deadline.
+        self.request_route_overflow();
+        let repeatable = finished && error.is_none() && batch.repeatable();
+        let deadline = self.route_overflow_due(if repeatable {
+            self.runner.collection_timer_due_ms()
+        } else {
+            self.runner.timer_due_ms()
+        });
+        self.finished_deadline =
+            (finished && error.is_none() && !self.resize_pending).then_some(deadline);
+        let key = repeatable.then(|| self.quiet_collection_key()).flatten();
+        let out = batch.finish(
+            deadline,
+            !self.engine.quiescent() || self.awaits_present(),
             self.runner.now_ms(),
             error,
-        )
+        );
+        if let Some(key) = key {
+            self.quiet_collection = Some((key, out.clone()));
+        }
+        out
     }
 
     /// An empty batch, which has no geometry to hold: a refusal's.
     pub(crate) fn refused(&self, error: Option<String>) -> String {
         let mut batch = Batch::new();
         self.state_onto(&mut batch);
-        let (timers, motion) = (self.runner.timer_due_ms(), !self.engine.quiescent());
+        let (timers, motion) = (
+            self.route_overflow_due(self.runner.timer_due_ms()),
+            !self.engine.quiescent() || self.awaits_present(),
+        );
         batch.finish(timers, motion, self.runner.now_ms(), error.as_deref())
     }
 
@@ -92,6 +147,9 @@ impl<D: DataSource> Host<D> {
         // These geometry rows will be withheld. Force a settled retry to
         // publish them even if the kernel's last guessed boxes compare equal.
         self.layout_withheld = true;
+        for (_, published) in self.flat.hits.values_mut() {
+            *published = false;
+        }
         for m in self.mirror.values_mut() {
             m.frame = None;
         }
@@ -103,6 +161,8 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(super) fn record_layout(&mut self, receipt: &exact_kernel::LayoutReceipt) {
+        self.route_overflow.dirty |=
+            !receipt.updated.is_empty() || !receipt.flow_changed.is_empty();
         self.pending_layout
             .extend(receipt.updated.iter().chain(&receipt.flow_changed).copied());
     }
@@ -262,8 +322,24 @@ impl<D: DataSource> Host<D> {
     }
 
     /// LLP 1083.000 D4: publish ranks independently of geometry, including zero.
+    /// Only a view has one: an inline run, an SVG element and an option's
+    /// content are painted by their paragraph, scene or control, so a
+    /// paragraph of a hundred runs sends no rank when an earlier node comes
+    /// or goes.
     pub(super) fn emit_ranks(&mut self, batch: &mut Batch) {
-        for (id, placed) in self.runner.kernel().paint_order() {
+        let order = self
+            .flat
+            .order
+            .take()
+            .unwrap_or_else(|| self.runner.kernel().paint_order());
+        for (id, placed) in order {
+            if self.flat.nodes.contains(&id)
+                || self.inline_runs.contains_key(&id)
+                || self.svg.is_element(id)
+                || self.option_part(id)
+            {
+                continue;
+            }
             if self.ranks.insert(id, placed.rank) != Some(placed.rank) {
                 batch.rank(id, placed.rank);
             }
@@ -273,8 +349,10 @@ impl<D: DataSource> Host<D> {
     /// The parent-relative frames and scroll content sizes that changed since
     /// the presenter last heard them.
     fn emit_layout(&mut self, batch: &mut Batch) -> Result<(), String> {
+        self.emit_flat_hits(batch);
         self.judge_list_moves();
         // Preserve publication order without a tree insertion for each touch.
+        self.queue_flat_descendants();
         let mut pending: Vec<_> = std::mem::take(&mut self.pending_layout)
             .into_iter()
             .collect();
@@ -293,9 +371,14 @@ impl<D: DataSource> Host<D> {
             let Some(node) = kernel.node(id) else {
                 continue;
             };
-            if node.is_inline_run() {
+            if node.is_inline_run() || self.flat.nodes.contains(&id) {
                 continue;
             }
+            let parent_id = if self.flat.nodes.is_empty() {
+                node.parent
+            } else {
+                self.presented_parent(id)
+            };
             let m = self.mirror.entry(id).or_default();
             // Silent list settling already updated kernel flow. Compare final
             // shapes with what the presenter saw, just like frames; destroyed
@@ -314,31 +397,26 @@ impl<D: DataSource> Host<D> {
             // D8.2): its root's frame as published, sent again when it
             // takes or loses the block, with the block's used size.
             let block = kernel.host_block_size(id);
-            let parent = node.parent.filter(|_| block.is_none());
+            let parent = parent_id.filter(|_| block.is_none());
             let parent = parent.and_then(|p| kernel.node(p)).map(|p| p.frame);
             let rel = relative(node.frame, parent);
-            // A sheet sized to its route's content reads that extent too
-            // (LLP 1075.003 §9.11). A route that scrolls itself keeps its
-            // scroll extent; any other (one that only clips too) is measured
-            // laid out alone (`emit_fitted`) whenever its subtree changes.
+            // The detent measures the route alone, independently of the
+            // extent its scroller needs in the current sheet.
             let overflow = style::effective_overflow(&node);
             let fits = node
                 .props
                 .str(PropId::NavigationDetent)
                 .is_some_and(|d| d.split(' ').any(|w| w == "fit-content"));
-            let scrolls = [overflow.0, overflow.1]
-                .iter()
-                .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
-            if fits && !scrolls {
+            if fits {
                 if !self.fit_routes.iter().any(|(r, _)| *r == id) {
                     self.fit_routes.push((id, None));
                 }
             } else {
                 self.fit_routes.retain(|(r, _)| *r != id);
+                m.fit_height = None;
             }
             visited.push(id);
-            let content = (!(fits && !scrolls)
-                && overflow != (Overflow::Visible, Overflow::Visible))
+            let content = (!fits && overflow != (Overflow::Visible, Overflow::Visible))
                 .then(|| content_size(&node, kernel));
             // An ancestor hint may change without touching the editor. Pass
             // its effective value through native containment, or clear it to
@@ -405,19 +483,25 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
-            // Where a flex text's lines go down its content box (CSS's
-            // anonymous flex item), which its paragraph is laid out from.
+            // The anonymous text item's placement within its content box.
             let offset = kernel.text_line_offset(&node);
-            let offset = (offset > 0.0).then(|| crate::style::num(offset));
-            if m.props.get("textOffset") != offset.as_ref() {
-                match offset {
-                    Some(value) => {
-                        batch.props(id, &[("textOffset", value.clone())], &[]);
-                        m.props.insert("textOffset", value);
-                    }
-                    None => {
-                        batch.props(id, &[], &["textOffset"]);
-                        m.props.remove("textOffset");
+            let item = kernel.text_item_box(&node);
+            for (name, value) in [
+                ("textOffset", (offset != 0.0).then_some(offset)),
+                ("textLeft", item.map(|item| item.x)),
+                ("textWidth", item.map(|item| item.width)),
+            ] {
+                let offset = value.map(crate::style::num);
+                if m.props.get(name) != offset.as_ref() {
+                    match offset {
+                        Some(value) => {
+                            batch.props(id, &[(name, value.clone())], &[]);
+                            m.props.insert(name, value);
+                        }
+                        None => {
+                            batch.props(id, &[], &[name]);
+                            m.props.remove(name);
+                        }
                     }
                 }
             }
@@ -450,7 +534,7 @@ impl<D: DataSource> Host<D> {
             if let Some(c) = content {
                 if self.layout_withheld || m.content != Some(c) {
                     m.content = Some(c);
-                    batch.content(id, c.0, c.1);
+                    batch.content(id, c.0, c.1, m.fit_height);
                 }
             }
             // @ref LLP 1063 — a moved box plays from where it was.
@@ -462,7 +546,9 @@ impl<D: DataSource> Host<D> {
         self.emit_extents(!visited.is_empty(), batch);
         self.snap_layout(batch);
         self.emit_sticky(batch);
+        self.place_timelines(batch);
         self.emit_fragments(batch);
+        self.emit_tables(batch);
         // A withheld batch held the scenes it placed: sent again
         if self.layout_withheld {
             self.svg.resend();
@@ -478,6 +564,17 @@ impl<D: DataSource> Host<D> {
         self.layout_withheld = false;
         self.emit_ranks(batch);
         self.emit_collections(batch)
+    }
+
+    /// Commits from an entry where only the commits move the tree
+    /// (`inert_entry`): a list's feedback, an event's action, an advance.
+    /// The flag ends with the commit, even when a panic unwinds through it
+    /// to a caller that keeps the host.
+    pub(super) fn in_inert_entry<T>(&mut self, commit: impl FnOnce(&mut Self) -> T) -> T {
+        self.inert_entry = true;
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| commit(self)));
+        self.inert_entry = false;
+        out.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     }
 
     /// An advance whose commits changed no node ([`Host::commit_tree`]): no
@@ -512,16 +609,15 @@ impl<D: DataSource> Host<D> {
         Ok(())
     }
 
-    /// The lists' metadata, when it moved. Layout and receipt work may change
-    /// the live window; motion-only ticks and stale feedback never traverse
-    /// the tree to collect it.
-    fn emit_collections(&mut self, batch: &mut Batch) -> Result<(), String> {
+    /// The lists' metadata, when it moved.
+    pub(super) fn emit_collections(&mut self, batch: &mut Batch) -> Result<(), String> {
         let collections = if self.native_mode() {
             self.collection_heads = None;
             self.native_collections_json()?
         } else {
-            // Revisions cover rows, extent and corrections. A newer feedback
-            // sequence alone needs no snapshot or serialization.
+            // Revisions cover rows, extent and corrections; the window also
+            // carries edge arming. A newer feedback sequence alone needs no
+            // snapshot or serialization.
             let mut heads = self.runner.collections_shallow();
             for head in &mut heads {
                 head.scroll_sequence = 0;
@@ -566,7 +662,7 @@ impl<D: DataSource> Host<D> {
             let m = self.mirror.entry(id).or_default();
             if self.layout_withheld || m.content != Some(c) {
                 m.content = Some(c);
-                batch.content(id, c.0, c.1);
+                batch.content(id, c.0, c.1, m.fit_height);
             }
         }
     }
@@ -581,7 +677,7 @@ impl<D: DataSource> Host<D> {
     /// need not move the route's box or extent), or when its width,
     /// resolved padding, border or cover changed (a block route's
     /// percentage padding moves nothing it publishes); else the last
-    /// measure stands. A scroller of a fixed length height that did not
+    /// measure stands. A nested scroller of a fixed length height that did not
     /// move holds what changes inside it, as it does in the trial.
     fn emit_fitted(&mut self, visited: &[ViewId], moved: &IdSet<ViewId>, batch: &mut Batch) {
         let kernel = self.runner.kernel();
@@ -625,18 +721,29 @@ impl<D: DataSource> Host<D> {
             if !self.layout_withheld && !refit.contains(&id) && last == Some(sig) {
                 continue;
             }
+            let overflow = style::effective_overflow(&node);
+            let scrolls = [overflow.0, overflow.1]
+                .iter()
+                .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto));
+            let extent = scrolls.then(|| content_size(&node, kernel));
             self.runner.count_kernel_layout();
-            let Some(height) = self.runner.kernel_mut().fit_content_height(key) else {
+            let height = self
+                .runner
+                .kernel_mut()
+                .fit_content_height(key)
+                .map(|h| (h - cover).max(0.0));
+            if height.is_some() {
+                self.fit_routes[i].1 = Some(sig);
+            }
+            let Some(c) = extent.or_else(|| height.map(|h| (sig[0], h))) else {
                 continue;
             };
-            self.fit_routes[i].1 = Some(sig);
-            let c = (sig[0], (height - cover).max(0.0));
             let m = self.mirror.entry(id).or_default();
-            // The detent reads the height alone: a route that does not
-            // scroll has no use for a new width.
-            if self.layout_withheld || m.content.map(|c| c.1) != Some(c.1) {
+            let fitted = height.or(m.fit_height);
+            if self.layout_withheld || m.fit_height != fitted || (scrolls && m.content != Some(c)) {
                 m.content = Some(c);
-                batch.content(id, c.0, c.1);
+                m.fit_height = fitted;
+                batch.content(id, c.0, c.1, m.fit_height);
             }
         }
     }
@@ -803,6 +910,7 @@ mod tests {
         let _ = h.measure_block(
             root,
             exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::AtMost(300.0),
             },
@@ -1184,5 +1292,100 @@ mod tests {
             "{:?}",
             grows(&batch)
         );
+    }
+
+    /// No rank goes to an inline run, an SVG element or a button's title, at
+    /// boot or when an earlier node comes or goes: none is a view.
+    #[test]
+    fn no_rank_goes_to_a_node_without_a_view() {
+        let plan = contract::compile(
+            r#"component App
+  state shown = false
+  action flip()
+    shown = not shown
+  view
+    column
+      if shown
+        box height=10
+      text testId="paragraph"
+        for i in range(20) key=i
+          text `w${i} ` opacity=0.5
+      svg width=20 height=20 testId="svg"
+        circle cx=10 cy=10 r=5 opacity=0.5
+      button "flip" testId="flip" press=flip
+"#,
+        )
+        .unwrap()
+        .encode();
+        let (mut h, boot) = Host::boot(
+            &plan,
+            NoData,
+            Box::new(exact_kernel::MonospaceMeasurer::default()),
+            390.,
+            844.,
+        )
+        .unwrap();
+        let kernel = h.runner.kernel();
+        let flip = id(&h, "flip");
+        let viewless: Vec<ViewId> = [id(&h, "paragraph"), id(&h, "svg"), flip]
+            .into_iter()
+            .flat_map(|parent| kernel.node(parent).unwrap().children())
+            .collect();
+        assert_eq!(viewless.len(), 22);
+        let ranked = |batch: &str| {
+            let v: serde_json::Value = serde_json::from_str(batch).unwrap();
+            (v["ops"].as_array().cloned().unwrap_or_default().into_iter())
+                .filter(|op| op["op"] == "rank")
+                .filter_map(|op| op["id"].as_u64())
+                .filter(|id| viewless.contains(&(*id as ViewId)))
+                .count()
+        };
+        assert!(boot.contains("\"op\":\"rank\""), "{boot}");
+        assert_eq!(ranked(&boot), 0, "{boot}");
+        for at in [10., 20.] {
+            let batch = h.dispatch_at(flip, exact_runner::Event::Press, at);
+            assert_eq!(ranked(&batch), 0, "{batch}");
+        }
+        // A run taken out of its paragraph is a view, ranked as a new one
+        // each time it becomes one.
+        let column = h
+            .runner
+            .kernel()
+            .node(id(&h, "paragraph"))
+            .unwrap()
+            .parent
+            .unwrap();
+        let outer = h.runner.kernel().node(column).unwrap().children();
+        let runs = viewless[..20].to_vec();
+        let (run, rest) = (runs[0], runs[1..].to_vec());
+        let rank = format!("{{\"op\":\"rank\",\"id\":{run},\"rank\":1}}");
+        for (seq, out) in [(100, true), (101, false), (102, true)] {
+            let (inner, outer) = if out {
+                (rest.clone(), [vec![run], outer.clone()].concat())
+            } else {
+                (runs.clone(), outer.clone())
+            };
+            let paragraph = id(&h, "paragraph");
+            let receipt = h
+                .runner
+                .kernel_mut()
+                .apply(
+                    0,
+                    seq,
+                    &[
+                        Op::SetChildren {
+                            id: paragraph,
+                            children: inner,
+                        },
+                        Op::SetChildren {
+                            id: column,
+                            children: outer,
+                        },
+                    ],
+                )
+                .unwrap();
+            let batch = h.commit(&[Timed { at_ms: 0., receipt }], None);
+            assert_eq!(batch.contains(&rank), out, "{batch}");
+        }
     }
 }

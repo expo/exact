@@ -2,6 +2,7 @@ use super::*;
 
 mod composition;
 mod delivery;
+mod image;
 mod storage_changed;
 
 use exact_data::storage;
@@ -561,6 +562,7 @@ fn forgotten_hands_a_child_its_own_tokens_and_lets_go_of_the_rest() {
 #[test]
 fn a_document_path_reads_and_writes_the_chosen_file_under_its_grant() {
     let dir = std::env::temp_dir().join(format!("exact-doc-storage-{}", std::process::id()));
+    let _remove = Paths(dir.clone());
     let folder = dir.join("notes");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("a.md"), "# A").unwrap();
@@ -687,6 +689,7 @@ fn a_chosen_file_is_copied_into_an_app_file_under_both_grants() {
 #[test]
 fn a_write_that_expects_what_it_read_is_refused_once_the_file_changed() {
     let dir = std::env::temp_dir().join(format!("exact-doc-expect-{}", std::process::id()));
+    let _remove = Paths(dir.clone());
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("drawing.json");
     std::fs::write(&file, "one").unwrap();
@@ -733,6 +736,7 @@ fn a_write_that_expects_what_it_read_is_refused_once_the_file_changed() {
 fn the_kept_list_reads_and_forgets_under_doc_keep() {
     use exact_data::documents::kept;
     let dir = std::env::temp_dir().join(format!("exact-doc-kept-{}", std::process::id()));
+    let _remove = Paths(dir.clone());
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("drawing.json");
     std::fs::write(&file, "one").unwrap();
@@ -783,6 +787,7 @@ fn the_kept_list_reads_and_forgets_under_doc_keep() {
 fn a_kept_file_renamed_between_launches_reads_through_its_kept_path() {
     use exact_data::documents::kept::{self, Identity};
     let dir = std::env::temp_dir().join(format!("exact-doc-renamed-{}", std::process::id()));
+    let _remove = Paths(dir.clone());
     std::fs::create_dir_all(&dir).unwrap();
     let dir = std::fs::canonicalize(&dir).unwrap();
     std::fs::write(dir.join("moved.md"), "kept").unwrap();
@@ -1166,187 +1171,6 @@ fn storage_forwards_source_console_lines_once() {
     assert!(source.take_logs().is_empty());
 }
 
-/// A Rust source's `fs.compressImage` (LLP 1069.002 A1.1): the operation a
-/// TypeScript source's `storage.fs.compressImage` runs, through ibex2's
-/// executor and the platform codec. On Apple the fixture comes back upright
-/// as a JPEG; elsewhere the call is refused as `unsupported`.
-#[test]
-fn compress_image_answers_a_rust_source_as_typescripts() {
-    let paths = Paths::new();
-    let mut host = Storage::new(Fixture::new());
-    paths.configure(&mut host);
-    host.activate().unwrap();
-    run(
-        &mut host,
-        storage::request("fs.mkdir", json!({"path":"app:/data/in"})),
-    )
-    .unwrap();
-    std::fs::write(
-        paths.0.join("data/in/photo.jpg"),
-        include_bytes!("../../../scripts/fixtures/picker/oriented-gps.jpg"),
-    )
-    .unwrap();
-    let compress = |to: &str, dimension: Json, bytes: Json| {
-        storage::request(
-            "fs.compressImage",
-            json!({"path":"app:/data/in/photo.jpg","destination":to,"maxDimension":dimension,"maxBytes":bytes}),
-        )
-    };
-    assert!(host.take_storage_changed());
-    let result = run(
-        &mut host,
-        compress("app:/data/out.jpg", json!(32), json!(2_000_000)),
-    );
-    assert_eq!(host.take_storage_changed(), result.is_ok());
-    if cfg!(target_vendor = "apple") {
-        let size = std::fs::metadata(paths.0.join("data/out.jpg"))
-            .unwrap()
-            .len();
-        assert_eq!(
-            result.unwrap(),
-            json!({"path":"app:/data/out.jpg","type":"image/jpeg","size":size,"width":24,"height":32})
-        );
-        let err = run(
-            &mut host,
-            compress("app:/data/unfit.jpg", json!(64), json!(1)),
-        )
-        .unwrap_err();
-        assert!(err.starts_with("compressImage: unfit: "), "{err}");
-        // A source over 64 MiB is the documented `too-large`, not the
-        // generic result limit its bounded read hits first.
-        let big = std::fs::File::create(paths.0.join("data/in/big.jpg")).unwrap();
-        big.set_len(64 * 1024 * 1024 + 1).unwrap();
-        let err = run(
-            &mut host,
-            storage::request(
-                "fs.compressImage",
-                json!({"path":"app:/data/in/big.jpg","destination":"app:/data/big-out.jpg","maxDimension":32,"maxBytes":2_000_000}),
-            ),
-        )
-        .unwrap_err();
-        assert!(err.starts_with("compressImage: too-large: "), "{err}");
-    } else {
-        assert_eq!(
-            result.unwrap_err(),
-            "compressImage: unsupported: no image codec"
-        );
-    }
-    for (request, expected) in [
-        (
-            compress("app:/cache/out.jpg", json!(32), json!(100)),
-            "denied: fs.write",
-        ),
-        (
-            compress("doc:/1/out.jpg", json!(32), json!(100)),
-            "compressImage: needs app:/ paths",
-        ),
-        (
-            compress("app:/data/x.jpg", json!(0), json!(100)),
-            "compressImage: invalid: maxDimension",
-        ),
-        (
-            compress("app:/data/x.jpg", json!(32), json!("100")),
-            "storage: maxBytes must be a number",
-        ),
-    ] {
-        let err = run(&mut host, request).unwrap_err();
-        assert!(err.starts_with(expected), "{err}");
-    }
-    assert!(!paths.0.join("data/x.jpg").exists());
-    assert!(!host.take_storage_changed());
-}
-
-/// A Rust source's `fs.transformImage` (LLP 1133.019 D17): the record is
-/// D14's options beside the two paths, and the answer is D14's record; and
-/// `fs.compressImage` takes the edit as TypeScript's call does (D15).
-#[test]
-fn transform_image_answers_a_rust_source_as_typescripts() {
-    let paths = Paths::new();
-    let mut host = Storage::new(Fixture::new());
-    paths.configure(&mut host);
-    host.activate().unwrap();
-    run(
-        &mut host,
-        storage::request("fs.mkdir", json!({"path":"app:/data/in"})),
-    )
-    .unwrap();
-    std::fs::write(
-        paths.0.join("data/in/photo.jpg"),
-        include_bytes!("../../../scripts/fixtures/picker/oriented-gps.jpg"),
-    )
-    .unwrap();
-    let transform = |to: &str, options: Json| {
-        let mut args = json!({"path":"app:/data/in/photo.jpg","destination":to});
-        args.as_object_mut()
-            .unwrap()
-            .extend(options.as_object().unwrap().clone());
-        storage::request("fs.transformImage", args)
-    };
-    assert!(host.take_storage_changed());
-    let result = run(
-        &mut host,
-        transform("app:/data/turned", json!({"rotate":90,"metadata":"none"})),
-    );
-    assert_eq!(host.take_storage_changed(), result.is_ok());
-    let cropped = run(
-        &mut host,
-        storage::request(
-            "fs.compressImage",
-            json!({"path":"app:/data/in/photo.jpg","destination":"app:/data/crop.jpg","maxDimension":100,"maxBytes":2_000_000,
-                "crop":{"x":0,"y":0,"width":24,"height":64}}),
-        ),
-    );
-    assert_eq!(host.take_storage_changed(), cropped.is_ok());
-    if cfg!(target_vendor = "apple") {
-        let size = std::fs::metadata(paths.0.join("data/turned.jpg"))
-            .unwrap()
-            .len();
-        assert_eq!(
-            result.unwrap(),
-            json!({"path":"app:/data/turned.jpg","type":"image/jpeg","size":size,"width":64,"height":48,
-                "colorSpace":"srgb","hdr":false,"metadata":"none"})
-        );
-        assert_eq!(cropped.unwrap()["width"], 24);
-        let err = run(
-            &mut host,
-            transform(
-                "app:/data/x.jpg",
-                json!({"crop":{"x":0,"y":100,"width":1,"height":1}}),
-            ),
-        )
-        .unwrap_err();
-        assert!(err.starts_with("transformImage: outside: "), "{err}");
-    } else {
-        assert_eq!(
-            result.unwrap_err(),
-            "transformImage: unsupported: no image codec"
-        );
-        assert!(cropped.is_err());
-    }
-    for (request, expected) in [
-        (
-            transform("app:/cache/out.jpg", json!({})),
-            "denied: fs.write",
-        ),
-        (
-            transform("doc:/1/out.jpg", json!({})),
-            "transformImage: needs app:/ paths",
-        ),
-    ] {
-        let err = run(&mut host, request).unwrap_err();
-        assert!(err.starts_with(expected), "{err}");
-    }
-    if cfg!(target_vendor = "apple") {
-        let err = run(
-            &mut host,
-            transform("app:/data/x.jpg", json!({"flip":"both"})),
-        )
-        .unwrap_err();
-        assert!(err.starts_with("transformImage: invalid: flip"), "{err}");
-    }
-    assert!(!paths.0.join("data/x.jpg").exists());
-}
-
 /// A Rust source's upload from a file (LLP 1108 D6 R2): the storage composer
 /// passes `Request::body_from` and `body_to` through untouched, the paths
 /// alone, for the host's executor to read and write when it runs the request.
@@ -1421,7 +1245,7 @@ fn image_cancellation_orders_publication_and_the_consumer_reads_only_success() {
             "app:/data/out.jpg",
             ImageRequest {
                 max_dimension: 1,
-                max_bytes: 100,
+                max_bytes: Some(100),
                 ..Default::default()
             },
         )

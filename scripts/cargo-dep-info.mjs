@@ -14,84 +14,220 @@ export function packageTests(dir) {
   return !existsSync(resolve(dir, 'app.json')) && existsSync(resolve(dir, 'package.json')) ? resolve(dir, 'test') : null;
 }
 
-/** A directory watch omits package tests; a separately named input is still read. */
-export function directoryInputNames(dir) {
+/** The package an explicit watch reads: the watched directory when it is one, else the installed
+ * package (`node_modules/<name>` or `node_modules/@scope/<name>`) that holds it. */
+function watchedPackage(path) {
+  path = resolve(path);
+  if (existsSync(resolve(path, 'package.json')) || existsSync(resolve(path, 'Cargo.toml'))) return path;
+  const parts = path.split(sep), at = parts.lastIndexOf('node_modules');
+  if (at < 0) return null;
+  const root = parts.slice(0, at + (parts[at + 1]?.startsWith('@') ? 3 : 2)).join(sep);
+  return existsSync(resolve(root, 'package.json')) ? root : null;
+}
+
+/** Resolve output aliases once for a collection of compiler inputs. */
+export const outputRoots = (outputs = []) => [...new Set(outputs.filter(Boolean).map(path => outputPath(resolve(path))))];
+
+/** Explicit package watches keep installed sources; incidental tool trees and actual outputs stay excluded. */
+export function watchOutput(outputs = [], inputs = [], roots = outputRoots(outputs)) {
+  const packages = [...new Set(inputs.map(watchedPackage).filter(Boolean))]
+    .map(path => ({path, real:outputPath(path)})).sort((a, b) => b.path.length - a.path.length);
+  const toolDirectory = name => /^(target|node_modules|\.git|\.exact|\.gradle|\.build)$/.test(name);
+  const appOutput = (path, directory) => {
+    const name = basename(path);
+    return ((directory && /^(dist|web-dist|dist-windows|artifacts)$/.test(name))
+      || beside(name) || beside(name, 'web-dist') || name === 'app.contract.d.ts')
+      && (existsSync(resolve(dirname(path), 'app.json')) || existsSync(resolve(dirname(path), 'app.contract')));
+  };
+  return (path, directory) => {
+    const name = basename(path);
+    if ((directory && toolDirectory(name)) || name === '.git' || name.startsWith('.exact-js-bake-')
+      || appOutput(path, directory)) return true;
+    let real; try { real = outputPath(path); } catch { real = resolve(path); }
+    const source = packages.find(root => under(root.path, resolve(path)) && under(root.real, real))?.real;
+    // Installed packages keep their node_modules ancestors; tool directories
+    // inside the package and aliases into other tool outputs remain excluded.
+    for (let at = real, isDir = directory; dirname(at) !== at && !under(at, resolve(path)); at = dirname(at), isDir = true) {
+      const installed = basename(at) === 'node_modules' && source && under(at, source);
+      if ((isDir && toolDirectory(basename(at)) && !installed) || appOutput(at, isDir)) return true;
+    }
+    return (directory && toolDirectory(basename(real))) || appOutput(real, directory) || roots.some(root => under(root, real));
+  };
+}
+
+/** A directory watch omits outputs and package tests; a separately named file remains an input. */
+export function directoryInputNames(dir, skip = watchOutput()) {
   const tests = packageTests(dir);
   return readdirSync(dir).sort().filter(name => {
-    if (resolve(dir, name) !== tests) return true;
-    return !statSync(tests).isDirectory();
+    const path = resolve(dir, name);
+    let directory = false; try { directory = statSync(path).isDirectory(); } catch { /* dangling link */ }
+    return !(directory && path === tests) && !skip(path, directory);
   });
 }
 
 const inputIdentity = info => [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs];
 
-/** File identity detects replacement at an old mtime; directory identity would include ignored test edits. */
-export function directoryInputSnapshot(path) {
+/** File identity detects replacement at an old mtime; directory identity would include ignored output edits. */
+export function directoryInputSnapshot(path, skip = () => false) {
+  let link;
+  try { if (lstatSync(path).isSymbolicLink()) link = readlinkSync(path); } catch { /* unavailable */ }
   try {
-    const entries = readdirSync(path).sort().map(name => {
+    const entries = directoryInputNames(path, skip).map(name => {
+      const child = resolve(path, name);
+      let target;
+      try { if (lstatSync(child).isSymbolicLink()) target = readlinkSync(child); } catch { /* unavailable */ }
+      const linked = target === undefined ? {} : {link:target};
       try {
-        const info = statSync(resolve(path, name)), directory = info.isDirectory();
-        return {name, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
-      } catch (error) { return {name, directory:false, error:error.code}; }
+        const info = statSync(child), directory = info.isDirectory();
+        return {name, ...linked, directory, ...(!directory ? {identity:inputIdentity(info)} : {})};
+      } catch (error) { return {name, ...linked, directory:false, error:error.code}; }
     });
-    return {path, entries};
+    return {path, ...(link === undefined ? {} : {link}), entries};
   } catch (error) {
     if (!['EACCES', 'EPERM', 'ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error;
     let identity = null; try { identity = inputIdentity(statSync(path)); } catch { /* unavailable */ }
-    return {path, entries:null, error:error.code, identity};
+    return {path, ...(link === undefined ? {} : {link}), entries:null, error:error.code, identity};
   }
 }
 
-/** Entry types filter removed tests; file identities and unreadable states preserve production changes. */
-export function packageDirectories(paths) {
-  const directories = new Map(), ancestors = new Set();
-  const visit = (path, tests) => {
-    let info, real;
-    try { info = statSync(path); } catch { return; }
-    // realpath fails on a directory without search permission; its snapshot then has no entries to descend into.
-    try { real = realpathSync(path); } catch { real = path; }
-    if (!info.isDirectory() || ancestors.has(real) || directories.has(path)) return;
-    const snapshot = directoryInputSnapshot(path);
-    directories.set(path, snapshot);
+/** The receipt and drive walk the same filtered entries and record links before stopping cycles. */
+export function* watchedTree(paths, {outputs = [], skip = () => false, roots = outputRoots(outputs)} = {}) {
+  const ancestors = new Set();
+  function* visit(path, excluded, top = false) {
+    let info, link;
+    try {
+      info = lstatSync(path);
+      if (info.isSymbolicLink()) { link = readlinkSync(path); info = statSync(path); }
+    } catch (error) { yield {path, link, error}; return; }
+    if ((!top || info.isDirectory()) && excluded(path, info.isDirectory())) return;
+    if (!info.isDirectory()) { yield {path, info, link}; return; }
+    let real; try { real = realpathSync(path); } catch { real = path; }
+    if (ancestors.has(real)) { yield {path, info, link, cycle:true}; return; }
+    const snapshot = directoryInputSnapshot(path, excluded);
+    yield {path, info, link, snapshot};
     ancestors.add(real);
-    for (const {name, directory} of snapshot.entries ?? []) {
-      const child = resolve(path, name);
-      if (directory && !/^(target|node_modules|\..*)$/.test(name) && child !== tests) visit(child, tests);
-    }
-    ancestors.delete(real);
-  };
-  for (const path of paths) { const tests = packageTests(path); if (tests) visit(resolve(path), tests); }
+    try { for (const entry of snapshot.entries ?? []) yield* visit(resolve(path, entry.name), excluded); }
+    finally { ancestors.delete(real); }
+  }
+  for (const path of paths) {
+    const output = watchOutput(outputs, [path], roots);
+    yield* visit(resolve(path), (path, directory) => output(path, directory) || skip(path, directory), true);
+  }
+}
+
+/** Inventories keep membership and link targets even when timestamps precede the build. */
+export function packageDirectories(paths, outputs = []) {
+  const directories = new Map();
+  for (const {snapshot} of watchedTree(paths, {outputs})) if (snapshot) directories.set(snapshot.path, snapshot);
+  // A watched file's `ENOTDIR` snapshot: a directory put in its place at an old mtime still differs.
+  for (const path of paths.map(path => resolve(path)).filter(path => !directories.has(path))) {
+    const snapshot = directoryInputSnapshot(path);
+    if (snapshot.error === 'ENOTDIR') directories.set(path, snapshot);
+  }
   return [...directories.values()];
+}
+
+/** Capture compiler inputs by bytes, directory membership and the targets written in links. */
+export function buildInputCollector({outputs, nameOf, hashes, replaced}) {
+  const inputs = new Map(), absent = new Map(), directories = new Map(), links = new Map();
+  let roots;
+  const add = (path, optional = false, declarer = null) => {
+    for (const node of watchedTree([path], {outputs, roots: roots ??= outputRoots(outputs)})) {
+      const {path:input, info, link, snapshot, error} = node;
+      if (replaced.has(input)) continue;
+      const name = nameOf(input, declarer);
+      if (link !== undefined) links.set(name, {name, path:input, target:link});
+      if (error) {
+        if (error.code === 'ELOOP' && link !== undefined) continue;
+        if (['ENOENT', 'ENOTDIR'].includes(error.code) && (optional || link !== undefined)) { absent.set(name, input); continue; }
+        throw new Error(`stale compiler dependency names missing or unreadable input ${input}; rebuild that Cargo unit`, {cause:error});
+      }
+      if (snapshot) {
+        if (!snapshot.entries) throw new Error(`unreadable compiler input ${input}`);
+        directories.set(name, {name, path:input, names:snapshot.entries.map(entry => entry.name)});
+      } else if (info.isFile() && inputs.get(name)?.path !== input) inputs.set(name, {name, path:input, sha256:hashes.of(input, info)});
+      else if (!node.cycle && !info.isFile()) throw new Error(`unsupported compiler input ${input}`);
+    }
+  };
+  return {inputs, absent, directories, links, add};
+}
+
+/** The inputs of the SwiftPM targets `product` consumes (`swift package
+ * describe`'s targets), added through a `buildInputCollector`. Each target's
+ * whole directory is added: SwiftPM compiles every source file under it, so
+ * a file added there is a new binary although no recorded file changed. */
+export function swiftTargetInputs(description, packageRoot, product, add) {
+  const pending = [product], seen = new Set();
+  while (pending.length) {
+    const name = pending.pop();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const unit = description.targets.find(target => target.name === name);
+    if (!unit) throw new Error(`Swift package has no ${name}`);
+    add(resolve(packageRoot, unit.path));
+    for (const resource of unit.resources ?? []) add(resolve(packageRoot, resource.path));
+    pending.push(...(unit.target_dependencies ?? []));
+  }
+}
+
+/** Source-owned binary inputs, relocated by root instead of the builder's
+ * absolute paths. Generated products and registry caches stay with the bake. */
+export function binarySourceInputs({files, directories, absent, links, inventories = [], metadata}, roots, outputs) {
+  const skip = watchOutput(outputs);
+  const located = path => {
+    if (skip(path)) return null;
+    const root = roots.find(root => under(root.contains ?? root.path, path));
+    return root ? { root: root.name, path: relative(root.path, path).split(sep).join('/') } : null;
+  };
+  const capture = (rows, pathOf, rest) => rows.flatMap(row => {
+    const at = located(pathOf(row));
+    return at ? [{ ...at, ...rest(row) }] : [];
+  });
+  // The receipt holds this as JSON: an undefined field is absent there too.
+  return { version: 1, metadata: JSON.parse(JSON.stringify(metadata)),
+    files: capture(files, file => file.path, file => ({ sha256: file.sha256 })),
+    directories: capture([...directories.values()], dir => dir.path, dir => ({ names: dir.names })),
+    absent: capture([...absent.values()], path => path, () => ({})),
+    links: capture([...links.values()], link => link.path, link => ({ sha256: createHash('sha256').update(link.target).digest('hex') })),
+    inventories: capture(inventories, inventory => inventory.path, inventory => ({ kind: inventory.kind, identity: inventory.identity })),
+  };
 }
 
 function outputPath(path) {
   try { return realpathSync(path); }
   catch (error) {
     if (!['ENOENT', 'ENOTDIR'].includes(error.code) || dirname(path) === path) throw error;
-    return resolve(outputPath(dirname(path)), basename(path));
+    let link; try { link = readlinkSync(path); } catch { /* not a link */ }
+    return link === undefined ? resolve(outputPath(dirname(path)), basename(path)) : outputPath(resolve(dirname(path), link));
   }
 }
 
 // Cargo follows directory links. Track their contents without reading outputs
 // through an alias or opening special files the baker may never use.
-function watchedDigest(paths, outputs, { inventory = false } = {}) {
+// With no pre-bake snapshot, `since` rejects inputs whose change time cannot precede the bake.
+export function watchedDigest(paths, outputs, { inventory = false, since = Infinity } = {}) {
   const hash = createHash('sha256');
   const excluded = outputs.map(outputPath), ancestors = new Set();
+  let stable = true;
+  const changed = info => { if (info.ctimeMs >= since) stable = false; };
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
-  const visit = (path, top = false, atRoot = false) => {
-    let info;
+  const visit = (path, top = false, atRoot = false, output = watchOutput(outputs, [path])) => {
+    let info, link;
     try {
       info = lstatSync(path);
       if (info.isSymbolicLink()) {
+        link = info;
         row(path, 'link', readlinkSync(path));
         info = statSync(path);
       }
       if (inventory && atRoot && basename(path).startsWith('.') && info.isDirectory()) return;
       const real = realpathSync(path);
       if (excluded.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
+      changed(info);
+      if (link) changed(link);
       if (info.isDirectory()) {
         if (ancestors.has(real)) { row(path, 'cycle'); return; }
-        const names = readdirSync(path).sort();
+        const names = inventory ? readdirSync(path).sort() : directoryInputNames(path, output);
         if (!inventory) row(path, 'directory', names);
         ancestors.add(real);
         try {
@@ -100,7 +236,7 @@ function watchedDigest(paths, outputs, { inventory = false } = {}) {
             if (inventory && (['.git', 'node_modules', 'target', 'dist'].includes(name)
               || name.startsWith('.exact-js-bake-') || name.endsWith('.test.contract')
               || (top && (name === 'dist-windows' || beside(name) || name === 'app.contract.d.ts')))) continue;
-            visit(resolve(path, name), false, top);
+            visit(resolve(path, name), false, top, output);
           }
         }
         finally { ancestors.delete(real); }
@@ -109,9 +245,23 @@ function watchedDigest(paths, outputs, { inventory = false } = {}) {
       } else if (info.isFile()) row(path, 'file', createHash('sha256').update(readFileSync(path)).digest('hex'));
       else row(path, info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo'
         : info.isBlockDevice() ? 'block-device' : info.isCharacterDevice() ? 'character-device' : 'other');
+      if (since !== Infinity) {
+        changed(lstatSync(path));
+        if (link) changed(statSync(path));
+      }
     } catch (error) {
+      if (info) changed(info);
+      if (link) changed(link);
       if (error.code === 'ELOOP') row(path, 'cycle');
-      else if (error.code === 'ENOENT' || error.code === 'ENOTDIR') row(path, 'missing');
+      else if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+        row(path, 'missing');
+        // A missing watch has no change time; its nearest existing parent records entry removal.
+        if (since !== Infinity) {
+          let parent = path;
+          do { parent = dirname(parent); } while (!existsSync(parent) && dirname(parent) !== parent);
+          changed(statSync(parent));
+        }
+      }
       // Directory watches include unused files. The baker decides which must be readable.
       else if (error.code === 'EACCES' || error.code === 'EPERM')
         row(path, 'unreadable', info?.mode, info?.size, info?.mtimeMs, info?.ctimeMs);
@@ -119,7 +269,7 @@ function watchedDigest(paths, outputs, { inventory = false } = {}) {
     }
   };
   for (const path of paths) visit(path, true);
-  return hash.digest('hex');
+  return stable ? hash.digest('hex') : null;
 }
 
 function sourceInventory(app, outputs) {
@@ -176,6 +326,21 @@ export function inputHashes(app, env) {
     },
   };
 }
+
+/** Products consumed by a later build step, captured before that step reads them. Their directories'
+ * inventories omit `outputs` and tool trees, as the freshness walk over them does. */
+export function inputProducts(paths, root, outputs = []) {
+  const products = [...new Set(paths)].filter(existsSync).map(path => {
+    const bytes = readFileSync(path);
+    return {path, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex'), input:true};
+  });
+  const directories = new Map(), output = watchOutput(outputs, [root]);
+  for (const {path} of products) for (let dir = dirname(path); dir !== root && under(root, dir); dir = dirname(dir)) {
+    if (!directories.has(dir)) directories.set(dir, directoryInputSnapshot(dir, output));
+  }
+  return {products, watchedDirectories:[...directories.values()]};
+}
+
 /** A bake's file watches, including optional inputs tracked by the builder rather than Cargo's recursive scan. */
 export function cargoInputPaths(stdout, base) {
   return [...new Set(stdout.split('\n').flatMap(line => {
@@ -287,7 +452,8 @@ export function unitDepInfo(message, workspace, metadata) {
   // Cargo copies libraries and executables out of deps, and aliases build scripts
   // in their build directory. Match the copied bytes; refuse ambiguous evidence.
   const custom = message.target.kind?.includes('custom-build');
-  for (const file of message.filenames.filter(path => /\.(rlib|a)$/.test(path) || path === message.executable || custom)) {
+  // A cdylib (a game's GPU crate: libX.dylib, libX.so) is copied the same way.
+  for (const file of message.filenames.filter(path => /\.(rlib|a|dylib|so)$/.test(path) || path === message.executable || custom)) {
     const directory = custom ? dirname(intermediate(file)) : resolve(dirname(intermediate(file)), 'deps');
     if (!existsSync(directory)) continue;
     const executable = custom || file === message.executable;
@@ -307,22 +473,24 @@ export function unitDepInfo(message, workspace, metadata) {
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) throw new Error(`ambiguous rustc unit dep-info for ${message.target.name}`);
   }
-  // The pinned nightly puts units under build/<package>/<hash>/out,
-  // reporting only the copied product. Watch archives use that layout too.
+  // Cargo 1.100 puts units under build/<package>/<hash>/out,
+  // reporting only the copied product, including executables.
   const pkg = metadata?.packages?.find(p => p.id === message.package_id);
-  for (const file of message.filenames.filter(path => /\.(wasm|a|rlib)$/.test(path))) {
+  for (const file of message.filenames.filter(path => /\.(wasm|a|rlib)$/.test(path) || path === message.executable)) {
     if (!pkg) continue;
     const directory = resolve(dirname(intermediate(file)), 'build', pkg.name);
     if (!existsSync(directory)) continue;
-    const bytes = readFileSync(file), matches = [], extension = file.slice(file.lastIndexOf('.'));
+    const executable = file === message.executable;
+    const bytes = readFileSync(file), matches = [], extension = executable ? (file.endsWith('.exe') ? '.exe' : '') : file.slice(file.lastIndexOf('.'));
     for (const hash of readdirSync(directory)) {
       if (!/^[a-f0-9]+$/.test(hash)) continue;
       const out = resolve(directory, hash, 'out');
       if (!existsSync(out)) continue;
-      const stem = basename(file, extension);
-      for (const name of readdirSync(out).filter(name => name === basename(file) || name === `${stem}-${hash}${extension}`)) {
+      const stem = executable ? message.target.name.replaceAll('-', '_') : basename(file, extension);
+      for (const name of readdirSync(out).filter(name => name === `${stem}${extension}` || name === `${stem}-${hash}${extension}`)) {
         const product = resolve(out, name);
-        const candidate = resolve(out, name.replace(/\.[^.]+$/, '.d').replace(extension === '.wasm' ? /^$/ : /^lib/, ''));
+        const unit = extension ? name.slice(0, -extension.length) : name;
+        const candidate = resolve(out, (executable || extension === '.wasm' ? unit : unit.replace(/^lib/, '')) + '.d');
         if (!existsSync(candidate) || statSync(product).size !== bytes.length || !readFileSync(product).equals(bytes)) continue;
         if (names(readFileSync(candidate, 'utf8'), candidate)) matches.push(candidate);
       }

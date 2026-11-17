@@ -24,7 +24,7 @@ export function heard(e: any) {
 
 /** What a read again leaves to the server: the tokens and the axes, the
  * files and the packages, and the components' params (a param's name
- * resolves before a design token's: tamber_serve.rs `lookup`). A change to
+ * resolves before a design token's: forma_serve.rs `lookup`). A change to
  * any is a full read. */
 const outlineOf = (ok: any) => JSON.stringify([ok.ir.axes, ok.ir.tuples, ok.ir.tokens.map((t: { name: string; kind: string; file?: string; package?: string }) => [t.name, t.kind, t.file ?? null, t.package ?? null]),
   (ok.ir.components ?? []).map((c: { identity: string; params?: { name: string; short?: string; token?: string }[] }) => [c.identity, (c.params ?? []).map(p => [p.name, p.short ?? null, p.token ?? null])]), Object.keys(ok.files ?? {}).sort(), ok.packages ?? null]);
@@ -71,7 +71,7 @@ export function again(kept: Kept | undefined, epoch: string, described: any, cha
 const BATCH_NAMES = 1024;
 
 /** Each of `names`' `resolve`, as one per name answers it (a refused one
- * `{error, reply: {error}}`): one `resolve` with `tokens` (tamber/1.17, the
+ * `{error, reply: {error}}`): one `resolve` with `tokens` (forma/1.17, the
  * third pass's #5 B), one snapshot and one fold at the server; else, from a
  * server before it, one per name, four at a time (a browser keeps
  * connections for the long poll and the other reads), until `still` is
@@ -84,8 +84,8 @@ export async function resolveAll<R extends { error: string; reply: any }>(call: 
     for (let at = 0; at < names.length && still(); at += BATCH_NAMES) out.push(...await resolveAll(call, names.slice(at, at + BATCH_NAMES), which, timeout, still));
     return out;
   }
-  const batch = await call('/__tamber', { method: 'resolve', tokens: names, ...which }, timeout), answers = batch.reply?.ok?.answers;
-  if (batch.reply?.error?.id === 'tamber-resolve-batch' && names.length > 1) {
+  const batch = await call('/__forma', { method: 'resolve', tokens: names, ...which }, timeout), answers = batch.reply?.ok?.answers;
+  if (batch.reply?.error?.id === 'forma-resolve-batch' && names.length > 1) {
     const half = Math.ceil(names.length / 2), first = await resolveAll(call, names.slice(0, half), which, timeout, still);
     return first.length < half ? first : [...first, ...await resolveAll(call, names.slice(half), which, timeout, still)];
   }
@@ -93,7 +93,7 @@ export async function resolveAll<R extends { error: string; reply: any }>(call: 
     return answers.map((a: any) => (a?.error ? { ...batch, error: String(a.error.message ?? 'The design server refused the token.'), reply: { error: a.error } } : { ...batch, reply: { ok: { ...a, files: batch.reply.ok.files } } }));
   }
   // Asked again by name only from a server before the batch, which refuses it for its missing `token` (in the words
-  // contract/cli/tests/it/tamber_resolve_batch.rs pins: a refusal carries no id to match on); any other
+  // contract/cli/tests/it/forma_resolve_batch.rs pins: a refusal carries no id to match on); any other
   // failure (no server, a timeout, the gateway's 504 while the batch still runs) is each name's answer. A request by
   // name that reached none stops the rest, each name not asked answering with it.
   if (!/^`token` is a string/.test(String(batch.reply?.error?.message ?? ''))) return names.map(() => batch);
@@ -102,7 +102,7 @@ export async function resolveAll<R extends { error: string; reply: any }>(call: 
   await Promise.all(Array.from({ length: Math.min(4, names.length) }, async () => {
     while (next < names.length && still() && !stalled) {
       const i = next++;
-      out[i] = await call('/__tamber', { method: 'resolve', token: names[i], ...which }, timeout);
+      out[i] = await call('/__forma', { method: 'resolve', token: names[i], ...which }, timeout);
       if (out[i].error && !out[i].reply?.error) stalled = out[i];
     }
   }));

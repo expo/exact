@@ -376,6 +376,45 @@ impl<B: Brush> LayoutData<B> {
         self.justified.clear();
     }
 
+    /// Exact patch 18: the cluster holding text byte `index`, with its run's
+    /// first glyph.
+    fn cluster_at(&self, index: usize) -> Option<(usize, usize)> {
+        let run = self.runs.iter().find(|r| r.text_range.contains(&index))?;
+        let c = run
+            .cluster_range
+            .clone()
+            .find(|&c| self.clusters[c].text_range(run).contains(&index))?;
+        Some((c, run.glyph_start))
+    }
+
+    /// Exact patch 18: `amount` more advance after the cluster holding text
+    /// byte `index`, as letter spacing adds it (`finish`): on the cluster and
+    /// its last glyph.
+    pub(crate) fn add_advance_after(&mut self, index: usize, amount: f32) {
+        let Some((c, glyph_start)) = self.cluster_at(index) else {
+            return;
+        };
+        let cluster = &mut self.clusters[c];
+        cluster.advance += amount;
+        if cluster.glyph_len != 0xFF {
+            let start = glyph_start + cluster.glyph_offset as usize;
+            let end = start + cluster.glyph_len as usize;
+            if let Some(last) = self.glyphs[start..end].last_mut() {
+                last.advance += amount;
+            }
+        }
+    }
+
+    /// Exact patch 18: `amount` more advance before the glyphs of the cluster
+    /// holding text byte `index`: on the cluster alone, so breaking and
+    /// content widths keep it with the cluster, and the host draws its
+    /// glyphs that much further on.
+    pub(crate) fn add_lead(&mut self, index: usize, amount: f32) {
+        if let Some((c, _)) = self.cluster_at(index) {
+            self.clusters[c].advance += amount;
+        }
+    }
+
     /// A tab's space glyph and stop interval.
     pub(crate) fn tab(&self, cluster: usize) -> Option<(u32, f32)> {
         let i = self.tabs.binary_search_by_key(&cluster, |t| t.0).ok()?;

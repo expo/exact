@@ -8,7 +8,7 @@
   "theme_color": "#2668d8",
   "background_color": "#f1f5fa",
   "app": { "id": "com.exact.markdown-stress", "name": "Markdown Stress" },
-  "rust": { "mode": "off" },
+  "rust": { "data": { "crate": "markdown-stress-data", "type": "markdown_stress_data::MarkdownStress" }, "mode": "off" },
   "host": {
     "web": {},
     "linux": {},

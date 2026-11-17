@@ -23,8 +23,10 @@ pub struct Anonymous<D> {
 }
 
 impl<D: DataSource> Anonymous<D> {
-    /// Wrap `inner`; its grants narrow to what a render holds.
-    pub fn new(inner: D) -> Self {
+    /// Wrap `inner`; its grants narrow to what a render holds, and it reads
+    /// what the browser's bundle reads (`render_web`).
+    pub fn new(mut inner: D) -> Self {
+        inner.render_web();
         let grants = held(inner.grants());
         Self { inner, grants }
     }
@@ -43,6 +45,23 @@ fn held(spec: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// LLP 1153.002 D2: a render's source reads what the browser's bundle
+/// reads, told so before anything activates it.
+#[cfg(test)]
+#[test]
+fn a_render_source_is_told_it_renders_the_web() {
+    struct Leaf(bool);
+    impl DataSource for Leaf {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn render_web(&mut self) {
+            self.0 = true;
+        }
+    }
+    assert!(Anonymous::new(Leaf(false)).inner.0);
 }
 
 #[cfg(test)]
@@ -71,6 +90,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
 
     // A render acquires no host storage, secrets or document handles.
     fn set_document_owner(&mut self, _: u64) {}
+
+    fn render_web(&mut self) {
+        self.inner.render_web();
+    }
 
     fn configure_storage(
         &mut self,
@@ -151,6 +174,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Answer, DataError> {
         self.inner.parse_for(target, store, source, args, outcome)
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.inner.launch()
+    }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &[]
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }
@@ -286,8 +316,28 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<(), DataError> {
         self.inner.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.inner.take_reports()
+    }
     fn take_logs(&mut self) -> Vec<String> {
         self.inner.take_logs()
+    }
+
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.inner
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.inner.module_identity(source)
     }
 
     fn take_aborted(&mut self) -> Vec<u64> {

@@ -1,0 +1,41 @@
+routes nav
+  home "/"
+    sheet "/sheet"
+    detail "/detail"
+
+shape Viewport
+  height: number
+
+component App
+  resource viewport = exactViewport() as shape Viewport
+  state overflowing = false
+  state clipped = false
+  state name = ""
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  action toggle
+    overflowing = !overflowing
+  action clip
+    clipped = !clipped
+  action edit(value: string)
+    name = value
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow interactive-widget="resizes-content" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationPresentation=(e.name == "sheet" ? "modal" : "push") navigationDetent="300 large" position="absolute" inset=0 display="block" overflow=(clipped ? "hidden" : "visible") testId=`route-${e.name}`
+          header height=(e.name == "detail" ? viewport.height : "auto") testId=`header-${e.name}`
+            h1 "Overflow"
+            button press=back id="back" testId=`back-${e.name}`
+              text "Back"
+            button press=toggle testId=`toggle-${e.name}`
+              text "Toggle overflow"
+            button press=clip testId=`clip-${e.name}`
+              text "Clip overflow"
+            link href="/sheet" testId=`open-${e.name}`
+              text "Sheet"
+            link href="/detail" testId=`push-${e.name}`
+              text "Push"
+          input value=name input=edit placeholder="Name" aria-label="Name" testId=`name-${e.name}`
+          view height=(e.name == "detail" ? 300 : (overflowing ? viewport.height + 200 : viewport.height / 2)) testId=`body-${e.name}`

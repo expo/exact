@@ -360,6 +360,7 @@ fn native_intersect_reads_a_block_where_its_host_shows_it() {
             .set_host_block(
                 route,
                 Some(exact_kernel::HostBlock {
+                    tactic: Default::default(),
                     width: is(300.0),
                     height: is(500.0),
                 }),
@@ -564,6 +565,7 @@ fn native_intersect_fixture(children: &str, overflow: &str) -> (Runner<NoData>, 
         .set_host_block(
             route,
             Some(exact_kernel::HostBlock {
+                tactic: Default::default(),
                 width: exact_kernel::BlockAxis::Is(300.0),
                 height: exact_kernel::BlockAxis::Is(500.0),
             }),

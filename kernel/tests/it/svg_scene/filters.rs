@@ -209,3 +209,43 @@ fn filters_resolve_into_one_chain() {
     // −10%/−10%/120%/120% of the box, grown by the blur's reach.
     assert!(f.region.0 <= 5.0 && f.region.2 >= 60.0, "{:?}", f.region);
 }
+
+/// Filter Effects 1 §5: each function consumes the previous one's result,
+/// so the region covers what the last function spreads from it.
+#[test]
+fn a_chains_region_grows_from_each_functions_result() {
+    use NodeType::*;
+    for (css, region) in [
+        (
+            "drop-shadow(10px 0 0 #000) drop-shadow(10px 0 0 #000)",
+            (10.0, 10.0, 30.0, 2.0),
+        ),
+        (
+            "drop-shadow(10px 0 0 #000) blur(2px)",
+            (4.0, 4.0, 32.0, 14.0),
+        ),
+    ] {
+        let mut d = Doc::new();
+        let svg = d.node(
+            Svg,
+            &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+            &[],
+        );
+        let rect = d.node(
+            SvgRect,
+            &[
+                (StyleId::X, "10"),
+                (StyleId::Y, "10"),
+                (StyleId::Width, "10"),
+                (StyleId::Height, "2"),
+                (StyleId::Filter, css),
+            ],
+            &[],
+        );
+        d.children(svg, &[rect]);
+        let k = d.kernel(&[svg], 100.0);
+        let s = resolve(&k, svg);
+        let filter = find(&s.items, rect).unwrap().filter.as_ref().unwrap();
+        assert_eq!(filter.region, region, "{css}");
+    }
+}

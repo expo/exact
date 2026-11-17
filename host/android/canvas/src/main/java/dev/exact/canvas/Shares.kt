@@ -25,6 +25,16 @@ internal object Shares {
     fun isShare(intent: Intent?): Boolean = intent?.action == Intent.ACTION_SEND || intent?.action == Intent.ACTION_SEND_MULTIPLE
 
     /**
+     * Whether the activity's [intent] arrives now, so that its share or URL is a location to go to. The system starts
+     * a task's base intent again when the person picks the task in Recents after Back finished its activity, marking
+     * it [Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY], and after it killed the process in the background, with the
+     * activity's saved state ([restored]). Either is a plain launch: a share is delivered once, when it arrives (LLP
+     * 1133.024 D2).
+     */
+    fun arrived(intent: Intent, restored: Boolean): Boolean =
+        !restored && (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) == 0
+
+    /**
      * The share [intent] carries as exact2 reads it, `{"target", "share"}`, or null when it is no share or the app
      * declares no target. Each file is a descriptor opened here through the intent's grant and detached for exact2,
      * which copies from it and closes it (`/proc/self/fd/<n>`): opening is a call to the sender's provider, copying

@@ -18,7 +18,11 @@
 // First, on this Mac, two Swift tests compiled with a package's Apple
 // sources: the capture session's notifications as the track's mute reason,
 // posted by hand (`interruptions.swift`, with media-capture's), and a failed
-// capture's answer to `takePhoto` (`photo-failure.swift`, with the camera's).
+// capture's answer to `takePhoto` (`photo-failure.swift`, with the camera's);
+// and on the iOS simulator, the system camera UI's answer
+// (`camera-app.swift`). The camera app (`takePhotoWithCameraApp`) is driven
+// under the agent, its sheet's `take` and `cancel`, and bound on the
+// simulator, which has no camera: `NotFoundError`.
 //
 // usage: bun packages/camera/test/apple.mjs [macos] [ios] [--sim <name|udid>] [--ask]
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
@@ -53,6 +57,27 @@ const { check, failed } = checker();
   rmSync(out, { recursive: true, force: true });
 }
 
+// The system camera UI's answer, compiled for the iOS simulator and run there (`simctl spawn`): the simulator has no
+// camera to show the UI with, so the delegate is handed what the picker would hand it.
+if (hosts.length === 0 || hosts.includes('ios')) {
+  const out = mkdtempSync(join(tmpdir(), 'exact-camera-ios-')), packages = resolve(root, 'packages'), target = 'arm64-apple-ios17.0-simulator';
+  const swiftc = (...args) => run('xcrun', ['-sdk', 'iphonesimulator', 'swiftc', '-target', target, '-parse-as-library', ...args], out);
+  swiftc('-emit-library', '-static', '-module-name', 'ExactPackage', '-emit-module', '-emit-module-path', join(out, 'ExactPackage.swiftmodule'),
+    resolve(root, 'host/apple/modules/ExactPackage.swift'), '-o', join(out, 'libExactPackage.a'));
+  swiftc('-swift-version', '5', '-I', out, '-L', out, '-lExactPackage', join(packages, 'camera/apple/Camera.swift'), join(packages, 'camera/apple/Viewfinder.swift'),
+    join(here, 'camera-app.swift'), '-o', join(out, 'camera-app'));
+  // The simulator the drive uses, booted and waited for (host/apple/devices.mjs, as build.mjs chooses it).
+  const { simulator } = await import(resolve(root, 'host/apple/devices.mjs'));
+  const device = simulator(sim);
+  const r = spawnSync('xcrun', ['simctl', 'spawn', device.udid, join(out, 'camera-app')], { encoding: 'utf8' }), lines = r.stdout.trim().split('\n');
+  for (const line of lines) {
+    const [verdict, where, ...name] = line.split(' ');
+    if (verdict === 'PASS' || verdict === 'FAIL') check(where, name.join(' '), verdict === 'PASS', line);
+  }
+  if (r.status !== 0 && !lines.some((l) => l.startsWith('FAIL '))) check('apple-camera-app', `runs to its end on ${device.name}`, false, `${r.status ?? r.signal}: ${r.stderr}`);
+  rmSync(out, { recursive: true, force: true });
+}
+
 const { app } = makeFixture(), name = basename(app);
 Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
@@ -74,6 +99,32 @@ const until = async (s, testId, want, ms = 15000) => {
   return got;
 };
 
+/** Under the agent the camera app is the person's sheet: `take` writes the agent's picture, `cancel` is AbortError.
+ *  macOS has no system camera UI. */
+async function cameraAppUnderTheAgent(host, where) {
+  const s = await open({ host, app: name, ...(host === 'ios' && sim ? { sim } : {}) });
+  try {
+    await s.tap('camera-app');
+    if (host === 'macos') {
+      const none = await until(s, 'shot-error', (t) => !!t);
+      return check(where, 'takePhotoWithCameraApp is NotSupportedError on a Mac', none === 'NotSupportedError', none);
+    }
+    const sheet = async () => (await s.state()).pending?.find((p) => p.device?.capability === 'camera-app');
+    let held = await sheet();
+    check(where, "under the agent the camera app waits on the person's sheet", !!held, JSON.stringify((await s.state()).pending));
+    if (held) await s.tap(`@${held.ticket}`, { choice: 'take' });
+    const taken = await until(s, 'shot', (t) => t && t !== 'none');
+    check(where, "take writes the agent's picture and answers a Photo", /^app:\/tmp\/camera\/1\.jpg image\/jpeg true [1-9]\d*x[1-9]\d*$/.test(taken ?? ''), taken);
+    await s.tap('camera-app');
+    held = await sheet();
+    if (held) await s.tap(`@${held.ticket}`, { choice: 'cancel' });
+    const cancelled = await until(s, 'shot-error', (t) => t === 'AbortError');
+    check(where, 'cancel is AbortError', cancelled === 'AbortError', cancelled);
+  } finally {
+    await s.close();
+  }
+}
+
 for (const host of hosts.length ? hosts : ['macos', 'ios']) {
   const where = host === 'ios' ? 'ios-simulator' : 'macos';
   run('bun', [resolve(root, 'host/apple/build.mjs'), ...(host === 'ios' ? ['--ios', ...(sim ? ['--sim', sim] : [])] : ['--bundle']), `${name}-apple`], root);
@@ -88,6 +139,7 @@ for (const host of hosts.length ? hosts : ['macos', 'ios']) {
   const plistAt = readdirSync(resolve(app, 'target'), { recursive: true }).find((f) => host === 'ios' ? /iphonesimulator|ios-sim/.test(f) && f.endsWith('.app/Info.plist') : /macos/.test(f) && f.endsWith('-Info.plist'));
   const plist = plistAt ? JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(app, 'target', plistAt)])) : {};
   check(where, 'Info.plist carries NSCameraUsageDescription with the purpose', plist.NSCameraUsageDescription === 'The conformance suite takes a photo.', plistAt ?? 'no Info.plist under target/');
+  await cameraAppUnderTheAgent(host, where);
   const s = await open({ host, app: name, bind: 'media-capture,camera', ...(host === 'ios' && sim ? { sim } : {}) });
   try {
     const state = await s.state();
@@ -98,6 +150,9 @@ for (const host of hosts.length ? hosts : ['macos', 'ios']) {
       await s.tap('open');
       const none = await until(s, 'open-error', (t) => !!t);
       check(where, 'getUserMedia(video) fails NotFoundError and asks nothing', none === 'NotFoundError', none);
+      await s.tap('camera-app');
+      const noCameraApp = await until(s, 'shot-error', (t) => !!t);
+      check(where, 'takePhotoWithCameraApp: the system camera UI has no camera here, NotFoundError', noCameraApp === 'NotFoundError', noCameraApp);
       continue;
     }
     check(where, 'cameraStatus answers from AVFoundation', /^true (prompt|granted|denied)$/.test(status ?? ''), status);

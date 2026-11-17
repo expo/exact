@@ -2,12 +2,11 @@
 //!
 //! @ref LLP 1008 §1
 //!
-//! After every commit the host walks the receipt (destroy, create, props, style, children — the
-//! web host's rule: the view tree mirrors the kernel tree), feeds the motion engine the commit
-//! (LLP 1003 §4), and seeks it to the app's clock before laying out the roots under the viewport.
-//! Layout projects the explicitly registered Height, then emits changed frames and scroll content
-//! sizes; other presentation values follow. The kernel is the single source of truth; the mirror
-//! is a memo of what the presenter has been told.
+//! Each commit projects receipts onto views, seeks motion to the app's clock,
+//! and lays out the kernel roots. Eligible iOS list-row wrappers are omitted
+//! from the view tree (LLP 1171 D4). Layout projects the registered Height,
+//! then emits changed frames and scroll content sizes; other presentation
+//! values follow. The mirror remembers what the presenter has been told.
 
 #[path = "host_replies.rs"]
 mod replies;
@@ -35,8 +34,14 @@ mod arrange_group_tests;
 mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
+#[path = "canvas_capture.rs"]
+mod canvas_capture;
+#[path = "canvas_performance.rs"]
+mod canvas_performance;
 #[path = "colors.rs"]
 mod colors;
+#[path = "commit.rs"]
+mod commit;
 #[path = "content_region/host.rs"]
 mod content_region_host;
 #[cfg(test)]
@@ -49,6 +54,8 @@ mod first_frame;
 #[cfg(test)]
 #[path = "first_frame_tests.rs"]
 mod first_frame_tests;
+#[path = "flat.rs"]
+mod flat;
 #[path = "flights.rs"]
 mod flights;
 #[path = "fold.rs"]
@@ -71,12 +78,18 @@ mod paint;
 #[path = "paragraph.rs"]
 mod paragraph;
 use paragraph::props_for;
+#[path = "forma.rs"]
+mod forma;
 #[path = "persistence.rs"]
 mod persistence;
 #[path = "presence.rs"]
 mod presence;
-#[path = "tamber.rs"]
-mod tamber;
+#[path = "renew.rs"]
+mod renew;
+#[path = "route_overflow.rs"]
+mod route_overflow;
+#[path = "route_parts.rs"]
+mod route_parts;
 #[cfg(test)]
 #[path = "transform_drag_tests.rs"]
 mod transform_drag_tests;
@@ -93,6 +106,9 @@ mod activation_tests;
 #[cfg(test)]
 #[path = "box_motion_tests.rs"]
 mod box_motion_tests;
+#[cfg(test)]
+#[path = "filter_motion_tests.rs"]
+mod filter_motion_tests;
 #[path = "layout.rs"]
 mod layout;
 use layout::{content_size, published_content_box};
@@ -118,6 +134,16 @@ mod svg_lower;
 #[cfg(test)]
 #[path = "svg_tests.rs"]
 mod svg_tests;
+#[path = "tables.rs"]
+mod tables;
+#[cfg(test)]
+#[path = "tables_tests.rs"]
+mod tables_tests;
+#[path = "timeline_scroll.rs"]
+mod timeline_scroll;
+#[cfg(test)]
+#[path = "timeline_scroll_tests.rs"]
+mod timeline_scroll_tests;
 #[path = "transform_drag.rs"]
 mod transform_drag;
 #[path = "transform_drag_wire.rs"]
@@ -155,6 +181,7 @@ pub(crate) struct Mirror {
     children: Box<[ViewId]>,
     frame: Option<(f32, f32, f32, f32)>,
     content: Option<(f32, f32)>,
+    fit_height: Option<f32>,
     flow: Box<[exact_kernel::FlowShape]>,
     /// Boxed: only a text field has one, and inline it was a quarter of the mirror.
     field_content: Option<Box<crate::batch::ContentBox>>,
@@ -167,6 +194,11 @@ pub(crate) struct Mirror {
 
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
+    pub(crate) preloads: Option<Box<dyn crate::launch_preloads::LaunchWork>>,
+    pub(crate) launch_store: Option<std::sync::Arc<crate::launch_preloads::StoreWatch>>,
+    boot_requests: Vec<RequestOut>,
+    preload_content: Vec<String>,
+    preload_accepted: bool,
     runner: Runner<D>,
     admitting_frame: bool,
     font_hook: Option<(crate::measure::FontsFn, *mut std::ffi::c_void, usize)>,
@@ -182,6 +214,7 @@ pub struct Host<D: DataSource> {
     style_texts: paragraph::StyleTexts,
     keys: IdMap<NodeKey, ViewId>,
     inline_runs: IdMap<ViewId, (ViewId, Vec<EventKind>)>,
+    flat: flat::Flat,
     /// Hatch words: those journaled as viewless here, and those the plan does not give this platform.
     hatches: paragraph::HatchWords,
     /// SVG scenes and lowered CSS animations (LLP 1055 D4, D7).
@@ -193,21 +226,29 @@ pub struct Host<D: DataSource> {
     /// Canvas draws run in a turn of their own (`exact_canvas_draw`), not in
     /// the turns main waits on (LLP 1072 §8.5).
     canvas_deferred: bool,
+    /// This session's display scale for Canvas 2D (LLP 1056 D4).
+    canvas_scale: f64,
     dirty_paragraphs: BTreeSet<ViewId>,
     pending_layout: IdSet<NodeKey>,
     layout_withheld: bool,
     /// A layout failed or a commit's did not run: `inert_layout` lays out.
     layout_owed: bool,
-    /// Committing an advance's or a presented frame's timers, answers and
-    /// frame tasks ([`Host::advanced`]), where only their commits move the tree.
-    in_advance: bool,
+    /// Committing where only the commits move the tree: an advance
+    /// ([`Host::advanced`]), a list's feedback, an event's action. Any other
+    /// entry changes what layout reads besides the tree.
+    inert_entry: bool,
     /// Routes whose `navigationDetent` names `fit-content` (LLP 1075.003
     /// §9.11), each with its width, resolved padding, border and bottom cover when last measured.
     fit_routes: Vec<(ViewId, Option<[f32; 10]>)>,
     /// Each sticky node's constraint as the presenter last heard it (LLP 1083).
     stickies: IdMap<ViewId, exact_kernel::StickyConstraint>,
+    /// The scrollers scroll and view timelines read (LLP 1057.003 D5).
+    timeline_scrolls: timeline_scroll::TimelineScrolls,
     /// Each multi-column record as the presenter last heard it (LLP 1093 D7).
     fragments: IdMap<ViewId, String>,
+    /// Each table's and table part's record as the presenter last heard it
+    /// (`tables.rs`).
+    tables: IdMap<ViewId, String>,
     ranks: IdMap<ViewId, i64>,
     roots: Vec<ViewId>,
     /// Last published common collection snapshot; refreshed only after layout.
@@ -216,6 +257,9 @@ pub struct Host<D: DataSource> {
     engine: Engine,
     paint: paint::Paint,
     holds: BTreeMap<u64, HoldToken>,
+    /// Canvas captures the presenter is encoding, or refused (`canvas_capture.rs`).
+    canvas_capture_waiting: Vec<(RequestOut, Option<String>)>,
+    canvas_captures: BTreeMap<u64, canvas_capture::Pending>,
     height_owner: Option<NodeKey>,
     height_handles: BTreeMap<NodeKey, HeightHandle>,
     height_auto_owned: bool,
@@ -239,13 +283,19 @@ pub struct Host<D: DataSource> {
     #[cfg(test)]
     pub(crate) layout_calls: usize,
     viewport: (f32, f32),
+    route_overflow: route_overflow::Journal,
     now_ms: f64,
     /// Where the app's kept secrets, and the runner's kept answers, go after
     /// a commit (LLP 1018 D6); `None` keeps them in the runner only (a test,
     /// or grants that do not parse).
     secrets: Option<Box<dyn crate::store::KeptStore>>,
     pending_store_writes: Vec<exact_runner::StoreWrite>,
+    /// A store write landed since the last batch was written (`Batch::stored`).
+    stored: bool,
     pending_store_stamps: std::collections::BTreeMap<String, exact_data::secrets::Stamp>,
+    /// What the disk held for each owed name when its write first failed.
+    pending_store_bases: std::collections::BTreeMap<String, Option<Vec<u8>>>,
+    reported_store_failures: BTreeSet<String>,
     data_activated: bool,
     /// The source's activation, run ahead of `activate_data` by `prepare_data`.
     source_prepared: Option<Result<(), String>>,
@@ -255,6 +305,15 @@ pub struct Host<D: DataSource> {
     /// The session's wake (`listen`), which a pending activation leaves with the data source.
     preload_wake: exact_runner::PreloadWake,
     doc_watch: Option<crate::doc_watch::DocWatch>,
+    /// Deadline at the last successful finish with no pending resize notifications;
+    /// only a receipt-free collection report can reuse its settled passes.
+    finished_deadline: Option<Option<f64>>,
+    quiet_collection: Option<([u64; 8], String)>,
+    resize_pending: bool,
+    #[cfg(test)]
+    finish_passes: usize,
+    #[cfg(test)]
+    pub(crate) batch_writes: usize,
     /// The update store's last line this host journaled, so a sync after a check writes it once.
     update_line: Option<String>,
     delivery: Option<&'static crate::delivery::Hooks>,
@@ -293,7 +352,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot carrying an earlier host's state (the dev reload, LLP 1007 §6):
     /// slots by name where their types still fit, settled resources where
     /// their arguments still match, the clock.
@@ -316,7 +374,6 @@ impl<D: DataSource> Host<D> {
             None,
         )
     }
-
     /// Boot with the app's kept secrets (LLP 1018 D6): `snapshot` is what
     /// the platform's store holds under the granted names, read before this
     /// call (a carried boot takes the carried store instead); `secrets` is
@@ -355,7 +412,6 @@ impl<D: DataSource> Host<D> {
         host.commit_boot();
         Ok((host, batch))
     }
-
     /// Boot with one action over the accepted plan before its first layout.
     /// The Apple ABI uses this for synchronous font registration without decoding the plan twice.
     #[allow(clippy::too_many_arguments)]
@@ -467,7 +523,9 @@ impl<D: DataSource> Host<D> {
             data.configure_secrets(shared)
                 .map_err(|error| HostError::Layout(format!("shared secrets: {error:?}")))?;
         }
-        let mut runner = Runner::boot_with_delivery_linked(
+        // A display presents its pictures: `presented` waits for the first's.
+        let was = exact_runner::page::set_awaits_present(start_on_frame);
+        let runner = Runner::boot_with_delivery_linked(
             links.runner,
             plan,
             data,
@@ -477,8 +535,10 @@ impl<D: DataSource> Host<D> {
             facts,
             viewport,
             launch,
-        )
-        .map_err(HostError::Runner)?;
+        );
+        exact_runner::page::set_awaits_present(was);
+        let mut runner = runner.map_err(HostError::Runner)?;
+        runner.read_only_store(crate::watch_sync::read_only_names());
         // Its own roles from here, not those of the session it replaces (a
         // caller's scope is that one's; LLP 1121 stage 5).
         let _roles = runner.bind_roles();
@@ -515,12 +575,24 @@ impl<D: DataSource> Host<D> {
             .nodes
             .iter()
             .any(|n| n.node_type == NodeType::Head as u8);
+        let preloads = links.io.and_then(|io| (io.preloads)());
+        let (boot_requests, preload_content) = preloads
+            .as_ref()
+            .map(|p| p.settle(&mut runner))
+            .transpose()?
+            .unwrap_or_default();
         let mut host = Host {
+            launch_store: None,
+            preloads,
+            boot_requests,
+            preload_content,
+            preload_accepted: false,
             has_heads,
             head_title: None,
             head_edited: false,
             language: None,
             hatches: paragraph::HatchWords::of(runner.plan()),
+            flat: flat::Flat::new(layout.flat_nodes, runner.plan()),
             runner,
             admitting_frame: false,
             font_hook,
@@ -533,14 +605,17 @@ impl<D: DataSource> Host<D> {
             canvas_held: IdSet::default(),
             canvas_kept: Default::default(),
             canvas_deferred: false,
+            canvas_scale: layout.canvas_scale.unwrap_or(canvas2d::DEFAULT_SCALE),
             dirty_paragraphs: BTreeSet::new(),
             pending_layout: IdSet::default(),
             layout_withheld: false,
             layout_owed: false,
-            in_advance: false,
+            inert_entry: false,
             fit_routes: Vec::new(),
             stickies: IdMap::default(),
+            timeline_scrolls: Default::default(),
             fragments: IdMap::default(),
+            tables: IdMap::default(),
             ranks: IdMap::default(),
             roots: Vec::new(),
             collections_json: "[]".into(),
@@ -558,6 +633,8 @@ impl<D: DataSource> Host<D> {
             },
             paint: paint::Paint::default(),
             holds: BTreeMap::new(),
+            canvas_capture_waiting: Vec::new(),
+            canvas_captures: BTreeMap::new(),
             height_owner: None,
             height_handles: BTreeMap::new(),
             height_auto_owned: false,
@@ -579,6 +656,7 @@ impl<D: DataSource> Host<D> {
             #[cfg(test)]
             layout_calls: 0,
             viewport: (viewport.width as f32, viewport.height as f32),
+            route_overflow: Default::default(),
             now_ms: 0.0,
             data_activated: false,
             source_prepared: None,
@@ -587,9 +665,19 @@ impl<D: DataSource> Host<D> {
             store_retry_names: Vec::new(),
             preload_wake: Default::default(),
             doc_watch: None,
+            finished_deadline: None,
+            quiet_collection: None,
+            resize_pending: false,
+            #[cfg(test)]
+            finish_passes: 0,
+            #[cfg(test)]
+            batch_writes: 0,
             secrets,
             pending_store_writes: Vec::new(),
+            stored: false,
             pending_store_stamps: Default::default(),
+            pending_store_bases: Default::default(),
+            reported_store_failures: BTreeSet::new(),
             update_line: None,
             delivery,
             colors_seen: None,
@@ -602,6 +690,7 @@ impl<D: DataSource> Host<D> {
         let order = host.preorder();
         host.close_top_layer(&order);
         host.cover_root_tablist();
+        host.prepare_flat(&mut batch);
         let handlers = host.runner.handlers();
         for id in &order {
             host.create(*id, handlers.get(id).map_or(&[], Vec::as_slice), &mut batch);
@@ -663,20 +752,21 @@ impl<D: DataSource> Host<D> {
         let batch = host.write(batch, None);
         Ok((host, batch))
     }
-
     /// Release effects only after the containing app accepted every candidate.
     pub(crate) fn commit_boot(&mut self) {
         if let Some(note) = self.delivery.and_then(|hooks| (hooks.take_note)()) {
             self.runner.log(note);
         }
         self.persist();
+        self.preload_accepted = true;
+        if let Some(preloads) = &self.preloads {
+            preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+        }
     }
-
     /// The runner.
     pub fn runner(&self) -> &Runner<D> {
         &self.runner
     }
-
     /// The runner, mutably: an auth session's arm (LLP 1069.006).
     pub fn runner_mut(&mut self) -> &mut Runner<D> {
         &mut self.runner
@@ -688,17 +778,16 @@ impl<D: DataSource> Host<D> {
     /// `cancel`, LLP 1069.002 D9). Also the picker's `showPicker` hold and
     /// `pickedPath`, whose reply adds the file to copy into. A `share` hold
     /// delivers nothing but the journal line the runner writes (LLP 1069.003
-    /// D6). `appFile` names the file behind an `app:/` path, what an export
-    /// copies from (LLP 1069.010 D3); `appRoots` the three roots, which the
+    /// D6). `appRoots` names the three roots, which the
     /// Swift host resolves an image's `app:/` source against (LLP 1069.002
     /// D7); `shareFile` a share's confined copy (LLP 1125 D12). `None` else.
     pub fn answer_hold(&mut self, request: &str) -> Option<String> {
         let op = exact_runner::agent::field_str(request, "op");
-        if let Some(op @ ("appFile" | "shareFile")) = op.as_deref() {
-            return Some(crate::picker::file_op(op, request, self.runner.data_ref()));
+        if op.as_deref() == Some("shareFile") {
+            return Some(crate::picker::share_file(request, self.runner.data_ref()));
         }
         if op.as_deref() == Some("appRoots") {
-            return Some(crate::picker::roots_reply());
+            return Some(crate::picker::app_roots_reply(self.runner.data_ref()));
         }
         if op.as_deref() == Some("sensorEvents") {
             return Some(self.sensor_events(request));
@@ -779,7 +868,11 @@ impl<D: DataSource> Host<D> {
 
     /// Take the source's announced topics, waking the host (LLP 1016.002).
     pub fn listen(&mut self, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        if let Some(store) = &self.launch_store {
+            store.listen(wake.clone());
+        }
         self.preload_wake.set(wake.clone());
+        self.route_overflow.wake = Some(wake.clone());
         self.runner.listen(wake);
     }
 
@@ -790,6 +883,7 @@ impl<D: DataSource> Host<D> {
         self.listen(io.waker());
         self.runner.set_socket_reader(io.socket_reader());
         self.runner.set_retry_reader(io.retry_reader());
+        io.set_fetch_fault(self.runner.fetch_fault());
         self.runner.set_listen_reader(io.listen_reader());
         self.runner.set_work_clock(io.work_clock());
     }
@@ -808,9 +902,10 @@ impl<D: DataSource> Host<D> {
         self.runner.release_work()
     }
 
-    /// The hosts the app may reach (LLP 1016 D6), as the data crate declares them.
+    /// The hosts the app may reach (LLP 1016 D6): the data crate's grants and
+    /// the origins its declared sources carry (LLP 1162.001 D3).
     pub fn grants(&mut self) -> String {
-        self.runner.data().grants().to_string()
+        self.runner.grants()
     }
 
     /// The app's `app:/data`, `app:/cache` and `app:/tmp`, as storage
@@ -834,7 +929,9 @@ impl<D: DataSource> Host<D> {
     /// The requests the runner handed out since the last take (LLP 1016 D2):
     /// the bridge gives them to the executor; nothing reaches the presenter.
     pub fn take_requests(&mut self) -> Vec<RequestOut> {
-        self.runner.take_requests()
+        let mut requests = std::mem::take(&mut self.boot_requests);
+        requests.extend(self.runner.take_requests());
+        requests
     }
 
     /// Admission failures remain on the runner's current tickets, not a queue.
@@ -870,13 +967,14 @@ impl<D: DataSource> Host<D> {
         match self.runner.collection_feedback_bytes(bytes) {
             Ok(mut result) => {
                 if result.receipts.is_empty() && result.error.is_none() {
-                    return self.finish(Batch::new(), None);
+                    return self.finish_collection();
                 }
                 self.now_ms = self.now_ms.max(now_ms);
                 for timed in &mut result.receipts {
                     timed.at_ms = self.now_ms;
                 }
-                self.commit(&result.receipts, result.error.map(|e| format!("{e:?}")))
+                let error = result.error.map(|e| format!("{e:?}"));
+                self.in_inert_entry(|host| host.commit(&result.receipts, error))
             }
             Err(error) => self.finish(Batch::new(), Some(format!("{error:?}"))),
         }
@@ -914,7 +1012,8 @@ impl<D: DataSource> Host<D> {
         self.now_ms = now_ms.max(self.now_ms);
         // At the event's time: an action's `performanceNow()` is the host's (LLP 1096 D3).
         let a = self.runner.dispatch_at(view, event, self.now_ms);
-        self.commit(&a.receipts, a.error.map(|e| format!("{e:?}")))
+        let error = a.error.map(|e| format!("{e:?}"));
+        self.in_inert_entry(|host| host.commit(&a.receipts, error))
     }
 
     /// The platform's own Back from visit `id` (LLP 1115 D5), at `now_ms`.
@@ -925,6 +1024,11 @@ impl<D: DataSource> Host<D> {
     /// Return to the visit selected in the platform's Back-history menu.
     pub fn host_back_to(&mut self, source: u64, destination: u64, now_ms: f64) -> String {
         self.own_navigation(now_ms, |runner| runner.host_back_to(source, destination))
+    }
+
+    /// Make `location` a rooted window's only visit (LLP 1030.004 D2).
+    pub fn host_root(&mut self, location: &str, now_ms: f64) -> String {
+        self.own_navigation(now_ms, |runner| runner.host_root(location))
     }
 
     /// Follow a declared route without an authored navigate handler.
@@ -999,10 +1103,7 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.canvas_frame();
         let error = a.error.map(|e| format!("{e:?}"));
-        self.in_advance = true;
-        let out = self.commit(&a.receipts, error);
-        self.in_advance = false;
-        out
+        self.in_inert_entry(|host| host.commit(&a.receipts, error))
     }
 
     /// An image loaded: its intrinsic size, in points (`None` when it failed
@@ -1095,8 +1196,22 @@ impl<D: DataSource> Host<D> {
     /// The page's visibility, connectivity and share sheet (LLP 1069.000
     /// D2): re-answer `exactPage` in one commit; the same facts commit nothing.
     pub fn set_page(&mut self, page: exact_runner::Page) -> String {
+        let released = self.page_presentable(page);
         let answer = self.runner.set_page(page);
+        if released && matches!(answer, Ok(None)) {
+            // What a release started (an exit's end, a lowered spec) goes now.
+            let mut batch = Batch::new();
+            self.present(&mut batch, false);
+            return self.finish(batch, None);
+        }
         self.told(answer, "page")
+    }
+
+    /// `prefer presented` (LLP 1069.000 D6): holds `exactPage().presented`
+    /// at a value, or with `None` gives it back. It moves no animation.
+    pub fn prefer_presented(&mut self, preferred: Option<bool>) -> String {
+        let answer = self.runner.prefer_presented(preferred);
+        self.told(answer, "presented")
     }
 
     /// The viewer's locale and zone, beside the date: one commit when it changes.
@@ -1129,31 +1244,6 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    /// The viewport's change into `batch`, after what it holds (`set_view`).
-    fn resize_inner(
-        &mut self,
-        width: f32,
-        height: f32,
-        mut batch: Batch,
-        error: Option<String>,
-    ) -> String {
-        let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
-                                               // @ref LLP 1039 D2 — merge re-answer and relayout, once.
-        let receipt = match self.runner.set_viewport(width as f64, height as f64) {
-            Ok(receipt) => receipt,
-            Err(e) => return self.finish(batch, error.or(Some(format!("viewport: {e:?}")))),
-        };
-        self.viewport = (width, height);
-        self.height_targets_dirty = true;
-        self.presence.snap = true;
-        if let Some(receipt) = receipt {
-            let at_ms = self.now_ms;
-            return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
-        }
-        let laid_out = self.layout(&mut batch).err();
-        self.finish(batch, error.or(laid_out))
-    }
-
     /// Content has settled: the tree and the motion engine give back what
     /// they hold beyond the live nodes ([`exact_kernel::Kernel::trim`]).
     pub fn trim(&mut self) {
@@ -1181,196 +1271,6 @@ impl<D: DataSource> Host<D> {
             batch.language(language, self.runner.direction());
             self.language = Some(language.into());
         }
-    }
-
-    fn finish(&mut self, batch: Batch, error: Option<String>) -> String {
-        // Clear the mark first: the resize handlers below commit the app's own moves
-        self.presence.unauthored = false;
-        let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
-        crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
-        let (mut batch, error) = self.resize_rounds(batch, error);
-        self.state_onto(&mut batch);
-        self.write(batch, error.as_deref())
-    }
-
-    fn commit(&mut self, receipts: &[Timed], error: Option<String>) -> String {
-        self.commit_into(receipts, error, Batch::new())
-    }
-
-    fn commit_into(&mut self, receipts: &[Timed], error: Option<String>, batch: Batch) -> String {
-        let (mut batch, error) = self.commit_tree(receipts, error, batch);
-        // A receipt can end an Arrange contact; its terminal runs at receipt time.
-        let arrange = self.arrange_after_commit(&mut batch);
-        self.group_after_commit(&mut batch);
-        self.commit_finish(batch, error.or(arrange))
-    }
-
-    /// The receipts into the mirror, the engine and layout; not yet presented.
-    fn commit_tree(
-        &mut self,
-        receipts: &[Timed],
-        error: Option<String>,
-        mut batch: Batch,
-    ) -> (Batch, Option<String>) {
-        let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
-        self.native_retire_removed_owner(&mut batch);
-        self.native_note_receipts(receipts);
-        let bulk_handlers = (receipts
-            .iter()
-            .map(|t| t.receipt.created.len())
-            .sum::<usize>()
-            > 1)
-        .then(|| self.runner.handlers());
-        self.close_new_top_layer(receipts);
-        for t in receipts {
-            let r = &t.receipt;
-            // Flights capture their leavers before an exit takes them
-            // out of the presenter's maps (LLP 1013.000 D4.1).
-            self.begin_flights(r, &mut batch);
-            self.begin_exits(r, &mut batch);
-            for key in &r.destroyed {
-                if let Some(id) = self.keys.remove(key) {
-                    self.ranks.remove(&id);
-                    self.paint.runs.remove(&id);
-                    self.paint.opacities.remove(&id);
-                    if let Some((owner, _)) = self.inline_runs.remove(&id) {
-                        self.dirty_paragraphs.insert(owner);
-                    } else if self.svg.destroyed(id) {
-                        self.mirror.remove(&id);
-                    } else if !self.native_selected_id(id) {
-                        self.mirror.remove(&id);
-                        self.end_flight_of(id);
-                        if !self.exit_holds(id, &mut batch) {
-                            batch.destroy(id);
-                        }
-                    }
-                    self.transform_drags.remove(id);
-                }
-            }
-            for key in &r.created {
-                if let Some(node) = self.runner.kernel().node_by_key(*key) {
-                    let id = node.id;
-                    let handlers = bulk_handlers.as_ref().map_or_else(
-                        || self.runner.handlers_of(id),
-                        |all| all.get(&id).cloned().unwrap_or_default(),
-                    );
-                    self.create(id, &handlers, &mut batch);
-                }
-            }
-            for key in &r.touched {
-                if let Some(node) = self.runner.kernel().node_by_key(*key) {
-                    let id = node.id;
-                    self.update(id, &mut batch);
-                }
-            }
-        }
-        // Receipts share the final kernel tree. A parent touched by an early
-        // timer can already name a child created by a later timer in this seek.
-        // All surviving views must exist before any final child list is attached.
-        for t in receipts {
-            for key in t.receipt.created.iter().chain(t.receipt.touched.iter()) {
-                if let Some(node) = self.runner.kernel().node_by_key(*key) {
-                    self.emit_children(node.id, &mut batch);
-                }
-            }
-        }
-        self.emit_paragraphs(&mut batch);
-        let roots = self.runner.roots();
-        if roots != self.roots {
-            self.roots = roots.clone();
-            batch.roots(&roots);
-        }
-        if !receipts.is_empty() {
-            self.emit_title(&mut batch);
-        }
-        let mut height_target_error = None;
-        // Runner receipts retain due-time order. Unobserved motion starts at
-        // that due time; a late receipt cannot rewind an already presented
-        // frame/hold. Match Web's floor at the engine's current presentation
-        // time, not this batch's final time. No timer work enters pointer moves.
-        for t in receipts {
-            let seek = self.engine.advance(self.engine_time(t.at_ms));
-            debug_assert!(seek.is_ok(), "the clock never runs backwards here");
-            let mut sync = self.runner.kernel().motion_sync(&t.receipt);
-            self.spare_exits(&mut sync);
-            let applied = sync.apply(&mut self.engine);
-            debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
-            let runner = &self.runner;
-            svg_lower::eligibility(
-                runner.kernel(),
-                &mut self.engine,
-                &sync,
-                self.svg.box_motion,
-                &|v| !runner.handlers_of(v).is_empty(),
-            );
-            svg_lower::hand_over_paths(runner.kernel(), &mut self.engine, self.svg.box_motion);
-            // A reveal changes a held play without changing its style row.
-            for (key, _) in &sync.animations {
-                if let Some(view) = self.keys.get(&node_key(*key)).copied() {
-                    self.svg.element(runner.kernel(), view);
-                }
-            }
-            for view in svg_lower::resample(runner.kernel(), &mut self.engine, self.svg.box_motion)
-            {
-                self.svg.element(self.runner.kernel(), view);
-            }
-            self.play_exits(&mut batch);
-            self.start_flights(&t.receipt);
-            self.seed_layout(&t.receipt, &mut batch);
-            self.sync_paint(&t.receipt, &mut batch);
-            self.reconcile_height_handles(&mut batch, true);
-            let synced = self.sync_height_owner();
-            debug_assert!(synced.is_ok(), "validated height sync");
-            if let Err(error) = self.sync_height_transitions() {
-                height_target_error.get_or_insert(error);
-            }
-            // Latest target/declaration must reach the held slot before an
-            // invalidated header cancels it (negative delays sample at once).
-            self.cancel_invalid_height_drag();
-            self.reconcile_transform_drags(&mut batch);
-        }
-        let seek = self.engine.advance(self.engine_time(self.now_ms));
-        debug_assert!(seek.is_ok(), "the clock never runs backwards here");
-        // An advance whose commits changed no node (a frame task that only
-        // moved state nothing shows; a `sent` reader answered at each MIDI
-        // message's time, LLP 1125 D6, with nothing on screen reading it)
-        // lays out only what such a commit can move (`inert_layout`): each
-        // would cost a whole layout and paint order walk otherwise.
-        let inert = self.in_advance && receipts.iter().all(|t| unchanged(&t.receipt));
-        let layout_error = if height_target_error.is_some() {
-            self.layout_owed = true;
-            height_target_error
-        } else if inert {
-            self.inert_layout(&mut batch, !receipts.is_empty()).err()
-        } else {
-            self.layout(&mut batch).err()
-        };
-        if layout_error.is_some() && !receipts.is_empty() {
-            self.emit_ranks(&mut batch);
-        }
-        self.canvas_turn(&mut batch);
-        for s in self.runner.take_surface_updates() {
-            batch.surface(&s);
-        }
-        // The capabilities the actions called, after their commits, in order.
-        // @ref LLP 1038 D7 — drain once, after all commits in this batch.
-        if let Some(change) = self.runner.take_router_change() {
-            batch.router(&change);
-        }
-        for c in self.runner.take_commands() {
-            batch.command(&c.name, &c.args, c.source);
-        }
-        batch.timed(&mut self.runner, false);
-        (batch, error.or(layout_error))
-    }
-
-    /// Persist, then the presentation after every commit in the batch.
-    fn commit_finish(&mut self, mut batch: Batch, error: Option<String>) -> String {
-        self.persist();
-        self.emit_language(&mut batch);
-        self.emit_transform_drags(&mut batch);
-        self.present(&mut batch, false);
-        self.finish(batch, error)
     }
 }
 

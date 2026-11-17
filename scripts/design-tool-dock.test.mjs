@@ -13,7 +13,7 @@ test('a param edit\'s proposal shows docked below its row, not over it, once; ty
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-dock-'));
   // A long token list after the components, as the clone has: the panel's own place is far below.
   const many = Array.from({ length: 120 }, (_, i) => `  filler.t${i} = #${String(i).padStart(6, '0')}`).join('\n');
-  writeFileSync(join(app, 'app.tamber'), `${readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.tamber'), 'utf8').trimEnd()}\n${many}\n`);
+  writeFileSync(join(app, 'app.forma'), `${readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.forma'), 'utf8').trimEnd()}\n${many}\n`);
   writeFileSync(join(app, 'app.contract'), STUB_APP);
   const tool = await proxied(app);
   try {

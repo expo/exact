@@ -146,3 +146,42 @@ fn source_over_never_batches_with_replace_or_blend() {
     let frame = encoder.finish();
     assert_eq!(frame.batches.len(), 5);
 }
+
+#[test]
+fn snapshot_bounds_cover_transformed_quads_and_intersect_the_effective_clips() {
+    let mut encoder = Encoder::new(1920, 1080);
+    let mut image = Instance::new(Kind::RoundedRect, Brush::Image, [10., 20., 30., 40.]);
+    image.xform = [0., 1., -1., 0., 300., 200.];
+    assert_eq!(
+        encoder.bounds(&image),
+        Scissor::from_rect([239., 209., 42., 32.])
+    );
+    let scissor = Scissor::from_rect([250., 220., 15., 10.]);
+    encoder.push_clip(Clip::Scissor(scissor)).unwrap();
+    assert_eq!(encoder.bounds(&image), scissor);
+    encoder.pop_clip();
+    encoder
+        .push_clip(Clip::Rounded(RoundedClip {
+            rect: [250., 220., 15., 10.],
+            radii: [2.; 4],
+        }))
+        .unwrap();
+    assert_eq!(
+        encoder.bounds(&image),
+        Scissor::from_rect([248., 218., 19., 14.])
+    );
+    encoder
+        .push_clip(Clip::Coverage(CoverageClip {
+            texture: TextureId(1),
+            rect: [252., 221., 8., 7.],
+            uv: [0., 0., 1., 1.],
+        }))
+        .unwrap();
+    assert_eq!(
+        encoder.bounds(&image),
+        Scissor::from_rect([252., 221., 8., 7.])
+    );
+    image = Instance::new(Kind::Coverage, Brush::Image, [254., 222., 3., 2.]);
+    image.xform = [2., 1., 1., 3., 99., 17.];
+    assert_eq!(encoder.bounds(&image), Scissor::from_rect(image.rect));
+}

@@ -14,6 +14,10 @@ impl DataSource for NoData {
 
 /// `decls` before the component, `view` its body.
 fn boot(decls: &str, view: &str) -> Runner<NoData> {
+    boot_actions(decls, "", view)
+}
+
+fn boot_actions(decls: &str, actions: &str, view: &str) -> Runner<NoData> {
     let source = format!(
         r#"
 {decls}
@@ -21,6 +25,7 @@ component Main
   state bold = false
   action toggle
     bold = !bold
+{actions}
   view
 {view}
 "#
@@ -194,6 +199,126 @@ fn a_moving_parent_hands_its_children_each_frame() {
     r.advance(400.0).unwrap();
     assert_eq!(rows(&r, "eased").0, 700);
     assert!(!own_weight(&r, "eased"));
+}
+
+fn coverage_fixture(inherited: bool) -> Runner<NoData> {
+    let rows = r#"font-weight=(bold ? 700 : 300) font-stretch=(bold ? "125%" : "75%") font-variation-settings=(bold ? "'wght' 700, 'GRAD' 100" : "'wght' 300, 'GRAD' 0")"#;
+    let view = if inherited {
+        format!("    column {rows}\n      text \"Library\" testId=\"title\" transition=curve")
+    } else {
+        format!("    text \"Library\" testId=\"title\" {rows} transition=curve")
+    };
+    boot_actions(
+        "",
+        r#"  state curve = "all 400ms linear"
+  action declare(next: string)
+    curve = next"#,
+        &view,
+    )
+}
+
+#[test]
+fn declaration_edits_cancel_uncovered_font_rows_at_their_saved_targets() {
+    for inherited in [false, true] {
+        for declaration in ["none", "opacity 1s"] {
+            let mut r = coverage_fixture(inherited);
+            r.act("toggle", vec![]).unwrap();
+            r.advance(100.).unwrap();
+            assert_eq!(
+                rows(&r, "title"),
+                (400, 87.5, r#""wght" 400, "GRAD" 25"#.into())
+            );
+            r.act("declare", vec![Value::str(declaration)]).unwrap();
+            assert_eq!(
+                rows(&r, "title"),
+                (700, 125., r#""wght" 700, "GRAD" 100"#.into()),
+                "{inherited}/{declaration}"
+            );
+            assert!(!r.wants_frames());
+            assert_eq!(r.text_axes_settle_ms(), None);
+            if inherited {
+                assert!(!own_weight(&r, "title"));
+            }
+        }
+    }
+}
+
+#[test]
+fn covering_declaration_edits_keep_font_curves() {
+    for inherited in [false, true] {
+        for declaration in [
+            "unset",
+            "all 0s",
+            "font-weight 0s, font-stretch 0s, font-variation-settings 0s",
+        ] {
+            let mut r = coverage_fixture(inherited);
+            r.act("toggle", vec![]).unwrap();
+            r.advance(100.).unwrap();
+            let before = rows(&r, "title");
+            r.act("declare", vec![Value::str(declaration)]).unwrap();
+            assert_eq!(
+                rows(&r, "title"),
+                before,
+                "{inherited}/{declaration}: declaration"
+            );
+            assert_eq!(r.text_axes_settle_ms(), Some(400.));
+            r.advance(200.).unwrap();
+            assert_eq!(
+                rows(&r, "title"),
+                (500, 100., r#""wght" 500, "GRAD" 50"#.into())
+            );
+            r.advance(400.).unwrap();
+            assert_eq!(
+                rows(&r, "title"),
+                (700, 125., r#""wght" 700, "GRAD" 100"#.into())
+            );
+            assert!(!r.wants_frames());
+        }
+    }
+}
+
+#[test]
+fn an_inherited_target_change_under_an_unset_declaration_stops_the_old_curve() {
+    let mut r = coverage_fixture(true);
+    r.act("toggle", vec![]).unwrap();
+    r.advance(100.).unwrap();
+    r.act("declare", vec![Value::str("unset")]).unwrap();
+    r.act("toggle", vec![]).unwrap();
+    assert_eq!(
+        rows(&r, "title"),
+        (300, 75., r#""wght" 300, "GRAD" 0"#.into())
+    );
+    assert!(!r.wants_frames());
+    assert!(!own_weight(&r, "title"));
+}
+
+#[test]
+fn an_ancestor_edit_preserves_a_childs_own_font_targets_after_unset() {
+    let mut r = boot_actions(
+        "",
+        r#"  state curve = "all 400ms linear"
+  state parentBold = false
+  action declare
+    curve = "unset"
+  action changeParent
+    parentBold = true"#,
+        r#"    column font-weight=(parentBold ? 900 : 100) font-stretch=(parentBold ? "150%" : "50%") font-variation-settings=(parentBold ? "'wght' 900" : "'wght' 100")
+      text "Library" testId="title" font-weight=(bold ? 700 : 300) font-stretch=(bold ? "125%" : "75%") font-variation-settings=(bold ? "'wght' 700" : "'wght' 300") transition=curve"#,
+    );
+    r.act("toggle", vec![]).unwrap();
+    r.advance(100.).unwrap();
+    let before = rows(&r, "title");
+    assert_eq!(before, (400, 87.5, r#""wght" 400"#.into()));
+    r.act("declare", vec![]).unwrap();
+    r.act("changeParent", vec![]).unwrap();
+    assert_eq!(rows(&r, "title"), before);
+    assert_eq!(r.text_axes_settle_ms(), Some(400.));
+    r.advance(200.).unwrap();
+    assert_eq!(rows(&r, "title"), (500, 100., r#""wght" 500"#.into()));
+    r.advance(400.).unwrap();
+    assert_eq!(rows(&r, "title"), (700, 125., r#""wght" 700"#.into()));
+    assert!(!r.wants_frames());
+    assert!(own_weight(&r, "title"));
 }
 
 /// A keyed jump builds the rows it lands on in a commit of its own

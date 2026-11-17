@@ -1,5 +1,5 @@
 ```prompt Add properties to my tests
-Add properties to the Exact app in this folder: rules in app.test.contract that must hold across every interaction. Use https://github.com/expo/exact/blob/main/docs/recipes/properties.md as the source for each step. The exact2 checkout has the same page at docs/recipes/properties.md.
+Add properties to the Exact app in this folder: rules in app.test.contract that must hold across every interaction. Use https://github.com/expo/exact/blob/main/docs/recipes/properties.md as the source for each step. The Exact checkout has the same page at docs/recipes/properties.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. Read app.contract and list the rules the app means: the values a state may take, what an action writes and what it leaves alone, what never changes once true, and which actions must never be refused. Show me the list and ask before you write them.

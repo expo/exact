@@ -1,0 +1,103 @@
+{
+  "probe": "object,function,function,object",
+  "scenarios": [
+    {
+      "run": "report",
+      "heard": [["error", "Error: reported", true, true], ["onerror", "Error: reported", "string"], ["after", false], ["returned"]],
+      "journal": { "native": ["console: Uncaught Error: reported"], "web": [] },
+      "system": ["Uncaught Error: reported"]
+    },
+    {
+      "run": "cancel",
+      "heard": [["error", "Error: cancelled", true, true], ["onerror", "Error: cancelled", "string"], ["after", true]],
+      "journal": { "native": ["console: Uncaught Error: cancelled"], "web": [] },
+      "system": []
+    },
+    {
+      "run": "async",
+      "heard": {
+        "native": [["error", "Error: async", true, true], ["onerror", "Error: async", "string"], ["after", false]],
+        "web": [
+          ["error", "Error: async", true, true], ["onerror", "Error: async", "string"], ["after", false],
+          ["unhandledrejection", "Error: from the listener", -1, true], ["onunhandledrejection", "Error: from the listener"]
+        ]
+      },
+      "journal": {
+        "native": ["console: Uncaught Error: async", "data: unhandled rejection: from the listener"],
+        "web": ["data: unhandled rejection: from the listener"]
+      },
+      "system": ["Uncaught Error: async", "Uncaught (in promise) Error: from the listener"]
+    },
+    {
+      "run": "microtask",
+      "heard": [["error", "Error: task", true, true], ["onerror", "Error: task", "string"], ["after", false]],
+      "journal": { "native": ["console: Uncaught Error: task"], "web": [] },
+      "system": ["Uncaught Error: task"]
+    },
+    {
+      "run": "abort",
+      "heard": [["error", "RangeError: listener", true, true], ["onerror", "RangeError: listener", "string"], ["after", false]],
+      "journal": { "native": ["console: Uncaught RangeError: listener"], "web": [] },
+      "system": ["Uncaught RangeError: listener"]
+    },
+    {
+      "run": "timer",
+      "heard": [["error", "Error: timer", true, true], ["onerror", "Error: timer", "string"], ["after", false]],
+      "journal": { "native": ["data: a timer's callback threw: timer"], "web": ["data: a timer's callback threw: timer"] },
+      "system": ["Uncaught Error: timer"]
+    },
+    {
+      "run": "rejection",
+      "heard": [["unhandledrejection", "Error: lost", 0, true], ["onunhandledrejection", "Error: lost"]],
+      "journal": { "native": ["data: unhandled rejection: lost"], "web": ["data: unhandled rejection: lost"] },
+      "system": ["Uncaught (in promise) Error: lost"]
+    },
+    {
+      "run": "shared",
+      "heard": [
+        ["unhandledrejection", "Error: shared", 0, true], ["onunhandledrejection", "Error: shared"],
+        ["unhandledrejection", "Error: shared", 1, true], ["onunhandledrejection", "Error: shared"]
+      ],
+      "journal": {
+        "native": ["data: unhandled rejection: shared", "data: unhandled rejection: shared"],
+        "web": ["data: unhandled rejection: shared", "data: unhandled rejection: shared"]
+      },
+      "system": ["Uncaught (in promise) Error: shared", "Uncaught (in promise) Error: shared"]
+    },
+    {
+      "run": "late",
+      "heard": [["unhandledrejection", "Error: late", 0, true], ["onunhandledrejection", "Error: late"]],
+      "journal": { "native": ["data: unhandled rejection: late"], "web": ["data: unhandled rejection: late"] },
+      "system": ["Uncaught (in promise) Error: late"]
+    },
+    {
+      "run": "handle",
+      "heard": [["rejectionhandled", "Error: late", 0]],
+      "journal": { "native": [], "web": [] },
+      "system": []
+    },
+    {
+      "run": "rethrow",
+      "heard": [
+        ["unhandledrejection", "Error: rethrown", 0, true],
+        ["error", "Error: the listener threw", true, true], ["onerror", "Error: the listener threw", "string"], ["after", false],
+        ["onunhandledrejection", "Error: rethrown"]
+      ],
+      "journal": {
+        "native": ["console: Uncaught Error: the listener threw", "data: unhandled rejection: rethrown"],
+        "web": ["data: unhandled rejection: rethrown"]
+      },
+      "system": ["Uncaught Error: the listener threw", "Uncaught (in promise) Error: rethrown"]
+    },
+    {
+      "run": "send",
+      "url": true,
+      "heard": [["error", "Error: send", true, true], ["onerror", "Error: send", "string"], ["after", false], ["reply", 204]],
+      "journal": { "native": ["console: Uncaught Error: send"], "web": [] },
+      "system": ["Uncaught Error: send"],
+      "reports": ["Error: send"]
+    },
+    { "run": "answer-throws", "fails": true, "heard": [], "journal": { "native": [], "web": [] }, "system": [] },
+    { "run": "answer-rejects", "fails": true, "heard": [], "journal": { "native": [], "web": [] }, "system": [] }
+  ]
+}

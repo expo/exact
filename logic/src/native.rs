@@ -156,17 +156,19 @@ fn load_symbols(bytes: &[u8]) -> Result<Symbols, String> {
 pub(crate) fn when_loaded(bytes: &[u8], wake: Box<dyn FnOnce() + Send>) {
     let digest = format!("{:x}", Sha256::digest(bytes));
     let mut waiters = WAITERS.lock().unwrap_or_else(|e| e.into_inner());
-    let loaded = RETAINED
-        .lock()
-        .ok()
-        .and_then(|r| r.modules.get(&digest).map(|e| e.get().is_some()))
-        .unwrap_or(true);
+    let loaded = is_loaded(&RETAINED, &digest);
     if loaded {
         drop(waiters);
         wake();
     } else {
         waiters.push((digest, wake));
     }
+}
+
+fn is_loaded(retained: &Mutex<Retained>, digest: &str) -> bool {
+    retained
+        .lock()
+        .is_ok_and(|r| r.modules.get(digest).is_some_and(|e| e.get().is_some()))
 }
 
 /// The image with `digest` finished loading: wake whoever waits for it.
@@ -203,6 +205,8 @@ fn map_symbols(bytes: &[u8]) -> Result<Symbols, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_nanos();
+    static SWEPT: std::sync::Once = std::sync::Once::new();
+    SWEPT.call_once(|| sweep(&std::env::temp_dir(), std::process::id(), stamp));
     let directory = std::env::temp_dir().join(format!(
         "exact-rust-{}-{stamp}-{attempt}",
         std::process::id()
@@ -251,9 +255,9 @@ fn map_symbols(bytes: &[u8]) -> Result<Symbols, String> {
         if library.is_ok() { "loaded" } else { "refused" }
     );
     // Unix keeps the mapping alive independently of the pathname; unique copies
-    // need not accumulate on disk. Windows retains its file while the image is open.
-    #[cfg(unix)]
-    {
+    // need not accumulate on disk. Windows locks its file while the image is
+    // open, so a loaded one stays until a later process sweeps it.
+    if cfg!(unix) || library.is_err() {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_dir(&directory);
     }
@@ -299,6 +303,31 @@ fn map_symbols(bytes: &[u8]) -> Result<Symbols, String> {
     }
     result
 }
+/// Remove another process's image directories under `temp` written over a
+/// minute before `now` (nanoseconds since the epoch): what a process that
+/// exited, or crashed before removing its copy, left behind. An image a
+/// running Windows process still maps is locked, and stays.
+fn sweep(temp: &std::path::Path, pid: u32, now: u128) {
+    const STALE: u128 = 60_000_000_000;
+    let Ok(entries) = fs::read_dir(temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(rest) = name.to_str().and_then(|n| n.strip_prefix("exact-rust-")) else {
+            continue;
+        };
+        let mut parts = rest.split('-');
+        let (Some(owner), Some(stamp)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let stamp = stamp.parse::<u128>().unwrap_or(u128::MAX);
+        if owner != pid.to_string() && now.saturating_sub(stamp) > STALE {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 impl Executor for Native {
     fn stateless(&self) -> bool {
         self.symbols.stateless
@@ -341,8 +370,67 @@ impl Drop for Native {
     }
 }
 
+#[test]
+fn absent_and_poisoned_images_are_not_loaded() {
+    let retained = Mutex::new(Retained::default());
+    let absent = is_loaded(&retained, "absent");
+    let _ = std::panic::catch_unwind(|| {
+        let _guard = retained.lock().unwrap();
+        panic!("poison this test's retained state");
+    });
+    assert_eq!((absent, is_loaded(&retained, "absent")), (false, false));
+}
+
+#[test]
+fn an_unreserved_image_does_not_wake_a_retry() {
+    let (send, received) = mpsc::channel();
+    when_loaded(
+        b"unreserved readiness test image",
+        Box::new(move || {
+            let _ = send.send(());
+        }),
+    );
+    assert!(matches!(
+        received.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+}
+
 #[cfg(all(test, unix))]
 pub(crate) fn mapping_count(bytes: &[u8]) -> usize {
     let digest = format!("{:x}", Sha256::digest(bytes));
     usize::from(RETAINED.lock().unwrap().modules.contains_key(&digest))
+}
+
+#[cfg(test)]
+#[test]
+fn a_sweep_removes_other_processes_stale_images_only() {
+    let now = 1_000_000_000_000_000_000u128;
+    let temp = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-logic-sweep-{}", std::process::id())),
+    );
+    let _ = fs::remove_dir_all(&temp);
+    let minute = 60_000_000_000;
+    let names = [
+        format!("exact-rust-1-{}-0", now - 2 * minute),
+        format!("exact-rust-1-{}-0", now - minute / 2),
+        format!("exact-rust-7-{}-0", now - 2 * minute),
+        format!("exact-rust-1-{}", now - 2 * minute),
+        format!("exact-rusty-1-{}-0", now - 2 * minute),
+    ];
+    for name in &names {
+        fs::create_dir_all(temp.join(name)).unwrap();
+        fs::write(temp.join(name).join("module.dll"), b"image").unwrap();
+    }
+    sweep(&temp, 7, now);
+    let left = |name: &String| temp.join(name).exists();
+    assert!(!left(&names[0]), "another process's stale image goes");
+    assert!(left(&names[1]), "a recent one may be loading");
+    assert!(left(&names[2]), "this process's own stays");
+    assert!(
+        !left(&names[3]),
+        "a stale one without an attempt number goes"
+    );
+    assert!(left(&names[4]), "another name stays");
+    fs::remove_dir_all(&temp).unwrap();
 }

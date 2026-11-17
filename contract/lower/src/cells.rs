@@ -30,14 +30,17 @@
 use contract_syntax::{Attr, Expr, Node};
 
 fn literal<'a>(attrs: &'a [Attr], name: &str) -> Option<Option<&'a str>> {
-    attrs
-        .iter()
-        .rev()
-        .find(|a| a.name == name)
-        .map(|a| match &a.value {
+    attrs.iter().rev().find(|a| a.name == name).map(|a| {
+        // A component argument ascribed to an enum is its string.
+        let mut value = &a.value;
+        while let Expr::Typed(inner, _, _) = value {
+            value = inner;
+        }
+        match value {
             Expr::Str(s, _) => Some(s.as_str()),
             _ => None,
-        })
+        }
+    })
 }
 
 /// Whether any node a list holds directly, through the regions that only
@@ -45,12 +48,8 @@ fn literal<'a>(attrs: &'a [Attr], name: &str) -> Option<Option<&'a str>> {
 pub(crate) fn sectioned(children: &[Node]) -> bool {
     children.iter().any(|child| match child {
         Node::Element { tag, .. } => tag == "section",
-        Node::When {
-            then, otherwise, ..
-        } => sectioned(then) || sectioned(otherwise),
-        Node::Each { body, .. } => sectioned(body),
-        Node::Match { some, none, .. } => sectioned(&some.1) || sectioned(none),
         Node::Use { .. } | Node::Children { .. } => false,
+        region => region.child_lists().into_iter().any(sectioned),
     })
 }
 

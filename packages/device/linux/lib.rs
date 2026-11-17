@@ -17,7 +17,7 @@
 //! the source. A source announces to its readers only when an answered
 //! field changes; the foreground reads every watched source again.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

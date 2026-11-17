@@ -845,6 +845,31 @@ final class NavigationBarIOSTests: XCTestCase {
         until("an invocation after a press opens it") { session.presenter.menus.isOpen(pop) }
     }
 
+    /// A header button that shows an alert by `commandfor` alone, pressing
+    /// nothing, is a bar item, and its tap and the agent's show the alert (#387).
+    func testABarItemShowingAnAlertByItsCommandAloneOpensIt() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents an alert only from a window a scene holds") }
+        let session = try fixture("bar-command", module: false), agent = Agent(session: session)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "open-plain").id)])["error"])
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        until("the plain route is pushed") { nav.viewControllers.count == 2 && nav.transitionCoordinator == nil }
+        let invoker = try node(session, "clear-plain")
+        XCTAssertNil(session.presenter.navigation.unshownByBar()[invoker.id], "the bar shows it")
+        func alert() -> UIAlertController? {
+            var at = window?.rootViewController
+            while let next = at?.presentedViewController { if let a = next as? UIAlertController { return a }; at = next }
+            return nil
+        }
+        try tap(nav.topViewController?.navigationItem.rightBarButtonItems?.first { $0.accessibilityLabel == "Clear" })
+        // The agent's `back` refuses an alert still presenting (`clock settle` first).
+        until("the item's tap shows the alert") { alert()?.title == "Clear the count?" && !session.presenter.menus.inTransition }
+        XCTAssertNil(agent.back()["error"])
+        until("Cancel dismisses it") { alert() == nil }
+        let reply = agent.tap(["id": Int(invoker.id)])
+        XCTAssertEqual(reply["native"] as? String, "bar-button-item", "\(reply)")
+        until("the agent's tap shows it too") { alert()?.title == "Clear the count?" }
+    }
+
     /// LLP 1075.003 §9.6: a header's `input type="search"` is the item's
     /// search controller; typing sends `input`, and Enter submits once.
     func testAHeaderSearchFieldIsTheItemsSearchControllerAndTypingIsItsInput() throws {
@@ -1173,7 +1198,7 @@ final class NavigationBarIOSTests: XCTestCase {
         XCTAssertEqual(control.segmentViews.map(\.accessibilityIdentifier), ["segment-all", "segment-missed"])
         XCTAssertEqual(control.segmentViews.map(\.accessibilityLabel), [nil, nil], "no name of their own: UIKit's, their words")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        XCTAssertEqual(tabs.viewControllers?.map(\.tabBarItem.accessibilityIdentifier), ["tab-home", "tab-second"])
+        XCTAssertEqual(tabs.tabControllers?.map(\.tabBarItem.accessibilityIdentifier), ["tab-home", "tab-second"])
     }
 
     /// LLP 1115 D5 with no `navigate` handler on the root: the button and

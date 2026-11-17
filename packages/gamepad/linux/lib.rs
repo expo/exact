@@ -1,6 +1,6 @@
 //! @exact/gamepad on Linux and Windows (LLP 1133.022 D4, D10 items 1 and 5,
 //! D12), composed into the app's host crate by the Rust builder: the host's
-//! one pad registry (`exact_linux::pads`), the evdev pads on Linux and
+//! one pad registry (`exact_painted::pads`), the evdev pads on Linux and
 //! XInput's slots on Windows, through the package context.
 //!
 //! - The list is the registry's, by slot index, with each pad's family by
@@ -14,8 +14,8 @@
 //!   at its ask; the registry announces a pad's coming, going and use, not
 //!   each reading.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
-use exact_linux::pads::{Pad, Pads};
+use exact_painted::package::{json, Context, Json, Package, Reply};
+use exact_painted::pads::{Pad, Pads};
 use std::sync::{Arc, Mutex};
 
 /// D2's labels by family; the interface's `tables.labels`.
@@ -106,7 +106,7 @@ impl Package for Gamepad {
         let told: Arc<Mutex<Vec<Pad>>> = Arc::new(Mutex::new(pads.list().0));
         let notifier = context.notifier();
         pads.watch(move || {
-            let (now, _) = exact_linux::pads::list();
+            let (now, _) = exact_painted::pads::list();
             let mut was = told.lock().unwrap_or_else(|e| e.into_inner());
             let alike = |a: &Pad, b: &Pad| a.index == b.index && a.identity == b.identity;
             for gone in was.iter().filter(|p| !now.iter().any(|n| alike(n, p))) {

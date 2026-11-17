@@ -113,6 +113,10 @@ pub struct RendererWithAssets<const ASSETS: bool> {
     // This frame's visible environment map is resident.
     pub(crate) sky_ready: bool,
     pub(crate) targets: Targets,
+    // Particle looks retain their own colour/depth when the live frame's are transient.
+    look_hdr: Option<Targets>,
+    // While encoding a look, `targets` holds its attachments and these hold the live ones.
+    live_hdr: Option<Targets>,
     // A direct frame's attachments (`encode_hooked`), made at its target's size;
     // a look frame that counts particles keeps its own, retained between passes.
     pub(crate) direct_targets: Option<crate::buffers::DirectTargets>,
@@ -148,7 +152,7 @@ pub struct RendererWithAssets<const ASSETS: bool> {
 
 // Use the uploaded affine records and the same presence test as transform.wgsl.
 fn attachment_matrix(words: &[f32], slot: u32) -> Option<glam::Mat4> {
-    let values = words.chunks_exact(16).nth(slot as usize)?;
+    let values = words.as_chunks::<16>().0.get(slot as usize)?;
     (values[15] == 1.).then(|| glam::Mat4::from_cols_slice(values))
 }
 
@@ -429,6 +433,8 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             sky_ready: false,
             targets,
             direct_targets: None,
+            look_hdr: None,
+            live_hdr: None,
             look_direct: None,
             direct_retained: false,
             allow_direct: samples == 1 || cfg!(any(target_os = "android", target_os = "ios")),
@@ -578,7 +584,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         if self.grid.len() < first + values.len() / 12 {
             self.grid.resize(first + values.len() / 12, false);
         }
-        for (k, record) in values.chunks_exact(12).enumerate() {
+        for (k, record) in values.as_chunks::<12>().0.iter().enumerate() {
             let grid = record[3] < 0.;
             if grid != self.grid[first + k] {
                 self.grid[first + k] = grid;

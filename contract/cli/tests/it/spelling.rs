@@ -77,8 +77,10 @@ fn check(name: &str, provenance: &str) {
                 rest.starts_with("LLP "),
                 "{name}: an Exact name cites its LLP"
             );
+            // A custom property the host defines is spelled `--exact-`
+            // (LLP 1123 D9), as an author reads it through `var()`.
             assert!(
-                name.starts_with("-exact-"),
+                name.starts_with("-exact-") || name.starts_with("--exact-"),
                 "{name}: a name Exact invents is spelled `-exact-`"
             );
         }

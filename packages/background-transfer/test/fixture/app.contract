@@ -64,3 +64,7 @@ component Fixture
         text "Download, held"
       button press=abort("h1") testId="abort-h1"
         text "Abort h1"
+      button press=start("keep", "k1") testId="keep-k1"
+        text "Download over a file, held"
+      button press=abort("k1") testId="abort-k1"
+        text "Abort k1"

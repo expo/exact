@@ -1,0 +1,77 @@
+// A forwarded argument shares its repeated prop reads, its lazy branch
+// stays lazy, and the callee's handlers and actions evaluate it at event
+// time. An inject read twice in one binding is evaluated once. A shared
+// read in an input's `type` or a style's choice keeps that choice.
+component App
+  state n = -1
+  state saved = -1
+  provide
+    items = range(n)
+  action grow
+    n = n + 2
+  action save(value: number)
+    saved = value
+  view
+    column
+      Box(values=range(n), shown=(n >= 0), go=save)
+      button press=grow testId="grow"
+        text "grow"
+      text `${saved}` testId="saved"
+
+component Box
+  props
+    values: number[]
+    shown: bool
+    go: action
+  view
+    column
+      Counted(count=values.length + values.length, label=(shown ? values.length + values.length : -1), go=go)
+      Field(kind=(shown && shown ? "text" : "password"))
+      Injected()
+
+component Counted
+  props
+    count: number
+    label: number
+    go: action
+  action keep
+    go(count)
+  view
+    column
+      text `${count}/${count}` testId="count"
+      text `${label}/${label}` testId="label"
+      button press=go(count + label) testId="save"
+        text "save"
+      button press=keep testId="keep"
+        text "keep"
+
+component Field
+  props
+    kind: string
+  view
+    column
+      input type=kind
+      row margin=(kind == "text" && kind == "text" ? 8 : "auto")
+        text kind testId="kind"
+
+component Injected
+  inject
+    items: number[]
+  view
+    text `${items.length}/${items.length}` testId="injected"
+
+test "forwarded arguments share their reads and keep their timing"
+  expect text "label" == "-1/-1"
+  expect text "kind" == "password"
+  expect text "saved" == "-1"
+  tap "grow"
+  expect text "count" == "2/2"
+  expect text "label" == "2/2"
+  expect text "injected" == "1/1"
+  expect text "kind" == "text"
+  tap "save"
+  expect text "saved" == "4"
+  tap "grow"
+  expect text "count" == "6/6"
+  tap "keep"
+  expect text "saved" == "6"

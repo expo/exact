@@ -45,7 +45,7 @@ class FilesTest {
     }
 
     /** A file a module was answered and writes, made a link to a file elsewhere after the answer: every way a module
-     * writes refuses it and the file it names is unchanged (a photo copied to `app:/tmp/photos/1.jpg`, the agent's photo
+     * writes refuses it and the file it names is unchanged (a photo copied into `app:/tmp/photos/`, the agent's photo
      * library's `agent-7.jpg`, a transcript's appended lines), and a reader does not take it for a regular file. */
     @Test fun aWriteRefusesALinkPlantedAfterTheAnswerAndLeavesWhatItNames() {
         val databases = File(dir.root, "databases").apply { mkdirs() }
@@ -69,5 +69,35 @@ class FilesTest {
         Files.output(fresh).use { "new".byteInputStream().copyTo(it) }
         assertEquals("new", fresh.readText())
         assertTrue(Files.regular(fresh))
+    }
+
+    /** The camera app's photo (`takePhotoWithCameraApp`): the one file the app hands out for writing is made empty and
+     * writable until the app takes it back; any other file stays read-only. */
+    @Test fun onlyAFileHandedOutForWritingIsWritableAndOnlyUntilItIsTakenBack() {
+        val photo = File(dir.root, "cache/exact.camera-app/photo.jpg")
+        val other = File(dir.root, "cache/temporary/camera/2.jpg").apply { parentFile!!.mkdirs(); writeText("kept") }
+        assertFalse(Files.writes(photo))
+
+        assertTrue(Files.openForWrite(photo))
+        assertTrue(photo.isFile)
+        assertEquals(0L, photo.length())
+        assertTrue(Files.writes(photo))
+        assertFalse(Files.writes(other))
+
+        Files.endWrite(photo)
+        assertFalse(Files.writes(photo))
+        assertEquals("kept", other.readText())
+    }
+
+    /** A link planted where the photo goes is not handed out, and what it names is unchanged. */
+    @Test fun aLinkWhereThePhotoGoesIsNotHandedOutForWriting() {
+        val databases = File(dir.root, "databases").apply { mkdirs() }
+        File(databases, "app.db").writeText("kept")
+        val photo = File(dir.root, "cache/exact.camera-app/photo.jpg").apply { parentFile!!.mkdirs() }
+        java.nio.file.Files.createSymbolicLink(photo.toPath(), File(databases, "app.db").toPath())
+
+        assertFalse(Files.openForWrite(photo))
+        assertFalse(Files.writes(File(databases, "app.db")))
+        assertEquals("kept", File(databases, "app.db").readText())
     }
 }

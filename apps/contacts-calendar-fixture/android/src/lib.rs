@@ -6,7 +6,7 @@
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
 #[cfg(target_os = "android")]
-exact_linux::canvas_jni!(
+exact_painted::canvas_jni!(
     contacts_calendar_fixture_data::Fixture,
     hatches = crate::exact_hatches()
 );

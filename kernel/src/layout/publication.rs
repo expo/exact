@@ -9,6 +9,11 @@ pub(super) fn publish(
     measurer: &mut dyn TextMeasurer,
     root: u32,
 ) -> LayoutReceipt {
+    for (node, _) in tree.pending_text_changes.drain() {
+        if let Some(context) = tree.taffy.get_node_context(node) {
+            arena.layout_dirty.insert(context.slot);
+        }
+    }
     #[cfg(test)]
     {
         tree.publication_visits = 0;
@@ -90,6 +95,11 @@ pub(super) fn publish(
         }
         let own_hidden = arena.style(slot).display == crate::Display::None;
         let hidden = hidden || own_hidden;
+        if !hidden && tree.text_pending(arena, slot) {
+            arena.flags_mut(slot).insert(NodeFlags::TEXT_PENDING);
+        } else {
+            arena.flags_mut(slot).remove(NodeFlags::TEXT_PENDING);
+        }
         // Its paragraph placed an image in its text, published (below), or,
         // holding a string, has none to place.
         if !hidden && arena.is_inline_image(slot) {
@@ -123,9 +133,9 @@ pub(super) fn publish(
         };
         // Publish the padding and border with the frame for readers that
         // must not reach into a tree a content region's nodes are not in
-        let inset = arena
-            .taffy(slot)
-            .map(|node| crate::id::BoxInset::of(arena, slot, tree.layout(node)));
+        let inset = arena.taffy(slot).map(|node| {
+            crate::id::BoxInset::of(arena, slot, tree.layout(node), tree.text_item(node))
+        });
         let inset_changed = arena.inset(slot) != inset;
         arena.set_inset(slot, inset);
         let frame = if hidden {
@@ -203,7 +213,7 @@ pub(super) fn publish(
         let displacement = tree
             .tables
             .flat(slot)
-            .then(|| super::table::displacement(arena, tree, slot));
+            .then(|| super::table::displacement(arena, tree, slot, arena.taffy(slot)));
         let displaced = displacement
             .is_some_and(|d| tree.displacements.insert(slot, d) != Some(d) || parent_moved);
         let descend_all = full
@@ -242,12 +252,10 @@ pub(super) fn publish(
         // A table's row group or row holds its children only in the arena:
         // the engine laid them out in the table's grid (`table.rs`), from
         // the grid's origin, moved with the row or group as it is moved
-        // relatively. A table that is another box holds its grid.
+        // relatively. A block's direct parts also take their own anonymous
+        // grid's offset; its ordinary children stay in the block's space.
         let (fx, fy) = if let Some((dx, dy)) = displacement {
             (ox + dx, oy + dy)
-        } else if let Some(grid) = tree.tables.anon(slot) {
-            let l = tree.layout(grid);
-            (fx + l.location.x, fy + l.location.y)
         } else {
             (fx, fy)
         };
@@ -257,10 +265,16 @@ pub(super) fn publish(
                     continue; // its own layout's, in its own space
                 }
                 let full = full || arena.flags(child).has(NodeFlags::ATTACHED);
+                let (cx, cy) = if let Some(grid) = tree.tables.grid_for(slot, child) {
+                    let l = tree.layout(grid);
+                    (fx + l.location.x, fy + l.location.y)
+                } else {
+                    (fx, fy)
+                };
                 stack.push((
                     child,
-                    fx,
-                    fy,
+                    cx,
+                    cy,
                     hidden,
                     full,
                     origin_moved || displaced,

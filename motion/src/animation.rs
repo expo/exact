@@ -20,7 +20,7 @@ use crate::property::{Property, Value};
 
 mod parse;
 mod schedule;
-pub use parse::{easing_css, link, value_css, LONGHANDS};
+pub use parse::{easing_css, is_easing, link, value_css, Role, Slots, LONGHANDS};
 
 /// Most animations one node may declare.
 pub const MAX_ANIMATIONS: usize = 8;
@@ -381,29 +381,60 @@ impl Keyframes {
         Ok(())
     }
 
+    /// An axis outside the screen plane needs a spatial host target.
+    pub fn spatial_rotation(&self) -> bool {
+        self.0.iter().any(|f| {
+            f.values
+                .iter()
+                .any(|(p, v)| *p == Property::Rotate && (v.y != 0.0 || v.z != 0.0))
+        })
+    }
+
+    /// Whether a scalar Z track can play every resolved rotation interval.
+    pub fn planar_rotation(&self, underlying: Value) -> bool {
+        self.track(Property::Rotate, underlying, false, &Easing::Linear)
+            .windows(2)
+            .all(|w| crate::rotation::planar(w[0].2, w[1].2))
+    }
+
     /// The keyframes one property takes part in, as (offset, easing, value),
-    /// with CSS's implicit `0%` and `100%` from `underlying` where no
-    /// keyframe declares it (CSS Animations 1 §3). A `light-dark()` colour
-    /// takes its value under `dark`.
-    pub fn track(
-        &self,
+    /// under an animation whose own timing function is `easing`, with CSS's
+    /// implicit `0%` and `100%` from `underlying` where no keyframe
+    /// declares it (CSS Animations 1 §3). A `light-dark()` colour takes its
+    /// value under `dark`.
+    ///
+    /// Keyframes at one offset whose timing functions are equal, a keyframe
+    /// without one taking the animation's, are one keyframe in which the
+    /// later value wins (CSS Animations 2 §3.2). The parser groups only
+    /// what it can without the animation.
+    pub fn track<'a>(
+        &'a self,
         property: Property,
         underlying: Value,
         dark: bool,
-    ) -> Vec<(f64, Option<&Easing>, Value)> {
-        let mut out: Vec<(f64, Option<&Easing>, Value)> = self
-            .0
-            .iter()
-            .filter_map(|f| {
-                f.get(property, dark)
-                    .map(|v| (f.offset, f.easing.as_ref(), v))
-            })
-            .collect();
+        easing: &'a Easing,
+    ) -> Vec<(f64, &'a Easing, Value)> {
+        let mut out: Vec<(f64, &Easing, Value)> = Vec::new();
+        for f in self.0.iter() {
+            let Some(v) = f.get(property, dark) else {
+                continue;
+            };
+            let v = if property == Property::Rotate {
+                crate::rotation::with_axis(v, underlying)
+            } else {
+                v
+            };
+            let e = f.easing.as_ref().unwrap_or(easing);
+            match out.iter_mut().find(|k| k.0 == f.offset && k.1 == e) {
+                Some(same) => same.2 = v,
+                None => out.push((f.offset, e, v)),
+            }
+        }
         if out.first().is_none_or(|f| f.0 > 0.0) {
-            out.insert(0, (0.0, None, underlying));
+            out.insert(0, (0.0, easing, underlying));
         }
         if out.last().is_none_or(|f| f.0 < 1.0) {
-            out.push((1.0, None, underlying));
+            out.push((1.0, easing, underlying));
         }
         out
     }
@@ -556,9 +587,13 @@ impl Animation {
     /// The keyframe effect at directed progress `p` for one property, a
     /// `light-dark()` colour under `dark`.
     pub fn value_at(&self, p: f64, property: Property, underlying: Value, dark: bool) -> Value {
-        let track = self.keyframes.track(property, underlying, dark);
+        let track = self
+            .keyframes
+            .track(property, underlying, dark, &self.easing);
         // The interval: the last keyframe at or before p (the last of equal
-        // offsets), and the next one after it; at p = 1 the final interval.
+        // offsets), and the next one after it; at p = 1 the final interval,
+        // or, when more than one keyframe is at 1, the last of them (Web
+        // Animations 1, "the effect value of a keyframe effect").
         let mut start = 0;
         for (i, frame) in track.iter().enumerate() {
             if frame.0 <= p && i + 1 < track.len() {
@@ -566,19 +601,34 @@ impl Animation {
             }
         }
         if p >= 1.0 {
-            start = track.len().saturating_sub(2);
-            while start > 0 && track[start].0 >= 1.0 {
-                start -= 1;
+            let n = track.len();
+            if n >= 2 && track[n - 2].0 >= 1.0 {
+                let v = track[n - 1].2;
+                return if property == Property::Rotate {
+                    crate::rotation::presented(v)
+                } else {
+                    v
+                };
             }
+            start = n.saturating_sub(2);
         }
         let (a, b) = (&track[start], &track[(start + 1).min(track.len() - 1)]);
         let span = b.0 - a.0;
         if span <= 0.0 {
-            return if p >= b.0 { b.2 } else { a.2 };
+            let v = if p >= b.0 { b.2 } else { a.2 };
+            return if property == Property::Rotate {
+                crate::rotation::presented(v)
+            } else {
+                v
+            };
         }
         let local = (p - a.0) / span;
-        let eased = a.1.unwrap_or(&self.easing).progress(local);
-        a.2.lerp(b.2, eased)
+        let eased = a.1.progress(local);
+        if property == Property::Rotate {
+            crate::rotation::interpolate(a.2, b.2, eased)
+        } else {
+            a.2.lerp(b.2, eased)
+        }
     }
 }
 
@@ -627,6 +677,45 @@ impl Animations {
         }
         out.sort();
         out
+    }
+}
+
+/// What a list of animations does to a picture of a box, about the box's
+/// centre. A route's part poses the route's picture so (LLP 1013.001 D1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Picture {
+    /// Zero to one.
+    pub opacity: f64,
+    /// Points, x then y.
+    pub translate: (f64, f64),
+    /// Uniform; one is the natural size.
+    pub scale: f64,
+    /// Degrees clockwise.
+    pub rotate: f64,
+}
+
+impl Animations {
+    /// The picture of a box `size` large (points) at local time `t`
+    /// (seconds): each property takes the last animation that applies to it
+    /// then, as CSS composites a list, over its initial value; `translate`'s
+    /// percentages are of the box.
+    pub fn picture(&self, t: f64, size: (f64, f64)) -> Picture {
+        let value = |p: Property| {
+            let rest = p.identity().unwrap_or(Value::ZERO);
+            (self.0.iter().rev())
+                .find_map(|a| a.sample(t, p, rest))
+                .unwrap_or(rest)
+        };
+        let translate = value(Property::Translate);
+        Picture {
+            opacity: value(Property::Opacity).x.clamp(0.0, 1.0),
+            translate: (
+                translate.x + translate.z / 100.0 * size.0,
+                translate.y + translate.w / 100.0 * size.1,
+            ),
+            scale: value(Property::Scale).x,
+            rotate: value(Property::Rotate).x,
+        }
     }
 }
 

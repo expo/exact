@@ -91,7 +91,7 @@ final class CollectionFillMacTests: XCTestCase {
         p.collections.fillSlice(1, limit: 1)
         clip.scroll(to: NSPoint(x: 0, y: 60))
         p.collections.changed(1)
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(wires.count, 2, "the turn's two passes are spent")
         clip.scroll(to: NSPoint(x: 0, y: 200))
         XCTAssertEqual(wires.count, 3, "the gap is rescued in the same turn")
@@ -127,7 +127,7 @@ final class CollectionFillMacTests: XCTestCase {
         clip.scroll(to: NSPoint(x: 0, y: 70))
         XCTAssertEqual(p.collections.fillSlice(1, limit: 5), 0)
         XCTAssertTrue(p.collections.fillPending.contains(1))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         XCTAssertEqual(wires.count, 1)
         XCTAssertEqual(fills.count, 1)
         // Landed: one retire-only report from main at the slice's limit, in
@@ -159,7 +159,7 @@ final class CollectionFillMacTests: XCTestCase {
         XCTAssertTrue(inFlight)
         let before = p.collections.continuations
         clip.scroll(to: NSPoint(x: 0, y: 70))
-        p.collections.flush()
+        p.collections.flushIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertLessThanOrEqual(p.collections.continuations - before, 1, "no continuation queues itself while the slice is in flight")
         XCTAssertEqual(wires.count, 1, "the report waits")

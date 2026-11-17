@@ -14,6 +14,15 @@ import UIKit
 /// UIKit's button, as a native button's control: never a UIKit focus item
 /// (the node is the focus owner, D4).
 final class NativeButtonIOS: UIButton {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     weak var owner: NodeView?
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -135,7 +144,9 @@ final class NativeButtonIOS: UIButton {
         didSet { refreshActiveState() }
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if ExactEnv.agentMode { TouchLog.reach(touches) }
+        #if EXACT_AGENT
+        if ExactEnv.agentCarried { TouchLog.reach(touches) }
+        #endif
         super.touchesBegan(touches, with: event)
     }
     /// Where the touch lifted while UIKit sends the action it ends with (in
@@ -153,6 +164,7 @@ final class NativeButtonIOS: UIButton {
         var active: NativeButtonState
         var raster: UInt64
         var accent: UIColor?
+        var tint: UIColor?
         var destructive: Bool
         var enabled: Bool
         var label: String?
@@ -174,7 +186,7 @@ final class NativeButtonIOS: UIButton {
             face.rows.title["written"] = nil; theirs.rows.title["written"] = nil
             face.rows.subtitle["written"] = nil; theirs.rows.subtitle["written"] = nil
             face.rows.symbol["written"] = nil; theirs.rows.symbol["written"] = nil
-            return face == theirs && raster == other.raster && accent == other.accent && destructive == other.destructive
+            return face == theirs && raster == other.raster && accent == other.accent && tint == other.tint && destructive == other.destructive
                 && enabled == other.enabled && traits == other.traits && interactive == other.interactive && padding == other.padding
         }
     }
@@ -396,7 +408,8 @@ extension ControlHost {
         let destructive = owner.props["destructive"] == "true" && !owner.wrote("accent_color")
         let accent = destructive ? UIColor.systemRed : Self.platformAccent(owner, accent)
         let written = NativeButtonIOS.Written(
-            face: face, active: NativeButtonState(owner), raster: owner.raster?.id ?? 0, accent: accent, destructive: destructive, enabled: !owner.disabled,
+            face: face, active: NativeButtonState(owner), raster: owner.raster?.id ?? 0, accent: accent, tint: owner.carriedTint,
+            destructive: destructive, enabled: !owner.disabled,
             label: owner.authoredLabel ?? face.title, testId: owner.props["testId"],
             // A checked radio is selected, as Safari's VoiceOver reads one (`setAccessibilityChecked`).
             // `aria-current` (not `false`) too: UIKit has no current (theme2 2026-10-22 06:40).
@@ -449,7 +462,7 @@ extension ControlHost {
                 "subtitle": face.subtitle as Any, "imagePlacement": face.placement ?? (face.leading ? "leading" : "trailing"),
                 "pointerEvents": button.isUserInteractionEnabled ? "auto" : "none",
                 "rows": ButtonConfigurationIOS.observation(face, button: button),
-                "size": [Agent.r2(button.bounds.width), Agent.r2(button.bounds.height)]]
+                "size": [InspectionValue.r2(button.bounds.width), InspectionValue.r2(button.bounds.height)]]
     }
 }
 

@@ -65,8 +65,8 @@ fn no_base_named_no_declarations_and_a_designs_own_is_its_token() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  space.md = 40px\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  space.md = 40px\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  view\n    column padding=\"space.md\" gap=\"space.sm\"\n      text \"a\"\n").unwrap();
@@ -94,13 +94,13 @@ fn an_apps_own_base_name_wins_and_follows_a_live_edit() {
             std::env::temp_dir().join(format!("exact-web-js-base-live-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        std::fs::write(dir.join("app.forma"), design).unwrap();
         std::fs::write(dir.join("app.contract"), "component App\n  view\n    column padding=\"space.md\" gap=\"space.sm\"\n      text \"a\"\n").unwrap();
         let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         plan
     };
-    let before = compile("tamber t\n\ntheme\n  space.md = 40px\n");
+    let before = compile("forma t\n\ntheme\n  space.md = 40px\n");
     // A development build: the row reads the design's property, never a base one.
     let dev = crate::emit::emit(&before, false, true).unwrap();
     assert!(
@@ -131,7 +131,7 @@ fn an_apps_own_base_name_wins_and_follows_a_live_edit() {
     };
     let (was, now) = (
         token(&before),
-        token(&compile("tamber t\n\ntheme\n  space.md = 48px\n")),
+        token(&compile("forma t\n\ntheme\n  space.md = 48px\n")),
     );
     // The edit's batch sets the same property to the new value: the page moves.
     assert_eq!(
@@ -165,7 +165,7 @@ fn an_alias_to_an_unset_base_reads_its_property_and_one_the_app_sets_folds() {
             std::env::temp_dir().join(format!("exact-web-js-alias-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        std::fs::write(dir.join("app.forma"), design).unwrap();
         std::fs::write(
             dir.join("app.contract"),
             "component App\n  view\n    column padding=\"card.pad\"\n      text \"a\"\n",
@@ -175,10 +175,7 @@ fn an_alias_to_an_unset_base_reads_its_property_and_one_the_app_sets_folds() {
         let _ = std::fs::remove_dir_all(&dir);
         plan
     };
-    let unset = compile(
-        "tamber t\n\ntheme\n  card.pad: length = space.md\n",
-        "unset",
-    );
+    let unset = compile("forma t\n\ntheme\n  card.pad: length = space.md\n", "unset");
     assert_eq!(
         crate::measures::css(exact_kernel::style::theme::Kind::Length, "space.md"),
         "var(--exact-space-md)"
@@ -219,7 +216,7 @@ fn an_alias_to_an_unset_base_reads_its_property_and_one_the_app_sets_folds() {
     );
     // The app sets `space.md`: the alias folds, its value shows, no base property.
     let own = compile(
-        "tamber t\n\ntheme\n  space.md = 40px\n  card.pad: length = space.md\n",
+        "forma t\n\ntheme\n  space.md = 40px\n  card.pad: length = space.md\n",
         "own",
     );
     let out = crate::emit::emit(&own, false, false).unwrap();
@@ -239,8 +236,8 @@ fn an_alias_in_an_svg_attribute_is_the_bases_length() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  card.pad: length = space.md\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  card.pad: length = space.md\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  state size = \"card.pad\"\n  view\n    svg viewBox=\"0 0 24 24\" width=24 height=24\n      pattern id=\"p\" width=size height=\"card.pad\"\n        path d=\"M0 0L4 4\"\n").unwrap();
@@ -366,7 +363,7 @@ fn a_keyword_rows_map_is_not_a_length_rows() {
     let dir = std::env::temp_dir().join(format!("exact-web-js-base-key-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), "tamber t\n\ntheme\n  tile = 8px\n").unwrap();
+    std::fs::write(dir.join("app.forma"), "forma t\n\ntheme\n  tile = 8px\n").unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  state scheme = \"light\"\n  state pad = \"space.md\"\n  view\n    column color-scheme=scheme padding=\"tile\"\n      column padding=pad\n        text \"a\"\n").unwrap();
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -404,8 +401,8 @@ fn a_token_a_bound_svg_attribute_may_name_is_written_inline() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  card.pad: length = space.md\n  tile = 8px\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  card.pad: length = space.md\n  tile = 8px\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  state size = \"card.pad\"\n  view\n    column padding=\"tile\"\n      svg viewBox=\"0 0 24 24\" width=24 height=24\n        pattern id=\"p\" width=size height=\"4\"\n          path d=\"M0 0L4 4\"\n").unwrap();
@@ -450,7 +447,7 @@ fn a_switch_between_base_names_keeps_the_structure() {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        std::fs::write(dir.join("app.forma"), design).unwrap();
         std::fs::write(
             dir.join("app.contract"),
             "component App\n  view\n    column padding=\"card.pad\"\n      text \"a\"\n",
@@ -464,14 +461,14 @@ fn a_switch_between_base_names_keeps_the_structure() {
             .unwrap()
             .to_string()
     };
-    let md = structure("tamber t\n\ntheme\n  card.pad: length = space.md\n");
+    let md = structure("forma t\n\ntheme\n  card.pad: length = space.md\n");
     assert_eq!(
         md,
-        structure("tamber t\n\ntheme\n  card.pad: length = space.lg\n")
+        structure("forma t\n\ntheme\n  card.pad: length = space.lg\n")
     );
     assert_ne!(
         md,
-        structure("tamber t\n\ntheme\n  card.pad: length = 12px\n")
+        structure("forma t\n\ntheme\n  card.pad: length = 12px\n")
     );
 }
 
@@ -520,8 +517,8 @@ fn an_expression_over_base_names_is_a_calc_over_their_properties() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        format!("tamber t\n\ntheme\n  card.pad: length = {expr}\n"),
+        dir.join("app.forma"),
+        format!("forma t\n\ntheme\n  card.pad: length = {expr}\n"),
     )
     .unwrap();
     std::fs::write(
@@ -573,8 +570,8 @@ fn an_expression_over_base_names_is_a_calc_over_their_properties() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        format!("tamber t\n\ntheme\n  card.pad: length = {expr}\n"),
+        dir.join("app.forma"),
+        format!("forma t\n\ntheme\n  card.pad: length = {expr}\n"),
     )
     .unwrap();
     std::fs::write(
@@ -653,8 +650,8 @@ fn a_shadow_over_base_names_writes_their_properties() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n",
     )
     .unwrap();
     std::fs::write(

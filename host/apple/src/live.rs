@@ -5,13 +5,13 @@ use super::Host;
 use exact_runner::{design::Edit, DataSource, LiveRefusal, Timed};
 
 impl<D: DataSource> Host<D> {
-    /// Apply a `tamber-batch` or `tamber-snapshot` frame: a batch whose
+    /// Apply a `forma-batch` or `forma-snapshot` frame: a batch whose
     /// `live` says `applied` (with `unsupported` when the wide colour table
     /// refused a colour), `stale` (ask for a snapshot), `structure` (a plan
     /// is coming) or `refused`.
     pub fn apply_live(&mut self, frame: &str) -> String {
         let Some(edit) = Edit::parse(frame) else {
-            return exact_runner::agent::error("live: not a tamber batch or snapshot");
+            return exact_runner::agent::error("live: not a forma batch or snapshot");
         };
         let (mut batch, live, unsupported) = match self.runner.apply_live(&edit) {
             Ok(applied) => {

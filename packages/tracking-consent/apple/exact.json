@@ -6,9 +6,87 @@
     "ios",
     "tvos"
   ],
-  "shapes": {},
+  "shapes": {
+    "TrackingStatus": {
+      "available": "bool",
+      "status": "enum<notDetermined|restricted|denied|authorized>",
+      "state": "enum<granted|prompt|denied>"
+    },
+    "AdvertisingIdentifier": {
+      "identifier": "string"
+    }
+  },
   "options": {},
-  "names": [],
+  "names": [
+    {
+      "source": "trackingAuthorizationStatus",
+      "live": true,
+      "overlays": "implementation",
+      "answers": "TrackingStatus",
+      "sync": {
+        "name": "trackingAuthorizationStatusSync",
+        "from": "read"
+      },
+      "substitute": {
+        "default": {
+          "available": false,
+          "status": "denied",
+          "state": "denied"
+        },
+        "targets": {
+          "ios": {
+            "available": true,
+            "status": "notDetermined",
+            "state": "prompt"
+          },
+          "tvos": {
+            "available": true,
+            "status": "notDetermined",
+            "state": "prompt"
+          }
+        }
+      }
+    },
+    {
+      "send": "requestTrackingAuthorization",
+      "request": true,
+      "origin": "app",
+      "foreground": true,
+      "answers": "TrackingStatus",
+      "substitute": {
+        "choose": {
+          "ticket": "tracking",
+          "typed": false,
+          "choices": [
+            "allow",
+            "deny",
+            "dismiss"
+          ]
+        },
+        "unsupported": [
+          "web",
+          "macos",
+          "android",
+          "linux",
+          "windows"
+        ]
+      }
+    },
+    {
+      "send": "advertisingIdentifier",
+      "contract": false,
+      "answers": "AdvertisingIdentifier",
+      "substitute": {
+        "unsupported": [
+          "web",
+          "macos",
+          "android",
+          "linux",
+          "windows"
+        ]
+      }
+    }
+  ],
   "views": [],
   "hatches": [],
   "sources": {

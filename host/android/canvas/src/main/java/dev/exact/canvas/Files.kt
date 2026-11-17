@@ -22,8 +22,9 @@ import java.nio.file.attribute.BasicFileAttributes
 /**
  * The app's files as content URIs another app may read under a grant (LLP 1133.024 D22 item 2): what an intent carries
  * for a mail's attachments, as `androidx.core`'s `FileProvider` does, without the library. Unexported, so only a URI
- * the app granted with its intent opens, and only for reading; a path outside the app's own data directory opens
- * nothing. [uri] makes one; `AndroidManifest.xml` declares it as `<package>.exact.files`.
+ * the app granted with its intent opens, and only for reading, unless the app handed that one file out for writing
+ * ([writableUri]: the camera app's photo); a path outside the app's own data directory opens nothing. [uri] makes
+ * one; `AndroidManifest.xml` declares it as `<package>.exact.files`.
  */
 class Files : ContentProvider() {
     override fun onCreate() = true
@@ -36,8 +37,11 @@ class Files : ContentProvider() {
     }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
-        if (mode != "r") throw SecurityException("the app's files are shared for reading only")
-        return ParcelFileDescriptor.open(file(uri), ParcelFileDescriptor.MODE_READ_ONLY)
+        if (mode == "r") return ParcelFileDescriptor.open(file(uri), ParcelFileDescriptor.MODE_READ_ONLY)
+        // [file] resolves links, so a link put in place of a handed-out file names one that is not handed out.
+        val f = file(uri)
+        if (!writes(f)) throw SecurityException("the app's files are shared for reading only")
+        return ParcelFileDescriptor.open(f, ParcelFileDescriptor.parseMode(mode))
     }
 
     /** The name and size a receiver shows ([OpenableColumns]). */
@@ -63,6 +67,38 @@ class Files : ContentProvider() {
             if (!inside(context, canonical) || !canonical.isFile) return null
             return Uri.Builder().scheme("content").authority("${context.packageName}.exact.files").path(canonical.path).build()
         }
+
+        /** The files another app may write through their URIs now, by canonical path ([writableUri]). */
+        private val writable: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+
+        /**
+         * A content URI another app may write [f] through, for an intent whose result is a file (the camera app's
+         * `EXTRA_OUTPUT`): [f], one of the app's own files, is made empty, and writes to it open until [endWrite].
+         * Null for a file outside the app's data directory, or a link.
+         */
+        fun writableUri(context: Context, f: File): Uri? {
+            // Before anything is emptied: a file elsewhere is left as it is.
+            if (!inside(context, f.canonicalFile)) return null
+            if (!openForWrite(f)) return null
+            return uri(context, f) ?: run { endWrite(f); null }
+        }
+
+        /** [f] made empty, following no link ([output]), and open to another app's writes through its URI until
+         * [endWrite]. */
+        internal fun openForWrite(f: File): Boolean {
+            try {
+                f.parentFile?.mkdirs()
+                output(f).close()
+            } catch (e: IOException) { return false }
+            writable.add(f.canonicalPath)
+            return true
+        }
+
+        /** Whether another app may write [f] through its URI now. */
+        internal fun writes(f: File): Boolean = f.canonicalPath in writable
+
+        /** [f]'s URI opens for reading only again. */
+        fun endWrite(f: File) { writable.remove(f.canonicalPath) }
 
         /** A file's type by its extension, as a receiver reads it. */
         fun type(f: File): String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "application/octet-stream"

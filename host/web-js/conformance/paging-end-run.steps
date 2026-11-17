@@ -1,0 +1,9 @@
+# The reader scrolls to the top; one page lands after the leading run, the
+# reader is held a page down, and no second page is asked for.
+clock settle
+wheel feed -100000
+clock +600
+clock +600
+clock settle
+expect slots.pages == 1
+expect slots.top == false

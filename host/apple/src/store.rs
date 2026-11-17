@@ -1,7 +1,9 @@
 //! The app's kept secrets on Apple platforms (LLP 1018 D6): `ibex2::host`'s
 //! `Secrets` — the Keychain (ibex LLP 0069) — read into a snapshot before the
-//! runner boots and written after each commit, on the main thread, never
-//! through Swift. The runner's kept answers (LLP 1027 D4) go through
+//! runner boots and written after each commit, on the owner thread. The optional
+//! watch export sends selected ordinary secrets only to its CryptoKit callback;
+//! its store reply contains only the sealed envelope (LLP 1018 D6).
+//! The runner's kept answers (LLP 1027 D4) go through
 //! `ibex2`'s kv store, a file per answer, written on a thread of their own
 //! (`flush_kept`).
 //!
@@ -18,6 +20,9 @@ use ibex2::boundary::HostError;
 use ibex2::host::{Bindings, Host, Kv, Secrets};
 #[path = "store_secrets.rs"]
 mod shared_secrets;
+pub(crate) use shared_secrets::{launch_backend, launch_secrets};
+#[cfg(test)]
+pub(crate) use shared_secrets::{launch_backend_in, read_launch_secrets};
 use shared_secrets::{secret_directory, secret_namespace, SecretBackend};
 
 /// The kv scope the runner's kept answers live in (LLP 1027 D4): beside the
@@ -180,7 +185,7 @@ thread_local! {
     /// `endow` on the thread shares it, as launches share the Keychain, so a
     /// test reads and writes the same store the bridge does without a
     /// developer's (possibly locked) keychain. The Keychain itself is
-    /// `ibex2`'s `secrets::darwin` test.
+    /// covered by `KeychainMacTests` through the native shim and Security.
     pub(crate) static PLATFORM: std::cell::RefCell<Option<std::sync::Arc<ibex2::secrets::MemoryStore>>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -201,10 +206,10 @@ impl ibex2::secrets::SecretStore for Shared {
     }
 }
 
-fn endow_in(host: Host, grants: &str) -> Result<Bindings, String> {
+pub(crate) fn endow_in(host: Host, grants: &str) -> Result<Bindings, String> {
     // Appended, so an error's line number is the app's own.
     let spec = format!(
-        "{}\nstorage.kv {KEPT}\nstorage.kv {STATE}\n{}",
+        "{}\nstorage.kv {KEPT}\nstorage.kv {STATE}\nstorage.kv exact.watch\n{}",
         exact_runner::io_grants(grants),
         crate::presence_secrets::scopes(),
     );
@@ -355,6 +360,9 @@ pub struct Endowed {
     pub bindings: Option<Bindings>,
     /// What the platform's stores held, read before the runner boots.
     pub snapshot: Vec<(String, Vec<u8>)>,
+    /// The kept answers past the read budget, by name: the host names them
+    /// to the runner it boots (`Runner::forget_unread_kept`).
+    pub unread_kept: Vec<String>,
     /// Where a commit's writes go.
     pub secrets: Option<Box<dyn KeptStore>>,
     /// Why the grants bound nothing.
@@ -372,6 +380,7 @@ impl Endowed {
         Endowed {
             bindings: None,
             snapshot: Vec::new(),
+            unread_kept: Vec::new(),
             secrets: None,
             unbound: None,
             presence: None,
@@ -381,7 +390,8 @@ impl Endowed {
 
 /// [`endow_bound`] and, for a fresh session, what its stores held (a reload
 /// carries the running store): [`crate::link::IoLinks`]'s endowment.
-pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
+/// `PRESENCE` links the vault only when the composition names it.
+pub fn endowed<const PRESENCE: bool>(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     let (bindings, unbound) = endow_bound(grants, app_id, fresh);
     let prefs = Prefs::of(app_id);
     let agent = std::env::var_os("EXACT_AGENT").is_some();
@@ -389,23 +399,29 @@ pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     // locked items in the keychain too, behind the platform's check, which it
     // binds (`--bind local-auth`): the conformance suite's real items.
     let platform = !agent || std::env::var("EXACT_STORE").as_deref() == Ok("real");
-    let presence = match !platform {
-        true => crate::presence_secrets::agent_backend(bindings.as_ref(), grants, agent)
+    let presence = match (PRESENCE, !platform) {
+        (false, _) => None,
+        (true, true) => crate::presence_secrets::agent_backend(bindings.as_ref(), grants, agent)
             .map(|b| (b, None)),
-        false => crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
-            .map(|(b, service)| (b, Some(service))),
+        (true, false) => {
+            crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
+                .map(|(b, service)| (b, Some(service)))
+        }
     };
-    let mut snapshot = if fresh {
-        snapshot_in(bindings.as_ref(), &prefs)
-    } else {
-        Vec::new()
+    let (mut snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
+        Some(b) => {
+            let read = snapshot_parts(&b.secrets, &b.kv, &prefs, Vec::new());
+            (read.values, read.omitted)
+        }
+        None => Default::default(),
     };
-    if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh) {
+    if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh && PRESENCE) {
         let capable = keystore.is_none() || crate::presence_secrets::keychain_capable();
         snapshot.extend(backend.snapshot_entries(capable));
     }
     Endowed {
         snapshot,
+        unread_kept,
         presence,
         secrets: bindings.as_ref().map(|b| {
             Box::new(
@@ -476,6 +492,13 @@ impl Platform {
     /// Keep or forget one write. A kept answer is handed to the writer and
     /// its failure, if any, is told later (`kept_failures`).
     pub fn write(&self, w: &StoreWrite) -> Result<(), HostError> {
+        if crate::watch_sync::read_only(&w.name) {
+            return Err(HostError::Failed("watch replica is phone-owned".into()));
+        }
+        self.write_import(w)
+    }
+
+    fn write_import(&self, w: &StoreWrite) -> Result<(), HostError> {
         if w.durable {
             return Ok(());
         }
@@ -508,9 +531,53 @@ impl Platform {
                 );
                 Ok(())
             }
-            (None, Some(v)) => self.secrets.set(&w.name, &String::from_utf8_lossy(v)),
-            (None, None) => self.secrets.forget(&w.name),
+            (None, value) => crate::launch_preloads::with_secret_write(&w.name, || {
+                let text = value.as_deref().map(String::from_utf8_lossy);
+                SecretBackend(self.secrets.clone(), self.secret_directory.clone())
+                    .persist(&w.name, text.as_deref())
+                    .map_err(HostError::Failed)
+            }),
         }
+    }
+
+    pub(crate) fn watch_meta(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+        self.kv
+            .get("exact.watch", key)
+            .map_err(|_| "watch metadata read failed".into())
+    }
+    pub(crate) fn watch_put_meta(&self, key: &str, value: &[u8]) -> Result<(), String> {
+        self.kv
+            .set("exact.watch", key, value)
+            .map_err(|_| "watch metadata write failed".into())
+    }
+    pub(crate) fn watch_presence(&self, name: &str) -> Result<bool, String> {
+        self.kv
+            .get(crate::presence_secrets::RECORDS, name)
+            .map(|v| v.is_some())
+            .map_err(|_| "watch presence read failed".into())
+    }
+    pub(crate) fn watch_read(&self, name: &str) -> Result<Option<String>, String> {
+        if let Some(key) = name.strip_prefix(Store::STATE) {
+            return match &self.prefs {
+                Prefs::Kv => self
+                    .kv
+                    .get_text(STATE, key)
+                    .map_err(|_| "watch state read failed".into()),
+                Prefs::Defaults(_) => Ok(self
+                    .prefs
+                    .read(&self.kv)
+                    .into_iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, b)| String::from_utf8_lossy(&b).into_owned())),
+            };
+        }
+        self.secrets
+            .get(name)
+            .map_err(|_| "watch secret read failed".into())
+    }
+    pub(crate) fn watch_write(&self, write: &StoreWrite) -> Result<(), String> {
+        self.write_import(write)
+            .map_err(|_| "watch import failed".into())
     }
 
     /// The kept answers the writer failed to write since the last call, as
@@ -676,8 +743,17 @@ fn wait_until_written(
 
 /// What the store holds under the granted names — the runner's snapshot.
 /// A name the store cannot read is absent, as an ungranted one is.
-pub fn snapshot_for(bindings: Option<&Bindings>, app_id: &str) -> Vec<(String, Vec<u8>)> {
-    snapshot_in(bindings, &Prefs::of(app_id))
+/// An entry's refresh is refused while a watch import overlaps the read: values
+/// from two snapshots, or none, must not reach its source as the account.
+pub fn snapshot_for(
+    bindings: Option<&Bindings>,
+    app_id: &str,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let Some(b) = bindings else {
+        return Ok(Vec::new());
+    };
+    crate::watch_sync::reading(&b.kv, || snapshot_in(bindings, &Prefs::of(app_id)))
+        .ok_or_else(|| "a watch import is unfinished".into())
 }
 
 /// The snapshot with the default preference store.
@@ -713,6 +789,29 @@ fn snapshot_parts(
     // kept writer can delay that turn; moving the read off-owner needs an
     // ordered snapshot handoff, not a read ahead of its flush.
     flush_kept();
+    #[cfg(not(any(target_os = "watchos", test)))]
+    return read_parts(secrets, kv, prefs, previous);
+    // A read a watch import overlapped is not one snapshot's: the caller keeps
+    // what it held and reads again.
+    #[cfg(any(target_os = "watchos", test))]
+    {
+        let prior = previous.clone();
+        crate::watch_sync::reading(kv, || read_parts(secrets, kv, prefs, previous)).unwrap_or(
+            StoreRead {
+                values: prior,
+                omitted: Vec::new(),
+                complete: false,
+            },
+        )
+    }
+}
+
+fn read_parts(
+    secrets: &Secrets,
+    kv: &Kv,
+    prefs: &Prefs,
+    previous: Vec<(String, Vec<u8>)>,
+) -> StoreRead {
     let mut values: std::collections::BTreeMap<_, _> = previous.into_iter().collect();
     let mut complete = true;
     let mut omitted = Vec::new();
@@ -834,6 +933,16 @@ pub(crate) fn group_root(app_id: &str) -> Option<std::path::PathBuf> {
         .filter(|p| p.is_absolute())
 }
 
+/// Imports must invalidate account timelines before their journal is cleared.
+pub(crate) fn watch_changed(app: &str) -> Result<(), String> {
+    if let Some(root) = group_root(app) {
+        if !publish_widget_change(root, app.to_owned()) {
+            return Err("watch timeline invalidation failed".into());
+        }
+    }
+    Ok(())
+}
+
 /// Stage 1 has one writer: the app. Publish only a counter and a Darwin ping;
 /// another process re-reads the store, never a payload in the notification.
 pub(crate) fn widget_changed(app: &str) {
@@ -849,7 +958,7 @@ pub(crate) fn widget_changed(app: &str) {
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for (root, app) in receive {
-                publish_widget_change(root, app);
+                let _ = publish_widget_change(root, app);
             }
         });
         send
@@ -858,7 +967,7 @@ pub(crate) fn widget_changed(app: &str) {
 }
 
 #[allow(unsafe_code)]
-fn publish_widget_change(root: std::path::PathBuf, app: String) {
+fn publish_widget_change(root: std::path::PathBuf, app: String) -> bool {
     // A kept answer reaches disk on its own writer: wait for it, so a refresh
     // that reads this counter reads the store the counter stands for.
     flush_kept();
@@ -882,7 +991,7 @@ fn publish_widget_change(root: std::path::PathBuf, app: String) {
     });
     let Some(_) = published else {
         let _ = std::fs::remove_file(&temporary);
-        return;
+        return false;
     };
     // WP11 must put both app and extension counter increments under its shared lock.
     // WP11's extension writer (Q1 B) posts this ping after releasing its
@@ -899,6 +1008,7 @@ fn publish_widget_change(root: std::path::PathBuf, app: String) {
     }
     #[cfg(not(target_vendor = "apple"))]
     let _ = app;
+    true
 }
 
 #[cfg(test)]
@@ -937,8 +1047,10 @@ mod tests {
 
     #[test]
     fn a_launch_reads_no_more_kept_answers_than_the_runner_keeps_together() {
-        let dir = std::env::temp_dir().join(format!("exact-kept-total-{}", std::process::id()));
-        let kv = ibex2::kv::FileStore::new(&dir);
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-kept-total-{}", std::process::id())),
+        );
+        let kv = ibex2::kv::FileStore::new(&*dir);
         let third = Store::KEPT_TOTAL_BYTES / 3 + 1;
         for key in ["a", "b", "c"] {
             ibex2::kv::KvStore::set(&kv, KEPT, key, &vec![0; third]).unwrap();
@@ -946,7 +1058,7 @@ mod tests {
         ibex2::kv::KvStore::set(&kv, KEPT, "d", &[1]).unwrap();
         let host = Host::new()
             .with_secret_store(Box::new(ibex2::secrets::MemoryStore::new()))
-            .with_kv_store(Box::new(ibex2::kv::FileStore::new(&dir)));
+            .with_kv_store(Box::new(ibex2::kv::FileStore::new(&*dir)));
         let snapshot = snapshot_of(Some(&endow_in(host, "").unwrap()));
         let kept: usize = snapshot
             .iter()
@@ -967,11 +1079,12 @@ mod tests {
 
     #[test]
     fn kept_answers_outlive_the_launch_beside_the_apps_secrets() {
-        let dir = std::env::temp_dir().join(format!("exact-kept-{}", std::process::id()));
+        let dir =
+            crate::TempDir(std::env::temp_dir().join(format!("exact-kept-{}", std::process::id())));
         let launch = || {
             let host = Host::new()
                 .with_secret_store(Box::new(ibex2::secrets::MemoryStore::new()))
-                .with_kv_store(Box::new(ibex2::kv::FileStore::new(&dir)));
+                .with_kv_store(Box::new(ibex2::kv::FileStore::new(&*dir)));
             endow_in(host, "secret.keep app.token").unwrap()
         };
         let write = |name: &str, value: Option<&str>| StoreWrite {
@@ -1001,11 +1114,13 @@ mod tests {
 
     #[test]
     fn a_persisted_state_is_a_preference_never_a_secret() {
-        let dir = std::env::temp_dir().join(format!("exact-prefs-{}", std::process::id()));
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-prefs-{}", std::process::id())),
+        );
         let launch = || {
             let host = Host::new()
                 .with_secret_store(Box::new(ibex2::secrets::MemoryStore::new()))
-                .with_kv_store(Box::new(ibex2::kv::FileStore::new(&dir)));
+                .with_kv_store(Box::new(ibex2::kv::FileStore::new(&*dir)));
             endow_in(host, "secret.keep app.token").unwrap()
         };
         // In a test, as in agent mode, persisted states are the kv store's.
@@ -1257,6 +1372,7 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("exact-widget-counter-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
+        let _remove = crate::TempDir(root.clone());
         let counter = root.join("widget-store-generation");
         // Account B's answer is kept while the disk is shut.
         platform
@@ -1303,8 +1419,9 @@ mod tests {
     fn named_agent_storage_keeps_a_secret_across_a_relaunch() {
         const CHILD: &str = "EXACT_APPLE_SECRET_KEEP_TEST";
         if std::env::var_os(CHILD).is_none() {
-            let home =
-                std::env::temp_dir().join(format!("exact-apple-secrets-{}", std::process::id()));
+            let home = crate::TempDir(
+                std::env::temp_dir().join(format!("exact-apple-secrets-{}", std::process::id())),
+            );
             let _ = std::fs::remove_dir_all(&home);
             std::fs::create_dir_all(&home).unwrap();
             let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1313,7 +1430,7 @@ mod tests {
                     "store::tests::named_agent_storage_keeps_a_secret_across_a_relaunch",
                 ])
                 .env(CHILD, "1")
-                .env("HOME", &home)
+                .env("HOME", &*home)
                 .env("EXACT_AGENT", "1")
                 .env("EXACT_AGENT_STORAGE", "s1")
                 .env_remove("EXACT_AGENT_STORAGE_FRESH")

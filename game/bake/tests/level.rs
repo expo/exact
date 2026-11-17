@@ -1,4 +1,24 @@
 use exact_game::{asset::Level, Data, Game, Input, Vec3, World};
+
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[derive(Default, Data)]
 struct Island {
     seed: u64,
@@ -23,7 +43,7 @@ impl Game for NoLevel {
 }
 #[test]
 fn level_bake_validates_the_authors_derive_before_delivery() {
-    let dir = std::env::temp_dir().join(format!("exact-level-{}", std::process::id()));
+    let dir = TempDir(std::env::temp_dir().join(format!("exact-level-{}", std::process::id())));
     std::fs::create_dir_all(&dir).unwrap();
     let level = Level::of::<Island>("island.level.json");
     let source = dir.join(level.name);

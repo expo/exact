@@ -117,13 +117,15 @@ fn storage_configuration_is_post_pixel_app_scoped_and_absent_in_agent_mode() {
 fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
     const CHILD: &str = "EXACT_FRESH_STORAGE_ORDER_TEST";
     if std::env::var_os(CHILD).is_none() {
-        let home = std::env::temp_dir().join(format!("exact-apple-fresh-{}", std::process::id()));
+        let home = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-fresh-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "host::storage_tests::a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after"])
             .env(CHILD, "1")
-            .env("HOME", &home)
+            .env("HOME", &*home)
             .env("EXACT_AGENT", "1")
             .env("EXACT_AGENT_STORAGE", "fresh")
             .env("EXACT_AGENT_STORAGE_FRESH", "1")
@@ -202,7 +204,9 @@ fn a_fresh_drive_empties_its_tree_before_the_boot_reads_and_never_after() {
 fn a_second_activation_keeps_what_the_first_session_picked() {
     const CHILD: &str = "EXACT_SECOND_ACTIVATION_TEST";
     if std::env::var_os(CHILD).is_none() {
-        let home = std::env::temp_dir().join(format!("exact-apple-second-{}", std::process::id()));
+        let home = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-second-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(&home).unwrap();
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -211,7 +215,7 @@ fn a_second_activation_keeps_what_the_first_session_picked() {
                 "host::storage_tests::a_second_activation_keeps_what_the_first_session_picked",
             ])
             .env(CHILD, "1")
-            .env("HOME", &home)
+            .env("HOME", &*home)
             .env_remove("EXACT_AGENT")
             .env_remove("EXACT_APP_GROUP_APP")
             .env_remove("EXACT_STORE")

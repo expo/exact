@@ -103,6 +103,64 @@ component Row
     }
 }
 
+/// An action is in its own component's scope only (LLP 1089 D1): a child's
+/// call of a standard function keeps that meaning in the expanded root,
+/// whose own action of the name would otherwise capture it, in a derive, an
+/// action's body and the view alike.
+#[test]
+fn a_childs_call_is_never_the_roots_action_of_that_name() {
+    let child = r#"component Child
+  state m = 0
+  derive r = round(2.5)
+  action go
+    m = round(m + 1.5)
+  view
+    text `${r}` testId="r"
+    button press=go testId="go"
+      text `${m} ${round(0.4)}` testId="m"
+"#;
+    let root = r#"component App
+  state n = 0
+  action round(by: number)
+    n = n + by
+  view
+    column
+      button press=round(1) testId="inc"
+        text `${n}`
+      Child()
+"#;
+    let plan = contract::compile(&format!("{root}{child}")).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let text = |r: &Runner<NoData>, id: &str| {
+        let key = r.kernel().find_by_test_id(id)[0];
+        let node = r.kernel().node_by_key(key).unwrap();
+        node.props.iter().find_map(|(id, v)| match v {
+            PropValue::Str(s) if id.name() == "text" => Some(s.to_string()),
+            _ => None,
+        })
+    };
+    assert_eq!(text(&r, "r").as_deref(), Some("3"));
+    for id in ["go", "go", "inc"] {
+        let key = r.kernel().find_by_test_id(id)[0];
+        let view = r.kernel().node_by_key(key).unwrap().id;
+        r.dispatch(view, exact_runner::Event::Press).unwrap();
+    }
+    // round(0 + 1.5) is 2, then round(2 + 1.5) is 4.
+    assert_eq!(text(&r, "m").as_deref(), Some("4 0"));
+    assert_eq!(r.slot("n"), Some(&Value::Number(1.0)));
+    // The root's own call still names its action.
+    let own = root.replace("Child()", "text `${round(2.5)}`");
+    let e = contract::compile(&format!("{own}{child}")).unwrap_err();
+    assert_eq!(e.id, "type-template-part", "{e}");
+}
+
 /// A call that fails to type against an action or `fn` named like a
 /// standard function says the name is the app's (the euxy port's action
 /// `sortBy(key)` beside a `derive` calling the standard `sortBy`).

@@ -1,8 +1,8 @@
 //! Admission, wire transport, and reserved-source default descriptors.
 use exact_plan::Plan;
 
-/// A type for the agent's typed JSON: `"n"`, `"b"`, `"s"`, `"u"`,
-/// `["?",T]`, `["[",T]`, `{"field":T,…}` in field order.
+/// A type for the agent's typed JSON, as a JavaScript literal: `"n"`, `"b"`,
+/// `"s"`, `"u"`, `["?",T]`, `["[",T]`, `{"field":T,…}` in field order.
 pub(crate) fn type_json(plan: &Plan, ty: exact_plan::TypesId) -> String {
     type_json_defaults(plan, ty, false)
 }
@@ -45,11 +45,16 @@ fn type_json_defaults(plan: &Plan, ty: exact_plan::TypesId, defaults: bool) -> S
                 .iter()
                 .map(|f| {
                     let f = &plan.fields[f.0 as usize];
-                    format!(
-                        "{}:{}",
-                        serde_json::to_string(plan.str(f.name)).unwrap(),
-                        type_json_defaults(plan, f.ty, defaults)
-                    )
+                    let name = serde_json::to_string(plan.str(f.name)).unwrap();
+                    // The descriptor is a JavaScript literal, where a plain
+                    // `"__proto__":` sets the prototype instead of making a
+                    // field; a computed key makes it an own property.
+                    let key = if plan.str(f.name) == "__proto__" {
+                        format!("[{name}]")
+                    } else {
+                        name
+                    };
+                    format!("{key}:{}", type_json_defaults(plan, f.ty, defaults))
                 })
                 .collect::<Vec<_>>()
                 .join(",")

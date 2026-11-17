@@ -302,7 +302,7 @@ fn the_transition_row_lowers_to_css_transition_and_springs_are_named() {
     let (css, spring) = transition_css(&rows);
     assert_eq!(
         css,
-        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s"
+        "opacity 0.25s ease-in-out 0s,all 0.5s cubic-bezier(0.4,0,0.2,1) 0s,translate 0s ease 0s"
     );
     assert!(spring, "the spring is reported, not silently dropped");
     assert_eq!(
@@ -390,17 +390,17 @@ fn dynamic_unavailable_colors_take_the_initial_value() {
     }
 }
 
-/// LLP 1069.000 D3 (#136): the live page writes the pixels the kernel
-/// resolves a `rem`/`em` row to, and re-resolves them; a page that keeps no
-/// kernel (the JS target's stylesheet) writes the units, for the browser.
+/// Both targets leave `em` to the browser's font. The live host resolves
+/// `rem` through the kernel; templates retain it (LLP 1069.000 D3).
 #[test]
-fn relative_lengths_are_pixels_live_and_units_ahead_of_time() {
+fn relative_lengths_keep_em_live_and_rem_ahead_of_time() {
     use exact_kernel::{StyleId, StyleProps, StyleValue};
     let mut s = StyleProps::default();
     for (id, value) in [
         (StyleId::Width, "10rem"),
         (StyleId::Height, "48px"),
         (StyleId::MarginLeft, "-0.5em"),
+        (StyleId::PaddingLeft, "0.5em"),
         (StyleId::FontSize, "1.5em"),
         (StyleId::LineHeight, "1.25em"),
         (StyleId::LetterSpacing, "0.1em"),
@@ -419,11 +419,12 @@ fn relative_lengths_are_pixels_live_and_units_ahead_of_time() {
     for (live_decl, ahead_decl) in [
         ("width:160px;".to_string(), "width:10rem;".to_string()),
         ("height:48px;".into(), "height:48px;".into()),
-        ("margin-left:-8px;".into(), "margin-left:-0.5em;".into()),
-        ("font-size:24px;".into(), "font-size:1.5em;".into()),
-        ("line-height:20px;".into(), "line-height:1.25em;".into()),
+        ("margin-left:-0.5em;".into(), "margin-left:-0.5em;".into()),
+        ("padding-left:0.5em;".into(), "padding-left:0.5em;".into()),
+        ("font-size:1.5em;".into(), "font-size:1.5em;".into()),
+        ("line-height:1.25em;".into(), "line-height:1.25em;".into()),
         (
-            "letter-spacing:1.6px;".into(),
+            "letter-spacing:0.1em;".into(),
             "letter-spacing:0.1em;".into(),
         ),
         (
@@ -437,6 +438,37 @@ fn relative_lengths_are_pixels_live_and_units_ahead_of_time() {
     ] {
         assert!(live.contains(&live_decl), "{live_decl} in {live}");
         assert!(ahead.contains(&ahead_decl), "{ahead_decl} in {ahead}");
+    }
+}
+
+#[test]
+fn scalar_viewport_units_stay_authored_on_both_web_targets() {
+    use exact_kernel::{StyleId, StyleProps, StyleValue, ViewportUnit};
+    for unit in ViewportUnit::ALL {
+        for (id, name) in [
+            (StyleId::FontSize, "font-size"),
+            (StyleId::LineHeight, "line-height"),
+            (StyleId::LetterSpacing, "letter-spacing"),
+            (StyleId::TextIndent, "text-indent"),
+            (StyleId::RowGap, "row-gap"),
+            (StyleId::ColumnGap, "column-gap"),
+            (StyleId::BorderWidthTop, "border-top-width"),
+            (StyleId::BorderSpacing, "border-spacing"),
+            (StyleId::ShapeMargin, "shape-margin"),
+        ] {
+            let value = format!("2{}", unit.name());
+            let mut style = StyleProps::default();
+            style
+                .set_dynamic(id, &StyleValue::Text(value.clone().into()))
+                .unwrap();
+            for (css, skipped) in [
+                css_text(&style, &[]),
+                exact_web::css::css_text_relative(&style, &[]),
+            ] {
+                assert!(skipped.is_empty(), "{skipped:?}");
+                assert!(css.contains(&format!("{name}:{value};")), "{css}");
+            }
+        }
     }
 }
 
@@ -601,6 +633,7 @@ fn explicit_clears_preserve_special_host_row_contracts() {
             "--exact-placeholder-color:initial;",
             false,
         ),
+        (BackdropColor, "--exact-backdrop-color:initial;", false),
         (
             TintColor,
             "--exact-tint:var(--exact-symbol, var(--exact-accent, AccentColor));",

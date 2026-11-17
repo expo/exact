@@ -1,5 +1,5 @@
 ```prompt Test my app against its Snapback backend
-Add tests to the Exact app in this folder that run against its Snapback backend. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback-tests.md as the source for each step. The exact2 checkout has the same page at docs/recipes/snapback-tests.md.
+Add tests to the Exact app in this folder that run against its Snapback backend. Use https://github.com/expo/exact/blob/main/docs/recipes/snapback-tests.md as the source for each step. The Exact checkout has the same page at docs/recipes/snapback-tests.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), or app.ts grants no loopback `net.fetch` origin for a Snapback backend, stop and tell me: wire it first with docs/recipes/snapback.md.
 2. Start `snapback4 dev` on that origin's port, as `bun exact.mjs snapback` names it, before the checks run: the runner refuses a Snapback run when none listens. `EXACT_PORT` moves the page's port, never the backend's.

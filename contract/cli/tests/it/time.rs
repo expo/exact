@@ -1,6 +1,7 @@
 //! @ref LLP 1027.000.000 — the date is a host fact: unknown (0) at bake and
 //! boot, then one commit when the host says it; refused when implausible.
 //! And tasks that wait for state (LLP 1092 D7–D11), below.
+use crate::scratch::Scratch;
 use exact_kernel::Kernel;
 use exact_runner::{DataError, DataSource, Runner, RunnerError, Value};
 
@@ -1356,8 +1357,7 @@ fn resource_clock_advice_tracks_let_values_in_their_scope() {
 
 #[test]
 fn resource_clock_advice_keeps_json_build_success_and_stdout_valid() {
-    let root = std::env::temp_dir().join(format!("exact-clock-advice-{}", std::process::id()));
-    std::fs::create_dir_all(&root).unwrap();
+    let root = Scratch::new(format!("exact-clock-advice-{}", std::process::id()));
     let path = root.join("app.contract");
     std::fs::write(&path, "shape Reply\n  value: number\ncomponent App\n  resource reply = read(performanceNow()) as shape Reply else empty()\n  view\n    text `${reply.value}`\n").unwrap();
     let run = std::process::Command::new(env!("CARGO_BIN_EXE_contract"))
@@ -1384,6 +1384,32 @@ fn resource_clock_advice_keeps_json_build_success_and_stdout_valid() {
         .args(["build", path.to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(String::from_utf8_lossy(&human.stderr).contains("analyze-resource-clock"));
+    // Each as the editor's problem matcher reads a warning (editors/vscode,
+    // `$exact-contract`): `file:line:col warning [id] message`.
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    let advice: Vec<_> = stderr
+        .lines()
+        .filter(|l| l.contains("analyze-resource-clock"))
+        .collect();
+    assert!(!advice.is_empty(), "{stderr}");
+    for line in advice {
+        let (at, _) = line
+            .split_once(" warning [analyze-resource-clock] ")
+            .unwrap_or_else(|| panic!("{line}"));
+        let mut parts = at.rsplitn(3, ':');
+        let numbers = [parts.next(), parts.next()];
+        assert!(
+            numbers
+                .iter()
+                .all(|n| n.is_some_and(|n| n.parse::<u32>().is_ok())),
+            "{line}"
+        );
+        assert!(
+            parts
+                .next()
+                .is_some_and(|file| file.ends_with("app.contract")),
+            "{line}"
+        );
+    }
     std::fs::remove_dir_all(root).unwrap();
 }

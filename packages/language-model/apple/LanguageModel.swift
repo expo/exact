@@ -51,7 +51,8 @@ final class ModelSession {
     let toolCost: Int
     var overflowed = false
     var window: Int
-    var queue: [(response: ModelResponse?, go: (Double) -> Void)] = []
+    /// The calls waiting their turn: `go` begins one, `cancel` answers one the session's end discards.
+    var queue: [(response: ModelResponse?, go: (Double) -> Void, cancel: () -> Void)] = []
     var responding: ModelResponse?
     var ended: [String] = []
     var count = 0
@@ -80,6 +81,7 @@ final class ModelResponse {
     let request: Int?
     let options: [String: Any]
     var planned: [String]?, hold = false, start = 0.0
+    var cancelAdvance: (() -> Void)?
     var contextUsage: Int?
     var settled: [(ModelResponse) -> Void] = []
     /// Foundation Models' generation, cancelled by an abort.
@@ -103,7 +105,8 @@ public final class LanguageModelModule: ExactPackage {
     var agent: Bool { context.agent }
     var sessions: [String: ModelSession] = [:]
     var responses: [String: ModelResponse] = [:]
-    private var byRequest: [Int: ModelResponse] = [:]
+    /// Each live response by the call that made it, for that call's `cancel`.
+    var byRequest: [Int: ModelResponse] = [:]
     private var serial = 0
     // The agent's words (§9) and its preferred availability, laid over the agent model's.
     private var overlay: [String: Any] = [:]
@@ -125,10 +128,31 @@ public final class LanguageModelModule: ExactPackage {
             self?.dropCaches()
         }
         #endif
+        disclose()
     }
 
     func say(_ line: String) { context.log("language-model: \(line)") }
-    func announce(_ key: String) { context.changed(key) }
+    func announce(_ key: String) { context.changed(key); disclose() }
+
+    /// The web implementation's disclosure (§9), with lengths rather than prompt or reply content.
+    func disclose() {
+        var fields: [String: Any] = [
+            "sessions": sessions.values.sorted { $0.id < $1.id }.map { s -> [String: Any] in
+                ["id": s.id, "turns": s.turns.count, "contextUsage": counted(s), "contextWindow": windowOf(s),
+                 "tools": s.tools.map(\.name), "overflowed": s.overflowed, "responding": s.responding?.id ?? NSNull()]
+            },
+            "responses": responses.values.sorted { $0.id < $1.id }.map { r -> [String: Any] in
+                var out: [String: Any] = ["id": r.id, "session": r.session.id, "state": r.state, "text": r.text.utf16.count,
+                                         "toolCalls": r.calls.map { ["name": $0.name, "state": $0.state, "origin": "tool:model:\(r.handle)"] }]
+                if let error = r.error { out["error"] = error }
+                return out
+            },
+            // Native disclosures replace fields, so an ended download must clear the previous progress.
+            "downloading": downloading.map { $0 as Any } ?? NSNull(),
+        ]
+        if agent { fields["script"] = script.count; fields["rate"] = rate; fields["contextWindow"] = agentWindow }
+        context.state(fields)
+    }
 
     // MARK: counting (§9)
 
@@ -230,24 +254,43 @@ public final class LanguageModelModule: ExactPackage {
     /// Under the agent: the tokens the session clock has reached, and the end once every one has landed.
     func advance(_ r: ModelResponse) {
         guard r.state == "generating", let planned = r.planned else { return }
+        r.cancelAdvance?(); r.cancelAdvance = nil
         let all = planned.count, whole = rate <= 0 || r.whole
-        let reached = whole ? all : Int((context.now() - r.start) / rate)
+        let now = context.now()
+        var reached = whole ? all : Int((now - r.start) / rate)
+        // Division can round below a token's deadline even when the clock has reached it.
+        if !whole, reached < all, now >= r.start + Double(reached + 1) * rate { reached += 1 }
         let shown = min(all - (r.hold ? 1 : 0), reached)
         r.text = planned.prefix(max(0, shown)).joined()
-        if shown >= all { end(r, "complete", at: whole ? r.start : r.start + Double(all) * rate) }
+        if shown >= all {
+            end(r, "complete", at: whole ? r.start : r.start + Double(all) * rate)
+        } else if !whole, shown < all - (r.hold ? 1 : 0) {
+            r.cancelAdvance = context.after(max(0, r.start + Double(reached + 1) * rate - now), coalescing: true) { [weak self, weak r] in
+                guard let self, let r else { return }
+                self.advance(r)
+                self.disclose()
+            }
+        }
     }
     private func advanceAll() { responses.values.forEach(advance) }
 
     /// The response ends: its turn committed with its text so far (D6), the session's next call begun at `at`.
     func end(_ r: ModelResponse, _ state: String, error: String? = nil, reason: String? = nil, message: String? = nil, at: Double? = nil) {
         guard r.live else { return }
+        r.cancelAdvance?(); r.cancelAdvance = nil
         r.state = state
         if let error { r.error = error; r.reason = reason; r.message = message }
+        // Only a live response has a generation for its call's cancel to abort.
+        if let request = r.request, byRequest[request] === r { byRequest[request] = nil }
         let s = r.session, begun = s.responding === r
         // One still waiting its turn never reached the session: nothing of it is committed.
         if begun { r.turn.reply = r.text } else { s.queue.removeAll { $0.response === r } }
         r.contextUsage = counted(s)
         r.task?.cancel()
+        // Foundation Models keeps no aborted or failed reply, and a cancelled
+        // generation may still be unwinding in its session: the next prompt
+        // builds another from the transcript, which holds this turn.
+        if begun, state != "complete" { s.platform = nil }
         if begun { s.responding = nil }
         s.ended.append(r.id)
         // An ended response is kept until its session has ended eight newer (D6).
@@ -263,13 +306,15 @@ public final class LanguageModelModule: ExactPackage {
     /// The calls waiting on `s`, begun in order until one generates (D6: one generation a session).
     private func next(_ s: ModelSession, at: Double) {
         while s.responding == nil, !s.queue.isEmpty { s.queue.removeFirst().go(at) }
+        disclose()
     }
     /// `work(at)` once the session is free; `r`, the response it begins, holds the session until it ends.
-    func queued(_ s: ModelSession, _ r: ModelResponse?, _ work: @escaping (Double) -> Void) {
+    /// `cancel` answers the call if the session ends first; a response's own end answers its prompt.
+    func queued(_ s: ModelSession, _ r: ModelResponse?, cancel: @escaping () -> Void = {}, _ work: @escaping (Double) -> Void) {
         s.queue.append((r, { at in
             if let r { guard r.state == "generating" else { return }; s.responding = r }
             work(at)
-        }))
+        }, cancel))
         next(s, at: context.now())
     }
 
@@ -373,6 +418,7 @@ public final class LanguageModelModule: ExactPackage {
         announce(Self.responseKey)
         context.invoke(r.handle, name, arguments) { [weak self] answer in
             guard let self else { return }
+            defer { self.disclose() }
             let failed = answer["error"] is String
             let full = failed ? (LanguageModelSchema.json(["error": answer["error"] ?? "", "message": answer["message"] ?? ""]) ?? "{}") : (answer["text"] as? String ?? "null")
             let result = Self.cut(full)
@@ -407,7 +453,11 @@ public final class LanguageModelModule: ExactPackage {
         agent ? agentAvailability() : Self.appleAvailability(self, args)
     }
 
-    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
+    public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply answered: @escaping ([String: Any]) -> Void) {
+        let reply: ([String: Any]) -> Void = { [weak self] value in
+            self?.disclose()
+            answered(value)
+        }
         let origin = context.origin
         let refused = { (e: Error) in
             let r = e as? Refused
@@ -426,8 +476,7 @@ public final class LanguageModelModule: ExactPackage {
             do {
                 let r = try respond(s, args, streaming: name == "promptStreaming")
                 if name == "promptStreaming" { return reply(["id": r.id, "session": s.id]) }
-                let settle = { [weak self] (r: ModelResponse) in
-                    if let request = r.request { self?.byRequest[request] = nil }
+                let settle = { (r: ModelResponse) in
                     if let e = r.error { return reply(["error": e]) }
                     guard r.typed else { return reply(["text": r.text, "contextUsage": r.contextUsage ?? 0, "overflowed": r.overflowed]) }
                     reply((LanguageModelSchema.parse(r.text) as? [String: Any]) ?? ["error": "SyntaxError"])
@@ -445,7 +494,7 @@ public final class LanguageModelModule: ExactPackage {
         case "appendLanguageModel":
             guard let s = session() else { return reply(["error": "InvalidStateError"]) }
             let input = args["input"] as? String ?? ""
-            queued(s, nil) { [weak self] _ in
+            queued(s, nil, cancel: { reply(["error": "AbortError"]) }) { [weak self] _ in
                 guard let self else { return }
                 guard self.fit(s, Self.cost(input)) else { return reply(["error": "QuotaExceededError"]) }
                 s.turns.append(ModelTurn(input: input))
@@ -466,7 +515,7 @@ public final class LanguageModelModule: ExactPackage {
             reply(sessions[id].map(sessionInfo) ?? ["error": "InvalidStateError"])
         case "cloneLanguageModel":
             guard let s = session() else { return reply(["error": "InvalidStateError"]) }
-            queued(s, nil) { [weak self] _ in
+            queued(s, nil, cancel: { reply(["error": "AbortError"]) }) { [weak self] _ in
                 guard let self else { return }
                 self.serial += 1
                 let turns = s.turns.map { t -> ModelTurn in let c = ModelTurn(input: t.input, reply: t.reply); c.calls = t.calls; return c }
@@ -518,6 +567,7 @@ public final class LanguageModelModule: ExactPackage {
 
     /// Under the agent: the preferred availability, laid over the agent model's, and the script, rate and window (§9).
     public func preferred(_ values: [String: Any]) {
+        defer { disclose() }
         let a = values["languageModelAvailability"] as? [String: Any]
         overlay = a.flatMap { $0["error"] == nil ? $0 : nil } ?? [:]
         let seen = values["responses"].flatMap { LanguageModelSchema.json($0) } ?? "null"
@@ -570,10 +620,13 @@ public final class LanguageModelModule: ExactPackage {
     }
 
     func drop(_ s: ModelSession, _ why: String) {
-        for r in Array(responses.values) where r.session === s { abort(r, why); responses[r.id] = nil }
-        s.queue = []
-        s.platform = nil
         sessions[s.id] = nil
+        // The calls waiting are answered first: the active response's end would begin them.
+        let waiting = s.queue
+        s.queue = []
+        waiting.forEach { $0.cancel() }
+        for r in Array(responses.values) where r.session === s { abort(r, why); responses[r.id] = nil }
+        s.platform = nil
         say("\(s.id): \(why)")
         announce(Self.sessionKey)
     }

@@ -1,6 +1,8 @@
 //! The File System Access API's three pickers, issued as commands (LLP
 //! 1069.010 D2): `showOpenFilePicker(id)` (or `(id, multiple)`),
-//! `showDirectoryPicker(id)`, `showSaveFilePicker(id, suggestedName)`.
+//! `showDirectoryPicker(id)`, `showSaveFilePicker(id, suggestedName)`,
+//! each with the API's `startIn` (LLP 1173 D2) as a trailing argument
+//! when the call names one.
 //! Each opens a document in place: the host mints a `doc:` handle for
 //! what the person chose (D1) and reports it as `change` on the element
 //! `id` names (several, one per line, under `multiple`), or HTML's `cancel`
@@ -69,6 +71,73 @@ pub struct Picker {
     pub multiple: bool,
     /// `showSaveFilePicker`'s `suggestedName`.
     pub suggested_name: String,
+    /// Where the picker opens (LLP 1173 D2): a [`WELL_KNOWN`] name or a
+    /// `doc:/` path, which the presenting host resolves.
+    pub start_in: Option<String>,
+}
+
+/// The `startIn` names (LLP 1173 D2): the File System Access API's
+/// `WellKnownDirectory` values, and `screenshots`, Exact's addition.
+pub const WELL_KNOWN: [&str; 7] = [
+    "desktop",
+    "documents",
+    "downloads",
+    "music",
+    "pictures",
+    "videos",
+    "screenshots",
+];
+
+/// A trailing `startIn` argument: `none` when the call names none.
+pub(crate) fn start_in_arg(arg: Option<&Value>) -> Result<Option<String>, ()> {
+    match arg {
+        None | Some(Value::Option(None)) => Ok(None),
+        Some(s @ exact_plan::str_value!()) => Ok(Some(s.text().to_string())),
+        Some(Value::Option(Some(v))) if v.is_str() => Ok(Some(v.text().to_string())),
+        Some(_) => Err(()),
+    }
+}
+
+/// Why `start` cannot be where a picker opens, if it cannot: a well-known
+/// name or a `doc:/<n>/…` path passes here, and the host refuses a handle
+/// the session does not hold.
+pub fn start_in_refusal(start: &str) -> Option<String> {
+    let handle = start
+        .strip_prefix("doc:/")
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|n| n.parse::<u64>().is_ok());
+    (!WELL_KNOWN.contains(&start) && !handle).then(|| {
+        format!(
+            "\"{start}\" is neither a well-known folder ({}) nor a doc:/ path",
+            WELL_KNOWN.join(", ")
+        )
+    })
+}
+
+/// A request's `startIn` once the runner has ruled: kept, or refused into
+/// the journal as `<command>: startIn: refused: <reason>` and dropped, so
+/// the picker still opens, where the platform chooses.
+pub(crate) fn ruled_start_in<D: DataSource>(
+    runner: &mut Runner<D>,
+    command: &str,
+    start: Option<String>,
+) -> Option<String> {
+    let start = start?;
+    match start_in_refusal(&start) {
+        None => Some(start),
+        Some(reason) => {
+            runner.log(format!("{command}: startIn: refused: {reason}"));
+            None
+        }
+    }
+}
+
+/// `,"startIn":…` for a summary, when there is one.
+pub(crate) fn push_start_in(start: &Option<String>, s: &mut String) {
+    if let Some(start) = start {
+        s.push_str(",\"startIn\":");
+        quote(start, s);
+    }
 }
 
 /// What a host does with a picker command.
@@ -84,7 +153,10 @@ pub enum Arm {
 }
 
 impl Picker {
-    /// The command's positional arguments.
+    /// The command's positional arguments: `(id)`, `(id, multiple)` or
+    /// `(id, suggestedName)`, and with `startIn` named `(id, multiple,
+    /// startIn)` (`multiple` `none` when absent), `(id, startIn)` or `(id,
+    /// suggestedName, startIn)`.
     pub fn from_args(kind: Kind, args: &[Value]) -> Result<Picker, String> {
         let usage = match kind {
             Kind::Open => "showOpenFilePicker takes (id) or (id, multiple)",
@@ -99,12 +171,26 @@ impl Picker {
             id: id.to_string(),
             multiple: false,
             suggested_name: String::new(),
+            start_in: None,
         };
+        let start = |i: usize| start_in_arg(args.get(i)).map_err(|()| usage.to_owned());
         match (kind, &args[1..]) {
             (Kind::Open, []) | (Kind::Directory, []) => {}
-            (Kind::Open, [Value::Bool(multiple)]) => picker.multiple = *multiple,
-            (Kind::Save, [name @ exact_plan::str_value!()]) => {
-                picker.suggested_name = name.text().to_string()
+            (Kind::Directory, [_]) => picker.start_in = start(1)?,
+            (Kind::Open, [multiple] | [multiple, _]) => {
+                picker.multiple = match multiple {
+                    Value::Bool(multiple) => *multiple,
+                    Value::Option(None) => false,
+                    _ => return Err(usage.into()),
+                };
+                picker.start_in = start(2)?;
+            }
+            (
+                Kind::Save,
+                [name @ exact_plan::str_value!()] | [name @ exact_plan::str_value!(), _],
+            ) => {
+                picker.suggested_name = name.text().to_string();
+                picker.start_in = start(2)?;
             }
             _ => return Err(usage.into()),
         }
@@ -140,6 +226,7 @@ impl Picker {
                 quote(&self.suggested_name, &mut s);
             }
         }
+        push_start_in(&self.start_in, &mut s);
         s.push('}');
         s
     }
@@ -159,7 +246,7 @@ pub fn arm<D: DataSource>(
         runner.log(format!("{}: refused: {reason}", kind.command()));
         Arm::Refused(reason, view)
     };
-    let request = match request {
+    let mut request = match request {
         Ok(request) => request,
         Err(reason) => return refuse(runner, reason, None),
     };
@@ -172,6 +259,7 @@ pub fn arm<D: DataSource>(
         let reason = format!("no element with id \"{}\"", request.id);
         return refuse(runner, reason, None);
     };
+    request.start_in = ruled_start_in(runner, kind.command(), request.start_in.take());
     if agent {
         let summary = request.summary();
         return Arm::Held(runner.hold(kind.capability(), Some(view), &summary, &[], true));
@@ -184,8 +272,8 @@ pub fn arm<D: DataSource>(
 
 /// [`arm`] for a host whose command arrived as JSON: `{"command":
 /// "showOpenFilePicker","id":…,"multiple":false,"agent":true}` (and
-/// `suggestedName` for a save, `available` false for a host that has no
-/// such picker). The reply is `{"refused":"…","view":N?}`, `{"ticket":N}`
+/// `suggestedName` for a save, `startIn` when the call names one,
+/// `available` false for a host that has no such picker). The reply is `{"refused":"…","view":N?}`, `{"ticket":N}`
 /// or `{"present":true,"view":N,"id":…,…}`. `"agent":true,"present":true`
 /// (iOS under `--touch platform`) holds it as under the agent and presents
 /// it too, `{"ticket":N,"present":true,…}`: the host answers the hold with
@@ -204,6 +292,7 @@ pub fn request<D: DataSource>(runner: &mut Runner<D>, json: &str) -> String {
             id,
             multiple: field_bool(json, "multiple"),
             suggested_name: field_str(json, "suggestedName").unwrap_or_default(),
+            start_in: field_str(json, "startIn"),
         }
         .checked(),
         None => Err(format!("{command} names an element id")),
@@ -353,5 +442,65 @@ mod tests {
         assert_eq!(Kind::of("showDirectoryPicker"), Some(Kind::Directory));
         assert_eq!(Kind::Save.capability(), "save-file");
         assert_eq!(answer_paths("/a\n /b \n"), ["/a", "/b"]);
+    }
+
+    #[test]
+    fn start_in_trails_each_pickers_arguments() {
+        let (s, none) = (Value::str, Value::Option(None));
+        let open = Picker::from_args(Kind::Open, &[s("f"), none.clone(), s("pictures")]).unwrap();
+        assert_eq!(
+            open.summary(),
+            r#"{"id":"f","multiple":false,"startIn":"pictures"}"#
+        );
+        let many = Picker::from_args(Kind::Open, &[s("f"), Value::Bool(true), none.clone()]);
+        assert_eq!(many.unwrap().start_in, None);
+        let folder = Picker::from_args(Kind::Directory, &[s("d"), s("doc:/3/notes")]).unwrap();
+        assert_eq!(folder.summary(), r#"{"id":"d","startIn":"doc:/3/notes"}"#);
+        let save = Picker::from_args(Kind::Save, &[s("s"), s("a.png"), s("screenshots")]);
+        assert_eq!(save.unwrap().start_in.as_deref(), Some("screenshots"));
+        assert!(Picker::from_args(Kind::Open, &[s("f"), s("pictures")]).is_err());
+        assert!(Picker::from_args(Kind::Save, &[s("s"), s("a"), Value::Number(1.0)]).is_err());
+        assert!(Picker::from_args(Kind::Directory, &[s("d"), s("a"), s("b")]).is_err());
+        // The host resolves a handle; a name outside the set never reaches it.
+        assert_eq!(start_in_refusal("videos"), None);
+        assert_eq!(start_in_refusal("doc:/12/notes/2026"), None);
+        for refused in ["Pictures", "home:/Pictures", "doc:/x/a", "/Users/me", ""] {
+            assert!(start_in_refusal(refused).is_some(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_start_in_outside_the_set_is_journaled_and_the_picker_still_opens() {
+        let plan = contract::compile(
+            "component App\n  view\n    column\n      input id=\"f\" display=\"none\"\n",
+        )
+        .unwrap();
+        struct NoData;
+        impl DataSource for NoData {
+            fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, crate::DataError> {
+                Err(crate::DataError::UnknownSource(source.into()))
+            }
+        }
+        let kernel = exact_kernel::Kernel::with_monospace();
+        let mut runner = Runner::boot(plan, NoData, kernel, Default::default(), "/").unwrap();
+        let ask = |runner: &mut Runner<NoData>, start: &str| {
+            request(
+                runner,
+                &format!(r#"{{"command":"showDirectoryPicker","id":"f","startIn":"{start}"}}"#),
+            )
+        };
+        let named = ask(&mut runner, "downloads");
+        assert!(
+            named.ends_with(r#","id":"f","startIn":"downloads"}"#),
+            "{named}"
+        );
+        let elsewhere = ask(&mut runner, "/etc");
+        assert!(elsewhere.ends_with(r#","id":"f"}"#), "{elsewhere}");
+        let journal: Vec<_> = runner.journal().collect();
+        assert!(
+            journal.iter().any(|line| line
+                .ends_with(r#"showDirectoryPicker: startIn: refused: "/etc" is neither a well-known folder (desktop, documents, downloads, music, pictures, videos, screenshots) nor a doc:/ path"#)),
+            "{journal:?}"
+        );
     }
 }

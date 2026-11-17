@@ -48,6 +48,10 @@ pub enum AlignItemsKeyword {
     /// Equivalent to End when the item's `direction` matches the container's, and
     /// to Start when they differ (in the inline axis).
     SelfEnd,
+    /// The physical left edge (resolved before layout).
+    Left,
+    /// The physical right edge (resolved before layout).
+    Right,
     /// Items are packed along the center of the cross axis.
     Center,
     /// Items are aligned such as their baselines align.
@@ -157,6 +161,10 @@ impl AlignItems {
     pub const SELF_START: Self = Self { keyword: AlignItemsKeyword::SelfStart, safety: AlignmentSafety::Unsafe };
     /// Items are packed toward the end of the axis as determined by the item's own direction.
     pub const SELF_END: Self = Self { keyword: AlignItemsKeyword::SelfEnd, safety: AlignmentSafety::Unsafe };
+    /// Items are packed toward the physical left edge.
+    pub const LEFT: Self = Self { keyword: AlignItemsKeyword::Left, safety: AlignmentSafety::Unsafe };
+    /// Items are packed toward the physical right edge.
+    pub const RIGHT: Self = Self { keyword: AlignItemsKeyword::Right, safety: AlignmentSafety::Unsafe };
     /// Items are packed along the center of the cross axis.
     pub const CENTER: Self = Self { keyword: AlignItemsKeyword::Center, safety: AlignmentSafety::Unsafe };
     /// Items are aligned such as their baselines align.
@@ -184,6 +192,10 @@ impl AlignItems {
     /// Like [`AlignItems::SELF_END`], but falls back to [`AlignItems::START`] when the
     /// alignment subject overflows the alignment container, to avoid data loss.
     pub const SAFE_SELF_END: Self = Self { keyword: AlignItemsKeyword::SelfEnd, safety: AlignmentSafety::Safe };
+    /// Physical left alignment, falling back to inline start on overflow.
+    pub const SAFE_LEFT: Self = Self { keyword: AlignItemsKeyword::Left, safety: AlignmentSafety::Safe };
+    /// Physical right alignment, falling back to inline start on overflow.
+    pub const SAFE_RIGHT: Self = Self { keyword: AlignItemsKeyword::Right, safety: AlignmentSafety::Safe };
 
     /// Returns `true` iff this carries the `safe` overflow-position modifier.
     #[inline]
@@ -197,11 +209,8 @@ impl AlignItems {
         self.keyword
     }
 
-    /// Resolve the writing-mode-relative `SelfStart`/`SelfEnd` keywords to `Start`/`End`
-    /// based on the item's own `direction` per CSS Box Alignment §5.2
-    /// <https://www.w3.org/TR/css-align-3/#self-alignment>. All other keywords are
-    /// returned unchanged.
-    ///
+    /// Resolve physical and self-relative keywords to `Start`/`End` per CSS Box Alignment §5.2
+    /// <https://www.w3.org/TR/css-align-3/#self-alignment>. Other keywords are unchanged.
     /// The `Start`/`End` keywords used by the compute paths are relative to the
     /// *container's* writing mode/direction, so in the inline axis `SelfStart` resolves
     /// to `Start` when the item's direction matches the container's and to `End` when it
@@ -216,6 +225,12 @@ impl AlignItems {
     ) -> Self {
         let flip = axis_is_inline && item_direction != container_direction;
         let keyword = match self.keyword {
+            AlignItemsKeyword::Left => {
+                if axis_is_inline && container_direction.is_rtl() { AlignItemsKeyword::End } else { AlignItemsKeyword::Start }
+            }
+            AlignItemsKeyword::Right => {
+                if axis_is_inline && container_direction.is_rtl() { AlignItemsKeyword::Start } else { AlignItemsKeyword::End }
+            }
             AlignItemsKeyword::SelfStart => {
                 if flip {
                     AlignItemsKeyword::End
@@ -250,6 +265,8 @@ impl FromCss for AlignItems {
                     "flex-end" => Ok(Self::SAFE_FLEX_END),
                     "self-start" => Ok(Self::SAFE_SELF_START),
                     "self-end" => Ok(Self::SAFE_SELF_END),
+                    "left" => Ok(Self::SAFE_LEFT),
+                    "right" => Ok(Self::SAFE_RIGHT),
                     "center" => Ok(Self::SAFE_CENTER),
                     _ => Err(input.new_unexpected_token_error(Token::Ident(pos))),
                 }
@@ -263,6 +280,8 @@ impl FromCss for AlignItems {
                     "flex-end" => Ok(Self::FLEX_END),
                     "self-start" => Ok(Self::SELF_START),
                     "self-end" => Ok(Self::SELF_END),
+                    "left" => Ok(Self::LEFT),
+                    "right" => Ok(Self::RIGHT),
                     "center" => Ok(Self::CENTER),
                     _ => Err(input.new_unexpected_token_error(Token::Ident(pos))),
                 }
@@ -273,6 +292,8 @@ impl FromCss for AlignItems {
             "flex-end" => Ok(Self::FLEX_END),
             "self-start" => Ok(Self::SELF_START),
             "self-end" => Ok(Self::SELF_END),
+            "left" => Ok(Self::LEFT),
+            "right" => Ok(Self::RIGHT),
             "center" => Ok(Self::CENTER),
             "baseline" => Ok(Self::BASELINE),
             "stretch" => Ok(Self::STRETCH),
@@ -436,6 +457,8 @@ const ALIGN_ITEMS_NAMES: &[&str] = &[
     "FlexEnd",
     "SelfStart",
     "SelfEnd",
+    "Left",
+    "Right",
     "Center",
     "Baseline",
     "Stretch",
@@ -445,6 +468,8 @@ const ALIGN_ITEMS_NAMES: &[&str] = &[
     "SafeFlexEnd",
     "SafeSelfStart",
     "SafeSelfEnd",
+    "SafeLeft",
+    "SafeRight",
     "SafeCenter",
 ];
 
@@ -458,6 +483,8 @@ impl serde::Serialize for AlignItems {
             (AlignItemsKeyword::FlexEnd, AlignmentSafety::Unsafe) => "FlexEnd",
             (AlignItemsKeyword::SelfStart, AlignmentSafety::Unsafe) => "SelfStart",
             (AlignItemsKeyword::SelfEnd, AlignmentSafety::Unsafe) => "SelfEnd",
+            (AlignItemsKeyword::Left, AlignmentSafety::Unsafe) => "Left",
+            (AlignItemsKeyword::Right, AlignmentSafety::Unsafe) => "Right",
             (AlignItemsKeyword::Center, AlignmentSafety::Unsafe) => "Center",
             (AlignItemsKeyword::Baseline, _) => "Baseline",
             (AlignItemsKeyword::Stretch, _) => "Stretch",
@@ -467,6 +494,8 @@ impl serde::Serialize for AlignItems {
             (AlignItemsKeyword::FlexEnd, AlignmentSafety::Safe) => "SafeFlexEnd",
             (AlignItemsKeyword::SelfStart, AlignmentSafety::Safe) => "SafeSelfStart",
             (AlignItemsKeyword::SelfEnd, AlignmentSafety::Safe) => "SafeSelfEnd",
+            (AlignItemsKeyword::Left, AlignmentSafety::Safe) => "SafeLeft",
+            (AlignItemsKeyword::Right, AlignmentSafety::Safe) => "SafeRight",
             (AlignItemsKeyword::Center, AlignmentSafety::Safe) => "SafeCenter",
         };
         serializer.serialize_str(name)
@@ -490,6 +519,8 @@ impl<'de> serde::Deserialize<'de> for AlignItems {
                     "FlexEnd" => AlignItems::FLEX_END,
                     "SelfStart" => AlignItems::SELF_START,
                     "SelfEnd" => AlignItems::SELF_END,
+                    "Left" => AlignItems::LEFT,
+                    "Right" => AlignItems::RIGHT,
                     "Center" => AlignItems::CENTER,
                     "Baseline" => AlignItems::BASELINE,
                     "Stretch" => AlignItems::STRETCH,
@@ -499,6 +530,8 @@ impl<'de> serde::Deserialize<'de> for AlignItems {
                     "SafeFlexEnd" => AlignItems::SAFE_FLEX_END,
                     "SafeSelfStart" => AlignItems::SAFE_SELF_START,
                     "SafeSelfEnd" => AlignItems::SAFE_SELF_END,
+                    "SafeLeft" => AlignItems::SAFE_LEFT,
+                    "SafeRight" => AlignItems::SAFE_RIGHT,
                     "SafeCenter" => AlignItems::SAFE_CENTER,
                     other => return Err(E::unknown_variant(other, ALIGN_ITEMS_NAMES)),
                 })
@@ -656,6 +689,12 @@ mod tests {
         // Other keywords are unchanged
         assert_eq!(AlignItems::START.resolve_self_relative(Ltr, Rtl, true), AlignItems::START);
         assert_eq!(AlignItems::FLEX_END.resolve_self_relative(Ltr, Rtl, true), AlignItems::FLEX_END);
+        for item in [Ltr, Rtl] {
+            assert_eq!(AlignItems::LEFT.resolve_self_relative(item, Ltr, true), AlignItems::START);
+            assert_eq!(AlignItems::RIGHT.resolve_self_relative(item, Ltr, true), AlignItems::END);
+            assert_eq!(AlignItems::LEFT.resolve_self_relative(item, Rtl, true), AlignItems::END);
+            assert_eq!(AlignItems::RIGHT.resolve_self_relative(item, Rtl, true), AlignItems::START);
+        }
     }
 
     #[test]
@@ -708,6 +747,8 @@ mod tests {
         assert_eq!("self-end".parse::<AlignItems>().unwrap(), AlignItems::SELF_END);
         assert_eq!("baseline".parse::<AlignItems>().unwrap(), AlignItems::BASELINE);
         assert_eq!("stretch".parse::<AlignItems>().unwrap(), AlignItems::STRETCH);
+        assert_eq!("left".parse::<AlignItems>().unwrap(), AlignItems::LEFT);
+        assert_eq!("right".parse::<AlignItems>().unwrap(), AlignItems::RIGHT);
     }
 
     #[cfg(feature = "parse")]
@@ -808,6 +849,10 @@ mod tests {
             (AlignItems::SAFE_CENTER, "\"SafeCenter\""),
             (AlignItems::SELF_START, "\"SelfStart\""),
             (AlignItems::SELF_END, "\"SelfEnd\""),
+            (AlignItems::LEFT, "\"Left\""),
+            (AlignItems::RIGHT, "\"Right\""),
+            (AlignItems::SAFE_LEFT, "\"SafeLeft\""),
+            (AlignItems::SAFE_RIGHT, "\"SafeRight\""),
             (AlignItems::SAFE_SELF_START, "\"SafeSelfStart\""),
             (AlignItems::SAFE_SELF_END, "\"SafeSelfEnd\""),
         ];

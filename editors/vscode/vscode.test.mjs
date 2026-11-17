@@ -47,3 +47,62 @@ test('every script the repository tasks run exists, and each matcher is one VS C
     for (const d of t.dependsOn ?? []) assert.ok(tasks.some(other => other.label === d), `${t.label}: no task ${d}`);
   }
 });
+
+test('a view repeats with `for`, which is a control keyword and indents; the retired `each` is neither', () => {
+  const grammar = readFileSync(resolve(import.meta.dir, 'syntaxes/exact-contract.tmLanguage.json'), 'utf8');
+  const keywords = [...grammar.matchAll(/"match": ("[^\n]*"),\n\s*"name": "keyword\.control\.exact-contract"/g)]
+    .map(([, source]) => new RegExp(JSON.parse(source)));
+  const { indentationRules } = JSON.parse(readFileSync(resolve(import.meta.dir, 'language-configuration.json'), 'utf8'));
+  const indents = new RegExp(indentationRules.increaseIndentPattern);
+  const line = (word) => `      ${word} item in items key=item.id`;
+  assert.ok(keywords.some(k => k.exec(line('for'))?.[0] === 'for'));
+  assert.ok(!keywords.some(k => k.exec(line('each'))?.[0] === 'each'));
+  assert.ok(indents.test(line('for')));
+  assert.ok(!indents.test(line('each')));
+});
+
+test('`.contract` is registered with the TypeScript 7 extension once content mappers are on, and nothing else is woken', async () => {
+  const manifest = JSON.parse(readFileSync(resolve(import.meta.dir, 'package.json'), 'utf8'));
+  assert.ok(existsSync(resolve(import.meta.dir, manifest.main)) && manifest.files.includes('extension.js'));
+  assert.deepEqual(manifest.activationEvents, ['onLanguage:exact-contract']);
+  const { activate } = await import('./extension.js');
+  const fake = enabled => {
+    const calls = [], activated = [], listeners = [], context = { subscriptions: [] };
+    const typescript = { activate: async () => { activated.push(1); return { registerContentMappers: (...args) => { calls.push(args); return { dispose() {} }; } }; } };
+    const vscode = {
+      extensions: { getExtension: id => id === 'TypeScriptTeam.native-preview' ? typescript : undefined },
+      workspace: {
+        getConfiguration: () => ({ get: key => key === 'js/ts.contentMappers.enabled' && enabled() }),
+        onDidChangeConfiguration: listener => { listeners.push(listener); return { dispose() {} }; },
+      },
+    };
+    const change = () => Promise.all(listeners.map(l => l({ affectsConfiguration: key => key === 'js/ts.contentMappers.enabled' })));
+    return { vscode, context, calls, activated, change };
+  };
+  // Off: the TypeScript extension is not even activated.
+  let on = false;
+  const off = fake(() => on);
+  assert.equal(await activate(off.context, off.vscode), false);
+  assert.deepEqual([off.activated.length, off.calls.length], [0, 0]);
+  // Turned on later: registered then, and once however often the setting changes.
+  on = true;
+  await off.change(); await off.change();
+  assert.deepEqual(off.calls, [['exact.exact-contract', [{ extensions: ['.contract'] }]]]);
+  // On from the start, with no TypeScript 7 extension, or one before content mappers: nothing.
+  const none = fake(() => true);
+  none.vscode.extensions.getExtension = () => undefined;
+  assert.equal(await activate(none.context, none.vscode), false);
+  const old = fake(() => true);
+  old.vscode.extensions.getExtension = () => ({ activate: async () => ({}) });
+  assert.equal(await activate(old.context, old.vscode), false);
+});
+
+test('Enter indents after every opener whose body is a block, and not after a line that is whole', () => {
+  const { indentationRules } = JSON.parse(readFileSync(resolve(import.meta.dir, 'language-configuration.json'), 'utf8'));
+  const indents = new RegExp(indentationRules.increaseIndentPattern);
+  for (const opener of ['theme', 'params', 'parts', 'members Composer', 'perf', 'sequence intro when open key=step', 'sequence spin mount',
+    'test "boots"', 'test "boots" on web', 'test "boots" on web, macos', '  test "boots" on ios // the phone', 'component Row'])
+    assert.ok(indents.test(opener), opener);
+  for (const whole of ['theme.accent', 'params x', 'members "./more.contract"', 'test "boots" on', 'expect perf layout <= 3', 'text "parts"'])
+    assert.ok(!indents.test(whole), whole);
+});

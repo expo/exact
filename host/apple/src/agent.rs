@@ -16,6 +16,11 @@ impl<D: DataSource> Host<D> {
         self.advanced(a)
     }
 
+    /// Action endings are delivery, separate from the agent's recent history.
+    pub fn take_ended_actions(&mut self) -> String {
+        format!("{{\"ended\":{}}}", self.runner.take_ended_actions())
+    }
+
     /// The agent API's read operations (LLP 1012): `tree`, `state`, and
     /// `logs` from the runner; `settle` — the clock at which the last
     /// transition in flight ends, milliseconds, `null` when quiescent — from
@@ -32,6 +37,8 @@ impl<D: DataSource> Host<D> {
                 .chain(self.runner.reask_due_ms())
                 // An answer waiting on its own timer (`data_timers.rs`): the clock goes to it too.
                 .chain(self.runner.data_timer_due_ms())
+                // A route-overflow check owed by the wake's throttle (`route_overflow.rs`).
+                .chain(self.route_overflow_owed_ms())
                 .reduce(f64::max)
             {
                 Some(t) => format!("{{\"settle\":{}}}", exact_runner::agent::num(t)),
@@ -46,6 +53,11 @@ impl<D: DataSource> Host<D> {
             });
         }
         let mut reply = exact_runner::agent::handle(&self.runner, request);
+        if exact_runner::agent::field_str(request, "op").as_deref() == Some("node") {
+            if let Some(id) = exact_runner::agent::field_num(request, "id").map(|v| v as ViewId) {
+                self.flat_agent(id, &mut reply);
+            }
+        }
         if exact_runner::agent::field_str(request, "op").as_deref() == Some("state")
             && reply.ends_with('}')
         {

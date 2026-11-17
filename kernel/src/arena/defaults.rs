@@ -4,13 +4,29 @@ use crate::style::metrics::{self, Column};
 use std::borrow::Cow;
 
 static HEADER: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
-    let mut style = StyleProps::default();
+    // Static defaults keep roles, independent of the initializing app's theme.
+    let role = |name| {
+        let metric = metrics::named(name).expect("schema header metric");
+        let crate::generated::MetricValue::Text(name) = metric.neutral else {
+            panic!("schema header role");
+        };
+        crate::ColorValue::Role(crate::style::roles::role(name).expect("schema header role"))
+    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-header-ground"));
+        rows.text_color = role("-exact-header-color");
+    });
+    style.border_color_bottom = Some(role("-exact-header-edge-color"));
+    for id in [
+        StyleId::BackgroundColor,
+        StyleId::TextColor,
+        StyleId::BorderColorBottom,
+    ] {
+        style.mask.set(id);
+    }
     for (id, name) in [
-        (StyleId::BackgroundColor, "-exact-header-ground"),
-        (StyleId::TextColor, "-exact-header-color"),
         (StyleId::BorderWidthBottom, "-exact-header-edge-width"),
         (StyleId::BorderStyleBottom, "-exact-header-edge-style"),
-        (StyleId::BorderColorBottom, "-exact-header-edge-color"),
         (StyleId::MinHeight, "-exact-header-min-height"),
         (StyleId::PaddingTop, "-exact-header-padding-block"),
         (StyleId::PaddingBottom, "-exact-header-padding-block"),
@@ -29,18 +45,17 @@ static HEADER: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
 static TAB_BAR: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
     let role =
         |name| crate::ColorValue::Role(crate::style::roles::role(name).expect("schema role"));
-    let mut style = StyleProps {
-        background_color: Some(role("-exact-background")),
-        border_width_top: metrics::length_in(
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-background"));
+        rows.border_width_top = metrics::length_in(
             crate::generated::metric::CONTROL_LINE,
             Column::Neutral,
             1.0,
             1.0,
         )
-        .expect("neutral separator width"),
-        border_style_top: crate::BorderStyle::Solid,
-        ..StyleProps::default()
-    };
+        .expect("neutral separator width");
+        rows.border_style_top = crate::BorderStyle::Solid;
+    });
     // Keep role identities: a static default must not capture one app's theme.
     style.border_color_top = Some(role("-exact-separator"));
     for id in [
@@ -64,10 +79,9 @@ static SEGMENTED: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| 
         let px = metrics::length_in(index, Column::Neutral, 1.0, 1.0).expect("neutral row");
         crate::StyleValue::Number(px as f64)
     };
-    let mut style = StyleProps {
-        background_color: Some(role("-exact-tertiary-fill")),
-        ..StyleProps::default()
-    };
+    let mut style = StyleProps::default().with_rows(|rows| {
+        rows.background_color = Some(role("-exact-tertiary-fill"));
+    });
     style.mask.set(StyleId::BackgroundColor);
     let padding = length(crate::generated::metric::SEGMENTED_PADDING);
     let radius = length(crate::generated::metric::CONTROL_RADIUS);
@@ -113,7 +127,16 @@ impl NodeArena {
         }
         // What moves a box in or out of sticky moves it out of or into the
         // top layer: its block follows at the next layout.
-        if crate::style::top_layer::lifted(self, slot) {
+        let lifted = crate::style::top_layer::lifted(self, slot);
+        // Measure every reader again, and at the next layout derive the raw readers below
+        // again, when a box joins or leaves the top layer: their band and targets may change
+        if lifted != self.top_layer_slots.contains(slot) {
+            self.observations.invalidate();
+            if !self.readers.targets.is_empty() {
+                self.observations.targets.moved.push(slot);
+            }
+        }
+        if lifted {
             self.top_layer_slots.insert(slot);
         } else {
             self.top_layer_slots.remove(slot);
@@ -140,6 +163,100 @@ impl NodeArena {
             parent = self.parent(p);
         }
         false
+    }
+
+    /// The neutral sheet's large-title line belongs to level-1 text in
+    /// the route's first header, outside any dialog or popover.
+    pub(crate) fn neutral_header_title(&self, slot: u32) -> bool {
+        if metrics::column() != Column::Neutral
+            || self.node_type(slot) != NodeType::Text
+            || self.props(slot).str(PropId::AccessibilityRole) != Some("heading")
+            || self.props(slot).get(PropId::AccessibilityHeadingLevel) != Some(&PropValue::Int(1))
+        {
+            return false;
+        }
+        let mut at = Some(slot);
+        let mut header = None;
+        while let Some(s) = at {
+            let props = self.props(s);
+            if props.get(PropId::Popover).is_some()
+                || props.str(PropId::SemanticTag) == Some("dialog")
+            {
+                return false;
+            }
+            if header.is_none() && self.is_neutral_header(s) {
+                header = Some(s);
+            }
+            at = self.parent(s);
+        }
+        let Some(header) = header else { return false };
+        let style = self.style(header);
+        if style.appearance == crate::Appearance::None && style.written.has(StyleId::Appearance) {
+            return false;
+        }
+        // A site's navigation is authored chrome, as on the web
+        // (`host/web/src/document_bars.rs`, `site_header`).
+        fn site(arena: &NodeArena, slot: u32, menu: bool, links: &mut u32) -> bool {
+            arena.children(slot).iter().any(|&child| {
+                let props = arena.props(child);
+                let tag = props.str(PropId::SemanticTag);
+                let menu = menu || props.get(PropId::Popover).is_some() || tag == Some("dialog");
+                if !menu
+                    && (props.get(PropId::Href).is_some()
+                        || props.str(PropId::AccessibilityRole) == Some("link"))
+                {
+                    *links += 1;
+                }
+                tag == Some("nav") || *links > 1 || site(arena, child, menu, links)
+            })
+        }
+        if site(self, header, false, &mut 0) {
+            return false;
+        }
+        let route = self.parent(header).expect("route header");
+        if self.children(route).first() != Some(&header) {
+            return false;
+        }
+        let presented = |r| {
+            matches!(
+                self.props(r).str(PropId::NavigationPresentation),
+                Some("modal" | "fullscreen")
+            )
+        };
+        !presented(route)
+            && !self.parent(route).is_some_and(|stack| {
+                self.children(stack)
+                    .iter()
+                    .take_while(|&&r| r != route)
+                    .any(|&r| presented(r))
+            })
+    }
+
+    pub(crate) fn neutral_title_layout(
+        &self,
+        slot: u32,
+        line: f32,
+        style: &mut taffy::style::Style,
+    ) {
+        let own = self.style(slot).mask.union(self.style(slot).written);
+        // The web scales the 16px text-style row in rem. Its bar never
+        // collapses, but keeps iOS's large-title leading (neutral.css).
+        let large = crate::TEXT_STYLES
+            .iter()
+            .position(|s| s.name == "large-title")
+            .expect("large-title text style") as u8;
+        let large_line =
+            crate::style::relative::text_style_size(large, 16.) * self.root_font_size() / 16. * 1.2;
+        let margin = ((large_line - line) / 2.).max(0.);
+        if !own.has(StyleId::MinHeight) {
+            style.min_size.height = taffy::style::Dimension::length(line);
+        }
+        if !own.has(StyleId::MarginTop) {
+            style.margin.top = taffy::style::LengthPercentageAuto::length(margin);
+        }
+        if !own.has(StyleId::MarginBottom) {
+            style.margin.bottom = taffy::style::LengthPercentageAuto::length(margin);
+        }
     }
 
     pub(crate) fn is_neutral_tab_bar(&self, slot: u32) -> bool {
@@ -230,6 +347,7 @@ impl NodeArena {
                 out.to_mut().copy_rows(start, defaults);
             }
         }
+        self.bar_symbol_style(slot, &mut out);
         out
     }
 
@@ -364,10 +482,9 @@ impl NodeArena {
         if self.bold_text {
             let weight = self.computed_source(slot, StyleId::FontWeight).font_weight;
             let family = self.computed_source(slot, StyleId::FontFamily).font_family;
-            let bold = StyleProps {
-                font_weight: self.emboldened(slot, weight, family),
-                ..StyleProps::default()
-            };
+            let bold = StyleProps::default().with_rows(|rows| {
+                rows.font_weight = self.emboldened(slot, weight, family);
+            });
             out.copy_rows(&bold, StyleMask::of(StyleId::FontWeight));
         }
         out

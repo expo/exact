@@ -1,5 +1,5 @@
 //! Package designs (LLP 1121 D11 "Packages", stage 11 A): a package the
-//! app's sources link may ship `<name>.tamber` beside its entry, its tokens
+//! app's sources link may ship `<name>.forma` beside its entry, its tokens
 //! named under its namespace (`reading.measure`). Each is checked alone for
 //! what only a package may not do, then its tokens (and its icons, stage
 //! 13) join the app's design, which folds them as one table: the app's
@@ -8,15 +8,15 @@
 //! packages can't happen: each names its tokens under its namespace, and
 //! two packages taking one namespace are refused where they are read
 //! (`contract/cli/src/sources.rs` `package_designs`); one name twice in one
-//! package is the fold's `tamber-duplicate`. Dials and axes are the app's
+//! package is the fold's `forma-duplicate`. Dials and axes are the app's
 //! alone. A package token's lines are numbered past [`LINE`], each package
 //! in a band of its own, so a refusal in the fold names its file.
 
 use super::Origin;
 use crate::LowerError;
 use contract_syntax::{DesignSource, Span};
+use exact_forma as forma;
 use exact_kernel::style::roles;
-use exact_tamber as tamber;
 
 /// Where package lines start: below a param's (`params::LINE`).
 pub(crate) const LINE: u32 = 1 << 28;
@@ -105,9 +105,9 @@ fn at(source: &DesignSource, line: u32, col: u32) -> Span {
 /// and [`references`] what its values name. Called once a design lowers;
 /// the bands it numbers are this thread's until the next.
 pub(crate) fn merge(
-    design: Option<tamber::Design>,
+    design: Option<forma::Design>,
     packages: &[DesignSource],
-) -> (Option<tamber::Design>, Vec<LowerError>) {
+) -> (Option<forma::Design>, Vec<LowerError>) {
     SOURCES.with(|s| *s.borrow_mut() = packages.iter().map(|p| p.source_id).collect());
     if packages.is_empty() {
         return (design, Vec::new());
@@ -124,7 +124,7 @@ pub(crate) fn merge(
             message,
             span: at(source, line, col),
         };
-        let design = match tamber::parse(&source.text) {
+        let design = match forma::parse(&source.text) {
             Ok(d) => d,
             Err(all) => {
                 refused.extend(
@@ -137,7 +137,7 @@ pub(crate) fn merge(
         if k as u32 >= (crate::params::LINE - LINE) / BAND
             || source.text.lines().count() as u32 >= BAND
         {
-            refused.push(refuse("tamber-package-block", 1, 1, format!(
+            refused.push(refuse("forma-package-block", 1, 1, format!(
                 "the package `{package}`'s design: an app reads at most {} package designs of at most {} lines each",
                 (crate::params::LINE - LINE) / BAND,
                 BAND - 1
@@ -147,8 +147,8 @@ pub(crate) fn merge(
         let mut ok = true;
         if design.name != ns {
             ok = false;
-            refused.push(refuse("tamber-package-name", 1, 1, format!(
-                "the package `{package}`'s design is `tamber {}`; a package's design is named for its package: `tamber {ns}`",
+            refused.push(refuse("forma-package-name", 1, 1, format!(
+                "the package `{package}`'s design is `forma {}`; a package's design is named for its package: `forma {ns}`",
                 design.name
             )));
         }
@@ -165,7 +165,7 @@ pub(crate) fn merge(
         for (name, why) in blocks {
             ok = false;
             refused.push(refuse(
-                "tamber-package-block",
+                "forma-package-block",
                 name.line,
                 name.col,
                 format!(
@@ -185,7 +185,7 @@ pub(crate) fn merge(
             if !name.starts_with(&format!("{ns}.")) || BASE.contains(&name.as_str()) {
                 ok = false;
                 refused.push(refuse(
-                    "tamber-package-name",
+                    "forma-package-name",
                     t.name.line,
                     t.name.col,
                     format!(
@@ -203,7 +203,7 @@ pub(crate) fn merge(
             continue;
         }
         let band = LINE + k as u32 * BAND;
-        let lined = |mut token: tamber::Token| {
+        let lined = |mut token: forma::Token| {
             token.name.line += band;
             token.value.line += band;
             for w in &mut token.whens {
@@ -263,23 +263,23 @@ pub(crate) fn unband(message: &str) -> String {
 /// `all` and `identities` are the app's params and components, which say
 /// whether the app's design sets a package's param (a unique match).
 pub(crate) fn references(
-    folding: &tamber::Folding,
+    folding: &forma::Folding,
     packages: &[DesignSource],
     all: &[crate::params::ParamToken],
     identities: &[String],
 ) -> Vec<LowerError> {
     let mut refused = Vec::new();
-    let declared: Vec<Vec<tamber::Token>> = packages
+    let declared: Vec<Vec<forma::Token>> = packages
         .iter()
-        .map(|p| tamber::parse(&p.text).map_or_else(|_| Vec::new(), |d| d.tokens))
+        .map(|p| forma::parse(&p.text).map_or_else(|_| Vec::new(), |d| d.tokens))
         .collect();
     let own = |band: usize, name: &str| declared[band].iter().any(|t| t.name.value == name);
     // A package's icon names only its own package's icons (stage 13), as
     // its tokens name only its tokens: one the app overrides is still its
     // own to name.
-    let icons: Vec<Vec<tamber::Token>> = packages
+    let icons: Vec<Vec<forma::Token>> = packages
         .iter()
-        .map(|p| tamber::parse(&p.text).map_or_else(|_| Vec::new(), |d| d.icons))
+        .map(|p| forma::parse(&p.text).map_or_else(|_| Vec::new(), |d| d.icons))
         .collect();
     for (band, source) in packages.iter().enumerate() {
         let package = source.package.as_deref().unwrap_or_default();
@@ -289,7 +289,7 @@ pub(crate) fn references(
                 continue;
             }
             refused.push(LowerError {
-                id: "tamber-unknown-token",
+                id: "forma-unknown-token",
                 message: format!("`{}` names `{whole}`, an icon that isn't the package `{package}`'s: a package's icon names its own icons only (D11)", t.name.value),
                 span: at(source, t.name.line, t.name.col),
             });
@@ -314,7 +314,7 @@ pub(crate) fn references(
         let span = span(line, token.name.col).unwrap_or_default();
         let mut wrong = |what: String| {
             refused.push(LowerError {
-                id: "tamber-unknown-token",
+                id: "forma-unknown-token",
                 message: format!("`{}` names {what}: a package's token names its own tokens, roles and base names only, and no dial (D11)", token.name.value),
                 span,
             })
@@ -373,7 +373,7 @@ pub(crate) fn references(
             };
             let mut wrong = |what: String| {
                 refused.push(LowerError {
-                    id: "tamber-unknown-token",
+                    id: "forma-unknown-token",
                     message: format!("`{}`'s default names {what}: a package's param names its package's own tokens, roles, base names and its component's params only, and no dial (D11)", p.full),
                     span: p.param.default_span,
                 })
@@ -426,7 +426,7 @@ impl crate::Lowerer<'_> {
     /// ([`references`]), each refusal said.
     pub(super) fn package_references(
         &mut self,
-        folding: &tamber::Folding,
+        folding: &forma::Folding,
         file: &contract_syntax::File,
     ) -> bool {
         let all = crate::params::tokens(file);
@@ -439,14 +439,14 @@ impl crate::Lowerer<'_> {
         any
     }
 
-    /// The app's design as the crate reads it (`app.tamber` parsed, or the
+    /// The app's design as the crate reads it (`app.forma` parsed, or the
     /// inline `theme` built, one token an entry; both is refused), with its
     /// packages' designs joined: a package's token refused here is said and
     /// left out of the fold.
     pub(super) fn design(
         &mut self,
         file: &contract_syntax::File,
-    ) -> Option<(tamber::Design, Origin)> {
+    ) -> Option<(forma::Design, Origin)> {
         let (app, origin) = match self.app_design(file) {
             Some((design, origin)) => (Some(design), origin),
             // The app's design was refused: its packages' are not folded.
@@ -464,7 +464,7 @@ impl crate::Lowerer<'_> {
         }) {
             let package = source.package.as_deref().unwrap_or_default();
             let ns = namespace(package);
-            let declared: Vec<String> = tamber::parse(&source.text)
+            let declared: Vec<String> = forma::parse(&source.text)
                 .map(|d| {
                     d.tokens
                         .into_iter()
@@ -493,7 +493,7 @@ impl crate::Lowerer<'_> {
                 {
                     let span = self.token_span(&origin, t.name.line, t.name.col);
                     self.push(LowerError {
-                        id: "tamber-package-unknown",
+                        id: "forma-package-unknown",
                         message: message(&t.name.value),
                         span,
                     });
@@ -502,7 +502,7 @@ impl crate::Lowerer<'_> {
             for (name, span) in crate::anatomy::library::rows_naming(file, ns) {
                 if unknown(&name) {
                     self.push(LowerError {
-                        id: "tamber-package-unknown",
+                        id: "forma-package-unknown",
                         message: message(&name),
                         span,
                     });

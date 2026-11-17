@@ -212,16 +212,17 @@ final class ObserveService {
     }
 
     /// Turns each pending ObserveCrash record into a `native.exception` log for the crashed session.
+    /// A record is the only copy of its crash, so it is removed only once its row is stored.
     func ingestCrashes() {
         guard let store, let dir = crashDirectory,
               let files = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
         for f in files where f.hasPrefix("exact-observe-pending-") && !f.contains(session) {
             let path = "\(dir)/\(f)"
-            defer { try? FileManager.default.removeItem(atPath: path) }
             guard let data = FileManager.default.contents(atPath: path),
                   let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   let crashed = o["session"] as? String, let signal = o["signal"] as? Int else {
                 fputs("observe: an incomplete pending crash record cannot be read and is removed\n", stderr)
+                try? FileManager.default.removeItem(atPath: path)
                 continue
             }
             let start = o["sessionStart"] as? Double ?? 0
@@ -230,7 +231,11 @@ final class ObserveService {
             let attrs: [String: Any] = ["exception.type": names[signal] ?? "SIG\(signal)", "exception.message": "fatal signal \(signal)",
                                         "expo.error.source": "nativeCrash", "expo.error.is_fatal": true, "expo.crash.signal_number": signal]
             let modified = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date)?.timeIntervalSince1970 ?? start
-            store.addLog(session: crashed, time: modified, severity: "fatal", name: "native.exception", body: nil, attributes: attrs, dropped: 0)
+            if store.addLog(session: crashed, time: modified, severity: "fatal", name: "native.exception", body: nil, attributes: attrs, dropped: 0) {
+                try? FileManager.default.removeItem(atPath: path)
+            } else {
+                fputs("observe: a pending crash record could not be stored and is kept for the next launch\n", stderr)
+            }
         }
     }
 

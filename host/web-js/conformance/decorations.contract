@@ -1,6 +1,6 @@
 decoration mention color="light-dark(#1083fe, #208bfe)"
 decoration link color="light-dark(#1083fe, #208bfe)" text-decoration="underline"
-decoration tag color="light-dark(#1083fe, #208bfe)" background-color="light-dark(#e8f1ff, #14243a)"
+decoration tag color="light-dark(#1083fe, #208bfe)" background-color="light-dark(#e8f1ff, #14243a)" text-shadow="0 0 1px #000"
 
 component App
   state draft = "hi @alice.bsky.social see https://bsky.app #art"

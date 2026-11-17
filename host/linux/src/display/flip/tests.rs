@@ -83,7 +83,7 @@ fn flip_completion_does_not_depend_on_sequence_order() {
             .ready(crtc(7), || Ok(vec![flip(7, sequence)]))
             .unwrap()
             .unwrap();
-        assert_eq!(completed.pixels.data()[0], 2);
+        assert_eq!(completed.data()[0], 2);
         assert!(!slots.pending());
         assert_eq!(slots.sequence, Some(sequence));
     }
@@ -95,8 +95,10 @@ fn read_errors_propagate_without_retry() {
     assert_eq!(error.kind(), ErrorKind::BrokenPipe);
 }
 
-fn frame(value: u8) -> crate::presenter::SubmittedFrame {
-    crate::presenter::SubmittedFrame::fixture(value)
+fn frame(value: u8) -> Arc<Pixmap> {
+    let mut pixels = Pixmap::new(1, 1).unwrap();
+    pixels.data_mut()[0] = value;
+    Arc::new(pixels)
 }
 
 #[test]
@@ -112,7 +114,7 @@ fn two_buffers_have_one_pending_owner_and_neither_front_nor_pending_is_overwritt
         .unwrap();
     assert_eq!(slots.front, 1);
     assert!(!slots.pending());
-    assert_eq!(first.pixels.data()[0], 1);
+    assert_eq!(first.data()[0], 1);
     assert!(slots
         .submit(frame(2), |back, first, _| {
             writes.push((back, first));
@@ -132,7 +134,7 @@ fn two_buffers_have_one_pending_owner_and_neither_front_nor_pending_is_overwritt
         .ready(crtc(7), || Ok(vec![flip(7, 21)]))
         .unwrap()
         .unwrap();
-    assert_eq!(completed.pixels.data()[0], 2);
+    assert_eq!(completed.data()[0], 2);
     assert_eq!(slots.front, 0);
     assert!(!slots.pending());
     slots
@@ -155,7 +157,7 @@ fn copy_or_ioctl_failure_does_not_change_front_or_claim_a_submission() {
     assert!(!slots.pending());
     slots.submit(frame(1), |_, _, _| Ok(())).unwrap();
     let rejected = frame(2);
-    let weak = Arc::downgrade(&rejected.pixels);
+    let weak = Arc::downgrade(&rejected);
     assert!(slots
         .submit(rejected, |back, first, _| {
             assert_eq!(back, 0);
@@ -173,7 +175,7 @@ fn no_event_wrong_crtc_and_read_errors_retain_the_exact_pending_pixels() {
     let mut slots = FlipState::default();
     slots.submit(frame(1), |_, _, _| Ok(())).unwrap();
     let submitted = frame(2);
-    let weak = Arc::downgrade(&submitted.pixels);
+    let weak = Arc::downgrade(&submitted);
     slots.submit(submitted, |_, _, _| Ok(())).unwrap();
     for read in [
         Ok(Vec::new()),
@@ -229,7 +231,7 @@ fn events_without_a_pending_flip_are_drained_without_changing_front() {
         .ready(crtc(7), || Ok(vec![flip(7, 41)]))
         .unwrap()
         .unwrap();
-    assert_eq!(third.pixels.data()[0], 3);
+    assert_eq!(third.data()[0], 3);
     assert_eq!(slots.front, 1);
     assert!(!slots.pending());
 }
@@ -238,7 +240,7 @@ fn events_without_a_pending_flip_are_drained_without_changing_front() {
 fn repeated_zero_sequences_complete_each_submitted_frame() {
     let mut slots = FlipState::default();
     let first = slots.submit(frame(1), |_, _, _| Ok(())).unwrap().unwrap();
-    assert_eq!(first.pixels.data()[0], 1);
+    assert_eq!(first.data()[0], 1);
     for value in 2..=6 {
         assert!(slots
             .submit(frame(value), |_, _, _| Ok(()))
@@ -255,7 +257,7 @@ fn repeated_zero_sequences_complete_each_submitted_frame() {
             })
             .unwrap()
             .expect("a flip with no vblank counter must release the pending frame");
-        assert_eq!(completed.pixels.data()[0], value);
+        assert_eq!(completed.data()[0], value);
         assert_eq!(slots.front, usize::from(value % 2));
         assert!(!slots.pending());
         assert_eq!(slots.sequence, Some(0));

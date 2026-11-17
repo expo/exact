@@ -10,7 +10,7 @@ use unicode_linebreak::{break_property, linebreaks, BreakClass};
 /// whose advances sum to at most this far past the offer still fits — the same
 /// `lineFitEpsilon` Pretext's engine profile applies (`@chenglou/pretext`
 /// `measurement.ts` / `line-break.ts`: 0.005, Safari 1/64).
-const FIT_EPSILON: f64 = 0.005;
+pub(crate) const FIT_EPSILON: f64 = 0.005;
 
 /// Measure a UTF-8 byte range in the original paragraph, shaped in its context.
 /// The caller includes letter spacing and returns a nonnegative finite advance.
@@ -42,7 +42,9 @@ pub enum OverflowWrap {
 /// nowrap, `pre-line` preserve-breaks × wrap. @ref LLP 1053 §0 G5
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum WhiteSpace {
-    /// Collapse spaces, tabs and segment breaks to one hanging space.
+    /// Collapse spaces, tabs, carriage returns and line feeds to one hanging
+    /// space. Form feeds and the other Unicode breaks are text, as
+    /// [`crate::collapse`] keeps them.
     #[default]
     Normal,
     /// Preserve spaces/tabs and break at segment breaks; trailing spaces hang.
@@ -52,7 +54,7 @@ pub enum WhiteSpace {
     /// Collapse spaces and tabs like `normal`, but a line feed is a forced
     /// break, and the spaces around it go. As in Chrome, only U+000A is a
     /// segment break: a carriage return is a space, and U+2028 and the other
-    /// Unicode breaks collapse as under `normal`.
+    /// Unicode breaks are text as under `normal`.
     PreLine,
     /// Preserve like `pre-wrap` with no soft wrap opportunity: each forced
     /// break ends a line and nothing else does; spaces at a line's end are
@@ -71,6 +73,12 @@ impl WhiteSpace {
             self,
             WhiteSpace::PreWrap | WhiteSpace::PreLine | WhiteSpace::Pre
         )
+    }
+    /// A forced break under this mode: only a line feed, under every mode
+    /// that keeps segment breaks, as Chrome renders it. A carriage return,
+    /// form feed, NEL, U+2028 or U+2029 never forces one.
+    pub fn forces_break(self, ch: char) -> bool {
+        self.preserves_breaks() && ch == '\n'
     }
     /// `text-wrap-mode: wrap`: soft wrap opportunities may end a line.
     pub fn wraps(self) -> bool {
@@ -191,14 +199,10 @@ impl Prepared {
             content_end: 0,
         };
         let preserve = options.white_space.preserves();
-        // A forced break: every Unicode hard break when preserving, only a line
-        // feed under `pre-line`; any other break character is collapsible space.
-        let forced = |ch| match options.white_space {
-            WhiteSpace::PreWrap | WhiteSpace::Pre => hard_break(ch),
-            WhiteSpace::PreLine => ch == '\n',
-            WhiteSpace::Normal | WhiteSpace::Nowrap => false,
-        };
-        let whitespace = |ch| space(ch) || (hard_break(ch) && !forced(ch));
+        // A forced break only at a line feed. Of the rest, only a carriage
+        // return or a line feed collapses; a form feed, NEL, U+2028 or U+2029 is text.
+        let forced = |ch| options.white_space.forces_break(ch);
+        let whitespace = |ch| collapsible(ch) && !forced(ch);
         let mut start = 0;
         for end in opportunities(text, words) {
             if end == start {
@@ -208,11 +212,10 @@ impl Prepared {
                 continue;
             }
             let previous = text[..end].chars().next_back().unwrap();
-            // One collapsed run can cross several UAX mandatory boundaries.
-            if !preserve
-                && whitespace(previous)
-                && text[end..].chars().next().is_some_and(whitespace)
-            {
+            // One whitespace run can cross several UAX mandatory boundaries:
+            // collapsed, or preserved after a carriage return, which CSS
+            // treats as a space.
+            if whitespace(previous) && text[end..].chars().next().is_some_and(whitespace) {
                 continue;
             }
             let source = &text[start..end];
@@ -302,12 +305,14 @@ impl Prepared {
     }
 
     /// Source ink range; trailing hanging spaces carry no ink, leading preserved spaces remain.
+    /// A preserved line ends in ink at a form feed, NEL, U+2028 or U+2029: the
+    /// walker measures them as text, so only what it hangs or breaks at is trimmed.
     pub fn paint_range(&self, text: &str, range: Range<usize>) -> Range<usize> {
         let raw = &text[range.clone()];
         if self.options.white_space.preserves() {
-            range.start..range.start + raw.trim_end_matches(|ch| space(ch) || hard_break(ch)).len()
+            range.start..range.start + raw.trim_end_matches(collapsible).len()
         } else {
-            let trim = |ch| space(ch) || hard_break(ch);
+            let trim = collapsible;
             let leading = raw.len() - raw.trim_start_matches(trim).len();
             let start = range.start + leading;
             start..start + raw.trim_matches(trim).len()
@@ -364,14 +369,14 @@ impl Prepared {
                     };
                     let mut last = first;
                     let mut painted = 0.0;
-                    for j in first..segment.atoms.end {
-                        let candidate = if self.atoms[j].space {
+                    for (j, atom) in (first..).zip(&self.atoms[first..segment.atoms.end]) {
+                        let candidate = if atom.space {
                             // A space run hangs, even after an overflowing cluster.
                             painted
                         } else {
-                            self.atoms[j].prefix - base
+                            atom.prefix - base
                         };
-                        if j > first && !self.atoms[j].space && candidate > fit {
+                        if j > first && !atom.space && candidate > fit {
                             break;
                         }
                         last = j;
@@ -628,7 +633,7 @@ fn collapsed_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure)
     let mut from = range.start;
     let mut chars = source.char_indices().peekable();
     while let Some((offset, ch)) = chars.next() {
-        if !(space(ch) || hard_break(ch)) {
+        if !collapsible(ch) {
             continue;
         }
         let at = range.start + offset;
@@ -637,10 +642,7 @@ fn collapsed_advance(text: &str, range: Range<usize>, measure: &mut dyn Measure)
         }
         total += advance(measure.advance(at..at + ch.len_utf8())) as f64;
         from = at + ch.len_utf8();
-        while chars
-            .peek()
-            .is_some_and(|(_, ch)| space(*ch) || hard_break(*ch))
-        {
+        while chars.peek().is_some_and(|(_, ch)| collapsible(*ch)) {
             let (offset, ch) = chars.next().unwrap();
             from = range.start + offset + ch.len_utf8();
         }
@@ -749,7 +751,7 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
             } else if latin1(previous) && latin1(ch) && !(previous == '-' && !ch.is_ascii()) {
                 chrome::breaks(previous, ch)
             } else {
-                listed
+                listed || east_asian_break(text, at, ch)
             };
             if open {
                 result.push(at);
@@ -761,6 +763,122 @@ fn opportunities(text: &str, words: &[usize]) -> Vec<usize> {
     result.push(text.len());
     result
 }
+
+/// Breaks Chrome takes that `unicode-linebreak`'s Unicode 15.0 pair table,
+/// blind to East_Asian_Width, misses before `ch` at `at`: before a full-width
+/// opening bracket after a letter or digit (UAX #14 LB30), and before an opening
+/// or after a closing quotation mark between East Asian characters (Unicode 15.1
+/// LB19a). Never where either side's class forbids a break.
+fn east_asian_break(text: &str, at: usize, ch: char) -> bool {
+    use BreakClass::*;
+    // The common quotation marks of general category Pi (`«‘‛“‟‹`) and Pf (`»’”›`).
+    let initial = |c: char| "\u{ab}\u{2018}\u{201b}\u{201c}\u{201f}\u{2039}".contains(c);
+    let last = |c: char| "\u{bb}\u{2019}\u{201d}\u{203a}".contains(c);
+    // Rule out by `ch` alone first, so a boundary inside a run of combining
+    // marks never walks the run.
+    let right = break_property(ch as u32);
+    let glued = matches!(
+        right,
+        ClosePunctuation
+            | CloseParenthesis
+            | Exclamation
+            | InfixSeparator
+            | Symbol
+            | NonStarter
+            | After
+            | Hyphen
+            | Inseparable
+            | NonBreakingGlue
+            | WordJoiner
+            | ZeroWidthJoiner
+            | CombiningMark
+    );
+    let opening = right == Quotation && initial(ch);
+    if glued || !(opening || wide(ch)) {
+        return false;
+    }
+    let Some((start, previous)) = base_before(text, at) else {
+        return false;
+    };
+    let left = break_property(previous as u32);
+    let mark = |c: &char| break_property(*c as u32) == CombiningMark;
+    !matches!(
+        left,
+        OpenPunctuation | NonBreakingGlue | WordJoiner | ZeroWidthJoiner | Before
+    ) && ((matches!(left, Alphabetic | HebrewLetter | Numeric) && right == OpenPunctuation)
+        || (opening
+            && wide(previous)
+            && text[at + ch.len_utf8()..]
+                .chars()
+                .find(|c| !mark(c))
+                .is_some_and(wide))
+        || (left == Quotation
+            && last(previous)
+            && wide(ch)
+            && base_before(text, start).is_some_and(|(_, c)| wide(c))))
+}
+
+/// The character ending before `end`, where it starts, with a combining mark
+/// standing for its base (UAX #14 LB9) or, with none, for a letter (LB10).
+fn base_before(text: &str, end: usize) -> Option<(usize, char)> {
+    use BreakClass::*;
+    let mut chars = text[..end].char_indices().rev();
+    let (mut at, mut ch) = chars.next()?;
+    while break_property(ch as u32) == CombiningMark {
+        match chars.next() {
+            Some((i, c))
+                if !matches!(
+                    break_property(c as u32),
+                    Mandatory | CarriageReturn | LineFeed | NextLine | Space | ZeroWidthSpace
+                ) =>
+            {
+                (at, ch) = (i, c)
+            }
+            _ => return Some((at, 'a')),
+        }
+    }
+    Some((at, ch))
+}
+
+/// East_Asian_Width F, W or H.
+fn wide(ch: char) -> bool {
+    let at = WIDE.partition_point(|&(_, last)| last < ch as u32);
+    WIDE.get(at).is_some_and(|&(first, _)| first <= ch as u32)
+}
+// The runs of East_Asian_Width F, W or H, first and last code point, from
+// Unicode 16.0 `EastAsianWidth.txt`. Generated; not edited by hand.
+#[rustfmt::skip]
+const WIDE: [(u32, u32); 128] = [
+    (0x1100, 0x115f), (0x20a9, 0x20a9), (0x231a, 0x231b), (0x2329, 0x232a), (0x23e9, 0x23ec),
+    (0x23f0, 0x23f0), (0x23f3, 0x23f3), (0x25fd, 0x25fe), (0x2614, 0x2615), (0x2630, 0x2637),
+    (0x2648, 0x2653), (0x267f, 0x267f), (0x268a, 0x268f), (0x2693, 0x2693), (0x26a1, 0x26a1),
+    (0x26aa, 0x26ab), (0x26bd, 0x26be), (0x26c4, 0x26c5), (0x26ce, 0x26ce), (0x26d4, 0x26d4),
+    (0x26ea, 0x26ea), (0x26f2, 0x26f3), (0x26f5, 0x26f5), (0x26fa, 0x26fa), (0x26fd, 0x26fd),
+    (0x2705, 0x2705), (0x270a, 0x270b), (0x2728, 0x2728), (0x274c, 0x274c), (0x274e, 0x274e),
+    (0x2753, 0x2755), (0x2757, 0x2757), (0x2795, 0x2797), (0x27b0, 0x27b0), (0x27bf, 0x27bf),
+    (0x2b1b, 0x2b1c), (0x2b50, 0x2b50), (0x2b55, 0x2b55), (0x2e80, 0x2e99), (0x2e9b, 0x2ef3),
+    (0x2f00, 0x2fd5), (0x2ff0, 0x303e), (0x3041, 0x3096), (0x3099, 0x30ff), (0x3105, 0x312f),
+    (0x3131, 0x318e), (0x3190, 0x31e5), (0x31ef, 0x321e), (0x3220, 0x3247), (0x3250, 0xa48c),
+    (0xa490, 0xa4c6), (0xa960, 0xa97c), (0xac00, 0xd7a3), (0xf900, 0xfaff), (0xfe10, 0xfe19),
+    (0xfe30, 0xfe52), (0xfe54, 0xfe66), (0xfe68, 0xfe6b), (0xff01, 0xffbe), (0xffc2, 0xffc7),
+    (0xffca, 0xffcf), (0xffd2, 0xffd7), (0xffda, 0xffdc), (0xffe0, 0xffe6), (0xffe8, 0xffee),
+    (0x16fe0, 0x16fe4), (0x16ff0, 0x16ff1), (0x17000, 0x187f7), (0x18800, 0x18cd5),
+    (0x18cff, 0x18d08), (0x1aff0, 0x1aff3), (0x1aff5, 0x1affb), (0x1affd, 0x1affe),
+    (0x1b000, 0x1b122), (0x1b132, 0x1b132), (0x1b150, 0x1b152), (0x1b155, 0x1b155),
+    (0x1b164, 0x1b167), (0x1b170, 0x1b2fb), (0x1d300, 0x1d356), (0x1d360, 0x1d376),
+    (0x1f004, 0x1f004), (0x1f0cf, 0x1f0cf), (0x1f18e, 0x1f18e), (0x1f191, 0x1f19a),
+    (0x1f200, 0x1f202), (0x1f210, 0x1f23b), (0x1f240, 0x1f248), (0x1f250, 0x1f251),
+    (0x1f260, 0x1f265), (0x1f300, 0x1f320), (0x1f32d, 0x1f335), (0x1f337, 0x1f37c),
+    (0x1f37e, 0x1f393), (0x1f3a0, 0x1f3ca), (0x1f3cf, 0x1f3d3), (0x1f3e0, 0x1f3f0),
+    (0x1f3f4, 0x1f3f4), (0x1f3f8, 0x1f43e), (0x1f440, 0x1f440), (0x1f442, 0x1f4fc),
+    (0x1f4ff, 0x1f53d), (0x1f54b, 0x1f54e), (0x1f550, 0x1f567), (0x1f57a, 0x1f57a),
+    (0x1f595, 0x1f596), (0x1f5a4, 0x1f5a4), (0x1f5fb, 0x1f64f), (0x1f680, 0x1f6c5),
+    (0x1f6cc, 0x1f6cc), (0x1f6d0, 0x1f6d2), (0x1f6d5, 0x1f6d7), (0x1f6dc, 0x1f6df),
+    (0x1f6eb, 0x1f6ec), (0x1f6f4, 0x1f6fc), (0x1f7e0, 0x1f7eb), (0x1f7f0, 0x1f7f0),
+    (0x1f90c, 0x1f93a), (0x1f93c, 0x1f945), (0x1f947, 0x1f9ff), (0x1fa70, 0x1fa7c),
+    (0x1fa80, 0x1fa89), (0x1fa8f, 0x1fac6), (0x1face, 0x1fadc), (0x1fadf, 0x1fae9),
+    (0x1faf0, 0x1faf8), (0x20000, 0x2fffd), (0x30000, 0x3fffd),
+];
 fn advance(n: f32) -> f32 {
     if n.is_finite() {
         n.max(0.0)
@@ -775,6 +893,11 @@ fn hyphenated(paint: f64, hyphen: bool, hyphen_advance: f64) -> f32 {
 }
 fn space(ch: char) -> bool {
     matches!(ch, ' ' | '\t')
+}
+/// What CSS collapses outside `pre` and `pre-wrap`: the set
+/// [`crate::collapse`] removes before shaping.
+fn collapsible(ch: char) -> bool {
+    matches!(ch, ' ' | '\t' | '\n' | '\r')
 }
 fn hard_break(ch: char) -> bool {
     matches!(

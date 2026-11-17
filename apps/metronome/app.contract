@@ -117,8 +117,10 @@ component Metronome
   // `beat` is read too so each beat `draw` writes recomputes it.
   derive current = floor(transport.anchorBeat + (performanceNow() - transport.anchorAt) * transport.bpm / 60000) + 0 * beat
   derive shown = transport.state == "countin" ? `Count-in ${current + 5}` : transport.state == "playing" ? `Beat ${current % 4 + 1}` : transport.state == "waiting" ? "Waiting for clock" : "Stopped"
-  // Following a clock, the device's tempo while the sequence follows it.
-  derive tempo = follow != "" and transport.state != "stopped" ? transport.bpm : bpm
+  // Following a clock, the device's tempo while the sequence follows it:
+  // the stepper, which sets the tempo of its own, waits until it stops.
+  derive following = follow != "" and transport.state != "stopped"
+  derive tempo = following ? transport.bpm : bpm
 
   action toggle
     playing = not playing
@@ -135,7 +137,7 @@ component Metronome
   action setGroove(on: bool)
     groove = on
   action shareCard
-    share(title="Metronome", text=`${bpm} BPM`, files=["#card"])
+    share(title="Metronome", text=`${tempo} BPM`, files=["#card"])
   action draw
     beat = floor(transport.anchorBeat + (performanceNow() - transport.anchorAt) * transport.bpm / 60000)
   action connect
@@ -184,9 +186,9 @@ component Metronome
           text "beats a minute" font="-exact-footnote" color="-exact-secondary-label"
           text (groove ? "Kick, snare, hats and clap" : accent ? "Click, beat 1 accented" : "Click") font="-exact-footnote" testId="pattern"
         row gap=12
-          button press=slower aria-label="Slower" testId="slower"
+          button press=slower disabled=following aria-label="Slower" testId="slower"
             text "−"
-          button press=faster aria-label="Faster" testId="faster"
+          button press=faster disabled=following aria-label="Faster" testId="faster"
             text "+"
       text shown font="-exact-title-2" testId="beat"
       button press=toggle buttonStyle="filled" testId="toggle"

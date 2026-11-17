@@ -1,5 +1,5 @@
-use super::{compatibility_with_trust, stored_module, Manifest};
-use std::path::{Path, PathBuf};
+use super::{compatibility_with_trust, Manifest};
+use std::path::Path;
 
 #[test]
 fn the_baked_painter_round_trips_per_host_without_changing_bundle_compatibility() {
@@ -226,6 +226,7 @@ fn list_scroll_offset_requires_a_new_binary_cohort() {
             let shape = match *name {
                 "share" => "3",
                 "stopSounds" => "1",
+                "setSounds" => "5",
                 "playSounds" => "1:4|5|6",
                 "playSound" => "6",
                 "sendMIDI" => "3",
@@ -365,7 +366,7 @@ fn rust_policy_inherits_and_refuses_invalid_configuration() {
 
 /// A minimal app: a data crate with one file, a manifest with one icon
 /// and a deploy policy, no shaders.
-fn app(name: &str) -> PathBuf {
+fn app(name: &str) -> crate::TempDir {
     let dir = std::env::temp_dir().join(format!("exact-compat-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/src")).unwrap();
@@ -380,7 +381,7 @@ fn app(name: &str) -> PathBuf {
         r#"{"name":"App","icons":[{"src":"assets/a.png"}],"app":{"id":"com.example.app","name":"App"},"host":{"ios":{"minimumOS":"17.0","backgroundModes":["fetch"]}},"deploy":{"origin":"continuous","bundles":"continuous"}}"#,
     )
     .unwrap();
-    dir
+    crate::TempDir(dir)
 }
 
 /// A Rust-only app's grants are read here and nowhere earlier: a set a
@@ -502,6 +503,19 @@ fn the_id_is_stable_and_moves_only_with_identity() {
     std::fs::write(dir.join("data/src/lib.rs"), "pub struct App; // moved\n").unwrap();
     let moved = id(&dir, "ios");
     assert_ne!(with_icon, moved, "a data crate edit moves it");
+    // A target branch is accepted, and an edit to an arm this target never
+    // compiles moves its id all the same (LLP 1030 D3a, amended 2026-11-12).
+    let branch = |n: u32| {
+        format!("pub struct App;\n#[cfg(target_os = \"macos\")]\npub const N: u32 = {n};\n#[cfg(not(target_os = \"macos\"))]\npub const N: u32 = 0;\n")
+    };
+    std::fs::write(dir.join("data/src/lib.rs"), branch(7)).unwrap();
+    let mac_arm = id(&dir, "ios");
+    std::fs::write(dir.join("data/src/lib.rs"), branch(8)).unwrap();
+    assert_ne!(
+        mac_arm,
+        id(&dir, "ios"),
+        "an edit to the macOS arm moves the iOS id"
+    );
     // A `data/` of TypeScript modules is no crate: its edits are not identity.
     std::fs::remove_file(dir.join("data/Cargo.toml")).unwrap();
     let typescript = id(&dir, "ios");
@@ -556,6 +570,41 @@ fn protocol_handler_templates_move_apple_compatibility() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// LLP 1038 D8: Apple signs the claimed hosts and Android's filters carry
+/// the scope, so a scope edit moves the Android binary alone.
+#[test]
+fn link_claims_move_the_binaries_that_bake_them() {
+    let dir = app("links-identity");
+    let manifest = std::fs::read_to_string(dir.join("app.json")).unwrap();
+    let ids = |links: &str| {
+        let with = format!(r#"{{"handle_links":"preferred","start_url":"/notes/",{links}"#);
+        let with = manifest.replacen('{', &with, 1).replacen(
+            r#"App"}"#,
+            r#"App","origin":"https://n.example"}"#,
+            1,
+        );
+        std::fs::write(dir.join("app.json"), with).unwrap();
+        let m = Manifest::read(&dir).unwrap();
+        let of = |p, t| {
+            compatibility_with_trust(&dir, p, t, &m, Some(""), "development")
+                .unwrap()
+                .id
+        };
+        (
+            of("ios", "aarch64-apple-ios"),
+            of("linux", "aarch64-linux-android"),
+        )
+    };
+    let (first, scoped) = (ids(r#""scope":"/notes/","#), ids(r#""scope":"/","#));
+    assert_eq!(first.0, scoped.0, "a scope is the Apple origin's file");
+    assert_ne!(first.1, scoped.1, "an Android filter carries the scope");
+    let other = r#""scope_extensions":[{"type":"origin","origin":"https://s.example"}],"#;
+    let extended = ids(other);
+    let moved = first.0 != extended.0 && first.1 != extended.1;
+    assert!(moved, "a claimed host is signed and filtered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn shortcuts_move_a_native_binary_but_not_the_web() {
     let dir = app("shortcuts-identity");
@@ -570,57 +619,6 @@ fn shortcuts_move_a_native_binary_but_not_the_web() {
     assert_ne!(macos, first.0, "a shortcut is compiled into the binary");
     assert_ne!(first.0, with("/new").0, "so is its url");
     assert_eq!(web, first.1, "the web's manifest.json is the web root's");
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-/// A faced tool's signature is compiled into the Apple and Android doors
-/// (LLP 1133.023 D8): a change to it moves those binaries' id, never the
-/// web's or tvOS's, and an unfaced tool moves none.
-#[test]
-fn a_faced_tools_signature_moves_the_binaries_with_its_door() {
-    let dir = app("faces-identity");
-    let manifest = std::fs::read_to_string(dir.join("app.json")).unwrap();
-    let ids = |description: &str, faced: bool| {
-        let source = format!("component A\n  state n = 0\n  tool add writes \"{description}\" = add\n  action add(by: number)\n    n = n + by\n  view\n    text `${{n}}`\n");
-        std::fs::write(dir.join("app.contract"), source).unwrap();
-        let face = if faced {
-            r#"{"intents":{"tools":{"add":{"title":"Add"}}},"#
-        } else {
-            "{"
-        };
-        std::fs::write(dir.join("app.json"), manifest.replacen('{', face, 1)).unwrap();
-        let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
-        let targets = [
-            ("ios", "aarch64-apple-ios"),
-            ("android", "aarch64-linux-android"),
-            ("web", "wasm32-unknown-unknown"),
-            ("ios", "aarch64-apple-tvos"),
-        ];
-        targets.map(|(platform, target)| {
-            let m = Manifest::read(&dir).unwrap();
-            let mut c =
-                compatibility_with_trust(&dir, platform, target, &m, Some(""), "development")
-                    .unwrap();
-            super::faces(&mut c, &plan, platform, target);
-            c.id
-        })
-    };
-    let bare = ids("Add.", false);
-    assert_eq!(
-        bare,
-        ids("Add more.", false),
-        "an unfaced tool is plan data"
-    );
-    let faced = ids("Add.", true);
-    let moved = ids("Add more.", true);
-    assert_ne!(
-        bare[0], faced[0],
-        "a face is compiled into the Apple binary"
-    );
-    assert_ne!(faced[0], moved[0], "so is the tool's description");
-    assert_ne!(faced[1], moved[1], "and into Android's");
-    assert_eq!(faced[2], moved[2], "the web registers it at run time");
-    assert_eq!(faced[3], moved[3], "tvOS compiles no faces");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -653,6 +651,7 @@ fn the_inputs_name_every_field_and_an_undeclared_app_gets_defaults() {
         "dataCrate",
         "gpuSurfaces",
         "nativeModules",
+        "notificationService",
         "hatches",
         "icons",
         "capabilities",
@@ -673,6 +672,7 @@ fn the_inputs_name_every_field_and_an_undeclared_app_gets_defaults() {
     assert!(i["rustAbi"].is_null());
     assert!(i["rustTarget"].is_null());
     assert!(i["rustModule"].is_null());
+    assert!(i["notificationService"].is_null());
     assert_eq!(i["executors"], serde_json::json!(["native"]));
     assert_eq!(i["arch"], "aarch64");
     assert_eq!(i["minimumOS"], "17.0");
@@ -739,14 +739,35 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
-    assert_eq!(super::RUST_ABI, 8);
+    assert_eq!(super::RUST_ABI, 12);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
-    for (mode, target, executor) in [
-        ("native", Some("aarch64-apple-darwin"), Some("native-dylib")),
-        ("wasm", Some("wasm32-unknown-unknown"), Some("wasmi")),
-        ("off", None, None),
+    for (mode, target, executors, kinds) in [
+        (
+            "native",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
+        (
+            "wasm",
+            Some("wasm32-unknown-unknown"),
+            serde_json::json!(["native", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "tiered",
+            Some("aarch64-apple-darwin"),
+            serde_json::json!(["native", "native-dylib", "wasmi"]),
+            serde_json::json!(["plan", "assets", "wasm"]),
+        ),
+        (
+            "off",
+            None,
+            serde_json::json!(["native"]),
+            serde_json::json!(["plan", "assets"]),
+        ),
     ] {
         manifest.json["rust"] = serde_json::json!({"mode":mode,"module":{"package":"app-logic"}});
         let receipt = compatibility_with_trust(
@@ -768,11 +789,13 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
                 serde_json::json!(super::RUST_ABI)
             }
         );
-        let expected = executor.map_or_else(
-            || serde_json::json!(["native"]),
-            |e| serde_json::json!(["native", e]),
-        );
-        assert_eq!(receipt.inputs["executors"], expected);
+        assert_eq!(receipt.inputs["executors"], executors, "{mode}");
+        assert_eq!(receipt.inputs["store"]["acceptedKinds"], kinds, "{mode}");
+        if matches!(mode, "wasm" | "tiered") {
+            let mut old = receipt.inputs.clone();
+            old["store"]["acceptedKinds"] = serde_json::json!(["plan", "assets"]);
+            assert_ne!(receipt.id, super::compatibility_digest(&old), "{mode}");
+        }
         assert!(
             !ids.contains(&receipt.id),
             "executor capability changes cohort identity"
@@ -780,6 +803,69 @@ fn rust_capability_receipts_bind_executor_abi_target_and_module() {
         ids.push(receipt.id);
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn swappable_receipts_name_wasmi_and_move_the_compatibility_id() {
+    use serde_json::json;
+    let dir = app("swappable-executor");
+    std::fs::create_dir_all(dir.join("apple/src")).unwrap();
+    std::fs::write(dir.join("apple/src/lib.rs"), "Swappable<App>\n").unwrap();
+    let mut manifest = Manifest::read(&dir).unwrap();
+    for (platform, target) in [
+        ("ios", "aarch64-apple-ios"),
+        ("macos", "aarch64-apple-darwin"),
+        ("linux", "x86_64-unknown-linux-gnu"),
+    ] {
+        let receipt =
+            compatibility_with_trust(&dir, platform, target, &manifest, Some(""), "development")
+                .unwrap();
+        let serialized: serde_json::Value = serde_json::from_str(&receipt.to_json()).unwrap();
+        assert_eq!(
+            serialized["inputs"]["executors"],
+            json!(["native", "wasmi"])
+        );
+        assert_eq!(
+            serialized["inputs"]["store"]["acceptedKinds"],
+            json!(["plan", "assets", "wasm"])
+        );
+        let mut old = receipt.inputs.clone();
+        old["executors"] = json!(["native", "wasmtime"]);
+        assert_ne!(receipt.id, super::compatibility_digest(&old), "{platform}");
+    }
+    std::fs::write(dir.join("app.ts"), "").unwrap();
+    let receipt = |manifest: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "linux",
+            "x86_64-unknown-linux-gnu",
+            manifest,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+    };
+    let mixed = receipt(&manifest);
+    assert_eq!(
+        mixed.inputs["executors"],
+        json!(["hermes", "native", "wasmi"])
+    );
+    assert_eq!(
+        mixed.inputs["store"]["acceptedKinds"],
+        json!(["plan", "assets", "bytecode", "wasm"])
+    );
+    manifest.json["deploy"]["store"] = json!({"linux":"0"});
+    assert_eq!(
+        receipt(&manifest).inputs["store"]["acceptedKinds"],
+        json!([])
+    );
+    std::fs::create_dir_all(dir.join("linux/src")).unwrap();
+    std::fs::write(dir.join("linux/src/lib.rs"), "pub struct App;\n").unwrap();
+    assert_eq!(
+        receipt(&manifest).inputs["executors"],
+        json!(["hermes", "native"])
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
@@ -850,6 +936,81 @@ fn web_receipts_name_the_linked_composition_and_refuse_an_unlinked_store() {
         let error = compatibility_with_trust(&dir, "web", "wasm32", &manifest, None, "production")
             .unwrap_err();
         assert!(error.contains("web host links no updater"), "{error}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The Android bake records platform `android` and reads its own store
+/// level: absent is "0" whatever the Linux binary of the same app has, so
+/// production trust asks for no stream; "A" is a store with the keys and
+/// origin every native store needs (LLP 1030.006 D2).
+#[test]
+fn the_android_bake_reads_its_own_store_level() {
+    let dir = app("android-store");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["app"]["origin"] = serde_json::json!("https://updates.example");
+    let android = |m: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "linux",
+            "aarch64-linux-android",
+            m,
+            None,
+            "production",
+        )
+    };
+    for store in [None, Some("0")] {
+        manifest.json["deploy"]["store"] = match store {
+            Some(store) => serde_json::json!({"linux":"A","android":store}),
+            None => serde_json::json!({"linux":"A"}),
+        };
+        let plain = android(&manifest).unwrap();
+        assert_eq!(plain.inputs["platform"], "android");
+        assert_eq!(plain.inputs["store"]["L"], "0");
+        assert!(plain.inputs["keys"].is_null());
+        assert!(plain.inputs["trust"].is_null());
+        assert!(plain.origin.is_none());
+    }
+    let linux =
+        compatibility_with_trust(&dir, "linux", "aarch64", &manifest, None, "development").unwrap();
+    assert_eq!(linux.inputs["platform"], "linux");
+    assert_eq!(linux.inputs["store"]["L"], "A", "Linux keeps its store");
+    // "A" in production needs keys, as every native store does.
+    manifest.json["deploy"]["store"] = serde_json::json!({"linux":"0","android":"A"});
+    let error = android(&manifest).unwrap_err();
+    assert!(error.contains("deploy.signing.keys"), "{error}");
+    manifest.json["deploy"]["signing"] =
+        serde_json::json!({"key":"k","keys":{"k":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}});
+    manifest.json["deploy"]["check"] = serde_json::json!({"interval": 60});
+    let stored = android(&manifest).unwrap();
+    assert_eq!(stored.inputs["store"]["L"], "A");
+    assert_eq!(stored.inputs["trust"], "production");
+    assert_eq!(stored.origin.as_deref(), Some("https://updates.example"));
+    let delivery: serde_json::Value = serde_json::from_str(&stored.to_json()).unwrap();
+    assert_eq!(delivery["delivery"]["checkInterval"], 60.0);
+    // No Rust executor in any trust (LLP 1030.006 D1), though a Linux binary
+    // of the same app replaces its module.
+    manifest.json["rust"] = serde_json::json!({"module":{"package":"app-logic"}});
+    for trust in ["development", "production"] {
+        let linux =
+            compatibility_with_trust(&dir, "linux", "aarch64", &manifest, None, trust).unwrap();
+        assert_eq!(linux.inputs["rustMode"], "native", "{trust}");
+        let android = compatibility_with_trust(
+            &dir,
+            "linux",
+            "aarch64-linux-android",
+            &manifest,
+            None,
+            trust,
+        )
+        .unwrap();
+        assert_eq!(android.inputs["rustMode"], "off", "{trust}");
+        assert!(android.inputs["rustAbi"].is_null(), "{trust}");
+    }
+    for setting in [serde_json::json!("B"), serde_json::json!(0)] {
+        manifest.json["deploy"]["store"]["android"] = setting;
+        let error = android(&manifest).unwrap_err();
+        assert_eq!(error, "deploy.store.android must be \"0\" or \"A\"");
     }
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -926,6 +1087,16 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     let needs = |bundle: &[u8]| super::typescript_runtime_of(bundle, "");
     assert_eq!(needs(b"export const answer = () => 'idle';"), 0);
     assert_eq!(needs(b"fetch(u)"), 0);
+    assert_eq!(needs(b"fetch(u, {exactPrefetch: true})"), 13);
+    assert_eq!(
+        needs(b"fetch(u, {exactPrefetch: true, exactPreload: 'feed'})"),
+        13
+    );
+    assert_eq!(needs(b"fetch(u, {exactPreload: 'feed'})"), 13);
+    assert_eq!(
+        needs(b"fetch(u, {exactPreload: 'feed', cache: 'default'})"),
+        13
+    );
     assert_eq!(needs(b"fetch(u, {redirect: 'manual'})"), 2);
     assert_eq!(needs(b"fetch(u, {cache: 'no-store'})"), 11);
     assert_eq!(
@@ -964,6 +1135,11 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
         needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
         12
     );
+    // LLP 1153.002: the bundle's launch module asks for the settings a launch may give.
+    assert_eq!(
+        needs(b"var exact = (function(exports) {\n__exact_launch_settings([\"API_BASE_URL\"]);"),
+        14
+    );
     // A transaction's options are data: what decides 10 is the grant.
     assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);
     let with = |grants: &str| {
@@ -997,55 +1173,53 @@ fn stream_bodies_require_a_runtime_that_reads_or_refuses_them() {
 #[test]
 fn a_stored_module_client_pins_its_module_into_the_id() {
     let dir = app("pinned-module");
-    let manifest = Manifest::read(&dir).unwrap();
-    let id = |module| {
+    let mut manifest = Manifest::read(&dir).unwrap();
+    let id = |manifest: &Manifest, target: &str, module: Option<serde_json::Value>| {
         super::compatibility_id_pinned(
             &dir,
             "ios",
-            "aarch64-apple-ios",
-            &manifest,
+            target,
+            manifest,
             Some(""),
             None,
             None,
-            module,
+            module.as_ref(),
+            &serde_json::Value::Null,
         )
-        .unwrap()
     };
-    let plain = id(None);
-    let a = id(Some("aa"));
+    let receipt = |sha: &str| Some(serde_json::json!({"module": {"sha256": sha}}));
+    let ios = |manifest: &Manifest, module| id(manifest, "aarch64-apple-ios", module).unwrap();
+    let plain = ios(&manifest, None);
+    let a = ios(&manifest, receipt("aa"));
     assert!(plain.inputs["typescriptModule"].is_null());
     assert_eq!(a.inputs["typescriptModule"], "aa");
     assert_ne!(a.id, plain.id, "the module is in the id");
-    assert_eq!(id(Some("aa")).id, a.id, "the same module, the same cohort");
-    assert_ne!(id(Some("bb")).id, a.id, "another module, another cohort");
+    assert_eq!(
+        ios(&manifest, receipt("aa")).id,
+        a.id,
+        "the same module, the same cohort"
+    );
+    assert_ne!(
+        ios(&manifest, receipt("bb")).id,
+        a.id,
+        "another module, another cohort"
+    );
     assert_eq!(
         a.id,
         super::compatibility_digest(&a.inputs),
         "the id digests the inputs it reports"
     );
-}
-
-#[test]
-fn a_store_pins_the_compiled_module_and_its_hash_is_required_without_one_too() {
-    let dir = app("stored-module");
-    let mut manifest = Manifest::read(&dir).unwrap();
-    let meta = serde_json::json!({"module": {"sha256": "abc"}});
-    // A native platform has an update store by default; the web has none
-    assert_eq!(stored_module(&meta, &manifest, "ios"), Ok(Some("abc")));
-    assert_eq!(stored_module(&meta, &manifest, "web"), Ok(None));
+    // A receipt without the hash is refused, with or without a store.
     for bad in [
         serde_json::json!({}),
         serde_json::json!({"module": {"sha256": 7}}),
     ] {
-        for platform in ["ios", "web"] {
-            assert_eq!(
-                stored_module(&bad, &manifest, platform),
-                Err("missing module hash".to_string())
-            );
-        }
+        let error = id(&manifest, "aarch64-apple-ios", Some(bad)).unwrap_err();
+        assert_eq!(error, "missing module hash");
     }
+    // Without a store nothing is pinned.
     manifest.json["deploy"] = serde_json::json!({"store": {"ios": "0"}});
-    assert_eq!(stored_module(&meta, &manifest, "ios"), Ok(None));
+    assert!(ios(&manifest, receipt("aa")).inputs["typescriptModule"].is_null());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1109,6 +1283,59 @@ fn the_data_crates_path_dependencies_are_identity() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The data crate is the one `rust.data` names, wherever it sits beside
+/// app.json, and a generated workspace's lock is its lockfile: an edit to
+/// either moves the id (LLP 1030.007 D3).
+#[test]
+fn the_named_data_crate_and_the_generated_lock_are_identity() {
+    let dir = app("named-data");
+    std::fs::remove_dir_all(dir.join("data")).unwrap();
+    let json = std::fs::read_to_string(dir.join("app.json")).unwrap();
+    let named = json.replacen(
+        '{',
+        r#"{"rust":{"data":{"crate":"records","type":"records::Records"}},"#,
+        1,
+    );
+    std::fs::write(dir.join("app.json"), named).unwrap();
+    krate(&dir.join("records"), "records", "[workspace]\n");
+    let data = || {
+        let m = Manifest::read(&dir).unwrap();
+        compatibility_with_trust(
+            &dir,
+            "ios",
+            "aarch64-apple-ios",
+            &m,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+        .inputs["dataCrate"]
+            .clone()
+    };
+    assert_eq!(
+        data()["files"],
+        3,
+        "the named crate and its lockfile, not data/"
+    );
+    let first = id(&dir, "ios");
+    std::fs::write(dir.join("records/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
+    let edited = id(&dir, "ios");
+    assert_ne!(first, edited, "an edit to the named crate moves it");
+    std::fs::create_dir_all(dir.join(".exact/shells")).unwrap();
+    std::fs::write(dir.join(".exact/shells/Cargo.lock"), "version = 4\n").unwrap();
+    let locked = id(&dir, "ios");
+    assert_ne!(
+        edited, locked,
+        "the generated workspace's lock is the lockfile"
+    );
+    std::fs::write(
+        dir.join(".exact/shells/Cargo.lock"),
+        "version = 4\n# moved\n",
+    )
+    .unwrap();
+    assert_ne!(locked, id(&dir, "ios"), "and its edit moves it");
+}
+
 /// A path crate outside the app's workspace is no member of it, so the
 /// closure is read from Cargo's full graph.
 #[test]
@@ -1122,7 +1349,21 @@ fn a_path_dependency_outside_the_workspace_is_identity() {
     std::fs::write(dir.join("Cargo.toml"), workspace).unwrap();
     let shared = "[dependencies]\nshared = { path = \"../../shared\" }\n";
     krate(&dir.join("data"), "app-data", shared);
-    krate(&root.join("shared"), "shared", "");
+    krate(
+        &root.join("shared"),
+        "shared",
+        "[dependencies]\nunused = { path = \"../unused\", optional = true }\n\
+         renamed = { package = \"enabled\", path = \"../enabled\", optional = true }\n\
+         [features]\ndefault = [\"dep:renamed\"]\n",
+    );
+    krate(&root.join("unused"), "unused", "");
+    krate(&root.join("enabled"), "enabled", "");
+    let names: Vec<_> = super::path_crates(&dir.join("data"))
+        .unwrap()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(names, ["enabled", "shared"]);
     let first = id(&dir, "ios");
     assert_eq!(first, id(&dir, "ios"), "stable across computations");
     std::fs::write(root.join("shared/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
@@ -1154,4 +1395,95 @@ fn the_closure_leaves_out_exact2s_own_crates() {
         ]
     );
     assert!(names("caltrain").is_empty());
+}
+
+/// LLP 1030.005 D3: a Mac App Store build links no update store, whatever
+/// app.json says for the Developer ID build, and nothing else changes.
+#[test]
+fn a_mac_app_store_build_links_no_update_store() {
+    let dir = app("appstore-level");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["deploy"]["store"] = serde_json::json!({"macos": "A", "ios": "A"});
+    use crate::compat::store_level_of;
+    assert_eq!(store_level_of(&manifest, "macos", true), "0");
+    assert_eq!(store_level_of(&manifest, "macos", false), "A");
+    assert_eq!(store_level_of(&manifest, "ios", true), "A");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The Apple bundle lists the strings tables as its localizations, so adding
+/// or dropping one moves the Apple ids (expo/exact#664). A translation's text
+/// does not, nor does a single table, nor any other platform.
+#[test]
+fn the_apple_bundles_languages_are_in_the_id() {
+    let dir = app("localizations");
+    let m = Manifest::read(&dir).unwrap();
+    let ids = || {
+        let compat = |platform| {
+            super::compatibility_id(&dir, platform, "aarch64-apple-ios", &m, Some("")).unwrap()
+        };
+        let (ios, macos, web) = (compat("ios"), compat("macos"), compat("web"));
+        assert_eq!(
+            ios.inputs.get("localizations"),
+            macos.inputs.get("localizations")
+        );
+        assert!(web.inputs.get("localizations").is_none());
+        (ios.id, ios.inputs.get("localizations").cloned(), web.id)
+    };
+    let tables = |list: &[(&str, &str)]| {
+        let _ = std::fs::remove_dir_all(dir.join("strings"));
+        std::fs::create_dir_all(dir.join("strings")).unwrap();
+        for (locale, text) in list {
+            std::fs::write(dir.join(format!("strings/{locale}.json")), text).unwrap();
+        }
+        ids()
+    };
+    let (bare, _, web) = ids();
+    let one = tables(&[("en", r#"{"t": "T"}"#)]);
+    assert_eq!(
+        one,
+        (bare, None, web.clone()),
+        "one table keeps the id it had"
+    );
+    let (two, inputs, two_web) = tables(&[("en", r#"{"t": "T"}"#), ("fr", r#"{"t": "Titre"}"#)]);
+    assert_eq!(
+        inputs,
+        Some(serde_json::json!({"base": "en", "locales": ["en", "fr"]}))
+    );
+    assert_ne!(two, one.0);
+    assert_eq!(two_web, web);
+    let edited = tables(&[("en", r#"{"t": "T"}"#), ("fr", r#"{"t": "Le titre"}"#)]);
+    assert_eq!(edited.0, two, "a translation edit is an update");
+    let three = tables(&[("en", "{}"), ("fr", "{}"), ("de", "{}")]);
+    assert_ne!(three.0, two);
+    assert_eq!(three.2, web);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_web_mount_is_a_native_delivery_input() {
+    let dir = app("web-mount");
+    let text = std::fs::read_to_string(dir.join("app.json")).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    json["app"]["origin"] = serde_json::json!("https://site.invalid");
+    json["host"]["web"]["base"] = serde_json::json!("/app/");
+    std::fs::write(dir.join("app.json"), json.to_string()).unwrap();
+    let manifest = Manifest::read(&dir).unwrap();
+    for (platform, target) in [
+        ("macos", "aarch64-apple-darwin"),
+        ("ios", "aarch64-apple-ios"),
+        ("linux", "aarch64-unknown-linux-gnu"),
+        ("windows", "x86_64-pc-windows-gnu"),
+        ("linux", "aarch64-linux-android"),
+    ] {
+        let compat =
+            compatibility_with_trust(&dir, platform, target, &manifest, Some(""), "development")
+                .unwrap();
+        assert_eq!(
+            compat.inputs["webMount"],
+            serde_json::json!({"origin": "https://site.invalid", "base": "/app/"}),
+            "{platform} {target}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

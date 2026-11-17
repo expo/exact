@@ -6,11 +6,13 @@
 use super::*;
 
 mod data_timers;
+mod inputs;
 
 /// How the runner's clock moves: whether the host presents frames, and the
 /// host's live clock when one owns it (D1; none is a seek clock).
 #[derive(Default)]
 pub(super) struct Clock {
+    pub(super) deadline: std::cell::RefCell<super::gates::Deadline>,
     /// The host presents frames: frame tasks fire only at `frame` (LLP 1073 D4)
     pub(super) presenting: bool,
     pub(super) native_timers: bool,
@@ -32,13 +34,16 @@ pub(super) struct Clock {
     arrived: bool,
     /// Answers waiting on their own timers (`data_timers.rs`)
     data: data_timers::DataTimers,
+    /// Inputs waiting on the work due by their arrival (`inputs.rs`)
+    held: std::collections::VecDeque<inputs::Held>,
 }
 
 impl<D: DataSource> Runner<D> {
     /// Move the clock to `now_ms`, firing every timer due, in order — the
     /// commits alone, or the refusal that stopped it. Tests use this; a host
     /// uses [`Runner::advance_timed`], which keeps the commits before a
-    /// refusal and the time each was made.
+    /// refusal and the time each was made. A change task yields early for
+    /// its receipt to be applied before another advance.
     pub fn advance(&mut self, now_ms: f64) -> Result<Vec<CommitReceipt>, RunnerError> {
         let a = self.advance_timed(now_ms);
         match a.error {
@@ -51,37 +56,25 @@ impl<D: DataSource> Runner<D> {
     /// firing every timer due by then, so the action's `performanceNow()` — and a sound
     /// it schedules (LLP 1096 D3) — is the event's time, as on the JS
     /// target, not the last timer's. The commits in order, the event's last,
-    /// at `now_ms`; a timer's refusal rides along and the event still runs.
+    /// at `now_ms`; a timer's refusal rides along, the work due after it
+    /// goes on and the event still runs. When a change action yields for its
+    /// receipt (`needs_apply`), the event waits: the host applies the
+    /// receipts and advances again, and the event runs once what was due by
+    /// `now_ms` has (`inputs.rs`).
     pub fn dispatch_at(&mut self, view: ViewId, event: Event, now_ms: f64) -> Advanced {
-        let mut a = self.advance_timed(now_ms);
-        match self.dispatch(view, event) {
-            Ok(receipt) => a.receipts.push(Timed {
-                at_ms: now_ms.max(self.now_ms),
-                receipt,
-            }),
-            Err(e) => a.error = Some(e),
-        }
-        a.now_ms = self.now_ms;
-        a
+        self.hold_event(view, event, now_ms)
     }
 
-    /// Native Forward at the host's time. As with [`Runner::dispatch_at`],
-    /// a timer's refusal rides along and the input still runs.
+    /// Native Forward at the host's time, as [`Runner::dispatch_at`] runs
+    /// an event.
     pub fn host_forward_at(&mut self, root: ViewId, now_ms: f64) -> Advanced {
-        let mut a = self.advance_timed(now_ms);
-        match self.host_forward(root) {
-            Ok(receipt) => a.receipts.extend(receipt.map(|receipt| Timed {
-                at_ms: now_ms.max(self.now_ms),
-                receipt,
-            })),
-            Err(e) => a.error = Some(e),
-        }
-        a.now_ms = self.now_ms;
-        a
+        self.hold_forward(root, now_ms)
     }
 
     /// Move the clock to `now_ms`, firing every timer due, in order, each at
-    /// its own due time. A refusal stops the advance there: the commits so
+    /// its own due time. A change action yields with `needs_apply`: the host
+    /// applies the receipts, then advances again toward the same cutoff.
+    /// A refusal stops the advance there: the commits so
     /// far are returned with their times, the clock stays at the refusing
     /// timer's due time, and the refusal rides along. Frame tasks fire their
     /// virtual frames here unless the host presents frames
@@ -183,7 +176,7 @@ impl<D: DataSource> Runner<D> {
         // A refused `next` is journaled and the frame goes on: its frame
         // tasks fire, and the `next` waits for a later wake (LLP 1092 D3).
         let next_refused = std::mem::take(&mut self.queues.stopped_on_next);
-        if (a.error.is_some() && !next_refused) || !self.wants_frames() {
+        if a.needs_apply || (a.error.is_some() && !next_refused) || !self.wants_frames() {
             return a;
         }
         let tail =
@@ -222,6 +215,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         if self.poisoned {
             a.error = Some(RunnerError::Poisoned);
@@ -317,8 +311,9 @@ impl<D: DataSource> Runner<D> {
         self.advance_within(self.seek_cutoff(now_ms), true, true)
     }
 
-    /// The `then` of every answer already landed, each its own commit, with
-    /// the clock where it is and no timer fired: how an agent's input ends
+    /// The `then` of every answer already landed and due change actions, each
+    /// its own commit, with the clock where it is and no elapsed timer fired:
+    /// how an agent's input ends
     /// (LLP 1012 §2), so the next operation sees what the input settled —
     /// a wall-clock host runs them at once by itself (`timer_due_ms`).
     /// trivia F3, kanban F19.
@@ -327,7 +322,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// [`Runner::land_then`] when the earliest work due is an answer's
-    /// `then`, a queue's `next` or a transport or MIDI answer; otherwise
+    /// `then`, a queue's `next`, a change action or a transport or MIDI answer; otherwise
     /// nothing, so no timer due before it is overtaken. A host that runs
     /// timer advances without waiting for them runs this while it waits, so
     /// an answer and what its `then` does show in one frame (LLP 1016.001
@@ -338,6 +333,13 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .chain(&self.queues.next_due)
             .chain([&self.transport.answer_due, &self.midi.answer_due])
+            .chain(
+                self.timers
+                    .iter()
+                    .zip(&self.plan.timers)
+                    .filter(|(_, row)| row.change)
+                    .map(|(t, _)| &t.next_ms),
+            )
             .copied()
             .filter(|ms| ms.is_finite())
             .reduce(f64::min);
@@ -347,6 +349,7 @@ impl<D: DataSource> Runner<D> {
                 now_ms: self.now_ms,
                 error: None,
                 stopped_on_request: false,
+                needs_apply: false,
             };
         }
         self.land_then()
@@ -365,12 +368,42 @@ impl<D: DataSource> Runner<D> {
     /// before it, and what the wakes can deliver is delivered after. No
     /// timer fires while a wake runs unseen.
     fn advance_within(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
+        if self.clock.held.is_empty() {
+            return self.advance_due(now_ms, until_request, timers);
+        }
+        let mut a = self.run_held(now_ms, until_request, timers);
+        if a.error.is_some() || a.stopped_on_request || a.needs_apply {
+            return a;
+        }
+        // An input's receipt is applied before a change action it made due.
+        if !a.receipts.is_empty() && self.change_due_by(now_ms) {
+            a.needs_apply = true;
+            return a;
+        }
+        let rest = self.advance_due(now_ms, until_request, timers);
+        a.receipts.extend(rest.receipts);
+        a.now_ms = rest.now_ms;
+        a.error = rest.error;
+        a.stopped_on_request = rest.stopped_on_request;
+        a.needs_apply = rest.needs_apply;
+        a
+    }
+
+    /// Whether a change action is due by `now_ms`.
+    fn change_due_by(&self, now_ms: f64) -> bool {
+        (self.timers.iter().enumerate())
+            .any(|(i, t)| self.plan.timers[i].change && t.next_ms <= now_ms)
+    }
+
+    /// [`Self::advance_within`] with no input held.
+    fn advance_due(&mut self, now_ms: f64, until_request: bool, timers: bool) -> Advanced {
         if self.poisoned {
             return Advanced {
                 receipts: Vec::new(),
                 now_ms: self.now_ms,
                 error: Some(RunnerError::Poisoned),
                 stopped_on_request: false,
+                needs_apply: false,
             };
         }
         let unseen = self.wake_stops_timers();
@@ -379,7 +412,7 @@ impl<D: DataSource> Runner<D> {
             .filter(|d| now_ms.is_finite() && *d <= now_ms);
         let Some(deadline) = deadline else {
             let mut a = self.advance_steps(now_ms, until_request, timers && !unseen);
-            if a.error.is_none() && !a.stopped_on_request {
+            if a.error.is_none() && !a.stopped_on_request && !a.needs_apply {
                 let at_ms = self.now_ms;
                 let (woke, error) = self.step_wakes();
                 a.receipts
@@ -389,7 +422,7 @@ impl<D: DataSource> Runner<D> {
             return a;
         };
         let mut a = self.advance_steps(deadline.max(self.now_ms), until_request, timers && !unseen);
-        if a.error.is_some() || a.stopped_on_request {
+        if a.error.is_some() || a.stopped_on_request || a.needs_apply {
             return a;
         }
         let at_ms = self.now_ms;
@@ -400,11 +433,16 @@ impl<D: DataSource> Runner<D> {
             a.error = error;
             return a;
         }
+        if !a.receipts.is_empty() && self.change_due_by(now_ms) {
+            a.needs_apply = true;
+            return a;
+        }
         let rest = self.advance_within(now_ms, until_request, timers);
         a.receipts.extend(rest.receipts);
         a.now_ms = rest.now_ms;
         a.error = rest.error;
         a.stopped_on_request = rest.stopped_on_request;
+        a.needs_apply = rest.needs_apply;
         a
     }
 
@@ -420,6 +458,7 @@ impl<D: DataSource> Runner<D> {
                 now_ms: self.now_ms,
                 error: Some(RunnerError::NonFiniteClock),
                 stopped_on_request: false,
+                needs_apply: false,
             };
         }
         // A live clock's cutoff may be behind what its last callback
@@ -430,6 +469,7 @@ impl<D: DataSource> Runner<D> {
                 now_ms: self.now_ms,
                 error: None,
                 stopped_on_request: false,
+                needs_apply: false,
             };
         }
         if now_ms > MAX_CLOCK_MS {
@@ -438,6 +478,7 @@ impl<D: DataSource> Runner<D> {
                 now_ms: self.now_ms,
                 error: Some(RunnerError::ClockOutOfRange),
                 stopped_on_request: false,
+                needs_apply: false,
             };
         }
         let mut landed = now_ms;
@@ -459,7 +500,9 @@ impl<D: DataSource> Runner<D> {
                 .timers
                 .iter()
                 .enumerate()
-                .filter(|_| timers)
+                .filter(|(i, _)| {
+                    timers || (self.plan.timers[*i].change && !self.wake_stops_timers())
+                })
                 .filter(|(i, _)| frames || !self.plan.timers[*i].frame)
                 .map(|(i, _)| (i, self.timer_execution(i)))
                 .filter(|(_, at)| *at <= now_ms)
@@ -519,13 +562,18 @@ impl<D: DataSource> Runner<D> {
             // An answer's `then` goes before a timer due at the same time: the
             // answer landed first. A queue's `next` goes after the `then`s and
             // before the timers (LLP 1092 D3). `exactTransport`'s answer is a
-            // `then` after every mutation's (LLP 1125 D3).
+            // `then` after every mutation's (LLP 1125 D3). `then`s due
+            // together run in the order their mutations are declared, a
+            // child's instances' by their rows (LLP 1035.005.004 D6).
             let then = self
                 .then_due
                 .iter()
                 .enumerate()
                 .filter(|(_, at)| **at <= now_ms)
-                .min_by(|(ia, a), (ib, b)| a.partial_cmp(b).unwrap().then(ia.cmp(ib)))
+                .min_by(|(ia, a), (ib, b)| {
+                    let site = |m: &usize| (self.mutation_site(*m), *m);
+                    a.partial_cmp(b).unwrap().then(site(ia).cmp(&site(ib)))
+                })
                 .map(|(m, at)| (m, *at));
             let answer = Some(self.transport.answer_due.min(self.midi.answer_due))
                 .filter(|at| *at <= now_ms && then.is_none_or(|(_, then)| *at < then));
@@ -568,6 +616,7 @@ impl<D: DataSource> Runner<D> {
                             limit: TIMER_FIRE_LIMIT,
                         }),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
                 self.now_ms = self.now_ms.max(at);
@@ -591,6 +640,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: Some(e),
                             stopped_on_request: false,
+                            needs_apply: false,
                         }
                     }
                 }
@@ -610,6 +660,7 @@ impl<D: DataSource> Runner<D> {
                             limit: TIMER_FIRE_LIMIT,
                         }),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
                 self.now_ms = self.now_ms.max(at);
@@ -617,7 +668,7 @@ impl<D: DataSource> Runner<D> {
                 let result = self.scheduled(at, |r| {
                     let was = r.poisoned;
                     let result = r.run_next(m);
-                    r.record_ran("queue", r.plan.mutations[m].name, was, &result);
+                    r.record_ran("queue", r.mutation_row(m).name, was, &result);
                     result
                 });
                 match result {
@@ -632,6 +683,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: Some(e),
                             stopped_on_request: false,
+                            needs_apply: false,
                         };
                     }
                 }
@@ -651,19 +703,30 @@ impl<D: DataSource> Runner<D> {
                             limit: TIMER_FIRE_LIMIT,
                         }),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
                 self.now_ms = self.now_ms.max(at);
                 self.then_due[m] = f64::INFINITY;
-                let action = self.plan.mutations[m].then.expect("armed only with a then");
+                let action = self.mutation_row(m).then.expect("armed only with a then");
                 let was_poisoned = self.poisoned;
                 let ticket = self.next_ticket;
+                // A child's runs in its instance's frames, with the
+                // arguments read there; a gone instance's does not run
+                // (LLP 1035.005.004 D6).
                 // A `then` runs under its answer's origin (LLP 1133.002 D12),
                 // invocation (LLP 1133.023 D7) and causes (LLP 1133.035 D16
                 // item 6).
                 let (origin, id, causes) = self.then_origin(m);
-                let result = self.as_invocation_caused(origin, id, causes, |r| {
-                    r.scheduled(at, |r| r.traced_action("then", action, Vec::new(), &[]))
+                let call = match self.then_call(m) {
+                    Ok(Some(call)) => Ok(call),
+                    Ok(None) => continue,
+                    Err(e) => Err(e),
+                };
+                let result = call.and_then(|(args, frames)| {
+                    self.as_invocation_caused(origin, id, causes, |r| {
+                        r.scheduled(at, |r| r.traced_action("then", action, args, &frames))
+                    })
                 });
                 match result {
                     Ok(receipt) => receipts.push(Timed {
@@ -673,7 +736,7 @@ impl<D: DataSource> Runner<D> {
                     Err(e) => {
                         let what = format!(
                             "{} then {}",
-                            self.plan.str(self.plan.mutations[m].name),
+                            self.mutation_name(m),
                             self.plan.str(self.plan.action(action).name)
                         );
                         let failed = Err(e);
@@ -683,6 +746,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: failed.err(),
                             stopped_on_request: false,
+                            needs_apply: false,
                         };
                     }
                 }
@@ -715,6 +779,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: Some(e),
                             stopped_on_request: false,
+                            needs_apply: false,
                         }
                     }
                 }
@@ -731,6 +796,7 @@ impl<D: DataSource> Runner<D> {
                             limit: TIMER_FIRE_LIMIT,
                         }),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
                 self.now_ms = self.now_ms.max(at);
@@ -746,6 +812,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: Some(e),
                             stopped_on_request: false,
+                            needs_apply: false,
                         }
                     }
                 }
@@ -769,6 +836,7 @@ impl<D: DataSource> Runner<D> {
                             limit: TIMER_FIRE_LIMIT,
                         }),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
                 self.now_ms = if live {
@@ -796,6 +864,7 @@ impl<D: DataSource> Runner<D> {
                             now_ms: self.now_ms,
                             error: failed.err(),
                             stopped_on_request: false,
+                            needs_apply: false,
                         };
                     }
                 }
@@ -833,6 +902,18 @@ impl<D: DataSource> Runner<D> {
                 }
                 break;
             };
+            // A change action may read the host's layout or issue commands.
+            // Return the preceding receipts before running it, and its own
+            // receipt before any following change action.
+            if self.plan.timers[i].change && !receipts.is_empty() {
+                return Advanced {
+                    receipts,
+                    now_ms: self.now_ms,
+                    error: None,
+                    stopped_on_request: false,
+                    needs_apply: true,
+                };
+            }
             if receipts.len() == TIMER_FIRE_LIMIT {
                 return Advanced {
                     receipts,
@@ -841,6 +922,7 @@ impl<D: DataSource> Runner<D> {
                         limit: TIMER_FIRE_LIMIT,
                     }),
                     stopped_on_request: false,
+                    needs_apply: false,
                 };
             }
             let nominal = self.timers[i].next_ms;
@@ -866,8 +948,18 @@ impl<D: DataSource> Runner<D> {
                         now_ms: self.now_ms,
                         error: failed.err(),
                         stopped_on_request: false,
+                        needs_apply: false,
                     };
                 }
+            }
+            if self.plan.timers[i].change {
+                return Advanced {
+                    receipts,
+                    now_ms: self.now_ms,
+                    error: None,
+                    stopped_on_request: until_request && self.next_ticket != ticket,
+                    needs_apply: true,
+                };
             }
             if until_request && self.next_ticket != ticket {
                 landed = self.now_ms;
@@ -894,6 +986,7 @@ impl<D: DataSource> Runner<D> {
                         now_ms: self.now_ms,
                         error: Some(error),
                         stopped_on_request: false,
+                        needs_apply: false,
                     }
                 }
             }
@@ -911,6 +1004,7 @@ impl<D: DataSource> Runner<D> {
                         now_ms: self.now_ms,
                         error: Some(error),
                         stopped_on_request: false,
+                        needs_apply: false,
                     }
                 }
             }
@@ -930,6 +1024,7 @@ impl<D: DataSource> Runner<D> {
                         now_ms: self.now_ms,
                         error: Some(error),
                         stopped_on_request: false,
+                        needs_apply: false,
                     }
                 }
             }
@@ -958,6 +1053,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error,
             stopped_on_request,
+            needs_apply: false,
         }
     }
 

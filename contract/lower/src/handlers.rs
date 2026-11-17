@@ -6,6 +6,27 @@ use contract_syntax::{Attr, Expr};
 use contract_types::{Scope, Ty};
 use exact_plan::{ActionsId, Code, EventKind};
 
+/// `toggle` written on an element with no `popover`. HTML fires `toggle` at
+/// a popover as it opens or closes, never at the button that opens it, and
+/// every host dispatches it only to an element with `popover`, so here the
+/// handler would never run. On a `button` it would also cost the button
+/// its native face: a native button takes no `toggle` (LLP 1069.011 D5).
+pub(crate) fn unheard_toggle(tag: &str, attrs: &[Attr], a: &Attr) -> Option<LowerError> {
+    if a.name != "toggle" || attrs.iter().any(|a| a.name == "popover") {
+        return None;
+    }
+    let instead = if tag == "dialog" {
+        "a `dialog` says it closed with `close`"
+    } else {
+        "to act when it is pressed, use `press`"
+    };
+    Some(LowerError {
+        id: "lower-handler-tag",
+        message: format!("`toggle` fires at a popover as it opens or closes (HTML's `ToggleEvent`), never at the button that opens it, and this `{tag}` has no `popover`, so its `toggle` would never run. Write `toggle=` on the element with `popover` (its `newState` says which way it went); {instead}"),
+        span: a.span,
+    })
+}
+
 impl Lowerer<'_> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn handler(

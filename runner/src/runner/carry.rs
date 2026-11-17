@@ -6,6 +6,8 @@ use exact_plan::Value;
 /// the clock. A logic edit re-asks resources rather than preserving old answers.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Carried {
+    /// Picked paths survive reloads, including copies still being imported.
+    pub picked_count: u64,
     /// Router slot name and its value decoded through the old plan's shapes.
     /// @ref LLP 1038 D5 — preserves named params when their field order changes.
     pub router: Option<(String, exact_route::Router)>,
@@ -19,8 +21,21 @@ pub struct Carried {
     pub panels: crate::instance::tabs::CarriedPanels,
     /// Resource name → (source name, arguments, value).
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
+    /// Kept entries waiting for their identifying arguments (LLP 1027.005
+    /// D3, 2026-11-13): (resource name, source name, identifying arguments,
+    /// digest of the stored entry).
+    pub waiting: Vec<(String, String, Vec<Value>, u64)>,
+    /// The resources whose answer came from a stream still open: a
+    /// replacement that takes the answer shows it and asks again, opening
+    /// the stream anew, since the old one ends with the runner that had it.
+    pub streams: Vec<String>,
     /// (Resource name, source name) pairs whose answer depends on the store.
     pub store_readers: Vec<(String, String)>,
+    /// Of `store_readers`, those asked in the run that carried them, and
+    /// whether each read what the store holds: one that only drew randomness
+    /// is not asked again by a store change after the reload either
+    /// (LLP 1069.005 D2).
+    pub read_contents: Vec<(String, String, bool)>,
     /// The clock, milliseconds.
     pub now_ms: f64,
     /// The store's kept values (LLP 1018): what the host has persisted.
@@ -30,6 +45,8 @@ pub struct Carried {
     pub forgot_waiting: Vec<(String, usize)>,
     /// The driver's fetch faults as they are (LLP 1103 D3, `Faults::spec`),
     /// so a replacement neither revives a spent fault nor loses an armed one.
+    /// A native host's replacement then shares the live table at its commit
+    /// (`Runner::share_faults`).
     pub faults: Option<String>,
     /// The window's app modes, (axis, value) (LLP 1121 D5): an app's
     /// `setMode` or the agent's `prefer mode` outlives a reload.
@@ -44,6 +61,7 @@ impl<D: super::DataSource> super::Runner<D> {
     /// Everything a reload keeps.
     pub fn carry(&self) -> Carried {
         Carried {
+            picked_count: self.picked_count,
             router: self.carry_router(),
             data_revision: self.data.revision().map(str::to_owned),
             keeps_answers: self.keeping.on,
@@ -79,6 +97,16 @@ impl<D: super::DataSource> super::Runner<D> {
                     })
                 })
                 .collect(),
+            waiting: self.carry_waiting(),
+            streams: (self.pending.iter())
+                .filter(|p| !p.in_flight())
+                .filter_map(|p| match p.target {
+                    super::Target::Resource(i) if i < self.declared_resources().len() => {
+                        Some(self.target_name(p.target))
+                    }
+                    _ => None,
+                })
+                .collect(),
             store_readers: self
                 .resource_rows()
                 .take(self.declared_resources().len())
@@ -88,6 +116,19 @@ impl<D: super::DataSource> super::Runner<D> {
                     (
                         self.plan.str(resource.name).to_string(),
                         self.plan.str(resource.source).to_string(),
+                    )
+                })
+                .collect(),
+            read_contents: self
+                .resource_rows()
+                .take(self.declared_resources().len())
+                .enumerate()
+                .filter(|(i, _)| self.resources[*i].store_reader && self.resources[*i].reads_known)
+                .map(|(i, resource)| {
+                    (
+                        self.plan.str(resource.name).to_string(),
+                        self.plan.str(resource.source).to_string(),
+                        self.resources[i].contents_reader,
                     )
                 })
                 .collect(),
@@ -396,5 +437,108 @@ mod tests {
                 .iter()
                 .any(|(name, value)| name == "token" && value == b"stored answer"));
         }
+    }
+
+    /// `events()` streams; each message is its answer, and the stream's end
+    /// answers "ended".
+    #[derive(Default)]
+    struct Events {
+        asks: usize,
+    }
+    impl DataSource for Events {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            self.asks += 1;
+            Ok(Answer::stream(crate::Request::get(
+                "https://example.test/events",
+            )))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: crate::Outcome,
+        ) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::str(match &outcome {
+                crate::Outcome::Message(m) => &m.data,
+                _ => "ended",
+            })))
+        }
+    }
+
+    fn message(data: &str) -> crate::Outcome {
+        crate::Outcome::Message(crate::Message {
+            data: data.into(),
+            ..crate::Message::default()
+        })
+    }
+
+    fn reload(carried: &Carried) -> Runner<Events> {
+        Runner::boot_carrying(
+            plan("events", false),
+            Events::default(),
+            Kernel::with_monospace(),
+            carried,
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    }
+
+    /// A stream open at a reload is opened anew, its last answer shown
+    /// meanwhile; one still awaiting its first message is asked again as any
+    /// request in flight is; one that ended is not.
+    #[test]
+    fn a_reload_opens_a_carried_stream_again() {
+        let boot = || {
+            Runner::boot(
+                plan("events", false),
+                Events::default(),
+                Kernel::with_monospace(),
+                Default::default(),
+                "/",
+            )
+            .unwrap()
+        };
+        let mut open = boot();
+        let ticket = open.take_requests().remove(0).ticket;
+        open.fulfill(ticket, message("first")).unwrap();
+        let carried = open.carry();
+        assert_eq!(carried.streams, ["answer"]);
+        let mut reloaded = reload(&carried);
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("first")));
+        let asked = reloaded.take_requests();
+        assert_eq!(asked.len(), 1, "the stream is opened again");
+        assert!(asked[0].request.stream);
+        assert_eq!(reloaded.data().asks, 1);
+        reloaded
+            .fulfill(asked[0].ticket, message("second"))
+            .unwrap();
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("second")));
+        assert_eq!(reloaded.carry().streams, ["answer"]);
+
+        let mut waiting = boot();
+        assert_eq!(waiting.take_requests().len(), 1);
+        let carried = waiting.carry();
+        assert!(carried.streams.is_empty() && carried.resources.is_empty());
+        assert_eq!(reload(&carried).take_requests().len(), 1);
+
+        let mut ended = boot();
+        let ticket = ended.take_requests().remove(0).ticket;
+        ended.fulfill(ticket, message("first")).unwrap();
+        let end = crate::Outcome::Failed {
+            kind: crate::FailureKind::Network,
+            message: "the event stream ended".into(),
+        };
+        ended.fulfill(ticket, end).unwrap();
+        let carried = ended.carry();
+        assert!(carried.streams.is_empty());
+        let mut reloaded = reload(&carried);
+        assert_eq!(reloaded.resource("answer"), Some(&Value::str("ended")));
+        assert!(reloaded.take_requests().is_empty());
+        assert_eq!(reloaded.data().asks, 0);
     }
 }

@@ -112,6 +112,86 @@ fn parses() -> usize {
 }
 
 #[test]
+fn unchanged_poll_inputs_do_no_discovery_and_every_changed_input_refreshes_it() {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("sample", &[], string);
+    b.module(
+        source,
+        ("test.poll", "@fixture/test.poll"),
+        "sample",
+        false,
+        true,
+        "never",
+        "",
+        r#"{"counts":{},"poll":{"option":"interval","default":250},"default":"x"}"#,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    r.set_live_clock(Some(Box::new(|| 0.)));
+    let scans = || super::POLL_SCANS.with(|n| n.get());
+    let before = scans();
+    for _ in 0..100 {
+        assert_eq!(r.collection_timer_due_ms(), None);
+    }
+    assert_eq!(scans(), before, "no source has armed a poll");
+    let row = r.plan.modules[0].clone();
+    let key = r.key(&row);
+    r.note_poll(&row);
+    assert_eq!(r.collection_timer_due_ms(), Some(250.));
+    let before = scans();
+    for _ in 0..100 {
+        assert_eq!(r.collection_timer_due_ms(), Some(250.));
+    }
+    assert_eq!(scans(), before, "an unchanged poll does no discovery");
+
+    for input in 0..7 {
+        match input {
+            0 => {
+                r.extensions.polls.insert(key.clone(), 10.);
+            }
+            1 => {
+                r.extensions
+                    .readers
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(0, r#"{"interval":500}"#.into());
+            }
+            2 => {
+                r.extensions.failed.insert(key.clone());
+            }
+            3 => {
+                r.extensions
+                    .within
+                    .entry(key.clone())
+                    .or_default()
+                    .insert(0, false);
+            }
+            4 => {
+                r.extensions.bound.insert("test.poll".into());
+            }
+            5 => {
+                r.extensions.agent.insert("test.poll".into());
+            }
+            6 => r.set_module_target("target-changed"),
+            _ => unreachable!(),
+        }
+        let before = scans();
+        r.collection_timer_due_ms();
+        assert_eq!(scans(), before + 1, "input {input}");
+    }
+    r.extensions.failed.clear();
+    r.extensions.within.clear();
+    assert_eq!(r.collection_timer_due_ms(), Some(510.));
+    // A stale-source deadline remains independently live when no poll is armed.
+    r.extensions.polls.clear();
+    r.extensions
+        .stale
+        .insert(key, r.wall_time().epoch_at_zero + 100.);
+    assert_eq!(r.collection_timer_due_ms(), Some(100.));
+}
+
+#[test]
 fn a_committed_scroll_dispatch_parses_no_substitute_once_read() {
     // The count is the thread's: from zero here, whatever ran on it before.
     SUBSTITUTE_PARSES.with(|n| n.set(0));
@@ -432,4 +512,700 @@ fn a_dropped_bound_member_reply_retires_its_provisional_request() {
         .unwrap()
         .iter()
         .all(|b| b.get("dispose").is_none()));
+}
+
+#[test]
+fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("openBrowser", &[], string);
+    b.module(
+        source,
+        ("browser", "@fixture/browser"),
+        "openBrowser",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"origin":"app","foreground":true}"#,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let row = r.plan.modules[0].clone();
+    for hidden in [false, true] {
+        r.page.hidden = hidden;
+        assert!(
+            r.admit(&row, &serde_json::json!({}), super::CallOrigin::Action)
+                .is_err(),
+            "hidden={hidden}"
+        );
+    }
+}
+
+#[test]
+fn an_action_without_a_handler_has_a_terminal_outcome() {
+    let mut r = boot(plan("never"));
+    assert!(r
+        .raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow {
+                id: 0,
+                cold: false,
+                hidden: false
+            },
+            "unheard"
+        )
+        .is_err());
+    assert_eq!(
+        r.ended_actions(),
+        serde_json::json!([{"id":"unheard","outcome":"unheard"}])
+    );
+}
+
+#[test]
+fn a_native_statement_is_owned_until_its_reply_or_expiry() {
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("showNotification", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "showNotification",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("showNotification");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let action = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        action,
+        "activation",
+        16,
+        0,
+    );
+    b.module_event(
+        ("geofencing", "@fixture/geofencing"),
+        "geofenceenter",
+        action,
+        "wake",
+        16,
+        30_000,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let replies: Arc<Mutex<Vec<crate::Reply>>> = Default::default();
+    let held = replies.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |body: Vec<u8>, reply: crate::Reply| {
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            if body["send"] != "showNotification" {
+                return;
+            }
+            held.lock().unwrap().push(reply);
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for (id, outcome, expired) in [
+        ("success", serde_json::json!(null), false),
+        (
+            "failure",
+            serde_json::json!({"error":"NotAllowedError"}),
+            false,
+        ),
+        ("expired", serde_json::json!(null), true),
+    ] {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            id,
+        )
+        .unwrap();
+        assert!(r.step_wakes().1.is_none());
+        assert!(
+            !r.ended_actions()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["id"] == id),
+            "the native reply has not arrived"
+        );
+        if expired {
+            assert!(r.expire_action(id).1.is_none());
+            assert_eq!(
+                r.ended_actions().as_array().unwrap().last().unwrap()["outcome"],
+                "expired"
+            );
+        }
+        replies
+            .lock()
+            .unwrap()
+            .pop()
+            .expect("the handler posted a notification")
+            .send(super::response(&outcome));
+        r.apply_announced();
+        assert!(r.step_wakes().1.is_none());
+        let ended = r.ended_actions();
+        let mine: Vec<_> = ended
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["id"] == id)
+            .collect();
+        assert_eq!(mine.len(), 1, "{ended}");
+        assert_eq!(
+            mine[0]["outcome"],
+            if expired { "expired" } else { "completed" }
+        );
+    }
+    r.raise_wake(
+        "geofencing",
+        "geofenceenter",
+        "[]",
+        crate::WakeHow {
+            id: 1,
+            cold: false,
+            hidden: true,
+        },
+    )
+    .unwrap();
+    assert!(r.step_wakes().1.is_none());
+    assert_eq!(
+        replies.lock().unwrap().len(),
+        1,
+        "the wake posted a notification"
+    );
+    let ended = r.take_ended_wakes();
+    assert_eq!(
+        ended.len(),
+        1,
+        "a wake's statement does not wait for its native reply"
+    );
+    assert!(ended[0].contains("completed"), "{ended:?}");
+    replies
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(super::response(&serde_json::json!(null)));
+    r.apply_announced();
+    assert!(r.step_wakes().1.is_none());
+    assert!(
+        r.take_ended_wakes().is_empty(),
+        "a late statement reply cannot end the wake twice"
+    );
+}
+
+#[test]
+fn every_action_ending_survives_a_single_turn_until_the_host_drains_it() {
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("post", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "post",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("post");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let clicked = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        clicked,
+        "activation",
+        16,
+        0,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let replies: Arc<Mutex<Vec<crate::Reply>>> = Default::default();
+    let held = replies.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |_: Vec<u8>, reply: crate::Reply| {
+            held.lock().unwrap().push(reply);
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for id in 0..40 {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            &id.to_string(),
+        )
+        .unwrap();
+    }
+    assert!(r.step_wakes().1.is_none());
+    assert!(r.ended_actions().as_array().unwrap().is_empty());
+    r.native_slot()
+        .host(Some(Arc::new(|_: Vec<u8>, reply: crate::Reply| {
+            reply.send(super::response(&serde_json::json!(null)));
+        })));
+    replies
+        .lock()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .send(super::response(&serde_json::json!(null)));
+    r.apply_announced();
+    assert!(r.step_wakes().1.is_none());
+    let ended = r.take_ended_actions();
+    assert_eq!(
+        ended.as_array().unwrap().len(),
+        40,
+        "no ending may be evicted before the host reads it"
+    );
+    assert!(r.take_ended_actions().as_array().unwrap().is_empty());
+    assert_eq!(r.ended_actions().as_array().unwrap().len(), 32);
+    for id in 0..40 {
+        assert_eq!(ended[id]["id"], id.to_string());
+        assert_eq!(ended[id]["outcome"], "completed");
+    }
+}
+
+#[derive(Default)]
+struct DeferredModuleReader {
+    ready: bool,
+}
+
+impl DataSource for DeferredModuleReader {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        unreachable!("the fixture implements answer")
+    }
+
+    fn ready(&self) -> bool {
+        self.ready
+    }
+
+    fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Later(crate::Request::native(
+            br#"{"extension":"camera","source":"devices"}"#.to_vec(),
+        )))
+    }
+
+    fn parse(
+        &mut self,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        let Outcome::Response(response) = outcome else {
+            panic!("a module response")
+        };
+        let value: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        if value["error"] == "NotSupportedError" {
+            return Err(DataError::Failed(
+                crate::failure::FailureCode::Error,
+                "camera.devices is not bound".into(),
+                String::new(),
+            ));
+        }
+        Ok(Answer::Now(Value::str(value.as_str().unwrap())))
+    }
+}
+
+fn deferred_module_reader(data_code: bool) -> Runner<DeferredModuleReader> {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("devices", &[], string);
+    b.module(
+        source,
+        ("camera", "@fixture/camera"),
+        "devices",
+        false,
+        false,
+        "never",
+        "",
+        "{}",
+    );
+    b.resource(
+        "devices",
+        if data_code { "readDevices" } else { "devices" },
+        &[],
+        string,
+        Some(&Value::str("no cameras")),
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = Runner::boot(
+        b.finish().unwrap(),
+        DeferredModuleReader::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.take_requests().is_empty());
+    r.data.ready = true;
+    r.data_ready().unwrap();
+    r
+}
+
+fn run_module_request(r: &mut Runner<DeferredModuleReader>, request: &crate::Request) -> Outcome {
+    use crate::{Dispatch, Reply, Work};
+    match r.native_work(request) {
+        Dispatch::Run(Work::Now(work)) => work(),
+        Dispatch::Run(Work::Later(work)) => {
+            let answer = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let out = answer.clone();
+            work(Reply::new(move |v| *out.lock().unwrap() = Some(v)));
+            let outcome = answer
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the fixture answers immediately");
+            outcome
+        }
+        _ => panic!("the module request runs"),
+    }
+}
+
+fn bind_camera(r: &mut Runner<DeferredModuleReader>) {
+    r.native_slot()
+        .host(Some(std::sync::Arc::new(|body, reply| {
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["extension"], "camera");
+            assert_eq!(body["source"], "devices");
+            reply.send(super::response(&serde_json::json!("back camera")));
+        })));
+    r.bind_extensions(&["camera"], &[]);
+    assert!(r.apply_announced().1.is_none());
+}
+
+#[test]
+fn binding_recovers_a_failed_contract_module_reader_after_data_activation() {
+    let mut r = deferred_module_reader(false);
+    assert_eq!(r.failed_resources().len(), 1);
+    bind_camera(&mut r);
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1);
+    let answer = run_module_request(&mut r, &requests[0].request);
+    r.fulfill(requests[0].ticket, answer).unwrap();
+    assert_eq!(r.resource("devices"), Some(&Value::str("back camera")));
+    assert!(r.failed_resources().is_empty());
+}
+
+#[test]
+fn binding_recovers_a_failed_data_module_reader_after_its_reply() {
+    let mut r = deferred_module_reader(true);
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1);
+    let answer = run_module_request(&mut r, &requests[0].request);
+    r.fulfill(requests[0].ticket, answer).unwrap();
+    assert_eq!(r.failed_resources().len(), 1);
+    bind_camera(&mut r);
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1);
+    let answer = run_module_request(&mut r, &requests[0].request);
+    r.fulfill(requests[0].ticket, answer).unwrap();
+    assert_eq!(r.resource("devices"), Some(&Value::str("back camera")));
+}
+
+#[test]
+fn binding_recovers_a_data_module_reader_before_its_failed_reply_lands() {
+    let mut r = deferred_module_reader(true);
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1);
+    let answer = run_module_request(&mut r, &requests[0].request);
+    bind_camera(&mut r);
+    assert!(
+        r.take_requests().is_empty(),
+        "the outstanding reply lands first"
+    );
+    r.fulfill(requests[0].ticket, answer).unwrap();
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1, "binding asks the failed reader again");
+    let answer = run_module_request(&mut r, &requests[0].request);
+    r.fulfill(requests[0].ticket, answer).unwrap();
+    assert_eq!(r.resource("devices"), Some(&Value::str("back camera")));
+    assert!(r.failed_resources().is_empty());
+}
+
+#[test]
+fn a_data_send_carries_the_grants_it_was_admitted_under() {
+    use crate::{Dispatch, Reply, Request, Work};
+    use serde_json::{json, Value as Json};
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    for (name, send) in [("devices", false), ("capture", true)] {
+        let source = b.source(&format!("camera.{name}"), &[], string);
+        b.module(
+            source,
+            ("camera", "@fixture/camera"),
+            name,
+            send,
+            false,
+            "never",
+            "",
+            "{}",
+        );
+    }
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let heard: Arc<Mutex<Vec<Json>>> = Default::default();
+    let seen = heard.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |body: Vec<u8>, reply: Reply| {
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&body).unwrap());
+            reply.send(super::response(&json!("done")));
+        })));
+    r.bind_extensions(&["camera"], &[]);
+    let scope = "net.fetch https://source.test";
+    for (verb, name, grants) in [
+        ("send", "capture", Some(scope)),
+        ("send", "capture", None),
+        ("source", "devices", Some(scope)),
+    ] {
+        // What the body claims for itself is never forwarded.
+        let body =
+            json!({"extension": "camera", verb: name, "args": {}, "authority": "net.fetch *"});
+        let mut request = Request::native(body.to_string().into_bytes());
+        request.grants = grants.map(Into::into);
+        match r.native_work(&request) {
+            Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
+            Dispatch::Run(Work::Now(work)) => drop(work()),
+            _ => panic!("the module request runs"),
+        }
+    }
+    let heard = heard.lock().unwrap();
+    assert_eq!(heard[0]["authority"], scope);
+    assert_eq!(heard[1]["authority"], json!(r.data.grants()));
+    assert_eq!(heard[2].get("authority"), None, "a read starts no work");
+}
+
+/// HTML's transient activation, on the session's clock: a call the app makes
+/// within five seconds of a person's press says so to its implementation.
+#[test]
+fn a_call_inside_a_persons_activation_window_says_so() {
+    use crate::{Dispatch, Reply, Request, Work};
+    use serde_json::{json, Value as Json};
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let number = b.primitive(TypeKind::Number);
+    let source = b.source("camera.capture", &[], string);
+    b.module(
+        source,
+        ("camera", "@fixture/camera"),
+        "capture",
+        true,
+        false,
+        "never",
+        "",
+        "{}",
+    );
+    let mut nothing = Asm::new();
+    nothing.simple(Opcode::Unit).simple(Opcode::Return);
+    let nothing = b.code(nothing);
+    let pressed = b.action("pressed", &[], &[], nothing);
+    let scrolled = b.action("scrolled", &[("x", number), ("y", number)], &[], nothing);
+    b.node(
+        NodeType::View as u8,
+        None,
+        None,
+        0,
+        &[],
+        &[
+            (EventKind::Press, pressed, &[]),
+            (EventKind::Scroll, scrolled, &[]),
+        ],
+        None,
+    );
+    let mut r = boot(b.finish().unwrap());
+    let heard: Arc<Mutex<Vec<Json>>> = Default::default();
+    let seen = heard.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |body: Vec<u8>, reply: Reply| {
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&body).unwrap());
+            reply.send(super::response(&json!("done")));
+        })));
+    r.bind_extensions(&["camera"], &[]);
+    // The data-code call, as the app's own or a tool's; whether its
+    // implementation heard it as inside the window.
+    let call = |r: &mut Runner<Source>, origin: super::CallOrigin| {
+        // What the body claims for itself is never forwarded.
+        let body =
+            json!({"extension": "camera", "send": "capture", "args": {}, "userActivation": true});
+        let request = Request::native(body.to_string().into_bytes());
+        match r.as_origin(origin, |r| r.native_work(&request)) {
+            Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
+            Dispatch::Run(Work::Now(work)) => drop(work()),
+            _ => panic!("the module request runs"),
+        }
+        let heard = heard.lock().unwrap().pop().expect("forwarded");
+        heard.get("userActivation").is_some_and(|v| v == true)
+    };
+    let app = super::CallOrigin::App;
+    let root = r.roots()[0];
+    let at = |r: &mut Runner<Source>, event: Event, ms: f64| {
+        let advanced = r.dispatch_at(root, event, ms);
+        assert!(advanced.error.is_none(), "{:?}", advanced.error);
+    };
+    assert!(
+        !call(&mut r, app),
+        "no input yet: a resource's or a timer's"
+    );
+    at(&mut r, Event::Scroll(ScrollEvent::default()), 100.);
+    assert!(!call(&mut r, app), "a scroll activates nothing");
+    at(&mut r, Event::Press, 1_000.);
+    assert!(call(&mut r, app), "a press handler's call");
+    assert!(call(&mut r, app), "reading the window does not consume it");
+    assert!(
+        !call(&mut r, super::CallOrigin::Tool),
+        "a tool's call inside the window is not the person's"
+    );
+    assert!(r.advance_timed(5_999.).error.is_none());
+    assert!(
+        call(&mut r, app),
+        "a timer inside the window, as on the web"
+    );
+    assert!(r.advance_timed(6_000.).error.is_none());
+    assert!(!call(&mut r, app), "the window expired");
+    at(&mut r, Event::Press, 7_000.);
+    assert!(call(&mut r, app), "each press starts it again");
+    // On a live clock no commit need come between the press and the call.
+    let clock = std::rc::Rc::new(std::cell::Cell::new(7_000.));
+    let sample = clock.clone();
+    r.set_live_clock(Some(Box::new(move || sample.get())));
+    clock.set(20_000.);
+    assert!(!call(&mut r, app), "the call's own time is past the window");
+}
+
+/// A notification's tap is a person's act though no input event carries it:
+/// the activation the host raises opens the window. What a package raises
+/// for itself, a wake and a tool open none.
+#[test]
+fn a_host_activation_opens_the_activation_window_and_no_other_origin_does() {
+    use crate::{Dispatch, Reply, Request, Work};
+    use serde_json::{json, Value as Json};
+    use std::sync::{Arc, Mutex};
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("camera.capture", &[], string);
+    b.module(
+        source,
+        ("camera", "@fixture/camera"),
+        "capture",
+        true,
+        false,
+        "never",
+        "",
+        "{}",
+    );
+    let mut nothing = Asm::new();
+    nothing.simple(Opcode::Unit).simple(Opcode::Return);
+    let nothing = b.code(nothing);
+    let heard_it = b.action("heard", &[], &[], nothing);
+    let notifications = ("notifications", "@fixture/notifications");
+    b.module_event(
+        notifications,
+        "notificationclick",
+        heard_it,
+        "activation",
+        16,
+        0,
+    );
+    b.module_event(notifications, "notificationshown", heard_it, "event", 16, 0);
+    b.module_event(
+        ("tide", "@fixture/tide"),
+        "tide",
+        heard_it,
+        "wake",
+        16,
+        30_000,
+    );
+    b.node(
+        NodeType::View as u8,
+        None,
+        None,
+        0,
+        &[],
+        &[(EventKind::Press, heard_it, &[])],
+        None,
+    );
+    let mut r = boot(b.finish().unwrap());
+    let heard: Arc<Mutex<Vec<Json>>> = Default::default();
+    let seen = heard.clone();
+    r.native_slot()
+        .host(Some(Arc::new(move |body: Vec<u8>, reply: Reply| {
+            seen.lock()
+                .unwrap()
+                .push(serde_json::from_slice(&body).unwrap());
+            reply.send(super::response(&json!("done")));
+        })));
+    r.bind_extensions(&["camera"], &[]);
+    // Whether the app's own call now is heard as inside the window.
+    let activated = |r: &mut Runner<Source>| {
+        let body = json!({"extension": "camera", "send": "capture", "args": {}});
+        let request = Request::native(body.to_string().into_bytes());
+        match r.native_work(&request) {
+            Dispatch::Run(Work::Later(work)) => work(Reply::new(|_| {})),
+            Dispatch::Run(Work::Now(work)) => drop(work()),
+            _ => panic!("the module request runs"),
+        }
+        let heard = heard.lock().unwrap().pop().expect("forwarded");
+        heard.get("userActivation").is_some_and(|v| v == true)
+    };
+    let (app, device) = (super::CallOrigin::App, super::CallOrigin::Device);
+    let root = r.roots()[0];
+    assert!(r.dispatch_at(root, Event::Press, 1_000.).error.is_none());
+    assert!(activated(&mut r));
+    assert!(r.advance_timed(7_000.).error.is_none());
+    assert!(!activated(&mut r), "the press's window expired");
+
+    // The tap of a notification, which only the host raises as the app's.
+    r.raise_module_event("notifications", "notificationclick", "[]", app)
+        .unwrap();
+    assert!(r.apply_announced().1.is_none());
+    assert!(activated(&mut r), "the tap is the person's act");
+    assert!(r.advance_timed(11_999.).error.is_none());
+    assert!(activated(&mut r), "five seconds from the tap");
+    assert!(r.advance_timed(12_000.).error.is_none());
+    assert!(!activated(&mut r), "the tap's window expired");
+
+    // A package's own raising of the activation has the device's origin.
+    r.raise_module_event("notifications", "notificationclick", "[]", device)
+        .unwrap();
+    assert!(r.apply_announced().1.is_none());
+    assert!(!activated(&mut r), "a device's event");
+    // An event that is no activation is the device's whoever raises it.
+    r.raise_module_event("notifications", "notificationshown", "[]", app)
+        .unwrap();
+    assert!(r.apply_announced().1.is_none());
+    assert!(!activated(&mut r), "an event that is no activation");
+    r.raise_wake("tide", "tide", "[]", crate::WakeHow::default())
+        .unwrap();
+    assert!(r.step_wakes().1.is_none());
+    assert!(!activated(&mut r), "a wake");
+    r.act_from(super::CallOrigin::Tool, "heard", vec![])
+        .unwrap();
+    assert!(!activated(&mut r), "a tool's invocation");
+    let ran = r
+        .journal()
+        .filter(|line| line.ends_with(": heard by heard"));
+    assert_eq!(ran.count(), 4, "the three events and the wake ran it");
 }

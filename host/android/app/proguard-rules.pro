@@ -6,3 +6,6 @@
 
 # The roster of the modules' implementations the APK carries (dev.exact.canvas.Extensions).
 -keep class exact.app.ExactExtensions { <init>(); }
+
+# ML Kit discovers these constructors through firebase-components' manifest metadata.
+-keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); }

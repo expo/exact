@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The widget's corner radius: the system's from Android 12 (values-v31). -->
+    <dimen name="exact_widget_radius">16dp</dimen>
+    <!-- What a provider is enabled by: from Android 12 (values-v31), the floor of LLP 1126.003 D1. -->
+    <bool name="exact_widgets_enabled">false</bool>
+</resources>

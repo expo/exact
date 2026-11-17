@@ -366,25 +366,27 @@ class MotionModule(context: ExtensionContext) : ExactExtension(context) {
     private fun orientation(v: FloatArray, at: Double, absolute: Boolean): JSONObject {
         val m = FloatArray(9)
         SensorManager.getRotationMatrixFromVector(m, v)
+        // An unnormalized vector can round this element past ±1, where asin is NaN and `JSONObject.put` throws.
+        val sinBeta = m[7].toDouble().coerceIn(-1.0, 1.0)
         var alpha: Double
         var beta: Double
         var gamma: Double
         if (m[8] > 0) {
             alpha = atan2(-m[1].toDouble(), m[4].toDouble())
-            beta = asin(m[7].toDouble())
+            beta = asin(sinBeta)
             gamma = atan2(-m[6].toDouble(), m[8].toDouble())
         } else if (m[8] < 0) {
             alpha = atan2(m[1].toDouble(), -m[4].toDouble())
-            beta = -asin(m[7].toDouble())
+            beta = -asin(sinBeta)
             beta += if (beta >= 0) -PI else PI
             gamma = atan2(m[6].toDouble(), -m[8].toDouble())
         } else if (m[6] > 0) {
             alpha = atan2(-m[1].toDouble(), m[4].toDouble())
-            beta = asin(m[7].toDouble())
+            beta = asin(sinBeta)
             gamma = -PI / 2
         } else if (m[6] < 0) {
             alpha = atan2(m[1].toDouble(), -m[4].toDouble())
-            beta = -asin(m[7].toDouble())
+            beta = -asin(sinBeta)
             beta += if (beta >= 0) -PI else PI
             gamma = -PI / 2
         } else {

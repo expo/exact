@@ -369,6 +369,46 @@ fn a_painting_hosts_entry_includes_the_apps_hatches_with_its_platforms_typed_key
     assert!(!windows.contains("Dot"), "{windows}");
 }
 
+/// The Linux and Windows crates `exact new` generates run the app's hatches
+/// as an authored crate does: the bake writes `exact_hatches()` beside the
+/// plan, naming each file by its absolute path, since the entry is read from
+/// OUT_DIR.
+#[test]
+fn a_generated_painting_hosts_bake_writes_the_apps_hatches_install() {
+    let app = App::new(
+        "bakedhatches",
+        r#","hatches":["dot"]"#,
+        r#"column hatch="dot""#,
+    );
+    let out = app.0.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let write = |platform: &str| {
+        contract::native::write_desktop_hatches(platform, &app.0, "x86_64-unknown-linux-gnu", &out)
+            .unwrap();
+        std::fs::read_to_string(out.join("hatches.rs")).unwrap_or_default()
+    };
+    let none = "fn exact_hatches() -> Option<::exact_painted::hatches::Install> {\n    None\n}\n";
+    assert_eq!(write("linux"), none);
+    let modules = app.0.join("modules/linux");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(modules.join("hatches.rs"), "pub type ExactHatches = ();\n").unwrap();
+    let text = write("windows");
+    assert!(
+        text.contains(
+            "Some(::exact_painted::hatches::install::<hatches::ExactHatches>(HatchKey::WORDS))"
+        ),
+        "{text}"
+    );
+    let file = std::fs::canonicalize(modules.join("hatches.rs")).unwrap();
+    assert!(
+        text.contains(&format!("include!({:?});", file.display().to_string())),
+        "{text}"
+    );
+    // A platform the shells compose no packages for is not written.
+    std::fs::remove_file(out.join("hatches.rs")).unwrap();
+    assert_eq!(write("macos"), "");
+}
+
 /// A game's compiler reads `.shells/app.json`, which the bake resolves from its
 /// `app.json`; edited since, the refusal says the copy is stale and how to
 /// regenerate it (LLP 1139.004 D2). The record is the authored file's content.

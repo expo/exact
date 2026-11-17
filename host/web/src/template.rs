@@ -3,18 +3,19 @@
 //! the live host and the document writer use ([`tag_for`], [`props_for`],
 //! [`crate::css::css_text`], [`host_css`]). The web build's JS target compiles a
 //! plan's static rows through this at build, so its stylesheet is this
-//! host's CSS, never a second mapping — but for `rem` and `em`, which it
-//! writes as authored ([`crate::css::css_text_relative`]): the page keeps no
-//! kernel to re-resolve them when a font size changes, and the browser does.
+//! host's CSS, with font-relative lengths retained for the browser to resolve
+//! ([`crate::css::css_text_relative`]).
 
 use super::{browser_kernel, font_names, host_css, in_button, props_for, svg_props, tag_for};
 use exact_kernel::{Kernel, SortedMap, ViewId};
 use exact_plan::Plan;
 
-pub use super::element::attribute_rows;
+pub use super::element::{attribute_rows, attributes_by_data, tags_by_data};
 // A node's state looks as page rules (LLP 1121 D8), for the JS target's sheet.
 use super::mode::looks;
-pub use super::mode::looks::{colour_below as look_colour_below, rules as look_rules};
+pub use super::mode::looks::{
+    colour_below as look_colour_below, marked as look_marks, rules as look_rules,
+};
 
 /// An element as the live host would create it.
 #[derive(Debug, Clone, PartialEq)]
@@ -39,7 +40,7 @@ pub fn kernel() -> Kernel {
 
 /// [`Parts`] for `id` in `kernel`, or `None` for a view it does not hold.
 pub fn parts(kernel: &Kernel, plan: &Plan, id: ViewId) -> Option<Parts> {
-    parts_with(kernel, plan, id, false, false)
+    parts_with(kernel, plan, id, false, false, false)
 }
 
 /// [`parts`], for a node a build knows has nothing the template leaves out
@@ -53,6 +54,7 @@ pub fn parts_with(
     id: ViewId,
     may_fold: bool,
     child_may_fold: bool,
+    press_translate: bool,
 ) -> Option<Parts> {
     let node = kernel.node(id)?;
     let tag = tag_for(&node, in_button(kernel, &node));
@@ -65,10 +67,17 @@ pub fn parts_with(
         }
     }
     svg_props(kernel, &node, &mut props);
-    let style = super::element::css_style_of(
+    let mut style = super::element::css_style_of(
         &|from, target| kernel.resolve_id(from, target),
         &node.facts(),
     );
+    // A computed offset keeps its animation identity even while unset.
+    if press_translate {
+        style
+            .to_mut()
+            .written
+            .set(exact_kernel::StyleId::PressTranslate);
+    }
     let (mut text, skipped) = crate::css::css_text_relative(&style, &font_names(plan));
     crate::css::text_style::fills(&node.facts(), &mut text);
     let css = super::element::contents(

@@ -10,9 +10,9 @@
 //! page rendered for one is the page for the other.
 
 use crate::viewport::{Viewport, FIELDS, SOURCE};
-use crate::vm::{instructions, Instruction};
-use exact_plan::{Opcode, Plan, ResourcesId, StrId, TypeKind, Value};
-use std::collections::BTreeSet;
+use crate::vm::instructions;
+use exact_plan::{Code, Opcode, Plan, ResourcesId, StrId, TypeKind, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// How the plan reads one fact.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +54,15 @@ pub struct Media {
     pub constant: Constant,
 }
 
+/// An operand whose use may still be decided by an executable caller.
+#[derive(Clone)]
+enum Operand {
+    Resource(usize),
+    Fact(usize),
+    Constant(Constant),
+    Other,
+}
+
 impl Reads {
     /// Walk every code body: each `exactViewport` resource's field read is a
     /// comparison with a constant, or not.
@@ -86,76 +95,146 @@ impl Reads {
         if fields.is_empty() {
             return reads;
         }
+        // Executable rows return operands to their callers. Scanning their
+        // returns as independent uses would turn every shared field into Whole.
+        // Dependencies precede readers, so summaries need no recursive expansion.
+        let mut returned = vec![Operand::Other; plan.derives.len()];
+        let mut entries = BTreeMap::new();
         plan.each_code(&mut |code| {
-            let Ok(code) = instructions(plan.code(code)).collect::<Result<Vec<_>, _>>() else {
-                // A body the VM would refuse reads nothing; the runner never runs it.
-                return;
-            };
-            // Where a jump can land: a value there may come from elsewhere.
-            let targets: BTreeSet<usize> = code
-                .iter()
-                .filter(|i| {
-                    matches!(
-                        i.op,
-                        Opcode::Jump
-                            | Opcode::JumpIfFalse
-                            | Opcode::JumpIfNone
-                            | Opcode::Map
-                            | Opcode::Filter
-                    )
-                })
-                .map(|i| i.args[0] as usize)
-                .collect();
-            for (at, i) in code.iter().enumerate() {
-                if i.op != Opcode::LoadResource {
-                    continue;
+            *entries.entry((code.offset, code.len)).or_insert(0_usize) += 1;
+        });
+        for (at, row) in plan.derives.iter().enumerate() {
+            if row.unsettled {
+                returned[at] = reads.scan(plan, row.body, &fields, &returned);
+                *entries.get_mut(&(row.body.offset, row.body.len)).unwrap() -= 1;
+            }
+        }
+        for ((offset, len), uses) in entries {
+            if uses != 0 {
+                let result = reads.scan(plan, Code { offset, len }, &fields, &returned);
+                reads.whole(result, &fields);
+            }
+        }
+        reads
+    }
+
+    fn scan(
+        &mut self,
+        plan: &Plan,
+        body: Code,
+        fields: &[(ResourcesId, Vec<Option<usize>>)],
+        returned: &[Operand],
+    ) -> Operand {
+        let Ok(code) = instructions(plan.code(body)).collect::<Result<Vec<_>, _>>() else {
+            // A body the VM would refuse reads nothing; the runner never runs it.
+            return Operand::Other;
+        };
+        let targets: BTreeSet<usize> = code
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.op,
+                    Opcode::Jump
+                        | Opcode::JumpIfFalse
+                        | Opcode::JumpIfNone
+                        | Opcode::Map
+                        | Opcode::Filter
+                )
+            })
+            .map(|i| i.args[0] as usize)
+            .collect();
+        let mut stack = Vec::new();
+        let mut result = Operand::Other;
+        for i in code {
+            // Values on opposite sides of a control-flow edge cannot be paired.
+            if targets.contains(&i.pc) {
+                self.flush(&mut stack, fields);
+            }
+            let value = match i.op {
+                Opcode::Number => Operand::Constant(Constant::Number(i.number)),
+                Opcode::Str => {
+                    Operand::Constant(Constant::Str(plan.str(StrId(i.args[0] as u32)).into()))
                 }
-                let Some((_, names)) = fields.iter().find(|(r, _)| r.0 as u64 == i.args[0]) else {
-                    continue;
-                };
-                // The record itself, not one field: every fact it holds.
-                let Some(field) = code.get(at + 1).filter(|n| n.op == Opcode::Field) else {
-                    for fact in names.iter().flatten() {
-                        reads.facts[*fact] = Some(Read::Whole);
+                Opcode::Bool => Operand::Constant(Constant::Bool(i.args[0] != 0)),
+                Opcode::LoadResource => fields
+                    .iter()
+                    .position(|(r, _)| r.0 as u64 == i.args[0])
+                    .map_or(Operand::Other, Operand::Resource),
+                Opcode::LoadDerive => returned[i.args[0] as usize].clone(),
+                Opcode::Field => match stack.pop() {
+                    Some(Operand::Resource(resource)) => fields[resource]
+                        .1
+                        .get(i.args[0] as usize)
+                        .copied()
+                        .flatten()
+                        .map_or(Operand::Other, Operand::Fact),
+                    value => {
+                        self.whole(value.unwrap_or(Operand::Other), fields);
+                        Operand::Other
                     }
-                    continue;
-                };
-                let Some(fact) = names.get(field.args[0] as usize).copied().flatten() else {
-                    continue;
-                };
-                let constant = |n: &Instruction| match n.op {
-                    Opcode::Number => Some(Constant::Number(n.number)),
-                    Opcode::Str => Some(Constant::Str(plan.str(StrId(n.args[0] as u32)).into())),
-                    Opcode::Bool => Some(Constant::Bool(n.args[0] != 0)),
-                    _ => None,
-                };
-                let landed = |n: &Instruction| targets.contains(&n.pc);
-                // `fact <op> constant`, or `constant <op> fact`.
-                let after = code.get(at + 2).zip(code.get(at + 3)).and_then(|(c, op)| {
-                    let value = constant(c).filter(|_| !landed(c) && !landed(op))?;
-                    comparison(op.op).map(|op| (op, value))
-                });
-                let before = at
-                    .checked_sub(1)
-                    .and_then(|b| code.get(b))
-                    .zip(code.get(at + 2))
-                    .and_then(|(c, op)| {
-                        let value = constant(c).filter(|_| !landed(i) && !landed(op))?;
-                        comparison(op.op).map(|op| (mirror(op), value))
-                    });
-                match (after.or(before), &mut reads.facts[fact]) {
-                    (Some(_), Some(Read::Whole)) => {}
-                    (Some(compared), Some(Read::Compared(all))) => {
-                        if !all.contains(&compared) {
-                            all.push(compared);
+                },
+                op if comparison(op).is_some() => {
+                    let right = stack.pop().unwrap_or(Operand::Other);
+                    let left = stack.pop().unwrap_or(Operand::Other);
+                    match (left, right) {
+                        (Operand::Fact(fact), Operand::Constant(value)) => {
+                            self.compared(fact, op, value);
+                        }
+                        (Operand::Constant(value), Operand::Fact(fact)) => {
+                            self.compared(fact, mirror(op), value);
+                        }
+                        (left, right) => {
+                            self.whole(left, fields);
+                            self.whole(right, fields);
                         }
                     }
-                    (Some(compared), slot) => *slot = Some(Read::Compared(vec![compared])),
-                    (None, slot) => *slot = Some(Read::Whole),
+                    Operand::Other
+                }
+                Opcode::Return if targets.is_empty() => {
+                    result = stack.pop().unwrap_or(Operand::Other);
+                    self.flush(&mut stack, fields);
+                    break;
+                }
+                _ => {
+                    self.flush(&mut stack, fields);
+                    Operand::Other
+                }
+            };
+            stack.push(value);
+        }
+        self.flush(&mut stack, fields);
+        result
+    }
+
+    fn flush(&mut self, stack: &mut Vec<Operand>, fields: &[(ResourcesId, Vec<Option<usize>>)]) {
+        for value in stack.drain(..) {
+            self.whole(value, fields);
+        }
+    }
+
+    fn whole(&mut self, value: Operand, fields: &[(ResourcesId, Vec<Option<usize>>)]) {
+        match value {
+            Operand::Fact(fact) => self.facts[fact] = Some(Read::Whole),
+            Operand::Resource(resource) => {
+                for fact in fields[resource].1.iter().flatten() {
+                    self.facts[*fact] = Some(Read::Whole);
                 }
             }
-        });
-        reads
+            _ => {}
+        }
+    }
+
+    fn compared(&mut self, fact: usize, op: Opcode, value: Constant) {
+        let compared = (op, value);
+        match &mut self.facts[fact] {
+            Some(Read::Whole) => {}
+            Some(Read::Compared(all)) => {
+                if !all.contains(&compared) {
+                    all.push(compared);
+                }
+            }
+            slot => *slot = Some(Read::Compared(vec![compared])),
+        }
     }
 
     /// Whether the plan reads any viewport fact.
@@ -355,5 +434,47 @@ fn holds(op: Opcode, value: &Value, constant: &Constant) -> bool {
         Opcode::Ge => order.is_ge(),
         Opcode::Eq => order.is_eq(),
         _ => order.is_ne(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use exact_plan::{asm::Asm, builder::PlanBuilder};
+
+    #[test]
+    fn a_straight_line_body_returns_its_first_return_operand() {
+        for executable in [false, true] {
+            let mut b = PlanBuilder::new(0, 1);
+            let number = b.primitive(TypeKind::Number);
+            let boolean = b.primitive(TypeKind::Bool);
+            let viewport = b.record("Viewport", &[("width", number)]);
+            let resource = b.resource("viewport", SOURCE, &[], viewport, None);
+            let mut a = Asm::default();
+            a.load_resource(resource)
+                .field(0)
+                .op(Opcode::Return, &[])
+                .number(640.0);
+            let body = b.code(a);
+            let row = b.derive("width", number, body);
+            if executable {
+                b.set_derive_unsettled(row, None);
+                let mut a = Asm::default();
+                a.load_derive(row).number(640.0).op(Opcode::Ge, &[]);
+                let body = b.code(a);
+                b.derive("wide", boolean, body);
+            }
+            let reads = Reads::of(&b.finish().unwrap());
+            assert!(reads.reads("width"));
+            if executable {
+                assert_eq!(reads.media().unwrap()[0].query, "(width >= 640px)");
+            } else {
+                assert!(reads.media().is_none());
+                assert_ne!(
+                    reads.key(&Viewport::sized(800.0, 900.0)),
+                    reads.key(&Viewport::sized(900.0, 900.0))
+                );
+            }
+        }
     }
 }

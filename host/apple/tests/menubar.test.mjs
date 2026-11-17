@@ -31,7 +31,7 @@ check(process.env.EXACT_MENU_HELP_ONLY === '1' ? 'AppKit Help search stays first
     const objects = ['ExactKit', 'ExactComposition', 'ExactGroupedLists', 'ExactMarkdown', 'ExactSurfaces', 'ExactDrag']
       .map(name => join(products, name + '.o')).filter(existsSync);
     const build = spawnSync('xcrun', ['swiftc', '-I', products, '-I', join(root, 'host/apple/Sources/CExact'),
-      '-L', process.env.EXACT_LIB_DIR ?? join(root, 'target/host-dev'), '-l' + (process.env.EXACT_LIB ?? 'caltrain_apple'), '-lc++',
+      '-L', process.env.EXACT_LIB_DIR ?? join(root, 'target/host-dev'), '-l' + (process.env.EXACT_LIB ?? 'caltrain_apple'), '-lc++', '-lsqlite3',
       join(dir, 'main.swift'), ...objects, '-o', binary], { encoding: 'utf8' });
     expect(build.status, build.stderr).toBe(0);
     const output = join(dir, 'result.log'), errors = join(dir, 'errors.log');

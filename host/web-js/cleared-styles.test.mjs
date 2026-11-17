@@ -1,11 +1,15 @@
 import { expect, test } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { open } from '../../scripts/agent.mjs';
+import { createServer } from 'node:http';
+import { serveStatic } from '../web/serve.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
-import { need } from '../../scripts/coverage.mjs';
+import { engineTests, need } from '../../scripts/coverage.mjs';
 import { withLook } from '../web/look.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../..');
 const CASES = {
@@ -17,7 +21,9 @@ const CASES = {
   removed: 'background-color=(mode == "color" ? "#000000" : none)',
   class: 'class=Paint',
 };
-const SOURCE = `style Paint
+const PRESENTATIONS = ['fullscreen', 'modal'];
+// An app has one navigation root, its view's root, so each case is its own app.
+const coverSource = (presentation, name) => `style Paint
   background-color="#123456"
 
 component App
@@ -33,33 +39,48 @@ component App
     fill = " \\t\\n"
     mode = "spaces"
   view
-    column
+    main navigationKey="cover" navigationBack="" position="relative" width=180 height=120
       button "Color" press=color testId="color"
       button "Clear" press=clear testId="clear"
       button "Whitespace" press=spaces testId="spaces"
       text mode testId="mode"
-${['fullscreen', 'modal'].flatMap(presentation => Object.entries(CASES).map(([name, attrs]) => {
-  const id = `${presentation}-${name}`;
-  return `      main navigationKey="cover" navigationBack="" position="relative" width=180 height=120
-        column navigationKey="home" testId="home-${id}" position="absolute" inset=0 background-color="#eeccaa"
-          text "Home"
-        column navigationKey="cover" navigationPresentation="${presentation}" testId="${id}" position="absolute" inset=0 ${attrs}
-          text "Cover"`;
-})).join('\n')}
+      column navigationKey="home" testId="home-${presentation}-${name}" position="absolute" inset=0 background-color="#eeccaa"
+        text "Home"
+      column navigationKey="cover" navigationPresentation="${presentation}" testId="${presentation}-${name}" position="absolute" inset=0 ${CASES[name]}
+        text "Cover"
 `;
 
-async function fixture(runtime, run, contract = SOURCE, files = {}, engine = 'chromium') {
+async function fixture(runtime, run, contract, files = {}, engine = 'chromium', live = false) {
   const dir = mkdtempSync(resolve(ROOT, 'target/cleared-styles-'));
-  let server, browser, session;
+  let server, browser, wasmServer;
   try {
     const source = resolve(dir, 'app.contract');
     writeFileSync(source, contract);
     for (const [name, text] of Object.entries(files)) writeFileSync(resolve(dir, name), text);
-    const built = spawnSync(resolve(ROOT, 'target/debug/exact-web-js'), ['js', source, '-o', dir], { encoding: 'utf8' });
+    const built = spawnSync(resolve(ROOT, `target/debug/exact-web-js${EXE}`), ['js', source, '-o', dir], { encoding: 'utf8' });
     expect(built.status, built.stderr).toBe(0);
     if (runtime === 'wasm') {
-      session = await open({ host: 'web', plan: resolve(dir, 'app.plan'), webDist: resolve(process.env.EXACT_WEB_DIST) });
-      await run(expression => session.carrier.evaluate(expression));
+      wasmServer = createServer((req, res) => {
+        if (req.url === '/__plan') { res.end(readFileSync(resolve(dir, 'app.plan'))); return; }
+        if (req.url.startsWith('/module-test/') || req.url.startsWith('/web/')) {
+          const path = req.url.replace(/^\/(module-test|web)\//, '');
+          const bases = req.url.startsWith('/web/') ? [resolve(ROOT, 'host/web')] : [dir, resolve(ROOT, 'host/web-js'), resolve(ROOT, 'host/web')];
+          const file = bases.map(base => resolve(base, path)).find(existsSync);
+          res.writeHead(file ? 200 : 404, { 'content-type': 'text/javascript' });
+          res.end(file ? readFileSync(file) : 'Not found'); return;
+        }
+        serveStatic(resolve(process.env.EXACT_WEB_DIST), req, res);
+      });
+      await new Promise(ok => wasmServer.listen(0, '127.0.0.1', ok));
+      browser = await suiteBrowser(engine);
+      const page = await browser.newPage();
+      await page.goto(`http://127.0.0.1:${wasmServer.address().port}/${live ? '' : '?agent=1'}`);
+      await page.waitForFunction(() => document.getElementById('exact-root')?.dataset.bootMs != null);
+      await page.evaluate(async () => {
+        await exact.ready;
+        await exact.reload(new Uint8Array(await fetch('/__plan').then(r => r.arrayBuffer())), true);
+      });
+      await run(expression => page.evaluate(expression), page);
     } else {
       const shell = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'));
       const style = shell.match(/<style>([\s\S]*?)<\/style>/)[1];
@@ -84,19 +105,19 @@ async function fixture(runtime, run, contract = SOURCE, files = {}, engine = 'ch
       const page = await browser.newPage();
       await page.goto(server.url.href);
       await page.waitForFunction(() => window.ready);
-      await run(expression => page.evaluate(expression));
+      await run(expression => page.evaluate(expression), page);
     }
   } finally {
-    await session?.close(); await browser?.close(); server?.stop(true);
+    await browser?.close(); server?.stop(true);
+    if (wasmServer) await new Promise(ok => wasmServer.close(ok));
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-const read = `(() => Object.fromEntries(['fullscreen', 'modal'].flatMap(p => ${JSON.stringify(Object.keys(CASES))}.map(name => {
-  const id = p + '-' + name, route = document.querySelector('[data-testid="' + id + '"]');
-  const home = document.querySelector('[data-testid="home-' + id + '"]');
-  return [id, [getComputedStyle(route).backgroundColor, getComputedStyle(home).visibility]];
-}))))()`;
+const read = id => `(() => {
+  const route = document.querySelector('[data-testid="${id}"]'), home = document.querySelector('[data-testid="home-${id}"]');
+  return [getComputedStyle(route).backgroundColor, getComputedStyle(home).visibility];
+})()`;
 
 const MAPPED = {
   tracks: ['grid-template-columns', '20px 1fr', '40px 60px'],
@@ -183,7 +204,7 @@ const readMapped = `(() => {
   }));
   for (const name of ['timeline', 'animation', 'pressed', 'shared', 'shared-pressed', 'unset-animation']) {
     const e = document.querySelector('[data-testid="' + name + '"]');
-    values[name] = [e.style.animationPlayState, getComputedStyle(e).animationPlayState, e.getAnimations().map(a => a.playState)];
+    values[name] = [e.style.animationPlayState, getComputedStyle(e).animationPlayState, e.getAnimations().map(a => a.playState), getComputedStyle(e).animationTimeline];
   }
   values.accent.push(document.querySelector('[data-testid="accent"]').style.getPropertyValue('--exact-accent'));
   return values;
@@ -201,12 +222,68 @@ async function action(evaluate, id, mode) {
   })`);
 }
 
+// A bound timeline name holds its animations. This plan has no drag timeline, so the JS target writes the name as
+// CSS's own row (LLP 1057.003 D5: the browser's timeline, none here, which holds them); the wasm target pauses them
+// for the drag code, which finds no source.
+const bound = (runtime, mapped) => runtime === 'JS' ? [mapped[1], mapped[3]] : [mapped[1]];
+const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
+
 for (const runtime of ['JS', 'wasm']) {
   const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
+    await evaluate(`(() => {
+      for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');
+    })()`);
+    for (const [id, mode, expected] of [[null, 'auto', 'auto'], ['raised', 'raised', '2'], ['invalid', 'invalid', 'auto'],
+      ['autoZ', 'auto', 'auto'], ['invalid', 'invalid', 'auto'], ['zero', 'zero', '0'], ['empty', 'empty', 'auto'],
+      ['raised', 'raised', '2'], ['spaces', 'spaces', 'auto'], ['zero', 'zero', '0'], ['autoZ', 'auto', 'auto']]) {
+      if (id) await action(evaluate, id, mode);
+      const values = await evaluate(`(() => Object.fromEntries(['modal', 'pushed', 'literal', 'unsaid'].map(id => {
+        const e = document.querySelector('[data-testid="' + id + '"]');
+        return [id, [getComputedStyle(e).zIndex, e.getAttribute('data-exact-zi'), e.style.zIndex]];
+      })))()`);
+      for (const name of ['modal', 'pushed']) {
+        expect(values[name][0], `${mode}: ${name}`).toBe(expected);
+        if (runtime === 'JS') expect(values[name][1], `${mode}: ${name} paint fact`).toBe(expected === 'auto' ? null : expected);
+        if (mode === 'empty' || mode === 'spaces') expect(values[name][2], `${mode}: ${name} authored clear`).toBe('unset');
+      }
+      expect(values.literal[0]).toBe('auto');
+      expect(values.unsaid[0]).toBe('1');
+    }
+  }, `component App
+  state mode = "auto"
+  state fraction = 2.5
+  action raised
+    mode = "raised"
+  action invalid
+    mode = "invalid"
+  action zero
+    mode = "zero"
+  action autoZ
+    mode = "auto"
+  action empty
+    mode = "empty"
+  action spaces
+    mode = "spaces"
+  view
+    column navigationKey="cover" navigationBack=""
+      column navigationKey="cover" navigationPresentation="modal" z-index=(mode == "raised" ? 2 : mode == "zero" ? 0 : mode == "invalid" ? fraction : mode == "empty" ? "" : mode == "spaces" ? " \\t\\n" : "auto") testId="modal"
+        text mode testId="mode"
+        button "Raised" press=raised testId="raised"
+        button "Invalid" press=invalid testId="invalid"
+        button "Zero" press=zero testId="zero"
+        button "Auto" press=autoZ testId="autoZ"
+        button "Empty" press=empty testId="empty"
+        button "Whitespace" press=spaces testId="spaces"
+        view transition="translate -exact-spring(300, 30, 1)" z-index=(mode == "raised" ? 2 : mode == "zero" ? 0 : mode == "invalid" ? fraction : mode == "empty" ? "" : mode == "spaces" ? " \\t\\n" : "auto") testId="pushed"
+        view z-index="auto" testId="literal"
+        view testId="unsaid"
+`), 120000);
+
   check(`${runtime}: an unset timeline leaves its animations running`, () => fixture(runtime, async evaluate => {
     await action(evaluate, 'timelineOn', 'timeline');
     const active = await evaluate(readMapped);
-    expect(active.timeline[1]).toBe('paused');
+    expect(bound(runtime, active.timeline)).toEqual(held(runtime));
     expect(active['unset-animation'][1]).toBe('running');
     for (const id of ['timelineUnset', 'timelineOff']) {
       await action(evaluate, id, 'running');
@@ -304,21 +381,37 @@ component Fam
     text "Prop" class=Family font-family=f testId="prop"
 `), 120000);
 
-  check(`${runtime}: an empty bound background clears routes over authored classes and the neutral sheet`, () => fixture(runtime, async evaluate => {
-    const snapshots = [];
-    for (const mode of ['empty', 'color', 'empty', 'spaces', 'color', 'empty']) {
-      if (snapshots.length) await evaluate(`document.querySelector('[data-testid="${mode === 'empty' ? 'clear' : mode}"]').click()`);
-      await evaluate(`new Promise((ok, fail) => {
-        const deadline = performance.now() + 10000;
-        const ready = () => {
-          if (document.querySelector('[data-testid="mode"]').textContent === ${JSON.stringify(mode)}) return ok();
-          if (performance.now() >= deadline) return fail(new Error('the style action did not commit'));
-          requestAnimationFrame(ready);
-        }; ready();
-      })`);
-      const actual = await evaluate(read);
-      snapshots.push(actual);
-      for (const p of ['fullscreen', 'modal']) {
+  check(`${runtime}: an empty bound background clears routes over authored classes and the neutral sheet`, async () => {
+    const modes = ['empty', 'color', 'empty', 'spaces', 'color', 'empty'], snapshots = modes.map(() => ({}));
+    for (const p of PRESENTATIONS) for (const name of Object.keys(CASES)) await fixture(runtime, async evaluate => {
+      for (const [i, mode] of modes.entries()) {
+        if (i) await evaluate(`document.querySelector('[data-testid="${mode === 'empty' ? 'clear' : mode}"]').click()`);
+        await evaluate(`new Promise((ok, fail) => {
+          const deadline = performance.now() + 10000;
+          const ready = () => {
+            if (document.querySelector('[data-testid="mode"]').textContent === ${JSON.stringify(mode)}) return ok();
+            if (performance.now() >= deadline) return fail(new Error('the style action did not commit'));
+            requestAnimationFrame(ready);
+          }; ready();
+        })`);
+        snapshots[i][`${p}-${name}`] = await evaluate(read(`${p}-${name}`));
+      }
+      if (runtime === 'JS' && p === 'fullscreen' && name === 'lowered') {
+        expect(await evaluate(`[...document.querySelector('[data-testid="fullscreen-lowered"]').classList].some(name => name.startsWith('xa'))`)).toBe(true);
+        expect(await evaluate(`(async () => {
+          const { css, cssText } = await import('/rt.js');
+          const el = document.createElement('div'); el.style.color = 'red';
+          const values = [];
+          for (const value of ['', null, ' \\t', undefined, '']) {
+            css(el, 'color', '', value); values.push(el.style.color);
+          }
+          return { values, tokens: ['', ' \\t', null].map(v => cssText('--exact-said-font-weight', '', v)) };
+        })()`)).toEqual({ values: ['unset', '', 'unset', '', 'unset'], tokens: ['', ' \t', null] });
+      }
+    }, coverSource(p, name));
+    for (const [i, mode] of modes.entries()) {
+      const actual = snapshots[i];
+      for (const p of PRESENTATIONS) {
         for (const name of ['bound', 'bound-class', 'lowered']) {
           expect([mode, p, name, actual[`${p}-${name}`]]).toEqual([mode, p, name, [mode === 'color' ? 'rgb(0, 0, 0)' : 'rgba(0, 0, 0, 0)', 'visible']]);
         }
@@ -328,26 +421,14 @@ component Fam
       expect(actual['fullscreen-unsaid']).toEqual(['rgba(1, 2, 3, 0)', 'hidden']);
       expect(actual['modal-unsaid'][0]).not.toBe('rgba(0, 0, 0, 0)');
       expect(actual['modal-unsaid'][1]).toBe('visible');
-      for (const p of ['fullscreen', 'modal']) {
+      for (const p of PRESENTATIONS) {
         expect(actual[`${p}-removed`]).toEqual(mode === 'color' ? ['rgb(0, 0, 0)', 'visible'] : actual[`${p}-unsaid`]);
       }
     }
     expect(snapshots[0]).toEqual(snapshots[2]);
     expect(snapshots[0]).toEqual(snapshots[3]);
     expect(snapshots[0]).toEqual(snapshots[5]);
-    if (runtime === 'JS') {
-      expect(await evaluate(`[...document.querySelector('[data-testid="fullscreen-lowered"]').classList].some(name => name.startsWith('xa'))`)).toBe(true);
-      expect(await evaluate(`(async () => {
-        const { css, cssText } = await import('/rt.js');
-        const el = document.createElement('div'); el.style.color = 'red';
-        const values = [];
-        for (const value of ['', null, ' \\t', undefined, '']) {
-          css(el, 'color', '', value); values.push(el.style.color);
-        }
-        return { values, tokens: ['', ' \\t', null].map(v => cssText('--exact-said-font-weight', '', v)) };
-      })()`)).toEqual({ values: ['unset', '', 'unset', '', 'unset'], tokens: ['', ' \t', null] });
-    }
-  }), 120000);
+  }, 240000);
 
   check(`${runtime}: mapped clears preserve class precedence, companion absence and running animations`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
@@ -379,19 +460,17 @@ component Fam
         }
       }
       expect(actual.timeline[1]).toBe('running');
-      if (runtime === 'JS') expect(actual.timeline).toEqual(['', 'running', ['running']]);
+      if (runtime === 'JS') expect(actual.timeline).toEqual(['', 'running', ['running'], 'auto']);
     }
     await action(evaluate, 'timelineOn', 'timeline');
-    const paused = (await evaluate(readMapped)).timeline;
-    expect(paused[1]).toBe('paused');
-    if (runtime === 'JS') expect(paused).toEqual(['paused', 'paused', ['paused']]);
+    expect(bound(runtime, (await evaluate(readMapped)).timeline)).toEqual(held(runtime));
     await action(evaluate, 'timelineUnset', 'running');
     expect((await evaluate(readMapped)).timeline[1]).toBe('running');
     await action(evaluate, 'timelineOn', 'timeline');
     await action(evaluate, 'timelineOff', 'running');
     const cleared = await evaluate(readMapped);
     expect(cleared.timeline[1]).toBe('running');
-    if (runtime === 'JS') expect(cleared.timeline).toEqual(['', 'running', ['running']]);
+    if (runtime === 'JS') expect(cleared.timeline).toEqual(['', 'running', ['running'], 'auto']);
     for (const name of ['animation', 'pressed']) {
       expect(cleared[name][2]).toEqual([]);
       if (runtime === 'JS') expect(cleared[name][0]).toBe('');
@@ -429,7 +508,7 @@ component Fam
         button "Clear" press=clear testId="clear"
         button "Color" press=color testId="color"
         button "Spaces" press=spaces testId="spaces"
-`, { 'app.tamber': 'tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n' }), 120000);
+`, { 'app.forma': 'forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n' }), 120000);
 }
 
 const SPELLINGS_SOURCE = `component App
@@ -471,7 +550,7 @@ const SPELLINGS_SOURCE = `component App
 // A row whose value writes more than one property, a native button's said
 // size, and the root's background as the page's canvas, in each engine.
 for (const [runtime, engine] of [['JS', 'chromium'], ['wasm', 'chromium'], ['JS', 'firefox']]) {
-  const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest[engine];
   check(`${runtime} in ${engine}: a clear unsets every property its value writes, and keeps the row said`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       document.head.appendChild(document.createElement('style')).textContent =
@@ -502,4 +581,209 @@ for (const [runtime, engine] of [['JS', 'chromium'], ['wasm', 'chromium'], ['JS'
       if (runtime === 'JS' && set) expect(actual.canvas[1]).toBe('rgb(30, 30, 31)');
     }
   }, SPELLINGS_SOURCE, {}, engine), 120000);
+}
+
+for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit']) {
+  const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest[engine];
+  const feedback = (evaluate, page) => runtime === 'JS'
+    ? evaluate(`(async () => { const { pieces } = await import('/rt.js'); await pieces(); })()`)
+    : page.waitForFunction(() => typeof exact.hold === 'function');
+  const settle = evaluate => evaluate('Promise.all(document.getAnimations().map(a => (a.finish(), a.finished)))');
+  check(`${runtime} ${engine}: active translate composes and a stationary real pointer activates`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      const slab = page.locator('[data-testid="slab"]'), base = await slab.boundingBox();
+      await page.mouse.move(base.x + 50, base.y + 40);
+      await page.mouse.down(); await settle(evaluate);
+      const held = await slab.boundingBox();
+      expect(held.x - base.x).toBeCloseTo(4, 2);
+      expect(held.y - base.y).toBeCloseTo(4, 2);
+      expect(held.width).toBeCloseTo(base.width, 2);
+      // The original left edge is now outside: the browser hit-tests the paint.
+      expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x + 1, y + 40)?.closest('[data-testid="slab"]') != null, base)).toBe(false);
+      await page.mouse.up(); await settle(evaluate);
+      expect(await page.locator('[data-testid="count"]').textContent()).toBe('1');
+      expect(await slab.boundingBox()).toEqual(base);
+    }, `component App
+  state n = 0
+  action go
+    n = n + 1
+  view
+    column padding=40
+      button "Slab" appearance="none" press=go testId="slab" width=100 height=80 padding=0 border-width=0 translate="10px 20px"
+        :active
+          translate = "4px 4px"
+      text n.toString() testId="count"
+`, {}, engine, true);
+  }, 30_000);
+  for (const sizing of ['content-box', 'border-box']) check(`${runtime} ${engine}: active translate percentages use the resized ${sizing} border box`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      const slab = page.locator('[data-testid="slab"]'), base = await slab.boundingBox();
+      await page.mouse.move(base.x + base.width / 2, base.y + base.height / 2); await page.mouse.down(); await settle(evaluate);
+      expect((await slab.boundingBox()).x - base.x).toBeCloseTo(base.width * .1, 2);
+      expect((await slab.boundingBox()).y - base.y).toBeCloseTo(base.height * .1, 2);
+      await page.locator('[data-testid="change"]').fill('200');
+      await page.waitForFunction(() => document.querySelector('[data-testid="size"]').textContent === '200');
+      const resized = await slab.boundingBox();
+      expect(resized.x - base.x).toBeCloseTo((resized.width - base.width) * .1 + resized.width * .1, 2);
+      await page.mouse.up(); await settle(evaluate);
+      expect((await slab.boundingBox()).x - base.x).toBeCloseTo((resized.width - base.width) * .1, 2);
+    }, `component App
+  state size = 100
+  action resize(value: string)
+    size = 200
+  action go
+    let value = 1
+  view
+    column padding=40
+      view press=go testId="slab" width=size height=80 padding=20 border-width=10 border-style="solid" box-sizing="${sizing}" translate="10% 0px"
+        :active
+          translate = "10% 10%"
+      text size.toString() testId="size"
+      input value="" input=resize testId="change"
+`, {}, engine);
+  }, 30_000);
+  if (runtime === 'JS') check(`${runtime} ${engine}: literal exit translation composes with active translation`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      await page.locator('[data-testid="remove"]').click();
+      const ghost = page.locator('[data-exiting]');
+      await page.waitForFunction(() => document.querySelector('[data-exiting]')?.getAnimations().some(a => a instanceof CSSAnimation));
+      await ghost.evaluate(el => {
+        window.exit = el.getAnimations().find(a => a instanceof CSSAnimation);
+        exit.pause(); exit.currentTime = 0;
+      });
+      const start = await ghost.boundingBox();
+      await evaluate('exit.currentTime = 500');
+      const halfway = await ghost.boundingBox();
+      expect(halfway.x - start.x).toBeCloseTo(50, 2);
+      expect(halfway.y - start.y).toBeCloseTo(30, 2);
+      await evaluate('exit.finish()');
+      await page.waitForFunction(() => !document.querySelector('[data-exiting]'));
+    }, `keyframes leave
+  from translate="0px 0px"
+  to translate="100px 60px"
+component App
+  state shown = true
+  action remove
+    shown = false
+  action go
+    let value = 1
+  view
+    column padding=40
+      button "Remove" press=remove testId="remove"
+      if shown
+        view press=go testId="slab" width=100 height=80 -exact-exit-animation="leave 1s linear"
+          :active
+            translate = "4px 4px"
+`, {}, engine, true);
+  }, 30_000);
+  for (const offset of ['offset', '"4px 4px"']) check(`${runtime} ${engine}: active translate keeps its containing block (${offset})`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      const slab = page.locator('[data-testid="slab"]');
+      for (const value of ['none', '4px 4px', 'none']) {
+        await page.locator('[data-testid="change"]').fill(value);
+        await page.waitForFunction(v => document.querySelector('[data-testid="value"]').textContent === v, value);
+        const none = offset === 'offset' && value === 'none';
+        expect(await slab.evaluate(el => getComputedStyle(el).translate === 'none')).toBe(none);
+        expect(await slab.evaluate(el => getComputedStyle(el).isolation)).toBe(none ? 'auto' : 'isolate');
+        expect(await slab.evaluate(el => getComputedStyle(el).position)).toBe('relative');
+        const child = page.locator('[data-testid="child"]');
+        expect((await child.boundingBox()).y).toBe(40);
+        await page.mouse.move(50, 60);
+        await page.mouse.down(); await settle(evaluate);
+        expect(await child.evaluate(el => el.offsetTop)).toBe(0);
+        expect((await child.boundingBox()).y - (await slab.boundingBox()).y).toBeCloseTo(0, 2);
+        await page.mouse.up(); await settle(evaluate);
+        expect((await child.boundingBox()).y).toBe(40);
+      }
+    }, `component App
+  state offset = "none"
+  action change(value: string)
+    offset = value
+  action go
+    let value = 1
+  view
+    column position="relative"
+      view height=40
+      row press=go testId="slab" width=100 height=80
+        :active
+          translate = ${offset}
+        view position="absolute" top=0 width=10 height=10 testId="child"
+      text offset testId="value"
+      input value="" input=change testId="change"
+`, {}, engine);
+  }, 30_000);
+  check(`${runtime} ${engine}: an unset active translate preserves authored transitions`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      const slab = page.locator('[data-testid="slab"]'), base = await slab.boundingBox();
+      await page.locator('[data-testid="change"]').fill('move');
+      await page.waitForFunction(() => document.getAnimations().some(a => a instanceof CSSTransition));
+      await evaluate('document.getAnimations().forEach(a => { a.pause(); a.currentTime = 500; })');
+      const during = await slab.boundingBox();
+      expect(during.x - base.x).toBeCloseTo(50, 2);
+      expect(during.y - base.y).toBeCloseTo(30, 2);
+    }, `component App
+  state moved = false
+  state offset = "none"
+  action change(value: string)
+    moved = true
+  action go
+    let value = 1
+  view
+    column padding=40
+      view press=go testId="slab" width=100 height=80 translate=(moved ? "100px 60px" : "0px 0px") transition="translate 1s linear"
+        :active
+          translate = offset
+      input value="" input=change testId="change"
+`, {}, engine, true);
+  }, 30_000);
+  check(`${runtime} ${engine}: computed active translate keeps authored keyframes and their playhead`, async () => {
+    await fixture(runtime, async (evaluate, page) => {
+      await feedback(evaluate, page);
+      const slab = page.locator('[data-testid="slab"]');
+      await page.waitForFunction(() => document.getAnimations().some(a => a instanceof CSSAnimation));
+      await slab.evaluate(el => {
+        window.slide = el.getAnimations().find(a => a instanceof CSSAnimation);
+        slide.pause(); slide.currentTime = 0;
+      });
+      const start = await slab.boundingBox();
+      await evaluate("slide.currentTime = 500");
+      const halfway = await slab.boundingBox();
+      expect(halfway.x - start.x).toBeCloseTo(50, 2);
+      expect(halfway.y - start.y).toBeCloseTo(30, 2);
+      await page.mouse.move(halfway.x + 50, halfway.y + 40); await page.mouse.down();
+      await slab.evaluate(async el => { await Promise.all(el.getAnimations().filter(a => !(a instanceof CSSAnimation)).map(a => (a.finish(), a.finished))); });
+      for (const value of ['4px 4px', 'none', '8px 6px', 'none']) {
+        await page.locator('[data-testid="change"]').fill(value);
+        await page.waitForFunction(v => document.querySelector('[data-testid="value"]').textContent === v, value);
+        await slab.evaluate(async el => { await Promise.all(el.getAnimations().filter(a => !(a instanceof CSSAnimation)).map(a => (a.finish(), a.finished))); });
+        expect(await slab.evaluate(el => el.getAnimations().find(a => a instanceof CSSAnimation) === window.slide)).toBe(true);
+        expect(await evaluate('slide.currentTime')).toBe(500);
+        const box = await slab.boundingBox(), [x, y] = value === 'none' ? [0, 0] : value.split(' ').map(parseFloat);
+        expect(box.x - halfway.x).toBeCloseTo(x, 2);
+        expect(box.y - halfway.y).toBeCloseTo(y, 2);
+      }
+      await page.mouse.up();
+    }, `keyframes slide
+  from translate="0px 0px"
+  to translate="100px 60px"
+component App
+  state offset = "none"
+  action change(value: string)
+    offset = value
+  action go
+    let value = 1
+  view
+    column padding=40
+      view press=go testId="slab" width=100 height=80 animation="slide 1s linear forwards"
+        :active
+          translate = offset
+      text offset testId="value"
+      input value="" input=change testId="change"
+`, {}, engine, true);
+  }, 30_000);
 }

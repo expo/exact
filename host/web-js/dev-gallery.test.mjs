@@ -10,27 +10,29 @@
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { galleryCache } from './dev-gallery.mjs';
-import { FRAME_ANCESTORS } from '../../scripts/tamber-server.mjs';
+import { FRAME_ANCESTORS } from '../../scripts/forma-server.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 afterEach(() => stopAll());
 
-/** A copy of library-gate with id `id`, under the repo's target. */
+/** A copy of library-gate's contract and design with id `id`, under the repo's target. */
 function copy(id) {
   const dir = resolve(ROOT, 'target', `dev-gallery-test-${process.pid}`, 'app');
   rmSync(dir, { recursive: true, force: true });
-  for (const f of ['app.contract', 'app.tamber']) cpSync(resolve(ROOT, 'apps/library-gate', f), join(dir, f), { recursive: true });
+  for (const f of ['app.contract', 'app.forma']) cpSync(resolve(ROOT, 'apps/library-gate', f), join(dir, f), { recursive: true });
   // An asset of the app's: the gallery's are the app's.
   mkdirSync(join(dir, 'assets'), { recursive: true });
   writeFileSync(join(dir, 'assets', 'note.txt'), 'the app\'s asset\n');
   const manifest = JSON.parse(readFileSync(resolve(ROOT, 'apps/library-gate/app.json'), 'utf8'));
   manifest.app.id = id; manifest.id = id;
+  // The copy has no data crate (its contract asks for no data), so its manifest names none (LLP 1153.003 D2).
+  delete manifest.rust;
   writeFileSync(join(dir, 'app.json'), JSON.stringify(manifest, null, 2));
   return dir;
 }
@@ -40,7 +42,8 @@ async function devLoop(dir, env = {}) {
   await new Promise((ok) => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise((ok) => listener.close(ok));
-  const dist = mkdtempSync(join(tmpdir(), 'exact-dev-gallery-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-dev-gallery-')), 'dist');
   const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '';
   dev.stderr.on('data', (d) => { out = (out + d).slice(-20000); });
@@ -48,7 +51,7 @@ async function devLoop(dir, env = {}) {
     dev.stdout.on('data', (d) => { out = (out + d).slice(-20000); if (out.includes('plan ready') && out.includes(`127.0.0.1:${port}/`)) ok(); });
     dev.on('exit', (code) => fail(new Error(`the dev loop exited ${code}: ${out}`)));
   });
-  return { base: `http://127.0.0.1:${port}`, port, dev, said: () => out, stop: async () => { await dev.stop(30_000); rmSync(dist, { recursive: true, force: true }); } };
+  return { base: `http://127.0.0.1:${port}`, port, dev, said: () => out, stop: async () => { await dev.stop(30_000); rmSync(dirname(dist), { recursive: true, force: true }); } };
 }
 
 /** An SSE stream's frames, as they come; `close` ends it. */
@@ -90,6 +93,8 @@ test('the gallery: made only once a page asks through the gate, its own build, s
     const nonce = gallery.got[0].nonce;
     expect(typeof nonce).toBe('string');
     expect(existsSync(join(cache, 'live/app.contract'))).toBe(true);
+    expect(lstatSync(join(cache, 'live/assets')).isDirectory()).toBe(true);
+    expect(readFileSync(join(cache, 'live/assets/note.txt'), 'utf8')).toBe("the app's asset\n");
     // Its page: its files under its path, its own dev client.
     const page = await (await fetch(`${loop.base}/__dev/gallery/`)).text();
     expect(page).toContain('<base href="/__dev/gallery/">');
@@ -104,20 +109,20 @@ test('the gallery: made only once a page asks through the gate, its own build, s
     // Its registration, listed as it said it.
     const reg = await fetch(`${loop.base}/__dev/report`, { method: 'POST', body: JSON.stringify({ nonce, kind: 'register', id: 'web-js-gallery-test', host: 'web-js', capabilities: ['pin', 'inspect', 'hold'], plan: null, page: 'gallery' }) });
     expect(reg.status).toBeLessThan(300);
-    const { token } = await (await fetch(`${loop.base}/__tamber/token`)).json();
-    const hello = (await (await fetch(`${loop.base}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).json()).ok;
+    const { token } = await (await fetch(`${loop.base}/__forma/token`)).json();
+    const hello = (await (await fetch(`${loop.base}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).json()).ok;
     expect(hello.builds.find((b) => b.id === 'web-js-gallery-test')?.page).toBe('gallery');
     // A kept design edit: a batch to the app, a build to the gallery; neither stream carries the other's.
     const app = frames(`${loop.base}/__dev/page`);
     await until(() => app.got.length > 0);
     const [appBefore, galleryBefore] = [app.got.length, gallery.got.length];
     const builtBefore = Math.max(...gallery.got.map((f) => f.reload ?? 0));
-    const tamber = readFileSync(join(dir, 'app.tamber'), 'utf8');
-    writeFileSync(join(dir, 'app.tamber'), tamber.replace('#ffffff', '#fefefe'));
-    await until(() => app.got.slice(appBefore).some((f) => f.kind === 'tamber-batch'));
+    const forma = readFileSync(join(dir, 'app.forma'), 'utf8');
+    writeFileSync(join(dir, 'app.forma'), forma.replace('#ffffff', '#fefefe'));
+    await until(() => app.got.slice(appBefore).some((f) => f.kind === 'forma-batch'));
     await until(() => gallery.got.slice(galleryBefore).some((f) => f.reload > builtBefore));
     expect(app.got.slice(appBefore).filter((f) => f.reload !== undefined || f.error)).toEqual([]);
-    expect(gallery.got.slice(galleryBefore).filter((f) => f.kind === 'tamber-batch' || f.error)).toEqual([]);
+    expect(gallery.got.slice(galleryBefore).filter((f) => f.kind === 'forma-batch' || f.error)).toEqual([]);
     app.close();
     // Its last page gone: its build stopped a while after (EXACT_DEV_GALLERY_IDLE_MS).
     gallery.close();

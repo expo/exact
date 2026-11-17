@@ -465,6 +465,32 @@ fn the_shared_cases_hold_for_the_rust_recorder() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// The two cases whose effect is ink Chrome does not show: the shared run
+/// checks only that both recorders agree, so the records are read here.
+#[test]
+fn an_infinite_max_width_and_a_singular_clip_record_nothing() {
+    use exact_canvas::list::Op;
+    let lists = rust_lists(include_str!("cases.txt"));
+    let ops = |name: &str| -> Vec<Op> {
+        let (_, l) = lists.iter().find(|(n, _)| n == name).unwrap();
+        l.iter()
+            .flat_map(|l| list::records(l).unwrap())
+            .map(|r| r.op)
+            .collect()
+    };
+    let text = ops("fillText and strokeText draw nothing with an infinite maxWidth");
+    let drawn = text
+        .iter()
+        .filter(|op| matches!(op, Op::FillText | Op::StrokeText));
+    assert_eq!(drawn.count(), 1, "{text:?}");
+    let clip = ops("clip under a singular matrix is ignored, as Chrome ignores it");
+    assert!(
+        !clip.iter().any(|op| matches!(op, Op::Clip | Op::ClipPath)),
+        "{clip:?}"
+    );
+    assert!(clip.contains(&Op::FillRect), "{clip:?}");
+}
+
 #[test]
 fn arc_to_near_collinear_turns_record_a_line_to_the_corner() {
     use exact_canvas::{list::Op, Path2d};
@@ -592,4 +618,32 @@ fn a_display_p3_canvas_records_display_p3_bytes() {
         .unwrap();
     let pixel = put.operands().nth(4).unwrap() as u32;
     assert_eq!(pixel.to_be_bytes(), [234, 51, 35, 255]);
+}
+
+/// WPT `2d.text.drawing.style.letterSpacing.change.font`: a font-relative
+/// spacing follows a later `font`, in what is measured and what is drawn,
+/// and still reads as written. `recorder.test.mjs` holds the TypeScript
+/// recorder to the same numbers.
+#[test]
+fn a_font_relative_spacing_follows_a_later_font() {
+    let ctx = Context2d::new();
+    let width = |ctx: &Context2d| ctx.measure_text("Hello World").unwrap().width;
+    let plain = width(&ctx);
+    ctx.set_letter_spacing("1em");
+    let at_ten = width(&ctx) - plain;
+    ctx.set_font("20px serif");
+    let plain_twenty = {
+        let other = Context2d::new();
+        other.set_font("20px serif");
+        width(&other)
+    };
+    assert_eq!(width(&ctx) - plain_twenty, 2.0 * at_ten);
+    assert_eq!(ctx.letter_spacing(), "1em");
+    ctx.set_word_spacing("1ex");
+    ctx.fill_text("Hello World", 0.0, 0.0).unwrap();
+    let lists = ctx.take_lists();
+    let records = list::records(&lists[0]).unwrap();
+    let font = records.iter().find(|r| r.op == list::Op::Font).unwrap();
+    let spacing: Vec<f64> = font.operands().skip(7).take(2).collect();
+    assert_eq!(spacing, [20.0, 10.0], "1em and 1ex of a 20px font");
 }

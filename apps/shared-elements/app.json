@@ -39,5 +39,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "shared-elements-data", "type": "shared_elements_data::Shared", "source": "shared_elements_data::Shared" } }
 }

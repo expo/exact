@@ -1,0 +1,47 @@
+// A text change to a date, time or datetime-local input is held to its
+// `min` and `max` as the times they name, not as strings: `12:00:00` is
+// not after `12:00`, a reversed time range wraps at midnight, a year past
+// 9999 is after 9999's, and a day the month lacks is no date.
+component App
+  state at = ""
+  state late = ""
+  state day = ""
+  state stamp = ""
+  action setAt(v: string)
+    at = v
+  action setLate(v: string)
+    late = v
+  action setDay(v: string)
+    day = v
+  action setStamp(v: string)
+    stamp = v
+  view
+    column
+      input type="time" value=at min="11:00" max="12:00" change=setAt testId="at"
+      input type="time" value=late min="23:00" max="02:00" change=setLate testId="late"
+      input type="date" value=day max="9999-12-31" change=setDay testId="day"
+      input type="datetime-local" value=stamp min="2026-01-01T00:00" change=setStamp testId="stamp"
+
+test "seconds at the maximum"
+  type "at" "12:00:00"
+  expect state at == "12:00:00"
+
+test "a reversed range wraps"
+  type "late" "23:00"
+  expect state late == "23:00"
+  type "late" "01:30"
+  expect state late == "01:30"
+  type "late" "12:00"
+  expect state late == "01:30"
+
+test "a later year"
+  type "day" "10000-01-01"
+  expect state day == ""
+
+test "no such day"
+  type "day" "2026-02-31"
+  expect state day == ""
+
+test "a datetime split on a space"
+  type "stamp" "2026-03-04 05:06"
+  expect state stamp == "2026-03-04 05:06"

@@ -10,7 +10,7 @@ const BETA: &str =
 const GAMMA: &str =
     "# LLP 0002.000: Gamma\n\n**Type:** Plan\n**Status:** Draft\n\nA needle, and another needle.\n";
 
-fn corpus(name: &str) -> PathBuf {
+fn corpus(name: &str) -> Corpus {
     let dir = std::env::temp_dir().join(format!("llp-reader-{}-{name}/llp", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     for (file, text) in [
@@ -20,7 +20,23 @@ fn corpus(name: &str) -> PathBuf {
     ] {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    dir
+    Corpus(dir)
+}
+
+/// A corpus directory, its parent removed when dropped.
+struct Corpus(PathBuf);
+
+impl Drop for Corpus {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+    }
+}
+
+impl std::ops::Deref for Corpus {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
 }
 
 /// Run the reader on a fresh corpus; each `print` is one screen.
@@ -30,9 +46,10 @@ fn run(name: &str, ops: &[&str]) -> Vec<String> {
 
 /// [`run`], and what the reader said on stderr.
 fn run_err(name: &str, ops: &[&str]) -> (Vec<String>, String) {
+    let dir = corpus(name);
     let out = Command::new(env!("CARGO_BIN_EXE_llp"))
-        .arg(corpus(name))
-        .args(["--size", "80x20", "until", "LLP 0001"])
+        .arg(&*dir)
+        .args(["--size", "80x20", "--drive", "until", "LLP 0001"])
         .args(ops)
         .output()
         .expect("runs");
@@ -49,9 +66,10 @@ fn run_err(name: &str, ops: &[&str]) -> (Vec<String>, String) {
 
 /// The test id of the link run whose text is `text`, from the tree.
 fn link(name: &str, text: &str) -> String {
+    let dir = corpus(name);
     let out = Command::new(env!("CARGO_BIN_EXE_llp"))
-        .arg(corpus(name))
-        .args(["--size", "80x20", "until", "LLP 0001", "tree"])
+        .arg(&*dir)
+        .args(["--size", "80x20", "--drive", "until", "LLP 0001", "tree"])
         .output()
         .expect("runs");
     let tree = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -102,9 +120,10 @@ fn closing_the_tree_releases_its_rows_and_reopening_restores_them() {
         ),
         ("picked", vec!["key", "t", "key", "Enter"], false),
     ] {
+        let dir = corpus(name);
         let out = Command::new(env!("CARGO_BIN_EXE_llp"))
-            .arg(corpus(name))
-            .args(["--size", "80x20", "until", "LLP 0001"])
+            .arg(&*dir)
+            .args(["--size", "80x20", "--drive", "until", "LLP 0001"])
             .args(ops)
             .arg("tree")
             .output()
@@ -136,6 +155,7 @@ fn the_tree_opens_on_a_document_beyond_its_first_window() {
         .args([
             "--size",
             "80x20",
+            "--drive",
             "until",
             "Document 60",
             "key",

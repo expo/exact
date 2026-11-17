@@ -1,6 +1,6 @@
 # Paperback Settings: build notes
 
-Built with Exact (`app.contract`, `app.tamber` for the sepia paper colours, `app.test.contract`).
+Built with Exact (`app.contract`, `app.forma` for the sepia paper colours, `app.test.contract`).
 It is installed on simulator 486FD498-… as **Settings**, bundle id `dev.bakeoff.settings.3bc92a`.
 
 ## What's there

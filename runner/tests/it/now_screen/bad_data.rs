@@ -105,7 +105,10 @@ fn repeated_keys_render_in_order_and_a_poisoned_runner_leaks_no_commands() {
     assert!(matches!(
         r.act("poke", vec![]),
         Err(RunnerError::Instance(
-            exact_runner::instance::InstanceError::Trap(Trap::UnwrapNone { .. })
+            exact_runner::instance::InstanceError::Evaluation {
+                trap: Trap::UnwrapNone { .. },
+                ..
+            }
         ))
     ));
     assert!(r.is_poisoned());
@@ -267,7 +270,7 @@ fn a_binding_that_traps_unsets_its_row_and_the_runner_goes_on() {
     assert_eq!(trapped.len(), 2, "{trapped:?}");
     assert!(
         trapped[0].contains(": text trapped Trap(IterationLimit { pc: ")
-            && trapped[0].ends_with("; unset")
+            && trapped[0].ends_with(": past the 65,536 list steps one evaluation may take; unset")
             && trapped[0].contains("(site "),
         "{trapped:?}"
     );
@@ -294,4 +297,88 @@ fn a_binding_that_traps_unsets_its_row_and_the_runner_goes_on() {
     let before = r.journal().count();
     r.act("grow", vec![]).unwrap();
     assert_eq!(trapping(&r, before), 2, "trapping again after a value");
+}
+
+#[test]
+fn traps_name_the_evaluation_and_bound_without_changing_the_token() {
+    let cases = [
+        ("  derive visible = range(n).map(i => range(200).includes(i)).length\n", "      text `${visible}`\n", "derive \"visible\"", false),
+        ("", "      Child(n=n)\ncomponent Child\n  props\n    n: number\n  derive visible = range(n).map(i => range(200).includes(i))\n  view\n    for x in visible key=x\n      text `${x}`\n", "each subject", true),
+        ("", "      for x in [1] key=range(n).map(i => range(200).includes(i)).length\n        text `${x}`\n", "each key", true),
+    ];
+    for (declarations, view, label, poisoned) in cases {
+        let source = format!("component App\n  state n = 1\n  action grow\n    n = 225\n{declarations}  view\n    column\n{view}");
+        let mut r = Runner::boot(
+            contract::compile(&source).unwrap(),
+            Schedule::default(),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let error = r.act("grow", vec![]).unwrap_err();
+        let text = format!("{error:?}");
+        assert!(text.contains("Trap(IterationLimit { pc: "), "{text}");
+        assert!(
+            text.contains(&format!(
+                " {label}: past the 65,536 list steps one evaluation may take"
+            )),
+            "{text}"
+        );
+        if poisoned {
+            assert!(
+                text.contains(" in view ") && text.contains("(site "),
+                "{text}"
+            );
+        }
+        assert_eq!(r.is_poisoned(), poisoned, "{text}");
+        assert!(r.journal().any(|line| line.contains(&text)), "{text}");
+    }
+}
+
+#[test]
+fn boot_commit_and_event_traps_name_their_reset_point() {
+    struct Zero;
+    impl DataSource for Zero {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::Number(0.))
+        }
+    }
+    let boot = |source: &str| {
+        Runner::boot(
+            contract::compile(source).unwrap(),
+            Zero,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+    };
+    let error = boot("component App\n  state n = range(65537).length\n  view\n    text `${n}`\n")
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:?}").contains(" in state \"n\" initializer: past the 65,536"),
+        "{error:?}"
+    );
+    let mut r = boot("component App\n  state n = 1\n  action grow\n    n = range(65537).length\n  view\n    text `${n}`\n").unwrap();
+    let error = r.act("grow", vec![]).unwrap_err();
+    assert!(
+        format!("{error:?}").contains(" in action \"grow\": past the 65,536"),
+        "{error:?}"
+    );
+    let mut r = boot("component App\n  state n = 1\n  resource rows = load(0, range(n).length) as shape number\n  action grow\n    n = 65537\n  view\n    text `${rows}`\n").unwrap();
+    let error = r.act("grow", vec![]).unwrap_err();
+    assert!(
+        format!("{error:?}").contains(" in resource \"rows\" argument 2: past the 65,536"),
+        "{error:?}"
+    );
+    let mut r = boot("component App\n  state n = 1\n  action take(v: number)\n    n = v\n  view\n    button press=take(range(65537).length) testId=\"go\"\n      text `${n}`\n").unwrap();
+    let key = r.kernel().find_first_by_test_id("go").unwrap();
+    let view = r.kernel().node_by_key(key).unwrap().id;
+    let error = r.dispatch(view, Event::Press).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("press argument 1: past the 65,536"),
+        "{error:?}"
+    );
+    assert!(!r.is_poisoned());
 }

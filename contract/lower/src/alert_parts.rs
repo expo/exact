@@ -188,12 +188,8 @@ impl Lowerer<'_> {
                     _ => None,
                 }
             }
-            Node::When {
-                then, otherwise, ..
-            } => all(&[then, otherwise]),
-            Node::Each { body, .. } => all(&[body]),
-            Node::Match { some, none, .. } => all(&[&some.1, none]),
             Node::Use { .. } | Node::Children { .. } => None,
+            node => all(&node.child_lists()),
         }
     }
 

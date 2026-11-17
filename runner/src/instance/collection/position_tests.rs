@@ -4,6 +4,40 @@
 //! input it reads (an outside slot), moved or not.
 use super::*;
 
+#[test]
+fn mounted_position_order_is_stable_across_the_full_position_range() {
+    for n in [0, 1, 16, 21, 64, 257] {
+        let mut h = Harness::new(n, false, false);
+        let mut feedback = h.feedback(0.0);
+        feedback.port_main = 16_384.0;
+        h.send(feedback);
+        let Child::Node(root) = &mut h.tree.children[0] else {
+            panic!()
+        };
+        let mut rows = std::mem::take(&mut root.collection_mut().unwrap().mounted);
+        assert_eq!(rows.len(), n);
+        let keys = [0, 1, usize::MAX / 2, usize::MAX];
+        for (i, row) in rows.iter_mut().enumerate() {
+            row.position = keys[(i * 17 + i / 5) % keys.len()];
+        }
+        let expected: Vec<_> = keys
+            .into_iter()
+            .flat_map(|key| {
+                rows.iter()
+                    .filter(move |row| row.position == key)
+                    .map(|row| (row.position, row.wrapper))
+            })
+            .collect();
+        sort_mounted(&mut rows);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.position, row.wrapper))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 /// A virtualized list over `items` keyed by item; each row a text of its
 /// item, a text of its position when `index`, and a text of the outside slot
 /// `mark` when `mark`.
@@ -654,8 +688,12 @@ fn a_moved_row_whose_body_is_opaque_reevaluates_as_before() {
         if virtualized {
             h.send(h.feedback(640.0));
         }
-        h.sites.deps.bodies.set_opaque(0);
-        assert!(h.sites.deps.bodies[0].reads_position());
+        std::sync::Arc::get_mut(&mut h.sites.data)
+            .unwrap()
+            .deps
+            .bodies
+            .set_opaque(0);
+        assert!(h.sites.data.deps.bodies[0].reads_position());
         let before = read(&h);
         h.slots[0] = prepended(100);
         h.update().unwrap();

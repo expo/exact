@@ -34,7 +34,8 @@ pub(super) struct Look<const ASSETS: bool> {
     /// Tell lines the next `logs` reply carries. They stay out of the world's
     /// journal, which a save carries: presentation never enters a save.
     unread: Vec<String>,
-    /// The canvas's size in points: its last frame's, or the last request that said it.
+    /// The canvas's size in points: its last frame's, the host's `size`, or
+    /// the last request that said it.
     pub(super) points: (f32, f32),
     /// The last live frame: a look frame draws it held.
     pub(super) held: Option<Frame>,
@@ -523,8 +524,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let labels = renderer.probe_labels(&feed.shape_names());
         let readback = renderer.probe_copies(&mut encoder, &texture, &facts);
         queue.submit([encoder.finish()]);
-        renderer.end_look();
         renderer.submitted();
+        renderer.end_look();
         readback.map();
         Ok((readback, facts, records, labels))
     }

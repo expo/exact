@@ -1,0 +1,85 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/store-update@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {
+    "AndroidStoreUpdateStatus": {
+      "availableVersionCode": "option<number>",
+      "updatePriority": "number",
+      "clientVersionStalenessDays": "option<number>",
+      "flexibleAllowed": "bool",
+      "immediateAllowed": "bool",
+      "installStatus": "enum<unknown|requires-ui-intent|pending|downloading|downloaded|installing|installed|failed|canceled>",
+      "bytesDownloaded": "number",
+      "totalBytesToDownload": "number",
+      "installErrorCode": "option<enum<unknown|api-not-available|invalid-request|install-unavailable|install-not-allowed|download-not-present|play-store-not-found|app-not-owned|internal-error>>"
+    },
+    "StoreUpdateResult": {
+      "outcome": "enum<accepted|canceled|failed>"
+    }
+  },
+  "options": {},
+  "names": [
+    {
+      "send": "startStoreUpdate",
+      "request": true,
+      "origin": "app",
+      "foreground": true,
+      "options": {
+        "appUpdateType": "enum<flexible|immediate>",
+        "allowAssetPackDeletion": "option<bool>"
+      },
+      "answers": "StoreUpdateResult",
+      "substitute": {
+        "choose": {
+          "ticket": "store-update",
+          "typed": false,
+          "choices": [
+            "accepted",
+            "canceled",
+            "failed"
+          ]
+        },
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "windows",
+          "tvos"
+        ]
+      }
+    },
+    {
+      "send": "completeStoreUpdate",
+      "request": true,
+      "origin": "app",
+      "answers": null,
+      "substitute": {
+        "unsupported": [
+          "web",
+          "ios",
+          "macos",
+          "linux",
+          "windows",
+          "tvos"
+        ]
+      }
+    }
+  ],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "com.google.android.play:app-update:2.1.0"
+  ],
+  "artifacts": [],
+  "class": "exact.storeupdate.StoreUpdateModule"
+}

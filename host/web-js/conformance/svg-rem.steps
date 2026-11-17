@@ -1,0 +1,10 @@
+prefer root-font-size 24
+tap resize
+tap change
+prefer root-font-size 18
+tap resize
+tap change
+tap omit
+tap resize
+prefer root-font-size 22
+tap omit

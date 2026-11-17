@@ -1,5 +1,4 @@
-// Body and collider controls that are saved only when set: a force, an authored
-// inertia, average restitution.
+// Body forces, authored inertia and collider restitution.
 use exact_game::{bin, hash, json, Entity, Transform, Vec3, World};
 use exact_game_physics::{self as physics, Body, BounceCombine, Collider, ExtraShape, Shape};
 
@@ -81,11 +80,51 @@ fn center_force_persists_until_cleared_and_replays() {
     assert!((after - total).abs() < 1e-5, "{total} then {after}");
 }
 
-// The new fields are written only when set (so existing saves and hashes keep their
-// bytes), round-trip through JSON, binary and a world save when set, keep their
-// value through a patch that omits them, and enter the hash under their names.
 #[test]
-fn optional_force_and_inertia_round_trip() {
+fn collider_saves_replace_defaults_and_patches_keep_omitted_fields() {
+    let changed = Collider {
+        bounce_combine: BounceCombine::Multiply,
+        extra: vec![ExtraShape {
+            shape: Shape::Sphere { radius: 0.25 },
+            ..ExtraShape::default()
+        }],
+        ..Collider::default()
+    };
+    for saved in [Collider::default(), changed.clone()] {
+        let initial = if saved == changed {
+            Collider::default()
+        } else {
+            changed.clone()
+        };
+        let mut decoded = initial.clone();
+        let text = json::to_string(&saved).unwrap();
+        json::read_into(&text, &mut decoded).unwrap();
+        assert_eq!(decoded, saved, "JSON save");
+        let mut decoded = initial;
+        bin::read_into(&bin::to_vec(&saved), &mut decoded).unwrap();
+        assert_eq!(decoded, saved, "binary save");
+    }
+    let mut patched = changed.clone();
+    json::read_into(r#"{"friction":0.25}"#, &mut patched).unwrap();
+    assert_eq!(
+        patched,
+        Collider {
+            friction: 0.25,
+            ..changed
+        }
+    );
+    json::read_into(r#"{"bounce_combine":{"Max":{}},"extra":[]}"#, &mut patched).unwrap();
+    assert_eq!(
+        patched,
+        Collider {
+            friction: 0.25,
+            ..Collider::default()
+        }
+    );
+}
+
+#[test]
+fn force_and_inertia_round_trip_and_survive_patches() {
     let set = Body {
         force: Vec3::new(1.0, 2.0, 3.0),
         inertia: Vec3::new(0.5, 0.25, 0.125),
@@ -93,7 +132,7 @@ fn optional_force_and_inertia_round_trip() {
     };
     let plain = json::to_string(&Body::default()).unwrap();
     assert!(
-        !plain.contains("force") && !plain.contains("inertia"),
+        plain.contains("\"force\":[0.0,0.0,0.0]") && plain.contains("\"inertia\":[0.0,0.0,0.0]"),
         "{plain}"
     );
     let text = json::to_string(&set).unwrap();
@@ -106,6 +145,11 @@ fn optional_force_and_inertia_round_trip() {
     let mut patched = set.clone();
     json::read_into(r#"{"damping":0.1}"#, &mut patched).unwrap();
     assert_eq!((patched.force, patched.inertia), (set.force, set.inertia));
+    json::read_into(&plain, &mut patched).unwrap();
+    assert_eq!(patched, Body::default());
+    let mut decoded = set.clone();
+    bin::read_into(&bin::to_vec(&Body::default()), &mut decoded).unwrap();
+    assert_eq!(decoded, Body::default());
     let force = Body {
         force: Vec3::ONE,
         ..Body::default()
@@ -119,7 +163,7 @@ fn optional_force_and_inertia_round_trip() {
         bounce_combine: BounceCombine::Average,
         ..Collider::default()
     };
-    assert!(!json::to_string(&Collider::default())
+    assert!(json::to_string(&Collider::default())
         .unwrap()
         .contains("bounce_combine"));
     assert!(json::to_string(&average)
@@ -306,7 +350,7 @@ fn extra_colliders_share_the_body_and_filter_by_their_own_layers() {
     }
     assert!(x(&w, die) > x(&w, other) + 0.5, "passed through");
     let json = exact_game::json::to_string(&*w.get::<Collider>(die).unwrap()).unwrap();
-    assert!(!json.contains("extra"), "{json}");
+    assert!(json.contains("\"extra\":[]"), "{json}");
 }
 
 #[test]

@@ -1,8 +1,9 @@
 //! `parity cases` prints the cases as JSON for `parity.html`; `parity check
 //! <fixture>` holds the engine to a recorded fixture and prints every
 //! disagreement. `host/web/parity.mjs` runs both around a headless browser.
-//! `parity presence <plan>` and `parity geometry <plan>` write a fixture's
-//! plan and print what the agent drives or expects on every host.
+//! `parity presence <plan>`, `parity geometry <plan>` and `parity timelines
+//! <plan>` write a fixture's plan and print what the agent drives or
+//! expects on every host.
 
 use std::process::ExitCode;
 
@@ -51,6 +52,20 @@ fn main() -> ExitCode {
             println!("{}", exact_web::parity::GEOMETRY_EXPECTED);
             ExitCode::SUCCESS
         }
+        Some("timelines") => {
+            let Some(path) = args.get(1) else {
+                eprintln!("usage: parity timelines <plan>");
+                return ExitCode::from(2);
+            };
+            let plan = contract::compile(exact_web::parity::timelines::SOURCE)
+                .expect("the timelines fixture compiles");
+            if let Err(error) = std::fs::write(path, plan.encode()) {
+                eprintln!("{path}: {error}");
+                return ExitCode::FAILURE;
+            }
+            println!("{}", exact_web::parity::timelines::STEPS);
+            ExitCode::SUCCESS
+        }
         Some("cases") => {
             println!("{}", exact_web::parity::cases_json());
             ExitCode::SUCCESS
@@ -96,7 +111,7 @@ fn main() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: parity cases | header <recorder> | check <fixture> | presence <plan> | geometry <plan> | paint <plan>"
+                "usage: parity cases | header <recorder> | check <fixture> | presence <plan> | geometry <plan> | paint <plan> | timelines <plan>"
             );
             ExitCode::from(2)
         }

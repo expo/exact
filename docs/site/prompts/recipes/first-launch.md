@@ -1,5 +1,5 @@
 ```prompt Add a first-launch screen
-Add a welcome screen to the Exact app in this folder: it shows until the person taps Continue, then never again. Use https://github.com/expo/exact/blob/main/docs/recipes/first-launch.md as the source for each step. The exact2 checkout has the same page at docs/recipes/first-launch.md.
+Add a welcome screen to the Exact app in this folder: it shows until the person taps Continue, then never again. Use https://github.com/expo/exact/blob/main/docs/recipes/first-launch.md as the source for each step. The Exact checkout has the same page at docs/recipes/first-launch.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not give the welcome's headline and one line under it, write them from what the app does and show them to me in your report. Keep it one short screen.

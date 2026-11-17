@@ -44,7 +44,7 @@ pub(crate) fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
-// Hinnant's integer Gregorian algorithms, also used by runner/src/format.rs.
+// Hinnant's integer Gregorian algorithms, also used by runner/src/format/mod.rs.
 pub(crate) fn ordinal(year: i32, month: u32, day: u32) -> i32 {
     let y = year - i32::from(month <= 2);
     let era = y.div_euclid(400);

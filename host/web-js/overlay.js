@@ -36,6 +36,8 @@ export function land(m, reply, write) {
 }
 /** `m`'s send (`write`) ended without landing: the resources to ask again, or `null` when none was. */
 export function end(m, write) { const w = pending(m, write); if (!w) return null; Writes.list.splice(Writes.list.indexOf(w), 1); return reconcile(m); }
+/** `m` is let go with its instance (LLP 1035.005.004 D6): none of its writes shows again. */
+export function drop(m) { Writes.list = Writes.list.filter(w => w.m !== m); }
 /** Every pending send of `m` ends: an assignment to its slot, or a newer send. */
 export function endPending(m, except) { const n = Writes.list.length; Writes.list = Writes.list.filter(w => w.m !== m || w.landed || w === except); return n === Writes.list.length ? [] : reconcile(m); }
 // Each refreshed resource no other pending write shows in (that one's own end asks).

@@ -161,12 +161,13 @@ pub struct Placed {
     pub policy: bool,
 }
 
-/// The motion properties that change stacking while they animate (D3).
+/// The motion properties that change stacking while they animate (D3):
+/// `filter` too, whose `none` end stacks nothing (LLP 1003.002 D9).
 fn stacking_property(p: exact_motion::Property) -> bool {
     use exact_motion::Property as P;
     matches!(
         p,
-        P::Translate | P::Scale | P::Rotate | P::Opacity | P::Layout
+        P::Translate | P::Scale | P::Rotate | P::Opacity | P::Layout | P::Filter
     )
 }
 
@@ -227,8 +228,10 @@ pub fn own_from(f: Facts<'_>) -> Own {
     let position = crate::style::top_layer::of(s, props);
     let positioned = position != PositionType::Static || f.root;
     let item = matches!(f.parent_display, Some(Display::Flex | Display::Grid));
-    let z =
-        (m.has(StyleId::ZIndex) && (positioned || item)).then(|| s.z_index.clamp(-Z_MAX, Z_MAX));
+    let z = (m.has(StyleId::ZIndex) && (positioned || item))
+        .then_some(s.z_index)
+        .flatten()
+        .map(|z| z.clamp(-Z_MAX, Z_MAX));
     let authored = (m.has(StyleId::Opacity) && s.opacity < 1.0)
         || m.has(StyleId::Translate)
         || m.has(StyleId::Scale)
@@ -264,7 +267,11 @@ pub fn own_from(f: Facts<'_>) -> Own {
     // Structural (D2, D3): a paragraph beside an exclusion; the parent of a
     // child with a layout transition.
     let flowing = kind == NodeType::Text && f.beside_exclusion;
-    let policy = host || motion_stacks(s) || flowing || f.holds_layout_transition;
+    let policy = host
+        || m.has(StyleId::PressTranslate)
+        || motion_stacks(s)
+        || flowing
+        || f.holds_layout_transition;
     Own {
         positioned,
         stacks: authored || policy,
@@ -564,6 +571,19 @@ mod tests {
         z: false,
         level0: false,
     };
+
+    /// LLP 1003.002 D9: a `blur()` → `none` run stacks until it ends.
+    #[test]
+    fn a_transition_covering_filter_stacks_at_rest() {
+        let covering = |text: &str| {
+            let mut s = crate::StyleProps::default();
+            s.transition = exact_motion::Transitions::parse(text).unwrap();
+            s.mask.set(StyleId::Transition);
+            motion_stacks(&s)
+        };
+        assert!(covering("filter 1s"));
+        assert!(!covering("color 1s"));
+    }
 
     #[test]
     fn a_sticky_header_over_plain_rows_is_not_lifted_under_them() {

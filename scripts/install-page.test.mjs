@@ -23,6 +23,44 @@ import { DirectoryOrigin, webReleasePath } from './origin.mjs';
 import { developmentLinks } from '../host/apple/build.mjs';
 const manifest = {name:'Interview',app:{id:'com.interview.app',name:'Interview'}};
 
+test('wasm install provenance keeps source facts and records a build time only in development', () => {
+  mkdirSync(join(import.meta.dir, '../target'), { recursive: true });
+  const dir = mkdtempSync(join(import.meta.dir, '../target/install-provenance-'));
+  try {
+    const source = readFileSync(join(import.meta.dir, '../host/web/build.mjs'), 'utf8');
+    const start = source.indexOf('const sourceRevision ='), end = source.indexOf('const escapeHtml =', start);
+    assert.ok(start >= 0 && end > start);
+    const generate = new Function('spawnSync', 'stage', 'app', 'buildReceipt', 'buildEnv', 'bakedReceipt', 'writeInstallPages', source.slice(start, end));
+    for (const trust of ['production', 'development']) for (const known of [true, false]) {
+      generate((command, args, options) => {
+        assert.equal(command, 'git');
+        assert.deepEqual(options, { cwd: dir, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
+        return { status: known ? 0 : 128, stdout: args[0] === 'rev-parse' ? 'abc1234567\n' : ' M app.contract\n' };
+      },
+        dir, { dir, manifest }, { binary: { sha256: 'a'.repeat(64) } }, { EXACT_UPDATE_TRUST: trust }, { reach: { rows: [] } }, writeInstallPages);
+      const { build, reach } = JSON.parse(readFileSync(join(dir, '.exact/install.json')));
+      assert.equal(build.source, known ? 'abc1234567' : null);
+      assert.equal(build.dirty, known ? true : null);
+      assert.equal(build.mode, trust === 'production' ? 'Release build' : 'Development build');
+      assert.equal(build.id, 'a'.repeat(64));
+      assert.deepEqual(reach, []);
+      if (trust === 'production') assert.equal(build.builtAt, null);
+      else assert.equal(new Date(build.builtAt).toISOString(), build.builtAt);
+    }
+    // A timed-out process can leave partial stdout without establishing metadata.
+    for (const stalled of ['rev-parse', 'status']) {
+      generate((_command, args, options) => ({ status: args[0] === stalled ? null : 0,
+        ...(args[0] === stalled ? { signal: options.killSignal, error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) } : {}),
+        stdout: args[0] === 'rev-parse' ? 'abc1234567\n' : ' M app.contract\n' }),
+        dir, { dir, manifest }, { binary: { sha256: 'a'.repeat(64) } }, { EXACT_UPDATE_TRUST: 'production' }, { reach: { rows: [] } }, writeInstallPages);
+      const { build } = JSON.parse(readFileSync(join(dir, '.exact/install.json')));
+      assert.equal(build.source, stalled === 'rev-parse' ? null : 'abc1234567');
+      assert.equal(build.dirty, stalled === 'status' ? null : true);
+      assert.equal(build.builtAt, null);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('static ancestor notifications reconcile nested trees and retain refused replacements', () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-static-ancestor-'));
   const app = join(dir, 'app'), source = join(app, 'gpu/shaders'), target = join(dir, 'served/shaders');
@@ -175,6 +213,39 @@ test('only a Mac development response adds local Simulator and signed-device act
   assert.throws(() => developmentInstallPage(page, 'guessable'), /32 random bytes/);
 });
 
+test('a status poll that fails during a build is retried, and Refresh stays usable', async () => {
+  const script = /<script>\n(\(\(\) => \{\n  const endpoint[\s\S]*?)<\/script>/.exec(developmentInstallPage(installPage(manifest), 'a'.repeat(64)))[1];
+  const element = () => ({ disabled: false, hidden: false, textContent: '', value: '', options: [], listeners: {},
+    addEventListener(type, f) { this.listeners[type] = f; }, replaceChildren(...options) { this.options = options; this.value = options[0]?.value ?? ''; },
+    querySelector() { return this.pre ??= element(); } });
+  const nodes = Object.fromEntries(['target', 'start', 'refresh', 'state', 'log'].map(id => [`#local-ios-${id}`, element()]));
+  const document = { querySelector: selector => nodes[selector], createElement: element };
+  const target = { id: 'sim', name: 'iPhone' };
+  const answers = [{ state: 'building', available: true, targets: [target], message: 'Building' }, null,
+    { state: 'installed', available: true, targets: [target], message: 'Installed' }];
+  let requests = 0, timers = [];
+  const fetch = async () => {
+    const answer = answers[requests++];
+    if (!answer) throw new TypeError('Failed to fetch');
+    return { ok: true, json: async () => answer };
+  };
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  new Function('document', 'fetch', 'setTimeout', 'clearTimeout', script)(document, fetch,
+    f => timers.push(f), () => { timers = []; });
+  await settle();
+  assert.equal(nodes['#local-ios-refresh'].disabled, true, 'Refresh waits while the build runs');
+  for (const expected of ['Failed to fetch', 'Installed']) {
+    assert.equal(timers.length, 1, `a poll is scheduled before "${expected}"`);
+    timers.shift()();
+    await settle();
+    assert.equal(nodes['#local-ios-state'].textContent, expected);
+    if (expected !== 'Installed') assert.equal(nodes['#local-ios-refresh'].disabled, false);
+  }
+  assert.equal(requests, 3);
+  assert.equal(timers.length, 0);
+  assert.equal(nodes['#local-ios-start'].disabled, false);
+});
+
 test('install HTTP routes participate in atomic publication and preserve old pages', async () => {
   const dir = mkdtempSync(join(tmpdir(),'exact-install-publish-'));
   const web = join(dir,'web'), origin = new DirectoryOrigin(join(dir,'origin'));
@@ -293,7 +364,7 @@ printf '%s\\n' '{"value":"aGk="}'
       // Check at once: a read asked again is the failed read's own, so its helper has run by now
       assert.equal(readFileSync('spawns','utf8'),'x','a closed reader is not asked again');
     `;
-    const child=spawnSync(process.execPath,['--input-type=module','-e',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH}});
+    const child=spawnSync(process.execPath,['--input-type=module','-e',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined}});
     assert.equal(child.status,0,child.stderr);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
@@ -330,7 +401,7 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
       assert.equal(failed.status,0,failed.stderr);assert.match(failed.stdout,/status 42, signal none/);
       assert.equal(readFileSync('attempts','utf8'),'x','failed operations must not be retried');
     `;
-    const child=spawnSync(process.execPath,['--eval',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,RUSTC_WORKSPACE_WRAPPER:'/toolchain/clippy-driver',CLIPPY_ARGS:'-D warnings'}});
+    const child=spawnSync(process.execPath,['--eval',program],{cwd:dir,encoding:'utf8',env:{...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined,RUSTC_WORKSPACE_WRAPPER:'/toolchain/clippy-driver',CLIPPY_ARGS:'-D warnings'}});
     assert.equal(child.status,0,child.stderr);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
@@ -349,7 +420,7 @@ cp helper-source target/exact-filesystem-tool/debug/exact-filesystem
 chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
 `,{mode:0o755});
     writeFileSync(join(dir,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`);
-    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_HOME:join(dir,'cargo-home')};
+    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined,CARGO_HOME:join(dir,'cargo-home')};
     delete env.EXACT_FILESYSTEM_HELPER;
     const get=()=>{
       const run=spawnSync(process.execPath,['--eval',"import {filesystem} from './scripts/filesystem.mjs';console.log(filesystem({op:'get'}));"],{cwd:dir,encoding:'utf8',env});
@@ -363,6 +434,124 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
     assert.equal(get(),2);
   } finally {rmSync(dir,{recursive:true,force:true});}
 }, 200_000);
+
+test('a deploy capture keeps its checked helper in its owning Cargo cache', () => {
+  const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-deploy-')));
+  const capture=join(dir,'capture'), cache=join(dir,'cargo');
+  try {
+    for (const sub of ['scripts','bin','filesystem/src']) mkdirSync(join(capture,sub),{recursive:true});
+    const bridge=readFileSync(new URL('./filesystem.mjs',import.meta.url));
+    const restore=()=>writeFileSync(join(capture,'scripts/filesystem.mjs'),bridge);
+    restore();
+    writeFileSync(join(capture,'filesystem/src/main.rs'),'fn main() {}\n');
+    writeFileSync(join(capture,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"helper"}'\n`);
+    writeFileSync(join(capture,'bin/cargo'),`#!/bin/sh
+set -e
+printf x >> '${join(dir,'builds')}'
+while [ "$1" != --target-dir ]; do shift; done
+out="$2/debug"
+mkdir -p "$out"
+cp helper-source "$out/exact-filesystem"
+chmod 755 "$out/exact-filesystem"
+`,{mode:0o755});
+    // The `rustc` on PATH says what `version` says, as a toolchain alias does that an update moves.
+    const version=join(dir,'version');
+    writeFileSync(version,'rustc 1.0.0 (aaaa)\n');
+    writeFileSync(join(capture,'bin/rustc'),`#!/bin/sh\ncat '${version}'\n`,{mode:0o755});
+    writeFileSync(join(dir,'other-rustc'),`#!/bin/sh\necho 'rustc 2.0.0 (bbbb)'\n`,{mode:0o755});
+    const env={...process.env,PATH:join(capture,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:cache};
+    delete env.EXACT_FILESYSTEM_HELPER;
+    const get=()=>{
+      const run=spawnSync(process.execPath,['--eval',"import {filesystem} from './scripts/filesystem.mjs';console.log(filesystem({op:'get'}));"],{cwd:capture,encoding:'utf8',env});
+      assert.equal(run.status,0,run.stderr); assert.equal(run.stdout.trim(),'helper');
+      return readFileSync(join(dir,'builds'),'utf8');
+    };
+    assert.equal(get(),'x');
+    rmSync(join(capture,'target'),{recursive:true,force:true});
+    restore();
+    assert.equal(get(),'x','recreating captured outputs must not compile the helper again');
+    assert.ok(existsSync(join(cache,'exact-filesystem-tool')));
+    let count='x';
+    for (const name of ['filesystem/src/main.rs','rust-toolchain.toml','.cargo/config.toml']) {
+      mkdirSync(dirname(join(capture,name)),{recursive:true});
+      writeFileSync(join(capture,name),'changed input\n');
+      count+='x';
+      assert.equal(get(),count,`${name}: changed inputs need a new checked helper`);
+      assert.equal(get(),count);
+    }
+    for (const toolchain of ['first-compiler','second-compiler']) {
+      env.RUSTUP_TOOLCHAIN=toolchain;
+      count+='x';
+      assert.equal(get(),count,'a toolchain override needs a new checked helper');
+      assert.equal(get(),count);
+    }
+    env.RUSTC=join(dir,'other-rustc');
+    count+='x';
+    assert.equal(get(),count,'the compiler RUSTC names needs a new checked helper');
+    assert.equal(get(),count);
+    delete env.RUSTC;
+    assert.equal(get(),count,'the compiler checked before still has its helper');
+    writeFileSync(version,'rustc 1.0.1 (cccc)\n');
+    count+='x';
+    assert.equal(get(),count,'a compiler updated behind the same name needs a new checked helper');
+    assert.equal(get(),count);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
+test('concurrent helper callers share a checked build and validate it against inputs after waiting', async () => {
+  const {dir,call,claim,has}=helperBuilds(), callers=[];
+  const directory=dirname(claim), tickets=join(directory,'.bootstrap.claims');
+  const choosing=join(tickets,`${process.pid}-${'0'.repeat(24)}`);
+  const source=join(dir,'filesystem/src/main.rs');
+  const start=name=>{const caller=call(name);callers.push(caller);return caller;};
+  const wait=names=>shown('each caller to wait before a capture is published',()=>names.every(name=>has('waited-'+name)));
+  const finished=async (group,value='helper')=>{
+    for(const caller of group) assert.deepEqual(await caller.done,{code:0,out:value});
+    assert.equal(existsSync(claim),false,'builders and reusers release the claim');
+    assert.deepEqual(readdirSync(tickets),[],'builders and reusers release their tickets');
+  };
+  const builds=()=>readFileSync(join(dir,'build-count'),'utf8').length;
+  const records=()=>readdirSync(directory).filter(name=>name.startsWith('checked-'));
+  try {
+    mkdirSync(dirname(source),{recursive:true});writeFileSync(source,'fn main() {}\n');
+    writeFileSync(join(dir,'hold'),'');
+    const builder=start('cold');
+    await shown('the cold build to start',()=>has('building'));
+    const names=['a','b','c'], waiters=names.map(start);
+    await wait(names);
+    assert.equal(records().length,0,'every caller initially misses the record');
+    rmSync(join(dir,'hold'));
+    await finished([builder,...waiters]);
+    assert.equal(builds(),1,'concurrent misses share the completed build');
+
+    const original=join(directory,records()[0]), captured=readFileSync(original,'utf8');
+    rmSync(original);
+    writeFileSync(choosing,'');
+    const editedNames=['edit-a','edit-b','edit-c'], edited=editedNames.map(start);
+    await wait(editedNames);
+    // Restore a record valid for the callers' original inputs, then change those inputs while they wait.
+    writeFileSync(original,captured);writeFileSync(source,'fn main() { }\n');
+    writeFileSync(join(dir,'helper-source'),`#!/bin/sh\nprintf '%s\\n' '{"value":"edited"}'\n`,{mode:0o755});
+    rmSync(choosing);
+    await finished(edited,'edited');
+    assert.equal(builds(),2,'changed inputs require one fresh build for all waiting callers');
+
+    const current=join(directory,records().find(name=>join(directory,name)!==original));
+    rmSync(current);writeFileSync(choosing,'');
+    const corruptNames=['corrupt-a','corrupt-b'], corrupt=corruptNames.map(start);
+    await wait(corruptNames);
+    const invalid=`exact-filesystem-${'0'.repeat(64)}${process.platform==='win32'?'.exe':''}`;
+    writeFileSync(join(directory,invalid),'corrupt');writeFileSync(current,invalid);
+    rmSync(choosing);
+    await finished(corrupt,'edited');
+    assert.equal(builds(),3,'a capture whose bytes do not match its digest is rebuilt');
+  } finally {
+    rmSync(join(dir,'hold'),{force:true});rmSync(choosing,{force:true});
+    for(const caller of callers) if(caller.child.exitCode===null) caller.child.kill();
+    await Promise.all(callers.map(caller=>caller.done));
+    rmSync(dir,{recursive:true,force:true});
+  }
+},120_000);
 
 test('a helper named by its checker is taken without a build, and only if it is this checkout\'s and intact', () => {
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-helper-named-')));
@@ -379,7 +568,7 @@ chmod 755 target/exact-filesystem-tool/debug/exact-filesystem
 `,{mode:0o755});
     const helper=value=>`#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({value})}'\n`;
     writeFileSync(join(dir,'helper-source'),helper('checked'));
-    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH};
+    const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined};
     delete env.EXACT_FILESYSTEM_HELPER;
     const named=spawnSync(process.execPath,['scripts/filesystem.mjs','--helper'],{cwd:dir,encoding:'utf8',env});
     assert.equal(named.status,0,named.stderr);
@@ -438,7 +627,7 @@ let clock=0;
 helperBuildWait.now=()=>{if(clock<120_000&&(clock+=10_000)===120_000)writeFileSync('waited-'+process.argv[2],'');return clock;};
 try{console.log(filesystem({op:'get'}));}catch(error){console.log(error.message);process.exit(3);}
 `);
-  const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH};
+  const env={...process.env,PATH:join(dir,'bin')+':'+process.env.PATH,CARGO_TARGET_DIR:undefined};
   const call=name=>{
     const child=spawn(process.execPath,['caller.mjs',name],{cwd:dir,env,stdio:['ignore','pipe','inherit']});
     let out='';child.stdout.on('data',data=>{out+=data;});

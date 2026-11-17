@@ -451,26 +451,17 @@ pub(super) fn role(prop: &str) -> &'static str {
 fn each(nodes: &[Node], bound: &[String], f: &mut dyn FnMut(&Node, &[String])) {
     for n in nodes {
         f(n, bound);
-        match n {
-            Node::Element { children, .. } | Node::Use { children, .. } => each(children, bound, f),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                each(then, bound, f);
-                each(otherwise, bound, f);
+        for (list, binds) in n.scoped_child_lists() {
+            if binds.is_empty() {
+                each(list, bound, f);
+            } else {
+                let inner: Vec<String> = bound
+                    .iter()
+                    .cloned()
+                    .chain(binds.iter().map(String::from))
+                    .collect();
+                each(list, &inner, f);
             }
-            Node::Each {
-                var, index, body, ..
-            } => {
-                let inner: Vec<String> = bound.iter().chain([var]).chain(index).cloned().collect();
-                each(body, &inner, f);
-            }
-            Node::Match { some, none, .. } => {
-                let inner: Vec<String> = bound.iter().chain([&some.0]).cloned().collect();
-                each(&some.1, &inner, f);
-                each(none, bound, f);
-            }
-            Node::Children { .. } => {}
         }
     }
 }

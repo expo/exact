@@ -1,9 +1,9 @@
-//! Gamepads from evdev (`crate::gamepad` reads their codes): which devices are
+//! Gamepads from evdev (`exact_painted::gamepad` reads their codes): which devices are
 //! pads, their axis ranges, their face-button layout, and their state at open.
 //! Opened at start with the other devices; a pad that goes away is reported
 //! disconnected, and none arrives later (no hotplug).
-use crate::gamepad::{Layout, State, AXES};
 use evdev::{AbsoluteAxisCode, Device};
+use exact_painted::gamepad::{Layout, State, AXES};
 use std::path::Path;
 
 /// Pads reported at once, indexed from zero.
@@ -26,8 +26,8 @@ fn ranges(d: &Device) -> [Option<(i32, i32)>; 8] {
 }
 /// The pad's face-button layout, from its driver in sysfs and its vendor.
 fn layout(path: &Path, d: &Device) -> Layout {
-    let driver = crate::gamepad::driver(Path::new("/sys"), path);
-    crate::gamepad::layout_for(driver.as_deref(), d.input_id().vendor())
+    let driver = exact_painted::gamepad::driver(Path::new("/sys"), path);
+    exact_painted::gamepad::layout_for(driver.as_deref(), d.input_id().vendor())
 }
 /// A pad as it is when opened: its held buttons and its axes, so the first
 /// reading is the device's, not a centred default.
@@ -46,13 +46,13 @@ pub(super) fn open(path: &Path, d: &Device) -> State {
     state
 }
 
-/// Who the pad at `path` is, for the registry (`crate::pads`).
-pub(super) fn identity(path: &Path, d: &Device) -> crate::pads::Identity {
-    crate::pads::Identity {
+/// Who the pad at `path` is, for the registry (`exact_painted::pads`).
+pub(super) fn identity(path: &Path, d: &Device) -> exact_painted::pads::Identity {
+    exact_painted::pads::Identity {
         id: d.name().unwrap_or("Gamepad").to_owned(),
         vendor: d.input_id().vendor(),
         product: d.input_id().product(),
-        driver: crate::gamepad::driver(Path::new("/sys"), path),
+        driver: exact_painted::gamepad::driver(Path::new("/sys"), path),
         user_index: None,
     }
 }
@@ -60,7 +60,7 @@ pub(super) fn identity(path: &Path, d: &Device) -> crate::pads::Identity {
 /// The pad's motors, where its driver takes `FF_RUMBLE` and the device
 /// opens for writing: a descriptor of their own, so the reader's is as it
 /// was. A pad opened read-only lists no effects.
-pub(super) fn motors(path: &Path, d: &Device) -> Option<Box<dyn crate::pads::Output>> {
+pub(super) fn motors(path: &Path, d: &Device) -> Option<Box<dyn exact_painted::pads::Output>> {
     if !d.supported_ff()?.contains(evdev::FFEffectCode::FF_RUMBLE) {
         return None;
     }
@@ -84,7 +84,7 @@ struct Motors {
     effect: Option<evdev::FFEffect>,
 }
 
-impl crate::pads::Output for Motors {
+impl exact_painted::pads::Output for Motors {
     fn rumble(&mut self, strong: f32, weak: f32, ms: u32) -> bool {
         self.effect = None;
         let magnitude = |m: f32| (m.clamp(0., 1.) * f32::from(u16::MAX)) as u16;

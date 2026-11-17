@@ -1,0 +1,17 @@
+[package]
+name = "forma-host-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Forma binding host's data source: none"
+publish = false
+
+[lib]
+name = "forma_host_data"
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+exact-plan = { path = "../../../plan" }
+exact-runner = { path = "../../../runner" }

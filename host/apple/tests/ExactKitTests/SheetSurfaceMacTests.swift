@@ -49,18 +49,44 @@ final class SheetSurfaceMacTests: XCTestCase {
         f.window.beginSheet(reference)
         XCTAssertTrue(f.window.attachedSheet === reference)
         let picture = try capture(reference)
+        // The same material over red in the reference: the window server
+        // blends a behind-window material with what lies behind the window,
+        // so the red is hidden. On a locked screen it lays the material over
+        // the window's own content instead, and Exact's ground, over red,
+        // cannot match a sheet with nothing under it.
+        let red = NSView(frame: try XCTUnwrap(reference.contentView).bounds)
+        red.wantsLayer = true
+        red.layer?.backgroundColor = NSColor.red.cgColor
+        let probe = NSVisualEffectView(frame: red.bounds)
+        probe.material = .sheet
+        probe.blendingMode = .behindWindow
+        red.addSubview(probe)
+        reference.contentView?.addSubview(red)
+        let overRed = try capture(reference)
         f.window.endSheet(reference)
         let expected = try colour(picture, y: 30)
         try XCTSkipUnless(expected.contains { $0 > 8 } && expected.contains { $0 < 247 }, "window-server capture is blank; sheet surfaces cannot be measured")
+        let blended = try colour(overRed, y: 30)
+        try XCTSkipUnless(zip(blended, expected).allSatisfy { abs($0 - $1) <= 1 },
+                          "the window server lays a behind-window material over the window's content (\(blended) against \(expected)); sheet surfaces cannot be measured")
 
         try f.press("open")
         let ground = try f.node("ground")
         let actualSheet = try XCTUnwrap(ground.window)
         let material = try XCTUnwrap(ground.materialView as? NSVisualEffectView)
+        XCTAssertEqual(actualSheet.frame, reference.frame)
         XCTAssertEqual(material.material, .sheet)
         XCTAssertEqual(material.blendingMode, .behindWindow)
         XCTAssertNil(try f.node("modal").materialView)
-        XCTAssertEqual(try colour(try capture(actualSheet), y: 30), expected, "the authored ground, over red, is the colour of AppKit's sheet")
+        // Exact on a 2x display. A 1x or unnamed (virtual) display's window server blends the two sheets' materials a
+        // unit apart on a channel (a headless Mac's: [58, 53, 50] against [57, 53, 50]).
+        let actual = try colour(try capture(actualSheet), y: 30)
+        if actualSheet.backingScaleFactor >= 2, NSScreen.main?.localizedName.isEmpty == false, NSScreen.main?.localizedName != "Display" {
+            XCTAssertEqual(actual, expected, "the authored ground, over red, is the colour of AppKit's sheet")
+        } else {
+            XCTAssertEqual(actual.count, expected.count)
+            for (a, e) in zip(actual, expected) { XCTAssertLessThanOrEqual(abs(a - e), 1, "the authored ground, over red, is the colour of AppKit's sheet: \(actual) against \(expected)") }
+        }
     }
 
     func testGroupedCardFillUsesItsWindowSurface() throws {

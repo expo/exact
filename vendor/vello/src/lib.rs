@@ -648,6 +648,7 @@ impl Renderer {
     /// EXACT: render `scene` into `target` (Rgba8, or Bgra8 when `bgra`),
     /// each pixel starting from `backdrop` (premultiplied; a 1×1 transparent
     /// texture for none), writing premultiplied colour, and wait for the GPU.
+    /// `clip_masks` holds the canvas clip coverage outside the image atlas.
     ///
     /// The bump buffers start at [`Renderer::sizes`] and grow when a render
     /// overflows them: vello counts what each stage needed, the render runs
@@ -661,13 +662,14 @@ impl Renderer {
         scene: &Scene,
         target: &TextureView,
         backdrop: &TextureView,
+        clip_masks: &wgpu::Buffer,
         bgra: bool,
         params: &RenderParams,
     ) -> Result<ExactStats> {
         let mut stats = ExactStats::default();
         loop {
             let t0 = std::time::Instant::now();
-            let (recording, out, back, bump) = render::render_exact(
+            let (recording, out, back, bump, masks) = render::render_exact(
                 scene,
                 &mut self.resolver,
                 &self.shaders,
@@ -676,10 +678,12 @@ impl Renderer {
                 &self.sizes,
                 bgra,
                 !self.indirect,
+                clip_masks.size(),
             );
             let external = [
                 ExternalResource::Image(out, target),
                 ExternalResource::Image(back, backdrop),
+                ExternalResource::Buffer(masks, clip_masks),
             ];
             self.engine
                 .run_recording(device, queue, &recording, &external, "render_exact")?;

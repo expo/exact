@@ -205,7 +205,7 @@ fn svg_hairline_attributes_follow_the_display_scale() {
 }
 
 #[test]
-fn svg_font_lengths_keep_computed_points() {
+fn svg_font_lengths_keep_authored_units() {
     let (host, first) = boot(
         r#"component App
   view
@@ -216,7 +216,7 @@ fn svg_font_lengths_keep_computed_points() {
 "#,
     );
     let first: serde_json::Value = serde_json::from_str(&first).unwrap();
-    for (name, height) in [("em", "40"), ("rem", "32"), ("compact", "10")] {
+    for (name, height) in [("em", "2em"), ("rem", "2rem"), ("compact", "10")] {
         let op = first["ops"]
             .as_array()
             .unwrap()

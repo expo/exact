@@ -7,6 +7,25 @@ use exact_gpu::fixture::{self, Pixels};
 use exact_gpu::wgpu;
 use exact_gpu::{Frame, Gpu, Surface, SurfaceError, Value};
 
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Clears to one color.
 struct Fill([f64; 4]);
 
@@ -184,7 +203,8 @@ fn a_pixel_off_the_picture_panics() {
 
 #[test]
 fn save_creates_the_directory_it_is_pointed_at() {
-    let dir = std::env::temp_dir().join(format!("exact-gpu-fixture-{}", std::process::id()));
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("exact-gpu-fixture-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir);
     let px = Pixels {
         width: 1,
@@ -192,7 +212,7 @@ fn save_creates_the_directory_it_is_pointed_at() {
         data: vec![1, 2, 3, 4],
     };
     // Process-wide; the only reader is `save`, and this is the file's one setter.
-    std::env::set_var("EXACT_GPU_OUT", &dir);
+    std::env::set_var("EXACT_GPU_OUT", &*dir);
     let path = px.save("one");
     std::env::remove_var("EXACT_GPU_OUT");
     assert_eq!(path, Some(dir.join("one.ppm")));

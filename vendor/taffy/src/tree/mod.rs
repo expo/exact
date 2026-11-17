@@ -5,11 +5,15 @@
 
 // Submodules
 mod cache;
+#[cfg(feature = "taffy_tree")]
+mod size_counts;
+#[cfg(feature = "taffy_tree")]
+pub use size_counts::SizeCacheCounts;
 mod layout;
 mod node;
 pub mod traits;
 
-pub use cache::{Cache, ClearState};
+pub use cache::{Cache, ClearState, SizeCachePolicy};
 pub use layout::{
     Baselines, CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, RequestedAxis, RunMode, SizingMode,
     StaticAlignment, StaticPosition,

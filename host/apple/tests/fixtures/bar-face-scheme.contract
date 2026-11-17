@@ -1,0 +1,15 @@
+// A route whose header's title is a pressable in an authored size with a
+// light and a dark ink (NavigationBarIOSTests): its bar item is a drawn face,
+// and nothing in the app reads the scheme, so changing it sends no batch.
+component BarFaceScheme
+  state taps = 0
+  action tap
+    taps = taps + 1
+  view
+    main navigationKey="home" width="100%" height="100%"
+      column navigationKey="home" position="absolute" inset=0 display="flex" flex-direction="column"
+        header display="flex" align-items="center" padding=12 flex-shrink=0
+          view role="button" press=tap aria-label="Title" testId="title-home"
+            text "Title" font-size=20 color="light-dark(#000000, #ffffff)"
+          text "" role="heading" aria-level=2 flex=1
+        column flex=1

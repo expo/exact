@@ -266,6 +266,7 @@ fn an_unchanged_advance_in_a_native_region_lays_out() {
         844.0,
         registration,
         NativeProjectionLimits::default(),
+        exact_runner::time::Launch::NONE,
     )
     .unwrap();
     assert!(host.native_mode());
@@ -289,6 +290,7 @@ fn an_unchanged_advance_lays_out_after_a_failed_layout() {
                 TextMetrics {
                     width: f32::NAN,
                     height: 0.,
+                    pending: false,
                     first_baseline: None,
                 }
             } else {

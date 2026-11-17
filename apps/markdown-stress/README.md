@@ -12,22 +12,28 @@ Choose a source budget of 16 KiB, 256 KiB, 1 MiB or 4 MiB, then:
 - **Mixed:** long prose with inline styles, fenced code, tables, quotes and lists.
 - **One long paragraph:** one heading and one unsplit paragraph, including UTF-8.
 - **One code block:** one heading and one unsplit fenced block with long lines.
-- **Giant table:** four columns and as many complete rows as fit.
+- **Giant table:** four columns, long unbreakable headers and as many complete rows as fit.
 - **Many blocks:** thousands of individually keyed headings and short paragraphs.
 
 Generation is deterministic. Complete syntax is emitted up to the selected byte
-budget; the app reports actual source bytes, parsed blocks, supplied blocks, table
-rows and the largest block's text bytes. These are not process-memory figures.
+budget; the app reports actual source bytes, grouped blocks, supplied blocks, table
+rows (including headers) and the largest block's text bytes. Each table is one
+block. Grids of at most 8,192 rows repeat the same invisible column-sizing text,
+which refers to the table's own cells, to share intrinsic widths across groups.
+Wide tables scroll horizontally. These are not process-memory figures.
 The 4 MiB ceiling matches the existing reader's file admission limit.
 
 The default is a **manual page of 40 blocks**. It still generates and parses the
 entire document and retains that parsed document; it is not virtualization.
-One 4 MiB paragraph remains one 4 MiB paragraph even in page mode. **Render ALL
+One 4 MiB paragraph or table remains one block even in page mode. **Render ALL
 blocks** explicitly mounts the complete document and can stall the current UI.
 **Window full document** supplies the same complete parsed block list to the
 shared viewport collection. It mounts nearby blocks while keeping their real
-styled text and table cells. All parsed data remains resident; a giant paragraph
-or code block stays giant. The mode does not split, truncate or page its text.
+styled text and table cells. All parsed data remains resident; giant paragraphs,
+code blocks and tables stay giant. Bounded table grids remain inside one virtual
+block; they do not add paging or viewport boundaries.
+
+The dated measurements below precede table grouping and count table rows as blocks.
 
 The 640/1200 px column controls reflow the same document without reparsing.
 Also drag the real window edge, scroll partway through the document and type in
@@ -72,6 +78,9 @@ source. Bold, Italic, Code, List, Quote and H2 operate on the editor's current
 selection. Link opens a URL field while preserving that selection; Apply Link
 returns focus to the editor. The line beneath the toolbar reports the shared
 selection state. Return continues a list and an empty item exits it.
+The resource supplies the complete generated source and no parsed blocks in this
+mode, so the supplied-block count is zero. The parsed document remains cached
+for returning to the block modes.
 
 On macOS and the web, use the usual bold/italic and undo/redo shortcuts.
 Normal copy preserves Markdown; ⌘⇧C on macOS or Mod-Shift-C on the web copies

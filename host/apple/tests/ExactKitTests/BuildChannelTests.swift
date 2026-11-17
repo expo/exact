@@ -6,7 +6,7 @@ import XCTest
 @testable import ExactKit
 
 // The build channel's host half (LLP 1122 D4): a pin read as the server
-// sends it (scripts/tamber-builds.mjs `pinRefused`), the commands dispatched
+// sends it (scripts/forma-builds.mjs `pinRefused`), the commands dispatched
 // before generation handling, the process id the server accepts, a live
 // batch's design digest, a batch's moved facts, and the plan's own design
 // after a boot.
@@ -39,7 +39,7 @@ final class BuildChannelTests: XCTestCase {
 
     func testCommandsAndId() {
         XCTAssertEqual(BuildChannel.commands, ["pin", "inspect", "outline", "hold"])
-        XCTAssertFalse(BuildChannel.commands.contains("tamber-batch"))
+        XCTAssertFalse(BuildChannel.commands.contains("forma-batch"))
         XCTAssertNotNil(BuildChannel.id.range(of: #"^(ios|macos)-[A-Za-z0-9_.:-]{1,57}$"#, options: .regularExpression), BuildChannel.id)
         XCTAssertEqual(BuildChannel.id, BuildChannel.id)
     }

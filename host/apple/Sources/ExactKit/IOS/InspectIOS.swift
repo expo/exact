@@ -280,7 +280,7 @@ enum InspectHost {
             if v is UIToolbar { return (session, nil, nil, "That is part of a UIKit toolbar, not a view of the app.") }
             if let node = v as? NodeView, !node.isHidden { return (session, node.id, node, nil) }
             if let button = v as? NativeButtonIOS, let owner = button.owner { return (session, owner.id, owner, nil) }
-            if let owned = v as? AgentOwned, let id = owned.agentViewId { return (session, id, v, nil) }
+            if let owned = v as? InspectionOwned, let id = owned.inspectionViewId { return (session, id, v, nil) }
             if let title = v as? HeaderTitleView, let id = title.groupId { return (session, id, title, nil) }
             // A swipe action UIKit draws for a row: the action's node.
             if let button = v as? UIButton, !(v is NativeButtonIOS), let id = session.presenter.swipeActions.action(for: button) { return (session, id, button, nil) }

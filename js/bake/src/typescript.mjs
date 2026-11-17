@@ -12,9 +12,11 @@ import { createHash } from 'node:crypto';
 import { builtinModules, createRequire } from 'node:module';
 import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespacedPath } from 'node:path';
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
-import { moduleBinding } from './__exact_binding.mjs';
+import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { envReads, inlineSettings } from './__exact_env.mjs';
+import { checkPreloadBackend, envReads, inlineSettings } from './__exact_env.mjs';
+import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
+export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
 import { bare, lineColumn, packageRefusals, propertyName, walkRuntime } from './__exact_portable.mjs';
 
@@ -27,17 +29,28 @@ function httpOrigin(value, label) {
   return url.origin;
 }
 
+/** Carry a drive flag's selection into its child builds. */
+export function selectBackendOrigin(value, env=process.env) {
+  if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin');
+  env.EXACT_BACKEND_ORIGIN=value;
+  env.EXACT_BACKEND_PROVENANCE=JSON.stringify({origin:value,source:'--backend'});
+}
+
 /** Explicit backend, saved development selection, then the checkout's declared fixture default. */
-export function backendOriginSelection(app, env=process.env) {
+export function backendOriginSelection(app, env=process.env, parse) {
   const file=resolve(app,'.exact/backend-origin');
   const value=env.EXACT_BACKEND_ORIGIN ?? (existsSync(file) ? readFileSync(file,'utf8').trim() : null);
-  if (value===null) return fixtureBackendSelection(app,env);
-  return { origin: httpOrigin(value,'EXACT_BACKEND_ORIGIN'), source: env.EXACT_BACKEND_ORIGIN != null ? 'EXACT_BACKEND_ORIGIN' : '.exact/backend-origin' };
+  if (value===null) return fixtureBackendSelection(app,env,parse);
+  // A child build keeps the flag's provenance only while it names that exact selection.
+  let flag; try { flag=JSON.parse(env.EXACT_BACKEND_PROVENANCE ?? 'null'); } catch { /* no flag provenance */ }
+  const source=env.EXACT_BACKEND_ORIGIN != null ? (flag?.origin===value && flag?.source==='--backend' ? '--backend' : 'EXACT_BACKEND_ORIGIN') : '.exact/backend-origin';
+  try { return { origin: httpOrigin(value,source), source }; }
+  catch (error) { throw Object.assign(error,{code:'backend-selection'}); }
 }
 export const backendOrigin = (app, env=process.env) => backendOriginSelection(app, env)?.origin ?? null;
 
 /** A declared fixture gets a stable development port from its app directory, shared by builds and drives. */
-export function fixtureBackendSelection(app, env=process.env) {
+export function fixtureBackendSelection(app, env=process.env, parse) {
   if (!developmentTrust(env)) return null;
   let manifest, code;
   try { manifest=JSON.parse(readFileSync(resolve(app,'app.json'),'utf8')); code=readFileSync(resolve(app,'app.ts'),'utf8'); } catch { return null; }
@@ -45,7 +58,7 @@ export function fixtureBackendSelection(app, env=process.env) {
   if (!Array.isArray(argv) || !/(^|\/)bun$/.test(argv[0])) return null;
   const entry=argv.findIndex((a,i)=>i>0 && !a.startsWith('-'));
   if (entry<0 || !/(^|[/\\])fixtures?[/\\]/.test(argv[entry])) return null;
-  const literal=/\bconst\s+origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(code)?.[1];
+  const literal=literalBackendOrigin(code,parse ?? createRequire(import.meta.url)('rolldown/utils').parseSync);
   if (!literal || !loopback(literal)) return null;
   const args=argv.slice(entry+1), at=args.indexOf('--port'), given=at<0 ? env.PORT : args[at+1];
   // Rust canonicalizes Windows paths with a namespace prefix; server drives must hash the same spelling.
@@ -58,7 +71,7 @@ export function fixtureBackendSelection(app, env=process.env) {
 // The bound on a type check that never ends (the design tool's `build.mjs --check` spun 4.7 days, found 2026-10-26):
 // 10 minutes, a bound for "never", not a target (the clone's check takes seconds). A test may shorten it
 // (EXACT_CHECK_BOUND_MS), read only under EXACT_TEST_TIMING=1, as the design server's clocks are
-// (scripts/tamber-timing.mjs); a value not shorter, not a whole number of ms from 50, or set without the switch is
+// (scripts/forma-timing.mjs); a value not shorter, not a whole number of ms from 50, or set without the switch is
 // ignored. Here, not in a module of its own: the native bake copies this file alone into its stage.
 export const CHECK_BOUND_MS = 10 * 60_000;
 
@@ -74,14 +87,25 @@ export const boundWords = ms => (ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1
 /** Explain when an app-local selection takes precedence over the authored origin. */
 export function backendOriginWarning(code, selection, parse) {
   if (selection?.source !== '.exact/backend-origin') return null;
+  const literal=literalBackendOrigin(code,parse);
+  if (!literal || literal===selection.origin) return null;
+  return `.exact/backend-origin selects ${selection.origin}, overriding the app.ts origin literal ${JSON.stringify(literal)}. Edit or remove .exact/backend-origin to use the changed literal; EXACT_BACKEND_ORIGIN overrides both.`;
+}
+
+/** The top-level const origin the backend selection can replace, canonicalized as an http(s) origin. */
+export function literalBackendOrigin(code, parse) {
   const parsed=parse('app.ts',code);
   if (parsed.errors.length) return null;
-  const declarations=parsed.program.body.flatMap(s=>(s.type==='ExportNamedDeclaration' ? s.declaration : s)?.declarations ?? []);
-  const init=declarations.find(d=>d.id.type==='Identifier' && d.id.name==='origin')?.init;
+  const declarations=parsed.program.body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
+    .filter(s=>s?.kind==='const').flatMap(s=>s.declarations);
+  const init=bare(declarations.find(d=>d.id.type==='Identifier' && d.id.name==='origin')?.init);
   const literal=init?.type==='Literal' && typeof init.value==='string' ? init.value
     : init?.type==='TemplateLiteral' && !init.expressions.length ? init.quasis[0].value.cooked : null;
-  if (!literal || literal.replace(/\/+$/,'')===selection.origin) return null;
-  return `.exact/backend-origin selects ${selection.origin}, overriding the app.ts origin literal ${JSON.stringify(literal)}. Edit or remove .exact/backend-origin to use the changed literal; EXACT_BACKEND_ORIGIN overrides both.`;
+  if (!literal) return null;
+  try {
+    const url=new URL(literal);
+    return ['http:','https:'].includes(url.protocol) && !url.username && !url.password ? url.origin : null;
+  } catch { return null; }
 }
 /** The socket origin at an http(s) origin's host: ws for http, wss for https. */
 const socketOrigin = (origin) => origin.replace(/^http/, 'ws');
@@ -184,12 +208,12 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
   const keyed=grants.filter(d=>bare(d.init)?.type==='ObjectExpression');
   if (origin===null && !keyed.length) return code;
   const targets=declarations.filter(d=>d.id.type==='Identifier' && d.id.name==='origin');
-  const init=targets[0]?.init;
+  const init=bare(targets[0]?.init);
   const literal=init?.type==='Literal' && typeof init.value==='string' ? init.value
     : init?.type==='TemplateLiteral' && !init.expressions.length ? init.quasis[0].value.cooked : null;
   if (targets.length!==1 || !literal || !/^https?:\/\//.test(literal))
     throw new Error(keyed.length ? `app.ts:${lineColumn(code)(init?.start ?? keyed[0].start)}: grants keyed by origin need one top-level literal const origin`
-      : 'EXACT_BACKEND_ORIGIN: app.ts needs one top-level literal const origin; use it in net.fetch ${origin}');
+      : "EXACT_BACKEND_ORIGIN: app.ts needs one top-level const origin, set to a literal http(s) string or import.meta.env.NAME ?? '<literal>'; use it in net.fetch ${origin}");
   const edits=origin===null ? [] : [[init.start,init.end,JSON.stringify(origin)]];
   const at=lineColumn(code);
   if (keyed.length) {
@@ -230,17 +254,14 @@ export function developmentGrants(code, parse, env=process.env) {
   const marker=/^([ \t]*)development[ \t]+(?=\S)/;
   const grants=staticFacts(code,parse).grants;
   if (grants===undefined || !grants.split('\n').some(line=>marker.test(line))) return code;
-  // The binding exported as `grants`, as `staticFacts` reads it.
-  const body=parsed.program.body;
-  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && !s.source ? (s.specifiers ?? []) : [])
-    .find(x=>(x.exported.name ?? x.exported.value)==='grants')?.local;
-  const name=local ? local.name ?? local.value : 'grants';
-  const declaration=body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
-    .flatMap(s=>s?.type==='VariableDeclaration' ? s.declarations : []).find(d=>d.id.type==='Identifier' && d.id.name===name);
+  const declaration=grantsDeclaration(parsed.program.body);
   const development=developmentTrust(env);
   const lines=grants.split('\n').flatMap(line=>!marker.test(line) ? [line] : development ? [line.replace(marker,'$1')] : []);
   return code.slice(0,declaration.init.start)+JSON.stringify(lines.join('\n'))+code.slice(declaration.init.end);
 }
+
+/** `launchGrants` (__exact_launch_setting.mjs) over the grants as `staticFacts` evaluates them. */
+export const launchGrants=(code,parse,names)=>grantsWithLaunches(code,parse,names,staticFacts);
 
 // Rolldown IDs are file paths, not URL or slash-normalized strings. Both
 // producers enforce the same captured-file boundary (LLP 1027 D5). A
@@ -266,8 +287,28 @@ export function assertCapturedModule(stage, id) {
 const DECLARATION=/\.d\.[cm]?ts$/;
 // A string after `from`, `import`, `import(`, `require(`, `declare module` or
 // `<reference types=`, comments between included. Matching more than an
-// import costs at most a package's declarations, staged and unread.
+// import only stages unread declarations; peer requirements use syntax below.
 const SPECIFIER=/(?:\bfrom|\bimport|\brequire|\bmodule|\btypes\s*=)(?:\s|\(|\/\*[\s\S]*?\*\/|\/\/[^\n]*)*(['"])([^'"\r\n]+)\1/g;
+// A peer requirement must come from an import, including import types and
+// leading triple-slash references, rather than an example in prose or a string.
+function declarationImports(text, parse) {
+  parse ??= createRequire(import.meta.url)('rolldown/utils').parseSync;
+  const {program,comments}=parse('package.d.ts',text), imports=new Set();
+  const visit=node=>{
+    if (Array.isArray(node)) { for (const child of node) visit(child); return; }
+    if (!node || typeof node!=='object') return;
+    if (/^(Import|ExportNamed|ExportAll)Declaration$|^(ImportExpression|TSImportType)$/.test(node.type) && typeof node.source?.value==='string') imports.add(node.source.value);
+    if (node.type==='TSExternalModuleReference' && typeof node.expression?.value==='string') imports.add(node.expression.value);
+    for (const key in node) visit(node[key]);
+  };
+  visit(program);
+  for (const comment of comments) {
+    if (comment.start>=(program.body[0]?.start ?? text.length)) break;
+    const types=/^\/\/\/\s*<reference\s(?:[^>]*?\s)?types\s*=\s*(['"])([^'"]*)\1/.exec(text.slice(comment.start,comment.end));
+    if (types) imports.add(types[2]);
+  }
+  return imports;
+}
 const PACKAGES='__exact_declarations.json';
 // A package's `/// <reference lib="esnext.disposable" />` to an ES library the
 // configuration leaves out is staged as a plain comment, so it loads nothing:
@@ -325,16 +366,17 @@ const physicalId=id=>{ if (!isAbsolute(id)) return id; try { return realpathSync
  * TypeScript names, and of the packages those declarations name: each found
  * from where its file was captured, as Node and TypeScript find it (the
  * nearest `node_modules` upward; a package's `@types` companion too), and
- * placed where the checker, walking up from the staged file, finds it. A
+ * placed where the checker, walking up from the staged file, finds it.
+ * A linked package's declared peers come from the app, beside their consumer. A
  * `node_modules` inside a captured root is mirrored at its place; one above
  * it is placed at the root (the app's at the stage's top, a mount's under its
  * name); a package's dependency sits beside it unless nested inside it.
  * Writes `__exact_declarations.json`: each staged package, where it is
  * installed and the directory that is, and every file read where it is
  * installed, so a producer can watch them. */
-export function stagePackages(stage) {
-  const roots=capturedOrigins(stage);
-  const staged=new Map(), files=new Map(), queue=[];
+export function stagePackages(stage, parse) {
+  const roots=capturedOrigins(stage), app=roots.at(-1);
+  const staged=new Map(), files=new Map(), queue=[], peers=[], peerRefusals=[];
   let total=0;
   // Over the cap, the error names the largest packages, each with the captured file whose imports reached it.
   const tooLarge=()=>{
@@ -358,18 +400,35 @@ export function stagePackages(stage) {
     }
   };
   // `source`: the captured file whose imports led here, as the app names it.
-  const need=(text,dir,root,owner,source)=>{
+  const need=(text,dir,root,owner,source,place)=>{
+    const declared=owner?.pkg?.json.peerDependencies ?? {};
+    const imports=Object.keys(declared).length ? declarationImports(text,parse) : null;
     for (const [, , spec] of text.matchAll(SPECIFIER)) {
       const name=packageName(spec);
       if (!name) continue;
+      if (Object.hasOwn(declared,name) && !imports.has(spec)) continue;
+      let peer;
+      try { peer=appPeer(app[1],owner?.pkg,name); }
+      catch (error) {
+        // Copying every declaration does not make it reachable. The checker
+        // enforces this requirement only if it reads the importing file.
+        peerRefusals.push([relative(stage,place),error.message]);
+        continue;
+      }
       for (const wanted of [name,'@types/'+name.replace(/^@/,'').replace('/','__')]) {
-        const found=find(wanted,dir,root,owner);
+        const found=peer ? find(wanted,app[1],app,null) : find(wanted,dir,root,owner);
         if (!found) continue;
+        if (peer) {
+          found.modules=owner.modules;
+          found.place=join(found.modules,wanted);
+          peers.push([dirname(place),wanted,found.real]);
+        }
         const known=staged.get(found.place)?.real;
         if (known && known!==found.real) throw new Error(`package declarations: two copies of ${wanted} (${known}, ${found.real}); install one`);
         if (known) continue;
         staged.set(found.place,Object.assign(found,{name:wanted,via:owner?.name,source,bytes:0}));
-        copy(found.real,found.place,{at:found.place,from:found.real,installed:found.installed,modules:found.modules,name:wanted,source,staged:found});
+        copy(found.real,found.place,{at:found.place,from:found.real,installed:found.installed,modules:found.modules,
+          name:wanted,source,staged:found,pkg:packageOf(join(found.real,'package.json'),found.installed)});
       }
     }
   };
@@ -386,7 +445,7 @@ export function stagePackages(stage) {
         if (total>64<<20) throw tooLarge();
         // Recorded where it is installed: a link retargeted is a change there.
         files.set(join(place,name),[join(owner.installed,relative(owner.from,path)),bytes]);
-        if (DECLARATION.test(name)) queue.push([bytes.toString('utf8'),dirname(realpathSync(path)),null,owner,owner.source]);
+        if (DECLARATION.test(name)) queue.push([bytes.toString('utf8'),dirname(realpathSync(path)),null,owner,owner.source,join(place,name)]);
       }
     }
   };
@@ -406,6 +465,16 @@ export function stagePackages(stage) {
   };
   sources(stage);
   while (queue.length) need(...queue.shift());
+  // A later ordinary dependency may have occupied a nearer slot. The checker
+  // must not silently read that copy for an app-owned peer.
+  for (const [from,name,real] of peers) {
+    for (let at=from; within(at,stage); at=dirname(at)) {
+      const found=staged.get(join(at,'node_modules',name));
+      if (!found) continue;
+      if (found.real!==real) throw new Error(`package declarations: two copies of ${name} (${real}, ${found.real}); install one`);
+      break;
+    }
+  }
   // The staged trees are exactly this capture: a package no longer named,
   // or no longer installed, goes.
   const prune=(dir)=>{
@@ -424,6 +493,7 @@ export function stagePackages(stage) {
   const record=JSON.stringify({
     packages:[...staged].map(([at,{installed,real}])=>[relative(stage,at),installed,real]).sort(),
     files:[...files.values()].map(([path])=>path).sort(),
+    peerRefusals:peerRefusals.sort(),
   });
   const recordPath=resolve(stage,PACKAGES);
   if (!existsSync(recordPath) || readFileSync(recordPath,'utf8')!==record) writeFileSync(recordPath,record);
@@ -431,9 +501,9 @@ export function stagePackages(stage) {
 
 // Package code (LLP 1027 D5, "Package code"). A package's JavaScript is
 // captured file by file as the bundle reaches it: each import is resolved
-// from where its importer really is (Node's lookup, a package's `exports`,
-// `main` and `browser` fields, as a browser bundle resolves them), and the
-// file it leads to is copied into the stage under `node_modules/.packages/
+// from where its importer really is, or from the app for a linked package's peer
+// (Node's lookup, a package's `exports`, `main` and `browser` fields, as a
+// browser bundle resolves them), and the file it leads to is copied into the stage under `node_modules/.packages/
 // <name>@<version>/`, with every `package.json` between it and the package's
 // root (their `type` and `sideEffects`). The bundle loads only those copies.
 // `__exact_packages.json` records each file by where it was read and its
@@ -452,17 +522,17 @@ const builtin=(spec)=>spec.startsWith('node:') || BUILTIN.has(spec) || BUILTIN.h
 // npm's package names (with the old capitals) and versions: a place in the
 // stage is made of them, so nothing else is taken.
 const NAME=/^(?:@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i, VERSION=/^(?:[0-9a-z][\w.+-]*)?$/i;
-// The package a file belongs to: the nearest `package.json` that names one
-// (a nested `{"type":"module"}` names none).
-function packageOf(file) {
+// A nameless entry manifest ends the package walk; a nested `{"type":"module"}` does not.
+function packageOf(file, installed) {
   for (let dir=dirname(file);;) {
     let json=null;
     try { json=JSON.parse(readFileSync(join(dir,'package.json'),'utf8')); } catch { /* none here, or not JSON */ }
     if (typeof json?.name==='string' && json.name) {
       const version=typeof json.version==='string' ? json.version : '';
       if (!NAME.test(json.name) || !VERSION.test(version)) throw new Error(`${join(dir,'package.json')}: not an npm package name and version (${JSON.stringify(json.name)}, ${JSON.stringify(version)})`);
-      return {root:dir,key:json.name+'@'+version,name:json.name,json,installed:new Set()};
+      return {root:dir,key:json.name+'@'+version,name:json.name,json,installed:new Set(installed ? [installed] : [])};
     }
+    if (json && ['exports','main','types'].some(key=>Object.hasOwn(json,key))) return null;
     const up=dirname(dir);
     if (up===dir) return null;
     dir=up;
@@ -479,6 +549,26 @@ function installedAt(name, dir) {
     at=up;
   }
 }
+// Linked consumers (a workspace or `link:` package: a link to a directory that
+// is not an entry of a `node_modules`) use the app's peers despite their
+// development install. Installed packages keep Node's ancestor lookup, including
+// those an isolated install (pnpm, Bun) links from its store, which places each
+// peer beside its consumer.
+const storeEntry=(root)=>{
+  const parent=dirname(root);
+  return basename(parent)==='node_modules' || basename(parent).startsWith('@') && basename(dirname(parent))==='node_modules';
+};
+function appPeer(app, pkg, name) {
+  if (!Object.hasOwn(pkg?.json.peerDependencies ?? {},name)) return null;
+  if (storeEntry(pkg.root) || ![...pkg.installed].some(path=>resolve(path)!==pkg.root)) return null;
+  const range=pkg.json.peerDependencies[name], installed=installedAt(name,app);
+  const who=`${pkg.key} requires peer ${name}@${range}`;
+  if (!installed || !existsSync(join(installed,'package.json'))) throw new Error(`${who}, which is not installed in the app; install a compatible version`);
+  const json=JSON.parse(readFileSync(join(installed,'package.json'),'utf8'));
+  if (typeof range!=='string' || typeof json.version!=='string' || !Bun.semver.satisfies(json.version,range))
+    throw new Error(`${who}, but the app has ${name}@${json.version ?? '(no version)'}; install a compatible version`);
+  return {installed};
+}
 const slash=(path)=>path.split(sep).join('/');
 const kindOf=(options)=>options?.kind==='require-call' ? 'require' : 'import';
 // Every bundle of the module resolves packages as a browser bundle does (the
@@ -494,13 +584,15 @@ export const bundleOptions={platform:'browser',transform:{define:{'process.env.N
 // back the answer current when the function was called and restores the one
 // before after the step. The runtime that runs the module owns
 // `__exact_async_context` (js/src/prelude.js, host/web-js/ts-data.js); a
-// realm without one runs the steps as the stock helper would.
+// realm without one runs the steps as the stock helper would. The web hook also supplies the source's Promise,
+// so reactions on an async helper's result retain their entropy owner.
 export const lowered={target:'es2016'};
 const ASYNC_HELPER=/@oxc-project\+runtime@[^/]*\/helpers\/esm\/asyncToGenerator\.js$/;
 export const asyncContextHelper=`export default function _asyncToGenerator(fn) {
   return function () {
     var self = this, args = arguments, context = globalThis.__exact_async_context, at = context ? context.current() : undefined;
-    return new Promise(function (resolve, reject) {
+    var P = context && context.Promise || Promise;
+    return new P(function (resolve, reject) {
       var gen = fn.apply(self, args);
       function step(key, arg) {
         // A live answer's step that a module turn settled runs in that answer's own turn (LLP 1146 D2)
@@ -525,7 +617,7 @@ export function asyncContext() {
 /** The native bundle of a data module, the same for the one-shot producer
  * and the resident compiler. */
 export const dataBundle=(stage)=>({...bundleOptions, transform:{...bundleOptions.transform, ...lowered},
-  plugins:[asyncContext(), capturedSources(stage)]});
+  plugins:[launchSource(stage), asyncContext(), capturedSources(stage)]});
 /** The captured graph's Rolldown plugin, the same in every producer: app
  * files load only from the stage, package code only from its capture, and
  * the clock (`ambientRefusals`) or what no executor has (`packageRefusals`)
@@ -575,7 +667,7 @@ export function capturedSources(stage, refusals=null) {
     }
   };
   const capture=(real,who,installed)=>{
-    const found=packageOf(real);
+    const found=packageOf(real,installed);
     if (!found) throw new Error('module outside captured app: '+real);
     const pkg=roots.get(found.key) ?? found;
     if (pkg.root!==found.root) throw new Error(`two copies of ${found.key} (${pkg.root}, ${found.root}); install one`);
@@ -618,9 +710,10 @@ export function capturedSources(stage, refusals=null) {
         const resolved=result && !result.external ? {...result,id:physicalId(result.id)} : result;
         if (resolved && !resolved.external && within(resolved.id,stage) && !staged(resolved.id)) { record(resolved.id); return resolved; }
       }
-      // Where the import leads from the importer's own place.
-      const [at,origin]=capturedOrigins(stage).find(([at])=>within(importer,at)) ?? [stage,stage];
-      const place=from ? from.real : resolve(origin,relative(at,importer));
+      // Linked consumers' peers belong to the app; other imports keep their own place.
+      const origins=capturedOrigins(stage), [at,origin]=origins.find(([at])=>within(importer,at)) ?? [stage,stage];
+      const app=origins.at(-1)[1], peer=name && appPeer(app,from?.package,name);
+      const place=peer ? join(app,'app.ts') : from ? from.real : resolve(origin,relative(at,importer));
       const real=await this.resolve(source, place, { ...options, skipSelf: true }).catch(() => null);
       const who=label(importer);
       if (!real || real.external) {
@@ -629,7 +722,7 @@ export function capturedSources(stage, refusals=null) {
       }
       // A `browser` field's `false`: Rolldown's empty module.
       if (real.id.startsWith('\0')) { record(null); return real; }
-      const id=capture(physicalId(real.id), who, name && installedAt(name, dirname(place)));
+      const id=capture(physicalId(real.id), who, peer?.installed ?? (name && installedAt(name, dirname(place))));
       record(id);
       return { ...real, id };
     },
@@ -732,8 +825,8 @@ export function replayCaptured(stage, allowed=[]) {
 }
 
 // Time and seeds are source arguments (LLP 1027.000): every executor refuses the clock, randomness and every
-// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/prelude.js,
-// js/src/binary.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
+// timer but an answer's own `setTimeout` (D1) when they are used, with these words (js/src/time.js,
+// js/src/crypto.js, host/web-js/ts-fetch.js). A direct use in the app's own code is refused here too, at
 // build, by file and line, so a test that runs the module under Bun, which has no such guard, cannot hide it.
 const ambient=(api)=>api+' is unavailable in data sources; pass time or a random seed as an argument';
 const timers=(api)=>api+' is unavailable in data sources: an answer waits with setTimeout; pass time as an argument';
@@ -869,17 +962,28 @@ export function staticFacts(code, parse) {
   return { appId: value('appId'), grants: value('grants'), exported: [...exported.keys()] };
 }
 
-export function configure(stage, incremental=false, parse) {
+/** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
+ * there (LLP 1153.002 D2). */
+export function configure(stage, incremental=false, parse, web=false) {
   const app=capturedOrigins(stage).at(-1)[1], modulePath=resolve(stage,'app.ts');
   if (existsSync(modulePath)) {
     const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
     const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
-    const selection=backendOriginSelection(app), warning=backendOriginWarning(authored,selection,parse);
-    writeFileSync(resolve(stage,'__exact_backend_warning.json'), JSON.stringify(warning));
+    const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
     // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
-    const settings=inlineSettings(authored,app,parse);
+    const settings=inlineSettings(authored,app,parse,process.env,{launches:!web});
     writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
-    const after=developmentGrants(injectBackendOrigin(settings.code,selection?.origin ?? null,parse),parse);
+    let injected;
+    try { injected=injectBackendOrigin(settings.code,selection?.origin ?? null,parse); }
+    catch (error) {
+      if (!selection) throw error;
+      throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
+    }
+    checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
+    const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
+    launchModule(stage,web ? [] : launched);
+    const after=developmentGrants(launchGrants(injected,parse,launched),parse);
+    writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
     if (before!==after) writeFileSync(modulePath,after);
     // Every producer refuses alike what the web build cannot read without running it.
     if (parse) staticFacts(after,parse);
@@ -952,14 +1056,14 @@ export function configure(stage, incremental=false, parse) {
     const before=readFileSync(declaration,'utf8'), after=snapbackMutationTypes(before);
     if(before!==after) writeFileSync(declaration,after);
   }
-  stagePackages(stage);
+  stagePackages(stage,parse);
 }
 
 // A native module's names in data code (LLP 1133.002 D13): an `import … from
 // "@exact/geolocation"` reaches a binding generated here from the package's
 // `exact.json`, never committed, so a published package and a `file:` one
 // read alike. Each interface installed above the app, the nearest first, is
-// written into the stage as `__exact_modules/<name>.ts` and mapped by
+// and its implementations are written as `__exact_modules/<name>.ts`, mapped by
 // `paths`, which the checker and Rolldown share. A call goes through the
 // runner's admission: the web runtime's `__exact_module`, else a native
 // request (`exact-native:`), whose answer the runner gives as the module's
@@ -970,12 +1074,16 @@ function moduleBindings(stage, app) {
   // The target the build compiles, as an implementation's `targets` names it, or none (a loop serving several).
   const mapping=resolve(stage,'__exact_paths.json'), named=existsSync(mapping) ? JSON.parse(readFileSync(mapping,'utf8')).target : null;
   const target=['web','ios','macos','tvos','android','windows','linux'].includes(named) ? named : null, out=new Map();
-  const interfaces=moduleInterfaces(app); for (const {name,root,declaration,implementations} of interfaces) {
+  const packages=modulePackages(app), interfaces=packages.filter(i=>i.declaration.kind==='interface');
+  const declarations=[...packages, ...interfaces.flatMap(i=>i.implementations.map(impl=>({name:impl.name,root:impl.dir,declaration:impl.json,implementations:[impl]})))];
+  for (const {name,root,declaration,implementations} of declarations) {
     const file='__exact_modules/'+name.replace(/^@/,'').replace(/\//g,'__')+'.ts';
     mkdirSync(resolve(stage,'__exact_modules'),{recursive:true});
     // An interface the executor implements carries its own binding (LLP 1133.007 D12).
     const own=Array.isArray(declaration.executor) && typeof declaration.binding==='string' ? readFileSync(resolve(root,declaration.binding),'utf8') : null;
-    const text=own ?? moduleBinding(name,declaration,implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
+    const iface=declaration.kind==='implementation' ? interfaces.find(i=>i.name===String(declaration.implements).replace(/@[^@]*$/,'')) : null;
+    const spec=iface ? {...declaration,shapes:Object.assign({},iface.declaration.shapes,...iface.implementations.map(i=>i.json.shapes),declaration.shapes)} : declaration;
+    const text=own ?? moduleBinding(name,spec,declaration.kind==='implementation' ? [declaration] : implementations.map(i=>i.json),names=>domDeclarations(app,names),membersOf(name,interfaces),target), at=resolve(stage,file);
     if (!existsSync(at) || readFileSync(at,'utf8')!==text) writeFileSync(at,text);
     out.set(name,'./'+file);
   }
@@ -987,6 +1095,10 @@ function moduleBindings(stage, app) {
  * its package carries (`exports` subpaths whose target is an
  * implementation's `exact.json`). */
 export function moduleInterfaces(app) {
+  return modulePackages(app).filter(i=>i.declaration.kind==='interface');
+}
+
+function modulePackages(app) {
   const out=new Map(), read=(path)=>{ try { return JSON.parse(readFileSync(path,'utf8')); } catch { return null; } };
   const entry=(exports, key)=>{
     const t=exports && typeof exports==='object' ? (Object.keys(exports).some(k=>k.startsWith('.')) ? exports[key] : key==='.' ? exports : null) : key==='.' ? exports : null;
@@ -1001,9 +1113,9 @@ export function moduleInterfaces(app) {
         const root=join(modules,name), pkg=read(join(root,'package.json')), main=entry(pkg?.exports,'.');
         if (!pkg || !main || !/(^|\/)exact\.json$/.test(main)) continue;
         const declaration=read(resolve(root,main));
-        if (declaration?.kind!=='interface') continue;
-        const implementations=Object.keys(pkg.exports).filter(k=>k!=='.').map(k=>entry(pkg.exports,k))
-          .filter(t=>t && /\/exact\.json$/.test(t)).map(t=>({dir:dirname(resolve(root,t)),json:read(resolve(root,t))})).filter(d=>d.json?.kind==='implementation');
+        if (!['interface','implementation'].includes(declaration?.kind)) continue;
+        const implementations=Object.keys(pkg.exports).filter(k=>k.startsWith('./')).map(k=>({name:name+k.slice(1),file:entry(pkg.exports,k)}))
+          .filter(i=>i.file && /\/exact\.json$/.test(i.file)).map(i=>({name:i.name,dir:dirname(resolve(root,i.file)),json:read(resolve(root,i.file))})).filter(d=>d.json?.kind==='implementation');
         out.set(name,{name,root,declaration,implementations});
       }
     }
@@ -1019,9 +1131,12 @@ export function moduleInterfaces(app) {
 export function implementationFor(app, iface, target) {
   const read=(path)=>{ try { return JSON.parse(readFileSync(path,'utf8')); } catch { return null; } };
   const located=(name)=>{
+    const parts=name.split('/'), take=name.startsWith('@') ? 2 : 1;
+    const packageName=parts.slice(0,take).join('/'), subpath=parts.slice(take).join('/');
+    const key=subpath ? `./${subpath}` : '.';
     for (let dir=app; ; dir=dirname(dir)) {
-      const root=join(dir,'node_modules',name), pkg=read(join(root,'package.json'));
-      const main=typeof pkg?.exports==='string' ? pkg.exports : pkg?.exports?.['.'];
+      const root=join(dir,'node_modules',packageName), pkg=read(join(root,'package.json'));
+      const main=typeof pkg?.exports==='string' && key==='.' ? pkg.exports : pkg?.exports?.[key];
       const at=typeof main==='string' ? main : main?.contract ?? main?.default;
       if (pkg && typeof at==='string' && /(^|\/)exact\.json$/.test(at)) { const json=read(resolve(root,at)); return json && {name,dir:dirname(resolve(root,at)),json}; }
       if (dirname(dir)===dir) return null;
@@ -1060,6 +1175,24 @@ function appText(app) {
   return [join(app,'app.ts'),...contracts(app)].map(f=>{ try { return readFileSync(f,'utf8'); } catch { return ''; } }).join('\n');
 }
 
+/** The specifiers a TypeScript or JavaScript file imports and re-exports from, read from its syntax tree, so a string or
+ * comment that spells an import is none: `import … from "x"` and `export … from "x"` (not `import type` or `export
+ * type`), `import "x"` and `import("x")`. The compiler reads the same set by tokens (`contract/cli/src/sources/data.rs`). */
+function moduleSpecifiers(file, text) {
+  const { parseSync } = createRequire(import.meta.url)('rolldown/utils');
+  const { program } = parseSync(file, text, { sourceType: 'module' });
+  const out = [];
+  const visit = (node) => {
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    if (!node || typeof node !== 'object') return;
+    if (/^(Import|ExportNamed|ExportAll)Declaration$/.test(node.type) && node.source && (node.importKind ?? node.exportKind) !== 'type') out.push(node.source.value);
+    if (node.type === 'ImportExpression' && typeof node.source?.value === 'string') out.push(node.source.value);
+    for (const key in node) visit(node[key]);
+  };
+  visit(program);
+  return out;
+}
+
 /** The packages the app imports, wherever it imports them (LLP 1133.004
  * stage 0, LLP 1133 D6 rule 6): every Contract file `app.contract` reaches
  * through relative `use … from "./…"`, and every TypeScript file `app.ts`
@@ -1077,12 +1210,10 @@ export function usedPackages(app) {
     let text='';
     try { text=readFileSync(file,'utf8'); } catch { return; }
     texts.push(text);
-    // Comments name nothing, and a type-only import links nothing.
-    const code=text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1');
+    // A Contract file's `use` lines, its comments left out.
     const specs=contract
-      ? [...code.matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
-      : [...code.matchAll(/\b(import|export)(\s+type\b)?[^'";]*?\bfrom\s*(['"])([^'"\n]+)\3|\bimport\s*\(?\s*(['"])([^'"\n]+)\5/g)]
-          .filter(m=>!m[2]).map(m=>m[4] ?? m[6]);
+      ? [...text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1').matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
+      : moduleSpecifiers(file, text);
     for (const spec of specs) {
       if (spec.startsWith('.')) visit(contract ? resolve(dirname(file),spec) : tsFile(resolve(dirname(file),spec)), contract);
       else if (!spec.startsWith('exact:') && !spec.startsWith('node:')) names.add(packageName(spec));
@@ -1097,7 +1228,8 @@ export function usedPackages(app) {
  * `macos`, `tvos`), of the `extensions` in the compiled plan (LLP 1133.001
  * D4): each extension, its own Swift module's name,
  * its class, its source files, what it adds to Info.plist (`plist`,
- * `plistKeys`), and the system frameworks it needs from an OS version
+ * `plistKeys`), the host events it takes (`hostEvents`, LLP 1133.001.000
+ * D2), and the system frameworks it needs from an OS version
  * (`frameworks`, LLP 1133.016 D15). */
 export function appleImplementations(app, target, extensions, contractSources = []) {
   const { text } = usedPackages(app), named = `${text}\n${appText(app)}\n${contractSources.map(path => readFileSync(path, 'utf8')).join('\n')}`;
@@ -1123,7 +1255,9 @@ export function appleImplementations(app, target, extensions, contractSources = 
     // An interface that declares an authenticator entry (LLP 1133.010 D13): its class serves it in process.
     const authenticator=!!i.declaration?.authenticator?.apple;
     const events=(i.declaration.names ?? []).some(n=>n.event);
-    return [{extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
+    const credentialMembers = Object.entries(i.declaration.members ?? {}).flatMap(([owner, members]) =>
+      Object.keys(members).map(option => `${owner.split('/').at(-1)}.${option}`));
+    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,hostEvents:impl.json.hostEvents ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',credentialMembers,frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
   });
 }
 
@@ -1225,12 +1359,12 @@ function sourceNames(stage,diagnostics) {
 // (not an RSS cap); explicit user settings always win.
 const checkEnv={GOGC:'300',GOMEMLIMIT:'128MiB',GOMAXPROCS:'4',...process.env};
 
-/** Value exports of the configured module namespace, including CommonJS re-exports. */
-export async function valueExports(stage, libraries) {
+/** Value exports of the configured module namespace, including CommonJS re-exports; or what `inspect`, given the
+ * checker, the namespace's type and the checker API, makes of them. */
+export async function valueExports(stage, libraries, inspect) {
   const module = resolve(stage, 'app.ts');
   const compiler = createRequire(resolve(libraries, 'tsc')).resolve('typescript/unstable/async');
-  const { API } = await import(pathToFileURL(compiler).href);
-  const api = new API({ cwd: stage });
+  const checking = await import(pathToFileURL(compiler).href), api = new checking.API({ cwd: stage });
   try {
     const config = resolve(stage, '__exact_tsconfig.json');
     const snapshot = await api.updateSnapshot({ openProjects: [config] });
@@ -1239,6 +1373,7 @@ export async function valueExports(stage, libraries) {
       checkFiles(stage, libraries, await program.getSourceFileNames());
       const file = await program.getSourceFile(module);
       const type = await checker.getTypeAtLocation(file);
+      if (inspect) return await inspect(checker, type, checking);
       return (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
     } finally { await snapshot.dispose(); }
   } finally { await api.close(); }
@@ -1268,20 +1403,53 @@ function checkFiles(stage, libraries, files) {
   libraries = realpathSync.native(libraries);
   const allowed = path => within(path, stage) || (within(path, libraries) && configuredLibrary(relative(libraries, path)));
   for (const path of files) {
-    if (path && !allowed(realpathSync.native(path))) throw new Error('module outside captured app: ' + path);
+    if (!path || allowed(realpathSync.native(path))) continue;
+    let pkg;
+    if (/\.[cm]?tsx?$/.test(path) && !DECLARATION.test(path)) {
+      try { pkg=packageOf(path); } catch { /* keep the capture refusal if package metadata is invalid */ }
+    }
+    const note=pkg && pkg.root!==physicalId(capturedOrigins(stage).at(-1)[1]) ? `: TypeScript source in package ${pkg.name} (${join(pkg.root,'package.json')}). The type check stages package declarations, not source. Export a declaration file for this entry (for example, a "types" condition before "default") and keep its imports within the staged declarations.` : '';
+    throw new Error('module outside captured app: ' + path + note);
   }
+  checkPeers(stage,files);
 }
 
-/** Type-check a configured stage with the native compiler `tsc` (whose
- * standard libraries are in `libraries`): its diagnostics, or the compiler's
- * actual resolved graph, type-only imports included, must stay inside the
- * stage (a package's declarations are in it: `stagePackages`) and the
- * configured libraries. An external declaration must not influence an
- * accepted app artifact. */
-export function check(stage, tsc, libraries) {
+// Use the compiler's graph, including relative declaration imports and exports,
+// rather than requiring peers from every subpath the package happens to ship.
+function checkPeers(stage, files) {
+  const record=resolve(stage,PACKAGES);
+  if (!existsSync(record)) return;
+  const {peerRefusals=[]}=JSON.parse(readFileSync(record,'utf8'));
+  if (!peerRefusals.length) return;
+  const used=new Set(files.filter(isAbsolute).map(physicalId));
+  for (const [file,why] of peerRefusals) if (used.has(physicalId(resolve(stage,file)))) throw new Error(why);
+}
+
+/** The checker runs before the bundle refuses a Node built-in, and says only "Cannot find module 'node:fs'… Try
+ * `npm i --save-dev @types/node`", which changes nothing (expo/exact-build#183). Said here as the bundle says it. */
+export function nodeNote(diagnostics) {
+  // TS2591 names an import's specifier as a module ("Cannot find module 'fs'") or, as the bake's checker words a
+  // `node:` import, a name ("Cannot find name 'node:fs'"); a bare name there (`process`) is a global, said below.
+  const modules=[...new Set([...diagnostics.matchAll(/Cannot find module '([^']+)'|Cannot find name '(node:[^']+)'/g)].map(match=>match[1] ?? match[2]).filter(builtin))];
+  const names=/Cannot find name '(?:require|process|Buffer|__dirname|__filename)'/.test(diagnostics);
+  if (!modules.length && !names) return '';
+  return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
+}
+/** Type-check a configured stage with native `tsc`: diagnostics and resolved files, including type-only imports,
+ * must stay inside the stage (`stagePackages` captures package declarations) and the configured `libraries`.
+ * An external declaration must not influence an accepted app artifact. */
+export async function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.
   stage=realpathSync.native(stage);
+  const entry=resolve(stage,'__exact_entry.ts'), declaration=resolve(stage,'app.contract.d.ts');
+  if (existsSync(declaration) && readFileSync(declaration,'utf8').includes('export type LanguageModelToolSchemas =')) {
+    const before=readFileSync(entry,'utf8').split(TOOL_CHECK)[0];
+    const tools=languageModelTools(readFileSync(declaration,'utf8'),await languageModelToolSources(stage,bundleOptions),(...a)=>createRequire(import.meta.url)('rolldown/utils').parseSync(...a));
+    const unowned=tools.length ? await valueExports(stage,libraries,(checker,type,api)=>unownedTools(checker,type,[...new Set(tools.map(t=>t.name))],api)) : [];
+    const after=before+languageModelToolCheck(tools,unowned);
+    if (readFileSync(entry,'utf8')!==after) writeFileSync(entry,after);
+  }
   // A package's JavaScript entry (`typescript/bin/tsc`, an `EXACT_TSC`
   // override) keeps its Node shebang: run it through Bun, as the one-shot
   // producer runs its tools (js/bake/src/lib.rs `run`).
@@ -1294,11 +1462,13 @@ export function check(stage, tsc, libraries) {
       // (A tsc that never returns is stopped at the bound: checkBound above.)
       if (error?.killed && error.signal === 'SIGKILL') return fail(new Error(`the TypeScript check did not finish in ${boundWords(checkBound())} (tsc stopped)`));
       if (error) {
+        try { checkPeers(stage,String(stdout??'').split(/\r?\n/)); }
+        catch (refusal) { return fail(refusal); }
         const diagnostics=String(stdout??'').split(/\r?\n/).filter(line=>! /^(?:\/|[A-Za-z]:[\\/]).*\.[cm]?[jt]sx?$/.test(line)).join('\n');
         const mutationFailure=/Type '(?:false|boolean)' is not assignable to type 'true'|SnapbackMutationSuccess/.test(diagnostics)
           && readFileSync(resolve(stage,'app.contract.d.ts'),'utf8').includes('type SnapbackMutationSuccess<');
         const refusal=mutationFailure ? "\nnote: a Snapback mutation returning {ok:false} leaves failure(slot) empty; throw refused({code: 'YOUR_CODE', message: 'Explain the refusal'}) instead. Annotate successful helpers with Result<'source'>, or keep ok:true literal with `as const`.\n" : '';
-        return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+String(stderr??'') || String(error.message)));
+        return fail(new Error(diagnostics+languageModelToolNote(readFileSync(entry,'utf8'),diagnostics)+sourceNames(stage,diagnostics)+refusal+nodeNote(diagnostics)+String(stderr??'') || String(error.message)));
       }
       try { checkFiles(stage, libraries, stdout.trim().split(/\r?\n/)); }
       catch (error) { return fail(error); }

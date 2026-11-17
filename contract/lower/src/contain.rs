@@ -15,10 +15,10 @@ use exact_kernel::{NodeType, PositionType, StyleId, StyleValue};
 ///   and scrolled by it. CSS does not make a clipping box a containing block;
 ///   this is the declared deviation.
 /// - The transforms, `filter` and `backdrop-filter`: CSS's own rule.
-/// - Motion (an animation, a transition, a press scale, a timeline): the
+/// - Motion (an animation, a transition, a press transform, a timeline): the
 ///   browser makes the box a containing block while a transform runs, so it
 ///   is one at rest too.
-pub const CONTAINS_ABSOLUTE: [StyleId; 16] = [
+pub const CONTAINS_ABSOLUTE: [StyleId; 17] = [
     StyleId::OverflowX,
     StyleId::OverflowY,
     StyleId::Translate,
@@ -32,6 +32,7 @@ pub const CONTAINS_ABSOLUTE: [StyleId; 16] = [
     StyleId::LayoutTransition,
     StyleId::ExitAnimation,
     StyleId::PressScale,
+    StyleId::PressTranslate,
     StyleId::DragTimeline,
     StyleId::AnimationTimeline,
     // CSS: `perspective` makes a containing block too (LLP 1077 D8).

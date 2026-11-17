@@ -13,6 +13,7 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs
 import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, makeFixture, root } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const { app } = makeFixture(), name = basename(app);
 
@@ -24,7 +25,7 @@ const found = (dir, file) => !existsSync(dir) ? [] : readdirSync(dir).flatMap((n
 
 const { check, failed } = checker();
 const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
-const out = resolve(root, 'host/android/app/build', name);
+const out = apkBuildDir(app);
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the APK builds, compiling Device.kt', built.status === 0, (built.stdout + built.stderr).slice(-3000));

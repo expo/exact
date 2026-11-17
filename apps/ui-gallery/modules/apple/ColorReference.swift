@@ -53,14 +53,16 @@ final class ColorReference: ExactModule {
     #endif
     override func element(_ element: ExactElement) {
         #if os(iOS)
-        guard #available(iOS 26, *), let view = element.view else { return }
+        guard let view = element.view else { return }
         if element.hatch == .stickyLimit, element.isNew {
-            // Keep the authored wrapper unpainted so Exact recognizes it as a native control bar
+            // Keep the authored wrapper unpainted so Exact recognizes it as a native control bar. Every
+            // version clears the bar over it (`route`), so every version draws this material.
             let background = RangeBarBackground(frame: view.bounds)
             background.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.insertSubview(background, at: 0)
             element.owns(view: background, "Range bar background")
         }
+        guard #available(iOS 26, *) else { return }
         let limit = element.data[.limit] ?? "no-limit"
         if element.hatch == .hdrReference, element.isNew {
             let reference = UIView(frame: CGRect(x: 0, y: 0, width: 116, height: 112))

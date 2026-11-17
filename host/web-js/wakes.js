@@ -4,9 +4,10 @@
 // invocation of origin `wake`, delivered once, in order, one at a time, each as its own commit. The page cannot tell
 // one request from another, so an invocation owns every answer that went out after its delivery, `then`s and queued
 // sends included, and a request the server holds (`heldAsks`, which `inflight` leaves out); not a stream, which is a
-// view's (a resource's live answer the boot or the view opened meanwhile). The origin of every call is `wake` until
-// that settles (`busy`), the least privileged in flight, as an emitted event's `device` is. Nothing it started is cancelled at the deadline: the invocation ends `expired`, and
-// what it started settles under the app's origin. A wake in a hidden page fires no timer (`clock.stopped`); under the
+// view's (a resource's live answer the boot or the view opened meanwhile). Its handlers' commits, and the replies, `then`s
+// and queued sends they start, are of origin `wake`, and data code takes `wake` while any of that work still waits,
+// the least privileged in flight, as an emitted event's `device` is. Nothing it started is cancelled at the deadline: the invocation ends `expired`, and
+// what it started settles under the origin it was started with, which a reply, a `then` and a queued send each restore. A wake in a hidden page fires no timer (`clock.stopped`); under the
 // agent the wake hides the page (`exactPage().visibilityState`) and shows it again after, as the platform's background.
 //
 // Registrations (§10): a keyed list declared with a `kind` keeps, beside each entry's options, its runs, attempts and
@@ -46,7 +47,9 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
     if (!w) waiting.push(w = { id, cold: !!how.cold, hidden: !!how.hidden, started: null, budget: 0, invocations: [], expired: false });
     if (!declared) { say(`${key}: no handler hears it`); resolve("unheard"); queueMicrotask(step); return; }
     const [, , hold, , , budget] = declared, event = key.slice(key.indexOf(".") + 1), tag = typeof args?.[0] === "string" ? args[0] : "";
+    const raised = (budget ?? 0) > w.budget;
     w.budget = Math.max(w.budget, budget ?? 0);
+    if (raised && w === current && timer) arm();
     w.invocations.push({ key, event, tag, args: Array.isArray(args) ? args : [], state: "queued", delivered: false, entry, resolve });
     say(`wake ${event} ${tag}: raised`);
     // Each event's own bound: past it, its own oldest not yet delivered ends with nothing delivered.
@@ -65,7 +68,7 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
     const [action, , , types, name] = events[inv.key];
     time();
     current.started ??= clock.now;
-    if (!clock.agent && !timer) timer = setTimeout(expire, current.budget);
+    if (!timer) arm();
     inv.state = "running";
     inv.delivered = true;
     if (inv.entry != null && meta.has(inv.entry)) meta.get(inv.entry).again = false;
@@ -99,8 +102,16 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
   // while the wake waits on it. The deadline is the clock's, never this timer's.
   let poll = 0;
   function again() { if (!poll) poll = setTimeout(() => { poll = 0; step(); }, 20); }
+  /** Off the agent, a wall timer for the running wake's deadline, which a later event's budget can move. */
+  function arm() {
+    clearTimeout(timer); timer = 0;
+    const d = deadline();
+    if (!clock.agent && d != null) { time(); timer = setTimeout(expire, Math.max(0, d - clock.now)); }
+  }
   function expire() {
     if (!current || current.expired) return;
+    time();
+    if (clock.now < deadline()) return arm();
     current.expired = true;
     base = null;
     for (const inv of current.invocations.filter(i => i.state === "queued" || i.state === "running")) end(inv, "expired");
@@ -168,7 +179,7 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
     /** `--wake '<entry>'`: listed again, then raised as a cold wake. */
     launch(row, entry, ref) {
       const { ref: _ref, delivered: _d, due: _due, lastRun, ...fields } = entry;
-      const state = row.sub.list.state, key = row.sub.list.key;
+      const state = lists.state(row, row.sub.list.state), key = row.sub.list.key;
       const kept = (lists.get(state) ?? []).filter(x => x.fields[key] !== fields[key] || x.fields.kind !== fields.kind);
       const e = { ref, row, fields };
       lists.set(state, [...kept, e]);
@@ -178,8 +189,8 @@ export function wakes({ events, say, value, run, toEpoch, onLine, lists, changed
       return raiseEntry(e, true);
     },
     /** A source declared `"listed"`: the entries of its kind, its fields each. */
-    listed(spec) {
-      return (lists.get(spec.state) ?? []).filter(e => spec.kind == null || e.fields.kind === spec.kind)
+    listed(spec, row) {
+      return (lists.get(lists.state(row, spec.state)) ?? []).filter(e => spec.kind == null || e.fields.kind === spec.kind)
         .map(e => { const all = { ...e.fields, ...(e.fields.kind ? { lastRun: meta.get(e.ref)?.lastRun ?? null, due: due(e) } : {}) }; return Object.fromEntries((spec.fields ?? []).map(f => [f, all[f] ?? null])); });
     },
   };

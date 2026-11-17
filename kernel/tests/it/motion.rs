@@ -316,11 +316,20 @@ fn inline_detached_and_reused_keys_are_ineligible_but_numeric_roots_are_allowed(
 
 #[test]
 fn height_transition_roundtrips_exwf_without_changing_previous_property_codes() {
-    // A path's `d` rides past the wire's codes (LLP 1055.000 D15).
+    // A path's `d` and `filter` ride past the wire's codes and the
+    // `border-color` shorthand's (LLP 1055.000 D15, LLP 1003.002 D1).
+    assert_eq!(
+        (
+            Property::COUNT,
+            Property::D as usize,
+            Property::Filter as usize
+        ),
+        (27, 28, 29)
+    );
     for (code, property) in Property::ALL
         .into_iter()
         .enumerate()
-        .chain([(Property::D as usize, Property::D)])
+        .chain(Property::TRANSITION_ONLY.map(|p| (p as usize, p)))
     {
         if property == Property::ShadowColor {
             continue; // named only by `box-shadow`; refused on the wire (LLP 1062)
@@ -520,6 +529,120 @@ fn a_style_change_transitions_under_the_row_and_the_clock_seeks() {
     );
     // The kernel's target never moved; only the presentation did.
     assert_eq!(kernel.node(1).unwrap().style.opacity, 0.0);
+}
+
+#[test]
+fn clearing_transition_keeps_coverage_but_none_or_another_property_cancels() {
+    for curve in ["opacity 1s linear", "opacity -exact-spring()"] {
+        for next in [None, Some("none"), Some("scale 1s"), Some("all 0s")] {
+            let (mut kernel, mut engine, node) =
+                boot(Transitions::parse(curve).unwrap().0.remove(0));
+            let receipt = kernel
+                .apply(
+                    0,
+                    2,
+                    &[Op::SetStyle {
+                        id: 1,
+                        patch: opacity(0.0),
+                    }],
+                )
+                .unwrap();
+            kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+            engine.advance(0.1).unwrap();
+            engine.frame();
+            let end = engine.settle_time();
+            let change = match next {
+                Some(text) => Op::SetStyle {
+                    id: 1,
+                    patch: style(|s| {
+                        s.transition = Transitions::parse(text).unwrap();
+                        s.mask.set(StyleId::Transition);
+                    }),
+                },
+                None => {
+                    let mut mask = exact_kernel::StyleMask::EMPTY;
+                    mask.set(StyleId::Transition);
+                    Op::ClearStyle {
+                        id: 1,
+                        mask,
+                        written: false,
+                    }
+                }
+            };
+            let receipt = kernel.apply(0, 3, &[change]).unwrap();
+            kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+            let covered = next.is_none() || next == Some("all 0s");
+            assert_eq!(
+                engine.is_active(node, Property::Opacity),
+                covered,
+                "{curve} → {next:?}"
+            );
+            assert_eq!(engine.settle_time(), if covered { end } else { None });
+            if !covered {
+                assert_eq!(engine.value(node, Property::Opacity), Some(Value::ZERO));
+            }
+        }
+    }
+}
+
+#[test]
+fn clearing_a_path_transition_keeps_all_coverage_at_an_unchanged_target() {
+    let mut kernel = Kernel::with_monospace();
+    let path = |value: &str| Op::SetProp {
+        id: 2,
+        prop: PropId::D,
+        value: PropValue::Str(value.into()),
+    };
+    let receipt = kernel
+        .apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::Svg,
+                },
+                Op::CreateView {
+                    id: 2,
+                    node_type: NodeType::SvgPath,
+                },
+                Op::SetChildren {
+                    id: 1,
+                    children: vec![2],
+                },
+                Op::SetStyle {
+                    id: 2,
+                    patch: transition(Transitions::parse("d 1s linear").unwrap().0.remove(0)),
+                },
+                path("M0 0L10 10"),
+                Op::AttachRoot { id: 1 },
+            ],
+        )
+        .unwrap();
+    let mut engine = Engine::new();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    let receipt = kernel.apply(0, 2, &[path("M0 0L20 20")]).unwrap();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    engine.advance(0.1).unwrap();
+    let node = motion_node(kernel.node(2).unwrap().key);
+    let shown = engine.presented_path(node);
+    let mut mask = exact_kernel::StyleMask::EMPTY;
+    mask.set(StyleId::Transition);
+    let receipt = kernel
+        .apply(
+            0,
+            3,
+            &[Op::ClearStyle {
+                id: 2,
+                mask,
+                written: false,
+            }],
+        )
+        .unwrap();
+    kernel.motion_sync(&receipt).apply(&mut engine).unwrap();
+    assert!(engine.is_active(node, Property::D));
+    assert_eq!(engine.settle_time(), Some(1.0));
+    assert_eq!(engine.presented_path(node), shown);
 }
 
 #[test]
@@ -1188,4 +1311,102 @@ fn destroyed_kernel_hold_tokens_cannot_touch_a_reused_node_slot_or_its_new_hold(
         Some(Value::new(7.0, -3.0))
     );
     assert!(engine.quiescent());
+}
+
+#[test]
+fn rotation_targets_keep_axes_until_the_transition_is_sampled() {
+    let (mut k, mut e, node) = boot(linear_all(1.0));
+    for (epoch, angle, axis) in [(2, 0.0, [1.0, 0.0, 0.0]), (3, 90.0, [0.0, 0.0, 1.0])] {
+        let receipt = k
+            .apply(
+                0,
+                epoch,
+                &[Op::SetStyle {
+                    id: 1,
+                    patch: style(|s| {
+                        s.rotate = angle;
+                        s.rotate_axis = exact_kernel::style::space::RotateAxis(axis);
+                        s.mask.set(StyleId::Rotate);
+                        s.mask.set(StyleId::RotateAxis);
+                    }),
+                }],
+            )
+            .unwrap();
+        k.motion_sync(&receipt).apply(&mut e).unwrap();
+        if epoch == 2 {
+            e.advance(1.0).unwrap();
+        }
+    }
+    e.advance(1.5).unwrap();
+    let value = e.value(node, Property::Rotate).unwrap();
+    assert_eq!(value.x, 45.0);
+    assert_eq!(exact_motion::rotation::axis(value), [0.0, 0.0, 1.0]);
+    assert_eq!(k.node(1).unwrap().style.rotate, 90.0);
+}
+
+#[test]
+fn parsed_keyframes_match_kernel_axis_precision_and_inherit_negative_z() {
+    for (row, frame, half, distance) in [
+        ("0.1 0.2 0.3 10deg", "0.1 0.2 0.3 370deg", 190., 360.),
+        ("0 0 -1 0deg", "60deg", -30., 60.),
+    ] {
+        let mut s = StyleProps::default();
+        for id in [StyleId::Rotate, StyleId::RotateAxis] {
+            s.set_dynamic(id, &exact_kernel::StyleValue::Text(row.into()))
+                .unwrap();
+        }
+        let base = exact_kernel::motion::targets(&s)[2].1;
+        let mut a = exact_motion::Animations::parse("spin 1s linear both")
+            .unwrap()
+            .0
+            .remove(0);
+        a.keyframes = exact_motion::Keyframes::parse(&format!("100%{{rotate:{frame};}}")).unwrap();
+        let end = a
+            .keyframes
+            .track(Property::Rotate, base, false, &Easing::Linear)
+            .last()
+            .unwrap()
+            .2;
+        assert!((exact_motion::rotation::distance(base, end) - distance).abs() < 1e-6);
+        assert!((a.sample(0.5, Property::Rotate, base).unwrap().x - half).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn resolved_svg_animation_checks_explicit_inherited_and_implicit_axes() {
+    for (row, frames, refused) in [
+        ("0deg", "100%{rotate:x -90deg;}", true),
+        ("x 0deg", "100%{rotate:60deg;}", true),
+        ("x 10deg", "100%{rotate:z 60deg;}", true),
+        ("x 10deg", "0%{rotate:z 0deg;}100%{rotate:z 60deg;}", false),
+        ("0 0 -1 0deg", "100%{rotate:60deg;}", false),
+    ] {
+        let mut k = Kernel::with_monospace();
+        let mut s = StyleProps::default();
+        for id in [StyleId::Rotate, StyleId::RotateAxis] {
+            s.set_dynamic(id, &exact_kernel::StyleValue::Text(row.into()))
+                .unwrap();
+        }
+        s.set_dynamic(
+            StyleId::Animation,
+            &exact_kernel::StyleValue::Text("spin 1s linear both".into()),
+        )
+        .unwrap();
+        s.animation.0[0].keyframes = exact_motion::Keyframes::parse(frames).unwrap();
+        let result = k.apply(
+            0,
+            1,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::SvgRect,
+                },
+                Op::SetStyle {
+                    id: 1,
+                    patch: Box::new(s),
+                },
+            ],
+        );
+        assert_eq!(result.is_err(), refused, "{row}: {frames}: {result:?}");
+    }
 }

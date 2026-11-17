@@ -34,7 +34,8 @@ public enum WidgetContainer {
             setenv("EXACT_WIDGET_WRITER", appID, 1)
         }
     }
-    public static var updateBase: URL? { root?.appendingPathComponent("Library/Application Support", isDirectory: true) }
+    /// The updater holds lifetime file locks; only published generations belong in the App Group.
+    public static var updateBase: URL? { FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first }
     /// The baked compatibility id (LLP 1030 D3a): the cohort a generation belongs to.
     package static var compatibility: String {
         let object = (try? JSONSerialization.jsonObject(with: Runtime.bakedCompat())) as? [String: Any]

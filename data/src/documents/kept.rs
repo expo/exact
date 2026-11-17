@@ -401,8 +401,9 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
         .records
         .iter()
         .position(|r| r.identity == identity && r.folder == folder);
-    let mut r = match at {
-        Some(i) => store.records.remove(i),
+    let was = at.map(|i| (i, store.records.remove(i)));
+    let mut r = match &was {
+        Some((_, r)) => r.clone(),
         None => {
             super::keep(n, &app);
             Record {
@@ -417,8 +418,16 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
             }
         }
     };
+    // What the list held before this choice, back in place: the set on disk
+    // still holds it.
+    let undo = |records: &mut Vec<Record>| {
+        if let Some((i, r)) = was.clone() {
+            records.insert(i, r);
+        }
+    };
     // Kept before this launch restored it: it resolves from now.
     if r.n != n && !super::adopt(r.n, &real, &r.name, identity, folder, owner, &app) {
+        undo(&mut store.records);
         return None;
     }
     r.mode = mode.into();
@@ -431,6 +440,7 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
     if save(store).is_err() {
         // Not written is not kept: the next launch would not know it.
         store.records.remove(0);
+        undo(&mut store.records);
         return None;
     }
     let listeners = announce(store);
@@ -563,14 +573,17 @@ pub struct Replaced {
 }
 
 /// The app's own atomic write replaced kept files (D4): each is the file it
-/// wrote now, read through the same folder.
-pub fn carry(owner: u64, replaced: Replaced) {
+/// wrote now, read through the same folder. An error is the set not saved,
+/// for the write to fail with: this session keeps the new file, as the
+/// replaced one is gone, but a relaunch would not until a later save writes
+/// the set. Writing the file again carries it again.
+pub fn carry(owner: u64, replaced: Replaced) -> Result<(), String> {
     let Some((after, false)) = Identity::at(&replaced.directory, &replaced.relative) else {
-        return;
+        return Ok(());
     };
     let mut all = stores();
     let Some((_, store)) = store_of(&mut all, owner) else {
-        return;
+        return Ok(());
     };
     for r in store
         .records
@@ -579,7 +592,12 @@ pub fn carry(owner: u64, replaced: Replaced) {
     {
         r.identity = after;
     }
-    let _ = save(store);
+    save(store).map_err(|e| {
+        format!(
+            "storage: the file was written, but the kept documents could not be saved ({e}), \
+             so a relaunch would not reopen it; write it again to keep it"
+        )
+    })
 }
 
 /// `<n>` was minted for `app`'s session: its counter passes it, for good.

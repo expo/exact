@@ -37,8 +37,10 @@ extension NavigationBarIOSTests {
         let route = try XCTUnwrap(nav.topViewController), item = route.navigationItem
         func labels(_ view: UIView) -> [UILabel] { ((view as? UILabel).map { [$0] } ?? []) + view.subviews.flatMap(labels) }
         func drawnLarge() -> UIFont? {
-            nav.navigationBar.layoutIfNeeded()
-            return labels(nav.navigationBar).filter { $0.text == "Fixture" }.map(\.font).max { $0.pointSize < $1.pointSize }
+            // Over a route's scroller, iOS 26 draws the large title in the
+            // scroll content rather than in the bar.
+            nav.view.layoutIfNeeded()
+            return labels(nav.view).filter { $0.text == "Fixture" }.map(\.font).max { $0.pointSize < $1.pointSize }
         }
         let platform = NavigationTitleInk.platformFonts(route.traitCollection)
         XCTAssertNil(item.standardAppearance, "no authored typography: UIKit's title")

@@ -4,7 +4,8 @@ import { resolve } from 'node:path';
 import { bundleHostModule } from '../../web-js/glue.mjs';
 
 const root = resolve(import.meta.dir, '../../..');
-export const navigationSource = await bundleHostModule(root, 'navigation.js');
+// As a page with popovers has it (glue.js, or a JS target page with a dialog, a menu or a popover: navigation.js `placePopovers`).
+export const navigationSource = await bundleHostModule(root, 'navigation.js') + 'placePopovers();\n';
 export const wasmSource = await bundleHostModule(root, 'glue.js');
 const admissionSource = await bundleHostModule(root, 'grant-admission.js');
 
@@ -29,7 +30,7 @@ export function glueDeclarations(source, names) {
   for (const entry of parsed.program.body) {
     const statement = entry.type === 'ExportNamedDeclaration' ? entry.declaration : entry;
     if (!statement) continue;
-    if (statement.type === 'FunctionDeclaration') declarations.set(statement.id.name, source.slice(statement.start, statement.end));
+    if (statement.type === 'FunctionDeclaration' || statement.type === 'ClassDeclaration') declarations.set(statement.id.name, source.slice(statement.start, statement.end));
     if (statement.type === 'VariableDeclaration') for (const declaration of statement.declarations) {
       if (declaration.id.type === 'Identifier') declarations.set(declaration.id.name, `${statement.kind} ${source.slice(declaration.start, declaration.end)};`);
     }

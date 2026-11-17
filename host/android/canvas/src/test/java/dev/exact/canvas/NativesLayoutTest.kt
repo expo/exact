@@ -41,7 +41,7 @@ class NativesLayoutTest {
         JSONObject().put("module", "test-picture").put("props", JSONObject().put("object-fit", fit).toString()).toString()
 
     @Test fun aScaleTypeChangedAtTheSameSizeIsDrawnWithItsOwnMatrix() {
-        val natives = Natives(RuntimeEnvironment.getApplication(), File("."), mapOf("test-picture" to Picture))
+        val natives = Natives(RuntimeEnvironment.getApplication(), { File(".") }, mapOf("test-picture" to Picture))
         // A 100×200 box: `cover` scales the 100×50 picture by 4, `contain` by 1.
         natives.ensure(1, 2, 100, 200, element("cover"), 0)
         val view = natives.getChildAt(0) as ImageView

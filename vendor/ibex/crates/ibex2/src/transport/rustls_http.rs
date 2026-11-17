@@ -5,38 +5,39 @@
 use crate::boundary::HostError;
 use crate::stdlib::abort::{AbortRegistration, AbortSignal};
 use crate::stdlib::fetch::{
-    over_limit, Body, BodySource, Headers, Request, StreamingResponse, Transport,
+    over_limit, Body, BodyFile, BodySource, Headers, Request, StreamingResponse, Transport,
 };
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use ureq::unversioned::transport::{
     Buffers, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
     Transport as WireTransport,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Roots {
-    System(usize),
-    CompiledIn,
-}
-impl std::fmt::Display for Roots {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::System(n) => write!(f, "the system's trust store ({n} roots)"),
-            Self::CompiledIn => write!(f, "no system trust store; the compiled-in roots"),
-        }
-    }
-}
+#[cfg(test)]
+static RESOLVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+use super::tls::tls_config;
+pub use super::tls::Roots;
+#[cfg(test)]
+use super::tls::{tls_config_from, NATIVE_CERT_LOADS};
 
 #[derive(Default)]
 struct Current {
     generation: u64,
     signal: Option<AbortSignal>,
     event_stream: bool,
+    /// The request's body is a file and it names no timeout of its own:
+    /// each write may wait [`IDLE_SEND`], with no limit on the whole
+    /// exchange (Exact patch 46).
+    file_body: bool,
+    idle_timeout: Option<Duration>,
+    /// The upload whose bytes written the response's transport tells.
+    written: Option<Written>,
     /// The lease's request went out on a pooled connection and none of its
     /// response has arrived: cleared when it starts to open a connection of
     /// its own (`CancellableConnector`, a proxy's hop's too) or some of the
@@ -44,6 +45,16 @@ struct Current {
     resendable: bool,
 }
 type Context = Arc<Mutex<Current>>;
+/// An upload's progress as the wire takes it: [`Counted`] stores how much of
+/// the body ureq has read, and each write that succeeds after that read has
+/// put those bytes on the socket, so [`Observed`] tells them then (Exact
+/// patch 46). A read whose write fails is never told.
+struct Written {
+    sent: crate::stdlib::fetch::Sent,
+    read: Arc<std::sync::atomic::AtomicU64>,
+    total: u64,
+    told: u64,
+}
 struct Slot {
     agent: ureq::Agent,
     context: Context,
@@ -108,6 +119,9 @@ impl RustlsHttpTransport {
             current.generation = current.generation.wrapping_add(1);
             current.signal = Some(signal.clone());
             current.event_stream = false;
+            current.file_body = false;
+            current.idle_timeout = None;
+            current.written = None;
             current.resendable = true;
         }
         Lease {
@@ -153,6 +167,12 @@ fn needs_tls(target_https: bool, proxy: Option<&ureq::Proxy>) -> bool {
 /// its resend included. Event streams keep this limit only until their headers.
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The longest a request whose body is a file waits for one write, when it
+/// names no timeout of its own: URLSession's 60 s without data, in place of
+/// [`GLOBAL_TIMEOUT`], which would end a large upload on a slow uplink
+/// (Exact patch 46).
+const IDLE_SEND: Duration = Duration::from_secs(60);
+
 fn agent_config(tls: bool, proxy: Option<ureq::Proxy>) -> ureq::config::Config {
     let builder = ureq::Agent::config_builder()
         .proxy(proxy)
@@ -170,46 +190,6 @@ fn agent_config(tls: bool, proxy: Option<ureq::Proxy>) -> ureq::config::Config {
     }
 }
 
-// Every transport in the process shares the one trust-store read. Keeping the
-// config out of `new` also keeps constructing an unused host endowment cheap.
-// @ref LLP 0068#5-open-questions — native roots are loaded lazily and once per process
-fn tls_config() -> &'static (ureq::tls::TlsConfig, Roots) {
-    static TLS_CONFIG: OnceLock<(ureq::tls::TlsConfig, Roots)> = OnceLock::new();
-    TLS_CONFIG.get_or_init(|| {
-        #[cfg(test)]
-        NATIVE_CERT_LOADS.fetch_add(1, Ordering::SeqCst);
-        tls_config_from(rustls_native_certs::load_native_certs().unwrap_or_default())
-    })
-}
-
-#[cfg(test)]
-static NATIVE_CERT_LOADS: AtomicUsize = AtomicUsize::new(0);
-#[cfg(test)]
-static RESOLVER_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-fn tls_config_from(
-    certs: Vec<rustls::pki_types::CertificateDer<'static>>,
-) -> (ureq::tls::TlsConfig, Roots) {
-    let mut store = rustls::RootCertStore::empty();
-    let mut certificates = Vec::new();
-    for cert in certs {
-        if store.add(cert.clone()).is_ok() {
-            certificates.push(ureq::tls::Certificate::from_der(cert.as_ref()).to_owned());
-        }
-    }
-    let (root_certs, roots) = if certificates.is_empty() {
-        (ureq::tls::RootCerts::WebPki, Roots::CompiledIn)
-    } else {
-        let count = certificates.len();
-        (certificates.into(), Roots::System(count))
-    };
-    (
-        ureq::tls::TlsConfig::builder()
-            .root_certs(root_certs)
-            .build(),
-        roots,
-    )
-}
 struct Lease {
     slot: Option<Slot>,
     pool: Arc<Pool>,
@@ -408,15 +388,50 @@ impl<T: WireTransport> WireTransport for Observed<T> {
     fn buffers(&mut self) -> &mut dyn Buffers {
         self.inner.buffers()
     }
-    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
-        self.inner.transmit_output(amount, timeout)
+    fn transmit_output(
+        &mut self,
+        amount: usize,
+        mut timeout: NextTimeout,
+    ) -> Result<(), ureq::Error> {
+        use ureq::unversioned::transport::time::Duration as Wait;
+        let current = self.context.lock().unwrap();
+        let idle = current
+            .idle_timeout
+            .or(current.file_body.then_some(IDLE_SEND));
+        if let Some(idle) = idle {
+            timeout.after = timeout.after.min(Wait::Exact(idle));
+        }
+        drop(current);
+        self.inner.transmit_output(amount, timeout)?;
+        if self.response {
+            let told = {
+                let mut current = self.context.lock().unwrap();
+                current.written.as_mut().and_then(|w| {
+                    let read = w.read.load(std::sync::atomic::Ordering::Relaxed);
+                    (read > w.told).then(|| {
+                        w.told = read;
+                        (w.sent.0.clone(), read, w.total)
+                    })
+                })
+            };
+            if let Some((sent, at, total)) = told {
+                sent(at, total);
+            }
+        }
+        Ok(())
     }
     fn await_input(&mut self, mut timeout: NextTimeout) -> Result<bool, ureq::Error> {
         // ureq retains the request's deadlines in its body reader. An event
         // stream without an explicit timeout must also outlive its global limit.
-        if self.response && self.context.lock().unwrap().event_stream {
+        let current = self.context.lock().unwrap();
+        if let Some(idle) = current.idle_timeout {
+            timeout.after = timeout
+                .after
+                .min(ureq::unversioned::transport::time::Duration::Exact(idle));
+        } else if self.response && current.event_stream {
             timeout.after = ureq::unversioned::transport::time::Duration::NotHappening;
         }
+        drop(current);
         let progress = self.inner.await_input(timeout)?;
         if progress && self.response {
             self.context.lock().unwrap().resendable = false;
@@ -574,19 +589,29 @@ fn failed(error: impl std::fmt::Display) -> HostError {
 }
 
 /// `req` on the lease's agent, its body a slice or a counted reader (Exact
-/// patch 23), within `left` of the request's time. A request's own `timeout`
-/// replaces every agent default: no shorter internal phase limit may win before
-/// it (LLP 0068.000 §4). Without one, the agent's phase and global limits
-/// stand until the response identifies an event stream.
+/// patch 23), within `left` of the request's time, if it has a limit. A
+/// request's own `timeout` replaces every agent default: no shorter internal
+/// phase limit may win before it (LLP 0068.000 §4). Without one, the agent's
+/// phase and global limits stand until the response identifies an event
+/// stream, but for a file body, which has no global limit (`IDLE_SEND`).
 fn run<S: ureq::AsSendBody>(
     lease: &Lease,
     req: ureq::http::Request<S>,
     timeout: Option<Duration>,
-    left: Duration,
+    left: Option<Duration>,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
     let agent = &lease.slot.as_ref().unwrap().agent;
-    let limit = Some(left);
-    let req = agent.configure_request(req).timeout_global(limit);
+    let limit = left;
+    let dns = {
+        let current = lease.slot.as_ref().unwrap().context.lock().unwrap();
+        current
+            .idle_timeout
+            .or(current.file_body.then_some(IDLE_SEND))
+    };
+    let req = agent
+        .configure_request(req)
+        .timeout_global(limit)
+        .timeout_resolve(timeout.and(limit).or(dns));
     let req = match timeout {
         Some(_) => req
             .timeout_connect(limit)
@@ -595,20 +620,37 @@ fn run<S: ureq::AsSendBody>(
             .timeout_await_100(limit)
             .timeout_recv_response(limit)
             .timeout_recv_body(limit),
+        None if lease
+            .slot
+            .as_ref()
+            .unwrap()
+            .context
+            .lock()
+            .unwrap()
+            .idle_timeout
+            .is_some() =>
+        {
+            req.timeout_send_request(None)
+                .timeout_send_body(None)
+                .timeout_await_100(None)
+                .timeout_recv_response(None)
+                .timeout_recv_body(None)
+        }
         None => req,
     };
     agent.run(req.build())
 }
 
-/// `req` with `body`, through `reader` when its bytes sent are told (Exact
-/// patch 23), within `left` of the request's time (`run`).
+/// `req` with `body`, through `reader` when its bytes sent are told or the
+/// body is a file's (Exact patches 23 and 46), within `left` of the
+/// request's time (`run`).
 fn send(
     lease: &Lease,
     req: ureq::http::Request<()>,
     body: &[u8],
     reader: &mut Option<Counted<'_>>,
     timeout: Option<Duration>,
-    left: Duration,
+    left: Option<Duration>,
 ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
     let (parts, ()) = req.into_parts();
     match reader.as_mut() {
@@ -656,21 +698,57 @@ impl BodySource for Source {
         result
     }
 }
-/// An upload's body as ureq takes it (Exact patch 23): each read is told to
-/// the request's `sent` hook. ureq writes what it read to the socket before
-/// it reads again, so the count leads the wire by at most one output buffer.
+/// A body as ureq reads it: an upload's bytes, whose progress is told as
+/// they are written (Exact patches 23 and 46, [`Written`]), or a file's,
+/// read as it is sent (Exact patch 46), at most its length.
 struct Counted<'a> {
-    body: &'a [u8],
-    at: usize,
-    sent: &'a crate::stdlib::fetch::Sent,
+    body: Outgoing<'a>,
+    at: u64,
+    total: u64,
+    read: Option<Arc<std::sync::atomic::AtomicU64>>,
+}
+enum Outgoing<'a> {
+    Bytes(&'a [u8]),
+    File(&'a BodyFile, Box<dyn Read + Send>),
+}
+impl Counted<'_> {
+    /// From the first byte again, for a resend.
+    fn rewind(&mut self) -> std::io::Result<()> {
+        if let Outgoing::File(file, reader) = &mut self.body {
+            *reader = file.0.reader()?;
+        }
+        self.at = 0;
+        if let Some(read) = &self.read {
+            read.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
+    }
 }
 impl Read for Counted<'_> {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        let n = out.len().min(self.body.len() - self.at);
-        out[..n].copy_from_slice(&self.body[self.at..self.at + n]);
-        self.at += n;
-        if n > 0 {
-            (self.sent.0)(self.at as u64, self.body.len() as u64);
+        let left = usize::try_from(self.total - self.at).unwrap_or(usize::MAX);
+        let len = out.len().min(left);
+        let out = &mut out[..len];
+        let n = match &mut self.body {
+            Outgoing::Bytes(body) => {
+                let at = self.at as usize;
+                out.copy_from_slice(&body[at..at + out.len()]);
+                out.len()
+            }
+            Outgoing::File(_, reader) => {
+                let n = reader.read(out)?;
+                if n == 0 && !out.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "the file body ended before its length",
+                    ));
+                }
+                n
+            }
+        };
+        self.at += n as u64;
+        if let Some(read) = &self.read {
+            read.store(self.at, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(n)
     }
@@ -690,7 +768,11 @@ impl Transport for RustlsHttpTransport {
     ) -> Result<StreamingResponse, HostError> {
         signal.check()?;
         let body = request.body.as_deref().unwrap_or_default();
-        let counted = request.sent.as_ref().filter(|_| !body.is_empty());
+        let file = request.body_file.as_ref();
+        let total = file.map_or(body.len() as u64, |f| f.0.len());
+        let sent = request.sent.as_ref().filter(|_| total > 0);
+        // A body read from a reader is otherwise sent chunked.
+        let counted = sent.is_some() || file.is_some();
         let build = || {
             let mut builder = ureq::http::Request::builder()
                 .method(request.method.as_str())
@@ -698,9 +780,8 @@ impl Transport for RustlsHttpTransport {
             for (name, value) in request.headers.entries() {
                 builder = builder.header(name, value);
             }
-            if counted.is_some() {
-                // A body read from a reader is otherwise sent chunked.
-                builder = builder.header("content-length", body.len());
+            if counted {
+                builder = builder.header("content-length", total);
             }
             builder.body(()).map_err(failed)
         };
@@ -714,11 +795,42 @@ impl Transport for RustlsHttpTransport {
         // This precedes leasing (and therefore TLS setup), DNS, and connection.
         let proxy = self.proxy_for(req.uri())?;
         let tls = needs_tls(req.uri().scheme_str() == Some("https"), proxy);
+        if tls {
+            super::tls::ensure_available()?;
+        }
         let started = Instant::now();
-        // The request's whole time, its own timeout or the agent's global limit
-        let limit = request.timeout.unwrap_or(GLOBAL_TIMEOUT);
+        // The request's whole time, its own timeout or the agent's global
+        // limit, which a file body without a timeout does not have.
+        let idle = (file.is_some() || request.idle_timeout.is_some()) && request.timeout.is_none();
+        let limit = (!idle).then(|| request.timeout.unwrap_or(GLOBAL_TIMEOUT));
+        let read = sent.map(|_| Arc::new(std::sync::atomic::AtomicU64::new(0)));
+        let watch = |lease: &Lease| {
+            let mut current = lease.slot.as_ref().unwrap().context.lock().unwrap();
+            current.file_body = idle;
+            current.idle_timeout = request.idle_timeout.filter(|_| request.timeout.is_none());
+            current.written = sent.zip(read.as_ref()).map(|(sent, read)| Written {
+                sent: sent.clone(),
+                read: read.clone(),
+                total,
+                told: 0,
+            });
+        };
         let mut lease = self.lease(signal, tls, true);
-        let mut reader = counted.map(|sent| Counted { body, at: 0, sent });
+        watch(&lease);
+        let mut reader = match file {
+            Some(file) => Some(Counted {
+                body: Outgoing::File(file, file.0.reader().map_err(failed)?),
+                at: 0,
+                total,
+                read: read.clone(),
+            }),
+            None => counted.then_some(Counted {
+                body: Outgoing::Bytes(body),
+                at: 0,
+                total,
+                read: read.clone(),
+            }),
+        };
         let mut result = send(&lease, req, body, &mut reader, request.timeout, limit);
         signal.check()?;
         // A request whose pooled connection closed before any of its response
@@ -729,33 +841,40 @@ impl Transport for RustlsHttpTransport {
         // (`Curl_retry_request`) resend on that condition, whatever the method.
         if result.as_ref().is_err_and(closed) && lease.resendable() {
             // The resend has what is left of the request's time, never a time of its own
-            let left = limit.saturating_sub(started.elapsed());
-            if !left.is_zero() {
+            let left = limit.map(|limit| limit.saturating_sub(started.elapsed()));
+            if left.is_none_or(|left| !left.is_zero()) {
                 lease = self.lease(signal, tls, false);
                 // The body goes out again from its start, its bytes sent
                 // counted from zero (Exact patch 23), as Chrome resets its
                 // upload stream to resend.
                 if let Some(reader) = reader.as_mut() {
-                    reader.at = 0;
+                    reader.rewind().map_err(failed)?;
                 }
+                watch(&lease);
                 result = send(&lease, build()?, body, &mut reader, request.timeout, left);
             }
         }
         signal.check()?;
+        // Progress stops at the bytes written: a reply before the whole body
+        // went out tells no more than were (Exact patch 46).
+        drop(reader);
+        lease.slot.as_ref().unwrap().context.lock().unwrap().written = None;
         let response = result.map_err(failed)?;
-        // The whole body was sent once the headers came.
-        if let Some(reader) = reader.filter(|r| r.at < body.len()) {
-            (reader.sent.0)(body.len() as u64, body.len() as u64);
-        }
         let status = response.status();
         let mut headers = Headers::new();
         for (name, value) in response.headers() {
-            headers.set_response(name.as_str(), value.to_str().map_err(failed)?);
+            let value = value.to_str().map_err(failed)?;
+            if matches!(name.as_str(), "cache-control" | "vary") {
+                headers.append(name.as_str(), value);
+            } else {
+                headers.set(name.as_str(), value);
+            }
         }
+        let content_type = headers.get("content-type");
         let context = &lease.slot.as_ref().unwrap().context;
         context.lock().unwrap().event_stream = request.timeout.is_none()
             && status.is_success()
-            && headers.get("content-type").is_some_and(|value| {
+            && content_type.is_some_and(|value| {
                 value
                     .split(';')
                     .next()
@@ -856,9 +975,13 @@ mod tests {
     fn trust_uses_platform_certificates_and_falls_back_only_when_none_are_usable() {
         let _guard = tls_test_lock();
         let roots = tls_config().1;
-        assert!(matches!(roots, Roots::System(n) if n > 0) || roots == Roots::CompiledIn);
+        if cfg!(target_os = "android") {
+            assert_eq!(roots, Roots::PlatformVerifier);
+        } else {
+            assert!(matches!(roots, Roots::System(n) if n > 0) || roots == Roots::CompiledIn);
+        }
         for certs in [vec![], vec![vec![0, 1, 2].into()]] {
-            let (tls, roots) = tls_config_from(certs);
+            let (tls, roots) = tls_config_from(false, || certs);
             assert_eq!(roots, Roots::CompiledIn);
             assert!(matches!(tls.root_certs(), ureq::tls::RootCerts::WebPki));
         }
@@ -1477,19 +1600,3 @@ mod tests {
 #[cfg(test)]
 #[path = "rustls_timeout_tests.rs"]
 mod timeout_tests;
-
-#[cfg(test)]
-mod tls_selection_tests {
-    use super::needs_tls;
-
-    #[test]
-    fn a_plain_request_through_an_https_proxy_uses_the_tls_agent() {
-        let https_proxy = ureq::Proxy::new("https://proxy.corp:443").unwrap();
-        let http_proxy = ureq::Proxy::new("http://proxy.corp:3128").unwrap();
-        assert!(needs_tls(false, Some(&https_proxy)));
-        assert!(!needs_tls(false, Some(&http_proxy)));
-        assert!(!needs_tls(false, None));
-        assert!(needs_tls(true, None));
-        assert!(needs_tls(true, Some(&http_proxy)));
-    }
-}

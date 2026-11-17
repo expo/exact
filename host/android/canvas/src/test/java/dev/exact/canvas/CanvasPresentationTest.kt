@@ -32,6 +32,18 @@ class CanvasPresentationTest {
         assertFalse(p.ready)
     }
 
+    @Test fun aReplacedHostsCanvasIsCoveredAndObservedAgain() {
+        val p = CanvasPresentation()
+        p.attach()
+        assertFalse("preparing before any present is no replacement", p.replaced(0))
+        assertEquals(1, p.observe(1, 100))
+        assertFalse(p.replaced(1))
+        assertTrue(p.replaced(0))
+        assertFalse("the retained image covers it", p.ready)
+        assertEquals(0, p.observe(0, 200))
+        assertEquals("a refused reattachment returns to buffers", -1, p.observe(-1, 300))
+    }
+
     @Test fun textureFirstFrameReleasesTheSavedImage() {
         val p = CanvasPresentation()
         p.attach()

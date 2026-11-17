@@ -1,5 +1,5 @@
 ```prompt Add a grouped form
-Add an entry or settings form to the Exact app in this folder: a grouped list of fields, with Save disabled until the form is valid. Use https://github.com/expo/exact/blob/main/docs/recipes/grouped-form.md as the source for each step. The exact2 checkout has the same page at docs/recipes/grouped-form.md.
+Add an entry or settings form to the Exact app in this folder: a grouped list of fields, with Save disabled until the form is valid. Use https://github.com/expo/exact/blob/main/docs/recipes/grouped-form.md as the source for each step. The Exact checkout has the same page at docs/recipes/grouped-form.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not name the fields and what makes the form valid, propose them from the app's data and ask me before you write code.

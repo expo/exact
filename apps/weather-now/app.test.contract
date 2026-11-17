@@ -1,0 +1,10 @@
+fail fetch "https://api.open-meteo.com"
+
+test "an unreachable forecast says so and offers a retry"
+  expect text "city" == "Berlin"
+  expect text "error" == "The weather couldn't be reached."
+  pass fetch "https://api.open-meteo.com"
+  fail fetch "https://api.open-meteo.com" times 1
+  tap "retry"
+  clock data
+  expect text "error" == "The weather couldn't be reached."

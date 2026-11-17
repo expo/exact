@@ -7,6 +7,7 @@
   "display": "standalone",
   "theme_color": "#ffffff",
   "background_color": "#ffffff",
+  "color_scheme_dark": { "theme_color": "#000000", "background_color": "#000000" },
   "app": {
     "id": "com.exact.messages",
     "name": "Messages"

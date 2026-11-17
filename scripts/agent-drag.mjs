@@ -2,10 +2,65 @@
 // the viewport, and the route to the touch runner (`host/apple/touches.mjs`)
 // or to the carrier's own contact phases. `agent.mjs` calls it from `tap`.
 import { MalformedOperation, pointerArguments, tapWords, inputJSON } from './agent-keys.mjs';
-import { DRAG_BOUNDS, REACH_MS } from '../host/apple/touches.mjs';
-import { layoutArgs, perfOp } from './agent-inspect.mjs';
+import { DRAG_BOUNDS, REACH_MS, reaches } from '../host/apple/touches.mjs';
+import { layoutArgs, perfOp, layoutBox } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+
+/** Observed only while CDP holds a finger. Cancellation ends the DOM pointer
+ * stream even though the driver still has to lift its injected touch. */
+export function pageContact(phase, point) {
+  const key = '__exactAgentContact', previous = globalThis[key];
+  if (phase !== 'start') {
+    previous?.stop();
+    delete globalThis[key];
+    return previous?.notes.size ? [...previous.notes].join('; ') : null;
+  }
+  previous?.stop();
+  const notes = new Set();
+  const nodes = new Map([...(globalThis.exact?.views ?? [])].map(([id, view]) => [view, id]));
+  let pointer;
+  const named = target => {
+    for (let node = target; node; node = node.parentElement) {
+      const id = nodes.get(node);
+      if (id != null) return { element: node, name: `node #${id}` };
+    }
+    return { element: target, name: target?.localName ?? 'page' };
+  };
+  const name = target => named(target).name;
+  const effectiveTouchAction = target => {
+    const all = ['pan-left', 'pan-right', 'pan-up', 'pan-down', 'pinch-zoom', 'double-tap-zoom'];
+    const expand = value => value.split(/\s+/).flatMap(word => ({
+      auto: all, manipulation: all.slice(0, 5), none: [],
+      'pan-x': all.slice(0, 2), 'pan-y': all.slice(2, 4),
+    })[word] ?? [word]);
+    let allowed = new Set(all), panning = true;
+    for (let node = target; node; node = node.parentElement) {
+      const style = getComputedStyle(node), own = new Set(expand(style.touchAction));
+      allowed = new Set([...allowed].filter(action => (!panning && action.startsWith('pan-')) || own.has(action)));
+      // Pointer Events §7.2: panning stops at the scroll container; zooming reads through to the document.
+      if (node === document.scrollingElement || [style.overflowX, style.overflowY].some(value => /^(auto|scroll|hidden)$/.test(value))) panning = false;
+    }
+    if (allowed.size === all.length) return 'auto';
+    if (allowed.size === all.length - 1 && !allowed.has('double-tap-zoom')) return 'manipulation';
+    const result = [];
+    for (const [axis, first, second] of [['pan-x', 'pan-left', 'pan-right'], ['pan-y', 'pan-up', 'pan-down']]) {
+      if (allowed.has(first) && allowed.has(second)) { result.push(axis); allowed.delete(first); allowed.delete(second); }
+    }
+    return [...result, ...allowed].join(' ') || 'none';
+  };
+  const hit = document.elementFromPoint(point.x, point.y), target = named(hit);
+  const start = { name: target.name, touchAction: target.element ? getComputedStyle(target.element).touchAction : 'auto', effective: effectiveTouchAction(hit) };
+  const down = event => { if (event.isTrusted && event.pointerType === 'touch' && pointer == null) pointer = { id: event.pointerId, ...start }; };
+  const cancel = event => {
+    if (!event.isTrusted || event.pointerId !== pointer?.id) return;
+    notes.add(`pointercancel at ${pointer.name} (touch-action ${pointer.touchAction}; effective ${pointer.effective} at contact start): the pointer stream ended; use touch-action="none" on a target that should own the finger, or drag … mouse`);
+  };
+  const scroll = event => { if (pointer != null) notes.add(`scrolled ${name(event.target)} during the contact`); };
+  const listeners = [['pointerdown', down], ['pointercancel', cancel], ['scroll', scroll]];
+  for (const [kind, fn] of listeners) window.addEventListener(kind, fn, true);
+  globalThis[key] = { notes, stop() { for (const [kind, fn] of listeners) window.removeEventListener(kind, fn, true); } };
+}
 
 /** A drag's `during` op is a read or the clock, not a second finger (drums R8).
  * A filmed screenshot (`over … every`) loops on the clock, a comparison settles
@@ -41,7 +96,8 @@ export async function duringOp(s, op) {
  * ms, one straight drag by (dx, dy) over `over` ms, hold `hold` ms, lift;
  * `during` thunks run while the finger is down after the move, before the
  * hold (kanban F14: a screenshot during a drag shows it moved), when no
- * input is accepted (`s.held`). The start and the end must be in the viewport. A real touch
+ * input is accepted (`s.held`). Both ends stay in the viewport unless `into: 'keyboard'`
+ * extends the end to the screen above its bottom safe area. A real touch
  * under `--touch platform`; elsewhere the carrier's own contact phases,
  * refused where the carrier refuses them.
  */
@@ -74,6 +130,7 @@ function dragLeg(opts) {
 
 export const dragLegs = (opts) => [opts, ...(opts.path ?? [])].map(({ dx, dy, press = 0, over = 250, hold = 0, during = [] }) => ({ dx, dy, press, over, hold, during }));
 export function dragArguments(opts) {
+  if (opts.into !== undefined && opts.into !== 'keyboard') throw new MalformedOperation('drag: into takes keyboard');
   if (opts.path !== undefined && (!Array.isArray(opts.path) || !opts.path.length || opts.path.length > 7 || opts.to !== undefined)) throw new MalformedOperation('drag: path is one to seven further legs, each with dx, dy, over, hold and during; drag to takes no path');
   dragLeg(opts);
   for (const leg of opts.path ?? []) {
@@ -100,6 +157,11 @@ export function parseDrag(s, text) {
     } else if (['over', 'hold'].includes(key) || key === 'press' && leg === drag) leg[key] = Number(words[i++]);
     else if (key === 'from' && leg === drag || key === 'at' && drag.to !== undefined) drag[key] = [Number(words[i++]), Number(words[i++])];
     else if (key === 'mouse' && leg === drag) drag.mouse = true;
+    else if (key === 'into') {
+      if (drag.into !== undefined) throw new MalformedOperation('drag: into is given twice');
+      drag.into = words[i++];
+      if (drag.into !== 'keyboard') throw new MalformedOperation('drag: into takes keyboard');
+    }
     else if (key === 'modifiers' && leg === drag) drag.modifiers = words[i++];
     else if (key === 'during') {
       const ops = [];
@@ -110,7 +172,7 @@ export function parseDrag(s, text) {
       }
       if (!ops.length) throw new MalformedOperation(`tap … drag … during: each read is quoted, as during "state liked" or during 'state liked'`);
       leg.during = ops;
-    } else throw new MalformedOperation(`tap … drag: unknown option ${key}; from x y, press ms, over ms, hold ms, during "op", then dx dy`);
+    } else throw new MalformedOperation(`tap … drag: unknown option ${key}; from x y, press ms, over ms, hold ms, into keyboard, during "op", then dx dy`);
   }
   dragArguments(drag);
   return drag;
@@ -118,6 +180,7 @@ export function parseDrag(s, text) {
 
 export async function dragTap({ s, carrier, node, target, host, timing, tapRefusal, scrolled }, opts) {
   dragArguments(opts);
+  if (opts.into && (!['ios', 'host-ios'].includes(host) || carrier.touch !== 'platform' || !carrier.touches)) throw new Error('drag: into keyboard needs iOS --touch platform');
   // `drag to B [at x y]` (LLP 1094 D12): the delta from both boxes at the press, to B's middle or to (x, y) from its
   // top left; B unmounted or off screen is refused by name. An autoscrolling drag is `drag dx dy hold ms`.
   if (opts.to !== undefined) {
@@ -126,7 +189,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     try { dragArguments({ ...opts, to: undefined }); }
     catch (error) { throw new Error(error.message); }
   }
-  const { dx, dy, from, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
+  const { dx, dy, from, into, mouse = false, modifiers, press = 0, over = 250, hold = 0, during = [] } = opts, drag = { dx, dy, press, over, hold, during, ...(into ? { into } : {}) }, said = { dx, dy, press, over, hold, ...(mouse ? { mouse } : {}), ...(modifiers ? { modifiers } : {}), ...(opts.to !== undefined ? { to: opts.to } : {}) };
   // `mouse` (files diary F10): the left button, where the carrier's contact
   // is otherwise a finger (the web's); a desktop host's contact is the mouse.
   if (mouse && (carrier.touches || ['ios', 'host-ios'].includes(host))) throw new Error('drag: mouse is a desktop pointer\'s; an iOS contact is a finger');
@@ -136,20 +199,40 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   // The touch runner lifts at the end of its scripted hold, and its ops start after the press and the move: without a hold they would find the finger lifted.
   if (carrier.touches && legs.some(l => l.during.length && !(l.hold > 0))) throw new Error('drag: under --touch platform, during runs after the press and the move, inside the scripted hold: give hold <ms>, the time the ops run in');
   if (s.contact) throw new Error('a contact is already down; use `tap up` or `tap cancel` first');
-  const layout = await s.layout(), b = layout.nodes.find((n) => n.id === node.id), vp = layout.viewport;
+  const layout = await s.layout(), b = await layoutBox(s, node.id, layout), vp = layout.viewport;
   const mark = await journalMark(s);
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // Android's reader owns scrolling; Presenter.pointer_* cannot hold its scroll contact.
+  // Use the reader's deterministic scroll samples, and report that delivery explicitly.
+  if (host === 'android' && carrier.reader && ['ScrollView', 'List'].includes(b.type) && !mouse) {
+    if (!inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
+    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, from: start };
+    const owner = await carrier.ask({ ...req, probe: true });
+    if (owner.error) throw new Error(`drag: ${owner.error}`);
+    if (owner.scrollDrag !== 'presenter') {
+      if (owner.scrollDrag !== 'reader') throw new Error('drag: Android reader did not identify the scroll owner');
+      if (during.length || press || hold || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, hold, during, path and modifiers need native input');
+      const r = await carrier.ask(req);
+      if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${r.error ?? r.reason ?? 'unsupported'}`);
+      return noted(await s.landed({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...still(r, target), ...await reorderNotes(s, mark)]);
+    }
+  }
+  if (into && !(await s.op({ op: 'state' })).keyboard?.visible) throw new Error('drag: into keyboard needs the software keyboard up at the press');
+  const bounds = { viewport: [vp.w, vp.h], screen: layout.screen, safeArea: layout.safeArea };
+  if (into && !inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
+  const endpoint = (point) => reaches(bounds, point, into);
   if (opts.path) {
     let point = [...start];
     for (const leg of legs) {
       point = [point[0] + leg.dx, point[1] + leg.dy];
-      if (!inside(point)) throw new Error(`drag: path waypoint (${point}) leaves the viewport (${vp.w} × ${vp.h})`);
+      if (!endpoint(point)) throw new Error(`drag: path waypoint (${point}) leaves ${into ? 'the screen above its bottom safe area' : `the viewport (${vp.w} × ${vp.h})`}`);
     }
   }
 
-  if (vp && !(inside(start) && inside(end))) {
+  if (into && !endpoint(end)) throw new Error(`drag: end (${end}) leaves the screen above its bottom safe area`);
+  if (vp && !(inside(start) && endpoint(end))) {
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll
@@ -289,7 +372,7 @@ const heldPress = (queue) => queue.reduce((t, q) => t + (q.hold ?? q.clock ?? 0)
  * (`tap <target> drag`).
  */
 export async function heldDown(s, node, at) {
-  const b = (await s.layout()).nodes.find((n) => n.id === node.id);
+  const b = await layoutBox(s, node.id, await s.layout());
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const point = at ? [at.x, at.y] : [b.x + b.w / 2, b.y + b.h / 2];
   s.contact = { x: point[0], y: point[1], whole: { id: node.id, hold: 0, queue: [] } };
@@ -342,7 +425,7 @@ export async function heldPhase(s, carrier, phase, opts) {
     return { phase, at, delivery: 'platform', note: `nothing was pressed${queue.some((q) => q.run) ? '; the steps written before it ran after it, unpressed' : ''}` };
   }
   // The point the contact went down at, still on its target: a target that moved since is refused, never followed.
-  const b = (await s.layout()).nodes.find((n) => n.id === whole.id);
+  const b = await layoutBox(s, whole.id, await s.layout());
   if (!b || at[0] < b.x || at[1] < b.y || at[0] > b.x + b.w || at[1] > b.y + b.h) throw new Error(`tap up: view ${whole.id} moved off (${at}), where the contact went down, so nothing was pressed: tap it down again`);
   // A step that fails once the touch is delivered is the reply's landError, the receipt kept: a retry would press twice.
   let landError = null;
@@ -411,7 +494,7 @@ async function strokes(s, target, opts, [x, y], vp) {
 async function toward(s, node, { to, at, from }) {
   const end = await s.find(to, false);
   if (!end) throw new Error(`drag to: ${to} is not mounted`);
-  const layout = await s.layout(), a = layout.nodes.find((n) => n.id === node.id), b = layout.nodes.find((n) => n.id === end.id), vp = layout.viewport;
+  const layout = await s.layout(), a = await layoutBox(s, node.id, layout), b = await layoutBox(s, end.id, layout), vp = layout.viewport;
   if (!a) throw new Error(`view ${node.id} has no box on screen`);
   if (!b || (vp && (b.x + b.w <= 0 || b.y + b.h <= 0 || b.x >= vp.w || b.y >= vp.h))) throw new Error(`drag to: ${to} is off screen; drag dx dy hold ms scrolls a list or a board toward it`);
   const start = from ? [a.x + from[0], a.y + from[1]] : [a.x + a.w / 2, a.y + a.h / 2];

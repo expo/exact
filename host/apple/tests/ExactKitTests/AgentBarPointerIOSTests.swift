@@ -55,6 +55,149 @@ final class AgentBarPointerIOSTests: XCTestCase {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
 
+    /// With UIKit's accessibility loaded, as under a real touch's runner:
+    /// UIKit names a bar's controls.
+    func testABarItemTheBarDoesNotShowIsRefused() throws {
+        guard hostedWindowScene() != nil, Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit names the control it shows for a bar item only with its accessibility loaded") }
+        try checkABarItemIsPlacedOnlyAtItsOwnControl()
+    }
+
+    /// Without it, as a `tap` with no real touch finds the app: no control of
+    /// the bar has a name.
+    func testABarItemTheBarDoesNotShowIsRefusedWithoutAccessibility() throws {
+        guard !Presenter.axRuntimeLoaded else { throw missing("bare process", "UIKit's accessibility is loaded here, and this covers a bar without it") }
+        try checkABarItemIsPlacedOnlyAtItsOwnControl()
+    }
+
+    /// A bar item reporting the frame its test gives it, in its bar's space:
+    /// the frames UIKit reports for an item it shows no control for.
+    private final class PosedItem: UIBarButtonItem {
+        var reports: () -> CGRect = { .zero }
+        weak var bar: UIView?
+        override func __frame(in referenceView: UIView) -> CGRect { bar?.convert(reports(), to: referenceView) ?? .zero }
+    }
+
+    /// A header of more buttons than the bar has room for, two of them
+    /// without a test id (#738). A tap aims at and presses an item only at
+    /// its own control. An item in the overflow menu is refused as there. An
+    /// item the bar shows no control for is refused as not placed, whatever
+    /// frame UIKit reports for it: one at the bar's leading edge, where a
+    /// finger reaches Back (a hidden item's on iOS 27.0, as a dropped item's
+    /// was reported on iOS 26.5), Back's own, or another item's.
+    private func checkABarItemIsPlacedOnlyAtItsOwnControl() throws {
+        let session = try fixture("EXACT_BAR_OVERFLOW_PLAN"), p = session.presenter, agent = Agent(session: session)
+        p.press(try node(session, "open-board").id)
+        until { p.navigation.primaryNavigation?.viewControllers.count == 2 && !agent.nativeInFlight() }
+        try requireFront(window)
+        let nav = try XCTUnwrap(p.navigation.primaryNavigation), bar = nav.navigationBar
+        let navigationItem = try XCTUnwrap(nav.topViewController?.navigationItem)
+        let appPress = p.onPress
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0) }
+        typealias Entry = (item: UIBarButtonItem, node: NodeView, name: String)
+        // The header's items by the node each presses; a space between groups presses none
+        func entries() throws -> [Entry] {
+            try (navigationItem.rightBarButtonItems ?? []).compactMap { item in
+                guard let id = (item.target as? BarPress)?.id else { return nil }
+                return (item, try XCTUnwrap(p.views[id]), item.accessibilityIdentifier ?? item.title ?? "#\(id)")
+            }
+        }
+        func entry(_ name: String) throws -> Entry { try XCTUnwrap(entries().first { $0.name == name }, name) }
+        func control(at point: CGPoint) -> UIControl? {
+            sequence(first: window?.hitTest(point, with: nil), next: { $0?.superview }).lazy.compactMap { $0 as? UIControl }.first
+        }
+        // The title the control a finger at a window point reaches shows, which needs no accessibility to read
+        func face(at point: CGPoint) -> String? {
+            var pending: [UIView] = control(at: point).map { [$0] } ?? []
+            while let v = pending.popLast() {
+                if let text = (v as? UILabel)?.text { return text }
+                pending.append(contentsOf: v.subviews)
+            }
+            return nil
+        }
+        func middle(_ item: UIBarButtonItem) -> CGPoint? { item.frame(in: bar).map { bar.convert(CGPoint(x: $0.midX, y: $0.midY), to: nil) } }
+        func shows(_ item: UIBarButtonItem) -> Bool { middle(item).map { face(at: $0) == item.title } == true }
+        func aim(_ node: NodeView) -> [String: Any] { agent.aim(["id": Int(node.id), "aim": ["press": true]]) }
+        func assertPlaced(_ e: Entry) throws {
+            let reply = aim(e.node)
+            let at = try XCTUnwrap((reply["aim"] as? [String: Any])?["window"] as? [Double], "\(e.name): \(reply)"), point = CGPoint(x: at[0], y: at[1])
+            if e.item.title?.isEmpty == false { XCTAssertEqual(face(at: point), e.item.title, "\(e.name): a finger there reaches the item's own control") }
+            if Presenter.axRuntimeLoaded { XCTAssertEqual(control(at: point)?.accessibilityIdentifier, e.item.accessibilityIdentifier, "\(e.name): as UIKit names the control") }
+            presses = []
+            XCTAssertNil(agent.tap(["id": Int(e.node.id)])["error"], e.name)
+            XCTAssertEqual(presses, [e.node.id], e.name)
+        }
+        func assertRefused(_ e: Entry, overflowed: Bool, _ why: String) {
+            let error = aim(e.node)["error"] as? String ?? ""
+            XCTAssertTrue(error.contains(overflowed ? "its bar item is in the navigation bar's overflow menu" : "its bar item is not placed in the navigation bar"), "\(e.name), \(why): \(error)")
+            presses = []
+            XCTAssertNotNil(agent.tap(["id": Int(e.node.id)])["error"], "\(e.name), \(why): the bar shows no control for it to activate")
+            XCTAssertEqual(presses, [], "\(e.name), \(why)")
+        }
+
+        // More items than fit: UIKit shows the first and lists the rest under its overflow button
+        bar.layoutIfNeeded()
+        var placed: [String] = [], overflowed: [String] = []
+        for e in try entries() {
+            if aim(e.node)["error"] == nil { placed.append(e.name); try assertPlaced(e) } else { overflowed.append(e.name); assertRefused(e, overflowed: true, "crowded") }
+        }
+        XCTAssertTrue(placed.contains("item-add") && placed.contains("Plain"), "the bar shows its first items: \(placed)")
+        XCTAssertTrue(overflowed.contains("item-31") && overflowed.contains("Spare"), "the bar has no room for its last: \(overflowed)")
+
+        // Every item fits
+        p.onPress = appPress
+        p.press(try node(session, "trim-items").id)
+        p.onPress = { presses.append($0) }
+        let kept = ["item-add", "item-31", "Spare"]
+        // UIKit swaps the bar's controls over some frames after the items change
+        let settled = { navigationItem.overflowPresentationSource == nil && !agent.nativeInFlight()
+            && (try? entries())?.filter { $0.item.title?.isEmpty == false }.allSatisfy { shows($0.item) } == true }
+        until { (try? entries()).map { Set($0.map(\.name)) } == Set(kept) && settled() }
+        for e in try entries() { try assertPlaced(e) }
+
+        // No control for an item, with and without a test id: UIKit reports a frame for it still
+        for name in ["item-31", "Spare"] {
+            let e = try entry(name)
+            e.item.isHidden = true
+            until { !agent.nativeInFlight() && !shows(e.item) }
+            assertRefused(e, overflowed: false, "hidden, its frame \(String(describing: e.item.frame(in: bar)))")
+            e.item.isHidden = false
+            until(settled)
+            try assertPlaced(e)
+        }
+
+        // The same, were UIKit to report another control's own frame for it
+        let items = try XCTUnwrap(navigationItem.rightBarButtonItems)
+        func assertRefused(_ name: String, reporting frame: @escaping () -> CGRect, _ why: String) throws {
+            let e = try entry(name), posed = PosedItem(title: e.item.title, style: .plain, target: e.item.target, action: e.item.action)
+            (posed.reports, posed.bar, posed.isHidden, posed.accessibilityIdentifier) = (frame, bar, true, e.item.accessibilityIdentifier)
+            navigationItem.rightBarButtonItems = items.map { $0 === e.item ? posed : $0 }
+            // The control there has the frame the item reports
+            until { !agent.nativeInFlight() && middle(posed).flatMap(control(at:)).map { $0.convert($0.bounds, to: bar) } == frame() }
+            assertRefused((posed, e.node, name), overflowed: false, why)
+            navigationItem.rightBarButtonItems = items
+            until(settled)
+        }
+        let back = {
+            var controls: [UIView] = [], pending = bar.subviews
+            while let v = pending.popLast() { if v is UIControl { controls.append(v) } else { pending.append(contentsOf: v.subviews) } }
+            return controls.map { $0.convert($0.bounds, to: bar) }.min { $0.minX < $1.minX } ?? .zero
+        }
+        XCTAssertNotNil(bar.backItem, "the pushed route's bar shows Back")
+        for name in ["item-31", "Spare"] { try assertRefused(name, reporting: back, "reporting Back's frame") }
+        let numbered = try entry("item-31").item
+        try assertRefused("Spare", reporting: { numbered.frame(in: bar) ?? .zero }, "reporting another item's frame")
+
+        // A control over an item with its box, which UIKit names as another's
+        let spare = try entry("Spare"), other = UIControl(frame: try XCTUnwrap(spare.item.frame(in: bar)))
+        other.accessibilityIdentifier = "BackButton"
+        bar.addSubview(other)
+        assertRefused(spare, overflowed: false, "under a control with another name")
+        other.removeFromSuperview()
+
+        for e in try entries() { try assertPlaced(e) }
+    }
+
     private func assertVisibleSegmentPoint(_ session: ExactSession, _ testId: String) throws {
         let p = session.presenter, tab = try node(session, testId), agent = Agent(session: session)
         until { p.navigation.barSegment(tab) != nil && !agent.nativeInFlight() }
@@ -118,6 +261,13 @@ final class AgentBarPointerIOSTests: XCTestCase {
         let refused = p.navigation.activateChrome(readout, before: { _ in checked = true; return false })
         XCTAssertTrue(checked)
         XCTAssertNotNil(refused?["error"], "a refused pointer delivery is not acknowledged as a tap")
+        // A readout the bar does not show has no place for a pointer
+        let item = try XCTUnwrap(route.readouts[readout.id])
+        item.isHidden = true
+        until { item.customView?.window == nil }
+        events = []
+        XCTAssertNotNil(agent.tap(["id": Int(readout.id)])["error"], "the bar shows no view for the readout")
+        XCTAssertEqual(events, [])
     }
 
     func testABarSegmentRechecksARIAAfterPointerHandlers() throws {

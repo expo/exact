@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+#[ignore = "async lane: measures a two-megabyte fetch against the source's CPU budget"]
+fn a_two_megabyte_body_stays_within_a_source_turn() {
+    let mut m = module();
+    m.bind(&contract::compile("component App\n  resource result = largeUpload(\"buffer\") as shape string\n  view\n    text result\n").unwrap());
+    m.set_budget_ms(100.0);
+    let mut s = store();
+    let mut expected = vec![0xa5; 2_000_000];
+    for (i, byte) in expected[..256].iter_mut().enumerate() {
+        *byte = i as u8;
+    }
+    for kind in ["buffer", "view", "dataview"] {
+        let args = [Value::str(kind)];
+        let started = std::time::Instant::now();
+        let answer = m.answer(&mut s, "largeUpload", &args);
+        eprintln!(
+            "2,000,000-byte Hermes {kind} request: {:?} wall; 100 ms CPU budget; error: {:?}",
+            started.elapsed(),
+            answer.as_ref().err()
+        );
+        let request = later(answer.unwrap());
+        assert_eq!(request.body.len(), expected.len(), "{kind}");
+        assert!(request.body == expected, "{kind}: bytes changed");
+        assert!(request.body_from.is_none());
+        assert!(!request
+            .headers
+            .iter()
+            .any(|(name, _)| name == "content-type"));
+        assert_eq!(
+            now(m
+                .parse(&mut s, "largeUpload", &args, response(200, "ok"))
+                .unwrap()),
+            Value::str("ok")
+        );
+    }
+    assert_eq!(m.overruns(), 0);
+}
+
 /// LLP 1069.002 D4: an ArrayBuffer or a view as a fetch's body is sent as
 /// its bytes, every value of a byte intact, copied when `fetch` is called.
 #[test]
@@ -12,6 +50,12 @@ fn a_buffer_source_body_is_sent_as_its_bytes() {
         ("view", vec![0u8, 255, 128, 10, 13, 0]),
         ("dataview", vec![0, 255, 128, 10, 13, 0]),
         ("buffer", vec![9, 0, 255, 128, 10, 13, 0, 9]),
+        ("wide", vec![255, 128, 10, 13]),
+        ("one", vec![0]),
+        ("two", vec![0, 255]),
+        ("emptyBuffer", vec![]),
+        ("emptyView", vec![]),
+        ("emptyDataView", vec![]),
     ] {
         let args = [Value::str(kind)];
         let request = later(m.answer(&mut s, "upload", &args).unwrap());
@@ -27,6 +71,43 @@ fn a_buffer_source_body_is_sent_as_its_bytes() {
             Value::str("ok")
         );
     }
+}
+
+#[test]
+fn concurrent_byte_bodies_are_owned_by_their_fetch() {
+    use exact_runner::Target;
+    let mut m = module();
+    m.bind(&contract::compile("component App\n  resource result = parallelUpload() as shape string\n  view\n    text result\n").unwrap());
+    let mut s = store();
+    let target = Target::Resource(0);
+    let first = later(m.answer_for(target, &mut s, "parallelUpload", &[]).unwrap());
+    let mut requests = vec![first];
+    requests.extend(m.more_for(target));
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body, [0, 255]);
+    assert_eq!(requests[1].body, [128, 255]);
+    assert!(requests[2].body.is_empty());
+    assert!(requests
+        .windows(2)
+        .all(|pair| pair[0].fetch != pair[1].fetch));
+    let mut answer = None;
+    for i in (0..3).rev() {
+        answer = m
+            .parse_fetch_for(
+                target,
+                requests[i].fetch,
+                &mut s,
+                "parallelUpload",
+                &[],
+                response(200, ["first", "second", "empty"][i]),
+            )
+            .unwrap();
+        if i != 0 {
+            assert!(answer.is_none());
+        }
+    }
+    assert_eq!(now(answer.unwrap()), Value::str("first/second/empty"));
+    assert_eq!(m.in_flight(), 0);
 }
 
 /// Fetch refuses any body on a GET or HEAD, an empty one too, and a view on

@@ -17,6 +17,8 @@ use std::path::Path;
 
 mod packages;
 mod slot;
+pub mod widgets;
+pub(crate) use packages::implementation_imports;
 pub use packages::{bound, plan_packages, rust_packages, write_desktop_packages, Bound};
 pub use slot::{native_slot, NativeSelection, NativeSlot};
 
@@ -104,27 +106,73 @@ pub fn rust_hatch_entry(
     manifest: &Manifest,
     target: &str,
 ) -> Result<(String, &'static str), String> {
-    let platform = if target.contains("android") {
+    let hatches = watched_rust_hatches(app_root, manifest, hatch_platform(target))?;
+    Ok(match hatches {
+        Some(text) => (
+            text,
+            "run_with_hatches::<AppData, hatches::ExactHatches>(PLAN, COMPAT, HatchKey::WORDS)",
+        ),
+        None => (String::new(), "run::<AppData>(PLAN, COMPAT)"),
+    })
+}
+
+/// What the Linux and Windows crates `exact new` generates include beside
+/// their plan (`scripts/app-shells.mjs`): `hatches.rs`, which defines
+/// `exact_hatches()`, the app's Rust hatches for the host's `Composed`, as
+/// [`rust_hatch_entry`] gives an authored crate's; `None` when the app has
+/// no hatch files.
+pub fn write_desktop_hatches(
+    platform: &str,
+    app_root: &Path,
+    target: &str,
+    out: &Path,
+) -> Result<(), String> {
+    if !matches!(platform, "linux" | "windows") {
+        return Ok(());
+    }
+    // Absolute, since `include!` resolves a relative path against OUT_DIR.
+    let app_root =
+        std::fs::canonicalize(app_root).map_err(|e| format!("{}: {e}", app_root.display()))?;
+    let manifest = Manifest::read(&app_root)?;
+    let install = "Option<::exact_painted::hatches::Install>";
+    let text = match watched_rust_hatches(&app_root, &manifest, hatch_platform(target))? {
+        Some(rust) => format!(
+            "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_painted::hatches::install::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
+        ),
+        None => format!("fn exact_hatches() -> {install} {{\n    None\n}}\n"),
+    };
+    let path = out.join("hatches.rs");
+    if std::fs::read(&path).ok().as_deref() == Some(text.as_bytes()) {
+        return Ok(());
+    }
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The platform whose hatch words a painting host's build for `target`
+/// handles.
+fn hatch_platform(target: &str) -> &'static str {
+    if target.contains("android") {
         "android"
     } else if target.contains("windows") {
         "windows"
     } else {
         "linux"
-    };
-    Ok(match rust_hatches(app_root, manifest, platform)? {
-        Some(text) => (
-            text,
-            "run_with_hatches::<AppData, hatches::ExactHatches>(PLAN, COMPAT, HatchKey::WORDS)",
-        ),
-        None => {
-            // A first hatch file is a new one under `modules`: build again then.
-            let modules = app_root.join("modules");
-            if modules.is_dir() {
-                println!("cargo:rerun-if-changed={}", modules.display());
-            }
-            (String::new(), "run::<AppData>(PLAN, COMPAT)")
-        }
-    })
+    }
+}
+
+/// [`rust_hatches`], and when the app has none, a watch on `modules`, so
+/// that a first hatch file builds again.
+fn watched_rust_hatches(
+    app_root: &Path,
+    manifest: &Manifest,
+    platform: &str,
+) -> Result<Option<String>, String> {
+    let text = rust_hatches(app_root, manifest, platform)?;
+    let modules = app_root.join("modules");
+    if text.is_none() && modules.is_dir() {
+        println!("cargo:rerun-if-changed={}", modules.display());
+    }
+    Ok(text)
 }
 
 /// What an app's Android crate (the Canvas host's library) writes beside
@@ -133,48 +181,52 @@ pub fn rust_hatch_entry(
 /// Rust hatches, `modules/android/*.rs` or `modules/linux/*.rs`, with the
 /// reader's Kotlin ones told beside them; the reader's alone when the app
 /// has no Rust ones; none when it gives `android` no word); and what
-/// [`android_reach`] writes.
+/// [`android_reach`] writes, and the widgets' `widgets.rs` ([`widgets`]).
 pub fn android_entry(
     app_root: &Path,
     manifest: &Manifest,
     plan: &exact_plan::Plan,
     out_dir: &Path,
 ) -> Result<(), String> {
-    let install = "Option<::exact_linux::hatches::Install>";
-    let text = match rust_hatches(app_root, manifest, "android")? {
+    let install = "Option<::exact_painted::hatches::Install>";
+    let text = match watched_rust_hatches(app_root, manifest, "android")? {
         Some(rust) => format!(
-            "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_linux::hatches::install_with_reader::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
+            "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_painted::hatches::install_with_reader::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
         ),
         None => {
-            let modules = app_root.join("modules");
-            if modules.is_dir() {
-                println!("cargo:rerun-if-changed={}", modules.display());
-            }
             let words = hatches_on(manifest, "android")?;
             if words.is_empty() {
                 format!("fn exact_hatches() -> {install} {{\n    None\n}}\n")
             } else {
                 format!(
-                    "fn exact_hatches() -> {install} {{\n    Some(::exact_linux::hatches::install_with_reader::<()>(&{words:?}))\n}}\n"
+                    "fn exact_hatches() -> {install} {{\n    Some(::exact_painted::hatches::install_with_reader::<()>(&{words:?}))\n}}\n"
                 )
             }
         }
     };
     std::fs::write(out_dir.join("hatches.rs"), text).map_err(|e| e.to_string())?;
+    widgets::write(app_root, manifest, out_dir)?;
     android_reach(app_root, plan, out_dir)
 }
 
 /// What the APK's build reads beside an Android plan, from an app's
-/// Android crate or a game's bake: `uses.txt`, the plan's capabilities by
-/// name, one a line (a plan with a date or time control links Compose
-/// Material 3), and `permissions.txt`, the Android permissions its grant
-/// lines and module names derive beyond the compatibility id's reach.
+/// Android crate or a game's bake: `uses.txt`, [`android_uses`] one a line,
+/// `permissions.txt`, the Android permissions its grant lines and module
+/// names derive, and `transfers.rs`, the imported transfer package's JNI entry.
 pub fn android_reach(
     app_root: &Path,
     plan: &exact_plan::Plan,
     out_dir: &Path,
 ) -> Result<(), String> {
-    let uses: Vec<&str> = exact_runner::uses(plan).iter().map(|c| c.name()).collect();
+    let transfer = if plan.package_extensions().get("background-transfer")
+        == Some(&"@exact/background-transfer")
+    {
+        "exact_painted::android_transfer_jni!();\n"
+    } else {
+        ""
+    };
+    std::fs::write(out_dir.join("transfers.rs"), transfer).map_err(|e| e.to_string())?;
+    let uses = android_uses(plan);
     std::fs::write(out_dir.join("uses.txt"), uses.join("\n")).map_err(|e| e.to_string())?;
     // The grant ceiling of the compatibility id the build script wrote
     // beside it, when it wrote one.
@@ -182,23 +234,49 @@ pub fn android_reach(
     let ceiling = compat
         .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
         .and_then(|c| c["inputs"]["grantCeiling"].as_str().map(str::to_owned));
-    let text = app_text(app_root);
-    let used = |name: &str| names(&text, name);
-    let mut permissions: Vec<String> = android_write_permissions(plan, ceiling.as_deref(), used)
+    let permissions = android_permissions(plan, ceiling.as_deref(), &app_text(app_root));
+    std::fs::write(out_dir.join("permissions.txt"), permissions.join("\n"))
+        .map_err(|e| e.to_string())
+}
+
+/// What an APK links for `plan`, by name: the plan's capabilities (a date or
+/// time control links Compose Material 3), and `video` where the plan makes a
+/// `video` or `audio`, which links Media3's player (LLP 1042.001 D2). Only
+/// Android links anything for a media node, so it is not a capability.
+pub fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
+    let mut uses: Vec<&'static str> = exact_runner::uses(plan).iter().map(|c| c.name()).collect();
+    if plan.nodes.iter().any(|node| {
+        exact_kernel::NodeType::from_wire(node.node_type) == Some(exact_kernel::NodeType::Video)
+    }) {
+        uses.push("video");
+    }
+    uses
+}
+
+/// The Android permissions the module names `text` (the app's source) uses
+/// derive beside the grant lines' own, each where `ceiling` (the app's
+/// grant lines, when known) grants the line it is under: a writing name's
+/// ([`android_write_permissions`]) and a name's `derives` ([`derived`]).
+pub fn android_permissions(
+    plan: &exact_plan::Plan,
+    ceiling: Option<&str>,
+    text: &str,
+) -> Vec<String> {
+    let used = |name: &str| names(text, name);
+    let mut permissions: Vec<String> = android_write_permissions(plan, ceiling, used)
         .into_iter()
         .map(str::to_owned)
         .collect();
-    for (line, permission) in derived(plan, &text, "android") {
+    for (line, permission) in derived(plan, text, "android") {
         let granted = |g: &str| {
             (line.strip_prefix("device.")).is_none_or(|n| exact_runner::device::granted(g, n))
         };
-        if ceiling.as_deref().is_none_or(granted) && !permissions.contains(&permission) {
+        if ceiling.is_none_or(granted) && !permissions.contains(&permission) {
             permissions.push(permission);
         }
     }
     permissions.sort_unstable();
-    std::fs::write(out_dir.join("permissions.txt"), permissions.join("\n"))
-        .map_err(|e| e.to_string())
+    permissions
 }
 
 /// What the app's use of its module names declares to `target`'s platform
@@ -206,9 +284,10 @@ pub fn android_reach(
 /// keys, `android` permissions), each with the grant line whose purpose a
 /// usage key takes: a name's own list where the app's source names it; per
 /// option, the permission of each value the source writes as a string
-/// literal, or of a flag it names. A computed value of such an option is
-/// refused at bake (`contract-module-literal`), so a Contract caller's
-/// values are in its text; data code's are its own literals.
+/// literal, or of a flag it names; per grant line (a `device.` key), its
+/// permission under that line wherever the name is used. A computed value of
+/// an option is refused at bake (`contract-module-literal`), so a Contract
+/// caller's values are in its text; data code's are its own literals.
 pub fn derived(plan: &exact_plan::Plan, text: &str, target: &str) -> Vec<(String, String)> {
     use serde_json::Value;
     // A package's specifier (`"@exact/pedometer"`) names no module name.
@@ -241,21 +320,32 @@ pub fn derived(plan: &exact_plan::Plan, text: &str, target: &str) -> Vec<(String
             Value::Array(own) => own.clone(),
             _ => sub["grants"].as_array().cloned().unwrap_or_default(),
         };
-        let line = (lines.first().and_then(Value::as_str))
+        let first = (lines.first().and_then(Value::as_str))
             .unwrap_or_default()
             .to_owned();
-        let mut keys: Vec<&str> = Vec::new();
+        let mut keys: Vec<(String, &str)> = Vec::new();
         match declares {
-            Value::Array(list) => keys.extend(list.iter().filter_map(Value::as_str)),
+            Value::Array(list) => keys.extend(
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(|k| (first.clone(), k)),
+            ),
             Value::Object(by) => {
                 for (option, d) in by {
                     let flag = option.rsplit('.').next().unwrap_or(option);
                     match d {
-                        Value::String(k) if names(text, flag) => keys.push(k),
+                        // A grant line in place of an option: any use of the
+                        // name, under that line, since data code may compute
+                        // the options (`getUserMedia(JSON.parse(saved))`), and
+                        // the line is what admits the capability at all.
+                        Value::String(k) if option.starts_with("device.") => {
+                            keys.push((option.clone(), k))
+                        }
+                        Value::String(k) if names(text, flag) => keys.push((first.clone(), k)),
                         Value::Object(values) => keys.extend(
                             (values.iter())
                                 .filter(|(v, _)| quoted(v))
-                                .filter_map(|(_, k)| k.as_str()),
+                                .filter_map(|(_, k)| Some((first.clone(), k.as_str()?))),
                         ),
                         _ => {}
                     }
@@ -263,8 +353,8 @@ pub fn derived(plan: &exact_plan::Plan, text: &str, target: &str) -> Vec<(String
             }
             _ => {}
         }
-        for key in keys {
-            let pair = (line.clone(), key.to_owned());
+        for (line, key) in keys {
+            let pair = (line, key.to_owned());
             if !out.contains(&pair) {
                 out.push(pair);
             }
@@ -677,7 +767,7 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
                 format!("the app's modules and its packages' views are {}", known.join(", "))
             };
             let add = crate::package_views::standard_with(&tag)
-                .map(|m| format!("; exact2's `{m}` module serves it: `exact add {m}` adds it to the app's package.json"))
+                .map(|m| format!("; exact2's `{m}` module serves it: `bun exact.mjs add {m}` adds it to the app's package.json"))
                 .unwrap_or_default();
             let stale = stale_manifest_hint(app_root);
             refusal(

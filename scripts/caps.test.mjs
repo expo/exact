@@ -2,6 +2,7 @@
 // also exercises the shared build and launch helpers.
 // `bun test ./scripts/caps.test.mjs`.
 import { test, expect } from 'bun:test';
+import { EXE } from './paths.mjs';
 // These cases run cargo (the filesystem tool, bakes, locks). A shell whose PATH
 // omits rustup's bin directory still finds it there; without cargo, say so.
 const cargoBin = `${process.env.CARGO_HOME ?? `${process.env.HOME}/.cargo`}/bin`;
@@ -17,20 +18,20 @@ import { tmpdir } from 'node:os';
 import { join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
-import { applyStaticChange, applyStaticTreeChange, appManifestDigest, builtAppMatches, copyStaticTree, copyStaticTreeIfPresent, installStaticCandidate, listAssets, listPublicFiles, publicFileCards, readDevGeneration, retainDevGeneration, shaderInterfaceDigests, staticFile, readStaticFile, serveStatic, syncStaticTree, watchStaticTrees, webEnvelope, devGenerationDigest, assetCards } from '../host/web/serve.mjs';
+import { captureAssets, applyStaticChange, applyStaticTreeChange, appManifestDigest, builtAppMatches, copyStaticTree, copyStaticTreeIfPresent, installStaticCandidate, listAssets, listPublicFiles, publicFileCards, readDevGeneration, retainDevGeneration, shaderInterfaceDigests, staticFile, readStaticFile, serveStatic, syncStaticTree, watchStaticTrees, webEnvelope, devGenerationDigest, assetCards } from '../host/web/serve.mjs';
 import { assertWebDistApp, jsonLines } from './agent.mjs';
 import { verifyBakeFiles, pendingBuildInputs } from './app.mjs';
-import { appDigest, driveStore, newerThan, notBuildInput, receiptChanges, webStore } from './agent-launch.mjs';
+import { appDigest, driveStore, newerThan, notBuildInput, receiptChanges, refuseStale, webStore } from './agent-launch.mjs';
 import { storeBase, sweepTestStores } from './agent-test.mjs';
 import { copyAppleStaticTrees, rebuildArgs } from '../host/apple/build.mjs';
 import { developmentLaunchEnvironment, deviceLaunchArgs } from '../host/apple/devices.mjs';
-import { classify, publishRoot, webRelease } from './deploy.mjs';
+import { classify, publishRoot, readAssetIndex, sealEnvelope, webRelease } from './deploy.mjs';
 import { DirectoryOrigin, webRootPath, webReleasePath, sha256 } from './origin.mjs';
 const CAPS = join(dirname(fileURLToPath(import.meta.url)), 'caps.mjs');
 const BOOT = join(dirname(fileURLToPath(import.meta.url)), 'boot.mjs');
 const DEPLOY = join(dirname(fileURLToPath(import.meta.url)), 'deploy.mjs');
 const GOOD_RULES = `# Rules
-- **6 blocking checks, 65s total.** **[check]**
+- **1 blocking check, 30s warm.** **[check]**
 - **15 documents in the working set.** **[check]**
 - **10 documents in the foundation.** **[check]**
 - **This file: 700 words.** **[check]**
@@ -39,8 +40,8 @@ const GOOD_RULES = `# Rules
 | | |
 |---|---|
 | Cold start to interactive | 100ms |
-## The six checks
-\`build\` · \`test\` · \`lint\` · \`caps\` · \`boot\` · \`workspace\`
+## The gate (30 s)
+\`bun scripts/gate.mjs\`
 `;
 
 function repo(files) {
@@ -74,7 +75,7 @@ const cases = [
   ['over the word cap fails',
     { 'rules/RULES.md': GOOD_RULES.replace('This file: 700 words', 'This file: 10 words') }, 'cap:words'],
   ['too many blocking checks fails',
-    { 'rules/RULES.md': GOOD_RULES.replace('**6 blocking checks', '**3 blocking checks') }, 'cap:checks'],
+    { 'rules/RULES.md': GOOD_RULES.replace('**1 blocking check', '**0 blocking checks') }, 'cap:checks'],
   ['unfilled product-latency row fails',
     { 'rules/RULES.md': GOOD_RULES.replace('| Cold start to interactive | 100ms |', '| **<the product latency that actually matters>** | |') },
     'cap:product-latency'],
@@ -185,7 +186,8 @@ const BOOT_RULES = GOOD_RULES.replace('| Cold start to interactive | 100ms |', '
 function boot(html, files = {}) {
   // The pinned capture script is the one boot.mjs checks every page against.
   const capture = readFileSync(join(dirname(BOOT), '../host/web/capture.js'), 'utf8');
-  const dir = repo({ 'rules/RULES.md': BOOT_RULES, 'host/web/index.html': html, 'host/web/glue.js': '', 'host/web/document-glue.js': '', 'host/web/capture.js': capture, ...files });
+  const scheme = readFileSync(join(dirname(BOOT), '../host/web/scheme.js'), 'utf8');
+  const dir = repo({ 'host/web/scheme.js': scheme, 'rules/RULES.md': BOOT_RULES, 'host/web/index.html': html, 'host/web/glue.js': '', 'host/web/document-glue.js': '', 'host/web/capture.js': capture, ...files });
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   const fixtureBoot = join(dir, 'scripts/boot.mjs');
   copyFileSync(BOOT, fixtureBoot);
@@ -271,8 +273,9 @@ for (const [name, html, files, expectCode, expect] of [
   const files = (seq) => {
     const plan = Buffer.from('plan'), page = Buffer.from(`guest ${seq}`);
     const card = (body) => ({ bytes: body.length, sha256: sha256(body) });
-    return new Map([['app.plan', plan], ['deck/nested/page.html', page], ['exact.json', Buffer.from(JSON.stringify({
-      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: [{ name: 'deck/nested/page.html', ...card(page) }],
+    const index = Buffer.from(JSON.stringify({ assets: [{ name: 'deck/nested/page.html', url: './deck/nested/page.html', ...card(page) }] }));
+    return new Map([['app.plan', plan], ['deck/nested/page.html', page], ['assets.json', index], ['exact.json', Buffer.from(JSON.stringify({
+      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: { url: 'assets.json', ...card(index), count: 1 },
     }))]]);
   };
   const first = files(1); retainDevGeneration(cache, epoch, 1, first);
@@ -291,13 +294,17 @@ for (const [name, html, files, expectCode, expect] of [
   rmSync(join(cache, epoch, '7', 'app.plan'));
   writeFileSync(join(cache, epoch, '6', 'app.plan'), 'broken');
   writeFileSync(join(cache, epoch, '5', 'exact.json'), '{');
-  result('damaged dev cache payloads and envelopes fail closed after restart',
+  writeFileSync(join(cache, epoch, '4', 'assets.json'), '{"assets":[]}');
+  result('damaged dev cache payloads, indexes and envelopes fail closed after restart',
     readDevGeneration(cache, `/__dev/generation/${epoch}/7/app.plan`) === null
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/4/deck/nested/page.html`) === null
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/3/deck/nested/page.html`)?.body.toString() === 'guest 3'
+      && readDevGeneration(cache, `/__dev/generation/${epoch}/3/assets.json`)?.body.length > 0
       && readDevGeneration(cache, `/__dev/generation/${epoch}/6/app.plan`) === null
       && readDevGeneration(cache, `/__dev/generation/${epoch}/5/exact.json`) === null
       && readDevGeneration(cache, prefix + 'app.plan')?.body.toString() === 'plan');
   const secret = join(dir, 'secret'); writeFileSync(secret, 'outside');
-  const page = join(cache, epoch, '1', 'deck', 'nested', 'page.html'); rmSync(page); symlinkSync(secret, page);
+  const page = join(cache, 'blobs', sha256(Buffer.from('guest 1'))); rmSync(page); symlinkSync(secret, page);
   result('retained dev routes reject links, traversal, undeclared and partial files', refused
     && readDevGeneration(cache, prefix + 'deck/nested/page.html') === null && readFileSync(secret, 'utf8') === 'outside');
   rmSync(dir, { recursive: true, force: true });
@@ -350,7 +357,7 @@ for (const [name, html, files, expectCode, expect] of [
   const brokenCopyRefused = await rejects(() => copyStaticTreeIfPresent(startupSource, join(dir, 'broken-copy')), error => error.message.includes('must be a real directory'));
   const shaderSource = join(dir, 'shader-source');
   const shaderTarget = join(dir, 'shader-target');
-  const reflector = resolve(dirname(fileURLToPath(import.meta.url)), '..', process.env.CARGO_TARGET_DIR ?? 'target', 'debug/exact-gpu-reflect');
+  const reflector = resolve(dirname(fileURLToPath(import.meta.url)), '..', process.env.CARGO_TARGET_DIR ?? 'target', `debug/exact-gpu-reflect${EXE}`);
   if (!existsSync(reflector)) spawnSync('cargo', ['build', '-q', '-p', 'exact-gpu-reflect'], { cwd: resolve(dirname(fileURLToPath(import.meta.url)), '..') });
   mkdirSync(shaderSource);
   writeFileSync(join(shaderSource, 'surface.wgsl'), '@compute @workgroup_size(1) fn main() {}\n');
@@ -406,49 +413,122 @@ for (const [name, html, files, expectCode, expect] of [
     JSON.stringify({ created, deleted, recreated, errors }));
   rmSync(dir, { recursive: true, force: true });
 }
+// One helper request or reply cannot hold a large generation. It is captured
+// and retained in pages, and a later generation shares its unchanged assets.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-dev-large-')), cache = join(dir, 'cache'), epoch = 'e'.repeat(32), size = 44 * 1024 * 1024;
+  mkdirSync(join(dir, 'assets'));
+  for (let i = 0; i < 3; i++) writeFileSync(join(dir, 'assets', `${i}.bin`), Buffer.alloc(size, i + 1));
+  const captured = captureAssets(dir), cards = assetCards(captured), plan = Buffer.from('plan');
+  const card = (body) => ({ bytes: body.length, sha256: sha256(body) });
+  const files = (seq) => {
+    const index = Buffer.from(JSON.stringify({ assets: cards }));
+    return new Map([['app.plan', plan], ...captured, ['assets.json', index], ['exact.json', Buffer.from(JSON.stringify({
+      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: { url: 'assets.json', ...card(index), count: 3 },
+    }))]]);
+  };
+  const first = retainDevGeneration(cache, epoch, 1, files(1)), second = retainDevGeneration(cache, epoch, 2, files(2), undefined, first.token);
+  const read = readDevGeneration(cache, `/__dev/generation/${epoch}/2/assets/2.bin`)?.body;
+  const stored = readdirSync(join(cache, 'blobs')).length;
+  rmSync(dir, { recursive: true, force: true });
+  result('a large dev generation is captured and retained in pages and shares unchanged assets',
+    captured.size === 3 && first.bytes > 3 * size && second.bytes - first.bytes < 4096 && stored === 3 && read?.equals(captured.get('assets/2.bin')),
+    JSON.stringify({ captured: captured.size, first: first.bytes, second: second.bytes, stored, read: read?.length }));
+}
+// A publication the quota cannot hold is refused before its first batch is kept,
+// and one refused after its batches releases them, so a smaller one then fits.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-dev-refused-')), cache = join(dir, 'cache'), epoch = 'f'.repeat(32), quota = 4500, batch = 1000;
+  const card = (body) => ({ bytes: body.length, sha256: sha256(body) }), plan = Buffer.from('plan');
+  const files = (seq, count) => {
+    const assets = Array.from({ length: count }, (_, i) => [`assets/${i}.bin`, Buffer.alloc(batch, seq * 16 + i)]);
+    const index = Buffer.from(JSON.stringify({ assets: assets.map(([name, body]) => ({ name, url: `./${name}`, ...card(body) })) }));
+    return new Map([['app.plan', plan], ...assets, ['assets.json', index], ['exact.json', Buffer.from(JSON.stringify({
+      exact: 1, dev: { epoch, seq }, plan: card(plan), assets: { url: 'assets.json', ...card(index), count },
+    }))]]);
+  };
+  const blobs = () => readdirSync(join(cache, 'blobs')).length;
+  retainDevGeneration(cache, epoch, 1, files(1, 1), quota, null, batch);
+  const whole = await rejects(() => retainDevGeneration(cache, epoch, 2, files(2, 3), quota, null, batch), (error) => error.message.includes('close all pages'));
+  const afterWhole = blobs();
+  // A conflicting payload refuses the envelope's request after two batches were kept.
+  mkdirSync(join(cache, epoch, '3'), { recursive: true });
+  writeFileSync(join(cache, epoch, '3', 'app.plan'), 'other');
+  const late = await rejects(() => retainDevGeneration(cache, epoch, 3, files(3, 2), quota, null, batch), (error) => error.message.includes('immutable'));
+  const afterLate = blobs();
+  const smaller = files(4, 1);
+  let fits = true;
+  try { retainDevGeneration(cache, epoch, 4, smaller, quota, null, batch); } catch { fits = false; }
+  const read = readDevGeneration(cache, `/__dev/generation/${epoch}/4/assets/0.bin`)?.body;
+  const detail = JSON.stringify({ whole, afterWhole, late, afterLate, fits, after: blobs() });
+  rmSync(dir, { recursive: true, force: true });
+  result('a refused dev publication leaves no blob charged, and a smaller one then fits',
+    whole && afterWhole === 1 && late && afterLate === 1 && fits && read?.equals(smaller.get('assets/0.bin')), detail);
+}
 // Independent dev payloads share a bounded queue; integrity still gates return.
 {
   const origin = 'http://exact.test/', body = Buffer.from('payload');
+  const assetBody = Buffer.alloc(56 * 1024 * 1024, 7);
+  const assetHash = sha256(assetBody);
   const card = name => ({ url: origin + name, bytes: body.length, sha256: sha256(body) });
-  const assets = Array.from({ length: 5 }, (_, i) => ({ name: `assets/${i}.txt`, ...card(`assets/${i}.txt`) }));
+  // Every tree the server captures is a name the client admits. Shaders and activity schemas are read with the
+  // generation; assets/ and deck/ files are read when the page asks for them (host/web/tests/dev-assets.test.mjs).
+  const assets = Array.from({ length: 5 }, (_, i) => i === 3 ? 'activities/3.json' : `shaders/${i}.wgsl`).map(name => ({ name, url: origin + name, bytes: assetBody.length, sha256: assetHash }));
   const module = Object.fromEntries(['native', 'receipt', 'web'].map(key => [key, card(key)]));
-  const canonical = { assets: assets.map(({ name, bytes, sha256 }) => ({ bytes, name, sha256 })),
+  const canonical = { assets: assets.map(({ name, bytes, sha256 }) => ({ bytes, name, sha256 })).sort((a, b) => a.name < b.name ? -1 : 1),
     module: Object.fromEntries(['native', 'receipt', 'web'].map(key => [key, { bytes: body.length, sha256: sha256(body) }])),
     plan: { bytes: body.length, sha256: sha256(body) } };
   const identity = { epoch: 'a'.repeat(32), seq: 1, generation: sha256(Buffer.from(JSON.stringify(canonical))), program: 'b'.repeat(64) };
-  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets, module };
-  let pending = [], peak = 0, count = 0, corrupt = false;
-  const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
+  // The cards are in the index the envelope names, fetched before the queue.
+  const index = Buffer.from(JSON.stringify({ assets }));
+  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets: { url: origin + 'assets.json', bytes: index.length, sha256: sha256(index), count: 5 }, module };
+  let pending = [], peak = 0, count = 0, corrupt = false, asked = false, wake = () => {};
+  const context = { crypto: globalThis.crypto, TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
     fetch: async url => {
-      if (url === origin + 'exact.json') return new Response(JSON.stringify(envelope));
+      if (url === origin + 'exact.json') { asked = true; return new Response(JSON.stringify(envelope)); }
+      if (url === origin + 'assets.json') return new Response(index);
       count++;
       return await new Promise(resolve => {
-        pending.push(() => resolve(new Response(corrupt && url === origin + 'web' ? 'damaged' : body)));
+        pending.push(() => resolve(new Response(corrupt && url === origin + 'web' ? 'damaged' : /\/(shaders|activities)\//.test(url) ? assetBody : body)));
         peak = Math.max(peak, pending.length);
+        wake();
       });
     } };
   runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
-  const run = async () => {
-    let done = false;
-    const promise = context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal)
-      .then(value => ({ value }), error => ({ error })).finally(() => { done = true; });
-    await new Promise(setImmediate);
+  const run = async (held) => {
+    let done = false; asked = false;
+    // The held assets are read after the envelope: a page that boots this generation holds none before.
+    const promise = context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal, false, () => asked ? held : null)
+      .then(value => ({ value }), error => ({ error })).finally(() => { done = true; wake(); });
+    await new Promise(resolve => {
+      wake = resolve;
+      if (pending.length || done) resolve();
+    });
     const first = pending.length;
-    for (let i = 0; !done && i < 20; i++) {
-      const batch = pending; pending = []; batch.forEach(resolve => resolve());
-      await new Promise(setImmediate);
+    while (!done) {
+      const batch = pending; pending = [];
+      await new Promise(resolve => {
+        wake = resolve;
+        batch.forEach(resolve => resolve());
+        if (done) resolve();
+      });
     }
-    if (!done) throw new Error('dev fetch queue did not settle');
     return { first, ...await promise };
   };
   const good = await run();
+  // The live generation's unchanged assets are not fetched again; a changed one is.
+  const live = new Map(good.value?.assets);
+  live.set('shaders/4.wgsl', { ...live.get('shaders/4.wgsl'), sha256: '0'.repeat(64) });
+  const again = await run(live), refetched = count - 8;
   corrupt = true;
   const bad = await run();
-  result('dev payloads fetch concurrently within four slots and refuse bad integrity',
-    good.first === 4 && peak === 4 && count === 16 && good.value?.assets.size === 5 && good.value?.module
+  result('a 280 MiB dev asset generation fetches within four slots, reuses unchanged assets and refuses bad integrity',
+    good.first === 4 && peak === 4 && refetched === 4 && count === 20 && good.value?.assets.size === 5 && good.value?.module
+      && again.value?.assets.get('shaders/0.wgsl').bytes === good.value.assets.get('shaders/0.wgsl').bytes
+      && again.value.assets.get('shaders/4.wgsl').bytes !== good.value.assets.get('shaders/4.wgsl').bytes
       && bad.error?.message.includes('payload integrity failed: module web'),
-    JSON.stringify({first:good.first,peak,count,goodError:good.error?.message,badError:bad.error?.message,assets:good.value?.assets.size}));
+    JSON.stringify({first:good.first,peak,count,refetched,goodError:good.error?.message,againError:again.error?.message,badError:bad.error?.message,assets:good.value?.assets.size}));
 }
 // A generation the dev loop names from asset cards captured on disk (which
 // carry their urls, as at a loop's start or an asset's edit) binds the
@@ -462,11 +542,12 @@ for (const [name, html, files, expectCode, expect] of [
   // Named in any order: the identity is over UTF-8 order, as a client sorts them.
   const generation = devGenerationDigest({ bytes: body.length, sha256: sha256(body) }, [...assets].reverse(), module);
   const identity = { epoch: 'a'.repeat(32), seq: 1, generation, program: 'b'.repeat(64) };
-  const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'),
-    assets: assets.map(a => ({ ...a, url: origin + a.name })), module: Object.fromEntries(Object.keys(module).map(key => [key, card(key)])) };
+  // The index as a build writes it: cards relative to the index's own URL.
+  const { envelope: sealed, index } = sealEnvelope({ exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets,
+    module: Object.fromEntries(Object.keys(module).map(key => [key, card(key)])) }, origin + 'assets.json');
   const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
-    fetch: async url => new Response(url === origin + 'exact.json' ? JSON.stringify(envelope) : body) };
+    fetch: async url => new Response(url === origin + 'exact.json' ? JSON.stringify(sealed) : url === origin + 'assets.json' ? index : body) };
   runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
   const got = await context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal).then(value => ({ value }), error => ({ error }));
   result('a dev generation named from cards captured on disk binds the manifest a client checks',
@@ -608,7 +689,9 @@ for (const [name, html, files, expectCode, expect] of [
       writeFileSync(join(root, '.well-known/apple-app-site-association'), 'association');
     }
     const card = (name) => { const body = readFileSync(join(root, name)); return { name, url: './' + name, sha256: sha256(body), bytes: body.length }; };
-    writeFileSync(join(root, 'exact.json'), JSON.stringify({ exact: 1, plan: card('app.plan'), assets: listPublicFiles(root).filter((n) => n.startsWith('assets/')).map(card) }));
+    // A bake's roster has portable names only; `space #?.txt` is a public file it does not name.
+    const sealed = sealEnvelope({ exact: 1, plan: card('app.plan'), assets: listPublicFiles(root).filter((n) => /^assets\/[a-z.]+$/.test(n)).map(card) });
+    writeFileSync(join(root, 'assets.json'), sealed.index); writeFileSync(join(root, 'exact.json'), sealed.bytes);
     return root;
   };
   const oldWeb = makeWeb('old'), newWeb = makeWeb('new');
@@ -678,9 +761,12 @@ for (const [name, html, files, expectCode, expect] of [
     }));
     const envelopeResponse = await fetch(url, { headers: { accept: 'application/vnd.exact.envelope+json' } });
     const envelope = await envelopeResponse.json();
-    for (const card of [envelope.plan, ...envelope.assets]) {
-      const response = await fetch(url + card.url), bytes = Buffer.from(await response.arrayBuffer());
-      payload.push(response.ok && card.url.startsWith('/.exact/root/web/releases/') && sha256(bytes) === card.sha256 && bytes.length === card.bytes);
+    const indexURL = new URL(envelope.assets.url, url), listed = readAssetIndex(envelope.assets, Buffer.from(await (await fetch(indexURL)).arrayBuffer()));
+    payload.push(envelope.assets.url.startsWith('/.exact/root/web/releases/'));
+    for (const card of [envelope.plan, ...listed]) {
+      const at = new URL(card.url, card === envelope.plan ? url : indexURL);
+      const response = await fetch(at), bytes = Buffer.from(await response.arrayBuffer());
+      payload.push(response.ok && at.pathname.startsWith('/.exact/root/web/releases/') && sha256(bytes) === card.sha256 && bytes.length === card.bytes);
     }
     rounds++;
     return expected && payload.every(Boolean) && envelopeResponse.headers.get('vary') === 'Accept';
@@ -727,17 +813,26 @@ for (const [name, html, files, expectCode, expect] of [
   // (scratch/), a saved world and a local server's database are not. A helper script
   // (drive.sh) is not.
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-build-inputs-')));
-  for(const sub of ['shots','tools','repros','gen','shader-gen','data','modules/web','art','scratch','logic/src','assets','presentation','server']) mkdirSync(join(dir,sub),{recursive:true});
-  for(const [name,text] of [['.gitignore','/local.ts\n/gen/\n/shader-gen/\n/notes/\n/modules/\n/art/\n/icon.png\n/data/table.bin\n/scratch/\n'],['Cargo.toml','[workspace]'],['app.json','{"icons":[{"src":"icon.png"}]}'],['icon.png','png'],['app.contract','view'],['local.ts','key'],['run.log','log'],['shots/one.png','png'],['shots/notes.txt','notes'],['shots/exported.json','{}'],['tools/probe.mjs','mjs'],['tools/levels.ops','ops'],['repros/bug.contract','view'],['app.test.ts','test'],['app.test.contract','test'],['drive.sh','sh'],['export.csv','a,b'],['logic/build.mjs','mjs'],['logic/src/foo.test.rs','rs'],['assets/x.js','js'],['presentation/view.mjs','mjs'],['data/ledger.csv','a,b'],['gen/made.rs','fn f() {}'],['shader-gen/paint.wgsl','fn main() {}'],['shader-gen/table.bin','bytes'],['data/Cargo.toml','[package]'],['data/table.bin','bytes'],['modules/web/index.js','js'],['art/strip.png','png'],['art/fox.glb','glb'],['run.world','world'],['data.db','db'],['data.db-wal','wal'],['server/club.sqlite-shm','shm'],['scratch/out.bin','bytes']]) writeFileSync(join(dir,name),text);
+  for(const sub of ['shots','tools','repros','gen','shader-gen','data','modules/web','art','scratch','logic/src','assets','presentation','server','local-crate']) mkdirSync(join(dir,sub),{recursive:true});
+  for(const [name,text] of [['.gitignore','/local.ts\n/gen/\n/shader-gen/\n/notes/\n/modules/\n/art/\n/icon.png\n/data/table.bin\n/scratch/\n'],['Cargo.toml','[workspace]'],['app.json','{"icons":[{"src":"icon.png"}],"host":{"macos":{"resources":[{"from":"declared.out"}]}}}'],['icon.png','png'],['app.contract','view'],['local.ts','key'],['run.log','log'],['macos.out','stdout'],['macos.err','stderr'],['other.OUT','stdout'],['declared.out','resource'],['assets/captured.err','asset'],['shader-gen/captured.out','shader input'],['local-crate/Cargo.toml','[package]'],['local-crate/captured.err','include_bytes input'],['shots/one.png','png'],['shots/notes.txt','notes'],['shots/exported.json','{}'],['tools/probe.mjs','mjs'],['tools/levels.ops','ops'],['repros/bug.contract','view'],['app.test.ts','test'],['app.test.contract','test'],['drive.sh','sh'],['export.csv','a,b'],['logic/build.mjs','mjs'],['logic/src/foo.test.rs','rs'],['assets/x.js','js'],['presentation/view.mjs','mjs'],['data/ledger.csv','a,b'],['gen/made.rs','fn f() {}'],['shader-gen/paint.wgsl','fn main() {}'],['shader-gen/table.bin','bytes'],['data/Cargo.toml','[package]'],['data/table.bin','bytes'],['modules/web/index.js','js'],['art/strip.png','png'],['art/fox.glb','glb'],['run.world','world'],['data.db','db'],['data.db-wal','wal'],['server/club.sqlite-shm','shm'],['scratch/out.bin','bytes']]) writeFileSync(join(dir,name),text);
   const walk=()=>newerThan(0,[dir],notBuildInput(dir,[join(dir,'shader-gen')])).map(p=>relative(dir,p)).sort();
   const outside=walk();
   spawnSync('git',['init','-q'],{cwd:dir});
-  const inside=walk(),want='["Cargo.toml","app.contract","app.json","art/fox.glb","art/strip.png","assets/x.js","data/Cargo.toml","data/ledger.csv","data/table.bin","gen/made.rs","icon.png","local.ts","logic/build.mjs","modules/web/index.js","presentation/view.mjs","shader-gen/paint.wgsl","shader-gen/table.bin"]';
+  const inside=walk(),want='["Cargo.toml","app.contract","app.json","art/fox.glb","art/strip.png","assets/captured.err","assets/x.js","data/Cargo.toml","data/ledger.csv","data/table.bin","declared.out","gen/made.rs","icon.png","local-crate/Cargo.toml","local-crate/captured.err","local.ts","logic/build.mjs","modules/web/index.js","presentation/view.mjs","shader-gen/captured.out","shader-gen/paint.wgsl","shader-gen/table.bin"]';
   result('the staleness walk skips what an agent leaves in an app, never what a build reads',
     JSON.stringify(inside)===want&&JSON.stringify(outside)===want.replace('"presentation/view.mjs",','"presentation/view.mjs","scratch/out.bin",'),JSON.stringify({inside,outside}));
   const receipt=join(dir,'receipt.json');
   writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin'}));
   writeFileSync(join(dir,'pins.json'),'{}');
+  const fresh=new Date(Date.now()+5000);
+  utimesSync(receipt,fresh,fresh);
+  const app={dir,target:join(dir,'missing-target'),manifest:{},crate:()=>'fixture-macos'};
+  for(const name of ['macos.out','macos.err','other.OUT']) utimesSync(join(dir,name),new Date(+fresh+1000),new Date(+fresh+1000));
+  result('redirected stdout and stderr leave an Apple receipt fresh',receiptChanges(receipt,app).length===0,JSON.stringify(receiptChanges(receipt,app)));
+  for(const name of ['evidence.json','macos.out','macos.err','app.contract','app.json','capture.bin']) {
+    let refusal; try { refuseStale('macos',receipt,[join(dir,name)],'rebuild'); } catch(error) { refusal=error; }
+    result(`a stale refusal explains .exact/ for ${name}`,refusal?.stale===true&&/if .*no build reads.*app's `\.exact\/`/.test(refusal.message),refusal?.message);
+  }
   const built=new Date(Date.now()+10000),edited=new Date(+built+10000);
   utimesSync(receipt,built,built);
   for(const name of ['pins.json','app.contract','drive.sh','tools/probe.mjs','shots/exported.json']) utimesSync(join(dir,name),edited,edited);
@@ -756,7 +851,7 @@ for (const [name, html, files, expectCode, expect] of [
   rmSync(base,{recursive:true,force:true});
   result('authored-test stores: a dead run\'s are swept, a live run\'s and other names stay',
     JSON.stringify(left)===JSON.stringify(['mine.r999999-ab12.t0','test','test.r'+process.pid+'-cd34.t0','test.t0','tests.r999999-ab12.t0'].sort()),JSON.stringify(left));
-  result('authored-test stores live where the hosts keep them',storeBase('com.x','mac',{},'/h')==='/h/Library/Caches/exact/com.x/agent'&&storeBase('com.x','linux',{XDG_CACHE_HOME:'/c'},'/h')==='/c/exact/com.x/agent'&&storeBase('com.x','linux',{XDG_CACHE_HOME:'rel'},'/h')==='/h/.cache/exact/com.x/agent'&&storeBase('com.x','ios')===null);
+  result('authored-test stores live where the hosts keep them',storeBase('com.x','mac',{},'/h')==='/h/Library/Caches/exact/com.x/agent'&&storeBase('com.x','linux',{XDG_CACHE_HOME:'/c'},'/h')==='/c/exact/com.x/agent'&&storeBase('com.x','linux',{XDG_CACHE_HOME:'rel'},'/h')==='/h/.cache/exact/com.x/agent'&&storeBase('com.x','ios')===null&&storeBase('com.x','macos',{},'/h',true)==='/h/Library/Containers/com.x/Data/Library/Caches/exact/com.x/agent');
   // dash, weather, kanban: a web store is a kept Chrome profile and one origin, the same port each drive.
   const x={id:'com.x',dir:'/apps/x'},dx=appDigest('/apps/x');
   const a=webStore(x,'pulse',{},'/h','darwin'),b=webStore(x,'pulse',{XDG_CACHE_HOME:'/c'},'/h','linux'),c=webStore(x,'other',{},'/h','darwin');
@@ -871,7 +966,7 @@ for (const [name, html, files, expectCode, expect] of [
 
 // Exercise the driver's actual method with a quantized wall clock (#285).
 test('clock +N real never seeks behind the last reply and ends at from + N', async () => {
-  const source = readFileSync(new URL('./agent.mjs', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('./agent-session.mjs', import.meta.url), 'utf8');
   const start = source.indexOf("    async clock(spec = 'settle'"); // (its parameters after the spec are its own)
   const end = source.indexOf('\n    /** The window', start);
   for (const host of ['macos', 'ios', 'host', 'host-ios', 'web', 'linux']) {

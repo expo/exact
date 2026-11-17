@@ -348,7 +348,7 @@ theorem case_each (ih : AllOk fuel) {fl : Bool} {l ps body cl tl cb tb}
 theorem stdlib_now {e₁ e₂ : Contract.Env} {f vs} (h : e₁.now = e₂.now)
     (hr : e₁.prog.routes = e₂.prog.routes) (hs : e₁.prog.strings = e₂.prog.strings) :
     stdlib e₁ f vs = stdlib e₂ f vs := by
-  unfold stdlib; rw [h, hr, hs]
+  unfold stdlib routing; rw [h, hr, hs]
 
 /-- What a call evaluates by, with its name a variable (so that a literal
 name never meets the unifier). -/

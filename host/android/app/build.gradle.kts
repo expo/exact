@@ -1,20 +1,30 @@
 // The app shell: one activity over the reader, packaging the app `-Papp=<name>` names (apps/<name>, or the directory
-// `-PappDir=` gives). The package id and the label are the app's own manifest's (app.json `app.id`, `app.name`).
+// `-PappDir=` gives). The package id and the label are `-PapplicationId` and `-PappName`, which agent-android.mjs resolves
+// from the manifest (app.json `host.android.id`, default `app.id`; `app.name`), as a selected variant has them (LLP 1030.008).
 // `bun scripts/agent-android.mjs build <name> --apk` builds the app's library (apps/<name>/android), puts it and the
 // app's assets under this module's build directory, and runs `:app:assembleRelease`.
 import groovy.json.JsonSlurper
 
 plugins { id("com.android.application") }
 
+val developmentApk = providers.gradleProperty("developmentApk").orNull == "1"
+
 // -Pcompose=1: the app's plan has a date or time control, and its picker is Compose Material 3's (LLP 1115.001.000
 // D1-D2; `agent-android.mjs` reads the plan's uses). Without it the framework's dialogs show, and Compose is not linked.
 val compose = providers.gradleProperty("compose").orNull == "1"
 if (compose) apply(plugin = "org.jetbrains.kotlin.plugin.compose")
+// -Pvideo=1: the plan has a `video` or an `audio`, or the build is a development one, and Media3's player (`:video`) is
+// linked (LLP 1042.001 D2). Without it the APK carries none of Media3.
+val video = providers.gradleProperty("video").orNull == "1"
+// -Pwidgets=1: app.json declares a widget Android draws, one with a `system*` family (LLP 1126.003 D1, D9), and
+// `:widgets` is linked; the build below makes each kind's provider. Without it the APK has none of it.
+val widgets = providers.gradleProperty("widgets").orNull == "1"
 
 val app = providers.gradleProperty("app").get()
 val appDir = providers.gradleProperty("appDir").orNull?.let { file(it) } ?: rootDir.resolve("../../apps/$app")
 val manifest = JsonSlurper().parse(appDir.resolve("app.json")) as Map<*, *>
-val identity = manifest["app"] as Map<*, *>
+val androidHost = (manifest["host"] as Map<*, *>?)?.get("android") as Map<*, *>?
+val packageId = providers.gradleProperty("applicationId").get()
 // The manifest's `orientation` as Chromium maps an installed web app's: `-primary` is the device's own way up, a
 // bare `portrait` or `landscape` either way up by the sensor. `natural` is resolved in MainActivity.
 val screenOrientation = mapOf(
@@ -24,7 +34,7 @@ val screenOrientation = mapOf(
 )[manifest["orientation"]] ?: "unspecified"
 // The manifest's `host.android.minimumOS`, the oldest Android the app runs on, as its API level. Below 12 the APK keeps
 // the reader's Android 10 and 11 code (proguard-legacy.pro); otherwise R8 leaves none of it.
-val minimumOS = (((manifest["host"] as Map<*, *>?)?.get("android") as Map<*, *>?)?.get("minimumOS") as String?) ?: "12"
+val minimumOS = (androidHost?.get("minimumOS") as String?) ?: "12"
 val minimumApi = mapOf("10" to 29, "11" to 30, "12" to 31, "13" to 33, "14" to 34, "15" to 35, "16" to 36)[minimumOS]
     ?: throw GradleException("app.json host.android.minimumOS \"$minimumOS\": name an Android release from 10 to 16")
 
@@ -44,19 +54,17 @@ android {
     compileSdk { version = release(37) { minorApiLevel = 2 } }
     buildToolsVersion = "37.0.0"
     defaultConfig {
-        // An Android package name's segments are Java identifiers: a manifest id's `-` becomes `_`.
-        applicationId = (identity["id"] as String).replace('-', '_')
+        applicationId = packageId
         minSdk = minimumApi
         targetSdk = 36
         // CI's version inputs are shared with Apple builds (LLP 1030.003 D6).
         versionCode = providers.environmentVariable("EXACT_BUILD_NUMBER").orElse("1").get().toInt().also {
             require(it in 1..2100000000) { "EXACT_BUILD_NUMBER must be an integer from 1 to 2100000000" }
         }
-        // -PidSuffix=.dev: a side-by-side build (another package) that leaves the installed one alone.
-        (project.findProperty("idSuffix") as String?)?.let { applicationIdSuffix = it }
         versionName = providers.environmentVariable("EXACT_VERSION").orElse("0.1.0").get()
-        ndk { abiFilters += "arm64-v8a" }
-        manifestPlaceholders["appName"] = identity["name"] as String
+        ndk { abiFilters += providers.gradleProperty("abis").orElse("arm64-v8a").get().split(',') }
+        manifestPlaceholders["audioSession"] = manifest["audio_session"] as String? ?: "ambient"
+        manifestPlaceholders["appName"] = providers.gradleProperty("appName").get()
         manifestPlaceholders["screenOrientation"] = screenOrientation
         manifestPlaceholders["exactDevelopment"] = providers.gradleProperty("exactDevelopment").orNull == "1"
         // The launcher icon (`android:icon` and `android:roundIcon`) and the TV banner among the resources below, as
@@ -64,6 +72,9 @@ android {
         // shows the shell's plain one (res/drawable/banner.xml).
         manifestPlaceholders["appIcon"] = providers.gradleProperty("appIcon").orNull ?: "@null"
         manifestPlaceholders["appBanner"] = providers.gradleProperty("appBanner").orNull ?: "@drawable/banner"
+        // The launch window in the manifest's `background_color` and with its `host.android.launchImage`
+        // (agent-android.mjs `androidLaunch`); without either the reader's, the platform's (LLP 1115.001 D3.6).
+        manifestPlaceholders["appTheme"] = providers.gradleProperty("appTheme").orNull ?: "@style/ExactLaunch"
     }
     val upload = providers.environmentVariable("EXACT_KEYSTORE").orNull?.let { path ->
         signingConfigs.create("upload") {
@@ -73,9 +84,11 @@ android {
             keyPassword = providers.environmentVariable("EXACT_KEY_PASSWORD").get()
         }
     }
+    lint { checkReleaseBuilds = !developmentApk }
     buildTypes {
         release {
             isMinifyEnabled = true
+            if (developmentApk) proguardFiles("proguard-development.pro")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (minimumApi < 31) proguardFiles("proguard-legacy.pro")
             signingConfig = upload ?: signingConfigs.getByName("debug")
@@ -86,7 +99,12 @@ android {
     sourceSets["main"].assets.directories.add(out.resolve("rust/assets").path)
     // The icon and banner agent-android.mjs makes from the manifest's `icons` (LLP 1163 D6).
     sourceSets["main"].res.directories.add(out.resolve("icons/res").path)
+    sourceSets["main"].res.directories.add(out.resolve("launch/res").path)
+    // The notification channels, their strings and sounds, and the small icon, for an app that grants notifications
+    // (agent-android.mjs `androidNotificationResources`, LLP 1133.004.000 D1, D3).
+    sourceSets["main"].res.directories.add(out.resolve("notify/res").path)
     sourceSets["main"].kotlin.directories.add(if (compose) "src/compose/java" else "src/nocompose/java")
+    sourceSets["main"].kotlin.directories.add(if (video) "src/video/java" else "src/novideo/java")
     // The app's Kotlin hatches and module roster (LLP 1115.001.000 D4) in its `modules/android`; -PmodulesDir lets a
     // component fixture compile the app's actual provider without copying its Kotlin.
     val modulesDir = providers.gradleProperty("modulesDir").orNull?.let { file(it) } ?: appDir.resolve("modules/android")
@@ -100,19 +118,82 @@ android {
     // app's activity, scripts/share-target.mjs, LLP 1133.024 D5), merged into the shell's manifest from the release source set's: an app that grants no device asks
     // for none, and one that uses no such package runs nothing beyond the shell's activity.
     val fragment = providers.gradleProperty("manifestFragment").orNull?.let { file(it).readText() }?.takeIf { it.isNotBlank() }
-    // The hardware a grant line uses where present (`-PandroidFeatures`, LLP 1133.037 D17), never required.
+    // The app's widgets (LLP 1126.003 D9): per kind a provider subclass (Android names a provider by its class), its
+    // `appwidget-provider` XML with D4's sizes, its initial and preview layout, and its receiver in the `:widgets`
+    // process; and the rows `:widgets` reads (res/raw/exact_widgets.json). The receivers join the manifest below.
+    val widgetReceivers = StringBuilder()
+    if (widgets) {
+        val dir = layout.buildDirectory.dir("widgets").get().asFile
+        dir.deleteRecursively()
+        val res = dir.resolve("res")
+        listOf("xml", "layout", "values", "raw").forEach { res.resolve(it).mkdirs() }
+        val kotlin = dir.resolve("java/dev/exact/app").apply { mkdirs() }
+        val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
+        val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
+        // Apple's families as cell spans (D4); `systemExtraLarge` is iPad's, a 4×4 here as `systemLarge`.
+        val cells = mapOf("systemSmall" to (2 to 2), "systemMedium" to (4 to 2), "systemLarge" to (4 to 4), "systemExtraLarge" to (4 to 4))
+        val rows = (manifest["widgets"] as List<*>?).orEmpty().map { it as Map<*, *> }
+            .filter { row -> (row["families"] as List<*>?).orEmpty().any { (it as String).startsWith("system") } }
+        val strings = StringBuilder()
+        rows.forEachIndexed { i, row ->
+            val kind = row["kind"] as String
+            val title = (row["title"] as String?) ?: kind
+            val description = (row["description"] as String?) ?: title
+            val (w, h) = (row["families"] as List<*>).mapNotNull { cells[it as String] }.minBy { it.first * it.second }
+            val dp = { n: Int -> "${70 * n - 30}dp" }
+            val configured = row["configuration"] != null
+            strings.append("    <string name=\"exact_widget_${i}_title\">${text(title)}</string>\n")
+            strings.append("    <string name=\"exact_widget_${i}_description\">${text(description)}</string>\n")
+            res.resolve("xml/exact_widget_$i.xml").writeText("<appwidget-provider xmlns:android=\"http://schemas.android.com/apk/res/android\"\n" +
+                "    android:minWidth=\"${dp(w)}\" android:minHeight=\"${dp(h)}\" android:targetCellWidth=\"$w\" android:targetCellHeight=\"$h\"\n" +
+                "    android:minResizeWidth=\"${dp(w)}\" android:minResizeHeight=\"${dp(h)}\" android:resizeMode=\"horizontal|vertical\"\n" +
+                "    android:updatePeriodMillis=\"1800000\" android:widgetCategory=\"home_screen\"\n" +
+                "    android:description=\"@string/exact_widget_${i}_description\"\n" +
+                "    android:initialLayout=\"@layout/exact_widget_${i}_initial\" android:previewLayout=\"@layout/exact_widget_${i}_initial\"" +
+                (if (configured) "\n    android:configure=\"dev.exact.widgets.Configure\" android:widgetFeatures=\"reconfigurable|configuration_optional\"" else "") +
+                " />\n")
+            // Until the first render: the widget's background in the system's colours, with the row's title (D9).
+            res.resolve("layout/exact_widget_${i}_initial.xml").writeText("<FrameLayout xmlns:android=\"http://schemas.android.com/apk/res/android\"\n" +
+                "    android:id=\"@android:id/background\" android:layout_width=\"match_parent\" android:layout_height=\"match_parent\"\n" +
+                "    android:background=\"@drawable/exact_widget_background\" android:clipToOutline=\"true\" android:padding=\"16dp\">\n" +
+                "    <TextView android:layout_width=\"wrap_content\" android:layout_height=\"wrap_content\" android:text=\"@string/exact_widget_${i}_title\"\n" +
+                "        android:textAppearance=\"@android:style/TextAppearance.DeviceDefault.Medium\" android:textColor=\"@color/exact_widget_role_4\" />\n" +
+                "</FrameLayout>\n")
+            kotlin.resolve("ExactWidget$i.kt").writeText("package dev.exact.app\n\n/** The `$kind` widget's provider (LLP 1126.003 D9). */\nclass ExactWidget$i : dev.exact.widgets.Provider()\n")
+            widgetReceivers.append("        <receiver android:name=\"dev.exact.app.ExactWidget$i\" android:exported=\"false\" android:process=\":widgets\"\n" +
+                "            android:enabled=\"@bool/exact_widgets_enabled\" android:label=\"@string/exact_widget_${i}_title\">\n" +
+                "            <intent-filter>\n" +
+                listOf("android.appwidget.action.APPWIDGET_UPDATE", "android.intent.action.LOCALE_CHANGED", "android.intent.action.TIME_SET", "android.intent.action.TIMEZONE_CHANGED")
+                    .joinToString("") { "                <action android:name=\"$it\" />\n" } +
+                "            </intent-filter>\n" +
+                "            <meta-data android:name=\"android.appwidget.provider\" android:resource=\"@xml/exact_widget_$i\" />\n" +
+                "            <meta-data android:name=\"dev.exact.widget.kind\" android:value=\"${attr(kind)}\" />\n" +
+                "        </receiver>\n")
+        }
+        res.resolve("values/exact_widgets.xml").writeText("<resources>\n$strings</resources>\n")
+        res.resolve("raw/exact_widgets.json").writeText(groovy.json.JsonOutput.toJson(rows))
+        sourceSets["main"].res.directories.add(res.path)
+        sourceSets["main"].kotlin.directories.add(dir.resolve("java").path)
+    }
+    // Hardware and software features from grant lines (`-PandroidFeatures`, LLP 1133.022 D18, LLP 1133.037 D17).
     val lineFeatures = providers.gradleProperty("androidFeatures").orNull?.split(',')?.filter { it.isNotBlank() }.orEmpty()
     (providers.gradleProperty("permissions").orNull?.split(',')?.filter { it.isNotEmpty() } ?: emptyList())
-        .takeIf { it.isNotEmpty() || fragment != null || lineFeatures.isNotEmpty() }?.let { names ->
+        .takeIf { it.isNotEmpty() || fragment != null || lineFeatures.isNotEmpty() || widgetReceivers.isNotEmpty() }?.let { names ->
         val permissions = layout.buildDirectory.file("permissions/AndroidManifest.xml").get().asFile
         permissions.parentFile.mkdirs()
         // CAMERA implies the back camera and autofocus as required features, which would filter the app from a
         // device without them; each is declared not required (LLP 1133.008 D6).
-        val features = (if ("android.permission.CAMERA" in names) listOf("camera.any", "camera", "camera.autofocus", "camera.flash") else emptyList()) + lineFeatures
-        // A permission a later API retired names its last level (`<name> maxSdkVersion=32`, LLP 1133.019 D4).
+        val features = (if ("android.permission.CAMERA" in names) listOf("camera.any", "camera", "camera.autofocus", "camera.flash").map { "android.hardware.$it required=false" } else emptyList()) + lineFeatures
+        // A retired permission is needed only when the app runs on an API that still uses it.
         val permission = { line: String ->
-            val (name, last) = line.split(' ').let { it[0] to it.getOrNull(1)?.removePrefix("maxSdkVersion=") }
-            "    <uses-permission android:name=\"$name\"${last?.let { " android:maxSdkVersion=\"$it\"" } ?: ""} />\n"
+            val parts = line.split(' ')
+            val attributes = parts.drop(1).joinToString("") {
+                val (key, value) = it.split('=', limit = 2)
+                require(key == "maxSdkVersion") { "Unknown permission attribute: $key" }
+                " android:$key=\"$value\""
+            }
+            val lastApi = parts.drop(1).firstOrNull { it.startsWith("maxSdkVersion=") }?.substringAfter('=')?.toInt()
+            if (lastApi != null && minimumApi > lastApi) "" else "    <uses-permission android:name=\"${parts[0]}\"$attributes />\n"
         }
         // The reader's foreground services the lines declare (`-PforegroundServices`, `{kind: {purpose, types}}`, LLP
         // 1133.033 D2), each with every type its lines give it: a type the manifest lacks throws at `startForeground`.
@@ -135,8 +216,12 @@ android {
         }
         permissions.writeText("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" xmlns:tools=\"http://schemas.android.com/tools\">\n" +
             names.joinToString("") { permission(it) } +
-            features.joinToString("") { "    <uses-feature android:name=\"android.hardware.$it\" android:required=\"false\" />\n" } +
-            manifestChildren(fragment, services.entries.joinToString("") { service(it.key, it.value) }) + "</manifest>\n")
+            features.joinToString("") {
+                val parts = it.split(' ')
+                require(parts.size == 1 || (parts.size == 2 && parts[1] == "required=false")) { "Invalid feature: $it" }
+                "    <uses-feature android:name=\"${parts[0]}\" android:required=\"${parts.size == 1}\" />\n"
+            } +
+            manifestChildren(fragment, services.entries.joinToString("") { service(it.key, it.value) } + widgetReceivers) + "</manifest>\n")
         sourceSets["release"].manifest.srcFile(permissions)
     }
     // The manifest's `shortcuts` as the launcher activity's static shortcuts (LLP 1133.023 D3, D17), in order: each
@@ -145,7 +230,6 @@ android {
     run {
         val res = layout.buildDirectory.dir("shortcuts/res").get().asFile
         val items = (manifest["shortcuts"] as List<*>?).orEmpty().map { it as Map<*, *> }
-        val pkg = (identity["id"] as String).replace('-', '_') + ((project.findProperty("idSuffix") as String?) ?: "")
         val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
         // A string resource's own escapes: a backslash, an apostrophe, and `@` or `?` leading.
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
@@ -199,7 +283,7 @@ android {
                 "        android:shortcutShortLabel=\"@string/exact_shortcut_${i}_short\" android:shortcutLongLabel=\"@string/exact_shortcut_${i}_long\"" +
                 (icon?.let { "\n        android:icon=\"$it\"" } ?: "") +
                 (disabled?.let { "\n        android:shortcutDisabledMessage=\"@string/exact_shortcut_${i}_disabled\"" } ?: "") + ">\n" +
-                "        <intent android:action=\"android.intent.action.VIEW\" android:targetPackage=\"$pkg\"\n" +
+                "        <intent android:action=\"android.intent.action.VIEW\" android:targetPackage=\"$packageId\"\n" +
                 "            android:targetClass=\"dev.exact.app.MainActivity\" android:data=\"${attr(item["url"] as String)}\" />\n" +
                 "    </shortcut>\n")
         }
@@ -212,8 +296,8 @@ android {
         } + "</symbols>\n")
         sourceSets["main"].res.directories.add(res.path)
     }
-    // The token names `bun exact.mjs tamber gen kotlin` wrote (LLP 1121 D12; never committed).
-    appDir.resolve(".exact/tamber/TamberTokens.kt").takeIf { it.isFile }?.let { sourceSets["main"].kotlin.directories.add(it.parent) }
+    // The token names `bun exact.mjs forma gen kotlin` wrote (LLP 1121 D12; never committed).
+    appDir.resolve(".exact/forma/FormaTokens.kt").takeIf { it.isFile }?.let { sourceSets["main"].kotlin.directories.add(it.parent) }
     if (app == "shelf") sourceSets["test"].kotlin.directories.addAll(listOf(
         "../../../packages/quick-actions/android", "../../../packages/quick-actions/test/android",
     ))
@@ -222,13 +306,14 @@ android {
         buildFeatures { this.compose = true }
         sourceSets["test"].kotlin.directories.add("src/composeTest/java")
     }
-    // An app's GPU module (-PgpuModule=<file>) is opened by path from the extracted library directory and checked
-    // against the digest its bake recorded, so it is extracted and left unstripped.
-    val gpuModule = providers.gradleProperty("gpuModule").orNull
+    // An app's GPU modules (-PgpuModules=<file>,<file>…: the primary and each named one) are opened by path from the
+    // extracted library directory and checked against the digests their bake recorded, so they are extracted and left
+    // unstripped.
+    val gpuModules = providers.gradleProperty("gpuModules").orNull?.split(',')?.filter { it.isNotEmpty() }.orEmpty()
     packaging {
         jniLibs {
-            useLegacyPackaging = gpuModule != null
-            gpuModule?.let { keepDebugSymbols += "**/$it" }
+            useLegacyPackaging = gpuModules.isNotEmpty()
+            gpuModules.forEach { keepDebugSymbols += "**/$it" }
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -248,6 +333,8 @@ if (maven.isNotEmpty()) {
 dependencies {
     maven.forEach { implementation(it) }
     implementation(project(":canvas"))
+    if (video) implementation(project(":video"))
+    if (widgets) implementation(project(":widgets"))
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     if (compose) {

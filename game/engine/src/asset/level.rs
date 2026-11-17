@@ -61,11 +61,7 @@ impl<G: crate::Game> crate::Sim<G> {
         let value = level.decode(&text).map_err(|e| e.to_string())?;
         let digest = crate::hash::of(&text);
         let assets = &mut self.world_mut().assets;
-        if assets
-            .identities
-            .get(name)
-            .is_some_and(|old| *old != digest)
-        {
+        if assets.identity(name).is_some_and(|old| old != digest) {
             return Err(format!(
                 "level `{name}` cannot change after delivery; restart with the new level"
             ));

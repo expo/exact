@@ -88,6 +88,90 @@ fn a_use_box_stops_at_the_expansion_limit() {
 }
 
 #[test]
+fn a_collapsed_calibrated_path_keeps_its_svg_scene() {
+    for path in ["M20 30Z", "M20 30L20 30", "M20 30L100 30"] {
+        let mut d = Doc::new();
+        let line = d.node(
+            NodeType::SvgPath,
+            &[
+                (StyleId::Fill, "none"),
+                (StyleId::Stroke, "#ff0000"),
+                (StyleId::StrokeDasharray, "0.2 0.2"),
+            ],
+            &[(PropId::D, path)],
+        );
+        d.ops.push(Op::SetProp {
+            id: line,
+            prop: PropId::PathLength,
+            value: PropValue::Float(1.0),
+        });
+        let sibling = d.node(
+            NodeType::SvgRect,
+            &[(StyleId::Width, "10"), (StyleId::Height, "10")],
+            &[],
+        );
+        let svg = svg(&mut d, &[line, sibling]);
+        let k = d.kernel(&[svg], 100.0);
+        let scene = resolve(&k, svg);
+        assert_eq!(scene.over, None, "{path}");
+        assert!(find(&scene.items, sibling).is_some(), "{path}");
+        let Kind::Shape(shape) = &find(&scene.items, line).unwrap().kind else {
+            panic!("expected a path");
+        };
+        let expected = if path.ends_with("100 30") {
+            vec![16.0, 16.0]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(shape.dash, expected, "{path}");
+    }
+}
+
+#[test]
+fn calibrated_dash_underflow_still_exceeds_the_scene_limit() {
+    for (path, path_length, dashes, over) in [
+        ("M0 0H100", 1e48, "1 1", Some(Limit::Dashes)),
+        ("M0 0H100", 1e32, "1e-30 1e-30", Some(Limit::Dashes)),
+        ("M0 0H100H0", 1e48, "1 1", Some(Limit::Dashes)),
+        ("M0 0H1e-30", 1e30, "1 1", Some(Limit::Dashes)),
+        ("M0 0H100", 1e48, "0 0", None),
+    ] {
+        let mut d = Doc::new();
+        let line = d.node(
+            NodeType::SvgPath,
+            &[
+                (StyleId::Stroke, "#000000"),
+                (StyleId::StrokeDasharray, dashes),
+            ],
+            &[(PropId::D, path)],
+        );
+        d.ops.push(Op::SetProp {
+            id: line,
+            prop: PropId::PathLength,
+            value: PropValue::Float(path_length),
+        });
+        let sibling = d.node(
+            NodeType::SvgRect,
+            &[(StyleId::Width, "10"), (StyleId::Height, "10")],
+            &[],
+        );
+        let svg = svg(&mut d, &[line, sibling]);
+        let k = d.kernel(&[svg], 100.0);
+        let scene = resolve(&k, svg);
+        assert_eq!(scene.over, over, "{path}, {path_length}, {dashes}");
+        if over.is_some() {
+            assert!(scene.items.is_empty(), "an over-budget scene draws nothing");
+        } else {
+            assert!(find(&scene.items, sibling).is_some());
+            let Kind::Shape(shape) = &find(&scene.items, line).unwrap().kind else {
+                panic!("expected a path");
+            };
+            assert!(shape.dash.is_empty(), "authored all-zero dashes stay solid");
+        }
+    }
+}
+
+#[test]
 fn dashes_and_surfaces_have_limits_and_an_ordinary_svg_passes() {
     use NodeType::*;
     let dashed = |dasharray: &str| {

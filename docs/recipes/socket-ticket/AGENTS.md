@@ -6,8 +6,8 @@ the manifest: set `app.name` and `app.id` before building. The app uses Exact at
 `../../..` by path (`EXACT` overrides it).
 
 This file is already in your instructions. Start from the nearest pattern: `bun exact.mjs
-pattern` lists them and `pattern <name>` writes one, tested. ../../start-here-site.md (a site) or
-../../start-here.md is the only required reading. `bun exact.mjs contract vocab <name>` answers a
+pattern` lists them and `pattern <name>` writes one, tested. ../../../docs/start-here-site.md (a site) or
+../../../docs/start-here.md is the only required reading. `bun exact.mjs contract vocab <name>` answers a
 name (none: the card); `bun exact.mjs docs <heading words>` a guide's
 section. Run `bun exact.mjs verify` when the features work, and `verify ios|android` at the end for a
 phone app. When an iPhone app is ready to try, run `bun exact.mjs share` and send its link;
@@ -17,8 +17,6 @@ app.json's `"commands"`.
 name their platform in app.json on first use and build in a generated workspace;
 `update --without <platform>` stops shipping it.
 `bun ../../../scripts/exact.mjs setup --check` names what a native build lacks.
-Shared data: `exact new <path> --snapback`, or `bun exact.mjs snapback` here.
-Install `snapback4@0.4.33` above; ../../../snapback4/README.md has setup and server commands.
 
 Generated, so don't edit: `exact.mjs` and this block.
 

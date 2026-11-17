@@ -18,9 +18,17 @@ import UIKit
 /// when a window becomes or stops being key, the canvas that had them hears
 /// each pad go and the focused one hears each pad as it is now. A controller
 /// without the extended profile (the Siri Remote) is reported connected and
-/// sends nothing more.
+/// sends nothing more. The pads open for the first canvas whose world reads
+/// them (`CanvasesHost.openPads`): GameController's first `controllers()` costs
+/// tens of milliseconds on the main thread, which a world without pads never pays.
 final class CanvasPads {
-    static let shared = CanvasPads()
+    private(set) static var opened: CanvasPads?
+    static func open() -> CanvasPads {
+        if let opened { return opened }
+        let pads = CanvasPads()
+        opened = pads
+        return pads
+    }
     /// A pad's index is its slot in the process's table (`table`); the next
     /// pad to connect takes the lowest free one, and the world treats it as
     /// a fresh device.

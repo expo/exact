@@ -282,6 +282,11 @@ pub fn prop_value(id: u16, value: &Value) -> Result<(PropId, PropValue), BridgeE
             _ => return Err(mismatch()),
         }
     };
+    if let Some(grammar) = exact_kernel::svg::length::AttributeLength::of(prop) {
+        if !out.as_str().is_some_and(|text| grammar.accepts(text)) {
+            return Err(mismatch());
+        }
+    }
     // `none` is no material, as CSS's `backdrop-filter: none` is no backdrop.
     if prop == PropId::BackgroundMaterial
         && matches!(&out, PropValue::Str(s) if s.as_str() == "none")

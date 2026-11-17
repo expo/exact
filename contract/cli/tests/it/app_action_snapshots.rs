@@ -100,6 +100,23 @@ fn video_seeks_on_the_first_tick_more_than_500_ms_after_the_last_press() {
     assert_eq!(number(&r, "seekTo"), 10.0);
 }
 
+/// Before `durationchange` the length is unknown, not zero: Forward does nothing
+/// rather than seek to the start.
+#[test]
+fn video_forward_waits_for_a_known_length() {
+    let mut r = boot("video-player", "", false);
+    r.act("timed", vec![Value::Number(5.0)]).unwrap();
+    r.act("forward", vec![]).unwrap();
+    r.advance(1100.0).unwrap();
+    assert_eq!(r.slot("pending"), Some(&Value::Bool(false)));
+    assert_eq!(number(&r, "seekTo"), 0.0);
+    assert_eq!(number(&r, "position"), 5.0);
+    r.act("measured", vec![Value::Number(12.0)]).unwrap();
+    r.act("forward", vec![]).unwrap();
+    r.advance(2200.0).unwrap();
+    assert_eq!(number(&r, "seekTo"), 12.0);
+}
+
 #[test]
 fn messages_starts_a_late_flight_instead_of_timing_it_out() {
     let mut r = boot(

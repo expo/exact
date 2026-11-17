@@ -1,10 +1,39 @@
 // HeldStateTests (LLP 1121 stage 8 E2): a card that presses, its `:active`
 // the press paint, with a child that is a flat leaf on iOS (a box with only a
 // fill and its size: no props, no handlers), and the count of its presses.
+keyframes rangeIn
+  from opacity=0 translate="0px 8px"
+
 component App
   state n = 0
+  state expanded = false
+  state entering = false
   action go
     n = n + 1
+  action revealEntering
+    entering = true
+    expanded = true
+  action reveal
+    expanded = not expanded
+  state changeReady = false
+  state changeWidth = 80
+  state changeSeen = -1
+  state changeAt = -1
+  state changeFocused = false
+  action changeStart
+    changeReady = true
+  action changeExpand
+    changeWidth = 160
+  action changeRead
+    changeSeen = frame("change-target").width
+    changeAt = performanceNow()
+    focus("change-target")
+  action changeFocus
+    changeFocused = true
+  task changeMeasure when changeReady key=changeWidth
+    change(changeRead)
+  task changeLater when changeReady
+    after(5, changeExpand)
   view
     main testId="root" width=400 height=400 background-color="#ffffff"
       box testId="card" press=go width=200 height=100 background-color="#ffffff"
@@ -12,3 +41,19 @@ component App
           background-color = "#0000ff"
         box width=20 height=20 background-color="#00ff00"
       text `n ${n}` testId="count"
+      box testId="hover-scale" width=100 height=100 background-color="#ff0000" transition="scale 150ms linear"
+        :hover
+          scale=1.2
+      button testId="reveal-range" press=reveal
+        text "Reveal range"
+      button "Reveal entering" testId="reveal-entering-range" press=revealEntering position="absolute" left=300 top=260 width=80 height=30
+      column testId="range-section" width=240 overflow="hidden" -exact-layout-transition="220ms linear"
+        if expanded
+          column testId="inserted-range" padding="12px 0px" animation=(entering ? "rangeIn 160ms linear both" : "none")
+            text "Volume" color="#ff0000"
+            input testId="inserted-slider" type="range" value=0.3 min=0 max=1 step=0.01 width="100%" margin-top=8
+        column testId="range-following" height=90 background-color="#0000ff" z-index=1 -exact-layout-transition="220ms linear"
+      button "Change" press=changeStart testId="change-start" position="absolute" left=300 top=300 width=80 height=30
+      if changeReady
+        input id="change-target" testId="change-target" focus=changeFocus position="absolute" left=220 top=200 width=changeWidth box-sizing="border-box"
+        box width=changeWidth height=1 position="absolute" top=360 -exact-layout-transition="100ms linear"

@@ -42,7 +42,10 @@ function assets(entry) {
       const deadline = performance.now() + deadlineMs;
       if (!assetName(name)) failure = "invalid asset name";
       else if (devAssets() instanceof Map) {
-        bytes = devAssets().get(`assets/${name}`)?.bytes ?? null;
+        // A dev generation's card: its bytes, or read now and verified (dev.js `later`).
+        const card = devAssets().get(`assets/${name}`);
+        try { bytes = card?.read ? await card.read(AbortSignal.any([flight.controller.signal, AbortSignal.timeout(deadlineMs)])) : card?.bytes ?? null; }
+        catch (error) { failure = String(error.message ?? error); }
         if (bytes && bytes.length > byteLimit) { bytes = null; failure = "exceeds 64 MiB"; }
       }
       else for (let attempt = 0; attempt < 3 && !flight.cancelled; attempt++) {

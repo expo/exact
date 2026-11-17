@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A widget: the platform's widget background (its id, its radius, the surface colour unless the entry's root gives
+     one), and the entry's views placed in it by margin and size (LLP 1126.003 D2, D3). -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/exact_widget_background"
+    android:clipToOutline="true">
+    <ImageView
+        android:id="@+id/exact_widget_fill"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/exact_widget_fill"
+        android:tint="@color/exact_widget_role_3" />
+    <FrameLayout
+        android:id="@+id/exact_widget_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+</FrameLayout>

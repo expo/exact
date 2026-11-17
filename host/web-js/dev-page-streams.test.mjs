@@ -4,11 +4,11 @@
 // pinned and inspected them all).
 import { afterEach, expect, test } from 'bun:test';
 import { spawnOwned, stopAll } from '../../scripts/test-children.mjs';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, request } from 'node:http';
 import { connect, createServer as createSocketServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -16,10 +16,10 @@ const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 afterEach(() => stopAll());
 
 test('a page that closes is no build of the loop any more, by 127.0.0.1 or by localhost', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-page-streams-')), dist = mkdtempSync(join(tmpdir(), 'exact-page-streams-dist-'));
+  const dir = mkdtempSync(join(tmpdir(), 'exact-page-streams-')), dist = join(mkdtempSync(join(tmpdir(), 'exact-page-streams-dist-')), 'dist');
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Streams', app: { id: 'com.exact.streams', name: 'Streams' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "streams"\n');
-  writeFileSync(join(dir, 'app.tamber'), 'tamber streams\n\ntheme\n  ink = #000000\n');
+  writeFileSync(join(dir, 'app.forma'), 'forma streams\n\ntheme\n  ink = #000000\n');
   const listener = createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
@@ -31,8 +31,8 @@ test('a page that closes is no build of the loop any more, by 127.0.0.1 or by lo
   const until = async (pass, ms, what) => { const end = Date.now() + ms; while (!(await pass())) { if (Date.now() > end) throw new Error(`${what}: not seen in ${out.slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
   const base = `http://127.0.0.1:${port}`;
   const builds = async () => {
-    const { token } = await (await fetch(`${base}/__tamber/token`)).json();
-    const hello = await (await fetch(`${base}/__tamber`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).json();
+    const { token } = await (await fetch(`${base}/__forma/token`)).json();
+    const hello = await (await fetch(`${base}/__forma`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).json();
     return hello.ok.builds.length;
   };
   try {
@@ -47,7 +47,7 @@ test('a page that closes is no build of the loop any more, by 127.0.0.1 or by lo
     // The development gate through the [::1] server (reload1's condition): a localhost request is local, so it is given
     // the token; another name at this port is refused.
     if (six) {
-      const token = (host) => new Promise((ok, fail) => request({ host: '::1', port, path: '/__tamber/token', headers: { host } }, (res) => { let body = ''; res.on('data', d => { body += d; }); res.on('end', () => ok({ status: res.statusCode, token: res.statusCode === 200 ? typeof JSON.parse(body).token : null })); }).on('error', fail).end());
+      const token = (host) => new Promise((ok, fail) => request({ host: '::1', port, path: '/__forma/token', headers: { host } }, (res) => { let body = ''; res.on('data', d => { body += d; }); res.on('end', () => ok({ status: res.statusCode, token: res.statusCode === 200 ? typeof JSON.parse(body).token : null })); }).on('error', fail).end());
       expect(await token(`localhost:${port}`)).toEqual({ status: 200, token: 'string' });
       expect((await token(`evil.example:${port}`)).status).toBe(421);
     }
@@ -64,15 +64,15 @@ test('a page that closes is no build of the loop any more, by 127.0.0.1 or by lo
     await browser?.close();
     await dev.stop(30_000);
     rmSync(dir, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 1_200_000);
 
 test('a page stream on a socket handed to the loop\'s server ends with its client, by the res close backstop alone', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-page-hand-off-')), dist = mkdtempSync(join(tmpdir(), 'exact-page-hand-off-dist-'));
+  const dir = mkdtempSync(join(tmpdir(), 'exact-page-hand-off-')), dist = join(mkdtempSync(join(tmpdir(), 'exact-page-hand-off-dist-')), 'dist');
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Streams', app: { id: 'com.exact.streams', name: 'Streams' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "streams"\n');
-  writeFileSync(join(dir, 'app.tamber'), 'tamber streams\n\ntheme\n  ink = #000000\n');
+  writeFileSync(join(dir, 'app.forma'), 'forma streams\n\ntheme\n  ink = #000000\n');
   const free = async () => { const l = createServer(); await new Promise(ok => l.listen(0, '127.0.0.1', ok)); const p = l.address().port; await new Promise(ok => l.close(ok)); return p; };
   const port = await free(), handOff = await free();
   const dev = spawnOwned(process.execPath, ['--preload', resolve(ROOT, 'host/web-js/hand-off.preload.mjs'), resolve(ROOT, 'host/web/dev.mjs'), '--app', dir, '--port', String(port)], { cwd: ROOT, env: { ...process.env, EXACT_WEB_DIST: dist, EXACT_TEST_HAND_OFF: `${port}:${handOff}` }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -82,8 +82,8 @@ test('a page stream on a socket handed to the loop\'s server ends with its clien
   const until = async (pass, ms, what) => { const end = Date.now() + ms; while (!(await pass())) { if (Date.now() > end) throw new Error(`${what}: not seen in ${out.slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
   const base = `http://127.0.0.1:${port}`;
   const builds = async () => {
-    const { token } = await (await fetch(`${base}/__tamber/token`)).json();
-    const hello = await (await fetch(`${base}/__tamber`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).json();
+    const { token } = await (await fetch(`${base}/__forma/token`)).json();
+    const hello = await (await fetch(`${base}/__forma`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).json();
     return hello.ok.builds.length;
   };
   try {
@@ -105,24 +105,20 @@ test('a page stream on a socket handed to the loop\'s server ends with its clien
     socket?.destroy();
     await dev.stop(30_000);
     rmSync(dir, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 1_200_000);
 
 test('a page whose app replaces fetch still registers and inspects: the dev client keeps the page\'s own', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-page-fetch-')), dist = mkdtempSync(join(tmpdir(), 'exact-page-fetch-dist-'));
+  const dir = mkdtempSync(join(tmpdir(), 'exact-page-fetch-')), dist = join(mkdtempSync(join(tmpdir(), 'exact-page-fetch-dist-')), 'dist');
   writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'Fetched', app: { id: 'com.exact.fetched', name: 'Fetched' } }));
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    column gap=8\n      text "above"\n      text "fetched"\n');
-  writeFileSync(join(dir, 'app.tamber'), 'tamber fetched\n\ntheme\n  ink = #000000\n');
-  // As a fixture build does (the clone's copy, data/fixture.ts): every fetch after the app loads is the app's, which
-  // takes no relative URL.
-  writeFileSync(join(dir, 'app.ts'), [
-    "import type { Answer, Sources } from './app.contract.d.ts';",
-    "(globalThis as { fetch: unknown }).fetch = (u: unknown) => { if (!/^[a-z][a-z0-9+.-]*:/i.test(String(u))) throw new TypeError(\"Failed to construct 'URL': Invalid URL\"); return Promise.reject(new Error('the app answers no fetch')); };",
-    "export const appId = 'com.exact.fetched';",
-    "export const grants = '';",
-    "const sources: Sources = {};",
-    "export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);",
+  writeFileSync(join(dir, 'app.forma'), 'forma fetched\n\ntheme\n  ink = #000000\n');
+  // Data modules have their own globals. A web hatch runs in the page and can replace its fetch.
+  mkdirSync(join(dir, 'modules/web'), { recursive: true });
+  writeFileSync(join(dir, 'modules/web/index.js'), [
+    "globalThis.fetch = function appFetch(u) { if (!/^[a-z][a-z0-9+.-]*:/i.test(String(u))) throw new TypeError(\"Failed to construct 'URL': Invalid URL\"); return Promise.reject(new Error('the app answers no fetch')); };",
+    'export function app() {}',
     '',
   ].join('\n'));
   const listener = createServer();
@@ -135,15 +131,20 @@ test('a page whose app replaces fetch still registers and inspects: the dev clie
   dev.stderr.on('data', d => { out = (out + d).slice(-8000); });
   const until = async (pass, ms, what) => { const end = Date.now() + ms; while (!(await pass())) { if (Date.now() > end) throw new Error(`${what}: not seen in ${out.slice(-2000)}`); await new Promise(ok => setTimeout(ok, 100)); } };
   const base = `http://127.0.0.1:${port}`;
-  const { token } = await until(() => out.includes(`127.0.0.1:${port}/`) && out.includes('plan ready'), 900_000, 'the first build').then(() => fetch(`${base}/__tamber/token`)).then(r => r.json());
-  const call = async (body) => (await fetch(`${base}/__tamber`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-tamber-token': token }, body: JSON.stringify(body) })).json();
+  const { token } = await until(() => out.includes(`127.0.0.1:${port}/`) && out.includes('plan ready'), 900_000, 'the first build').then(() => fetch(`${base}/__forma/token`)).then(r => r.json());
+  const call = async (body) => (await fetch(`${base}/__forma`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-forma-token': token }, body: JSON.stringify(body) })).json();
   const stream = new AbortController();
   try {
     // A present client, to turn inspect on, hearing what the page refuses.
-    const sub = await fetch(`${base}/__tamber/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-tamber-token': token }, body: '{"client":"probe"}', signal: stream.signal });
+    const sub = await fetch(`${base}/__forma/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-forma-token': token }, body: '{"client":"probe"}', signal: stream.signal });
     (async () => { const reader = sub.body.getReader(); for (;;) { const { value, done } = await reader.read(); if (done) return; events += new TextDecoder().decode(value); } })().catch(() => {});
     browser = await suiteBrowser('chromium');
     const page = await (await browser.newContext()).newPage();
+    // Register only after the hatch replaces fetch, so registration exercises the client's captured function too.
+    await page.route('**/__dev/page', async route => {
+      await page.waitForFunction(() => globalThis.fetch.name === 'appFetch');
+      await route.continue();
+    });
     const said = [];
     page.on('console', m => said.push(m.text()));
     await page.goto(`${base}/`);
@@ -167,6 +168,6 @@ test('a page whose app replaces fetch still registers and inspects: the dev clie
     await browser?.close();
     await dev.stop(30_000);
     rmSync(dir, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 1_200_000);

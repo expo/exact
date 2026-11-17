@@ -378,7 +378,8 @@ fn under_a_sheet<'a>(
 
 /// A navigation root's tabpanels, in tab order: those its own tablist's
 /// tabs name with `aria-controls` (the browser's `panelsOf`; the Linux
-/// host's `tab_panels`). A tablist inside a route is that route's.
+/// host's `root_tabs`). Panels inside a tablist still belong to the root;
+/// a tablist inside a route is that route's.
 pub(crate) fn tab_panels<'a>(
     node: &impl Fn(ViewId) -> Option<HeadNode<'a>>,
     children: &Children<'_>,
@@ -396,7 +397,7 @@ pub(crate) fn tab_panels<'a>(
             Some("tablist") => lists.push(kids),
             _ => {}
         }
-        if props.str(PropId::NavigationKey).is_none() && role != Some("tablist") {
+        if props.str(PropId::NavigationKey).is_none() {
             stack.extend(kids.iter().rev());
         }
     }

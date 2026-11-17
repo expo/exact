@@ -153,6 +153,7 @@ impl Namespace {
                     options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
                 }
                 let path = directory.join(filename);
+                #[cfg(unix)]
                 let existed = path.exists();
                 let mut file = options.open(path).map_err(|e| e.to_string())?;
                 match crate::try_lock(&file) {
@@ -285,7 +286,9 @@ impl Marker {
             return Ok(Self::default());
         }
         bytes[..len]
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .filter_map(|slot| {
                 if Sha256::digest(&slot[..17])[..15] != slot[17..] || slot[16] > 3 {
                     return None;

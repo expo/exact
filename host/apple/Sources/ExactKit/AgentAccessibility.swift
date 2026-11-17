@@ -4,7 +4,7 @@
 // cells, text elements, native controls, modal layers). UIKit's walk is
 // containment order, never a reading-order claim; AppKit's is its
 // navigation order. Each element is joined to the Exact view it belongs to:
-// itself, its declared owner (`AgentOwned`), or the nearest view above it.
+// itself, its declared owner (`InspectionOwned`), or the nearest view above it.
 // What the walk cannot cover it says, in `coverage`, rather than guess.
 // The driver adds the views' intent and the findings (`scripts/agent-ax.mjs`).
 #if os(macOS)
@@ -12,10 +12,6 @@ import AppKit
 #else
 import UIKit
 #endif
-
-/// An accessibility object standing for one Exact view it is not itself:
-/// a swipe cell's authored control, an inline run's element (D5).
-protocol AgentOwned { var agentViewId: UInt32? { get } }
 
 extension Agent {
     /// `{"op":"tree","ax":true}` (D1, D7): validated here, at the wire, and
@@ -53,8 +49,8 @@ extension Agent {
         case .foreign: limits.append(["root": "sheet", "reason": "a sheet this session cannot be shown to own blocks its window; it is not walked"])
         case .none: break
         }
-        if presenter.toolbar.projected, view.window?.toolbar != nil {
-            limits.append(["root": "toolbar", "reason": "the window toolbar this session projected is not walked; its commands' authored views are hidden"])
+        if presenter.toolbar.toolbar != nil, presenter.toolbar.accessibilityRoot == nil {
+            limits.append(["root": "toolbar", "reason": "AppKit did not expose this session's installed toolbar"])
         }
         #endif
         let ax = presenter.axElements(roots: axRoots(view), limit: limit, excluded: req["excluded"] as? Bool == true, scope: scope, modalRoot: modalRoot,
@@ -70,6 +66,7 @@ extension Agent {
         roots = presenter.accessibilitySurfaces
         #else
         if presenter.navigation.split.active { roots = [presenter.navigation.split.agentRoot] }
+        if let toolbar = presenter.toolbar.accessibilityRoot { roots.append(toolbar) }
         // A dialog's sheet, the sheets on it, and the popovers AppKit shows (LLP 1115.002 D7).
         for sheet in presenter.sheets(on: view.window) { if case .owned(let content) = presenter.axSheet(sheet) { roots.append(content) } }
         roots += presenter.menus.windowed.map(\.content)
@@ -92,6 +89,10 @@ extension Presenter {
         var modalView: AnyObject?
         var modalDepth = -1
         var limits: [[String: Any]] = []
+        #if os(macOS)
+        // AppKit remakes segment objects on each read; native equality keeps their cell and slot identity.
+        var projections: [NSObject: UInt32] = [:]
+        #endif
         #if os(iOS) || os(tvOS)
         var nativeTabBar: UIView?
         var nativeTabBarExcluded = false
@@ -137,6 +138,19 @@ extension Presenter {
                     limits: [[String: Any]] = [], foreign: @escaping (AnyObject) -> Bool = { _ in false }) -> [String: Any] {
         // A scroll view's indicators and other unexposed views cost visits too.
         var w = AxWalk(limit: limit, budget: 5 * limit + 64, excluded: excluded, foreign: foreign, modalRoot: modalRoot, limits: limits)
+        #if os(macOS)
+        if let bar = toolbar.accessibilityRoot, roots.contains(where: { $0 === bar }) {
+            let joined = toolbar.accessibilityItems
+            for (object, id) in joined { if let object = object as? NSObject { w.projections[object] = id } }
+            if toolbar.projected, joined.isEmpty {
+                w.limits.append(["root": "toolbar", "reason": "AppKit's toolbar children could not be joined to its projected items"])
+            }
+            if let group = toolbar.segments.item, toolbar.toolbar?.visibleItems?.contains(where: { $0 === group }) == true,
+               !Set(joined.map(\.id)).isSuperset(of: toolbar.segments.tabs) {
+                w.limits.append(["root": "toolbar-segments", "reason": "AppKit's group elements could not be joined to their authored tabs"])
+            }
+        }
+        #endif
         #if os(iOS) || os(tvOS)
         w.nativeTabBar = navigation.tabController.flatMap { tabs -> UIView? in
             guard let owner = tabs.viewIfLoaded,
@@ -174,7 +188,7 @@ extension Presenter {
         let platform = "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)", source = "appkit", order = "navigation"
         var known: [String] = []
         #endif
-        // A projected segment or tab bar item joins its tablist, not its tab.
+        // A segment whose projection has no ownership join remains a coverage limit.
         if w.segments { known.append("segments") }
         var coverage: [String: Any] = ["roots": roots.map { String(describing: type(of: $0)) }, "complete": !w.stopped && w.more == 0 && w.limits.isEmpty,
                                        "visited": w.visited, "limits": known]
@@ -329,67 +343,6 @@ extension Presenter {
         (.causesPageTurn, "causesPageTurn"), (.tabBar, "tabBar"), (.toggleButton, "toggleButton"), (.supportsZoom, "supportsZoom"),
     ]
     #else
-    /// AppKit's answers. A view and an element answer through their typed
-    /// accessors; any other participant (a control's cell, AppKit's own
-    /// parts) through the attribute protocol every AX client is served by.
-    /// `enabled` is the attribute a client is sent: a view that is not a
-    /// control has none, and its accessor's default `false` is not a state.
-    struct AxFacts {
-        var role: String?, subrole: String?, label: String?, title: String?, help: String?, value: Any?
-        var enabled = true, focused = false, selected = false, element = false, expanded = false
-        var frame: NSRect = .zero, identifier: String?, children: [Any] = []
-        /// `aria-required`, `aria-invalid` and `aria-haspopup` as browsers serve them.
-        var required = false, invalid: String?, popup: String?
-        mutating func aria(_ a: (String) -> Any?) {
-            invalid = a("AXInvalid").map { "\($0)" }
-            popup = (a("AXHasPopup") as? Bool) == true ? (a("AXPopupValue") as? String ?? "true") : nil
-        }
-    }
-    /// AppKit's navigation order, read untyped: it is declared as elements
-    /// of the `NSAccessibilityElement` protocol, which the class of that name
-    /// (a paragraph's links and words) does not formally adopt, and an
-    /// unoptimized build traps on a typed read holding one.
-    static func navigationOrder(_ o: NSObject) -> [Any]? {
-        let read = NSSelectorFromString("accessibilityChildrenInNavigationOrder")
-        return o.responds(to: read) ? o.perform(read)?.takeUnretainedValue() as? [Any] : nil
-    }
-    static func axFacts(_ obj: AnyObject) -> AxFacts? {
-        if let v = obj as? NSView {
-            var f = AxFacts(role: v.accessibilityRole()?.rawValue, subrole: v.accessibilitySubrole()?.rawValue, label: v.accessibilityLabel(), title: v.accessibilityTitle(),
-                           help: v.accessibilityHelp(), value: v.accessibilityValue(), enabled: v.accessibilityAttributeValue(.enabled) as? Bool ?? true, focused: v.isAccessibilityFocused(),
-                           selected: v.isAccessibilitySelected(), element: v.isAccessibilityElement(), expanded: v.isAccessibilityExpanded(), frame: v.accessibilityFrame(), identifier: v.accessibilityIdentifier(),
-                           children: navigationOrder(v) ?? v.accessibilityChildren() ?? [], required: v.isAccessibilityRequired())
-            f.aria { v.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: $0)) }
-            return f
-        }
-        if let e = obj as? NSAccessibilityElement {
-            return AxFacts(role: e.accessibilityRole()?.rawValue, subrole: e.accessibilitySubrole()?.rawValue, label: e.accessibilityLabel(), title: e.accessibilityTitle(),
-                           help: e.accessibilityHelp(), value: e.accessibilityValue(), enabled: e.accessibilityAttributeValue(.enabled) as? Bool ?? true, focused: e.isAccessibilityFocused(),
-                           selected: e.isAccessibilitySelected(), element: e.isAccessibilityElement(), expanded: e.isAccessibilityExpanded(), frame: e.accessibilityFrame(), identifier: e.accessibilityIdentifier(),
-                           children: navigationOrder(e) ?? e.accessibilityChildren() ?? [])
-        }
-        guard let o = obj as? NSObject else { return nil }
-        func a(_ name: String) -> Any? { o.accessibilityAttributeValue(NSAccessibility.Attribute(rawValue: name)) }
-        // AXPosition is the top-left corner in global display points, y down from the primary screen's top.
-        // A cell fills its control: the control's frame is the cell's.
-        var frame = (obj as? NSCell)?.controlView?.accessibilityFrame() ?? .zero
-        if frame.isEmpty, let p = (a("AXPosition") as? NSValue)?.pointValue, let s = (a("AXSize") as? NSValue)?.sizeValue {
-            let top = NSScreen.screens.first?.frame.maxY ?? 0
-            frame = NSRect(x: p.x, y: top - p.y - s.height, width: s.width, height: s.height)
-        }
-        // A cell is served its control's typed label, help and required
-        // (AppKit's dispatcher prefers them); the cell's own attributes
-        // answer "" or nothing (onboarding F16: every named pop-up,
-        // checkbox, slider and date read unnamed here).
-        let control = (obj as? NSCell)?.controlView
-        let nonEmpty = { (s: String?) in s.flatMap { $0.isEmpty ? nil : $0 } }
-        var f = AxFacts(role: a("AXRole") as? String, subrole: a("AXSubrole") as? String, label: nonEmpty(control?.accessibilityLabel()) ?? a("AXDescription") as? String, title: a("AXTitle") as? String,
-                        help: nonEmpty(control?.accessibilityHelp()) ?? a("AXHelp") as? String, value: a("AXValue"), enabled: a("AXEnabled") as? Bool ?? true, focused: a("AXFocused") as? Bool ?? false,
-                        selected: a("AXSelected") as? Bool ?? false, element: !o.accessibilityIsIgnored(), expanded: a("AXExpanded") as? Bool ?? false, frame: frame, identifier: a("AXIdentifier") as? String,
-                        children: a("AXChildren") as? [Any] ?? [], required: control?.isAccessibilityRequired() == true || a("AXRequired") as? Bool == true)
-        f.aria(a)
-        return f
-    }
     enum AxSheet { case none, owned(NSView), foreign }
     /// A sheet attached to the window is this session's only when its
     /// content holds this presenter's own views (D3); any other sheet blocks
@@ -437,14 +390,17 @@ extension Presenter {
         }
         let i = w.elements.count
         var e: [String: Any] = ["i": i, "parent": parent ?? NSNull()]
+        #if os(macOS)
+        let (id, via) = axOwner(obj, projections: w.projections)
+        #else
         let (id, via) = axOwner(obj)
+        #endif
         e["id"] = id ?? NSNull()
         e["via"] = via
         // A hatch's part, joined by its bound view (LLP 1075.003.000.001 §3.5).
         if let part = elements.regions.part(owning: obj) { e["part"] = part }
         var states: [String: Any] = [:]
         var native: [String: Any] = ["class": String(describing: type(of: obj))]
-        if Self.underSegments(obj) { w.segments = true }
         #if os(iOS) || os(tvOS)
         let o = obj as! NSObject
         let traits = o.accessibilityTraits
@@ -488,6 +444,13 @@ extension Presenter {
         if let actions = o.accessibilityCustomActions, !actions.isEmpty { e["actions"] = actions.prefix(16).compactMap { cut($0.name) } }
         native["role"] = names
         if let ident = (o as? UIAccessibilityIdentification)?.accessibilityIdentifier, ident != axTestId(id) { native["identifier"] = cut(ident) }
+        // A data table's rows and columns, and a cell's first row, rows, first column and columns, as Android's reader says them.
+        if o.accessibilityContainerType == .dataTable, let table = obj as? UIAccessibilityContainerDataTable {
+            native["collection"] = [table.accessibilityRowCount(), table.accessibilityColumnCount()]
+        }
+        if let cell = obj as? UIAccessibilityContainerDataTableCell, case let (r, c) = (cell.accessibilityRowRange(), cell.accessibilityColumnRange()), r.location != NSNotFound {
+            native["item"] = [r.location, r.length, c.location, c.length]
+        }
         let frame = o.accessibilityFrame
         if !frame.isEmpty {
             let vp = viewport
@@ -537,6 +500,10 @@ extension Presenter {
         e["interactive"] = ["AXButton", "AXLink", "AXTextField", "AXTextArea", "AXCheckBox", "AXRadioButton", "AXSlider", "AXPopUpButton", "AXMenuItem", "AXComboBox"].contains(r)
         native["role"] = r
         if let subrole = f.subrole { native["subrole"] = subrole }
+        if r == NSAccessibility.Role.table.rawValue, let table = obj as? NSView { native["collection"] = [table.accessibilityRowCount(), table.accessibilityColumnCount()] }
+        if r == NSAccessibility.Role.cell.rawValue, let cell = obj as? NSView, case let (rows, columns) = (cell.accessibilityRowIndexRange(), cell.accessibilityColumnIndexRange()), rows.length > 0 {
+            native["item"] = [rows.location, rows.length, columns.location, columns.length]
+        }
         if let ident = f.identifier, !ident.isEmpty, ident != axTestId(id) { native["identifier"] = cut(ident) }
         if !f.frame.isEmpty, let window = viewport.window {
             // Screen points, y up, into the viewport's: the clip view's, less its scroll.
@@ -546,6 +513,8 @@ extension Presenter {
             e["frame"] = ["x": round2(r.minX - clip.bounds.origin.x), "y": round2(y), "w": round2(r.width), "h": round2(r.height), "source": "element"]
         }
         #endif
+        if Self.underSegments(obj), e["interactive"] as? Bool == true,
+           id.flatMap({ views[$0]?.props["accessibilityRole"] }).map({ !["tab", "radio"].contains($0) }) ?? true { w.segments = true }
         if !exclusion.isEmpty { e["excluded"] = exclusion }
         e["states"] = states
         e["native"] = native
@@ -563,28 +532,54 @@ extension Presenter {
 
     /// D5: the view an element is, the view that declared it, or the view above it.
     private func axOwner(_ obj: AnyObject) -> (UInt32?, String) {
-        if let n = obj as? NodeView { return (n.id, "self") }
-        if let owned = obj as? AgentOwned, let id = owned.agentViewId { return (id, "owner") }
-        #if os(iOS) || os(tvOS)
-        if let e = obj as? UIAccessibilityElement, let n = e.accessibilityContainer as? NodeView { return (n.id, "owner") }
-        var v = (obj as? UIView)?.superview
-        let control = obj is UIControl
-        while let s = v { if let n = s as? NodeView { return (n.id, control && n.isAccessibilityElement == false ? "owner" : "ancestor") }; v = s.superview }
+        #if os(macOS)
+        return axOwner(obj, projections: [:])
         #else
+        if let n = obj as? NodeView { return (n.id, "self") }
+        if let placed = obj as? PlacedElement, let native = placed.native,
+           Self.underSegments(native) { return axOwner(native) }
+        if let owned = obj as? InspectionOwned, let id = owned.inspectionViewId { return (id, "owner") }
+        if let e = obj as? UIAccessibilityElement, let n = e.accessibilityContainer as? NodeView { return (n.id, "owner") }
+        let element = (obj as? UIView) ?? ((obj as? UIAccessibilityElement)?.accessibilityContainer as? UIView)
+        var v = element?.superview
+        let control = obj is UIControl
+        while let s = v {
+            if let segments = s as? LabelledSegmentedControl, let element,
+               let id = segments.segmentOwner(of: element, owners: segments.segmentOwners) { return (id, "owner") }
+            #if os(iOS)
+            if let segments = s as? UISegmentedControl, let element,
+               let search = navigation.controllers.values.compactMap(\.search).first(where: { $0.scopeControl === segments }),
+               let id = segments.segmentOwner(of: element, owners: search.scopeTabs) { return (id, "owner") }
+            #endif
+            if let n = s as? NodeView { return (n.id, control && n.isAccessibilityElement == false ? "owner" : "ancestor") }
+            v = s.superview
+        }
+        return (nil, "none")
+        #endif
+    }
+
+    #if os(macOS)
+    private func axOwner(_ obj: AnyObject, projections: [NSObject: UInt32]) -> (UInt32?, String) {
+        if let object = obj as? NSObject, let id = projections[object] { return (id, "owner") }
+        if let n = obj as? NodeView { return (n.id, "self") }
+        if let owned = obj as? InspectionOwned, let id = owned.inspectionViewId { return (id, "owner") }
         if let e = obj as? NSAccessibilityElement, let n = e.accessibilityParent() as? NodeView { return (n.id, "owner") }
         // A control's cell is the control's (its accessibility is the cell's).
         let host = (obj as? NSCell)?.controlView ?? (obj as? NSView)
-        if obj is NSCell, let owned = host as? AgentOwned, let id = owned.agentViewId { return (id, "owner") }
+        if obj is NSCell, let owned = host as? InspectionOwned, let id = owned.inspectionViewId { return (id, "owner") }
         if let n = host as? NodeView, obj is NSCell { return (n.id, "owner") }
         var v = obj is NSCell ? host : host?.superview
         let control = host is NSControl
-        while let s = v { if let n = s as? NodeView { return (n.id, control ? "owner" : "ancestor") }; v = s.superview }
-        #endif
+        while let s = v {
+            if let id = projections[s] { return (id, s.accessibilityRole() == .toolbar ? "ancestor" : "owner") }
+            if let n = s as? NodeView { return (n.id, control ? "owner" : "ancestor") }
+            v = s.superview
+        }
         return (nil, "none")
     }
+    #endif
 
-    /// A segment or tab bar item the host projected from a tablist (D5's
-    /// segment join is not built: such an element joins its tablist).
+    /// A native segment or tab bar item whose ownership needs a projection join.
     private static func underSegments(_ obj: AnyObject) -> Bool {
         #if os(iOS) || os(tvOS)
         var v: UIView? = (obj as? UIView) ?? ((obj as? UIAccessibilityElement)?.accessibilityContainer as? UIView)

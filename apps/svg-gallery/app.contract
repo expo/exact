@@ -335,6 +335,20 @@ component StageFour
       rect width=120 height=80 fill="#0ea5e9" clip-path="url(#ring)"
       rect width=120 height=80 fill="#ef4444" clip-path="url(#both)"
 
+    // The same percentage outline at two reference-box sizes.
+    view testId="fx-polygon-small" class=Tile
+      view width=60 height=40 background-color="#2563eb" clip-path="polygon(0% 25%, 100% 0%, 50% 100%)"
+        view width="100%" height=12 background-color="#ef4444"
+    view testId="fx-polygon-large" class=Tile
+      view width=110 height=70 background-color="#2563eb" clip-path="polygon(0% 25%, 100% 0%, 50% 100%)"
+        view width="100%" height=12 background-color="#ef4444"
+    view testId="fx-inset-round" class=Tile
+      view width=120 height=80 background-color="#2563eb" clip-path="inset(10% 5% round 20% 8px / 12px 30%)"
+    view testId="fx-circle-percent" class=Tile
+      view width=120 height=80 background-color="#2563eb" clip-path="circle(40% at 40% 50%)"
+    view testId="fx-ellipse-percent" class=Tile
+      view width=120 height=80 background-color="#2563eb" clip-path="ellipse(40% 30% at 50% 50%)"
+
 // Stage 5: text. Chart labels, anchors and baselines, runs.
 component StageFive
   view
@@ -648,9 +662,7 @@ component StageNine
       circle cx=30 cy=40 r=24 fill="#ffffff" filter="url(#matte)"
       rect x=64 y=16 width=48 height=48 rx=10 fill="#be123c" filter="url(#shine)"
 
-// Stage 10c: mix-blend-mode and isolation (LLP 1055.000 D19). Not drawn
-// blended on iOS (§8 ruling 6), so the smoke leaves this tile to the other
-// hosts there.
+// The backdrop stays inside the SVG for native blending (LLP 1055.000 D19).
 component StageTenBlend
   view
     svg testId="fx-mix" class=Tile viewBox="0 0 120 80"

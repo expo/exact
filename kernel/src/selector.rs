@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Default, Clone)]
 pub struct SelectorIndex {
     by_test_id: BTreeMap<String, Vec<u32>>,
+    pub(crate) references: crate::svg::refs::IdIndex<u32>,
 }
 
 impl SelectorIndex {
@@ -81,6 +82,10 @@ impl SelectorIndex {
 
     /// Record that `slot`'s `id` prop is now `new` (LLP 1055.000 D3).
     pub fn update_id(&mut self, slot: u32, old: Option<&str>, new: Option<&str>) {
+        if old == new {
+            return;
+        }
+        self.references.clear();
         let (old, new) = (old.map(Self::id_key), new.map(Self::id_key));
         self.update(slot, old.as_deref(), new.as_deref());
     }
@@ -111,6 +116,7 @@ impl SelectorIndex {
     /// Forget everything.
     pub fn clear(&mut self) {
         self.by_test_id.clear();
+        self.references.clear();
     }
 }
 

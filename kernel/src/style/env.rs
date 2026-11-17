@@ -335,6 +335,33 @@ pub struct Env {
     /// own ([`crate::Kernel::set_root_font_size`]), which the next commit
     /// writes here; [`crate::Kernel::set_env`] keeps it.
     pub root_font_size: f32,
+    /// The session root's `--exact-safe-area-inset-*` (LLP 1123 D9), top
+    /// right bottom left: the insets of the area the document covers, set
+    /// apart from `env()` by a host whose document covers its view while
+    /// `env()` is 0 (iOS under `viewport-fit=auto` with a native primary
+    /// container, D1); [`crate::Kernel::set_root_local_insets`]. `None`: the
+    /// safe-area insets. [`crate::Kernel::set_env`] keeps it.
+    pub root_local: Option<[f32; 4]>,
+    /// What `var(--exact-safe-area-inset-<edge>)` reads at one node, top
+    /// right bottom left: set only in an environment made for that node
+    /// (`NodeArena::env_of`, [`crate::Kernel::env_of`]), since the value
+    /// differs from box to box (an owner's, an author's override). The
+    /// document's environment has none, and a local inset resolved against
+    /// it is a caller's mistake ([`Env::local_inset`]).
+    pub local: Option<[f32; 4]>,
+    /// The values of the custom properties one node's lengths read (LLP
+    /// 1123 D5), set, as `local` is, only in an environment made for that
+    /// node.
+    pub properties: Option<crate::style::safe_area_properties::Resolved>,
+    /// What one node's observations of its safe area are, top right bottom
+    /// left, `None` where one is unavailable (LLP 1123 D9): the solve's
+    /// inputs, set, as `local` is, only in an environment made for that
+    /// node.
+    pub observed: Option<[Option<f32>; 4]>,
+    /// The native targets one node reads raw insets from (LLP 1123 D9),
+    /// set, as `local` is, only in an environment made for a node that reads
+    /// one.
+    pub targets: Option<crate::style::targets::Scope>,
 }
 
 impl Default for Env {
@@ -365,7 +392,59 @@ impl Env {
             regions: None,
             titlebar_area: None,
             root_font_size: crate::style::relative::MEDIUM,
+            root_local: None,
+            local: None,
+            properties: None,
+            observed: None,
+            targets: None,
         }
+    }
+
+    /// `var(--exact-safe-area-inset-<edge>)`'s value (LLP 1123 D9): the
+    /// node's this environment was made for. One with none is the
+    /// document's, whose length reads the session root's inset where a
+    /// route's bar is: a reader that took it is a mistake, which a test
+    /// stops at and a development build reports once ([`misread`]).
+    pub fn local_inset(&self, edge: Edge) -> f32 {
+        match self.local {
+            Some(local) => local[edge as usize],
+            None => {
+                misread(edge);
+                self.root_inset(edge)
+            }
+        }
+    }
+
+    /// What `leaf` observes at the node (LLP 1123 D9): its own safe area as
+    /// the solve gives it, or its target's raw insets; `None` where that is
+    /// unavailable, or the environment was made for no node.
+    pub fn observation(&self, leaf: &crate::style::calc::Observe) -> Option<f32> {
+        let edge = leaf.edge as usize;
+        match &leaf.target {
+            crate::style::targets::Target::Box => self.observed.and_then(|o| o[edge]),
+            target => self.targets.as_ref()?.insets(target).map(|i| i[edge]),
+        }
+    }
+
+    /// An author's custom property's value at the node this environment was
+    /// made for (LLP 1123 D5); `None` where it is undeclared or invalid. One
+    /// with no node is the document's, and reading it is a caller's mistake,
+    /// as for a local inset ([`misread`]).
+    pub fn property(&self, name: &str) -> Option<&crate::style::calc::Node> {
+        match &self.properties {
+            Some(properties) => properties.get(name),
+            None => {
+                misread_var(name);
+                None
+            }
+        }
+    }
+
+    /// The session root's local inset at `edge` (LLP 1123 D9): the host's,
+    /// else the safe-area inset.
+    pub fn root_inset(&self, edge: Edge) -> f32 {
+        self.root_local
+            .map_or_else(|| self.inset(edge), |l| l[edge as usize])
     }
 
     /// The inset at an edge.
@@ -391,6 +470,10 @@ impl Env {
             .as_ref()
             .is_none_or(crate::ButtonFonts::is_valid)
             && Edge::ALL.iter().all(|e| self.inset(*e).is_finite())
+            && self.local.is_none_or(|l| l.iter().all(|v| v.is_finite()))
+            && self
+                .root_local
+                .is_none_or(|l| l.iter().all(|v| v.is_finite()))
             && self
                 .regions
                 .is_none_or(|r| r.iter().flatten().all(|v| v.is_finite()))
@@ -673,6 +756,10 @@ pub const ENV_NAMES: [(&str, &str); 8] = [
     (TitleBarVar::PREFIX, "css Window Controls Overlay"),
 ];
 
+/// The custom property a local inset is read through, before its edge:
+/// `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D9).
+pub const LOCAL_PREFIX: &str = "--exact-safe-area-inset-";
+
 pub(super) fn term(inner: &str) -> Result<Dimension, EnvRefusal> {
     let inner = inner.trim();
     let body = inner
@@ -794,12 +881,13 @@ pub fn uses_env(style: &crate::StyleProps) -> bool {
 }
 
 /// The rows of `style` whose engine value a root font size can change: a
-/// calculation or a grid template that holds a `rem`.
+/// calculation or a grid template that holds a `rem`, or a calculation that
+/// reads a custom property, which may hold one (LLP 1123 D5).
 pub(crate) fn root_font_readers(style: &crate::StyleProps) -> crate::StyleMask {
     let mut rows = crate::StyleMask::EMPTY;
     for id in style.mask.iter() {
         let reads = match style.get(id) {
-            crate::RowValue::Dimension(Dimension::Compare(c)) => c.reads_rem(),
+            crate::RowValue::Dimension(Dimension::Compare(c)) => c.reads_rem() || c.reads_custom(),
             _ => match id {
                 crate::StyleId::GridTemplateColumns => style.rare.grid_template_columns.reads_rem(),
                 crate::StyleId::GridTemplateRows => style.rare.grid_template_rows.reads_rem(),
@@ -833,5 +921,54 @@ impl Env {
             },
             ..self.clone()
         }
+    }
+}
+
+/// Whether a process stops at a local inset read against the document's
+/// environment: one with `EXACT_STRICT_LOCAL_INSETS=1`, which the repository
+/// sets for what Cargo runs (`.cargo/config.toml`: `cargo test`, `cargo run`)
+/// and for the Swift host tests (`host/apple/xctest.mjs`). An app the build
+/// scripts make and launch has none.
+static STRICT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A box's local inset read against the document's environment (LLP 1123
+/// D9): the reader should have taken the box's own (`NodeArena::env_of`,
+/// `Kernel::env_of`). A test stops there ([`STRICT`], and the kernel's own
+/// tests always); otherwise the read takes the session root's inset, which
+/// a development build says once on the console.
+fn misread(edge: Edge) {
+    report(&format!(
+        "var(--exact-safe-area-inset-{}) resolved against the document's environment: \
+         resolve a box's lengths with NodeArena::env_of or Kernel::env_of (LLP 1123 D9); \
+         the session root's inset stands in",
+        edge.name()
+    ));
+}
+
+/// A box's custom property read against the document's environment (LLP
+/// 1123 D5), which has none: the property takes its fallback, as one
+/// undeclared does.
+fn misread_var(name: &str) {
+    report(&format!(
+        "var({name}) resolved against the document's environment: resolve a box's lengths \
+         with NodeArena::env_of or Kernel::env_of (LLP 1123 D5); the fallback stands in"
+    ));
+}
+
+/// Stop a test, or a process with `EXACT_STRICT_LOCAL_INSETS=1`, at a
+/// length a reader resolved against the document's environment; else say so
+/// once in a development build.
+fn report(message: &str) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let strict = cfg!(test)
+        || *STRICT.get_or_init(|| {
+            std::env::var_os("EXACT_STRICT_LOCAL_INSETS").is_some_and(|v| v == "1")
+        });
+    if strict {
+        panic!("{message}");
+    }
+    if cfg!(debug_assertions) && !WARNED.swap(true, Relaxed) {
+        eprintln!("exact: {message}");
     }
 }

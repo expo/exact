@@ -203,7 +203,12 @@ impl PaintMotion {
             }
         }
         for (node, property) in &sync.retired {
-            self.current.remove(node);
+            if let Some(sides) = self.current.get_mut(node) {
+                sides.retain(|p| p != property);
+                if sides.is_empty() {
+                    self.current.remove(node);
+                }
+            }
             if let Some(pending) = self.pending.get_mut(node) {
                 pending.retain(|(p, _)| p != property);
                 if pending.is_empty() {

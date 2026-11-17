@@ -9,6 +9,35 @@ use crate::NodeType;
 use taffy::prelude::length;
 
 impl Kernel {
+    pub(crate) fn replace_bar_symbols(&mut self, mut wanted: Vec<(u32, f32)>) {
+        wanted.sort_by_key(|(slot, _)| *slot);
+        if wanted == self.arena.bar_symbols {
+            return;
+        }
+        let old = std::mem::replace(&mut self.arena.bar_symbols, wanted);
+        let mut changed: Vec<_> = old
+            .iter()
+            .chain(&self.arena.bar_symbols)
+            .filter(|(slot, _)| {
+                old.iter().find(|(s, _)| s == slot).map(|(_, n)| n)
+                    != self
+                        .arena
+                        .bar_symbols
+                        .iter()
+                        .find(|(s, _)| s == slot)
+                        .map(|(_, n)| n)
+            })
+            .map(|(slot, _)| *slot)
+            .collect();
+        changed.sort_unstable();
+        changed.dedup();
+        for slot in changed {
+            if self.arena.is_live(slot) {
+                self.intrinsic_changed(slot);
+            }
+        }
+    }
+
     /// Host intrinsic size (`None` to forget it). Replaced elements keep
     /// their natural ratio; a projected tablist or radio group (a segmented
     /// control, LLP 1116.004 D5.2) uses the height as its automatic

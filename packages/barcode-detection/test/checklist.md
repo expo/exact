@@ -49,13 +49,35 @@ Build: `bun host/apple/build.mjs shelf-apple --run`, on a Mac with a camera
 2. With Continuity Camera, choose the iPhone in the camera menu if one is
    offered: the scan reads as on the phone.
 
-## Android phone (stage 4, not built)
+## Android phone
 
-The Kotlin implementation over ML Kit is not built (LLP 1133.027 §12, stage
-4's as-built note). When it lands: build the APK (`bun
-scripts/agent-android.mjs build shelf --apk`; the NDK and JDK 17 as
-`host/android/README.md` says), install it, and repeat the iPhone steps on a
-Pixel. Step 8 is Settings → Apps → Shelf → Permissions → Camera → Don't allow.
+The Kotlin implementation uses ML Kit's bundled barcode model (LLP 1133.027
+D14). Its JVM tests cover attachment failures, a shared detector with per-scan
+filters and history, frame cleanup, result mapping and upright image decoding.
+QR and PDF417 inference, offline first use, concurrent scans, rotation, camera
+release/resume and a photo during scanning passed on an Android 16 emulator.
+The reporter confirmed QR and an Argentine DNI's PDF417 on a POCO X6 Pro
+running Android 14, including rotation, Home/return and an offline launch
+after a force-stop. Separate sources, photos and a fresh offline install
+remain unqualified on that phone.
+
+Build the APK (`bun scripts/agent-android.mjs build shelf --apk`; the NDK
+and JDK 17 as `host/android/README.md` says), install it, and repeat the
+iPhone steps on a Pixel. Step 8 is Settings → Apps → Shelf → Permissions →
+Camera → Don't allow. Check the minified APK too: ML Kit's manifest-named
+registrars must retain their no-argument constructors.
+
+In an app that asks for QR and PDF417, scan both formats and then hide the
+viewfinder. Confirm the scan becomes idle and the camera indicator goes
+out, then reopen it and scan again. Rotate the phone while scanning and
+check that results stay upright beside the viewfinder. Take a photo while
+scanning. Repeat offline on a fresh install.
+Under the Android agent, polls analyse the bitmap the viewfinder draws with
+ML Kit and retain `seen` when the preferred picture changes. With no displayed
+picture the scan is idle. JVM tests replace ML Kit with a detector stand-in;
+run the agent picture drive on Android to qualify real inference on that path.
+A refused photo is covered by a JVM CameraX stand-in that rejects the use-case
+combination and verifies that preview and analysis remain bound.
 
 ## Chrome on Android, Safari on iPhone, a desktop browser
 

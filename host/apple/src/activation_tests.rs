@@ -9,6 +9,10 @@ use std::sync::{Arc, Mutex};
 
 type Wake = Box<dyn FnOnce() + Send>;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[path = "activation_native_tests.rs"]
+mod native;
+
 /// Prepares in the background until `ready`; keeps the wakes it is given.
 struct Loading {
     ready: Arc<AtomicBool>,
@@ -176,6 +180,56 @@ fn prepared_data_activates_once_and_its_refusal_is_committed_then_retried() {
     assert!(host.data_activated);
     host.prepare_data();
     assert_eq!(count(), 2, "nothing to prepare once activated");
+}
+
+/// Says only what `evaluates_from_draw` reads: whether it has a native slot
+/// (a TypeScript module), where it runs, and its grants.
+struct Shaped {
+    native: bool,
+    placement: exact_runner::Placement,
+    grants: &'static str,
+}
+impl DataSource for Shaped {
+    fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(name.into()))
+    }
+    fn native(&self) -> Option<exact_runner::Native> {
+        self.native.then(exact_runner::Native::default)
+    }
+    fn placement(&self) -> exact_runner::Placement {
+        self.placement
+    }
+    fn grants(&self) -> &str {
+        self.grants
+    }
+}
+
+/// LLP 1027.008 D3: the presenter posts the evaluation from the first draw
+/// only for a TypeScript module on the runner's thread.
+#[test]
+fn only_a_module_on_the_runners_thread_is_evaluated_from_the_draw() {
+    use exact_runner::Placement::{Main, Worker};
+    let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    builder.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = builder.finish().unwrap().encode();
+    let evaluates = |native, placement, grants| {
+        let source = Shaped {
+            native,
+            placement,
+            grants,
+        };
+        let measurer = Box::new(MonospaceMeasurer::default());
+        let (host, _) = Host::boot(&plan, source, measurer, 10.0, 10.0).unwrap();
+        host.evaluates_from_draw()
+    };
+    assert!(evaluates(true, Main, ""), "a module on the runner's thread");
+    assert!(!evaluates(false, Main, ""), "a Rust source");
+    assert!(!evaluates(true, Worker, ""), "a module on a worker");
+    assert_eq!(
+        evaluates(true, Main, "doc.keep\n"),
+        !cfg!(target_os = "macos"),
+        "a module that keeps documents waits for them on a Mac"
+    );
 }
 
 #[test]
@@ -349,12 +403,14 @@ fn app_side_writes_publish_without_reasking_a_time_varying_reader() {
     if std::env::var("EXACT_WP12_WRITER_TEST").as_deref() != Ok("1") {
         // Environment is fixed before the child starts; parallel tests in
         // this process never observe a changed app group or writer identity.
-        let root = std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id()));
+        let root = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id())),
+        );
         std::fs::create_dir_all(&root).unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "host::activation_tests::app_side_writes_publish_without_reasking_a_time_varying_reader", "--test-threads=1"])
             .env("EXACT_WP12_WRITER_TEST", "1")
-            .env("EXACT_APP_GROUP_ROOT", &root)
+            .env("EXACT_APP_GROUP_ROOT", &*root)
             .env("EXACT_APP_GROUP_APP", app)
             .env("EXACT_WIDGET_WRITER", app)
             .output().unwrap();
@@ -809,7 +865,22 @@ impl crate::store::KeptStore for RefusedWrite {
 
 #[test]
 fn failed_persistence_is_reported_and_retried_without_another_value_change() {
-    let plan = contract::compile("component App\n  state count = 0 persist\n  action step\n    count = count + 1\n  action keep\n    count = count\n  view\n    text \"State\"\n").unwrap().encode();
+    let plan = contract::compile(
+        r#"component App
+  state count = 0 persist
+  state other = 0 persist
+  action step
+    count = count + 1
+  action step_other
+    other = other + 1
+  action keep
+    count = count
+  view
+    text "State"
+"#,
+    )
+    .unwrap()
+    .encode();
     let (mut host, _) = Host::boot(
         &plan,
         ChangingReader {
@@ -827,44 +898,74 @@ fn failed_persistence_is_reported_and_retried_without_another_value_change() {
         refusing: refusing.clone(),
         attempts: attempts.clone(),
     }));
-    let mut act = |name| {
+    let act = |host: &mut Host<ChangingReader>, name| {
         let receipt = host.runner.act(name, vec![]).unwrap();
         serde_json::from_str::<serde_json::Value>(
             &host.commit(&[Timed { at_ms: 0., receipt }], None),
         )
         .unwrap()
     };
-    let failed = act("step");
+    let reports = |host: &Host<ChangingReader>| {
+        ["count", "other"].map(|name| {
+            let prefix = format!("store exact.state.{name} failed:");
+            host.runner
+                .journal()
+                .filter(|line| line.contains(&prefix))
+                .count()
+        })
+    };
+    let failed = act(&mut host, "step");
     assert!(
         failed["error"].is_null(),
         "committed work is accepted: {failed}"
     );
+    for _ in 0..2 {
+        let retried = act(&mut host, "keep");
+        assert!(retried["error"].is_null(), "{retried}");
+    }
+    assert_eq!(attempts.lock().unwrap().len(), 3);
+    assert_eq!(reports(&host), [1, 0], "retries report a failure once");
+
+    act(&mut host, "step_other");
+    act(&mut host, "keep");
+    assert_eq!(reports(&host), [1, 1], "each name reports independently");
+
+    act(&mut host, "step");
+    act(&mut host, "keep");
+    assert_eq!(
+        reports(&host),
+        [2, 1],
+        "a replacement can report again without re-reporting other names"
+    );
+
     refusing.store(false, Ordering::SeqCst);
-    let retried = act("keep");
+    let retried = act(&mut host, "keep");
     assert!(retried["error"].is_null(), "{retried}");
-    assert_eq!(
-        attempts.lock().unwrap().len(),
-        2,
-        "an unchanged value still retries its failed write"
-    );
+    assert!(host.pending_store_writes.is_empty());
+    act(&mut host, "keep");
+    assert_eq!(attempts.lock().unwrap().len(), 13, "success clears retries");
+    assert_eq!(reports(&host), [2, 1]);
+
     refusing.store(true, Ordering::SeqCst);
-    act("step");
+    act(&mut host, "step");
+    act(&mut host, "keep");
+    assert_eq!(reports(&host), [3, 1], "a later failure reports again");
     refusing.store(false, Ordering::SeqCst);
-    act("step");
-    act("keep");
+    act(&mut host, "step");
+    act(&mut host, "keep");
     let attempts = attempts.lock().unwrap();
-    let values: Vec<serde_json::Value> = attempts
-        .iter()
-        .map(|w| serde_json::from_slice(w.value.as_ref().unwrap()).unwrap())
-        .collect();
-    assert_eq!(
-        values,
-        serde_json::json!([1, 1, 2, 3])
-            .as_array()
-            .unwrap()
-            .as_slice(),
-        "a newer value supersedes the pending write; success clears it"
-    );
+    for (name, expected) in [
+        ("count", vec![1, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4]),
+        ("other", vec![1; 5]),
+    ] {
+        let values: Vec<i32> = attempts
+            .iter()
+            .filter(|w| w.name == format!("exact.state.{name}"))
+            .map(|w| serde_json::from_slice(w.value.as_ref().unwrap()).unwrap())
+            .collect();
+        assert_eq!(values, expected, "{name}: retries retain the latest value");
+    }
+    assert_eq!(reports(&host), [3, 1], "success adds no failure report");
 }
 
 #[test]
@@ -1089,4 +1190,77 @@ fn a_shared_secret_lease_on_a_name_the_grants_do_not_keep_is_denied() {
     let other = lease("other");
     assert_eq!(other.read(), Err("denied: secret.keep".into()));
     assert_eq!(other.write(Some("x")), Err("denied: secret.keep".into()));
+}
+
+#[test]
+fn a_refresh_keeps_a_failed_write_the_disk_has_not_superseded() {
+    /// A disk that refuses writes to `exact.state.count` while `refusing`.
+    struct Disk {
+        values: Arc<Mutex<std::collections::BTreeMap<String, Vec<u8>>>>,
+        refusing: Arc<AtomicBool>,
+    }
+    impl crate::store::KeptStore for Disk {
+        fn snapshot(&self, _: Vec<(String, Vec<u8>)>) -> crate::store::StoreRead {
+            crate::store::StoreRead {
+                values: self.values.lock().unwrap().clone().into_iter().collect(),
+                omitted: vec![],
+                complete: true,
+            }
+        }
+        fn write(&self, write: &exact_runner::StoreWrite) -> Result<(), String> {
+            if write.name == "exact.state.count" && self.refusing.load(Ordering::SeqCst) {
+                return Err("injected storage full".into());
+            }
+            let mut values = self.values.lock().unwrap();
+            match &write.value {
+                Some(value) => values.insert(write.name.clone(), value.clone()),
+                None => values.remove(&write.name),
+            };
+            Ok(())
+        }
+        fn kept_failures(&self) -> Vec<String> {
+            vec![]
+        }
+    }
+    let plan = contract::compile("component App\n  state count = 0 persist\n  state other = 0 persist\n  action step\n    count = count + 1\n  action step_other\n    other = other + 1\n  action keep\n    count = count\n  view\n    text `${count}`\n").unwrap().encode();
+    let values = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
+    let refusing = Arc::new(AtomicBool::new(true));
+    let (mut host, _) = Host::boot(
+        &plan,
+        ChangingReader {
+            asks: Arc::new(AtomicUsize::new(0)),
+        },
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        200.,
+    )
+    .unwrap();
+    host.activate_data();
+    host.runner.take_store_writes();
+    host.secrets = Some(Box::new(Disk {
+        values: values.clone(),
+        refusing: refusing.clone(),
+    }));
+    for name in ["step", "step_other"] {
+        let receipt = host.runner.act(name, vec![]).unwrap();
+        host.commit(&[Timed { at_ms: 0., receipt }], None);
+    }
+    assert_eq!(values.lock().unwrap()["exact.state.other"], b"1");
+    assert!(!values.lock().unwrap().contains_key("exact.state.count"));
+
+    // Committing `other` moves the counter; the refresh reads a disk on
+    // which `count` is still what it was when its write failed.
+    host.refresh_store();
+    assert_eq!(host.runner.slot("count"), Some(&Value::Number(1.)));
+    assert_eq!(
+        host.pending_store_writes.len(),
+        1,
+        "the write is still owed"
+    );
+
+    refusing.store(false, Ordering::SeqCst);
+    let receipt = host.runner.act("keep", vec![]).unwrap();
+    host.commit(&[Timed { at_ms: 0., receipt }], None);
+    assert_eq!(values.lock().unwrap()["exact.state.count"], b"1");
+    assert!(host.pending_store_writes.is_empty());
 }

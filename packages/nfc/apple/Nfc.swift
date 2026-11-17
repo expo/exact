@@ -184,7 +184,7 @@ enum NfcRecords {
                 .map { (UInt8($0.offset), String(url.dropFirst($0.element.count))) } ?? (0, url)
             return .success((1, Data("U".utf8), id, Data([code]) + Data(rest.utf8)))
         case "absolute-url":
-            guard let url = r["data"] as? String, url.contains(":") else { return .failure("an absolute-url record's data is a URL") }
+            guard let url = r["data"] as? String ?? data.map({ String(decoding: $0, as: UTF8.self) }), url.contains(":") else { return .failure("an absolute-url record's data is a URL") }
             return .success((3, Data(url.utf8), id, Data()))
         case "mime":
             guard let data else { return .failure("a mime record has data") }

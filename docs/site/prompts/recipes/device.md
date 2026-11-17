@@ -1,7 +1,7 @@
 ```prompt Use the battery, the network and Low Power Mode
-Make the Exact app in this folder read the battery, the network and Low Power Mode, and use less when the person or the device asks. Use https://github.com/expo/exact/blob/main/docs/recipes/device.md as the source for each step. The exact2 checkout has the same page at docs/recipes/device.md.
+Make the Exact app in this folder read the battery, the network and Low Power Mode, and use less when the person or the device asks. Use https://github.com/expo/exact/blob/main/docs/recipes/device.md as the source for each step. The Exact checkout has the same page at docs/recipes/device.md.
 
-1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
 2. If I did not say what the app changes for each fact, propose it (for example, stop an animation in Low Power Mode, or defer an upload under Save Data) and ask me.
 3. Install the package: `bun <exact2>/scripts/exact.mjs add device .`. None of the three facts asks permission.
 4. In app.contract, read `getBattery()`, `connection()` and `powerState()` as resources, each with a placeholder no answer can be (`level=-1`, `type="unknown"`), so a failed read draws what the app draws without the fact. `powerState()` fails on the web.

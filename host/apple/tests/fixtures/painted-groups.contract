@@ -1,0 +1,87 @@
+// Radio groups and a tablist a segmented control draws until `paint` makes
+// them the author's (`appearance="none"`), when their keys and Tab stop are
+// the kernel's (LLP 1166.000; SegmentsMacTests, NativeContextsIOSTests). The
+// buttons below the groups change what the tests change between keys: the
+// groups' direction, whether Month is shown, and which period is checked.
+// A member's press changes nothing the groups show. After them
+// (RoleKeysMacTests, RoleKeysIOSTests): a radio group of `input type="radio"`s,
+// whose group is HTML's; a menu in the page, whose items' `key` handler
+// takes End; a menu whose middle item is a link in a line of text; and
+// between two buttons a tablist of boxes with a `tabindex`, the last of
+// them `-1`.
+component App
+  state painted = false
+  state rtl = false
+  state hidden = false
+  state period = "Day"
+  state presses = 0
+  state size = "m"
+  state changes = 0
+  state heard = 0
+  action paint
+    painted = not painted
+  action flip
+    rtl = not rtl
+  action hide
+    hidden = not hidden
+  action choose(v: string)
+    period = v
+  action note
+    presses = presses + 1
+  action pick(v: string)
+    size = v
+    changes = changes + 1
+  action menuKeys(k: string, e: KeyboardEvent)
+    if k == "End"
+      preventDefault()
+      heard = heard + 1
+  view
+    column width="100%" height="100%"
+      row role="radiogroup" appearance=(painted ? "none" : "auto") direction=(rtl ? "rtl" : "ltr") aria-label="Period" testId="period"
+        for v in ["Day", "Week", "Month"] key=v
+          button press=note role="radio" aria-checked=(v == period) visibility=(hidden and v == "Month" ? "hidden" : "visible") testId=`period-${v}`
+            text v
+      row role="radiogroup" appearance=(painted ? "none" : "auto") aria-label="Pair" testId="pair"
+        for v in ["One", "Two"] key=v
+          button press=note role="radio" aria-checked=false testId=`pair-${v}`
+            text v
+      row role="tablist" appearance=(painted ? "none" : "auto") aria-label="Tabs" testId="tabs"
+        for v in ["One", "Two"] key=v
+          button press=note role="tab" testId=`tab-${v}`
+            text v
+      button press=paint testId="paint"
+        text "Paint"
+      button press=flip testId="flip"
+        text "Flip"
+      button press=hide testId="hide"
+        text "Hide"
+      for v in ["Day", "Week", "Month"] key=v
+        button press=choose(v) testId=`choose-${v}`
+          text v
+      row role="radiogroup" aria-label="Size" testId="sizes"
+        for v in ["s", "m", "l"] key=v
+          input type="radio" name="size" value=v checked=(v == size) change=pick aria-label=v testId=`size-${v}`
+      column role="menu" aria-label="Actions" testId="actions"
+        for v in ["Cut", "Copy", "Paste"] key=v
+          button press=note key=menuKeys testId=`item-${v}`
+            text v
+      column role="menu" aria-label="Edit" testId="edit"
+        button press=note testId="edit-cut"
+          text "Cut"
+        text testId="edit-note"
+          text "Read the "
+          text "docs" href="/docs" key=menuKeys
+        button press=note testId="edit-paste"
+          text "Paste"
+      button press=note testId="before"
+        text "Before"
+      row role="tablist" appearance="none" aria-label="Stops" testId="stops"
+        box role="tab" tabindex=0 testId="stop-A"
+          text "A"
+        box role="tab" tabindex=0 testId="stop-B"
+          text "B"
+        box role="tab" tabindex=-1 testId="stop-C"
+          text "C"
+      button press=note testId="after"
+        text "After"
+      text `${size} ${changes} ${presses} ${heard}` testId="state"

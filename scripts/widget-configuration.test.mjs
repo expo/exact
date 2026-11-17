@@ -56,7 +56,8 @@ struct ExactTimelineProvider: TimelineProvider {
 extension EnvironmentValues { var widgetDisplayGamut: String { get { "srgb" } set {} } }
 `);
       const runApple = (cmd, args) => {
-        const result = spawnSync(cmd, args, { encoding: 'utf8' });
+        // `swiftc` leaves a `TemporaryDirectory.*` in TMPDIR each run: the children's TMPDIR is this test's directory, removed after.
+        const result = spawnSync(cmd, args, { encoding: 'utf8', env: { ...process.env, TMPDIR: dir } });
         assert.equal(result.status, 0, result.stderr || result.stdout);
         return result;
       };

@@ -323,6 +323,11 @@ pub fn parse_input(text: &str) -> Result<crate::InputEvent, String> {
             Some(Value::Bool(b)) => Ok(*b),
             _ => Err(format!("{name}: expected a boolean")),
         };
+        // A modifier a host does not send was not held.
+        let held = |name: &str| match fields.get(name) {
+            None => Ok(false),
+            Some(_) => boolean(name),
+        };
         let number = |name: &str| match fields.get(name) {
             Some(Value::Number(n)) if n.is_finite() => Ok(*n),
             _ => Err(format!("{name}: expected a finite number")),
@@ -388,6 +393,10 @@ pub fn parse_input(text: &str) -> Result<crate::InputEvent, String> {
                     other => return Err(format!("kind: unknown `{other}`")),
                 },
                 buttons: unsigned("buttons")?,
+                shift_key: held("shiftKey")?,
+                ctrl_key: held("ctrlKey")?,
+                alt_key: held("altKey")?,
+                meta_key: held("metaKey")?,
                 at_ms,
             },
             "control" => InputEvent::Control {
@@ -409,6 +418,10 @@ pub fn parse_input(text: &str) -> Result<crate::InputEvent, String> {
                 dy: point("dy")?,
                 x: point("x")?,
                 y: point("y")?,
+                shift_key: held("shiftKey")?,
+                ctrl_key: held("ctrlKey")?,
+                alt_key: held("altKey")?,
+                meta_key: held("metaKey")?,
                 at_ms,
             },
             "pad" => {

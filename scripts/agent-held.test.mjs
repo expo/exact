@@ -96,6 +96,28 @@ test('a look that answers past the bound counts nothing', async () => {
   expect(performance.now() - started).toBeLessThan(140);
 });
 
+test('a wait leaves no timer behind: the process exits when it returns, not at its bound', async () => {
+  // In a child, so what keeps the process alive is seen: a won look's losing deadline did, until the bound.
+  const script = `
+    import { heldClock } from ${JSON.stringify(new URL('./agent-held.mjs', import.meta.url).href)};
+    for (const [counts, bound] of [[[0, 0, 1], '5s'], [[0], '300ms']]) {
+      let i = 0;
+      const s = { now: 7, carrier: { host: 'web' }, async op(req) {
+        if (req.op === 'tags') return {};
+        const n = counts[Math.min(i++, counts.length - 1)];
+        return { held: [{ name: 'item', ticket: 1, held: true }], heldReplies: { item: n } };
+      }, async clock() { return { settled: true }; } };
+      console.log(JSON.stringify(await heldClock(s, [bound])));
+    }`;
+  const started = performance.now();
+  const child = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(err).toBe('');
+  expect(code).toBe(0);
+  expect(out.trim().split('\n').map((line) => JSON.parse(line).settled)).toEqual([true, false]);
+  expect(performance.now() - started).toBeLessThan(3000);
+}, 10_000);
+
 /** A session whose `gateway.state` is `before` until `after` ms of real time have passed since it was made, then
  * `ready`; it records every op, so a test sees that the clock never moved. */
 function flipping(after, host = 'web', { slow = 0 } = {}) {
@@ -141,6 +163,43 @@ test('a miss fails at its bound naming the last value; a missing field is named 
     /^clock until state gateway\.state == "ready" within 150: gateway\.state was "identifying" after \d+ ms of real time, the clock frozen at 7 ms; `record` is due a commit later \(an `after\(1, …\)`\), which the frozen clock never reaches: `clock settle` or `clock \+1` before this step runs it$/);
   expect(performance.now() - started).toBeGreaterThanOrEqual(145);
   await expect(untilClock(flipping(0).s, 'until state gateway.user == null within 60')).rejects.toThrow('gateway has no field "user"');
+});
+
+/** A session holding a password field: `secret` revealed, bullets masked. `masked` answers the masked read. */
+function guarded(masked = (state) => state) {
+  const secret = 'synthetic-password-value';
+  const s = {
+    now: 7, carrier: { host: 'web' },
+    async op(req) {
+      if (req.land) return { clock: s.now };
+      const form = { password: req.reveal ? secret : '••••', user: 'ada' };
+      return req.reveal ? { slots: { form }, tasks: {} } : masked({ slots: { form }, tasks: {} });
+    },
+  };
+  return { s, secret };
+}
+
+test('clock until state never says a revealed value, when the masked read fails or no longer has it', async () => {
+  const { secret } = guarded();
+  const said = (spec, masked) => untilClock(guarded(masked).s, spec).then(() => '', (e) => e.message);
+  const fails = () => { throw new Error('transport'); };
+  const removed = () => ({ slots: { form: { user: 'ada' } }, tasks: {} });
+  const cases = [
+    ['until state form.password == "other" within 10', undefined, 'form.password was "••••"'],
+    ['until state form.password == "other" within 10', fails, 'form.password could not be read masked'],
+    ['until state form.password == "other" within 10', removed, 'form.password could not be read masked'],
+    ['until state form.password.length == 3 within 10', undefined, 'form.password has no field "length" (it is "••••")'],
+    ['until state form.password.length == 3 within 10', fails, 'form.password has no field "length" (it is a string)'],
+    ['until state form.pin == 3 within 10', fails, 'form has no field "pin" (it is a record of password, user)'],
+  ];
+  for (const [spec, masked, says] of cases) {
+    const message = await said(spec, masked);
+    expect(message).toContain(says);
+    expect(message).not.toContain(secret);
+  }
+  // Met, its value is the masked one, or none when that read fails.
+  expect(await untilClock(guarded().s, `until state form.password == "${secret}" within 10`)).toMatchObject({ until: 'met', value: '••••' });
+  expect(await untilClock(guarded(fails).s, `until state form.password == "${secret}" within 10`)).not.toHaveProperty('value');
 });
 
 test('a look that answers past the bound counts nothing, a value met late included', async () => {

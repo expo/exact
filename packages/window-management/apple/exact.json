@@ -1,0 +1,14 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/window-management@^1.0",
+  "platform": "apple",
+  "targets": ["macos"],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": { "swift": ["WindowManagement.swift"] },
+  "artifacts": [],
+  "class": "WindowManagementModule"
+}

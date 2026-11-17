@@ -1,0 +1,27 @@
+// LLP 1035.006.000 (TipsIOSTests, TipsMacTests): two tips, one over the
+// header's Filter button, which the platform's bar draws, and one over the
+// page's Add button. The first in document order shows first; pressing a
+// button is doing what its tip teaches (`tipDone`), which retires the tip
+// and lets the next show.
+routes nav
+  stations "/"
+
+component Tips
+  state filtered = false
+  state added = 0
+  action filter
+    filtered = not filtered
+  action add
+    added = added + 1
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0
+          header padding="8px 16px"
+            text "Stations" role="heading" aria-level=1
+            button id="filter-tip" press=filter aria-label="Filter" testId="filter" tip="Filter stations" tipMessage="Show only the stations near you." tipImage="symbol:filter" tipDone=filtered
+              image "symbol:filter"
+          column padding=16 gap=12 align-items="flex-start"
+            button id="add-tip" press=add testId="add" tip="Add a station" tipMessage="Keep the ones you use." tipDone=(added > 0)
+              text "Add"
+            text `${added} added` testId="added"

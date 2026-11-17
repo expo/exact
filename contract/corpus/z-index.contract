@@ -1,0 +1,24 @@
+style Ranked
+  z-index=9
+
+component Paint
+  state step = 0
+  derive z = step == 0 ? "auto" : step == 1 ? "0" : step == 2 ? "2" : "-2"
+  action advance
+    step = (step + 1) % 4
+  view
+    column width=300
+      button "Advance" testId="advance" press=advance
+      box display="flex" width=200 height=100 testId="flex"
+        box class=Ranked width=100 height=100 flex-shrink=0 z-index=z background-color="#ff0000" testId="flex-red"
+        box width=100 height=100 flex-shrink=0 margin-left=-100 background-color="#0000ff" testId="flex-blue"
+      box display="grid" grid-template-columns="100px 100px" width=200 height=100 testId="grid"
+        box width=100 height=100 z-index=z background-color="#ff0000" testId="grid-red"
+        box width=100 height=100 margin-left=-100 background-color="#0000ff" testId="grid-blue"
+      box position="relative" width=200 height=100 testId="positioned"
+        box position="absolute" width=100 height=100 z-index=z background-color="#ff0000" testId="positioned-red"
+        box position="absolute" width=100 height=100 z-index=0 background-color="#0000ff" testId="positioned-blue"
+      box position="relative" width=200 height=100 testId="nested"
+        box position="relative" width=100 height=100 z-index=z
+          box position="relative" width=100 height=100 z-index="auto" background-color="#00ff00" testId="nested-green"
+        box position="relative" width=100 height=100 margin-top=-100 z-index=0 background-color="#0000ff" testId="nested-blue"

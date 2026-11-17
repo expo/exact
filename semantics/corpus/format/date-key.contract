@@ -1,0 +1,63 @@
+fn label(day: string, offset: number): string = formatDate(day, offset, "medium")
+
+component App
+  state due = "2026-10-16"
+  state offset = -420
+  derive picked = label(due, offset)
+  derive month = formatDate(due, offset, "month-year")
+  derive key = formatDate(due, offset, "iso")
+  derive timestamp = formatDate(0, offset, "iso")
+  derive leap = `${label("2000-02-29", offset)} | ${label("2400-02-29", offset)}`
+  derive edges = `${formatDate("0001-01-01", offset, "iso")} | ${label("0099-12-31", offset)} | ${formatDate("9999-12-31", offset, "iso")}`
+  derive invalid = `[${label("1900-02-29", 0)}][${label("2100-02-29", 0)}][${label("2024-04-31", 0)}][${label("0000-01-01", 0)}][${label("10000-01-01", 0)}]`
+  derive malformed = `[${label("2024-2-09", 0)}][${label(" 2024-02-09", 0)}][${label("2024-02-09\n", 0)}][${label("2024-02-09T00:00:00Z", 0)}][${label("２０２４-02-09", 0)}][${label("2024-٠٢-09", 0)}]`
+  derive badOffset = `[${label(due, 1081)}][${label(due, 0 / 0)}]`
+  action pick(day: string)
+    due = day
+  action east
+    offset = 1080
+  action west
+    offset = -1080
+  view
+    column
+      text picked testId="picked"
+      text month testId="month"
+      text key testId="key"
+      text timestamp testId="timestamp"
+      text leap testId="leap"
+      text edges testId="edges"
+      text invalid testId="invalid"
+      text malformed testId="malformed"
+      text badOffset testId="badOffset"
+      button "Leap day" press=pick("2024-02-29") testId="pick"
+      button "Invalid" press=pick("2026-02-29") testId="invalid-pick"
+      button "Clear" press=pick("") testId="clear"
+      button "East" press=east testId="east"
+      button "West" press=west testId="west"
+
+test "picked days keep their calendar date across offsets"
+  expect text "picked" == "Oct 16, 2026"
+  expect text "month" == "October 2026"
+  expect text "key" == "2026-10-16"
+  expect text "timestamp" == "1969-12-31"
+  expect text "leap" == "Feb 29, 2000 | Feb 29, 2400"
+  expect text "edges" == "0001-01-01 | Dec 31, 99 | 9999-12-31"
+  expect text "invalid" == "[][][][][]"
+  expect text "malformed" == "[][][][][][]"
+  expect text "badOffset" == "[][]"
+  tap "east"
+  expect text "picked" == "Oct 16, 2026"
+  expect text "timestamp" == "1970-01-01"
+  tap "west"
+  expect text "picked" == "Oct 16, 2026"
+  expect text "timestamp" == "1969-12-31"
+  tap "pick"
+  expect text "picked" == "Feb 29, 2024"
+  expect text "month" == "February 2024"
+  expect text "key" == "2024-02-29"
+  tap "invalid-pick"
+  expect text "picked" == ""
+  expect text "month" == ""
+  expect text "key" == ""
+  tap "clear"
+  expect text "picked" == ""

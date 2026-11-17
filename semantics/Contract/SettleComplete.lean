@@ -57,8 +57,8 @@ theorem lookup_isSome_append_self {x : String} {l : List (String × Value)} {v :
     (h : (lookup x l).isSome = false) : (lookup x (l ++ [(x, v)])).isSome = true := by
   rw [lookup_append]; cases hl : lookup x l <;> simp_all [lookup]
 
-theorem settle_pass_complete {p : Program} {o : Oracle} {slots now prev force} :
-    ∀ n st r, settle.pass p o slots now prev force n st = .ok r →
+theorem settle_pass_complete {p : Program} {o : Oracle} {slots now prev force lateReady} :
+    ∀ n st r, settle.pass p o slots now prev force lateReady n st = .ok r →
       (∀ d ∈ p.derives, (lookup d.name r.derives).isSome = true) ∧
       (∀ x ∈ p.resources, (lookup x.name r.resources).isSome = true)
   | 0, _, _, h => by simp [settle.pass] at h
@@ -292,8 +292,8 @@ theorem settle_pass_complete {p : Program} {o : Oracle} {slots now prev force} :
 
 /-- **Settlement is complete**: a settlement that succeeds has settled
 every derive and every resource. -/
-theorem settle_complete {p : Program} {o : Oracle} {slots now prev force st}
-    (h : settle p o slots now prev force = .ok st) :
+theorem settle_complete {p : Program} {o : Oracle} {slots now prev force lateReady st}
+    (h : settle p o slots now prev force lateReady = .ok st) :
     (∀ d ∈ p.derives, (lookup d.name st.derives).isSome = true) ∧
       (∀ x ∈ p.resources, (lookup x.name st.resources).isSome = true) :=
   settle_pass_complete _ _ _ h

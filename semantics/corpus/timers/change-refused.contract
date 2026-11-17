@@ -1,0 +1,31 @@
+component App
+  state key = 1
+  state count = 0
+  action follow
+    count = count + 1
+  action next
+    key = key + 1
+  action zero
+    key = 0
+  task follow key=1 / key
+    change(follow)
+  task valid key=1 / (key - count)
+    after(1000, follow)
+  view
+    column
+      text `${count}` testId="count"
+      button "next" press=next testId="next"
+      button "zero" press=zero testId="zero"
+
+test "a refused firing is consumed and a refused key preserves the pending firing"
+  clock +0
+  expect state count == 0
+  clock +0
+  expect state count == 0
+  tap "next"
+  tap "zero"
+  expect state key == 2
+  clock +0
+  expect state count == 1
+  clock +0
+  expect state count == 1

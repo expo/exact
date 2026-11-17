@@ -57,7 +57,7 @@ object Presence {
     private val oaep = OAEPParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA1, PSource.PSpecified.DEFAULT)
     private val background = Executors.newSingleThreadExecutor()
 
-    /** The host's synchronous call (`host/linux/src/canvas/presence.rs`): `ok:<text>` or `err:<why>`. */
+    /** The host's synchronous call (`host/painted/src/canvas/presence.rs`): `ok:<text>` or `err:<why>`. */
     @JvmStatic fun keystore(op: Int, request: String, value: String): String = try {
         when (op) {
             1 -> { add(JSONObject(request), value); "ok:" }

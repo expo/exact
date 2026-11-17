@@ -1,5 +1,24 @@
 import { test, expect } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
 import { createFixture } from './fixture.mjs';
+
+test('the fixture serves a JS build and its lazy chunks', async () => {
+  const dist=mkdtempSync(resolve(tmpdir(),'completion-storm-dist-'));
+  writeFileSync(resolve(dist,'.exact-build.json'),JSON.stringify({target:'js'}));
+  writeFileSync(resolve(dist,'index.html'),'<script type="module" src="./app.js"></script>');
+  writeFileSync(resolve(dist,'app.js'),'export const agent = () => import("./agent-123.js");');
+  writeFileSync(resolve(dist,'agent-123.js'),'export const ready = true;');
+  const f=await createFixture({port:0,controlPort:0,dist});
+  try {
+    for (const path of ['/','/app.js','/agent-123.js']) {
+      expect((await fetch(f.control+path)).status).toBe(200);
+    }
+    expect(await (await fetch(f.control+'/agent-123.js')).text()).toBe('export const ready = true;');
+    expect((await fetch(f.control+'/.exact-build.json')).status).toBe(404);
+  } finally { await f.close(); rmSync(dist,{recursive:true,force:true}); }
+});
 
 test('API-only fixture needs no dist and refuses static requests', async () => {
   const f=await createFixture({port:0,controlPort:0,dist:null});

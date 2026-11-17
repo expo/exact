@@ -19,6 +19,8 @@ import UIKit
 import UserNotifications
 #endif
 
+AgentLink.install()
+
 setvbuf(stdout, nil, _IOLBF, 0)
 let exact = ExactComposition.app
 /// The host's own lines go to stderr: under the agent, stdout is the protocol.
@@ -213,7 +215,7 @@ func agentReady() {
     guard ExactEnv.agentMode, !readySent else { return }
     readySent = true
     let error: Any = (a.bootError ?? b.bootError).map { $0 as Any } ?? NSNull()
-    Agent.startSocket(ready: ["ready": true, "boot": max(a.bootMs, b.bootMs), "views": a.viewCount + b.viewCount, "sessions": sessions.map(\.0), "error": error, "pid": Int(getpid())], sessions: sessions)
+    AgentLink.startSocket(ready: ["ready": true, "boot": max(a.bootMs, b.bootMs), "views": a.viewCount + b.viewCount, "sessions": sessions.map(\.0), "error": error, "pid": Int(getpid())], sessions: sessions)
 }
 
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -229,8 +231,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         a = exact.makeSession(delegate: delegate, label: "a")
         b = exact.makeSession(delegate: delegate, label: "b")
+        exact.installHostEvents(applicationDelegate: nil, sceneDelegate: SceneDelegate.self)
         #if !os(tvOS)
-        exact.installNotificationClicks()
+        exact.installNotificationClicks(boot: { $0.bootForWake() }, activate: nil)
         #endif
         if ExactEnv.agentFreezes { a.clock = 0; b.clock = 0 }
         sessions = [("a", a), ("b", b)]
@@ -259,6 +262,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard let ws = scene as? UIWindowScene else { return }
         #if !os(tvOS)
         if let response = connectionOptions.notificationResponse { exact.openNotification(response) }
+        exact.hostEvents(connectionOptions: connectionOptions)
         #endif
         let w = ExactWindow(windowScene: ws)
         let rootController = RootController()

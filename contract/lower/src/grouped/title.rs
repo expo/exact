@@ -19,16 +19,16 @@ use contract_syntax::Node;
 /// Where among `children` the row's title button stands, if it has one: the
 /// first `button` or `link` with only symbols and inputs shown before it,
 /// whose shown face is texts and symbols, one text at least, and with a
-/// shown text after it among the row's parts.
+/// shown text after it among the row's parts. An `if` counts by its arms, as
+/// `leading` has it: each arm passes, and the face has a text if one arm does.
 pub(super) fn title_button(children: &[Node]) -> Option<usize> {
     let text = |n: &Node| matches!(n, Node::Element { tag, .. } if tag == "text") && !hidden(n);
     let at = children.iter().position(|c| {
         !hidden(c) && matches!(c, Node::Element { tag, .. } if tag == "button" || tag == "link")
     })?;
-    let before = children[..at]
-        .iter()
-        .filter(|c| !hidden(c))
-        .all(|c| matches!(c, Node::Element { tag, .. } if tag == "input" || symbol(c).is_some()));
+    let before = every_shown(&children[..at], &|c| {
+        matches!(c, Node::Element { tag, .. } if tag == "input") || symbol(c).is_some()
+    });
     let Node::Element {
         tag,
         attrs,
@@ -38,19 +38,33 @@ pub(super) fn title_button(children: &[Node]) -> Option<usize> {
     else {
         return None;
     };
-    let shown: Vec<&Node> = face.iter().filter(|c| !hidden(c)).collect();
-    let face_ok = shown.iter().any(|c| text(c))
-        && shown.iter().all(|c| text(c) || symbol(c).is_some())
+    let face_ok = any_shown(face, &text)
+        && every_shown(face, &|c| text(c) || symbol(c).is_some())
         && !column_row(tag, attrs)
         // A styled button (bordered, filled) beside a value is a control.
         && !attrs.iter().any(|a| a.name == "buttonStyle" || a.name == "appearance");
-    let value = children[at + 1..].iter().any(|c| match c {
+    let value = any_shown(&children[at + 1..], &text);
+    (before && face_ok && value).then_some(at)
+}
+
+/// Whether every shown node of `nodes`, through each arm of an `if`, is `ok`.
+fn every_shown(nodes: &[Node], ok: &dyn Fn(&Node) -> bool) -> bool {
+    nodes.iter().filter(|c| !hidden(c)).all(|c| match c {
         Node::When {
             then, otherwise, ..
-        } => then.iter().chain(otherwise).any(text),
-        other => text(other),
-    });
-    (before && face_ok && value).then_some(at)
+        } => every_shown(then, ok) && every_shown(otherwise, ok),
+        other => ok(other),
+    })
+}
+
+/// Whether some shown node of `nodes`, in some arm of an `if`, is `ok`.
+fn any_shown(nodes: &[Node], ok: &dyn Fn(&Node) -> bool) -> bool {
+    nodes.iter().filter(|c| !hidden(c)).any(|c| match c {
+        Node::When {
+            then, otherwise, ..
+        } => any_shown(then, ok) || any_shown(otherwise, ok),
+        other => ok(other),
+    })
 }
 
 /// The title button's sheet: the list's press face, as a button row is,

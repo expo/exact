@@ -104,6 +104,16 @@ fn waits(mut r: Runner<Data>) {
     assert!(!held(&r, "coin-2"));
     assert!(key(&r, "coin-4").is_some(), "the lead mounted row 4");
     assert!(held(&r, "coin-4"), "a row below the port waits");
+    let window = r.collections().pop().unwrap().window.unwrap();
+    assert_eq!(
+        window.reveal,
+        [0.0, 300.0],
+        "quiet travel stops at the first unrevealed row"
+    );
+    assert!(
+        window.built[1] > window.reveal[1],
+        "the reveal is inside built coverage"
+    );
 
     // The engine hears it paused at its start, and running once it shows.
     let mut engine = Engine::new();
@@ -179,10 +189,16 @@ fn a_row_shown_without_a_report_starts_too() {
     assert_eq!(shown.receipts.len(), 1);
     assert!(!shown.receipts[0].receipt.revealed.is_empty());
     assert!(!held(&r, "coin-4"));
+    let after = r.collections();
     assert_eq!(
-        r.collections(),
-        before,
-        "the window and rows are the last report's"
+        after[0].rows, before[0].rows,
+        "revealing rows does not rebuild them"
+    );
+    assert_eq!(after[0].revision, before[0].revision);
+    assert_eq!(after[0].scroll_sequence, before[0].scroll_sequence);
+    assert!(
+        after[0].window.as_ref().unwrap().reveal[1] > before[0].window.as_ref().unwrap().reveal[1],
+        "the reveal bound advances past rows that have shown"
     );
     // Again, and the report that follows: nothing is revealed twice.
     assert!(r.collection_shown(feed, 250.0).unwrap().receipts.is_empty());

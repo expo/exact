@@ -2,6 +2,7 @@ import { MalformedOperation, inputJSON } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { renderAx } from './agent-ax.mjs';
 import { decodePng, encodePng, shrink } from './png.mjs';
@@ -285,7 +286,8 @@ export function render(op, r, how = {}) {
     case 'state': {
       if (!r || typeof r !== 'object') return q(r);
       if (Array.isArray(r)) return stateCap(q(r), r, how);
-      if (r.draws || r.visible || r.look) return renderLook(r);
+      // Routed by what was asked: a world's `perf` has a `draws` (the last frame's count) and a `look` too.
+      if (how.look) return renderLook(r);
       // One line a section: pretty-printing cost an app's state more than half again its JSON (Caltrain, 2026-10-09).
       const { epoch, incarnation, clock, ...rest } = r, app = 'slots' in r;
       const head = [epoch != null && `epoch ${epoch}`, incarnation != null && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`].filter(Boolean).join(' · ');
@@ -432,7 +434,7 @@ function renderNode(n) {
   if (n.visible) out.push(`  visible ${sorted(n.visible).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   if (n.native) out.push(`  native ${sorted(n.native).filter(([k]) => k !== 'subviews').map(([k, v]) => `${k}=${typeof v === 'string' ? v : q(v)}`).join(' ')}`);
   if (n.browser) out.push(`  browser ${sorted(n.browser).map(([k, v]) => `${k}=${q(v)}`).join(' ')}`);
-  // A pressed paint, on the page's images, which the computed opacity and background don't show (LLP 1061 D7).
+  // A pressed paint, which the computed opacity and background don't show where it is on the page's images (LLP 1061 D7).
   if (n.press_shown) out.push(`  press shows opacity=${n.press_shown.opacity} background=${q(n.press_shown.backgroundColor)} color=${q(n.press_shown.color)} (paint ${n.press_shown.paint})`);
   if (n.native?.subviews) out.push(...renderSubviews(n.native.subviews));
   return out;
@@ -501,9 +503,9 @@ export async function readTrack(s, cursor = trackCursors.get(s)) {
 export async function perfOp(s, args, line, step) {
   if (args[0] === 'frames') {
     if (args[1] === 'health') {
-      const source = ['app', 'scroll'].includes(args[2]) ? args[2] : undefined;
+      const source = ['app', 'scroll', 'window'].includes(args[2]) ? args[2] : undefined;
       const end = source ? 3 : 2;
-      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll] [during "<op>" …]');
+      if (args.length !== end && args[end] !== 'during') throw new MalformedOperation('perf frames health [app|scroll|window] [during "<op>" …]');
       const read = cursor => s.op({ op: 'perf', frames: true, health: true, ...(source ? { source } : {}), ...(cursor ? { cursor } : {}) });
       let before;
       try { before = await read(); }
@@ -521,7 +523,7 @@ export async function perfOp(s, args, line, step) {
       return read(before.cursor);
     }
     if (args[1] === 'report') {
-      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll]');
+      if (args.length > 3 || (args[2] !== undefined && !['app', 'scroll', 'window'].includes(args[2]))) throw new MalformedOperation('perf frames report [app|scroll|window]');
       return s.op({ op: 'perf', frames: true, report: true, ...(args[2] ? { source: args[2] } : {}) });
     }
     if (args[1] === 'track') {
@@ -558,22 +560,47 @@ export async function perfOp(s, args, line, step) {
           (action !== 'start' && args.length !== 3) || !Number.isInteger(durationMs) || durationMs < 1 || durationMs > 120000) {
         throw new MalformedOperation('perf frames capture start [1–120000 ms] | stop | clear');
       }
-      return s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      const reply = await s.op({ op: 'perf', frames: true, capture: action, ...(action === 'start' ? { durationMs } : {}) });
+      // Android's lease lends the display the clock; once it is returned, the driver's goes on from where it stands.
+      if (s.host === 'android' && Number.isFinite(reply.clock)) s.now = reply.clock;
+      return reply;
     }
     const at = word => { const i = args.indexOf(word); return i < 0 ? undefined : Number(args[i + 1]); };
     const live = at('live'), late = at('late');
     if (live !== undefined && !(Number.isInteger(live) && live > 0 && live <= 120000)) throw new MalformedOperation('perf frames live <ms>: a whole number of milliseconds, 1–120000');
     if (live !== undefined && ['ios', 'host-ios', 'macos', 'host'].includes(s.host)) {
       if (live > 30000 || late !== undefined || args.length !== 3 || args[1] !== 'live') throw new MalformedOperation('perf frames live <1–30000 ms> on Apple; use report for hitch detail');
-      const before = await s.op({ op: 'perf', frames: true, health: true });
-      if (before.error || !before.available) return before;
-      if (before.capture?.agentLeaseRemainingMs > 0) throw new MalformedOperation('a live frame capture is already active; read health or stop that capture first');
+      const current = await s.op({ op: 'perf', frames: true, health: true });
+      if (current.error) return current;
+      if (current.capture?.agentLeaseRemainingMs > 0) throw new MalformedOperation('a live frame capture is already active; read health or stop that capture first');
+      // The lease starts an on-demand collector in a new generation, so the baseline is read once it holds.
       const capture = await s.op({ op: 'perf', frames: true, capture: 'start', durationMs: live + 5000 });
       if (!capture.capture) return capture;
       try {
+        const before = await s.op({ op: 'perf', frames: true, health: true });
+        if (before.error || !before.available) return before;
         await new Promise(resolve => setTimeout(resolve, live));
         return await s.op({ op: 'perf', frames: true, health: true, cursor: before.cursor });
       } finally { await s.op({ op: 'perf', frames: true, capture: 'stop' }); }
+    }
+    if (live !== undefined && s.host === 'android') {
+      // Android's capture lease lends the display the clock (LLP 1079.000 §7.1), so the window's frames are real ones:
+      // the baseline is read once it is lent, and the lease ends with the window, giving the driver its clock back.
+      if (live > 30000 || late !== undefined || args.length !== 3 || args[1] !== 'live') throw new MalformedOperation('perf frames live <1–30000 ms> on Android; use report for hitch detail');
+      const capture = await s.op({ op: 'perf', frames: true, capture: 'start', durationMs: live + 5000 });
+      if (!capture.capture) return capture;
+      try {
+        // Both sources over the same window: Exact's turns, and the window's frames beside them.
+        const read = (source, cursor) => s.op({ op: 'perf', frames: true, health: true, source, ...(cursor ? { cursor } : {}) });
+        const before = await read('app'), window = await read('window');
+        if (before.error || !before.available) return before;
+        await new Promise(resolve => setTimeout(resolve, live));
+        const after = await read('app', before.cursor);
+        return window.cursor ? { ...after, windowFrames: await read('window', window.cursor) } : after;
+      } finally {
+        const stopped = await s.op({ op: 'perf', frames: true, capture: 'stop' });
+        if (Number.isFinite(stopped.clock)) s.now = stopped.clock;
+      }
     }
     return s.perf(null, { frames: true, late, ...(live !== undefined ? { live } : {}) });
   }
@@ -598,9 +625,11 @@ export async function perfOp(s, args, line, step) {
   const before = await s.perf(target);
   for (const op of ops) await step(op);
   if (target?.startsWith('world:')) {
-    const after = await s.perf(target, {spanSince: before.spanTicks});
+    const after = await s.perf(target, {spanSince: {incarnation: before.incarnation, generation: before.generation, ticks: before.spanTicks}});
+    if (after.incarnation !== before.incarnation) throw Error('perf world: world incarnation changed (remount, restart or restore); no difference is defined');
+    if (after.generation !== before.generation) throw Error('perf world: recording generation changed; no difference is defined');
     if (after.tick < before.tick || after.restarted !== before.restarted) throw Error('perf world: world restarted between reads');
-    return {...after, from:{tick:before.tick}};
+    return {...after, from:{tick:before.tick, incarnation:before.incarnation, generation:before.generation, spanTicks:before.spanTicks}};
   }
   return perfDelta(before, await s.perf(target));
 }
@@ -718,7 +747,7 @@ export function renderPerf(r) {
   if (r.format === 'exact.frame-health.metrics/2') return renderFrameHealthMetrics(r);
   if (r.format === 'exact.frame-health/2') return renderFrameHealthReport(r);
   if (typeof r.capture === 'boolean') return `frame capture ${r.capture ? 'armed' : 'paused'}${r.reason ? `: ${r.reason}` : ''}${r.agentLeaseRemainingMs ? ` · agent lease ${r.agentLeaseRemainingMs} ms` : ''}`;
-  if (r.spans) return [`${r.target} · tick ${r.from ? r.from.tick + '..' : ''}${r.tick} · exclusive ms${r.tickMs ? ` · tick p50 ${r.tickMs.p50} p95 ${r.tickMs.p95} mean ${r.tickMs.mean}` : ''}`,
+  if (r.spans) return [`${r.target} · tick ${r.from ? r.from.tick + '..' : ''}${r.tick} · world incarnation ${r.incarnation} · recording generation ${r.generation} · exclusive ms${r.tickMs ? ` · tick p50 ${r.tickMs.p50} p95 ${r.tickMs.p95} mean ${r.tickMs.mean}` : ''}`,
     ...r.spans.map(s => `  ${s.name} at ${s.at}: p50 ${s.p50} p95 ${s.p95} max ${s.max} perTick ${s.perTick} (${s.count} ticks)`)].join('\n');
   if (r.calls && r.hatches) return renderHatchPerf(r);
   if (r.streamTiming) return renderStreamTiming(r.streamTiming);
@@ -835,8 +864,12 @@ export async function pidTrace(pid, dest, run = spawnSync, timeout = 10000) {
     if (container.status !== 0) throw new Error(`trace --pid ${pid}: ${container.stderr.trim() || 'simctl get_app_container failed'}`);
     dir = resolve(container.stdout.trim(), 'tmp');
   } else {
-    // A Mac app here is unsandboxed: its temporary directory is this user's.
-    dir = run('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim();
+    // A sandboxed app's temporary directory is its container's (`mac --sandbox`, LLP 1030.005 D4); another's, this user's.
+    const app = exe.match(/^(.*?\.app)\/Contents\/MacOS\//)?.[1];
+    const signed = app ? run('codesign', ['-d', '--entitlements', '-', '--xml', app], { encoding: 'utf8' }).stdout ?? '' : '';
+    const id = /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/.test(signed)
+      && run('plutil', ['-extract', 'CFBundleIdentifier', 'raw', resolve(app, 'Contents/Info.plist')], { encoding: 'utf8' }).stdout?.trim();
+    dir = id ? resolve(homedir(), 'Library/Containers', id, 'Data/tmp') : run('getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim();
   }
   const ready = resolve(dir, `exact-trace-${pid}.ready`), started = Date.parse(ps('lstart'));
   if (!existsSync(ready) || (Number.isFinite(started) && statSync(ready).mtimeMs < started - 1000)) {
@@ -900,6 +933,10 @@ export function renderTrace(t) {
   if (t.perf?.sites?.some(x => x.source?.status !== 'compatible') && typeof digest === 'string') {
     out.push(`source · no map here fits plan ${digest.slice(0, 12)}: pass --plan a build of it (a plan, its map, or a directory such as that checkout's target/)${hb.commit ? `; the host was built from ${hb.commit.slice(0, 12)}${hb.machine ? ` on ${hb.machine}` : ''}` : ''}`);
   }
+  if (t.observation) {
+    const o = t.observation;
+    out.push(`observation · ${o.clockMode} clock · ${o.scheduling} scheduling · store ${o.store} · substitutions: ${(o.substitutions ?? []).join(', ') || 'none'} · reads: ${Object.entries(o.reads ?? {}).map(([name, read]) => `${name} ${read.class}`).join(', ')}`);
+  }
   if (t.proxies) out.push(`proxies · ${Object.entries(t.proxies).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ')}`);
   if (t.frames?.lifetime) {
     out.push('', renderPerf({ ...t.frames, late: [] }));
@@ -949,7 +986,8 @@ export function renderTrace(t) {
 /** Quantiles are bounds from finalized populations; frame rates from callbacks never certify presentation. */
 export function renderFrameHealthMetrics(report) {
   if (report.error) return `frame health unavailable: ${report.error} · ${report.reason ?? 'read a fresh baseline'}`;
-  if (Buffer.byteLength(JSON.stringify(report), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
+  // Each source's reply has its own budget: Android's live window carries the window's frames beside it.
+  if (Buffer.byteLength(JSON.stringify({ ...report, windowFrames: undefined }), 'utf8') > 4000) throw new Error('Frame health metrics exceed the 4 KB limit. Request a fresh snapshot with a matching Exact reader.');
   const frames = report.frames ?? {}, work = report.work ?? {}, window = report.window ?? {};
   const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
   const { policy, cadence, target, contentLatency } = report.assessments ?? {};
@@ -966,10 +1004,18 @@ export function renderFrameHealthMetrics(report) {
     `generation ${window.generation ?? '?'} · ${window.kind ?? '?'} · intervals finalized ${window.intervalFromNs ?? '?'}..${window.intervalThroughNs ?? '?'} ns · work finalized ${window.workFromNs ?? '?'}..${window.workThroughNs ?? '?'} ns`,
     `callbacks ${frames.callbacks ?? '?'} · held ${frames.held ?? '?'} · frame intervals ${frames.intervals ?? '?'} · ${frames.perSecond == null ? 'rate unknown' : `${frames.perSecond.toFixed(2)} FPS`} · missed ${frames.missedFrames ?? '?'} of ${frames.requestedSlots ?? '?'} requested slots`,
     `frame time median ${bounds(frames.medianBoundsNs)} · p99 ${bounds(frames.p99BoundsNs)} · pacing changes ${frames.pacingChanges ?? '?'} · schedule changes ${frames.cadenceChanges ?? '?'}`,
-    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
-    `coverage ${JSON.stringify(report.coverage ?? {})}`,
-    'Bounds include the lower value and exclude the upper value. A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.'].join('\n');
+    `work records ${work.records ?? '?'} · late ${work.late ?? `unknown${work.latenessUnknown ? ` (${work.latenessUnknown})` : ''}`} · in flight ${work.pending ?? '?'}, overdue ${work.overdue ?? 'unknown'}${work.lost > 0 ? `, lost ${work.lost}` : ''} · median ${bounds(work.medianBoundsNs)} · p99 ${bounds(work.p99BoundsNs)} · maximum ${bounds(work.maximumBoundsNs)}`,
+    `coverage ${JSON.stringify(report.coverage ?? {})}${report.droppedReports > 0 ? ` · ${report.droppedReports} reports lost before they were read` : ''}`,
+    `Bounds include the lower value and exclude the upper value. ${FRAME_SOURCES[report.source] ?? FRAME_SOURCES.apple}`,
+    ...(report.windowFrames ? ['', renderFrameHealthMetrics(report.windowFrames)] : [])].join('\n');
 }
+
+/** What a frame is, and what stays unmeasured, by source (LLP 1079.000 §6.1, §6.2). */
+const FRAME_SOURCES = {
+  apple: 'A frame is a callback that started frame work, timed from the display link; presentation, Core Animation commits, input latency and GPU execution remain unmeasured, so a proxy pass covers callbacks and Exact\'s own work only.',
+  'exact-app-choreographer': 'A frame is a Choreographer turn on exact2\'s thread, timed from its vsync until the main thread ingested what it published; presentation, RenderThread, input latency and GPU execution remain unmeasured, so a proxy pass covers turns and Exact\'s own work only.',
+  'android-frame-metrics': 'A frame is one the window drew, from its intended vsync for its FrameMetrics total duration, against its deadline; the window says nothing when it idles, so frame times and cadence are unknown, and presentation and SurfaceViews remain unmeasured.',
+};
 
 /** Exact's frame clock's users, from bit 40 of a screen's row (`FrameClock.Order`) */
 const SCREEN_ASKERS = ["the session's clock", "a list's offset correction", 'a navigation reveal', 'the scroll pump', 'heavy leaves', 'a live SVG filter', 'a resize grip'];
@@ -985,7 +1031,7 @@ export function renderFrameHealthReport(report) {
   const expected = screen ? SCREEN_COLUMNS : ['sequence', 'capture', 'generation', 'age_us', 'flags', 'target_offset_us', 'period_us', 'requested_period_us', 'gap_us', 'callback_us',
     'before_gap_us', 'before_callback_us', 'after_offset_us', 'after_gap_us', 'after_callback_us',
     'owner_queued_offset_us', 'owner_began_offset_us', 'owner_finished_offset_us', 'main_landed_offset_us',
-    'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations'];
+    'apply_began_offset_us', 'apply_finished_offset_us', 'work_target_offset_us', 'operations', 'frame_start_offset_us'];
   if (!Array.isArray(columns) || columns.length !== expected.length || !Array.isArray(hitches) || hitches.length > 16 ||
       Buffer.byteLength(JSON.stringify(report), 'utf8') > 4000 || new Set(columns).size !== columns.length) {
     throw new Error('Frame health report has an invalid structure or exceeds 4 KB. Export it again from Exact.');
@@ -998,6 +1044,13 @@ export function renderFrameHealthReport(report) {
   out.push(`build ${identity.build ?? 'unknown'}${identity.buildDirty ? ' (dirty)' : ''} · app build ${identity.appBuild ?? 'unknown'} · ${identity.buildKind ?? 'unknown build kind'} · ${identity.simulator === true ? 'simulator' : identity.simulator === false ? 'physical device' : 'unknown device type'}`,
     `${identity.device ?? 'unknown device'} · ${identity.os ?? 'unknown OS'} · display maximum ${identity.displayMaximumHz ?? '?'} Hz · live-agent parity ${report.scope?.liveAgentParity ?? 'unknown'}`);
   if (report.time?.clamped) out.push('Timing values were clamped; exact durations are unavailable beyond the integer range.');
+  // Every frame since the collector's reset, which the rows' late frames are a few of: bin bounds, null unmeasured
+  const core = report.coreSinceReload ?? {};
+  const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
+  const spread = b => b ? `median ${bounds(b.median)}, p99 ${bounds(b.p99)}, maximum ${bounds(b.maximum)}` : 'unmeasured';
+  out.push(`since reset: ${core.callbacks ?? '?'} ${screen ? 'updates' : 'callbacks'} · ${screen ? '' : `frame intervals ${core.frameIntervals ?? '?'} · missed ${core.missedFrames ?? 'unknown'} · `}late ${core.lateFrames ?? 'unknown'}`,
+    `  ${screen ? '' : `frame time ${spread(core.frameTimeBoundsNs)} · `}work ${spread(core.workBoundsNs)}`);
+  if (report.otherSources?.length) out.push(`other sources: ${report.otherSources.map(s => `${s.source} (${s.retainedEvents ?? '?'} retained)`).join(', ')} · ${report.selection ?? 'one source per report'}`);
   const ms = value => value == null ? 'unknown' : `${(value / 1e3).toFixed(3)} ms`;
   for (const row of hitches) {
     if (!Array.isArray(row) || row.length !== columns.length || row.slice(0, 3).some(value => typeof value !== 'string' || !/^\d{1,20}$/.test(value)) ||
@@ -1013,7 +1066,8 @@ export function renderFrameHealthReport(report) {
     const bit = number => Math.floor(event.flags / 2 ** number) % 2 === 1;
     const workload = bit(23) ? ['motion', 'spatial', 'canvas', 'frame tasks', 'fill pending', 'tick pending', 'hatch frames'].filter((_, index) => bit(index + 16)).join(', ') || 'none at observation' : 'unknown';
     const thermal = ['nominal', 'fair', 'serious', 'critical'][Math.floor(event.flags / 2 ** 32) % 4];
-    const reasons = [event.flags & 1 ? 'callback gap' : null, event.flags & 2 ? 'callback target overrun' : null, event.flags & 4 ? 'tick apply target overrun' : null].filter(Boolean);
+    const reasons = [event.flags & 1 ? 'callback gap' : null, event.flags & 2 ? 'callback target overrun' : null,
+      event.flags & 4 ? 'tick apply target overrun' : null, event.flags & 128 ? 'frame work target overrun' : null].filter(Boolean);
     if (screen) {
       const next = event.flags & 8 ? `next update's effective start ${ms(event.after_offset_us)} after this one's, work ${ms(event.after_callback_us)}` : 'next update unseen';
       const rest = event.exact_us == null || event.card_us == null ? null : Math.max(0, event.callback_us - event.exact_us - event.card_us);
@@ -1021,6 +1075,11 @@ export function renderFrameHealthReport(report) {
         `  work ${ms(event.callback_us)} · deadline ${ms(Math.abs(event.target_offset_us))} ${event.target_offset_us < 0 ? 'before' : 'after'} its work's effective start, the commit less its work · previous update's work ${ms(event.before_callback_us || null)} · ${next}`,
         `  of its work: Exact's host phases ${ms(event.exact_us)} · the card's ${ms(event.card_us)} · the rest ${ms(rest)} · nodes laid out ${event.layouts ?? 'unknown'} · the main thread also waited ${ms(event.waited_us)} in the update`,
         `  workload ${workload} · asked by ${SCREEN_ASKERS.filter((_, index) => bit(index + 40)).join(', ') || 'none of Exact\'s frame clock (UIKit or the system)'} · thermal ${thermal} · low power ${bit(34)}${bit(36) ? ' · card dragged' : ''}`);
+      continue;
+    }
+    if (event.flags & 128) {
+      out.push(`#${event.sequence} / capture ${event.capture} / generation ${event.generation} · ${ms(event.age_us)} ago · ${reasons.join(', ')}`,
+        `  work ${ms(clamped || event.frame_start_offset_us == null ? null : -event.frame_start_offset_us)} · budget ${ms(elapsed('target_offset_us', 'frame_start_offset_us'))} · finished ${ms(clamped || event.target_offset_us == null ? null : -event.target_offset_us)} past deadline`);
       continue;
     }
     out.push(`#${event.sequence} / capture ${event.capture} / generation ${event.generation} · ${ms(event.age_us)} ago · ${reasons.join(', ') || 'timing event'}`,
@@ -1091,6 +1150,9 @@ function renderAgreement(a) {
   return out.join('\n');
 }
 
+/** The second words of `state` that read a world's look frame. */
+export const LOOK_READS = ['draws', 'visible', 'look'];
+
 /** The `state` op's words (LLP 1116.007 D3.9). `state` is the whole record; `state <target>` a world's own (a game's
  * `world:*` or `world:entity`: its entities; `state <canvas> input` its world's input); a name that is a state, derive or resource, or a field of the record
  * (`mediaSession`), reads that, down a dotted path (`groceries.0.done`) as an authored `expect state` does. Any other
@@ -1098,7 +1160,7 @@ function renderAgreement(a) {
  * or text (a sequencer's `transport` bar and the record's `transport`). */
 export async function stateOp(s, args) {
   // `state <canvas> draws`, `state <canvas>:<entity> visible` and `state <canvas> look` are a world's look frame (LLP 1127.000 D1, D4).
-  const look = ['draws', 'visible', 'look'].includes(args[1]) ? { [args[1]]: true, world: true } : {};
+  const look = LOOK_READS.includes(args[1]) ? { [args[1]]: true, world: true } : {};
   const page = { ...look, ...(args[1] === 'events' ? {world:true, events:true, ...(args[2] ? {event_type:args[2]} : {})} : {}), ...(args.includes('from') ? { from: Number(args[args.indexOf('from') + 1]) } : {}), ...(args.includes('limit') ? { limit: Number(args[args.indexOf('limit') + 1]) } : {}), ...(args.includes('resources') ? { resources: true } : {}) };
   const read = (target) => s.state(target, args[1] === 'under' ? args[2] : undefined, args[1] === 'pose', args[1] === 'busy', page);
   if (args[0] == null) return read();
@@ -1317,4 +1379,13 @@ export async function lookPicture(s, path, target, view = {}) {
   const { tick, hash, w, h, look, bounds } = reply, from = Object.fromEntries(Object.entries(view).filter(([k]) => k !== 'resolution'));
   // `bounds`: the scene's centre and radius an orbit or plan view was drawn within.
   return { screenshot: resolve(path), w, h, tick, hash, canvas: at.id, look, ...(bounds ? { bounds } : {}), ...(Object.keys(from).length ? { view: from } : {}) };
+}
+
+/** A presented box, including a layout-only node read from its logical layout. */
+export async function layoutBox(s, id, layout) {
+  const box = layout.nodes.find(n => n.id === id);
+  if (box) return box;
+  if (!['ios', 'host-ios'].includes(s.host)) return undefined;
+  const node = (await s.layout(id)).node;
+  return node?.native?.layoutOnly === true ? node.space?.viewport : undefined;
 }

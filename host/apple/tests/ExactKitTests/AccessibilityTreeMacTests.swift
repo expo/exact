@@ -63,6 +63,48 @@ final class AccessibilityTreeMacTests: XCTestCase {
     }
     private func elements(_ ax: [String: Any]) -> [[String: Any]] { ax["elements"] as? [[String: Any]] ?? [] }
 
+    /// A tablist's tabs are hidden by the host while a segmented control draws their words: what the
+    /// tablist labels, and a live region that holds it beside a grouped list, read the same once the
+    /// control is adopted.
+    func testATablistASegmentedControlDrawsStillNamesAndSpeaks() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 29, "kind": "view", "props": ["accessibilityLive": "polite"]],
+            ["op": "create", "id": 30, "kind": "view", "props": ["id": "views"]],
+            ["op": "create", "id": 31, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab"]],
+            ["op": "create", "id": 32, "kind": "button", "handlers": ["press"], "props": ["accessibilityRole": "tab"]],
+            ["op": "create", "id": 33, "kind": "text", "props": ["text": "One"]],
+            ["op": "create", "id": 34, "kind": "text", "props": ["text": "Two"]],
+            ["op": "create", "id": 35, "kind": "control", "props": ["type": "checkbox", "accessibilityLabelledBy": "views"], "handlers": ["change"]],
+            ["op": "create", "id": 36, "kind": "list", "props": ["listStyle": "inset-grouped"]],
+            ["op": "create", "id": 37, "kind": "view", "props": ["semanticTag": "section"]],
+            ["op": "create", "id": 38, "kind": "view"],
+            ["op": "create", "id": 39, "kind": "text", "props": ["text": "Name"]],
+            ["op": "children", "id": 31, "ids": [33]], ["op": "children", "id": 32, "ids": [34]],
+            ["op": "children", "id": 30, "ids": [31, 32]],
+            ["op": "children", "id": 38, "ids": [39]], ["op": "children", "id": 37, "ids": [38]], ["op": "children", "id": 36, "ids": [37]],
+            ["op": "children", "id": 29, "ids": [30, 36]],
+            ["op": "children", "id": 1, "ids": [2, 3, 29, 35]],
+            ["op": "frame", "id": 29, "x": 0.0, "y": 100.0, "w": 400.0, "h": 120.0],
+            ["op": "frame", "id": 30, "x": 0.0, "y": 0.0, "w": 400.0, "h": 40.0],
+            ["op": "frame", "id": 36, "x": 0.0, "y": 50.0, "w": 400.0, "h": 60.0],
+            ["op": "frame", "id": 35, "x": 0.0, "y": 230.0, "w": 22.0, "h": 22.0],
+        ]))
+        let live = try XCTUnwrap(p.views[29]), tab = try XCTUnwrap(p.views[31]), control = try XCTUnwrap(p.controls.controls[35])
+        func reads(_ when: String) {
+            p.syncAccessibility()
+            XCTAssertEqual(control.accessibilityLabel(), "One Two", when)
+            XCTAssertEqual(live.liveText, "One Two Name", when)
+        }
+        XCTAssertNil(p.segments.control(of: 30))
+        XCTAssertFalse(tab.isHidden)
+        reads("as authored")
+        p.apply(wireBatch([["op": "props", "id": 30, "set": ["accessibilityRole": "tablist"]]]))
+        XCTAssertNotNil(p.segments.control(of: 30))
+        XCTAssertTrue(tab.isHidden)
+        reads("drawn by the segmented control")
+    }
+
     /// A native control is named by `aria-labelledby` as by `aria-label`
     /// (accname), and follows the text it names.
     func testANativeCheckboxIsNamedByTheTextItsLabelledbyNames() throws {
@@ -300,6 +342,92 @@ final class AccessibilityTreeMacTests: XCTestCase {
         XCTAssertTrue(slider.sendAction(slider.action, to: slider.target))
         XCTAssertEqual(heard, ["input:60", "input:70", "change:70"])
         XCTAssertNil(p.controls.lastRange[11])
+    }
+
+    /// An assistive app's increment or decrement of a range is first its
+    /// arrow key (LLP 1069.001, amended 2026-11-16): where a `key` handler
+    /// calls `preventDefault()` the move is the handler's and AppKit's step
+    /// does not happen; where none does, AppKit steps as before.
+    func testARangesAccessibilityStepIsItsArrowKeyFirst() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 11, "kind": "control",
+             "props": ["type": "range", "min": "0", "max": "240", "step": "any", "value": "40"],
+             "handlers": ["input", "change", "key", "keyup"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 11]],
+            ["op": "frame", "id": 11, "x": 0, "y": 140, "w": 129, "h": 24],
+        ]))
+        let slider = try XCTUnwrap(p.controls.controls[11] as? NSSlider)
+        let cell = try XCTUnwrap(slider.cell as? NSSliderCell)
+        var keys: [String] = [], sent: [String] = [], takes = true
+        p.onControlValue = { _, value, _, _ in sent.append(value) }
+        p.onKey = { id, key in
+            keys.append("\(id):\(key.up ? "up" : "down"):\(key.chord)")
+            if takes, !key.up { p.defaultPrevented = true }
+        }
+        XCTAssertFalse(cell.accessibilityPerformIncrement(), "the answer is whether the value moved")
+        XCTAssertFalse(slider.accessibilityPerformDecrement(), "the control's own method is the cell's")
+        XCTAssertEqual(keys, ["11:down:ArrowRight", "11:up:ArrowRight", "11:down:ArrowLeft", "11:up:ArrowLeft"])
+        XCTAssertEqual(slider.doubleValue, 40, "the handler took both: AppKit moved nothing")
+        XCTAssertEqual(sent, [])
+        // The handler's change to the bound value is the move.
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["value": "50"]]]))
+        XCTAssertEqual(slider.doubleValue, 50)
+
+        takes = false
+        keys = []
+        XCTAssertTrue(cell.accessibilityPerformIncrement())
+        XCTAssertEqual(keys, ["11:down:ArrowRight", "11:up:ArrowRight"], "heard, and left to AppKit")
+        XCTAssertEqual(slider.doubleValue, 62, "AppKit's own step, a twentieth of the span")
+        XCTAssertEqual(sent, ["62", "62"], "input, then change")
+
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["disabled": "true"]]]))
+        takes = true
+        keys = []
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(keys, [], "a disabled range sends no key")
+        XCTAssertEqual(slider.doubleValue, 62)
+    }
+
+    /// A step nothing prevented is the key's default action: AppKit makes
+    /// it between the keydown and the keyup, as a keyboard's arrow lands,
+    /// from the value the keydown's handler left; and a range that handler
+    /// disabled or made inert does not move, as an inert one gets no key.
+    func testAnUnpreventedRangeStepFollowsItsKeydown() throws {
+        let p = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 11, "kind": "control",
+             "props": ["type": "range", "min": "0", "max": "240", "step": "any", "value": "40"],
+             "handlers": ["input", "change", "key", "keyup"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 11]],
+            ["op": "frame", "id": 11, "x": 0, "y": 140, "w": 129, "h": 24],
+        ]))
+        let slider = try XCTUnwrap(p.controls.controls[11] as? NSSlider)
+        let cell = try XCTUnwrap(slider.cell as? NSSliderCell)
+        var heard: [String] = [], onKeydown = ["value": "60"]
+        p.onControlValue = { _, value, input, change in
+            if input { heard.append("input:\(value)") }
+            if change { heard.append("change:\(value)") }
+        }
+        p.onKey = { _, key in
+            heard.append(key.up ? "up" : "down")
+            if !key.up { p.apply(wireBatch([["op": "props", "id": 11, "set": onKeydown]])) }
+        }
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(heard, ["down", "input:72", "change:72", "up"], "a twentieth past the handler's 60, before the keyup")
+        for prop in ["disabled", "inert"] {
+            onKeydown = [prop: "true"]
+            heard = []
+            _ = cell.accessibilityPerformIncrement()
+            XCTAssertEqual(heard, ["down"], prop)
+            XCTAssertEqual(slider.doubleValue, 72, prop)
+            p.apply(wireBatch([["op": "props", "id": 11, "clear": [prop]]]))
+        }
+        p.apply(wireBatch([["op": "props", "id": 11, "set": ["inert": "true"]]]))
+        heard = []
+        _ = cell.accessibilityPerformIncrement()
+        XCTAssertEqual(heard, [], "an inert range gets no key")
+        XCTAssertEqual(slider.doubleValue, 72)
     }
 
     private func rangeCurrentEvent(_ type: NSEvent.EventType) throws {

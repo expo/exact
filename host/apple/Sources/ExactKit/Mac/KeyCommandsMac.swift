@@ -76,6 +76,7 @@ extension Presenter {
         var vertical = true
         if case .line(let dx, _) = step, dx != 0 { vertical = false }
         guard let scroller = keyScroller(around: view, vertical: vertical) else { return false }
+        personScrolls += 1
         (scroller as? ChainingScrollView)?.collectionWillScroll?()
         let clip = scroller.contentView, document = scroller.documentView?.frame.size ?? .zero
         let limit = NSPoint(x: max(0, document.width - clip.bounds.width), y: max(0, document.height - clip.bounds.height))

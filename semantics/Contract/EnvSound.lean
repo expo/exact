@@ -367,13 +367,23 @@ theorem envOKE_gen {p : Program} (hp : WellTyped p) {E : Err → Prop}
   have hnr : p.resources.any (·.name == m.name) = false := by
     simpa using fun r hr => N.mutation_resource m hm r hr
   have : p.mutations.any (·.name == m.name) = true := any_name.mpr ⟨m, hm, rfl⟩
+  have hmut : isMutation p m.name = true := by simpa [isMutation] using ⟨m, hm, rfl⟩
+  obtain ⟨hty, -⟩ := slotTy_mutation hp.names hmut
+  rw [distinct_find (name := MutationDecl.name) N.mutations hm] at hty
   simp only [hnd, hnr, this, ite_true, Bool.false_eq_true, ite_false]
+  split
+  · -- A child's mutation: its instance's row slot.
+    cases hv : lookup m.name env.rows with
+    | none => simp only [Option.elim, GoodW]; exact refusedE _
+    | some v =>
+      simp only [Option.elim, GoodW]
+      have := hrows _ _ (lookup_mem hv)
+      rw [hty] at this
+      exact conforms_valTy hp.shapes v this (by simpa [Ty.complete] using hp.mutations m hm)
   obtain ⟨v, hv⟩ := lookup_isSome_of_key (hpres _ hL (.inr ⟨m, hm, rfl⟩))
   simp only [hv, Option.elim, GoodW]
   have hval := hslots _ _ (lookup_mem hv) hL
-  have hmut : isMutation p m.name = true := by simpa [isMutation] using ⟨m, hm, rfl⟩
-  obtain ⟨hty, -⟩ := slotTy_mutation hp.names hmut
-  rw [hty, distinct_find (name := MutationDecl.name) N.mutations hm] at hval
+  rw [hty] at hval
   exact hval
 
 theorem SlotsPresent.of {p : Program} {slots : List (String × Value)} (h : SlotsPresent p slots) (L : String → Bool) :

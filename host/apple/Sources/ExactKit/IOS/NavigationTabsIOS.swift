@@ -25,15 +25,20 @@ import UIKit
 /// straight to the app's delegate.
 final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     weak var host: NavigationHost?
-    weak var app: UITabBarControllerDelegate?
+    /// The app's delegate, held strongly until the app gives another or nil,
+    /// or the container leaves Exact (`NavigationHost.tabController`), as
+    /// `NavigationDelegateProxy.app` is.
+    var app: UITabBarControllerDelegate?
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
+        // A container built from `UITab`s asks `shouldSelectTab` (TabsIOS.swift)
+        guard host?.builtTabs.isEmpty != false else { return true }
         return host?.mayShow(tabs, controller) ?? true
     }
 
     func tabBarController(_ tabs: UITabBarController, didSelect controller: UIViewController) {
-        host?.followUIKit(tabs)
+        if host?.builtTabs.isEmpty != false { host?.followUIKit(tabs) }
         app?.tabBarController?(tabs, didSelect: controller)
     }
 
@@ -50,9 +55,8 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
         super.responds(to: selector) || (app?.responds(to: selector) ?? false)
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? {
-        app?.responds(to: selector) == true ? app : nil
-    }
+    // Send the app's delegate each call Exact does not implement, as `NavigationDelegateProxy` does
+    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 extension NavigationHost {
@@ -65,6 +69,11 @@ extension NavigationHost {
     /// Whether Exact's tab bar shows: not under the agent's own chrome,
     /// which sees the authored tablist (LLP 1021 D4's one presentation).
     var tabBarShows: Bool { tabController != nil && tabOwner === tabController && !ExactEnv.authoredChrome && !tablistAppearanceNone }
+    /// Whether UIKit's tab bar stands for `node`: a root tab, or what it holds, while the bar shows.
+    func tabBarStands(for node: NodeView) -> Bool {
+        guard tabBarShows, let tabs = container.flatMap({ NavigationTabs.of($0, presenter) }) else { return false }
+        return tabs.tabs.contains { node === $0 || node.isDescendant(of: $0) }
+    }
 
     /// What a tab other than the selected one holds: its stack up to its
     /// first presentation. A sheet is presented only over the selected tab;
@@ -91,11 +100,15 @@ extension NavigationHost {
         let owned = askTabContainer(tabs, selected: p.at)
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
-            let container = UITabBarController()
+            let container = TabController()
             tabProxy.host = self
+            if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
+                buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
+            } else {
+                container.setViewControllers(navs, animated: false)
+                container.selectedIndex = p.at
+            }
             container.delegate = tabProxy
-            container.setViewControllers(navs, animated: false)
-            container.selectedIndex = p.at
             tablistAppearanceNone = tabs.tablist.wrote("appearance") && tabs.tablist.style["appearance"]?.string == "none"
             if ExactEnv.authoredChrome || tablistAppearanceNone { hideTabBar(container) }
             tabController = container
@@ -139,9 +152,10 @@ extension NavigationHost {
             holder.view.accessibilityIdentifier = "exact-navigation-\(UUID().uuidString)"
         }
         // Sized before it enters the window, where UIKit lays it out.
-        holder.view.frame = ownerFrame(holder, in: root)
+        let mount = ownerMount(root)
+        holder.view.frame = ownerFrame(holder, in: mount)
         holder.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        root.addSubview(holder.view)
+        mount.addSubview(holder.view)
         holder.view.setPaintForeground(aboveAuthored: false)
         fitOwner()
         holder.didMove(toParent: parent)
@@ -175,7 +189,7 @@ extension NavigationHost {
         // again keeps its selected index but shows no tab selected (iOS 26 and 27).
         guard let owned = askTabContainer(tabs, selected: routerTab) else {
             let navs = tabPanels.compactMap { tabStacks[$0] }
-            if container.viewControllers?.count != navs.count {
+            if !restoreBuiltTabs(container, navs), container.viewControllers?.count != navs.count {
                 presenter.session?.log("hatch: tabContainer took the tabs' stacks but returned no container; Exact's has them back")
                 container.setViewControllers(navs, animated: false)
                 container.selectedIndex = max(0, routerTab)
@@ -206,13 +220,63 @@ extension NavigationHost {
 
     private func hideTabBar(_ container: UITabBarController) {
         if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(true, animated: false) } else { container.tabBar.isHidden = true }
+        (container as? TabController)?.syncBarAccessibility()
+    }
+
+    /// Rows below the panels stay in CSS flow while UIKit's container fills the page: the root's
+    /// children and, within each child that holds panels, the panels' siblings, at any depth.
+    /// The highest top of those rows, rather than the hidden native bar, bounds the routes'
+    /// bottom safe area. `rows` are those of them that are the root's children, which
+    /// `clearBesideRoutes` paints over the container.
+    func rowsBelowTabs(in area: CGRect, routes: [CGRect], skipping owned: Set<UInt32>, hidden: Bool? = nil) -> (bottom: CGFloat, rows: [NodeView]) {
+        guard !ExactEnv.authoredChrome, let tabs = tabController, tabOwner === tabs, let root = container, !routes.isEmpty else { return (0, []) }
+        if #available(iOS 18.0, tvOS 18.0, *) {
+            guard hidden ?? tabs.isTabBarHidden else { return (0, []) }
+        } else if !(hidden ?? tabs.tabBar.isHidden) { return (0, []) }
+        let panels = tabPanels.compactMap { presenter.views[$0] }
+        var bottom: CGFloat = 0, rows: [NodeView] = []
+        func visit(_ children: [NodeView]) {
+            let holding = children.filter { child in panels.contains { $0 === child || $0.isDescendant(of: child) } }
+            guard let end = holding.map({ $0.convert($0.bounds, to: root).maxY }).max() else { return }
+            for child in children where !holding.contains(child) && !owned.contains(child.id) && Self.inFlow(child) && !child.isHidden {
+                let box = child.convert(child.bounds, to: root)
+                guard !box.isEmpty, box.intersects(area), box.minY >= end - 0.5,
+                      routes.contains(where: { $0.minX < box.maxX && $0.maxX > box.minX }) else { continue }
+                bottom = max(bottom, area.maxY - box.minY)
+                if child.superview === ownerMount(root) { rows.append(child) }
+            }
+            for branch in holding where !panels.contains(branch) {
+                visit(branch.container.subviews.compactMap { $0 as? NodeView })
+            }
+        }
+        visit(ownerMount(root).subviews.compactMap { $0 as? NodeView })
+        return (bottom, rows)
+    }
+
+    /// Swap a replacement row's clearance with the native bar in one layout.
+    /// Showing the bar with the row's inset still installed makes UIKit retain both.
+    @available(iOS 18.0, tvOS 18.0, *)
+    func setTabBarHidden(_ hidden: Bool, in tabs: UITabBarController, animated: Bool) {
+        let before = besideOwner === tabs ? besideInsets.bottom : 0
+        clearBesideRoutes(tabBarHidden: hidden)
+        let replacesRow = before > 0 || (besideOwner === tabs && besideInsets.bottom > 0)
+        if replacesRow {
+            UIView.performWithoutAnimation {
+                tabs.setTabBarHidden(hidden, animated: false)
+                tabs.view.layoutIfNeeded()
+                for stack in primaryStacks { stack.viewIfLoaded?.layoutIfNeeded() }
+            }
+        } else {
+            tabs.setTabBarHidden(hidden, animated: animated)
+        }
+        (tabs as? TabController)?.syncBarAccessibility()
     }
 
     /// Before installing: a root that gains, loses or changes its tabs gets
     /// its containers again (the router's stacks are untouched).
     func reshape(_ p: Projection) {
         let panels = p.tabs?.panels.map(\.id) ?? []
-        guard primaryOwner != nil, panels != tabPanels else { return }
+        guard primaryOwner != nil, panels != tabPanels || builtTabsChanged(p) else { return }
         presenter.session?.log("navigation: the tabs changed; the containers are built again")
         if tabOwner != nil { retireTabs() } else if let nav = primaryNavigation {
             release(nav)
@@ -241,39 +305,34 @@ extension NavigationHost {
             tablistHidBar = false
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
-                if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(hidden, animated: false) }
-                else { container.tabBar.isHidden = hidden }
+                if #available(iOS 18.0, tvOS 18.0, *) { setTabBarHidden(hidden, in: container, animated: false) }
+                else {
+                    container.tabBar.isHidden = hidden
+                    (container as? TabController)?.syncBarAccessibility()
+                }
                 tablistHidBar = hidden && !authored
             }
         }
+        followSidebar(p)
         let navs = tabs.panels.compactMap { tabStacks[$0.id] }
         guard navs.count == tabs.panels.count else { return }
         // Write each other tab's routes where UIKit holds them: in More's
         // stack for the tab whose routes UIKit moved there (`routesStack`),
         // else in the tab's own. A tab's controller is empty until the runner
         // builds the tab, when it is first selected or More's list is about
-        // to show it (LLP 1075.003 §9.14).
-        // Until More's `didShow` reports its pop, write no tab's routes and keep More's record, from which that
-        // `didShow` finds the Back (`morePopTab`)
-        let popping = morePopTab != nil
-        if !popping {
-            // Record what More holds once UIKit moved routes out of it, which More's `didShow` need not report, and the
-            // own controller of the tab whose routes More holds, which holds none of them: what UIKit puts back there
-            // as More pops is then no pop pending (LLP 1075.003 §9.16)
-            if let more { recordOwned(more) }
-            let held = moreTab
-            if let held, let own = navs[held] as? UINavigationController { recordOwned(own) }
-            for index in navs.indices where index != p.at {
-                setRoutes(base(p.wanted[index]), in: index == held ? more ?? navs[index] : navs[index])
-            }
+        // to show it (LLP 1075.003 §9.14). A stack that holds the routes
+        // already is only projected again; one UIKit is moving (`writable`) is
+        // written once the move ends.
+        for index in navs.indices where index != p.at {
+            let stack = routesStack(index) ?? navs[index]
+            let routes = base(p.wanted[index])
+            if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else { tabsHeld = true }
         }
         // Fill the router's tab's controller with its first routes, or project
         // its bar when the router's tab changes, before UIKit shows it, where
-        // nothing animates in; `sync` writes the rest of its stack. While a pop
-        // of More is pending, an empty controller is left to `sync`, which
-        // waits for More's `didShow` while the router is on the tab More pops.
+        // nothing animates in; `sync` writes the rest of its stack.
         let selected = routesStack(p.at) ?? navs[p.at]
-        if selected.stackRoutes.isEmpty { if !popping { setRoutes(base(p.wanted[p.at]), in: selected) } }
+        if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
         else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
         // @ref LLP 1038 D6 — a tab change swaps immediately. UIKit's selection
         // is the state (LLP 1075.003 §3.7): it is written only when the
@@ -283,8 +342,9 @@ extension NavigationHost {
         // reorders tabs. A tab UIKit is selecting (`tapping`) is left to UIKit.
         if routerTab != p.at {
             routerTab = p.at
+            selectionPressed = nil
             if let container = tabController, container.selectedViewController !== navs[p.at], navs[p.at] !== tapping {
-                container.selectedViewController = navs[p.at]
+                selectInUIKit(p.at, in: container)
                 refollowFloatingBar() // (no push or pop: the stack it shows keeps its wish on an iPad)
             }
             if tabController == nil { presenter.session?.natives.tabsHatch(nil, event: 2, index: p.at) }
@@ -302,14 +362,14 @@ extension NavigationHost {
         return presenter.session?.app.resolver?.url(source, maximumBytes: 4 << 20).flatMap { UIImage(contentsOfFile: $0.path) }
     }
 
-    /// The items, from the authored tabs: each tab's own item, written in
-    /// place when its face changes, so what else the app set on it (a badge)
-    /// and a handle to it stay good.
     /// The items again, from the tabs they were last made from (a size class change).
     func resyncTabItems() {
         if let tabs = tabItemsSource { syncItems(tabs) }
     }
 
+    /// The items, from the authored tabs: each tab's own item, written in
+    /// place when its face changes, so what else the app set on it (a badge)
+    /// and a handle to it stay good.
     private func syncItems(_ tabs: NavigationTabs) {
         tabItemsSource = tabs
         for tab in tabs.tabs { tab.rejectNativeActiveProperties(on: "UITabBarItem") }
@@ -317,7 +377,7 @@ extension NavigationHost {
         let faces = tabs.tabs.map(TabFace.init)
         // A tab's test id is its item's identifier, which XCUITest and
         // Maestro address it by (LLP 1116 D2); without one, its symbol or title.
-        let ids = zip(tabs.tabs, faces).map { tab, face in tab.props["testId"] ?? face.base.flatMap { FaceSymbol.isPath($0) ? nil : $0 } ?? face.title }
+        let ids = zip(tabs.tabs, faces).map { tab, face in tab.props["testId"] ?? face.base.flatMap { FaceSymbol.isCustom($0) ? nil : $0 } ?? face.title }
         // The idiom and the size class size a path's glyph (`FaceSymbol.tabBarPoints`).
         // The bar's traits once it is in its window; before, the page's.
         let traits = tabController.flatMap { $0.tabBar.window == nil ? nil : $0.tabBar.traitCollection }
@@ -343,9 +403,11 @@ extension NavigationHost {
             // a tab that never authored one is left alone.
             let had = tabItems.indices.contains(index) && !tabItems[index].hasSuffix("|")
             if face.badge != nil || had { item.badgeValue = face.badge }
+            writeBuiltTab(index, item: item, title: face.title)
         }
         tabItems = signature
         tint(tabs.tablist)
+        followSearchTab()
     }
 
     /// The tab bar's own tint, as a hand-built app tints one: the selected tab's own tint where it
@@ -384,35 +446,13 @@ extension NavigationHost {
     /// More where UIKit has none.
     var more: UINavigationController? { adoptedMore }
 
-    /// The tab whose routes UIKit pops in More (its Back, More tapped again)
-    /// before More's `didShow` has reported it: More holds a prefix of what
-    /// Exact last recorded, a route it dropped is More's child or in no
-    /// navigation controller, and the tab's own controller holds none of its
-    /// routes, as it does once a size class change moves them there (LLP
-    /// 1075.003 §9.16). While a pop is pending, `syncTabs` writes no tab's
-    /// routes, so none that UIKit popped goes back into a controller, and a
-    /// sync waits while the router is on that tab (`changing`). A pop within the tab's routes that ends while another
-    /// tab shows stays pending until More's next `didShow`, which UIKit sends
-    /// when More shows again (§9.16). With another delegate on More, Exact
-    /// hears no `didShow`, so a pop is pending only while More's delegate is
-    /// Exact's.
-    var morePopTab: Int? {
-        guard let more, let stack = stacks[ObjectIdentifier(more)], more.delegate === stack.proxy else { return nil }
-        let written = stack.written
-        let now = more.viewControllers.map(ObjectIdentifier.init)
-        guard now.count < written.count, written.starts(with: now), let dropped = controllers.values.first(where: {
-            let id = ObjectIdentifier($0)
-            return written.contains(id) && !now.contains(id) && ($0.navigationController.map { $0 === more } ?? true)
-        }), let tab = tabIndex(ofRoute: dropped) else { return nil }
-        return tabStack(tab)?.stackRoutes.isEmpty != false ? tab : nil
-    }
-
-    /// Whether `nav` is More showing its list, which Exact follows
-    /// (`followMoresList`) whichever stack navigation follows by then: once
-    /// More holds no route of the tab, `syncTabs` points navigation at the
-    /// tab's own controller, which can come before More's `didShow`.
-    func showsMoresList(_ nav: UINavigationController) -> Bool {
-        nav === more && nav.topViewController != nil && nav.topViewController === nav.viewControllers.first
+    /// Whether Exact may write `routes` into `stack` now: UIKit runs no
+    /// transition there (a tab tapped in the turn of its pop leaves one there
+    /// until the tab shows again, LLP 1075.003 §9.16), and moves none of the
+    /// routes (`routesInFlight`). The write waits for the transition's end
+    /// (`runHeldSync`) or the move's.
+    func writable(_ stack: UIViewController, _ routes: [RouteController]) -> Bool {
+        (stack as? UINavigationController)?.transitionCoordinator == nil && !routesInFlight(routes)
     }
 
     /// The tab whose routes UIKit holds in More's stack: a row of its list
@@ -435,30 +475,33 @@ extension NavigationHost {
     /// Tab `index`'s item, when Exact's tab bar shows it: a tab whose item
     /// the bar does not show is a row of More's list (iOS).
     func barItem(ofTab index: Int) -> UITabBarItem? {
-        guard let item = tabStack(index)?.tabBarItem, tabController?.tabBar.items?.contains(where: { $0 === item }) == true else { return nil }
-        return item
+        guard let item = tabStack(index)?.tabBarItem else { return nil }
+        // UIKit makes the items of a bar built from `UITab`s: Exact's item carries the tab's face and test id
+        if !builtTabs.isEmpty { return tabController != nil && builtTabInBar(index) ? item : nil }
+        return tabController?.tabBar.items?.contains(where: { $0 === item }) == true ? item : nil
     }
 
-    /// The tab a route belongs to, by its tabpanel.
+    /// The tab a route belongs to, by the tabpanel that holds its node. A node
+    /// that has left the tree while UIKit still holds its controller, such as
+    /// a root More holds that the app replaced or removed, takes the tabpanel
+    /// it was last projected from, if that is still a tab.
     func tabIndex(ofRoute route: RouteController) -> Int? {
-        logicalParent(of: route.node).flatMap { tabPanels.firstIndex(of: $0.id) }
+        (logicalParent(of: route.node)?.id ?? route.panel).flatMap { tabPanels.firstIndex(of: $0) }
     }
 
-    /// More shows a controller: a row of its list was picked, which sends no
-    /// tab delegate call (measured), or More was selected again with a tab's
-    /// controller on top (LLP 1075.003 §9.16). A tab the router does not show
-    /// is pressed now, before More's push draws, as `mayShow` presses a tab a
-    /// tap on the bar selects; its routes then follow More's stack. The press
-    /// runs with `tapping` set, as a tap's does, because UIKit has selected
-    /// the tab, or is selecting More. A transition from another controller of
-    /// the same tab is UIKit's push or pop within it, not a pick, and presses
-    /// nothing: a tap on another tab can move the router to that tab after
-    /// More's pop is asked for and before More's `willShow` for the pop
-    /// (§9.16). The routes UIKit moved into
-    /// More are then projected as pushed over its list, and More's bar shown
-    /// as the top one wants, before the push draws: the bar was decided for
-    /// them before this, as their own stack's. More's list, shown again by a
-    /// pop or a swipe, gets the tabs it shows built (`buildTabsUnderMore`).
+    /// More shows a controller. A tab UIKit selected that the router is not
+    /// on is pressed now, before More's push draws (`followSelection`), as
+    /// `mayShow` presses a tab a tap on the bar selects: UIKit reports the tab
+    /// selected by More's `willShow` for a row of its list picked, which
+    /// sends no tab delegate call, and for the tab selected in code. For a tap
+    /// on More from another tab, UIKit reports it only at `didSelect`, which
+    /// presses it (`followUIKit`), and during a pop within the tab's routes it
+    /// reports the tab the router is on, so neither presses anything here
+    /// (LLP 1075.003 §9.16). The routes UIKit moved into More are then
+    /// projected as pushed over its list, and More's bar shown as the top one
+    /// wants, before the push draws: the bar was decided for them before
+    /// this, as their own stack's. More's list, shown again by a pop or a
+    /// swipe, gets the tabs it shows built (`buildTabsUnderMore`).
     func followMore(_ shown: UIViewController, animated: Bool) {
         guard let more else { return }
         watchPops(more)
@@ -466,38 +509,37 @@ extension NavigationHost {
             if shown === more.viewControllers.first { buildTabsUnderMore() }
             return
         }
-        let withinTab = more.transitionCoordinator?.viewController(forKey: .from).flatMap(tabIndex(ofShown:)) == index
-        if index == routerTab {
-            // The router's own tab picked again: UIKit moved its routes back into More
-            primaryNavigation = routesStack(index) as? UINavigationController ?? primaryNavigation
-        } else if !withinTab, let tab = authoredTab(index) {
-            tapping = tabStack(index)
-            defer { tapping = nil }
-            pressTab(tab)
-        }
+        // Follow More when the router's own tab shows again there: UIKit moved its routes back into More
+        if index == routerTab { primaryNavigation = routesStack(index) as? UINavigationController ?? primaryNavigation }
+        followSelection(showing: shown)
         let routes = more.stackRoutes.compactMap { $0 as? RouteController }
         guard !routes.isEmpty else { return }
         prepareRoutes(routes, in: more)
         showBar(more, for: shown as? RouteController, animated: animated)
     }
 
+    /// Press the tab UIKit selected when the router is on another and UIKit
+    /// shows that tab (`shown` is one of its controllers), once for that selection, with
+    /// `tapping` set as a tap's press runs, because UIKit has selected it.
+    /// While a selection is applied, UIKit can show the new tab with the old
+    /// one still reported selected (LLP 1075.003 §9.16), and a shown
+    /// controller of another tab than the selected one presses nothing. A
+    /// press that leaves the router where it was is the app declining the tab
+    /// (`declineMoreRow`).
+    func followSelection(showing shown: UIViewController) {
+        guard let tabs = tabController, let selected = tabs.selectedViewController, let index = tabIndex(of: selected),
+              index != routerTab, tabIndex(ofShown: shown) == index, tapping == nil, selected !== selectionPressed,
+              let tab = authoredTab(index) else { return }
+        selectionPressed = selected
+        tapping = selected
+        defer { tapping = nil }
+        pressTab(tab)
+    }
+
     /// The tab of a controller More shows: a plain tab it pushed for a row,
     /// or a route UIKit moved into it.
     func tabIndex(ofShown shown: UIViewController) -> Int? {
         tabIndex(of: shown) ?? (shown as? RouteController).flatMap(tabIndex(ofRoute:))
-    }
-
-    /// More showed its list again, having dropped the router's top route
-    /// (`popped`: its Back on a root, More tapped again): a Back to the tab's
-    /// root, unless the routes left More for their tab's own controller, as a
-    /// size class change moves them. More can report its list then (this
-    /// host's journal, iPhone Duo simulator, iOS 27.1), and the router keeps
-    /// its tab. One route above the root, it is the platform's Back, which
-    /// presses the authored control; further up, a history jump.
-    func followMoresList(_ nav: UINavigationController, popped: [String]) {
-        let moved = controllers.values.contains { $0.key == selectedKey && $0.navigationController.map { $0 !== nav } == true }
-        guard !moved, let top = selectedKey, popped.contains(top), let root = shownKeys.first, top != root else { return }
-        if shownKeys.firstIndex(of: top) == 1, back != nil { goBack() } else { goBack(from: top, to: root) }
     }
 
     /// Whether More showed a row's tab that the app declined: the row's press
@@ -507,12 +549,12 @@ extension NavigationHost {
     func declineMoreRow(_ shown: UIViewController) -> Bool {
         guard let more, let index = tabIndex(ofShown: shown), index != routerTab, tabStack(routerTab) != nil else { return false }
         more.popToRootViewController(animated: false)
-        recordOwned(more)
         showRouterTab(declining: index)
         return true
     }
 
-    /// A tap on the bar, before UIKit selects. A tap on another tab presses
+    /// A tap on the bar, before UIKit selects. A pop UIKit made before the tap
+    /// reaches the router first (`followPops`). A tap on another tab presses
     /// that tab's authored tab now, as a click on the web's tablist presses
     /// it, so the tab is built and projected before UIKit shows it, as a
     /// hand-built app's tab is ready before it is tapped. A press that leaves
@@ -520,11 +562,13 @@ extension NavigationHost {
     /// nothing, and UIKit shows the router's tab (`syncTabs` selects the
     /// router's tab when the press moved the router to a third tab). A tap on
     /// the tab UIKit shows, above its root, lets UIKit pop it to the root
-    /// only where Back goes (`backAllows`), and the tab is pressed once the
-    /// pop ends; at the root, its screen scrolls to its top after the tab's
-    /// press (`followUIKit`). More is UIKit's: a tap that shows its list gets
-    /// the tabs it lists built first (`buildTabsUnderMore`).
+    /// only where Back goes (`backAllows`), and the tab is pressed after that
+    /// Back; at the root, its screen scrolls to its top after the tab's press
+    /// (`followUIKit`). More is UIKit's: a tap that shows its list gets the
+    /// tabs it lists built first (`buildTabsUnderMore`).
     func mayShow(_ tabs: UITabBarController, _ controller: UIViewController) -> Bool {
+        followPops()
+        selectionPressed = nil
         #if os(iOS)
         // Adopt the More a tap on its item shows, which UIKit may have made anew; only a controller that is no tab's is
         // read against `moreNavigationController`, which makes a More where UIKit has none
@@ -539,9 +583,7 @@ extension NavigationHost {
         guard let index = tabIndex(of: controller) else { return true }
         if controller === tabs.selectedViewController {
             if controller.stackRoutes.count > 1 {
-                guard backAllows("tab reselect") else { return false }
-                reselectedPop = controller as? UINavigationController
-                return true
+                return backAllows("tab reselect")
             }
             reselected = reselectedRoot(index)
             return true
@@ -560,17 +602,22 @@ extension NavigationHost {
         return false
     }
 
-    /// UIKit selected a tab. After a tap on another tab the router shows it
-    /// already (`mayShow`), and the tab is laid out and its covers reported
-    /// once, as `sync` reports after its own layout (`tapping`). A tab
-    /// UIKit shows that the router does not (one under More) is pressed now,
-    /// and a press that leaves the router on another tab selects the
-    /// router's tab again. At the root of the tab UIKit showed, tapped again,
-    /// the press runs and the screen scrolls to its top. Above its root, the
-    /// press runs once UIKit's pop has ended and the router has followed it
-    /// as a Back, so the tab's press runs on every tap of its item, as the
-    /// web's tablist presses a tab on every click.
+    /// UIKit selected a tab. A pop UIKit committed reaches the router first
+    /// (`followPops`): a tap on the selected tab above its root has popped
+    /// its stack (LLP 1075.003 §9.16: UIKit's pop has its coordinator by
+    /// `didSelect` and its `willShow` after it), and on the `tabs` path code
+    /// can pop a stack in the turn it selects a tab. After a tap on another
+    /// tab the router shows it already (`mayShow`), and the tab is laid out
+    /// and its covers reported once, as `sync` reports after its own layout
+    /// (`tapping`). A tab UIKit shows that the router does not (one under
+    /// More, after a tap on More from another tab, or one selected in code on
+    /// the `tabs` path) is pressed now, and a press that leaves the router on
+    /// another tab selects the router's tab again. A tab tapped again is
+    /// pressed: after the Back above its root; at its root, and then its
+    /// screen scrolls to its top. So the tab's press runs on every tap of its
+    /// item, as the web's tablist presses a tab on every click.
     func followUIKit(_ tabs: UITabBarController) {
+        let popped = followPops()
         let screen = reselected
         reselected = nil
         if tapping != nil {
@@ -578,7 +625,7 @@ extension NavigationHost {
             // now that UIKit selected the tab, before the tab's first frame
             if pendingSync {
                 tapping = nil
-                sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+                resync()
                 return refollowFloatingBar()
             }
             refollowFloatingBar()
@@ -587,34 +634,33 @@ extension NavigationHost {
             return reportCovers()
         }
         guard let index = tabIndex(of: tabs.selectedViewController) else { return }
-        // UIKit's pop has its coordinator by `didSelect` but sends `willShow` after it (iOS 27, measured), so a press
-        // queued on that coordinator would run before the Back the pop is: it waits for the pop's end
-        // (`completeTransition`), unless no pop is under way
-        if let popping = reselectedPop, popping.transitionCoordinator == nil, !nativePopPending(on: popping) {
-            reselectedPop = nil
-            pressReselected(popping)
-        }
-        if index == routerTab, screen == nil { return refollowFloatingBar() }
+        if index == routerTab, screen == nil, !popped { return refollowFloatingBar() }
         guard let tab = authoredTab(index) else { return }
+        let again = index == routerTab
         pressTab(tab, scrolling: screen)
-        if screen != nil { return }
+        // Leave the router's own tab, tapped again, to its press; another tab's press can leave the router elsewhere
+        if again { return }
         guard routerTab != index, tabStack(routerTab) != nil else { return refollowFloatingBar() }
         showRouterTab(declining: index)
-    }
-
-    /// Press the tab whose stack a tap popped to its root (`mayShow`), once
-    /// the pop has ended and the router has followed it as a Back.
-    func pressReselected(_ stack: UINavigationController) {
-        guard let index = tabIndex(of: stack), index == routerTab, let tab = authoredTab(index) else { return }
-        pressTab(tab)
     }
 
     /// Select the router's tab again: tab `index`'s press left the router on
     /// it, the app's answer to a person's pick of `index`.
     func showRouterTab(declining index: Int) {
-        guard let tabs = tabController, let stack = tabStack(routerTab) else { return }
-        tabs.selectedViewController = stack
+        guard let tabs = tabController, tabStack(routerTab) != nil else { return }
+        selectionPressed = nil
+        selectInUIKit(routerTab, in: tabs)
         presenter.session?.log("navigation: tab \(index)'s press left the router on tab \(routerTab), which UIKit shows again")
+    }
+
+    /// Write UIKit's selection of tab `index`: More while it holds the tab's
+    /// routes, as a tap on More selects it, else the tab's own controller.
+    /// The tab's controller selected in code while More holds its routes
+    /// drops a route above its root that hides the tab bar, as More pops to
+    /// its list (LLP 1075.003 §9.16).
+    func selectInUIKit(_ index: Int, in tabs: UITabBarController) {
+        guard let stack = tabStack(index) else { return }
+        tabs.selectedViewController = index == moreTab ? more : stack
     }
 
     /// Whether a tap may let UIKit pop a stack to its root: only where Back
@@ -722,14 +768,16 @@ extension NavigationHost {
         releaseMore()
         if tabsHatched, tabController != nil { presenter.session?.natives.tabsHatch(tabController, event: 1) }
         if tabController == nil, tabOwner != nil { presenter.session?.natives.tabsHatch(nil, event: 3) }
+        // Leave the slot of a container the app owns as it is; Exact's own container's is emptied as
+        // `tabController` changes
         if let holder = tabOwner {
-            (holder as? UITabBarController)?.delegate = nil
             holder.willMove(toParent: nil)
             holder.view.removeFromSuperview()
             holder.removeFromParent()
         }
         tabController = nil
         tabOwner = nil
+        builtTabs = []
         tabsHatched = false
         tabContainerAsked = false
         routerTab = -1
@@ -748,6 +796,10 @@ extension NavigationHost {
     /// authored tablist's covers.
     func batchApplied(_ batch: Batch, rowsOnly: Bool) {
         if !rowsOnly || syncOwed { sync(batch) }
+        else if batch.ops.isEmpty {
+            // Page facts can carry no ops after UIKit sized an inactive owner.
+            fitOwner()
+        }
         presenter.modals.inheritFromAncestors()
         followAuthoredTablist()
     }
@@ -784,6 +836,14 @@ extension NavigationHost {
 }
 
 extension UITabBarController {
+    /// Its tabs' controllers in tab order, whether it holds them as
+    /// `viewControllers` or as `UITab`s, whose `viewControllers` is nil.
+    var tabControllers: [UIViewController]? {
+        if let viewControllers { return viewControllers }
+        guard #available(iOS 18.0, tvOS 18.0, *), !tabs.isEmpty else { return nil }
+        return tabs.compactMap(\.viewController)
+    }
+
     /// The bar the controller projects, including iPadOS's floating list of tab items.
     var projectedTabBar: UIView? {
         if #available(iOS 18.0, tvOS 18.0, *), isTabBarHidden { return nil }
@@ -808,10 +868,12 @@ extension UITabBarController {
     /// carry their items' accessibility identifiers (the tabs' test ids,
     /// `syncItems`), or their titles as labels, as the agent's aim reads
     /// them: a list of the same shape whose cells name other things (a
-    /// hatch's) is not it. Nil where the bar is UIKit's classic one, where
-    /// no such list shows, or where two would.
+    /// hatch's) is not it. A sidebar's list of tabs (`mode = .tabSidebar`,
+    /// TabsIOS.swift) has the same shape, and while it shows the floating
+    /// bar does not. Nil where the bar is UIKit's classic one, where no such
+    /// list shows, or where two would.
     var floatingTabList: UICollectionView? {
-        guard tabBar.window == nil, let controllers = viewControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
+        guard tabBar.window == nil, let controllers = tabControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
               let selected = selectedViewController?.viewIfLoaded else { return nil }
         func names(_ cell: UIView, _ item: UITabBarItem) -> Bool {
             let id = item.accessibilityIdentifier ?? ""

@@ -1,5 +1,5 @@
 //! The desktop modules' host services on Windows (LLP 1133.025 D11 item 2,
-//! `exact_linux::desktop`): hot keys by `RegisterHotKey`, attention by
+//! `exact_painted::desktop`): hot keys by `RegisterHotKey`, attention by
 //! `FlashWindowEx`, and the login item as a development build's `Run` value.
 //!
 //! - **Hot keys** are registered with a null window, so `WM_HOTKEY` is
@@ -7,15 +7,25 @@
 //!   hears it ([RegisterHotKey](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-registerhotkey)).
 //!   One registration per chord serves every reader of it; a press raises
 //!   each reader's event as an activation (D11 item 3). `MOD_NOREPEAT`
-//!   keeps a held chord to one press. A modifier pair needs a low-level
-//!   keyboard hook, which is not built: it answers `not-allowed`.
+//!   keeps a held chord to one press unless a reader asked for repeat
+//!   (`windows.repeat`, D8): `WM_HOTKEY` does not mark a repeat, so while
+//!   any reader of a chord asks for one, the chord is registered without
+//!   the flag and every reader of it hears each repeat. The registration
+//!   is made again as readers attach and leave. A modifier pair needs a
+//!   low-level keyboard hook, which is not built: it answers `not-allowed`.
 //! - **Print Screen alone** can be consumed by Snipping Tool even when
 //!   `RegisterHotKey` succeeds (#195). A nonzero DWORD or an unreadable
 //!   `HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`
 //!   answers `reserved`. A missing value is reserved from build 22000,
 //!   or when the build cannot be read; an explicit zero permits registration.
+//!   While a session reads it, a thread waits on that key
+//!   ([RegNotifyChangeKeyValue](https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regnotifychangekeyvalue))
+//!   and, when the answer flips, has the session ask its readings again
+//!   (#503): a reader of a chord the system took is dropped, and one of a
+//!   chord it gave back is registered. Nothing intercepts the key itself.
 //! - **Attention** flashes the taskbar button until the window comes to
-//!   the front, or three times for an informational request
+//!   the front, or three times for an informational request, or the
+//!   author's `windows.count` times, which beats `critical`
 //!   ([FlashWindowEx](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-flashwindowex)).
 //!   A hidden window has no taskbar button, so nothing is asked.
 //! - **The login item** is a value under `HKCU\…\CurrentVersion\Run` named
@@ -49,6 +59,18 @@ fn chord(keys: &str) -> Result<(u32, u32), &'static str> {
     Ok((bits, virtual_key(key).ok_or("invalid")?))
 }
 
+/// How attention flashes, `(until the window comes to the front, flashes)`:
+/// the author's count when there is one (LLP 1133.025 D8), else until the
+/// front for a critical request and three times for an informational one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn flash(critical: bool, count: Option<u32>) -> (bool, u32) {
+    match count {
+        Some(n) => (false, n),
+        None if critical => (true, 0),
+        None => (false, 3),
+    }
+}
+
 /// `VK_SNAPSHOT`, the Print Screen key.
 const PRINT_SCREEN: u32 = 0x2C;
 
@@ -72,6 +94,25 @@ fn available_chord(
         }
     }
     Ok(chord)
+}
+
+/// Bare Print Screen's availability as last read, so that a change under
+/// the keyboard's registry key asks readers again only when it flips.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct PrintScreen(bool);
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl PrintScreen {
+    fn new(snipping: Result<Option<u32>, u32>, windows_build: Option<u32>) -> PrintScreen {
+        PrintScreen(available_chord((0, PRINT_SCREEN), snipping, windows_build).is_ok())
+    }
+
+    /// Takes a new reading; true when bare Print Screen's availability changed.
+    fn flipped(&mut self, snipping: Result<Option<u32>, u32>, windows_build: Option<u32>) -> bool {
+        let was = self.0;
+        *self = PrintScreen::new(snipping, windows_build);
+        was != self.0
+    }
 }
 
 /// The virtual-key code of an `aria-keyshortcuts` key name: a letter or
@@ -113,9 +154,10 @@ fn run_value(exe: &str, hidden: bool) -> String {
     format!("\"{exe}\" --login{}", if hidden { " hidden" } else { "" })
 }
 
-/// The launch the login item made, from the process's arguments.
+/// The launch the login item made, from the process's arguments: whether
+/// its registration asked `hidden`, or `None` for any other launch.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn login_launch(args: &[String]) -> Option<bool> {
+pub(crate) fn login_launch(args: &[String]) -> Option<bool> {
     let at = args.iter().position(|a| a == "--login")?;
     Some(args.get(at + 1).is_some_and(|a| a == "hidden"))
 }
@@ -123,17 +165,20 @@ fn login_launch(args: &[String]) -> Option<bool> {
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod imp {
-    use exact_linux::desktop::{Login, Refusal, Services};
+    use exact_painted::desktop::{Login, Refusal, Services};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     use windows_sys::Win32::{
         Foundation::{
             GetLastError, ERROR_FILE_NOT_FOUND, ERROR_INVALID_DATA, ERROR_PATH_NOT_FOUND,
             ERROR_SUCCESS, HWND,
         },
         System::Registry::{
-            RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER,
-            HKEY_LOCAL_MACHINE, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+            RegCloseKey, RegDeleteKeyValueW, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW,
+            RegSetKeyValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_NOTIFY,
+            KEY_QUERY_VALUE, REG_NOTIFY_CHANGE_LAST_SET, REG_SZ, RRF_RT_REG_BINARY,
+            RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
         },
         UI::{
             Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT},
@@ -154,6 +199,7 @@ mod imp {
     struct Reader {
         session: String,
         id: String,
+        repeat: bool,
         extension: &'static str,
         event: &'static str,
     }
@@ -161,7 +207,12 @@ mod imp {
         keys: String,
         atom: i32,
         readers: Vec<Reader>,
+        /// Whether the chord is registered without `MOD_NOREPEAT`.
+        repeats: bool,
     }
+
+    /// The sessions to ask again when bare Print Screen flips, by session.
+    type Watchers = Arc<Mutex<Vec<(String, Box<dyn Fn() + Send>)>>>;
 
     /// The host's one hot-key table, taskbar button and launch.
     pub(crate) struct Desktop {
@@ -172,10 +223,103 @@ mod imp {
         launch: Option<bool>,
         /// Wakes the event loop, whose next turn raises a press.
         wake: RefCell<Option<Box<dyn Fn()>>>,
+        watchers: Watchers,
+        /// Whether the thread that waits on the keyboard's key has started.
+        watching: Cell<bool>,
     }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn snipping() -> Result<Option<u32>, u32> {
+        let (key, name) = (wide(KEYBOARD), wide("PrintScreenKeyForSnippingEnabled"));
+        let mut value = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&mut value as *mut u32).cast(),
+                &mut size,
+            )
+        };
+        match status {
+            ERROR_SUCCESS if size == std::mem::size_of::<u32>() as u32 => Ok(Some(value)),
+            ERROR_SUCCESS => Err(ERROR_INVALID_DATA),
+            ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+            error => Err(error),
+        }
+    }
+
+    fn windows_build() -> Option<u32> {
+        let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        let name = wide("CurrentBuildNumber");
+        let mut buffer = [0u16; 32];
+        let mut size = std::mem::size_of_val(&buffer) as u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let end = buffer.iter().position(|c| *c == 0)?;
+        String::from_utf16(&buffer[..end]).ok()?.parse().ok()
+    }
+
+    /// Snipping Tool's setting, and the build when the setting is missing.
+    fn print_screen_reading() -> (Result<Option<u32>, u32>, Option<u32>) {
+        let snipping = snipping();
+        let build = if snipping == Ok(None) {
+            windows_build()
+        } else {
+            None
+        };
+        (snipping, build)
+    }
+
+    /// Waits on the keyboard's key for good, asking `watchers` again each
+    /// time bare Print Screen flips from `print_screen`. A value set or
+    /// deleted under the key ends each synchronous wait.
+    fn watch_keyboard(watchers: Watchers, mut print_screen: super::PrintScreen) {
+        let path = wide(KEYBOARD);
+        let mut key: HKEY = std::ptr::null_mut();
+        let opened = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                KEY_NOTIFY | KEY_QUERY_VALUE,
+                &mut key,
+            )
+        };
+        if opened != ERROR_SUCCESS {
+            return;
+        }
+        while unsafe {
+            RegNotifyChangeKeyValue(key, 0, REG_NOTIFY_CHANGE_LAST_SET, std::ptr::null_mut(), 0)
+        } == ERROR_SUCCESS
+        {
+            let (snipping, build) = print_screen_reading();
+            if print_screen.flipped(snipping, build) {
+                let watchers = watchers.lock().unwrap_or_else(|e| e.into_inner());
+                for (_, changed) in watchers.iter() {
+                    changed();
+                }
+            }
+        }
+        unsafe { RegCloseKey(key) };
     }
 
     impl Desktop {
@@ -189,8 +333,10 @@ mod imp {
                 next: Cell::new(1),
                 launch: super::login_launch(&args),
                 wake: RefCell::new(None),
+                watchers: Arc::default(),
+                watching: Cell::new(false),
             });
-            exact_linux::desktop::install(desktop.clone());
+            exact_painted::desktop::install(desktop.clone());
             desktop
         }
 
@@ -218,9 +364,9 @@ mod imp {
                 return;
             };
             for r in &chord.readers {
-                let event = exact_linux::package::json!({ "id": r.id, "keys": chord.keys });
-                let args = exact_linux::package::json!([r.id, event]).to_string();
-                exact_linux::desktop::activate(r.extension, r.event, args);
+                let event = exact_painted::package::json!({ "id": r.id, "keys": chord.keys });
+                let args = exact_painted::package::json!([r.id, event]).to_string();
+                exact_painted::desktop::activate(r.extension, r.event, args);
             }
             drop(chords);
             if let Some(wake) = &*self.wake.borrow() {
@@ -233,21 +379,15 @@ mod imp {
             if chord != (0, super::PRINT_SCREEN) {
                 return Ok(chord);
             }
-            let snipping = self.snipping();
-            let build = if snipping == Ok(None) {
-                self.windows_build()
-            } else {
-                None
-            };
+            let (snipping, build) = print_screen_reading();
             super::available_chord(chord, snipping, build)
         }
 
         /// Registers `keys` under `atom`, or says why not.
-        fn register(&self, keys: &str, atom: i32) -> Result<(), Refusal> {
+        fn register(&self, keys: &str, atom: i32, repeat: bool) -> Result<(), Refusal> {
             let (modifiers, key) = self.available_chord(keys)?;
-            let ok = unsafe {
-                RegisterHotKey(std::ptr::null_mut(), atom, modifiers | MOD_NOREPEAT, key)
-            };
+            let modifiers = modifiers | if repeat { 0 } else { MOD_NOREPEAT };
+            let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), atom, modifiers, key) };
             if ok != 0 {
                 return Ok(());
             }
@@ -255,52 +395,6 @@ mod imp {
                 ERROR_HOTKEY_ALREADY_REGISTERED => "in-use",
                 _ => "reserved",
             })
-        }
-
-        fn snipping(&self) -> Result<Option<u32>, u32> {
-            let (key, name) = (wide(KEYBOARD), wide("PrintScreenKeyForSnippingEnabled"));
-            let mut value = 0u32;
-            let mut size = std::mem::size_of::<u32>() as u32;
-            let status = unsafe {
-                RegGetValueW(
-                    HKEY_CURRENT_USER,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    RRF_RT_REG_DWORD,
-                    std::ptr::null_mut(),
-                    (&mut value as *mut u32).cast(),
-                    &mut size,
-                )
-            };
-            match status {
-                ERROR_SUCCESS if size == std::mem::size_of::<u32>() as u32 => Ok(Some(value)),
-                ERROR_SUCCESS => Err(ERROR_INVALID_DATA),
-                ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
-                error => Err(error),
-            }
-        }
-
-        fn windows_build(&self) -> Option<u32> {
-            let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            let name = wide("CurrentBuildNumber");
-            let mut buffer = [0u16; 32];
-            let mut size = std::mem::size_of_val(&buffer) as u32;
-            let status = unsafe {
-                RegGetValueW(
-                    HKEY_LOCAL_MACHINE,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    RRF_RT_REG_SZ,
-                    std::ptr::null_mut(),
-                    buffer.as_mut_ptr().cast(),
-                    &mut size,
-                )
-            };
-            if status != ERROR_SUCCESS {
-                return None;
-            }
-            let end = buffer.iter().position(|c| *c == 0)?;
-            String::from_utf16(&buffer[..end]).ok()?.parse().ok()
         }
 
         fn read_string(&self, key: &str) -> Option<String> {
@@ -320,6 +414,26 @@ mod imp {
             };
             (status == 0)
                 .then(|| String::from_utf16_lossy(&buffer[..(size as usize / 2).saturating_sub(1)]))
+        }
+
+        /// Register `chord` again when its readers' repeat changed. If the
+        /// new registration fails, the old one is made again.
+        fn follow_repeat(&self, chord: &mut Chord) -> Result<(), Refusal> {
+            let repeat = chord.readers.iter().any(|r| r.repeat);
+            if repeat == chord.repeats {
+                return Ok(());
+            }
+            unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+            match self.register(&chord.keys, chord.atom, repeat) {
+                Ok(()) => {
+                    chord.repeats = repeat;
+                    Ok(())
+                }
+                Err(reason) => {
+                    let _ = self.register(&chord.keys, chord.atom, chord.repeats);
+                    Err(reason)
+                }
+            }
         }
 
         /// Whether Settings › Apps › Startup turned the value off: the
@@ -349,34 +463,56 @@ mod imp {
             session: &str,
             id: &str,
             keys: &str,
+            repeat: bool,
             extension: &'static str,
             event: &'static str,
         ) -> Result<(), Refusal> {
             let reader = Reader {
                 session: session.into(),
                 id: id.into(),
+                repeat,
                 extension,
                 event,
             };
             let mut chords = self.chords.borrow_mut();
             if let Some(chord) = chords.iter_mut().find(|c| c.keys == keys) {
-                self.available_chord(keys)?;
-                if !chord
+                if let Err(reason) = self.available_chord(keys) {
+                    // The system took the chord after it was registered: this
+                    // reader asking again no longer holds it, and the last
+                    // reader's leaving gives the registration back.
+                    drop(chords);
+                    self.unregister_hotkey(session, id, keys);
+                    return Err(reason);
+                }
+                // A reader asking again takes its new repeat.
+                let at = chord
                     .readers
                     .iter()
-                    .any(|r| r.session == session && r.id == id)
-                {
-                    chord.readers.push(reader);
+                    .position(|r| r.session == session && r.id == id);
+                let was = match at {
+                    Some(i) => Some(std::mem::replace(&mut chord.readers[i], reader)),
+                    None => {
+                        chord.readers.push(reader);
+                        None
+                    }
+                };
+                if let Err(reason) = self.follow_repeat(chord) {
+                    match at.zip(was) {
+                        Some((i, was)) => chord.readers[i] = was,
+                        None => drop(chord.readers.pop()),
+                    }
+                    return Err(reason);
                 }
                 return Ok(());
             }
             let atom = self.next.get();
-            self.register(keys, atom)?;
+            self.register(keys, atom, repeat)?;
             self.next.set(atom + 1);
             chords.push(Chord {
                 keys: keys.into(),
                 atom,
                 readers: vec![reader],
+                repeats: repeat,
             });
             Ok(())
         }
@@ -389,6 +525,10 @@ mod imp {
                     .retain(|r| !(r.session == session && r.id == id));
                 if chord.readers.is_empty() {
                     unsafe { UnregisterHotKey(std::ptr::null_mut(), chord.atom) };
+                } else {
+                    // On a failure the chord keeps the registration it had,
+                    // which still serves every reader left.
+                    let _ = self.follow_repeat(chord);
                 }
             }
             chords.retain(|c| !c.readers.is_empty());
@@ -401,12 +541,12 @@ mod imp {
             }
             // An atom of its own, given back at once.
             let atom = 0xBFFF;
-            self.register(keys, atom)?;
+            self.register(keys, atom, false)?;
             unsafe { UnregisterHotKey(std::ptr::null_mut(), atom) };
             Ok(())
         }
 
-        fn attention(&self, critical: bool) -> Result<(), String> {
+        fn attention(&self, critical: bool, count: Option<u32>) -> Result<(), String> {
             let hwnd = self.hwnd.get() as HWND;
             if hwnd.is_null() || unsafe { IsWindowVisible(hwnd) } == 0 {
                 return Err("the window is hidden, so it has no taskbar button to flash".into());
@@ -414,11 +554,12 @@ mod imp {
             if unsafe { GetForegroundWindow() } == hwnd {
                 return Err("the window is in front".into());
             }
+            let (until_front, count) = super::flash(critical, count);
             let info = FLASHWINFO {
                 cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
                 hwnd,
-                dwFlags: FLASHW_TRAY | if critical { FLASHW_TIMERNOFG } else { 0 },
-                uCount: if critical { 0 } else { 3 },
+                dwFlags: FLASHW_TRAY | if until_front { FLASHW_TIMERNOFG } else { 0 },
+                uCount: count,
                 dwTimeout: 0,
             };
             unsafe { FlashWindowEx(&info) };
@@ -475,6 +616,27 @@ mod imp {
             Ok(self.login())
         }
 
+        fn watch_reserved(&self, session: &str, changed: Box<dyn Fn() + Send>) {
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            watchers.retain(|(s, _)| s != session);
+            watchers.push((session.into(), changed));
+            if !self.watching.replace(true) {
+                // Read before the caller registers, so a change from here on
+                // is measured against what that registration saw.
+                let (snipping, build) = print_screen_reading();
+                let print_screen = super::PrintScreen::new(snipping, build);
+                let watchers = self.watchers.clone();
+                let _ = std::thread::Builder::new()
+                    .name("print-screen-watch".into())
+                    .spawn(move || watch_keyboard(watchers, print_screen));
+            }
+        }
+
+        fn unwatch_reserved(&self, session: &str) {
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            watchers.retain(|(s, _)| s != session);
+        }
+
         fn login_launch(&self) -> Option<bool> {
             self.launch
         }
@@ -487,7 +649,16 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::{available_chord, chord, login_launch, run_value};
+    use super::{available_chord, chord, flash, login_launch, run_value, PrintScreen};
+
+    #[test]
+    fn an_authors_count_is_the_flashes_even_for_a_critical_request() {
+        assert_eq!(flash(false, None), (false, 3));
+        assert_eq!(flash(true, None), (true, 0));
+        assert_eq!(flash(false, Some(1)), (false, 1));
+        assert_eq!(flash(false, Some(7)), (false, 7));
+        assert_eq!(flash(true, Some(7)), (false, 7));
+    }
 
     #[test]
     fn a_chord_is_its_modifier_bits_and_virtual_key() {
@@ -539,6 +710,29 @@ mod tests {
                     assert_eq!(available_chord(chord, reading, build), Ok(chord));
                 }
             }
+        }
+    }
+
+    /// #503: a change under the keyboard's key asks readers again only when
+    /// it takes bare Print Screen or gives it back.
+    #[test]
+    fn readers_are_asked_again_only_when_print_screen_flips() {
+        let mut print_screen = PrintScreen::new(Ok(Some(1)), None);
+        for (snipping, build, flipped) in [
+            (Ok(Some(1)), None, false), // another value of the key changed
+            (Ok(Some(0)), None, true),  // Snipping Tool's setting turned off
+            (Ok(Some(0)), None, false),
+            (Ok(None), Some(19045), false), // deleted where missing is free
+            (Ok(None), Some(26100), true),  // deleted where missing is reserved
+            (Err(5), None, false),
+            (Ok(Some(0)), None, true),
+            (Err(13), None, true),
+        ] {
+            assert_eq!(
+                print_screen.flipped(snipping, build),
+                flipped,
+                "{snipping:?} {build:?}"
+            );
         }
     }
 

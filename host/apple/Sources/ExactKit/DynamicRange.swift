@@ -246,7 +246,7 @@ extension NodeView {
         #endif
         var h: Float = 0
         if box {
-            for gradient in Gradient.layers(style["background_image"]) {
+            for gradient in Gradient.layers(style["background_image"], tint: gradientTint) {
                 for c in gradient.stops(dark: drawsDark).1 { h = max(h, ColorRange.headroom(c)) }
             }
             for key in ["background_color", "border_color_top", "border_color_right", "border_color_bottom", "border_color_left"] {
@@ -264,7 +264,7 @@ extension NodeView {
         let box = boxNeedsDraw
         #endif
         guard box else { return false }
-        let stops = Gradient.layers(style["background_image"]).flatMap { $0.stops(dark: drawsDark).1 }
+        let stops = Gradient.layers(style["background_image"], tint: gradientTint).flatMap { $0.stops(dark: drawsDark).1 }
         return stops.contains { ColorRange.needsExtendedComponents($0) }
             || ["background_color", "border_color_top", "border_color_right", "border_color_bottom", "border_color_left"].contains { ColorRange.needsExtendedComponents(cgColor($0)) }
     }

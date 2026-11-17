@@ -48,6 +48,37 @@ fn reach_margin(a: &Attr, virtualized: bool) -> Result<(), LowerError> {
     }
 }
 
+fn fixed_offset(value: &Expr) -> bool {
+    numeric_literal(value) == Some(0.0)
+        || matches!(value, Expr::Str(s, _) if s == "auto"
+            || s.strip_suffix("px").unwrap_or(s).parse::<f64>() == Ok(0.0))
+}
+
+fn fixed_margin(value: &Expr) -> bool {
+    let number = match value {
+        Expr::Str(s, _) => exact_kernel::style::cells::parse(s)
+            .or_else(|| exact_kernel::style::relative::parse(s).map(|(_, n)| n))
+            .or_else(|| {
+                let mut style = exact_kernel::StyleProps::default();
+                style
+                    .set_dynamic(
+                        exact_kernel::StyleId::MarginTop,
+                        &exact_kernel::StyleValue::Text(s.into()),
+                    )
+                    .ok()?;
+                match style.margin_top {
+                    exact_kernel::Dimension::Points(n) | exact_kernel::Dimension::Percent(n) => {
+                        Some(n)
+                    }
+                    _ => None,
+                }
+            })
+            .map(f64::from),
+        _ => numeric_literal(value),
+    };
+    number.is_some_and(|n| n.is_finite() && n >= 0.0)
+}
+
 impl Lowerer<'_> {
     /// `keep-mounted=keys` (@ref LLP 1010 §6.11): a list of row keys, each a
     /// string, number or bool or an option of one, as a `for`'s `key=` is.
@@ -143,8 +174,10 @@ impl Lowerer<'_> {
         if matches!(opt.value, Expr::Bool(false, _)) {
             return Ok(());
         }
-        let row = row_list(attrs);
-        self.collection_axis(attrs, row, span)?;
+        // A class's rows are its literals: a percentage there is refused too.
+        let own = self.with_class_rows(attrs);
+        let row = row_list(&own);
+        self.collection_axis(attrs, row, span, scope)?;
         // Computed bounds are checked by the bake's measured-layout lint.
         // Merely spelling `auto` or a non-growing flex is not a bound.
         if !row
@@ -156,20 +189,59 @@ impl Lowerer<'_> {
         {
             return err("lower-collection-unbounded", "a virtualized list needs height, max-height, or flex constraining its vertical scrollport", span);
         }
-        // A class's rows are its literals: a percentage there is refused too.
-        let mut own = attrs.to_vec();
-        if let Some((_, rows)) = self.class_rows(attrs).ok().flatten() {
-            own.extend(rows);
-        }
         self.collection_inset(&own, row, scope)?;
         self.collection_flow(attrs, Some(row))?;
-        let [Node::Each { body, .. }] = children else {
+        let mut rows = children.iter().filter(|n| matches!(n, Node::Each { .. }));
+        let Some(Node::Each { body, .. }) = rows.next() else {
             return err(
                 "lower-collection-template",
-                "a virtualized list initially supports exactly one direct `for`",
+                "a virtualized list needs one direct keyed `for`; put its data rows in that `for`",
                 span,
             );
         };
+        if rows.next().is_some() {
+            return err("lower-collection-template", "a virtualized list holds one direct `for`; put another `for` inside an element (all its rows mount), or use a separate list", span);
+        }
+        if children.len() > 1 {
+            if row {
+                return err("lower-collection-fixed", "fixed content needs a vertical virtualized list; move it outside this horizontal list", span);
+            }
+            if literal(&own, "appearance").and_then(string) != Some("none") {
+                return err("lower-collection-fixed", "fixed content in a virtualized cells list is not supported yet; write appearance=\"none\" on the list", span);
+            }
+            for fixed in children.iter().filter(|n| !matches!(n, Node::Each { .. })) {
+                let fixed = std::slice::from_ref(fixed);
+                // Its flow roots: elements other than `display: contents`, seen
+                // through those and through `if`, `for` and `match`.
+                let roots = Node::walk_with(fixed, (), |node, _| {
+                    let through = match node {
+                        Node::Element { attrs, .. } => {
+                            literal(&self.with_class_rows(attrs), "display").and_then(string)
+                                == Some("contents")
+                        }
+                        _ => true,
+                    };
+                    [through.then_some(()); 2]
+                });
+                for (node, ()) in roots {
+                    if let Node::Element {
+                        tag, attrs, span, ..
+                    } = node
+                    {
+                        self.check_fixed_root(tag, attrs, *span)?;
+                    }
+                }
+                for node in Node::walk(fixed) {
+                    if let Node::Element { attrs, .. } = node {
+                        if let Some(opt) = literal(attrs, "virtualized")
+                            .filter(|a| !matches!(a.value, Expr::Bool(false, _)))
+                        {
+                            return err("lower-collection-fixed", "a virtualized list cannot live in fixed content; move it into a data row or outside the enclosing list, or write virtualized=false", opt.span);
+                        }
+                    }
+                }
+            }
+        }
         self.check_nested(body, false)?;
         let [Node::Element { tag, attrs, .. }] = body.as_slice() else {
             return err("lower-collection-template", "a `for` in a virtualized list needs exactly one element flow root (wrap conditional or multiple roots in column)", span);
@@ -181,12 +253,17 @@ impl Lowerer<'_> {
                 span,
             );
         }
-        // An unknown class is the node's own refusal; here it has no rows.
-        let mut expanded = attrs.clone();
+        self.collection_flow(&self.with_class_rows(attrs), None)
+    }
+
+    /// An element's attributes followed by its class's rows. An unknown
+    /// class is the element's own refusal; here it has no rows.
+    fn with_class_rows(&self, attrs: &[Attr]) -> Vec<Attr> {
+        let mut expanded = attrs.to_vec();
         if let Some((_, rows)) = self.class_rows(attrs).ok().flatten() {
             expanded.extend(rows);
         }
-        self.collection_flow(&expanded, None)
+        expanded
     }
 
     /// `reorderGroup` (@ref LLP 1094 D1): lists that share one exchange rows,
@@ -208,13 +285,13 @@ impl Lowerer<'_> {
         if !virtualized || !has("reorderdrop") || !has("id") {
             return err("lower-reorder-group", "`reorderGroup` joins lists that take a drop: give this `list virtualized=true` a `reorderdrop` and an `id`", group.span);
         }
-        let [Node::Each {
+        let Some(Node::Each {
             var,
             index,
             list,
             key,
             ..
-        }] = children
+        }) = children.iter().find(|n| matches!(n, Node::Each { .. }))
         else {
             return Ok(());
         };
@@ -239,13 +316,13 @@ impl Lowerer<'_> {
         children: &[Node],
         scope: &Scope,
     ) -> Result<(), LowerError> {
-        let [Node::Each {
+        let Some(Node::Each {
             var,
             index,
             list,
             key,
             ..
-        }] = children
+        }) = children.iter().find(|n| matches!(n, Node::Each { .. }))
         else {
             return Ok(());
         };
@@ -278,10 +355,36 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Whether `value` is a number of points: a literal one at least
+    /// `least` (`positive`: more than it), or a computed one; a string could
+    /// be `auto` or a percentage.
+    fn points(&self, value: &Expr, scope: &Scope, positive: bool) -> bool {
+        match (numeric_literal(value), value) {
+            (Some(n), _) => n.is_finite() && if positive { n > 0.0 } else { n >= 0.0 },
+            (None, Expr::Ternary(_, yes, no, _)) => {
+                self.points(yes, scope, positive) && self.points(no, scope, positive)
+            }
+            (None, Expr::Str(..) | Expr::Bool(..)) => false,
+            (None, value) => matches!(
+                contract_types::infer(value, scope, &self.types.shapes),
+                Ok(Ty::Number) | Err(_)
+            ),
+        }
+    }
+
     /// The rules that make a list's axis CSS's and keep its index's starts
-    /// prefix sums (LLP 1070 H2, §8): a row list is a literal-height flex row,
-    /// left to right, that neither wraps, reverses nor spreads its items.
-    fn collection_axis(&self, attrs: &[Attr], row: bool, span: Span) -> Result<(), LowerError> {
+    /// prefix sums (LLP 1070 H2, §8, as amended for #226): a row list is a
+    /// flex row of a definite height, left to right, that neither wraps,
+    /// reverses nor spreads its items; its `gap` is a number of points the
+    /// index counts between items. A vertical list is a block, where CSS lays
+    /// out no gap.
+    fn collection_axis(
+        &self,
+        attrs: &[Attr],
+        row: bool,
+        span: Span,
+        scope: &Scope,
+    ) -> Result<(), LowerError> {
         if let Some(display) = literal(attrs, "display") {
             if !matches!(string(display), Some("block" | "flex")) {
                 return err("lower-collection-flow", "a virtualized list's `display` is a literal `block` (it scrolls vertically) or `flex` (a row that scrolls horizontally)", display.span);
@@ -316,13 +419,22 @@ impl Lowerer<'_> {
         if let Some(reorder) = literal(attrs, "reorderdrop").filter(|_| row) {
             return err("lower-collection-reorder", "reordering is vertical; a virtualized row list refuses `reorderdrop` until a consumer needs it (LLP 1070 §4.7)", reorder.span);
         }
+        for gap in attrs
+            .iter()
+            .filter(|a| matches!(a.name.as_str(), "gap" | "row-gap" | "column-gap"))
+        {
+            if !row && numeric_literal(&gap.value) != Some(0.0) {
+                return err("lower-collection-flow", format!("`{}` on a vertical virtualized list: it is a block, where CSS lays out no gap; space rows with a `margin-bottom` on the row root", gap.name), gap.span);
+            }
+            if row && !self.points(&gap.value, scope, false) {
+                return err("lower-collection-flow", format!("`{}` on a virtualized row list is a nonnegative number of points, a literal or a computed number, which the list counts between its items", gap.name), gap.span);
+            }
+        }
         if !row {
             return Ok(());
         }
-        if !literal(attrs, "height")
-            .is_some_and(|a| numeric_literal(&a.value).is_some_and(|n| n > 0.0))
-        {
-            return err("lower-collection-cross", "a virtualized row list needs a literal `height`: an auto height would be its tallest mounted item, which changes as items mount", span);
+        if !literal(attrs, "height").is_some_and(|a| self.points(&a.value, scope, true)) {
+            return err("lower-collection-cross", "a virtualized row list needs a `height` in points, a literal or a computed number: an auto height would be its tallest mounted item, which changes as items mount", span);
         }
         for a in attrs {
             let refusal = match a.name.as_str() {
@@ -337,6 +449,42 @@ impl Lowerer<'_> {
                     format!("`{}` on a virtualized row list: {reason}", a.name),
                     a.span,
                 );
+            }
+        }
+        Ok(())
+    }
+
+    /// Refuses a flow root of fixed content that could overlap the data rows;
+    /// `check_collection` finds the roots.
+    fn check_fixed_root(&self, tag: &str, attrs: &[Attr], span: Span) -> Result<(), LowerError> {
+        if tag == "dialog" {
+            return err("lower-collection-fixed-flow", "a fixed collection root must participate in normal flow; move the dialog outside the list", span);
+        }
+        let expanded = self.with_class_rows(attrs);
+        if literal(&expanded, "display").and_then(string) == Some("contents") {
+            return Ok(());
+        }
+        for a in &expanded {
+            let allowed = match a.name.as_str() {
+                "position" => matches!(string(a), Some("static" | "relative")),
+                "margin" | "margin-top" | "margin-bottom" | "margin-left" | "margin-right" => {
+                    match super::shorthands::sides(&a.name, &a.value)? {
+                        Some(sides) => sides.iter().all(fixed_margin),
+                        None => fixed_margin(&a.value),
+                    }
+                }
+                "top" | "bottom" => fixed_offset(&a.value),
+                "inset" => {
+                    let sides = super::shorthands::sides(&a.name, &a.value)?;
+                    [0, 2].into_iter().all(|i| {
+                        let value = sides.as_ref().map_or(&a.value, |s| &s[i]);
+                        fixed_offset(value)
+                    })
+                }
+                _ => true,
+            };
+            if !allowed {
+                return err("lower-collection-fixed-flow", format!("`{}` on a fixed collection root can overlap the data rows; use static or relative positioning without vertical offsets, nonnegative margin lengths (including percentages and font-relative units), or move it outside the list", a.name), a.span);
             }
         }
         Ok(())
@@ -378,21 +526,11 @@ impl Lowerer<'_> {
                     }
                     self.check_nested(children, inner)?;
                 }
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    self.check_nested(then, inner)?;
-                    self.check_nested(otherwise, inner)?;
+                node => {
+                    for list in node.child_lists() {
+                        self.check_nested(list, inner)?;
+                    }
                 }
-                Node::Match { some, none, .. } => {
-                    self.check_nested(&some.1, inner)?;
-                    self.check_nested(none, inner)?;
-                }
-                Node::Each { body, .. } => {
-                    self.check_nested(body, inner)?;
-                }
-                Node::Use { children, .. } => self.check_nested(children, inner)?,
-                Node::Children { .. } => {}
             }
         }
         Ok(())
@@ -478,9 +616,7 @@ impl Lowerer<'_> {
                     };
                     matches!(&a.value, Expr::Str(s, _) if if a.name == main { s == "scroll" || s == "auto" } else { s == "hidden" })
                 }
-                "gap" | "row-gap" | "column-gap" if container => {
-                    numeric_literal(&a.value) == Some(0.0)
-                }
+                "gap" | "row-gap" | "column-gap" if container => true, // `collection_axis`
                 "flex-direction" | "flex-wrap" | "grid-template-rows" | "grid-template-columns"
                     if container =>
                 {

@@ -121,6 +121,23 @@ pub struct Launch {
     /// The claims that cold share drew from, so a later share this launch
     /// draws its tokens and file names past them.
     pub claims: Option<crate::share_in::Claims>,
+    /// The window's name, which the page's `name` reads as `window.name`:
+    /// `main` when none is told, the first window on every host (LLP
+    /// 1030.004 D2).
+    pub window_name: Option<String>,
+    /// The router launches rooted: the launch location's screen alone, as a
+    /// window opened at a route shows it (LLP 1030.004 D2).
+    pub rooted: bool,
+    /// The platform's layout direction, on a host where it is fixed for the
+    /// process and governs a direction the author left unsaid (AppKit's
+    /// `NSApp.userInterfaceLayoutDirection` on the Mac): the document's
+    /// direction in place of the strings table's. `None`: the table's.
+    pub direction: Option<exact_kernel::Direction>,
+    /// Text whose direction is unsaid takes each paragraph's base direction
+    /// from its first strong character, as the platform's own text does
+    /// (LLP 1060.000 D3; the Mac). Told on its own, not implied by
+    /// `direction`.
+    pub natural_text: bool,
 }
 
 impl Launch {
@@ -131,6 +148,10 @@ impl Launch {
         clock: None,
         shared: Vec::new(),
         claims: None,
+        window_name: None,
+        rooted: false,
+        direction: None,
+        natural_text: false,
     };
 }
 
@@ -169,6 +190,10 @@ pub fn launching_with<T>(launch: Launch, boot: impl FnOnce() -> T) -> T {
             .filter(|t| (0.0..=crate::MAX_CLOCK_MS).contains(t)),
         shared: launch.shared,
         claims: launch.claims,
+        window_name: launch.window_name,
+        rooted: launch.rooted,
+        direction: launch.direction,
+        natural_text: launch.natural_text,
     };
     let _restore = Restore(Some(LAUNCH.with(|l| l.replace(launch))));
     boot()
@@ -206,6 +231,28 @@ pub(crate) fn launch_shared() -> Vec<(String, crate::share_in::SharedFiles)> {
 /// The claims a cold share drew from, when a boot under [`launching_with`] was told.
 pub(crate) fn launch_claims() -> Option<crate::share_in::Claims> {
     LAUNCH.with(|l| l.borrow().claims.clone())
+}
+
+/// The window's name a boot under [`launching_with`] was told, else `main`.
+pub(crate) fn launch_window_name() -> String {
+    LAUNCH
+        .with(|l| l.borrow().window_name.clone())
+        .unwrap_or_else(|| "main".into())
+}
+
+/// Whether a boot under [`launching_with`] launches its router rooted.
+pub(crate) fn launch_rooted() -> bool {
+    LAUNCH.with(|l| l.borrow().rooted)
+}
+
+/// The platform's layout direction, when a boot under [`launching_with`] was told.
+pub(crate) fn launch_direction() -> Option<exact_kernel::Direction> {
+    LAUNCH.with(|l| l.borrow().direction)
+}
+
+/// Whether a boot under [`launching_with`] was told its unsaid text is natural.
+pub(crate) fn launch_natural_text() -> bool {
+    LAUNCH.with(|l| l.borrow().natural_text)
 }
 
 /// Where the viewer is, when a boot under [`launching_with`] was told.

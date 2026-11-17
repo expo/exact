@@ -64,11 +64,50 @@ const SECRETS = [
   /\bxox[abposr]-[A-Za-z0-9-]{10,}/g,
   /https:\/\/hooks\.slack\.com\/\S+/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-  /\b((?:api[_-]?key|secret|token|password|passwd|auth)\w*\s*[:=]\s*)["']?[^\s"']{8,}/gi,
   /\b((?:Bearer|Basic)\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
-  /\b([\w.-]*(?:password|passwd|secret|token|api[_-]?key)\w*\s*[:=]\s*)["']?[^\s"',;]+/gi,
-  /(--?(?:api-?key|secret|token|password|passwd|auth)\w*(?:=|\s+))["']?[^\s"']+/gi,
 ];
+// A credential named by its key or flag. The key may end in a quote, as in JSON, a JS object (a computed key's
+// bracket too) or JSON escaped inside a string. A quoted value is blanked whole (quotedEnd); `bare` is how much of
+// an unquoted one is.
+const KEY_END = String.raw`\w*\\*["'\x60]?\]?\s*[:=]\s*`;
+const NAMED = [
+  { key: new RegExp(String.raw`\b(?:api[_-]?key|secret|token|password|passwd|auth)${KEY_END}`, 'gi'), bare: /[^\s"']{8,}/y },
+  { key: new RegExp(String.raw`\b[\w.-]*(?:password|passwd|secret|token|api[_-]?key)${KEY_END}`, 'gi'), bare: /[^\s"',;]+/y },
+  { key: /--?(?:api-?key|secret|token|password|passwd|auth)\w*(?:=|\s+)/gi, bare: /[^\s"']+/y },
+];
+
+/** Where the quoted string at `i` ends: past its closing quote, or at the end of its line when it has none. Null
+ * when no quote opens there. A quote after `depth` backslashes opens a string escaped inside another (`\"` in JSON
+ * held in a JSON string); the same quote closes it after a run of backslashes `r` with r mod 2(depth+1) = depth,
+ * which at depth 0 is an even run, and at depth 1 sets the closing `\"` apart from an escaped `\\\"`. */
+function quotedEnd(text, i) {
+  const open = /\\*(["'`])/y;
+  open.lastIndex = i;
+  const opened = open.exec(text);
+  if (!opened) return null;
+  const [run0, quote] = opened, depth = run0.length - 1;
+  for (let j = open.lastIndex, run = 0; j < text.length; j++) {
+    const c = text[j];
+    if (c === '\n' || c === '\r') return j;
+    if (c === quote && run % (2 * depth + 2) === depth) return j + 1;
+    run = c === '\\' ? run + 1 : 0;
+  }
+  return text.length;
+}
+
+function blankNamed(text, { key, bare }) {
+  let out = '', at = 0;
+  for (const found of text.matchAll(key)) {
+    if (found.index < at) continue;
+    const from = found.index + found[0].length;
+    bare.lastIndex = from;
+    const to = quotedEnd(text, from) ?? (bare.test(text) ? bare.lastIndex : from);
+    if (to === from) continue;
+    out += `${text.slice(at, from)}[redacted]`;
+    at = to;
+  }
+  return out + text.slice(at);
+}
 
 /** The home directory, the app's directory and its names become placeholders;
  * anything shaped like a credential is blanked. A net under the diary's own rules. */
@@ -80,6 +119,7 @@ export function redact(text, dir) {
   // However the app's directory was spelled (a symlinked /var, a relative path), what led to it goes too.
   text = text.replace(/(?:~|\.{0,2})(?:\/[^\s/'"`<>]+)*\/<app>/g, '<app>').replaceAll(homedir(), '~');
   for (const secret of SECRETS) text = text.replace(secret, (match, key) => typeof key === 'string' ? `${key}[redacted]` : '[redacted]');
+  for (const named of NAMED) text = blankNamed(text, named);
   return text;
 }
 const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

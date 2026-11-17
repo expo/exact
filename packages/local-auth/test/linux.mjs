@@ -1,5 +1,5 @@
 // @exact/local-auth's store half on the Linux host under the agent (LLP 1133.010
-// §7, §11 stage 2): the vault Android's reader shares (`host/linux/src/
+// §7, §11 stage 2): the vault Android's reader shares (`host/painted/src/
 // presence_secrets.rs`), here headless on this machine, with the substitute's
 // tickets for the person and the drive's scratch store for the locked items.
 // The fixture app is the one `exact new` makes outside the repo (fixture.mjs).

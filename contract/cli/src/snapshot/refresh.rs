@@ -74,15 +74,25 @@ pub fn bake_app(
     entries: &BTreeMap<String, Entry>,
     plan: Plan,
     data: impl DataSource,
-    mut refresh_data: impl DataSource,
+    refresh_data: impl DataSource,
 ) -> Result<Plan, BakeError> {
+    bake_app_with_warnings(entries, plan, data, refresh_data).map(|(plan, _)| plan)
+}
+
+/// Bake with an isolated refresh check and retain deferred-call warnings.
+pub fn bake_app_with_warnings(
+    entries: &BTreeMap<String, Entry>,
+    plan: Plan,
+    data: impl DataSource,
+    mut refresh_data: impl DataSource,
+) -> Result<(Plan, Vec<String>), BakeError> {
     check_refreshes(entries, &mut refresh_data).map_err(|message| BakeError::Lint {
         id: "snapshot-refresh",
         message,
         site: None,
     })?;
     drop(refresh_data);
-    crate::bake(plan, data)
+    crate::bake_with_warnings(plan, data)
 }
 
 fn mismatch(plan: &Plan, ty: TypesId, value: &Value, at: &str) -> Option<String> {

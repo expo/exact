@@ -253,7 +253,7 @@ final class FrameSampler: NSObject {
         observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.stop() })
         #else
         observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: nil, queue: .main) { [weak self] note in
-            if let window = note.object as? NSWindow, window === self?.session?.presenter.viewport.window, !window.occlusionState.contains(.visible) { self?.stop() }
+            if let window = note.object as? NSWindow, window === self?.session?.presenter.viewport.window, !window.screenOcclusionState.contains(.visible) { self?.stop() }
         })
         #endif
     }
@@ -284,7 +284,7 @@ final class FrameSampler: NSObject {
         let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
         #else
         let viewport = session.presenter.viewport
-        guard viewport.window?.occlusionState.contains(.visible) == true else { return }
+        guard viewport.window?.screenOcclusionState.contains(.visible) == true else { return }
         let l = viewport.displayLink(target: self, selector: #selector(tick(_:)))
         #endif
         l.add(to: .main, forMode: .common)
@@ -452,9 +452,13 @@ final class FrameSampler: NSObject {
         // Hold the interval to the period the last callback announced, so a
         // change of rate (a recording asking for the full one, ProMotion
         // lowering it) misses no frame
-        let announced = period
+        let announced = period ?? (target - now) * 1000
         period = (target - now) * 1000
-        if let last { sample(interval: (now - last) * 1000, period: announced ?? (target - now) * 1000, at: now) }
+        // A callback whose target is its own timestamp announces no period,
+        // and an interval cannot be counted in frames of none
+        if let last, announced.isFinite, announced > 0 {
+            sample(interval: (now - last) * 1000, period: announced, at: now)
+        }
         last = now
     }
 
@@ -667,7 +671,7 @@ extension ExactSession {
                                        "bootWall": ((Date().timeIntervalSince1970 - (CACurrentMediaTime() - ExactEnv.t0)) * 1000).rounded(),
                                        "pid": Int(ProcessInfo.processInfo.processIdentifier), "session": label,
                                        "savedAt": (Date().timeIntervalSince1970 * 1000).rounded(), "hostBuild": hostBuild]
-        let trace: [String: Any] = [
+        var trace: [String: Any] = [
             "traceEvents": events,
             "identity": identity,
             "proxies": ["period": "target: the sampler's own display link, targetTimestamp − timestamp",
@@ -681,6 +685,7 @@ extension ExactSession {
             // The hatches (LLP 1075.003.000.001 §3.3), read in this same turn, so the sections agree.
             "hatches": ["state": presenter.elements.observation(hatchDiagnostics), "perf": hatchPerf()],
         ]
+        trace.merge(traceSnapshot()) { _, snapshot in snapshot }
         do {
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("trace-\(stamp).json")
@@ -794,6 +799,7 @@ final class FrameObservation {
 }
 
 // @ref LLP 1142 §13 D8 — independent real-time observation, never a clock loan.
+#if EXACT_AGENT
 extension Agent {
     func liveFrames(_ request: [String: Any], completed: @escaping ([String: Any]) -> Void) {
         guard let ms = Agent.integer(request["live"]), (1...120_000).contains(ms) else {
@@ -806,7 +812,7 @@ extension Agent {
         // covered, and AppKit presents no frames to a covered window: it comes forward
         // for the recording, once AppKit reports it visible, and goes back after.
         if let window = session.presenter.viewport.window, window.level == .agentBehind, window.isVisible,
-           !window.occlusionState.contains(.visible) {
+           !window.screenOcclusionState.contains(.visible) {
             var seen: NSObjectProtocol?
             var started = false
             let start = { [self] in
@@ -822,7 +828,7 @@ extension Agent {
                 }
             }
             seen = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { _ in
-                if window.occlusionState.contains(.visible) { start() }
+                if window.screenOcclusionState.contains(.visible) { start() }
             }
             window.level = .normal
             window.orderFrontRegardless()
@@ -843,15 +849,11 @@ extension Agent {
         let start = CACurrentMediaTime(), from = session.now(), before = sampler.observedCount
         let observation = FrameObservation(ms: ms) { [self] reason in
             sampler.endObservation()
-            let storageSubstituted = ExactEnv.environment["EXACT_AGENT"] != nil && ExactEnv.environment["EXACT_STORE"] != "real"
             var result = sampler.reply(late: request["late"] as? Int ?? 20, all: request["records"] as? Bool == true)
-            result["live"] = ["ms": (CACurrentMediaTime() - start) * 1000, "from": from, "to": session.now(),
-                              "clockMode": session.clock == nil ? "real" : "virtual", "clockChanged": false,
-                              "execution": ExactEnv.agentMode ? "agent" : "normal",
-                              "scheduling": ExactEnv.agentMode ? "agent" : "normal",
-                              "performanceClaim": !ExactEnv.agentMode && !storageSubstituted && session.clock == nil,
-                              "inputPath": "unknown", "observation": sampler.observation(from: (start - ExactEnv.t0) * 1000, before: before),
-                              "substitutions": ExactEnv.agentMode ? ["timers", "collection-fill-scheduling", "scroll-velocity", "wheel-routing", "device-facts", "capabilities"] : storageSubstituted ? ["storage", "secret-presence"] : []] as [String: Any]
+            result["live"] = session.executionObservation().merging([
+                "ms": (CACurrentMediaTime() - start) * 1000, "from": from, "to": session.now(),
+                "inputPath": "unknown", "observation": sampler.observation(from: (start - ExactEnv.t0) * 1000, before: before)
+            ]) { _, observed in observed }
             if let reason { result["error"] = session.state == .destroyed ? "session destroyed during live observation" : reason }
             completed(result)
         }
@@ -859,3 +861,4 @@ extension Agent {
         sampler.observationStopped = { observation.finish($0) }
     }
 }
+#endif

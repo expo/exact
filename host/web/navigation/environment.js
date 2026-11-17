@@ -14,9 +14,22 @@ export function environment() {
     "safe-area-inset-right": r2(parseFloat(cs.paddingRight) || 0),
     "safe-area-inset-bottom": r2(parseFloat(cs.paddingBottom) || 0),
     "safe-area-inset-left": r2(parseFloat(cs.paddingLeft) || 0),
-    "keyboard-inset-height": r2(Math.max(0, innerHeight - (visualViewport?.height ?? innerHeight))),
+    "keyboard-inset-height": keyboardInset(),
     ...foldEnv()
   };
+}
+/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
+export function keyboardInset(platform = globalThis) {
+  const rect = platform.navigator?.virtualKeyboard?.boundingRect;
+  if (rect?.height > 0) {
+    return r2(rect.height);
+  }
+  const vv = platform.visualViewport;
+  return vv ? r2(Math.max(0, platform.innerHeight - vv.height - vv.offsetTop)) : 0;
+}
+/** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
+export function onKeyboard(changed, platform = globalThis) {
+  platform.navigator?.virtualKeyboard?.addEventListener?.("geometrychange", changed);
 }
 // Read CSS when the JS fold interfaces are absent (LLP 1078 D6). Share agent substitutes with agent-navigation.js; they change facts, not CSS env() resolution (D7).
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -29,7 +42,7 @@ function readFold() {
       s.y,
       s.width,
       s.height
-    ]);
+    ]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
     return {
       posture,
       cols: new Set(rects.map((r) => r[0])).size,
@@ -229,13 +242,31 @@ export const preferences = () => {
 };
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];
+// @ref LLP 1101.003 D6 — Media Queries 4's `update`: 0 `fast` (a screen, and a page that cannot ask), 1 `slow`, 2 `none` (print). The preference bits have no room for it; the wasm host takes it through `exact_set_update`.
+let updateQueries;
+const updates = () => updateQueries ??= ["(update: slow)", "(update: none)"].map(q => globalThis.matchMedia?.(q));
+export const UPDATES = ["fast", "slow", "none"];
+export const updateCode = () => updates()[1]?.matches ? 2 : updates()[0]?.matches ? 1 : 0;
 /** A phone-sized screen (its short side under 600 CSS px): the GPU tier's class when the adapter says nothing it knows, and never `high` (LLP 1139.003 D2). */ export const handheld = (platform = globalThis) => Math.min(platform.screen?.width ?? Infinity, platform.screen?.height ?? Infinity) < 600;
-export const onPreferences = (changed) => queries().forEach(([q]) => q.addEventListener("change", changed));
+export const onPreferences = (changed) => {
+  queries().forEach(([q]) => q.addEventListener("change", changed));
+  updates().forEach(q => q?.addEventListener?.("change", changed));
+  // A window can move between displays without changing its logical size.
+  let resolution;
+  const watch = () => {
+    resolution?.removeEventListener?.("change", rescaled);
+    resolution = globalThis.matchMedia?.(`(resolution: ${globalThis.devicePixelRatio || 1}dppx)`);
+    resolution?.addEventListener("change", rescaled);
+  };
+  const rescaled = () => { watch(); changed(); };
+  watch();
+};
 // LLP 1069.000 D2/D6: pack page facts; agent preferences replace browser readings except display scale.
 // Picture sharing is agent-only; persisted pageshow events count back/forward cache restores.
 export function pageReporter(agent, platform = globalThis) {
   const facts = {
     "visibility-state": "visible",
+    frozen: false,
     online: true,
     "can-share": true,
     "can-share-files": true,
@@ -244,12 +275,17 @@ export function pageReporter(agent, platform = globalThis) {
     "has-focus": true,
     "root-font-size": 16,
     "gpu-tier": "high",
-    "iframe-partition": false
+    "iframe-partition": false,
+    presented: true
   }, cache = {
     persisted: false,
     restores: 0
   };
   // cache: the drive's page is never put away
+  let frozen = false;
+  // `presented` (LLP 1069.000 D2 r7): the browser has presented a picture of this page. Under the agent each frame is
+  // presented at its commit (true, until `prefer presented`); on the page, false until `presentedNow`.
+  let seen = false;
   let sharesFiles;
   const canShareFiles = () => sharesFiles ??= (() => {
     try {
@@ -272,6 +308,7 @@ export function pageReporter(agent, platform = globalThis) {
     ...cache
   } : {
     ...cache,
+    frozen,
     "visibility-state": platform.document.visibilityState === "hidden" ? "hidden" : "visible",
     online: platform.navigator.onLine !== false,
     "can-share": typeof platform.navigator.share === "function",
@@ -281,12 +318,13 @@ export function pageReporter(agent, platform = globalThis) {
     "has-focus": typeof platform.document.hasFocus !== "function" || platform.document.hasFocus(),
     "navigation-type": navigationType,
     "gpu-tier": gpuTier(),
-    "iframe-partition": false
+    "iframe-partition": false,
+    presented: seen
   };
   // iframe-partition: a browser never honours an iframe's `partition` (LLP 1020.002 Q4)
   const bits = () => {
     const f = read();
-    return ((f["visibility-state"] === "hidden" ? 1 : 0) | (f.online ? 0 : 2) | (f["can-share"] ? 4 : 0) | (f["can-open-files"] ? 8 : 0) | (f["has-focus"] ? 0 : 16) | (f["can-share-files"] ? 256 : 0) | (f["can-share-pictures"] ? 512 : 0) | [
+    return ((f["visibility-state"] === "hidden" ? 1 : 0) | (f.frozen ? 128 : 0) | (f.online ? 0 : 2) | (f["can-share"] ? 4 : 0) | (f["can-open-files"] ? 8 : 0) | (f["has-focus"] ? 0 : 16) | (f["can-share-files"] ? 256 : 0) | (f["can-share-pictures"] ? 512 : 0) | [
       "navigate",
       "reload",
       "back_forward"
@@ -306,7 +344,7 @@ export function pageReporter(agent, platform = globalThis) {
         "high"
       ].includes(value)) {
         next[name] = value;
-      } else if ((name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition") && (value === "true" || value === "false")) {
+      } else if ((name === "frozen" || name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition" || name === "presented") && (value === "true" || value === "false")) {
         next[name] = value === "true";
       } else if (name === "root-font-size" && Number(value) > 0 && Number.isFinite(Number(value))) {
         next[name] = Number(value);
@@ -331,6 +369,12 @@ export function pageReporter(agent, platform = globalThis) {
       return;
     }
     platform.document.addEventListener("visibilitychange", changed);
+    for (const name of ["freeze", "resume"]) {
+      platform.document.addEventListener(name, () => {
+        frozen = name === "freeze";
+        changed();
+      });
+    }
     for (const name of [
       "online",
       "offline",
@@ -368,7 +412,9 @@ export function pageReporter(agent, platform = globalThis) {
       if (!agent) {
         told = tier;
       }
-    }
+    },
+    // The present of the page's first picture; whether this changed it.
+    presentedNow: () => !agent && !seen && (seen = true)
   };
 }
 // The page launch owns its seed, a whole number below 2^32 on every host (LLP 1116.005 D5); a new runner during
@@ -438,6 +484,16 @@ export function launchLocation(platform = globalThis) {
   }
   const rest = q.toString();
   return pathname + (rest ? "?" + rest : "") + hash;
+}
+/** The locations of this document's history entries before the current one, oldest first, by the Navigation API: after
+ * a reload, the visits Back returns to without loading a page (`NavigationHistoryEntry.sameDocument`). */
+export function launchVisits(platform = globalThis) {
+  const entries = platform.navigation?.entries?.() ?? [], at = platform.navigation?.currentEntry?.index ?? -1;
+  let from = at;
+  while (from > 0 && entries[from - 1].sameDocument) {
+    from--;
+  }
+  return entries.slice(from, Math.max(at, 0)).map((entry) => launchLocation({ location: new URL(entry.url) }));
 }
 // Drive facts use the launch URL after route changes too (storage-environment.js `launchHref`).
 const launched = () => new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams;

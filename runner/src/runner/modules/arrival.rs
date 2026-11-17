@@ -444,8 +444,12 @@ impl<D: DataSource> Runner<D> {
                     }
                 }
             } else {
-                let resumed = std::mem::take(&mut self.extensions.arrivals.suspended);
-                if resumed.is_empty() {
+                // Only this extension's scans: the set holds every extension's.
+                let mut resumed = false;
+                for c in self.claims(&extension, &[&name("scan")]) {
+                    resumed |= self.extensions.arrivals.suspended.remove(&c.token);
+                }
+                if !resumed {
                     continue;
                 }
                 self.log(format!("{extension}: scans resumed"));

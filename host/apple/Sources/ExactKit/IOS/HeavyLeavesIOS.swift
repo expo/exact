@@ -88,6 +88,7 @@ final class HeavyLeaves: NSObject, UIGestureRecognizerDelegate {
     }
     /// The list moved: a held leaf may have come near, a made one gone far.
     func scrolled() {
+        guard !pending.isEmpty || presenter.session?.natives.isEmpty == false else { return }
         hideFar()
         if !pending.isEmpty { start() }
     }

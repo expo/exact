@@ -19,7 +19,7 @@ import android.view.HapticFeedbackConstants
  * What exact2 asks of the platform, acted on (LLP 1115.001 D5): the one channel out. exact2 queues a request and
  * wakes the reader; whoever holds the host takes the queue ([Native.requests], on exact2's thread) and hands it to
  * the main thread, where [perform] reads it. A request with an answer (the share sheet) is answered later by its id
- * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/linux/src/presenter/requests.rs`
+ * ([Exact.answer]). `host/android/README.md` has the kinds and their words; `host/painted/src/presenter/requests.rs`
  * writes them.
  *
  * Everything here is the platform's own: an `Intent` for a link, `performHapticFeedback` for a haptic, the system's
@@ -35,6 +35,10 @@ internal class Requests(private val activity: ExactActivity) {
         private set
     /** The top layer's windows (LLP 1115.001 D10): what exact2 says of its open surface goes to them. */
     var surfaces: Surfaces? = null
+    /** The GPU surfaces' haptics (LLP 1009 D10), made at the first, and whether the activity is paused, which they are
+     * made with: the first may come after a pause. */
+    private var haptics: SurfaceHaptics? = null
+    private var paused = false
 
     /** `x_log_requests=1` (exact2's EXACT_LOG_REQUESTS): each request as it is acted on, to the log. A haptic or a
      * clipboard write shows nowhere else. */
@@ -52,6 +56,21 @@ internal class Requests(private val activity: ExactActivity) {
         }
     }
     private var listening = false
+    private var sound: SoundOutput? = null
+    private var foreground = true
+
+    fun foreground(on: Boolean) { foreground = on; sound?.foreground(on) }
+
+    private fun sounds(text: String) {
+        val body = org.json.JSONObject(text)
+        val ops = body.getJSONArray("ops")
+        if (sound == null && (0 until ops.length()).any { ops.getJSONObject(it).getInt("kind") == 1 }) {
+            val info = activity.packageManager.getApplicationInfo(activity.packageName, android.content.pm.PackageManager.GET_META_DATA)
+            val policy = SoundPolicy.of(info.metaData?.getString("dev.exact.audioSession") ?: "ambient")
+            sound = SoundOutput(activity, { AssetRoot.of(activity) }, policy).also { if (!foreground) it.foreground(false) }
+        }
+        sound?.apply(body)
+    }
 
     private fun listen() {
         if (listening) return
@@ -72,6 +91,13 @@ internal class Requests(private val activity: ExactActivity) {
             try {
                 when (kind) {
                     OPEN -> open(string(words, body).first)
+                    AUTH -> {
+                        val (url, next) = string(words, body)
+                        val (callback, after) = string(words, next)
+                        val (state, end) = string(words, after)
+                        Auth.open(activity, id, url, callback, state, end < i && words[end] != 0)
+                    }
+                    AUTH_END -> Auth.end(words[body])
                     HAPTIC -> haptic(words[body])
                     COPY -> copy(string(words, body).first)
                     SHARE -> share(id, words, body)
@@ -87,24 +113,22 @@ internal class Requests(private val activity: ExactActivity) {
                     MODULE -> Extensions.call(id, string(words, body).first)
                     PRESENCE -> Presence.check(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
+                    // The surface, then its message's JSON.
+                    SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
+                    SOUND -> sounds(string(words, body).first)
+                    FILES -> files(id, words, body)
+                    ASSETS -> { sound?.reroot(); activity.assetsMoved() }
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
                 Log.w(TAG, "request $id kind $kind: $e")
-                if (kind == SHARE && sharing.remove(id)) Exact.answer(id, e.message ?: e.javaClass.simpleName)
+                if (kind == FILES || (kind == SHARE && sharing.remove(id))) Exact.answer(id, e.message ?: e.javaClass.simpleName)
             }
         }
     }
 
     /** The session's orientation lock (LLP 1133.029 D6), on this activity. */
     private val orientation = Orientation(activity) { w, at -> string(w, at) }
-
-    /** The string at [at]: its bytes' count, then UTF-8 padded to whole words. And the index after it. */
-    private fun string(w: IntArray, at: Int): Pair<String, Int> {
-        val n = w[at]
-        val bytes = ByteArray(n) { k -> (w[at + 1 + k / 4] ushr (8 * (k % 4))).toByte() }
-        return String(bytes, Charsets.UTF_8) to at + 1 + (n + 3) / 4
-    }
 
     /** The pickers that are up, by their requests' ids, and what closes each: none has answered yet. */
     private val picking = HashMap<Int, () -> Unit>()
@@ -143,6 +167,16 @@ internal class Requests(private val activity: ExactActivity) {
             Log.e(TAG, "picker $kind: $e")
             answer(null)
         }
+    }
+
+    private fun files(id: Int, words: IntArray, body: Int) {
+        var at = body + 3
+        val accept = List(words[body + 2]) {
+            val (type, next) = string(words, at)
+            at = next
+            type
+        }
+        FilePicker.show(activity, accept, words[body + 1] != 0) { Exact.answer(id, it) }
     }
 
     /** A link that leaves the app: an `http` or `https` URL in the browser (or the app that claims it), `mailto:` in
@@ -220,13 +254,20 @@ internal class Requests(private val activity: ExactActivity) {
     /** The activity is in front again. A share sheet that was up and has said nothing was dismissed: answered so a
      * moment later, since the sheet's word of a choice is a broadcast and may land just after. */
     fun resumed() {
+        paused = false
+        haptics?.suspended = false
         if (sharing.isEmpty()) return
         val waiting = sharing.toIntArray()
         activity.window.decorView.postDelayed({ for (id in waiting) if (sharing.remove(id)) Exact.answer(id, "dismissed") }, DISMISSED_MS)
     }
 
+    /** Paused: no surface's haptics play until [resumed]. */
+    fun paused() { paused = true; haptics?.suspended = true }
+
     /** The activity goes: no sheet of its answers any more, and each still up is cancelled. */
     fun destroy() {
+        haptics?.destroy()
+        sound?.destroy()
         if (listening) activity.unregisterReceiver(receiver)
         for (id in sharing) Exact.answer(id, null)
         sharing.clear()
@@ -237,11 +278,36 @@ internal class Requests(private val activity: ExactActivity) {
         }
     }
 
-    private companion object {
-        const val TAG = "exact"
+    companion object {
+        /** No activity can open UI, but process-owned waits still receive their cleanup, and the extensions, which
+         * outlive the activity, still answer their calls: one that needs an activity says so in its answer. */
+        fun detached(words: IntArray) {
+            var i = 0
+            while (i + 3 <= words.size) {
+                val kind = words[i]; val id = words[i + 1]; val body = i + 3
+                i = body + words[i + 2]
+                if (i > words.size) return
+                when (kind) {
+                    FILES -> Exact.answer(id, "file picker: activity unavailable")
+                    AUTH -> Exact.answer(id, "cancelled")
+                    AUTH_END -> Auth.end(words[body])
+                    MODULE -> Extensions.call(id, string(words, body).first)
+                    PRESENCE -> Presence.check(string(words, body).first)
+                }
+            }
+        }
+
+        /** The string at [at]: its bytes' count, then UTF-8 padded to whole words. And the index after it. */
+        private fun string(w: IntArray, at: Int): Pair<String, Int> {
+            val n = w[at]
+            val bytes = ByteArray(n) { k -> (w[at + 1 + k / 4] ushr (8 * (k % 4))).toByte() }
+            return String(bytes, Charsets.UTF_8) to at + 1 + (n + 3) / 4
+        }
+
+        private const val TAG = "exact"
         /** A URL's user name and password (to the authority's last `@`), which logcat is not given. */
-        val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
-        const val ID = "id"
+        private val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
+        private const val ID = "id"
         /** The kinds (`presenter::Request`). */
         const val OPEN = 1
         const val HAPTIC = 2
@@ -257,7 +323,13 @@ internal class Requests(private val activity: ExactActivity) {
         const val PRESENCE = 12
         const val ORIENTATION = 13
         const val PAD_INPUT = 14
+        const val SURFACE_HAPTIC = 15
+        const val SOUND = 16
+        const val AUTH = 17
+        const val AUTH_END = 19
+        const val FILES = 18
+        const val ASSETS = 20
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
-        const val DISMISSED_MS = 500L
+        private const val DISMISSED_MS = 500L
     }
 }

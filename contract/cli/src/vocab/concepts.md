@@ -7,6 +7,19 @@ tag, attribute or function prints its entry first, then the concept. Every `cont
 compiles (`contract/cli/tests/it/vocab.rs`).
 -->
 
+## bluetooth: Bluetooth grants for an app's native module
+names: device.bluetooth, device.bluetooth-background
+
+Declare `device.bluetooth purpose.bluetooth` in the data module's grants and
+`"purpose.bluetooth": "Reads your heart rate from your strap."` in `strings/en.json`.
+Apple derives `NSBluetoothAlwaysUsageDescription`; a sandboxed Mac also gets its
+Bluetooth entitlement. Android derives connection permission and CompanionDeviceManager
+setup metadata; the module asks for runtime permission itself.
+For an iOS central receiving peripheral updates in the background, add
+`device.bluetooth-background` without a purpose key beside the Bluetooth line.
+It derives `bluetooth-central` in `UIBackgroundModes` on iOS only. The native
+module owns Bluetooth calls; see docs/reference.md#bluetooth-in-a-native-module.
+
 ## scroll: scrolling to the top, or to an item
 names: scrollTo, scrollToTop, scroll-to-top, scrollToIndex, scrollIntoView, scrollTop, scrollToEnd, scrollToBottom, scroll-to-bottom
 
@@ -142,7 +155,7 @@ component App
 - Each option is one short `text` (or a symbol `image` with an `aria-label`); leave its
   look unsaid. A radio that paints itself (its own `background-color`, `border` or
   `border-radius`, LLP 1104 D2) makes the group your drawn control on every host, keys
-  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or long labels: a `select` (`contract vocab select`). A setting on or off: `input
+  and all; `appearance="none"` on the `radiogroup` says so whatever the radios write. Six or more options, or labels that do not fit side by side at the largest text size (verify reads it): a `select` (`contract vocab select`). A setting on or off: `input
   type="checkbox" switch`.
 - An item checked off (a to-do, a shopping list) is a plain `input type="checkbox"`: on iOS
   the checklist's circle, as Reminders draws it, never a switch. Several of a fixed set (a
@@ -188,6 +201,9 @@ test "a course is picked"
 - In a test or a drive, `type` picks an option by its `value`; a tap does not open the menu.
 - An option whose `value` is `""` stands for none chosen ("None", "Choose…"). Two to five
   short options are a `choice` (a segmented control).
+- A `select` is no wider than what holds it (an implied `max-width: 100%`), however long its
+  options. Beside a label in a row it keeps its width until the row is full: let the row
+  wrap (`flex-wrap="wrap"`), or give the select `min-width=0` to shrink with the row.
 
 ## screen: a second screen, a list and its detail, and Back
 names: navigate, navigation, navigationBack, back, detail, route, routes, router, list-detail, master-detail, deep-link, deep link, protocol_handlers, openURL, url-scheme, react-router, back button, back-button, back title, backButtonDisplayMode, headerBackTitle, backButtonTitle, backBarButtonItem, navigationBackTitle, large title, large-title, largeTitle, prefersLargeTitles, navigation bar, navigation-bar, navbar, UINavigationBar, phase, stage, anchor, hashchange, location.hash
@@ -302,7 +318,10 @@ A form you lay out (fields, Save, Cancel) is a route presented as a sheet:
 `navigationBack` names, so the iOS swipe down and the web's Escape press it, and the screen
 under it is inert. A question with buttons only is a `dialog role="alertdialog"`
 (`contract vocab confirm`). A `dialog` you lay out yourself is a smaller thing: the web's and
-macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar.
+macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar. One whose own
+`background-color` or `background-image` you write is your box, not the platform's: on iOS it is
+HTML's top layer, over any sheet, centred, its own `animation` its entrance and, when an `if`
+removes it, its `-exact-exit-animation` its exit.
 `role="dialog"` on a `column` gets no Escape, focus or sheet anywhere. A `dialog` opens with
 `showModal(id)` or `commandfor=id command="show-modal"` and takes no `open`: in HTML `open` alone
 shows a dialog non-modally, and a dialog that state holds open is not available yet.
@@ -613,10 +632,10 @@ component App
 More: docs/recipes/after-a-write.md
 
 ## resource: a read from the data module
-names: source, sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
+names: sources, fetch, load, useEffect, useQuery, query, transient, no-store, volatile, ephemeral
 
-`resource name = source(args) as shape T else empty()` asks the source in `app.ts` and shows its
-answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
+`resource name = source(args) as shape T else empty()` asks the source in `app.ts`
+(or a declared `source`) and shows its answer as `name`; the arguments are state, so a change asks again. Until the first answer it is
 `else empty()`, the shape's zero. `pending(name)`: a request out; `failed(name)`: no answer;
 `current(name)`: it shows its arguments' answer. `when cond` asks nothing while `cond` is
 false. Only the root declares one.
@@ -633,11 +652,44 @@ component App
       text `${hits.length} found` testId="n"
 ```
 
-- The source answers exactly the shape (an extra field fails it), and a failed fetch is data, not
-  an exception. A child takes what it shows as props; `refresh name` in an action asks again.
-- `transient` after the shape: the answer is never kept on the device for the next launch.
+- `app.ts` answers exactly the shape (an extra field fails it); a failed fetch is data, not
+  an exception; `refresh name` in an action asks again. A child takes what it shows as props.
+- `transient` after the shape: the answer is never kept for the next launch.
 
 More: docs/recipes/fetch-loading-error.md
+
+## source: one HTTP request declared in Contract (a GET, a GraphQL query), with no data module
+names: declared, http, get, rest, endpoint, url, api, graphql, json, pointer
+
+`source name(param: type) as shape T`, at the top of `app.contract`, then `fetch()`'s lines:
+`url` (required; `{param}` puts the argument in, encoded), `method` (`GET` unless named),
+`header "Name" "value"` (`{param}`, or `{secret:name}` for a secret the data module keeps),
+`body json` (the parameters as one JSON object) or `graphql "…"` (a `POST` of the operation and
+its variables), and `pointer "/data/items"` (a JSON Pointer to the answer). The runner makes the
+request, so an app whose sources are all declared needs no `app.ts` and its native build links no
+JavaScript engine. The URL's origin is its grant. The answer reads the shape's fields by name
+and ignores the rest; an absent `option` field is `none`.
+
+```contract
+shape Current
+  temperature_2m: number
+
+source weather(latitude: number, longitude: number) as shape Current
+  url "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m"
+  pointer "/current"
+
+component App
+  resource now = weather(52.52, 13.41) as shape Current
+  view
+    text `${now.temperature_2m}°` testId="temp"
+```
+
+- `failure(now)`: `offline`, `timeout` or `refused` as the network failed, `error` for a status
+  outside 200–299 or a GraphQL `errors` (its `extensions.code` is `reason`), `shape` for an answer
+  outside the shape. Token refresh, pagination, offline queues and overlays stay in `app.ts`.
+- A `send` may use one with `method "POST"` and `body json`; rename a field in a `derive`.
+
+More: docs/recipes/declared-source.md
 
 ## match: take an option apart (some, none)
 names: case, option, optional, null, undefined, nullable
@@ -808,7 +860,7 @@ component Tag
       text label
 ```
 
-- Resources, mutations and tasks are the root's: a child takes their results as props.
+- A child may own resources, asked while each instance lives; mutations and tasks are the root's.
 
 ## derive: a value computed from state
 names: computed, memo, useMemo, selector, getter
@@ -905,7 +957,7 @@ along the gradient line. `background-attachment` takes `scroll` or `fixed`;
 hatch on separate rows does not establish one pattern across the list.
 
 ## menu: a pull-down menu of actions, and a long-press one
-names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu
+names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu, menu section, section title, displayInline, sectionHeader
 
 A menu is HTML's: a `column popover="auto" role="menu"` of `button`s, opened by a button's
 `popovertarget` (on iOS a `UIMenu`; in a `header`, the bar item's pull-down). A long-press
@@ -945,6 +997,12 @@ component App
 - A row's second `text`, under the first (a block `button`, or `flex-direction="column"`), is
   its grey subtitle: `text "Name"` then `text "A to Z"`. Side by side they stay one title.
 - An `hr` between rows starts a section; `destructive=true` paints a row red.
+- A titled section is a `column role="group" aria-label="Your presets"` holding its rows, as
+  WAI-ARIA groups a menu's items: iOS shows the title over the section
+  (`UIMenu(title:options: .displayInline)`), the Mac a section header, Android, Linux and
+  Windows a title row. The web draws the group as written, so to show the title there too,
+  write it inside as `text "Your presets" id="mine"` and name it with `aria-labelledby="mine"`
+  in place of `aria-label`: the native menus take that text as the title, not as a row.
 - iOS puts the first row nearest the finger, so a menu opening upward from near the bottom
   of the screen shows its rows last first. `menuOrder="fixed"` on the trigger keeps them as
   written; `"priority"` always puts the first row nearest the finger.
@@ -956,8 +1014,8 @@ component App
 A test opens one with `tap "sort"`, a long-press one with `tap "row-1" contextmenu`, then
 taps the item. A row whose `popovertarget` names another menu is its submenu.
 
-## search: the bar's search field, filtering a list or querying a server
-names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search
+## search: the bar's search field, filtering a list or querying a server, and a search tab
+names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search, search tab, UISearchTab, Tab(role: .search), automaticallyActivatesSearch
 
 An `input type="search"` in a route's `header` is the bar's search field: on iOS UIKit's
 search controller (a magnifier, a clear button, Cancel), on the web a field under the title.
@@ -1042,6 +1100,61 @@ component App
 
 More: docs/recipes/list-rows.md
 
+**A search tab.** The root tab that says `rel="search"` (HTML's link type for "an interface
+for searching") is the app's search tab, a destination of its own: it stays `role="tab"`, and is written last. On iOS 18 and later it is a
+`UISearchTab` with the tab's own symbol and label; its root route's header `input
+type="search"` is its field, which UIKit moves into the bar when the tab is selected. With
+`autofocus` on that field, iOS 26 sets the tab apart at the bar's trailing end and opens the
+field each time the tab is selected; without it, the tab is one among the others. The web,
+the Mac's sidebar and the other hosts keep the tab where it is written.
+
+```contract
+routes nav
+  tab home "/"
+  tab find "/find"
+
+component App
+  state query = ""
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action edit(v: string)
+    query = v
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                header
+                  text (e.name == "home" ? "Home" : "Speakers") role="heading" aria-level=1
+                  if e.name == "find"
+                    input type="search" autofocus value=query input=edit placeholder="Search speakers"
+                      testId="speaker-search"
+                scroll flex=1 min-height=0
+                  text query
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+          testId="tab-home" flex=1
+          image "symbol:home"
+          text "Home"
+        button role="tab" rel="search" aria-controls="panel-find" aria-selected=(nav.tab == "find")
+          press=pick("find") testId="tab-find" flex=1
+          image "symbol:people"
+          text "Speakers"
+```
+
+- A field on a list's own screen filters that list (`contract vocab search`); a search tab
+  searches the app. Never push a route for the bar's search.
+- `role="search"` on a tab (Expo's trigger) is refused: a tablist owns only tabs. A second
+  `rel="search"`, or one not on the last tab, is a warning.
+- A test taps the tab and types its field: `tap "tab-find"`, `type "speaker-search" "Ada"`.
+
+More: docs/recipes/tabs.md
+
 ## menubar: adding commands to the Mac menu bar
 names: -exact-menu, -exact-menu-remove, -exact-menu-keys
 
@@ -1121,17 +1234,98 @@ component App
 - `::before` and `::after` are refused: Contract has no generated box. Write what they would show as
   a child (a `text`, an `image`).
 
+## ::backdrop: what lies beneath a modal dialog
+names: backdrop, scrim, dim, dimming, modal overlay, overlay colour, backdropColor, UIDimmingView
+
+CSS's `::backdrop { background-color }` is a block: `::backdrop` on its own line under a `dialog`
+(before its children; there a value may compute) or in a `style`, then `background-color=…`
+indented beneath it. It admits `background-color` alone, with its own alpha (`transparent` lays
+nothing over the page), and fades in and out with the dialog. Without one each platform keeps its
+own dim (UIKit's beneath a sheet, the web's and the painted hosts' scrim).
+
+```contract
+component App
+  view
+    column
+      dialog id="confirm" background-color="#0000008C" width="100%" height="100%"
+        ::backdrop
+          background-color="transparent"
+        text "Panel" background-color="#14171D" color="#FFFFFF" padding=24
+```
+
+- Another property in the block (`backdrop-filter`, `opacity`) is refused; so is the block on any
+  element other than a `dialog`.
+
+## view-transition: a route's own entrance and exit
+names: ::view-transition-new, ::view-transition-old, view transition, route transition, screen transition, page transition, navigation animation, view-transition-name, stackAnimation, enterTransition, popExitTransition, transitionSpec, fade route, slide route
+
+A route (an element with `navigationKey`) chooses its own entrance and exit with CSS View
+Transitions' two parts: `::view-transition-new` plays when a push (or a `fullscreen`
+presentation) adds it, `::view-transition-old` when a pop (or the dismissal) removes it. Each
+holds one declaration, the `animation` shorthand, naming `keyframes` that move `opacity`,
+`translate`, `scale` and `rotate`, or `none` for a cut. Only the route added or removed moves;
+the route beneath stands still. Declaring a part replaces the platform's transition for that
+change; a route with no parts keeps the platform's push and pop. Write the parts in a `style`
+the route takes, or under the route before its children.
+
+```contract
+keyframes fade-in
+  from opacity=0
+keyframes fade-out
+  to opacity=0
+
+style Fades
+  ::view-transition-new
+    animation="fade-in 180ms ease-out both"
+  ::view-transition-old
+    animation="fade-out 150ms ease-in both"
+
+routes nav
+  home "/"
+  camera "/camera"
+
+component App
+  action open
+    nav = push(nav, path("camera"))
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="close" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "camera"
+          column navigationKey=`${e.id}` navigationPresentation="fullscreen" class=Fades background-color="black"
+            button press=back id="close"
+              text "Close"
+        else
+          column navigationKey=`${e.id}`
+            button press=open
+              text "Camera"
+```
+
+- The longhands (`animation-duration`…) are refused: the shorthand resets every one, so no
+  browser default leaks in. An `infinite` or `paused` animation is refused, and a value is a
+  literal or a choice of literals (`still ? "none" : "fade-in 180ms"`).
+- A sheet (`navigationPresentation="modal"`), a route with `navigationSource` (the zoom), and
+  any element that is no route refuse the parts; an element that moves between states takes
+  `sharedElement` instead. A tab switch keeps the platform's.
+- Under reduce motion the change cuts. On iOS the edge swipe keeps UIKit's interactive pop;
+  Android's predictive Back scrubs the authored exit.
+
 ## glass: Liquid Glass, a material or a blur behind a box
-names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive
+names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive, UIBlurEffect, dark blur, blur tint, blur intensity, intensity
 
 Bars, tab bars, sheets and menus are the platform's, glass included: leave them unsaid. A
 surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `UIGlassEffect` on iOS 26 and `NSGlassEffectView` on macOS 26; `"ultra-thin"`, `"thin"`,
-`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's blurs,
-and `"sidebar"`, `"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a
-blur that approximates each. A glass button is `buttonStyle="glass"` or
+`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's materials,
+`"dark"`, `"light"`, `"extra-light"`, `"regular"` and `"prominent"` its plain blurs (`UIBlurEffect`
+`.dark` and so on: no material's grey wash, as expo-blur's `tint="dark"`), and `"sidebar"`,
+`"menu"`, `"popover"`, `"hud-window"` the Mac's. On macOS, `"sidebar"` blends with the
+content behind the window. The node's own fill and content still paint above it.
+The web and Linux draw a blur that approximates each. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
-SwiftUI's `GlassEffectContainer` does.
+SwiftUI's `GlassEffectContainer` does. On iOS a glass a tap adds to a group grows out of the
+nearest glass within that spacing, and one it removes is drawn back into it.
 
 ```contract
 component App
@@ -1146,6 +1340,15 @@ component App
 - CSS's `backdrop-filter="blur(12px) saturate(1.8)"` blurs what is behind on the web, macOS
   and Linux; iOS draws a fixed light material for it, so a surface meant for iPhone says
   `backgroundMaterial`, which wins when both are written.
+- A material's strength is the platform's: UIKit's blurs take no radius or intensity, so there
+  is no "dark at 40%" (expo-blur's `intensity` holds a paused animation part way). To darken
+  the blurred result, put the content in one child that fills the box and paints the colour,
+  as each host draws a material under the box's children:
+  `column backgroundMaterial="dark" border-radius=16` holding
+  `column flex=1 border-radius=16 padding=12 background-color="rgba(14,16,21,0.5)"`. The
+  box's own `background-color` is no way to do it, as each host differs: iOS paints it under
+  the blur, so it colours what is blurred; the Mac's material covers it; the web and Linux
+  paint it in place of the material's tint.
 - A navigation bar's buttons share one glass capsule on iOS 26; `buttonStyle="glass"` on
   each gives it a capsule of its own (`contract vocab bar-buttons`).
 - `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself (`UIGlassEffect.tintColor`);
@@ -1159,7 +1362,9 @@ The buttons of a route's `header` are its bar's items: those before the heading 
 after it trail. iOS 26 puts adjacent ungrouped buttons on one shared glass capsule.
 `buttonStyle="glass"` on a bar button gives it a capsule of its own (`sharesBackground =
 false`), and a `row role="group"` around some keeps those on one capsule, set apart from the
-next group. Leave their size, colour and padding unsaid.
+next group. Leave their size, colour and padding unsaid. A button whose face is drawn as
+written (a status dot beside its label, or a label in a `font-family` of yours) keeps its
+left and right padding as room inside its capsule.
 
 ```contract
 routes nav
@@ -1213,7 +1418,7 @@ component App
       text `${n}`
 ```
 
-## status-bar: the phone's status bar icons, and hiding them on iOS
+## status-bar: the phone's status bar icons, and hiding the system bars
 names: status bar, statusbar, setStatusBarStyle, UIStatusBarStyle, preferredStatusBarStyle, expo-status-bar, system-bars-hidden, statusBarHidden, prefersStatusBarHidden, prefersHomeIndicatorAutoHidden, autoHideHomeIndicator, immersive
 
 `status-bar-style="light-content"` (light text, for a dark surface), `"dark-content"` or
@@ -1225,10 +1430,14 @@ pages, with no native sheet detent or transition completion; see host/android/RE
 Edge to edge. `status-bar-animation="fade"` fades a change on iOS alone. Other hosts ignore
 both properties.
 
-On iOS, `system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
-indicator while that node's screen is under them, resolved the same way: a `fullscreen`
-route's wins over the stack, a `medium` sheet's does not, and a descendant's `false` shows
-them again.
+`system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
+indicator on iOS, and hides the status and navigation bars on Android (a swipe from the edge
+shows them for a moment), while that node's screen is under them, resolved the same way: a
+`fullscreen` route's wins over the stack, a `medium` sheet's does not (iOS), and a
+descendant's `false` shows them again. A notch's or Dynamic Island's inset and the home
+indicator's stay while the bars hide, and a route's content stays clear of them: a route
+that must fill the screen (a game's canvas) takes `-exact-safe-area="none"` and places its
+controls with `var(--exact-safe-area-inset-*)`.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
 
@@ -1253,9 +1462,20 @@ component App
       button press=save testId="save"
         text "Save"
       if toast != ""
-        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 backgroundMaterial="thin" aria-live="polite" testId="toast"
+        text toast position="absolute" bottom=32 left=16 right=16 padding=12 border-radius=12 text-align="center"
+          backgroundMaterial="thin" box-shadow="0 4px 16px rgba(0, 0, 0, 0.2)" pointer-events="none"
+          aria-live="polite" testId="toast"
 ```
 
+- A material takes the colour of what is behind it, so over a page of its own colour (a thin
+  material on a white page) only its shadow sets it apart; the shadow reads in both schemes.
+
+- In a tab app it stands above the tab bar: `bottom="calc(6rem + env(safe-area-inset-bottom))"`
+  clears the bar on every host at every text size (the web's bar is 3.5rem tall and grows
+  with the text; iOS 26's floating bar ends about 84 points above the screen's bottom).
+- `pointer-events="none"` lets taps through to what it lies over while it shows. verify
+  takes such an announcement (out of flow, `aria-live`, letting taps through) as lying over
+  the page by design, so a test may end while it shows.
 - The action the task runs clears the message whatever it reads: a gated task is armed at
   commits, not by the clock (docs/agent-pitfalls.md, "A gate reads state at commits").
 
@@ -1266,9 +1486,15 @@ Window Controls Overlay's `env(titlebar-area-x|y|width|height)` is the part of t
 bar the page may draw in, beside the window's controls. On the Mac, under
 `viewport-fit="cover"`, it is AppKit's title bar less the traffic lights: in a 900-point
 window `78 0 822×32` with a left-to-right title bar, `0 0 822×32` with a right-to-left one.
-It is all zero in full screen and while the window has a toolbar (an
-app with routes has one), and undefined elsewhere: in a browser tab, on iOS, Linux and
-Windows, and on a Mac window that does not cover its title bar. Give each a fallback.
+It is all zero in full screen and while the session's toolbar fills the title bar.
+Once navigation history retains a toolbar, it stays (LLP 1115.000, retention as built).
+In a single-location app, a root header can bring a toolbar before history retains
+one; it goes away when that header hides or its route says `navigationBar="none"`.
+With no stack, or before any route has shown a bar while all mounted routes say
+`navigationBar="none"`, navigation brings no toolbar. An authored toolbar or sidebar
+can still supply one.
+Elsewhere the area is undefined: in a browser tab, on iOS, Linux and Windows, and on a
+Mac window that does not cover its title bar. Give each a fallback.
 `"display_override": ["window-controls-overlay"]` in `app.json` gives a Mac window the
 platform's tall title row (an empty unified toolbar, about 52 points) while it shows no
 toolbar of its own, whatever `viewport-fit` says, and the area is that row beside the
@@ -1414,23 +1640,63 @@ component App
 ```
 
 - An icon the platform has is `image "symbol:<role>"`, drawn from each host's own set; a one-colour
-  SVG file is an `app.tamber` icon (docs/recipes/symbols.md), and an `.svg` asset is an
+  SVG file is an `app.forma` icon (docs/recipes/symbols.md), and an `.svg` asset is an
   `image` source too.
 - A `foreignObject` draws on the web only; on every host, place a box over the `svg`.
 
 More: apps/svg-gallery/app.contract (each element and attribute, drawn alike on every host but `foreignObject`)
 
+## env: a setting app.ts reads, from the build or from a launch (import.meta.env)
+names: import.meta.env, process.env, .env, .env.local, dotenv, environment variable, launchEnvironment, SIMCTL_CHILD, API_BASE_URL
+
+`env()` in a length is CSS's: the concept `safe-area`. A setting is a name in app.json's `env`
+read in a top-level `const` of app.ts: `const API = import.meta.env.API_BASE_URL ??
+'http://127.0.0.1:8080'`. Its value is the build's, inlined into the module: the environment,
+then `.env.local`, then `.env` beside app.json, then the default. Every value is public.
+
+`{ "name": "API_BASE_URL", "launch": true }` in `env` lets a launch replace it (a test, a
+benchmark, a debugger): the same read takes a non-empty value from the launched process's
+environment on Apple, Linux and Windows, and the build's on Android and the web. It is fixed
+for the launch.
+
+- iOS simulator: `SIMCTL_CHILD_API_BASE_URL=http://127.0.0.1:9000 xcrun simctl launch <udid> <bundle-id>`
+- XCUITest: `app.launchEnvironment["API_BASE_URL"] = "…"` before `app.launch()`
+- A phone: `xcrun devicectl device process launch --environment-variables '{"API_BASE_URL": "…"}' --device <id> <bundle-id>`
+- macOS, Linux, Windows: the process's environment (`API_BASE_URL=… ./app`)
+- Grants are fixed at build, so a grant over a marked name is refused: grant what a launch may
+  name (`net.fetch https:`, `net.fetch http:`, or each origin). A `fetch` to its origin outside
+  them is refused naming the setting.
+- A native module is not the way to read one: this read holds the value before the module's
+  first request.
+
+More: docs/reference.md ("A setting a launch gives")
+
 ## safe-area: the notch, the status bar and the home indicator
-names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator
+names: env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
 Inside a route, leave it unsaid: the host keeps the route's content clear of the status bar
 and its bars (UIKit's inset on the route's scroller, else the route's padding), and a
 scroller's end clear of the home indicator, as a hand-built screen is. `env()` is CSS's, in
 any length (`padding-bottom="calc(env(safe-area-inset-bottom) + 16px)"`). On a native host
 under the default `viewport-fit="auto"` it is 0, so `env()` padding inside a route adds
-nothing; under the root's `viewport-fit="cover"` it is the device's insets, and a route's
-content goes under the bar unless its column pads `env(safe-area-inset-top)`. On the web it is
-the browser's. `env(-exact-layout-margins-inset-left)` is UIKit's layout margin.
+nothing; under the root's `viewport-fit="cover"` it is the device's insets. While an edge
+stays cleared, `env()` padding on a box inside the route adds that device inset again.
+After `-exact-safe-area` turns that edge's clearance off, padding by either `env()` or
+`var(--exact-safe-area-inset-*)` clears the inset once; the latter includes the route's
+bars. On the web `env()` is the browser's. `env(-exact-layout-margins-inset-left)` is
+UIKit's layout margin.
+
+`var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`, `-left`) is the safe area where
+the box is (LLP 1123 D9): inside a route, a tab or a sheet its own, the status bar, the bars
+and a large title included, as UIKit's `safeAreaInsets` and React Navigation's
+`useHeaderHeight` give it; outside every route the screen's, even where `env()` is 0. A
+background under the navigation bar is `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
+padding-top="var(--exact-safe-area-inset-top)"` on a box at the route's top. A route's
+clearance adds to its own padding unless that padding reads the inset (then the larger
+counts), and `-exact-safe-area="top"` (or `none`, or other edges) on the route turns it off,
+as SwiftUI's `ignoresSafeArea`: a scroller at the route's top then starts under the bar, and
+its first box pads `var(--exact-safe-area-inset-top)` itself. A box may set
+`--exact-safe-area-inset-bottom="0px"` for its subtree.
 
 - A scroller's last row sits its `padding-bottom` above UIKit's inset: subtract the inset
   from the original's gap rather than adding `env(safe-area-inset-bottom)`.
@@ -1440,12 +1706,12 @@ More: docs/agent-pitfalls.md ("Native presentation and navigation (iOS)"), docs/
 ## var: a design token by CSS's `var(--name)`, and a stylesheet's custom properties
 names: var(), custom-property, custom-properties, tokens.css
 
-`var(--name)` in a style row is the token `name` of the app's design (`app.tamber`, or a root
+`var(--name)` in a style row is the token `name` of the app's design (`app.forma`, or a root
 `theme`), and compiles exactly as writing `name` does: folded, or on the web `var(--x-name)`
 where the token varies by an app mode. It is the build's reference, not the browser's: no
 stylesheet redefines it, and every host draws it. A name the design lacks is refused, naming
 the tokens the row could take, whether or not a fallback is written, so a misspelt name never
-ships the fallback; a declared name's fallback is ignored and warned (`tamber-var-fallback`).
+ships the fallback; a declared name's fallback is ignored and warned (`forma-var-fallback`).
 
 ```contract
 theme
@@ -1459,14 +1725,14 @@ component App
       text "3 patterns" color="ink"
 ```
 
-- `bun exact.mjs tamber import css tokens.css` writes a stylesheet's `:root` custom properties
-  into `app.tamber`, a `prefers-color-scheme: dark` redeclaration as `light-dark()`, between
-  `// tamber:import tokens.css` and `// tamber:end`; after an edit, import again. A `.dark` or
+- `bun exact.mjs forma import css tokens.css` writes a stylesheet's `:root` custom properties
+  into `app.forma`, a `prefers-color-scheme: dark` redeclaration as `light-dark()`, between
+  `// forma:import tokens.css` and `// forma:end`; after an edit, import again. A `.dark` or
   `[data-theme]` scope, or a value built around a `var()`, is refused by name.
 - A token of another kind (`color="var(--space)"` for a length) is refused as its name is.
 - JavaScript's `var`, a name inside an action, is `let` (`contract vocab let`).
 
-More: docs/recipes/tamber.md, docs/recipes/theme.md
+More: docs/recipes/forma.md, docs/recipes/theme.md
 
 ## media: a layout by width, where CSS has `@media`
 names: @media, responsive, media-query, media-queries, breakpoint, breakpoints, matchMedia, container-query
@@ -1505,7 +1771,7 @@ styles, by CSS's name and value (`padding=16`, `font-family="Georgia, serif"`). 
 inherits are inherited, so `font-family` and `color` on the root reach every text below it. A
 `style Name` block at file scope is a class that an element takes with `class=Name`; its own
 attributes win over the class's. A stylesheet's custom properties become the app's design:
-`bun exact.mjs tamber import css tokens.css`, then `var(--name)` names one (`contract vocab var`).
+`bun exact.mjs forma import css tokens.css`, then `var(--name)` names one (`contract vocab var`).
 
 ```contract
 style Card
@@ -1534,3 +1800,54 @@ module state lasts one render. An API that sends no `Cache-Control` is asked eve
 its answers, have it say how long they keep.
 
 More: docs/recipes/rest-backend.md
+
+## rtl: an app in Arabic, Hebrew, Persian or Urdu (right to left)
+names: right-to-left, RTL, dir, bidi, I18nManager, isRTL, forceRTL, writing-direction, layout-direction
+
+An app's direction comes from the strings table it shows (LLP 1060): with `strings/ur.json`
+shown, the web's document is `lang="ur" dir="rtl"`, and a native host lays out and reads aloud
+right to left, so rows and alignment mirror with no `direction` written. The table shown is the
+one for the person's language, else the base. The base is `en` unless app.json names another,
+so an app only in Urdu says:
+
+```json
+{ "strings": { "base": "ur" } }
+```
+
+`strings/ur.json` then holds every key a `t("key")` reads, as `{"title": "سلام"}`. Without
+that line, a build with no `strings/en.json` is refused (`strings-base-missing`). On the web the
+agent's `state` shows the page's as `language {"lang":"ur","dir":"rtl"}`.
+
+`direction="rtl"` is CSS's, for one box: it mirrors that box's content and leaves the page's
+`lang` and `dir` alone. Use it for a run that reads against the page, as `direction="ltr"` on a
+phone number in Arabic text.
+
+More: docs/contract-for-agents.md (`t`, `setLocale`)
+
+## :active: Press feedback without app state
+names: active, pressed, press-translate
+
+`:active` takes `background-color`, `color`, `opacity`, `translate` and
+`-exact-press-scale`. The host shows them on the innermost pressable node,
+without a runner round trip. Translate adds to the node's own translation.
+Percentages use the border box by default. Only x and y are accepted; use
+transitions for 3D motion. A computed target changes with ordinary app
+commits; `none` clears the offset. The node remains the containing block of
+its absolute descendants while unpressed and when a computed target is `none`
+(LLP 1074).
+
+Layout stays unchanged. On the web, the hit area moves with the paint, as
+CSS does, and the browser's click rules apply. Native hosts keep the unpressed
+hit area and use their press timing. Release or cancellation removes the offset.
+
+```contract
+component App
+  state n = 0
+  action count
+    n = n + 1
+  view
+    button press=count appearance="none"
+      :active
+        translate = "4px 4px"
+      text `Pressed ${n}`
+```

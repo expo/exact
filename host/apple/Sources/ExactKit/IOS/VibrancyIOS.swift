@@ -40,7 +40,7 @@ extension NodeView {
     /// moves, and every descendant re-decides whether it is vibrant.
     func rehomeMaterialChildren() {
         let target = container
-        let holders = [self, materialView?.contentView].compactMap { $0 }
+        let holders = [self, materialView?.contentView, clipBox].compactMap { $0 }
         let strays = holders.filter { $0 !== target }.flatMap(\.subviews).compactMap { $0 as? NodeView }
         if !strays.isEmpty { GlassGroups.moving(in: self) { for child in strays { target.addSubview(child) } } }
         // No record is a view holding its own children, unhosted, as every
@@ -131,7 +131,7 @@ extension NodeView {
             if !isParagraph { setNeedsDisplay() }
             // A paragraph's text paints over its box (CSS): above its
             // border and fill layers; a vibrant fill is the box's back.
-            if isParagraph, let top = [boxBorder, imageLayer, insetCaster, boxGradient, shadowCaster].compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
+            if isParagraph, let top = [boxBorder, imageLayer, insetCaster, boxPattern, boxGradient, shadowCaster].compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
                 layer.insertSublayer(v.layer, above: top)
             }
         }

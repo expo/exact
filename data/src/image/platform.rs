@@ -8,7 +8,9 @@
 //! A decoded picture lives in the platform as a handle until it is closed,
 //! so a search encodes the one decode at each trial size.
 use super::edit::{self, Flip, Geometry, Metadata, Transform};
-use super::{failure, search, search_lossless, Compressed, Deadline, Edit, Format, Transformed};
+use super::{
+    failure, search, search_lossless, Compressed, Deadline, Edit, Format, Limits, Transformed,
+};
 use std::sync::OnceLock;
 
 /// A decoded picture, upright (its orientation applied), held by the platform.
@@ -164,8 +166,7 @@ pub fn compress(
     codec: &dyn Platform,
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     edit: &Edit,
     deadline: Deadline<'_>,
 ) -> Result<Compressed, String> {
@@ -190,12 +191,12 @@ pub fn compress(
         held.push(Held(codec, picture));
     }
     let best = match format {
-        Format::Jpeg => search(size.0, size.1, max_dimension, max_bytes, |w, h, q| {
+        Format::Jpeg => search(size.0, size.1, limits, |w, h, q| {
             deadline.check()?;
-            (codec.encode(picture, (w, h), "image/jpeg", f64::from(q) / 100.0, false))
+            (codec.encode(picture, (w, h), "image/jpeg", q, false))
                 .map_err(|(code, detail)| failure(&code, detail))
         })?,
-        Format::Png => search_lossless(size.0, size.1, max_dimension, max_bytes, |w, h| {
+        Format::Png => search_lossless(size.0, size.1, limits, |w, h| {
             deadline.check()?;
             (codec.encode(picture, (w, h), "image/png", 1.0, false))
                 .map_err(|(code, detail)| failure(&code, detail))
@@ -209,7 +210,7 @@ pub fn compress(
     best.ok_or_else(|| {
         failure(
             "unfit",
-            format!("no {name} of this image fits {max_bytes} bytes"),
+            format!("no {name} of this image fits {} bytes", limits.bytes()),
         )
     })
 }

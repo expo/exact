@@ -19,7 +19,7 @@ fn main() {
     let patches = std::env::var("DEP_EXACT_WGPU_HAL_PATCHES")
         .ok()
         .and_then(|n| n.parse::<u32>().ok());
-    if patches.is_some_and(|n| n >= 12) {
+    if patches.is_some_and(|n| n >= 16) {
         return;
     }
     let exact2 = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

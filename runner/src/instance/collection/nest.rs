@@ -1,26 +1,31 @@
 //! One level of nesting (LLP 1070 §4): a virtualized list in a virtualized
 //! list's row lives and dies with that row (N1); what the reader scrolled it
-//! to is kept, by default, as an item key and an offset into that item (Q1
-//! as ruled, §4.2); a pin inside it pins the outer row too (N5).
+//! to is kept as a data key or fixed region and an offset within it (Q1,
+//! §4.2); a pin inside it pins the outer row too (N5).
 use super::*;
 use std::collections::HashMap;
 use traversal::InnerSites;
 
 /// At most this many kept positions per outer list, least recently kept
-/// evicted first (~48 bytes an entry beside keys the index shares).
+/// evicted first.
 pub(crate) const KEPT_POSITIONS: usize = 4096;
 
-/// Where an inner list's reader was: the key of the item at its port's start
-/// and how far into that item. Not pixels, so estimates and re-measured items
-/// above it never move what the reader sees when it comes back.
+/// A bounded reading anchor; it retains no old key order or row views.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum ReadingPoint {
+    Row(Rc<str>),
+    Fixed(usize),
+}
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ReadingPosition {
+    point: ReadingPoint,
+    within: f64,
+    start: f64,
+    sizes: [f64; 2],
+}
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct KeptPosition {
-    pub key: Rc<str>,
-    pub within: f64,
-    /// The item's start when its row left: measured items above it may not
-    /// match the estimates a new list starts from, and the difference is
-    /// spread over those so the offset comes back as well as the item.
-    pub start: f64,
+    position: ReadingPosition,
     stamp: u64,
 }
 
@@ -36,12 +41,12 @@ impl Kept {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
-    fn put(&mut self, row: Rc<str>, site: Rc<str>, position: Option<(Rc<str>, f64, f64)>) {
+    fn put(&mut self, row: Rc<str>, site: Rc<str>, position: Option<ReadingPosition>) {
         let slot = (row, site);
         if let Some(old) = self.entries.remove(&slot) {
             self.order.remove(&old.stamp);
         }
-        let Some((key, within, start)) = position else {
+        let Some(position) = position else {
             return;
         };
         self.clock += 1;
@@ -49,9 +54,7 @@ impl Kept {
         self.entries.insert(
             slot,
             KeptPosition {
-                key,
-                within,
-                start,
+                position,
                 stamp: self.clock,
             },
         );
@@ -91,8 +94,17 @@ impl Kept {
             out.push_str(",\"site\":");
             crate::agent::quote(site, out);
             out.push_str(",\"key\":");
-            crate::agent::quote(&entry.key, out);
-            let _ = write!(out, ",\"within\":{}}}", exact_num::Shortest(entry.within));
+            match &entry.position.point {
+                ReadingPoint::Row(key) => crate::agent::quote(key, out),
+                ReadingPoint::Fixed(side) => {
+                    let _ = write!(out, "null,\"fixed\":{side}");
+                }
+            }
+            let _ = write!(
+                out,
+                ",\"within\":{}}}",
+                exact_num::Shortest(entry.position.within)
+            );
         }
     }
 }
@@ -196,21 +208,42 @@ impl Collection {
         out
     }
     /// Where the reader left this list, if anywhere but its start.
-    fn position(&self) -> Option<(Rc<str>, f64, f64)> {
-        // Restored and gone again before any host reported it: still there.
+    fn position(&self) -> Option<ReadingPosition> {
         let Some(g) = self.geometry.as_ref() else {
-            let (key, within) = self.restored_at.clone()?;
-            let start = self.index.prefix(self.index.position(&key)?)?;
-            return Some((key, within, start));
+            return self.restored_at.clone();
         };
-        let max = self.index.max_offset(g.port_main);
-        let offset = g.offset.min(max).max(0.0);
+        let offset = g.offset.min(self.index.max_offset(g.port_main)).max(0.0);
         if offset <= 0.0 {
             return None;
         }
-        let row = self.index.row_at(offset).ok()??;
-        let start = self.index.prefix(row)?;
-        Some((self.index.shared_key(row)?.clone(), offset - start, start))
+        let sizes = [self.index.fixed_size(0), self.index.fixed_size(1)];
+        if let Some(row) = self.index.first_in_port(offset, g.port_main) {
+            let start = self.index.prefix(row)?;
+            return Some(ReadingPosition {
+                point: ReadingPoint::Row(self.index.shared_key(row)?.clone()),
+                within: offset - start,
+                start,
+                sizes,
+            });
+        }
+        let side = if offset < sizes[0] {
+            0
+        } else if sizes[1] > 0.0 {
+            1
+        } else {
+            return None;
+        };
+        let start = if side == 0 {
+            0.0
+        } else {
+            sizes[0] + self.index.data_extent()
+        };
+        Some(ReadingPosition {
+            point: ReadingPoint::Fixed(side),
+            within: offset - start,
+            start,
+            sizes,
+        })
     }
     /// A mounted row leaves the window: its inner lists' positions are kept
     /// under its key, unless a list opted out (`scroll-restoration:
@@ -266,9 +299,9 @@ impl Collection {
             let kept = (!inner.manual)
                 .then(|| self.kept.get(key, &site))
                 .flatten()
-                .map(|k| (k.key.clone(), k.within, k.start));
-            if let Some((anchor, within, start)) = kept {
-                inner.restore_position(u, &frames, &anchor, within, start)?;
+                .map(|k| k.position.clone());
+            if let Some(position) = kept {
+                inner.restore_position(u, &frames, position)?;
             } else if again {
                 inner.realize_window(u, &frames, false, CollectionFill::default())?;
             }
@@ -279,19 +312,22 @@ impl Collection {
     /// reader moves it or that item is measured: its estimate may be
     /// shorter than `within`, so the offset alone would name the next item.
     pub(super) fn restoring(&mut self, feedback: &CollectionFeedback) -> Option<index::Anchor> {
-        let (key, within) = self.restored_at.clone()?;
-        // The reader moved it: from now on, what shows is the anchor. (Not
-        // the report's sequence: hosts advance it for their own reasons.)
-        // A host that reports before applying the correction reports its
-        // start; that is not the reader moving either.
+        let position = self.restored_at.clone()?;
         let moved = (feedback.offset - self.start_offset).abs() > 0.5 && feedback.offset > 0.5;
-        if moved || self.index.is_measured(&key) {
+        let measured = match &position.point {
+            ReadingPoint::Row(key) => self.index.is_measured(key),
+            ReadingPoint::Fixed(_) => true,
+        };
+        if moved || measured {
             self.restored_at = None;
         }
         if moved {
             return None;
         }
-        self.index.anchor_at(&key, within)
+        match position.point {
+            ReadingPoint::Row(key) => self.index.anchor_at(&key, position.within),
+            ReadingPoint::Fixed(side) => Some(self.index.fixed_anchor(side, position.within)),
+        }
     }
     /// Drop the kept positions of rows whose keys are gone.
     pub(super) fn forget_departed(&mut self) {
@@ -306,25 +342,38 @@ impl Collection {
         &mut self,
         u: &mut Update<'_>,
         frames: &[Frame],
-        key: &str,
-        within: f64,
-        start: f64,
+        position: ReadingPosition,
     ) -> Result<(), InstanceError> {
-        let Some(position) = self.index.position(key) else {
-            return Ok(()); // the item left: the list starts at its start
+        let row = match &position.point {
+            ReadingPoint::Row(key) => match self.index.position(key) {
+                Some(row) => Some(row),
+                None => return Ok(()),
+            },
+            ReadingPoint::Fixed(_) => None,
         };
-        // The items above were measured when the row left; a new list has
-        // only their estimates. Their difference goes to the estimates, so
-        // the item starts where it did and the offset comes back exactly.
-        let estimated = self.index.prefix(position).unwrap_or(0.0);
-        self.index
-            .spread_estimates(0..position, start - estimated)
-            .map_err(index_error)?;
-        let offset = self.index.prefix(position).unwrap_or(0.0) + within;
+        for (side, size) in position.sizes.iter().enumerate() {
+            self.index.measure_fixed(side, *size).map_err(index_error)?;
+        }
+        let start = if let Some(row) = row {
+            let estimated = self.index.prefix(row).unwrap_or(0.0);
+            self.index
+                .spread_estimates(0..row, position.start - estimated)
+                .map_err(index_error)?;
+            self.index.prefix(row).unwrap_or(0.0)
+        } else if position.point == ReadingPoint::Fixed(1) {
+            let estimated = self.index.fixed_size(0) + self.index.data_extent();
+            self.index
+                .spread_estimates(0..self.index.len(), position.start - estimated)
+                .map_err(index_error)?;
+            self.index.fixed_size(0) + self.index.data_extent()
+        } else {
+            0.0
+        };
+        let offset = start + position.within;
         self.start_offset = offset;
         self.at_end = false;
         self.restored = true;
-        self.restored_at = self.index.shared_key(position).map(|k| (k.clone(), within));
+        self.restored_at = Some(position);
         self.correction = Some(AnchorCorrection {
             scroll_sequence: 0,
             offset,
@@ -388,7 +437,14 @@ mod tests {
     #[test]
     fn kept_positions_are_bounded_by_recency_and_leave_with_their_rows() {
         let mut kept = Kept::default();
-        let at = |n: usize| Some((Rc::from(format!("n:{n}").as_str()), 4.0, 0.0));
+        let at = |n: usize| {
+            Some(ReadingPosition {
+                point: ReadingPoint::Row(Rc::from(format!("n:{n}").as_str())),
+                within: 4.0,
+                start: 0.0,
+                sizes: [0.0; 2],
+            })
+        };
         for row in 0..KEPT_POSITIONS + 10 {
             kept.put(Rc::from(format!("r{row}").as_str()), Rc::from("7"), at(row));
         }

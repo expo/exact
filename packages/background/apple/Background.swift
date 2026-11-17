@@ -85,6 +85,7 @@ public final class BackgroundModule: NSObject, ExactPackage {
                 reply([:])
             case "unregisterPeriodicSync":
                 tags["periodicsync"]?[tag] = nil
+                if !context.agent { context.wakes.cancel(key: "periodicsync " + tag) }
                 keep("periodicsync")
                 reply([:])
             case "syncTags": reply(["exact:answer": listed("sync")])

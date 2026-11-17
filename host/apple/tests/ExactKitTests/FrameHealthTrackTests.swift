@@ -113,6 +113,32 @@ final class FrameHealthTrackTests: XCTestCase {
         XCTAssertNil(health.track)
     }
 
+    /// A track's lease asks an on-demand collector to collect, as a capture's does: the demand keeps the track that
+    /// asked for it, and ends when the track stops or its lease ends at the next frame, without a read.
+    func testATrackStartsAnOnDemandCollectorForItsLease() throws {
+        let health = FrameHealth(policy: .onDemand), scroll = scroller()
+        defer { health.destroy() }
+        let now = CACurrentMediaTime()
+        func start() -> [String: Any] {
+            health.trackRequest("start", node: 1, scroller: scroll, durationMs: 1000, cursor: nil, maximumFramesPerSecond: 60, now: now)
+        }
+        XCTAssertEqual(start()["track"] as? Bool, true)
+        XCTAssertTrue(health.enabled)
+        XCTAssertTrue(try XCTUnwrap(health.track).tracks(scroll))
+        XCTAssertNotNil(health.trackRequest("stop", node: nil, scroller: nil, durationMs: nil, cursor: nil, maximumFramesPerSecond: 60, now: now)["raw"])
+        XCTAssertFalse(health.enabled)
+        XCTAssertEqual(start()["track"] as? Bool, true)
+        XCTAssertTrue(health.enabled)
+        health.expireCapture(at: now + 2)
+        XCTAssertNil(health.track)
+        XCTAssertFalse(health.enabled)
+        // Collection that is off refuses it by what it is
+        let off = FrameHealth(enabled: false)
+        defer { off.destroy() }
+        XCTAssertEqual(off.trackRequest("start", node: 1, scroller: scroll, durationMs: 1000, cursor: nil, maximumFramesPerSecond: 60)["reason"] as? String,
+                       "collection-disabled")
+    }
+
     /// Any finite offset encodes: centipoints are clamped to JSON's safe integers, both signs.
     func testHugeFiniteOffsetsEncodeClampedBothSigns() throws {
         let track = FrameHealthTrack(node: 1, scroller: scroller(), now: 0, durationMs: 30_000, maximumFramesPerSecond: 60)

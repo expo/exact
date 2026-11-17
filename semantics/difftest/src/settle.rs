@@ -51,7 +51,7 @@ pub(crate) fn expand(script: &mut Scripted, plan: Option<&exact_plan::Plan>) -> 
         None => crate::compile(&script.case)?,
     };
     let oracle = crate::oracle::Oracle::for_case(&plan, &script.case);
-    let (mut driver, _) = Driver::new(plan, oracle);
+    let (mut driver, _) = Driver::new(plan.clone(), oracle);
     let spans = std::mem::take(&mut script.delivery.events);
     let mut spans = spans.into_iter();
     let mut expanded = Vec::new();
@@ -112,7 +112,7 @@ pub(crate) fn expand(script: &mut Scripted, plan: Option<&exact_plan::Plan>) -> 
                     serde_json::Value::Null => "none".into(),
                     _ => unreachable!("the test parser accepts only scalar clock-until literals"),
                 };
-                let got = crate::script::state_value(&lines, &path);
+                let got = crate::state_path::value(&plan, &lines, &path);
                 if got != Some(want.as_str()) {
                     let got = got.unwrap_or("<not printed>");
                     let shown = got

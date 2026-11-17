@@ -571,11 +571,20 @@ struct FrameHealthCardPresentation {
 
 /// What Share offers, each alone, so every app takes it the same way; each holds everything,
 /// whichever view the card shows.
-enum FrameHealthShare: CaseIterable {
-    case report, summary, image
-    var title: String {
+enum FrameHealthShare {
+    /// The agent report of what the face shows, and, where the face shows the screen's frames, that of Exact's frames
+    /// beside it: an app drawn by GPU surfaces has frame times only on Exact's clock, and each report keeps to its own
+    /// 4000 bytes (LLP 1079.000 §7.4)
+    case report, clockReport
+    case summary, image
+
+    /// The choices for a face that shows the screen's frames, or Exact's.
+    static func choices(screen: Bool) -> [Self] { screen ? [.report, .clockReport, .summary, .image] : [.report, .summary, .image] }
+
+    func title(screen: Bool) -> String {
         switch self {
-        case .report: "Agent Report"
+        case .report: screen ? "Agent Report: Screen" : "Agent Report"
+        case .clockReport: "Agent Report: Exact's Frames"
         case .summary: "Summary"
         case .image: "Image"
         }

@@ -325,11 +325,11 @@ final class AtomCatcher: NSView {
 /// (`NodeView.withAtoms`), and its parent is the element that lists it
 /// (`NodeView.atomParent`). The agent joins it to the field's node, as iOS's
 /// container does.
-package final class AtomElement: NSAccessibilityElement, AgentOwned {
+package final class AtomElement: NSAccessibilityElement, InspectionOwned {
     weak var field: TextArea?
     let range: NSRange
     var atom: MarkupAtom
-    var agentViewId: UInt32? { field?.owner?.id }
+    package var inspectionViewId: UInt32? { field?.owner?.id }
     init(field: TextArea, range: NSRange, atom: MarkupAtom) {
         (self.field, self.range, self.atom) = (field, range, atom)
         super.init()
@@ -466,21 +466,41 @@ extension NodeView {
     /// thread.
     func readerAtomFrame(_ start: Int, _ end: Int) -> CGRect? {
         guard props["markup"] == "markdown", let text else { return nil }
-        let spec = paragraphSpec(), fit = props["fitScale"].flatMap(Float.init) ?? 1
+        let spec = paragraphSpec()
         var at = 0, frame = CGRect.null
+        var leading = false, collapsedAtom: NSRange?
+        var collapsedLine: Int?
         for run in spec.runs {
             let length = (run.text as NSString).length
             defer { at += length }
             guard let atom = Self.readerAtom(run.href)?.range else { continue }
             let (s, e) = (atom.location, NSMaxRange(atom))
             guard start == end ? start == s || start == e : s < end && start < e else { continue }
-            let rects = shapedRects(at, at + length, empty: false, font: text.font(run.scaled(fit)) as CTFont)
             if start == end {
-                guard let piece = start == s ? rects.first : rects.last else { continue }
-                let x = (start == s) != (spec.direction == 1) ? piece.minX : piece.maxX
-                return CGRect(x: x, y: piece.minY, width: 0, height: piece.height)
+                if let collapsedAtom, collapsedAtom != atom { continue }
+                collapsedAtom = atom
+                leading = start == s
             }
+            var line: Int?
+            if start == end, let paragraph = paragraphLayout() {
+                let lines = paragraph.lines.indices.filter {
+                    let range = CTLineGetStringRange(paragraph.lines[$0])
+                    return range.location < at + length && at < range.location + range.length
+                }
+                guard let edge = leading ? lines.first : lines.last else { continue }
+                if let previous = collapsedLine, previous != edge {
+                    guard leading ? edge < previous : edge > previous else { continue }
+                    frame = .null
+                }
+                collapsedLine = edge; line = edge
+            }
+            let rects = shapedRects(at, at + length, empty: false, font: text.font(run) as CTFont, line: line)
             frame = rects.reduce(frame) { $0.union($1) }
+        }
+        if start == end, !frame.isNull {
+            let rtl = paragraphLayout()?.insets.rtl(at: start) ?? (spec.direction == 1)
+            let x = leading != rtl ? frame.minX : frame.maxX
+            return CGRect(x: x, y: frame.minY, width: 0, height: frame.height)
         }
         return frame.isNull ? nil : frame
     }

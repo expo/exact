@@ -17,7 +17,7 @@ typealias SoundLogCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePoi
 /// The arm's five entry points: the dylib's, or a test's stand-in.
 final class SoundLibrary {
     typealias Open = @convention(c) (UnsafePointer<UnsafePointer<CChar>?>?, Int, UnsafeMutableRawPointer?, SoundLogCallback?, Bool, UnsafeMutablePointer<CChar>?, Int) -> UnsafeMutableRawPointer?
-    typealias Op = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt64, UInt32, Double, Float, Float, Float) -> Bool
+    typealias Op = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt64, UInt32, Double, Float, Float, Float, Double) -> Bool
     typealias Counts = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutablePointer<UInt64>?) -> Void
     typealias Engine = @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafeMutablePointer<CChar>?, Int) -> Bool
     typealias Close = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -92,11 +92,13 @@ final class SoundOutput {
     /// Ops the mixer's ring had no room for, in order, pushed again from
     /// the main queue as renders empty it: an advance that crosses several
     /// of a sequence's fills can hand over more than the ring holds.
-    private var backlog: [(kind: UInt32, id: UInt64, sound: UInt32, at: Double, gain: Float, rate: Float, pan: Float)] = []
+    private var backlog: [MixerOp] = []
     private var draining = false
     /// The latest start of a voice handed to the arm, host seconds: a voice
     /// still ahead keeps the output from counting as idle.
     private var latestStart = 0.0
+    /// A running transport keeps the engine between hits (LLP 1125 D4).
+    private var sequencePlaying = false
     /// Seconds after a failure before a voice tries again; settable for tests.
     var retryAfter = 1.0
     /// The host clock, on CACurrentMediaTime's timebase; settable for tests.
@@ -119,6 +121,7 @@ final class SoundOutput {
     /// The session is destroyed, or a boot names other files: the arm is
     /// stopped and let go, and the session claim given back.
     func shutdown() {
+        sequencePlaying = false
         haptics.values.forEach { $0.cancel() }
         haptics = [:]
         backlog = []
@@ -130,10 +133,11 @@ final class SoundOutput {
     }
 
     /// The owner is about to change the session for speech (LLP 1133.012
-    /// D4): an output with no voice submitted and not ended stops and gives
-    /// its hold back, and the next voice opens it again, as after a route
+    /// D4): an output with no playing sequence or unended voice stops and gives
+    /// its hold back; the next voice opens it again, as after a route
     /// change. Whether it let the hold go.
     func stopIfIdle() -> Bool {
+        guard !sequencePlaying else { return false }
         guard let arm else { return true }
         guard backlog.isEmpty, counts(arm)[0] == 0, now() > latestStart + 0.05 else { return false }
         say("sound: the idle output stopped so the audio session can change; the next sound opens it again")
@@ -147,14 +151,18 @@ final class SoundOutput {
     /// A batch's `sound` op: the files at a boot (the last boot's voices end
     /// now), then its ops in order.
     func apply(_ payload: [String: Any]) {
+        #if os(iOS) || os(tvOS)
+        defer { AudioSession.playbackChanged() }
+        #endif
         guard !ExactEnv.agentMode else { return }
         if let files = payload["files"] as? [String] {
             // New files let the output and its session claim go; the next voice takes both again.
             if files != self.files { shutdown(); self.files = files; failure = nil }
             // The last boot's ops still waiting are let go; the stop of its
             // voices waits its turn like any op, so a full ring never skips it.
-            else if let arm, let library = library() { backlog = []; send(arm, library, (3, 0, 0, 0, 0, 1, 0)) }
+            else if let arm, let library = library() { backlog = []; send(arm, library, (3, 0, 0, 0, 0, 1, 0, 0)) }
         }
+        if let playing = payload["playing"] as? Bool { sequencePlaying = playing }
         for op in payload["ops"] as? [[String: Any]] ?? [] {
             let id = UInt64((op["id"] as? NSNumber)?.int64Value ?? 0), at = (op["at"] as? NSNumber)?.doubleValue ?? 0
             // Runner time to host seconds on CACurrentMediaTime's timebase (D6).
@@ -165,9 +173,15 @@ final class SoundOutput {
                 guard let arm = ready(), let library = library() else { skipped += 1; continue }
                 latestStart = max(latestStart, host)
                 send(arm, library, (1, id, UInt32((op["sound"] as? NSNumber)?.intValue ?? 0), host, (op["gain"] as? NSNumber)?.floatValue ?? 1,
-                                    (op["playbackRate"] as? NSNumber)?.floatValue ?? 1, (op["pan"] as? NSNumber)?.floatValue ?? 0))
+                                    (op["playbackRate"] as? NSNumber)?.floatValue ?? 1, (op["pan"] as? NSNumber)?.floatValue ?? 0, 0))
+            // A change to a playing voice (LLP 1096 D14): a value not given is NaN.
+            case "set":
+                func given(_ key: String) -> Float { (op[key] as? NSNumber)?.floatValue ?? .nan }
+                if let arm, let library = library() {
+                    send(arm, library, (4, id, 0, host, given("gain"), given("playbackRate"), given("pan"), ((op["ramp"] as? NSNumber)?.doubleValue ?? 0) / 1000))
+                }
             case "end":
-                if let arm, let library = library() { send(arm, library, (2, id, 0, host, 0, 1, 0)) }
+                if let arm, let library = library() { send(arm, library, (2, id, 0, host, 0, 1, 0, 0)) }
             // A sequence step's haptic plays on the main thread at its time; it never opens the output.
             case "haptic":
                 guard let kind = op["kind"] as? String else { continue }
@@ -188,8 +202,10 @@ final class SoundOutput {
     }
 
     /// An op to the mixer, after any it had no room for.
-    private func send(_ arm: Arm, _ library: SoundLibrary, _ op: (kind: UInt32, id: UInt64, sound: UInt32, at: Double, gain: Float, rate: Float, pan: Float)) {
-        if backlog.isEmpty && library.op(arm.handle, op.kind, op.id, op.sound, op.at, op.gain, op.rate, op.pan) { return }
+    typealias MixerOp = (kind: UInt32, id: UInt64, sound: UInt32, at: Double, gain: Float, rate: Float, pan: Float, ramp: Double)
+
+    private func send(_ arm: Arm, _ library: SoundLibrary, _ op: MixerOp) {
+        if backlog.isEmpty && library.op(arm.handle, op.kind, op.id, op.sound, op.at, op.gain, op.rate, op.pan, op.ramp) { return }
         backlog.append(op)
         guard !draining else { return }
         draining = true
@@ -201,12 +217,20 @@ final class SoundOutput {
     func drain() {
         draining = false
         guard let arm, let library = library() else { backlog = []; return }
-        while let op = backlog.first, library.op(arm.handle, op.kind, op.id, op.sound, op.at, op.gain, op.rate, op.pan) { backlog.removeFirst() }
+        while let op = backlog.first, library.op(arm.handle, op.kind, op.id, op.sound, op.at, op.gain, op.rate, op.pan, op.ramp) { backlog.removeFirst() }
         if !backlog.isEmpty {
             draining = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.005) { [weak self] in self?.drain() }
         }
     }
+
+    #if os(iOS) || os(tvOS)
+    private var hasLiveSound: Bool {
+        guard let arm, started else { return false }
+        let c = counts(arm)
+        return c[3] == 1 && (sequencePlaying || c[0] > 0 || !backlog.isEmpty || now() < latestStart + 0.05)
+    }
+    #endif
 
     /// The running output, opened when there is none: at the first voice,
     /// after the system stopped the engine, or `retryAfter` after a failure.
@@ -236,7 +260,7 @@ final class SoundOutput {
         guard let library = library() else { fail("no sound module in this build"); return nil }
         #if os(iOS) || os(tvOS)
         // The session before the engine: an output made with no active session is AURemoteIO's to fail.
-        do { try AudioSession.hold(ObjectIdentifier(self)) } catch { fail("the audio session did not activate: \(error.localizedDescription)"); return nil }
+        do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in self?.hasLiveSound ?? false }) } catch { fail("the audio session did not activate: \(error.localizedDescription)"); return nil }
         AudioSession.stopsWhenIdle(ObjectIdentifier(self)) { [weak self] in self?.stopIfIdle() ?? true }
         observe()
         #endif
@@ -270,7 +294,7 @@ final class SoundOutput {
     /// when it must be activated again: nil, or why not.
     private func start(_ arm: Arm) -> String? {
         #if os(iOS) || os(tvOS)
-        if reactivate { do { try AudioSession.hold(ObjectIdentifier(self)) } catch { return "the audio session did not activate again: \(error.localizedDescription)" } }
+        if reactivate { do { try AudioSession.hold(ObjectIdentifier(self), running: { [weak self] in self?.hasLiveSound ?? false }) } catch { return "the audio session did not activate again: \(error.localizedDescription)" } }
         #endif
         var reason = [CChar](repeating: 0, count: 512)
         guard library()?.engine(arm.handle, 1, &reason, reason.count) == true else { return String(cString: reason) }
@@ -290,6 +314,9 @@ final class SoundOutput {
     }
 
     private func close() {
+        #if os(iOS) || os(tvOS)
+        defer { AudioSession.playbackChanged() }
+        #endif
         backlog = []
         guard let arm else { return }
         self.arm = nil
@@ -342,6 +369,7 @@ final class SoundOutput {
     private func observe() {
         AudioSession.listen(ObjectIdentifier(self)) { [weak self] event in
             switch event {
+            case .background: break
             case let .interruption(began, resume): self?.interruption(began: began, resume: resume)
             case let .appActive(othersPlaying): self?.becameActive(othersPlaying: othersPlaying)
             case .reset: self?.mediaServicesWereReset()

@@ -5,11 +5,14 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // shown beside its detail. A split list is live beside its detail when wide and hidden under it when narrow; under a
 // sheet the page shows, wide the list too, inert; whatever the runner said, the page's flags are the reply's. A
 // flowed paragraph's runs, held off the page while its fragments paint (textflow-glue.js), take their paragraph's.
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../../..');
 // A root whose list route asks for a 320 px split, its detail pushed, and a sheet when `sheet`; the node ids are each
@@ -33,7 +36,7 @@ const reply = (sheet) => ({ nodes: [
 ] });
 const flags = (want) => Object.fromEntries(Object.entries(want).map(([id, f]) => [id, { inactive: f > 0, hidden: f > 1 }]));
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the wasm runtime's tree flags routes as the page shows them`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: the wasm runtime's tree flags routes as the page shows them`, async () => {
   const glue = readFileSync(resolve(ROOT, 'host/web/glue.js'), 'utf8');
   const suite = await suiteBrowser(engine, { timeout: 10000 });
   try {

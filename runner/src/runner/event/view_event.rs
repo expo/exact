@@ -18,6 +18,7 @@ impl<D: DataSource> Runner<D> {
     /// ordinary dispatch to take the message.
     pub(super) fn view_event(
         &mut self,
+        view: exact_kernel::ViewId,
         node: NodesId,
         text: &str,
         frames: &[Frame],
@@ -57,8 +58,11 @@ impl<D: DataSource> Runner<D> {
         let Some(event) = sent["exact:event"].as_str() else {
             let h = plain?;
             let mut args = Vec::new();
-            for a in h.args.iter() {
-                match self.eval(self.plan.arg(a).expr, &[], frames) {
+            for (k, a) in h.args.iter().enumerate() {
+                match self
+                    .eval(self.plan.arg(a).expr, &[], frames)
+                    .map_err(|e| e.argument(view, node, "message", k))
+                {
                     Ok(v) => args.push(v),
                     Err(e) => return Some(Err(e)),
                 }

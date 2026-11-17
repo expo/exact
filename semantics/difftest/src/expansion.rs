@@ -15,9 +15,9 @@
 //!      unexpanded file and the flat semantics on Rust's expansion over the
 //!      case's events, the oracle the runner's transcript, and compares the
 //!      observations, omitting commit traces (`ran …`), which the component
-//!      semantics does not emit, and the slots the expansion lifted out of
-//!      children (`slot name#n …`), which it keeps per instance, not as root
-//!      slots.
+//!      semantics does not emit, and the slots and resources the expansion
+//!      lifted out of children (`slot name#n …`, `resource name#n …`), which
+//!      it keeps per instance, not as the root's.
 //!
 //! A structural difference is a disagreement between the two expanders; an
 //! observational one is a disagreement between the expansion and the
@@ -133,18 +133,28 @@ fn module(cases: &[(usize, Prepared)]) -> String {
 }
 
 /// Compare outcomes and configurations, omitting commentary, commit traces
-/// (the component semantics has none), and the flat side's lifted slots.
+/// (the component semantics has none), and the flat side's lifted slots and
+/// resources.
 fn comparable(lines: &[String], flat: bool) -> Vec<String> {
     lines
         .iter()
         .flat_map(|l| l.lines().map(str::to_string).collect::<Vec<_>>())
         .filter(|l| !l.starts_with('#') && !l.starts_with("ran "))
         .filter(|l| {
+            let name = |prefix| {
+                l.strip_prefix(prefix)
+                    .and_then(|r: &str| r.split(' ').next())
+            };
+            // A lifted resource is `name#n`; the root's placeholder row
+            // `name#else` is the root's own.
+            let lifted_resource = |n: &str| {
+                n.split('#')
+                    .skip(1)
+                    .any(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+            };
             !flat
-                || !l
-                    .strip_prefix("slot ")
-                    .and_then(|r| r.split(' ').next())
-                    .is_some_and(|name| name.contains('#'))
+                || !(name("slot ").is_some_and(|n| n.contains('#'))
+                    || name("resource ").is_some_and(lifted_resource))
         })
         .collect()
 }
@@ -401,6 +411,21 @@ mod tests {
         ]
         .map(str::to_string);
         assert!(matches!(verdict(&lines).0, Verdict::Agree));
+    }
+
+    #[test]
+    fn lifted_resources_are_omitted_and_placeholder_rows_kept() {
+        let agree = [
+            "#flat",
+            "resource got#1 \"a\"",
+            "resource data#else n0000000000000000",
+            "#comp",
+            "resource data#else n0000000000000000",
+        ]
+        .map(str::to_string);
+        assert!(matches!(verdict(&agree).0, Verdict::Agree));
+        let differ = ["#flat", "resource data#else u", "#comp"].map(str::to_string);
+        assert!(matches!(verdict(&differ).0, Verdict::Diverge { .. }));
     }
 
     #[test]

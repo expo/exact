@@ -109,7 +109,7 @@ extension NodeView {
         // press down on the node as it was held is taken over, and its
         // release shows nothing (the click is still its own).
         if holds("active") { return }
-        if pressed, defaultLink == nil { pressHaptic() }
+        if pressed { pressHaptic() }
         showPress(pressed)
     }
     /// The press shown (`down`), or taken off: the scale and the paint, or
@@ -123,7 +123,6 @@ extension NodeView {
         }
         #endif
         if isNativeButton { heldHighlight(); return }
-        let down = down && defaultLink == nil
         // What a press shows goes at its release whatever the style says now:
         // an authored look the style dropped while held included.
         if !down || !authorsPress { paintPress(false, instantly: down); aimPress(false, release: true) }
@@ -146,7 +145,6 @@ extension NodeView {
     func pressFollows(inside: Bool) {
         guard pressed else { return }
         pressPaint.outside = !inside
-        if defaultLink != nil { showPress(false); return }
         if holds("active") { return }
         if !inside { paintPress(false); aimPress(false) }
         #if os(iOS)
@@ -231,6 +229,8 @@ extension NodeView {
         ease.timingFunction = PressFeedback.timing
         layer.add(ease, forKey: "press")
         press.easedAbout = CGPoint(x: o.x - bounds.midX, y: o.y - bounds.midY)
+        // A one-axis clip above fits the ease's extent, not the model's.
+        overflowClipGeometryChanged()
     }
     /// No ease of the press on the render server: a view taken for another
     /// node, or one a flight carries, shows its own transform alone.
@@ -296,6 +296,10 @@ extension NodeView {
 
     #if os(iOS) || os(tvOS)
     package func applyTransform() {
+        defer { refreshPressTranslation() }
+        defer { overflowClipGeometryChanged() }
+        let before = layer.transform
+        defer { if !CATransform3DEqualToTransform(before, layer.transform) { refreshPixelatedImages() } }
         // Flying scaled whole in its clip (LLP 1013.000 D4.4): the
         // flight's scale only.
         if flightLook != nil { stopPressEase() }
@@ -326,7 +330,13 @@ extension NodeView {
     /// transform: a layout transition's offset, a sticky box's scroll offset
     /// (LLP 1083), a keyboard toolbar's lift and a context preview's projection.
     var hostPlacement: CGAffineTransform {
-        CGAffineTransform(translationX: layoutOffset.x + stickyOffset.x, y: layoutOffset.y - keyboardLift + stickyOffset.y + controlRide).concatenating(contextTransform)
+        let placed = CGAffineTransform(translationX: layoutOffset.x + stickyOffset.x, y: layoutOffset.y - keyboardLift + stickyOffset.y + controlRide).concatenating(contextTransform)
+        // A zoomable scroller's child, scaled about its box's top left and
+        // moved to where its zoom centres it (`ScrollZoomIOS.swift`); UIKit
+        // scales about the centre.
+        let z = zoomFactor, shift = zoomShift
+        guard z != 1 || shift != .zero else { return placed }
+        return placed.concatenating(CGAffineTransform(a: z, b: 0, c: 0, d: z, tx: (z - 1) * bounds.width / 2 + shift.x, ty: (z - 1) * bounds.height / 2 + shift.y))
     }
     /// The border box in `viewport`'s visible space as an open top-layer box
     /// is told to the runner: before its own transform, which the runner
@@ -352,6 +362,10 @@ extension NodeView {
     }
     #else
     package func applyTransform() {
+        defer { refreshPressTranslation() }
+        defer { overflowClipGeometryChanged() }
+        let before = layer?.transform ?? CATransform3DIdentity
+        defer { if !CATransform3DEqualToTransform(before, layer?.transform ?? CATransform3DIdentity) { refreshPixelatedImages() } }
         // A backdrop mirrors its box as the transform moves and scales it.
         defer { if !backdropOperations.isEmpty { applyBackdrop() } }
         // A frame's web view takes its scale by geometry (`FrameScaleMac.swift`).
@@ -386,7 +400,9 @@ extension NodeView {
         t = t.translatedBy(x: o.x, y: o.y).rotated(by: rotate * .pi / 180).scaledBy(x: s, y: s).translatedBy(x: -o.x, y: -o.y)
         // Outermost, a layout transition's offset; its size is the surface's
         // alone (`Surface.swift`, LLP 1063).
-        layer?.setAffineTransform(t.concatenating(CGAffineTransform(translationX: layoutOffset.x, y: layoutOffset.y)))
+        // Written when it differs: this runs at every display of the view, and at every rebinding of a list's row.
+        let placed = t.concatenating(CGAffineTransform(translationX: layoutOffset.x, y: layoutOffset.y))
+        if let layer, !CATransform3DIsAffine(layer.transform) || layer.affineTransform() != placed { layer.setAffineTransform(placed) }
     }
     /// Whether a window point is inside the box as it stands unpressed.
     /// `local` reaches a transformed box through its plane, the press
@@ -426,7 +442,7 @@ extension NodeView {
     static let dimHold: CFTimeInterval = 0.1
 
     /// Whether a press shows the platform's dim: a node the host presses
-    /// (a `press` handler or a custom invoker's visual contact),
+    /// (a `press` handler, a link's `href` or a custom invoker's visual contact),
     /// with no pressed look written (a
     /// `-exact-press-scale` or pressed paint, any value, 1 included, is the
     /// author's: `authorsPress`), no `pointerdown` or `pointerup` of its own
@@ -435,7 +451,7 @@ extension NodeView {
     /// native button is UIKit's own and never comes here.
     var platformPressDims: Bool {
         guard !authorsPress, !isNativeButton, !isSurfaceControl,
-              handlers.contains("press") || pressContact?.invokerLook == true || overlayHoldsPress,
+              handlers.contains("press") || defaultLink != nil || pressContact?.invokerLook == true || overlayHoldsPress,
               !handlers.contains("pointerdown"), !handlers.contains("pointerup") else { return false }
         if let w = window {
             let r = convert(bounds, to: w)

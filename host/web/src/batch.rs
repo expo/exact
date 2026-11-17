@@ -16,6 +16,8 @@ pub struct Batch {
     /// A data module's timer continuation an advance released is still out
     /// (`Runner::data_timer_landing`): the agent's jump waits for its reply.
     landing: bool,
+    /// This batch is the page's transition into `frozen`.
+    freeze: bool,
 }
 
 /// Validate before token translation or storage/continuation serialization.
@@ -34,11 +36,20 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
             return Some("only HTTP may opt into independent transport");
         }
     }
+    // This host's sockets only listen (LLP 1016.000 D7): a Rust source's
+    // two-way socket is refused, never opened to only listen (LLP 1016.003).
+    // A TypeScript socket here asks for none.
+    if request.socket && request.listen.is_none() && !request.is_process() {
+        return Some("Request::socket is unavailable on the web's wasm host");
+    }
     // This host's sockets carry no idle timeout (LLP 1016.000 D11).
     if request.idle_timeout_ms.is_some() {
         return Some("an idle timeout is unavailable on the web's wasm host");
     }
-    (request.ceiling_refusal())
+    request
+        .prefetch_refusal()
+        .or(request.preload_refusal())
+        .or(request.ceiling_refusal())
         .or(request.timeout_refusal())
         .or(request.protocols_refusal())
         .or(request.body_from_refusal())
@@ -355,6 +366,14 @@ impl Batch {
         self.ops.push(s);
     }
 
+    /// The large-title size at the runner's root, for the bar's reserved line.
+    pub fn large_title(&mut self, size: f32) {
+        self.ops.push(text!(
+            "{{\"op\":\"large-title\",\"size\":{}}}",
+            Shortest(f64::from(size))
+        ));
+    }
+
     /// `{"op":"looks","id":…,"css":…}`: a view's state-look rules for the
     /// page's looks sheet (LLP 1121 D8), `""` to drop them.
     pub fn looks(&mut self, id: u32, css: &str) {
@@ -424,6 +443,27 @@ impl Batch {
         );
     }
 
+    /// A held spring's frames (LLP 1003.001 D9, "The web"): as
+    /// [`Batch::animate`] writes them, with `"held":true` and no `at`, so the
+    /// page lets the browser start the animation at its ready time and
+    /// reports it, and `"due":ms`, when the engine releases it at its commit
+    /// if no ready time came.
+    pub fn held_spring(
+        &mut self,
+        id: u32,
+        property: &str,
+        timing: (f64, f64),
+        values: &[[f64; 4]],
+        due_ms: f64,
+    ) {
+        let pair = property == "translate";
+        self.animate_op(None, id, property, timing, values, pair);
+        if let Some(op) = self.ops.last_mut() {
+            op.pop();
+            push_text!(op, ",\"held\":true,\"due\":{}}}", Shortest(due_ms));
+        }
+    }
+
     fn animate_op(
         &mut self,
         at_ms: Option<f64>,
@@ -450,7 +490,7 @@ impl Batch {
                 s.push(',');
             }
             let (x, y) = (Shortest(*x), Shortest(*y));
-            if pair && (*px != 0.0 || *py != 0.0) {
+            if property == "rotate" || pair && (*px != 0.0 || *py != 0.0) {
                 push_text!(&mut s, "[{},{},{},{}]", x, y, Shortest(*px), Shortest(*py));
             } else if pair {
                 push_text!(&mut s, "[{},{}]", x, y);
@@ -544,6 +584,48 @@ impl Batch {
         self.ops.push(s);
     }
 
+    /// Ask the page to finish layout before resolving a capture's backing.
+    pub fn canvas_capture_prepare(&mut self, ticket: u64) {
+        self.ops.push(format!(
+            "{{\"op\":\"canvasCapturePrepare\",\"ticket\":{ticket}}}"
+        ));
+    }
+
+    /// `{"op":"canvasCapture","ticket","id","lifetime","generation","w","h","scale","path","scope","type","quality"?}`:
+    /// the page writes the canvas's bitmap as `toBlob` encodes `type` and
+    /// `quality` (`exact_runner::canvas_capture`).
+    pub fn canvas_capture(
+        &mut self,
+        ticket: u64,
+        c: &exact_runner::canvas_capture::CanvasCapture,
+        scope: Option<&str>,
+    ) {
+        let mut s = text!(
+            "{{\"op\":\"canvasCapture\",\"ticket\":{},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{},\"scale\":{},\"path\":",
+            ticket,
+            c.view,
+            c.lifetime,
+            c.generation,
+            c.sequence,
+            c.width,
+            c.height,
+            Shortest(c.scale)
+        );
+        quote(&c.path, &mut s);
+        s.push_str(",\"scope\":");
+        match scope {
+            Some(scope) => quote(scope, &mut s),
+            None => s.push_str("null"),
+        }
+        s.push_str(",\"type\":");
+        quote(&c.encoding.media_type, &mut s);
+        if let Some(q) = c.encoding.quality {
+            s.push_str(&text!(",\"quality\":{}", Shortest(q)));
+        }
+        s.push('}');
+        self.ops.push(s);
+    }
+
     /// `{"op":"request","ticket":N,"target":…,"method":…,"url":…,"headers":[[k,v]…],"body":"<base64>","cache":"default"|"reload"}`
     /// — a request the runner handed the host to run (LLP 1016 D2); the
     /// reply comes back through `exact_fulfill`.
@@ -552,7 +634,10 @@ impl Batch {
             self.refuse(r.ticket, &message);
             return;
         }
-        if let Some(message) = request_refusal(&r.request) {
+        if let Some(message) = (r.request.prefetch && r.class != exact_runner::RequestClass::Read)
+            .then_some("exactPrefetch requires a plain HTTP read")
+            .or(request_refusal(&r.request))
+        {
             self.refuse(r.ticket, message);
             return;
         } else if let Some(work) = r.request.surface.as_deref() {
@@ -560,6 +645,12 @@ impl Batch {
                 exact_runner::SurfaceRequest::Capture { name } => ("capture", name, None),
                 exact_runner::SurfaceRequest::Restore { name, bytes } => {
                     ("restore", name, Some(bytes.as_slice()))
+                }
+                // The host hands a canvas capture to the page itself
+                // (`Host::emit_request`); none reaches a GPU surface.
+                exact_runner::SurfaceRequest::Canvas { .. } => {
+                    self.refuse(r.ticket, "a canvas capture is not GPU surface work");
+                    return;
                 }
             };
             let mixed = r.request.continuation.is_some()
@@ -864,6 +955,32 @@ impl Batch {
                     }
                     s.push('}');
                 }
+                // LLP 1096 D14: only the values the call gave.
+                SoundOp::Set {
+                    id,
+                    at,
+                    gain,
+                    playback_rate,
+                    pan,
+                    ramp,
+                } => {
+                    push_text!(
+                        &mut s,
+                        "{{\"op\":\"set\",\"id\":{},\"at\":{}",
+                        id,
+                        Shortest(*at)
+                    );
+                    for (name, v) in [
+                        ("gain", gain),
+                        ("playbackRate", playback_rate),
+                        ("pan", pan),
+                    ] {
+                        if let Some(v) = v {
+                            push_text!(&mut s, ",\"{}\":{}", name, Shortest(*v));
+                        }
+                    }
+                    push_text!(&mut s, ",\"ramp\":{}}}", Shortest(*ramp));
+                }
                 SoundOp::End { id, at } => push_text!(
                     &mut s,
                     "{{\"op\":\"end\",\"id\":{},\"at\":{}}}",
@@ -963,6 +1080,12 @@ impl Batch {
         self
     }
 
+    /// With `"freeze":true` on the page's transition into `frozen`.
+    pub(crate) fn freeze(mut self, freeze: bool) -> Batch {
+        self.freeze = freeze;
+        self
+    }
+
     /// @ref LLP 1043.000 §3 D8 — carry the runner deadline, not a poll interval.
     /// The batch as one JSON document:
     /// `{"ops":[…],"timers":bool,"clock":ms,"error":null|"…"}` — `clock` is
@@ -1006,6 +1129,9 @@ impl Batch {
         }
         if self.landing {
             s.push_str(",\"landing\":true");
+        }
+        if self.freeze {
+            s.push_str(",\"freeze\":true");
         }
         if let Some((first, last)) = self.seq {
             push_text!(&mut s, ",\"seq\":[{},{}]", first, last);

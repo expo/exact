@@ -697,6 +697,35 @@ derivatives; baked models contain no tangent arrays. The shader reads a normal
 map's XY and rebuilds Z (`sqrt(1 − x² − y²)`), so RGBA8, BC5 and two-channel ASTC
 draw alike. Material UV transforms apply separately to every texture.
 
+### Contract performance
+
+Contract's opt-in `exactCanvasPerformance("surface")` read receives a bounded
+snapshot at most once per second. The renderer reports the last submitted frame's
+actual pixels, render scale, effective pixel ratio, MSAA and submitted work counts.
+Frame counts and CPU tick/feed/encode means and maxima cover the window since the
+previous snapshot. Late/missed frames and the longest gap describe inter-frame
+intervals completed in that window; an interval may start before its snapshot window.
+An idle poll has no completed interval to report. Enabling, restarting the scene
+or restoring a save starts a fresh window; disabling drops these counters.
+`windowMs` measures monotonic time since the previous snapshot; `fps` is submitted
+frames per second over that window, not display or compositor FPS. An idle window
+reports zero. The first snapshot, virtual-clock snapshots and the first after a
+clock-mode change leave these fields unavailable. A clock-mode change discards the
+open measurement window. Delayed snapshots use their actual elapsed time.
+The cadence comparison honors the canvas frame cap and excludes virtual time and
+the first frame after rest. `quality`, `maxFps` and `idle` are
+read when the snapshot is taken, not over the window (`thermalState` is the last
+drawn frame's, absent from a window with no drawn frame), as are `textureMemoryBytes`
+(the delivered textures the renderer holds, retired ones included, render
+targets excluded) and
+`geometryMemoryBytes` (the shared vertex and index buffers' allocated bytes);
+the GPU module adds the process's footprint and, on the web, its own heap. `audioState` is the game audio output's (`running`, `suspended`,
+`interrupted`, `closed`) where the target has a player. CPU encoding is distinct
+from queue submission (`cpuSubmitMs`, which the GPU module times) and GPU
+execution (`gpuMs`: each frame's timestamp envelope, measured by the agent's
+timing without its samples or trace while only a reader asks); unsupported
+timing, memory and audio fields stay unavailable. No simulation state, save or hash contains these readings.
+
 ### Texture families
 
 A `.tex` record is RGBA8, BC4, BC5, BC7 or ASTC 4×4 (`TextureData.format`,
@@ -704,7 +733,9 @@ A `.tex` record is RGBA8, BC4, BC5, BC7 or ASTC 4×4 (`TextureData.format`,
 delivered, whole blocks per level, and never transcodes. The device requests every
 available block family (`exact_gpu::requested_features`); `Surface::device_ready`
 passes the granted features, and the surface chooses **BC** when granted, else
-**ASTC**, else **RGBA8**. Worlds and models name the authored `x.tex`; the surface asks
+**ASTC**, else **RGBA8**, among the families its target's bundle holds
+(`TextureFamily::BUNDLED`): BC alone on macOS, ASTC alone on iOS and tvOS, so an
+M-series iPad, which grants both, takes ASTC there. Worlds and models name the authored `x.tex`; the surface asks
 the host for `x.bc.tex`, `x.astc.tex` or `x.tex` and maps the delivered file back,
 so hosts fetch by name and the simulation never sees a family. A headless surface
 has no device and fetches RGBA8, which validates and hashes like any delivery
@@ -904,7 +935,11 @@ no CPU frame perf clock calls unless tick spans are armed; samples do not enter 
 mean milliseconds. `tick.other` completes the tick. `tickSpans.tickMs` measures
 the same engine interval, before presentation; the exclusive per-tick means sum
 to its mean. Span distributions include zero for ticks before a name first appeared. These rings also retain
-16,384 ticks, including under the agent clock; `during` reads the added ticks. Armed perf also reads back, a few
+16,384 ticks, including under the agent clock; `during` reads the added ticks.
+Each read names its world `incarnation` and recording `generation`; `during`
+refuses a remount, restart, restore, module reload or recording reset even when counters match.
+The incarnation includes a random namespace for the loaded module.
+These identities stay outside saves and hashes. Armed perf also reads back, a few
 frames late and asynchronously, `perf.culled` (instances each view drew: `camera`,
 `shadows[0..3]`) and, where timestamps are granted, `world.gpuMs` rings for every
 pass by `GPU_PASS_NAMES`: forward, the cascades, local shadows, `cull`, skin palettes,
@@ -958,8 +993,9 @@ each probe hook is one `Option` check, and a record is built only by a closure a
 armed probe calls. A look frame whose encode fails disarms every instrument, and a
 live frame clears any that are left. Hooks see the last live frame held, with no time passing, and
 the hook clock keeps that frame's time, so the next live frame's delta is the one
-it would have had. A look frame draws every sun caster itself and leaves the static
-shadow cache as the live frames left it, and it chooses levels of detail from its
+it would have had. A look frame reads the static shadow cache when its sun matrices
+and caster signature match, otherwise drawing every sun caster itself. It leaves
+the cache as the live frames left it, and chooses levels of detail from its
 own camera and then puts back the live frames' choice (`end_look`), so the
 selection's hysteresis never carries an inspection's level into a live frame. A canvas that draws (web, Apple, a Linux
 host under `EXACT_GPU_RENDER=1`) draws its look frame with its own renderer; a
@@ -1010,9 +1046,10 @@ until it has, and the driver asks again.
   so a look frame with particles draws its translucency in a pass of its own, as
   soft particles do, over the attachments the live frame draws into: the HDR
   image, or a direct frame's target, with the direct frame's format, blending and
-  resolve (its colour and depth kept between the two passes in attachments of the
-  look frame's own, released at the next live frame, so the live frame's stay
-  transient). build.rs assembles every quad module, validates it with naga, and
+  resolve. Particle counting keeps any transient colour or depth in retained
+  attachments of the look frame's own, released at the next live frame. HDR
+  looks share the live resolve image and tone binding, preserving effect
+  bindings. build.rs assembles every quad module, validates it with naga, and
   reflects the probe variants' counter group, from which the renderer takes its
   layout, binding numbers and entry points. Limits, each a gap or a stated
   meaning, not an approximation: GL has no fragment storage writes, and a scene
@@ -1026,7 +1063,8 @@ until it has, and the driver asks again.
   build) into a counter it zeroes first, and the tell reads those. The listing's caster instances come from the
   shadow passes' draw records and the cull's counts for each cascade; a direct
   frame (no GPU cull, the iOS simulator) draws casters unculled and lists them
-  as unknown.
+  as unknown. Reused static depth is listed as `cached sun casters`; its texels
+  count, but its caster instances are unknown because those draws ran earlier.
 - **The cull's account** (cull.wgsl `probe`): after the passes, the cull's own
   functions run once more over every item into a buffer of the look frame's own:
   its world sphere (swept between ticks, attached, skinned; a kept-whole group's
@@ -1067,9 +1105,10 @@ until it has, and the driver asks again.
   outside the view by the quad's own extent about its anchor, or drawn. An
   entity's word combines all of its drawables: when an opaque part drew, that
   part's word (`drawn`, `custom-material`, `outside-cascade <n>`); when only a
-  blended part, a sprite or an emitter drew, `drawn`, the reason naming which;
+  blended part, a sprite or an emitter drew, `drawn`;
   when none drew, the first one's word (the mesh's, then the sprite's, then the
-  emitter's), the reason naming the others'.
+  emitter's). For multiple drawables, the reason lists each drawable's word and
+  explanation in that order.
 - **Views**: the game's camera; an orbit at a yaw, pitch and distance from the
   centre of the scene; or an orthographic plan from above. An orbit or plan first
   reads a camera frame for the scene's bounds: the cull's sphere of every item it

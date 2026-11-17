@@ -13,7 +13,8 @@
 //! record.json                              { codec, selected, lastGood, failures, stream, bad }
 //! blobs/<sha256>                            each file's bytes, once, verified before reuse
 //! entries/<canonical envelope sha256>/exact.json  the head, as it arrived
-//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy where refused)
+//! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy on Android or where refused)
+//! entries/<envelope sha256>/assets.json     the asset index, likewise
 //! entries/<envelope sha256>/assets/<name>   likewise
 //! entries/.tmp-<something>/                 an entry being built; never selected
 //! ```
@@ -23,6 +24,8 @@
 //! accepted at the floor, and an entry another process runs are kept. A blob
 //! none of them names is kept until a check finishes: it may be part of a
 //! download that a launch did not finish.
+//! A witness names its asset index's blob, so the next check of an
+//! unchanged head reads the index from disk.
 //!
 //! Three rules hold the whole thing up:
 //!
@@ -185,6 +188,22 @@ impl AssetSet {
     /// also the tombstone boundary for embedded or predecessor assets.
     pub fn names(&self) -> Vec<String> {
         self.cards.keys().cloned().collect()
+    }
+
+    /// The directory the names resolve under (`entries/<entry>/assets`).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Read every asset and check it against its signed card, for a reader
+    /// that opens files by path rather than through [`AssetSet::resolve`].
+    /// The first mismatch is the error; no bytes are kept.
+    pub fn verify(&self) -> Result<(), String> {
+        for (name, card) in self.cards.iter() {
+            safe_name(name)?;
+            read_card(&self.root.join(name), card)?;
+        }
+        Ok(())
     }
 
     /// Resolve one name. `Ok(None)` means the complete roster omits it;
@@ -374,13 +393,8 @@ impl Store {
             .write(true)
             .open(dir.join("owner.lock"))
             .map_err(|e| format!("cannot open update store lock {}: {e}", dir.display()))?;
-        let reader = match owner.try_lock() {
-            Ok(()) => false,
-            Err(std::fs::TryLockError::WouldBlock) => true,
-            Err(std::fs::TryLockError::Error(e)) => {
-                return Err(format!("cannot lock update store {}: {e}", dir.display()))
-            }
-        };
+        let reader = !disk::try_lock(&owner, true)
+            .map_err(|e| format!("cannot lock update store {}: {e}", dir.display()))?;
         let entries = dir.join("entries");
         std::fs::create_dir_all(&entries)
             .map_err(|e| format!("cannot make {}: {e}", entries.display()))?;
@@ -638,7 +652,7 @@ impl Store {
             return Ok(());
         }
         self.record.failures += 1;
-        self.write_boot_mark()
+        self.write_boot_mark(&self.record)
     }
 
     /// First pixel: the bundle that booted is good (LLP 1026 D11). Clears the
@@ -648,9 +662,12 @@ impl Store {
         if self.read_only().is_some() || *generation != self.generation() {
             return Ok(());
         }
-        self.record.failures = 0;
-        self.record.last_good.clone_from(&self.running);
-        self.write_boot_mark()
+        let mut record = self.record.clone();
+        record.failures = 0;
+        record.last_good.clone_from(&self.running);
+        self.write_boot_mark(&record)?;
+        self.record = record;
+        Ok(())
     }
 
     /// The selected entry was refused before it could run and this process
@@ -696,7 +713,7 @@ impl Store {
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
     ) -> Result<Check, String> {
         let envelope = self.download(head_url, fetch, embedded_asset)?;
-        self.finish_check(envelope, head_url, embedded_asset)
+        self.finish_check(envelope, head_url, embedded_asset, true)
     }
 
     /// The immutable facts a download uses while its host releases the lock.
@@ -728,7 +745,14 @@ impl Store {
         if let Some(why) = self.read_only() {
             return Err(why.into());
         }
-        let envelope = Envelope::parse(&fetch(head_url)?)?;
+        let mut envelope = Envelope::parse(&fetch(head_url)?)?;
+        // The signature first: an unauthenticated head names nothing to fetch.
+        self.embedded.verify(&envelope)?;
+        // Its index from the blob store when an earlier check kept it.
+        if let Some(card) = envelope.index.as_ref().map(|index| index.card.clone()) {
+            self.obtain(&card, head_url, fetch, &mut |_| None)?;
+            envelope.read_index(&read_card(&self.blobs().dir().join(&card.sha256), &card)?)?;
+        }
         if !self.admit_check(&envelope, head_url, embedded_asset)? {
             self.write_entry(&envelope, head_url, fetch, embedded_asset)?;
         }
@@ -737,12 +761,14 @@ impl Store {
 
     /// Recheck against the live record after downloading: activation, boot
     /// marks, and a newer accepted head must never be overwritten by a copy
-    /// of the record taken before network I/O.
+    /// of the record taken before network I/O. `collect` is false while
+    /// another download of this store is outstanding.
     pub(crate) fn finish_check(
         &mut self,
         envelope: Envelope,
         head_url: &str,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
+        collect: bool,
     ) -> Result<Check, String> {
         if self.admit_check(&envelope, head_url, embedded_asset)? {
             let witness = self.entry_dir(&envelope.digest);
@@ -755,12 +781,15 @@ impl Store {
             if self.record.seq != envelope.stream.seq
                 || self.record.digest.as_ref() != Some(&envelope.digest)
             {
-                self.record.seq = envelope.stream.seq;
-                self.record.digest = Some(envelope.digest.clone());
-                self.write_record()?;
+                let mut record = self.record.clone();
+                record.seq = envelope.stream.seq;
+                record.digest = Some(envelope.digest.clone());
+                self.adopt_record(record)?;
             }
             self.sunset = envelope.sunset.clone();
-            self.collect();
+            if collect {
+                self.collect();
+            }
             return Ok(Check::Current {
                 sunset: envelope.sunset,
             });
@@ -773,21 +802,26 @@ impl Store {
                     envelope.digest
                 )
             })?;
+        let mut record = self.record.clone();
         if self.hold {
             // `app-decides`: whole on disk and known, booted by no launch
             // until the app says so.
-            self.record.pending = Some(envelope.digest.clone());
+            record.pending = Some(envelope.digest.clone());
         } else {
-            self.record.selected = Some(envelope.digest.clone());
-            self.record.pending = None;
-            self.record.failures = 0;
+            record.selected = Some(envelope.digest.clone());
+            record.pending = None;
+            record.failures = 0;
+        }
+        record.seq = envelope.stream.seq;
+        record.digest = Some(envelope.digest.clone());
+        self.adopt_record(record)?;
+        if !self.hold {
             self.view = Some(view);
         }
-        self.record.seq = envelope.stream.seq;
-        self.record.digest = Some(envelope.digest.clone());
-        self.write_record()?;
         self.sunset = envelope.sunset.clone();
-        self.collect();
+        if collect {
+            self.collect();
+        }
         Ok(Check::Staged {
             entry: envelope.digest,
             seq: envelope.stream.seq,
@@ -862,8 +896,15 @@ impl Store {
         {
             return Err(format!("the head is seq {floor} but names another bundle; a used sequence cannot equivocate"));
         }
+        let roster = envelope.assets()?;
         let current = match &self.view {
-            _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => true,
+            // A held entry's plan is first read by `prepare_activation`, so a
+            // plan damaged since staging is written again, not reported current.
+            _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => self
+                .validate(Some(envelope.digest.clone()))
+                .is_some_and(|view| {
+                    read_card(&self.entry_dir(&view.sha).join("app.plan"), &view.plan).is_ok()
+                }),
             Some(view) => view.sha == envelope.digest,
             // Entry zero is current when the head names the plan the binary
             // embeds and exactly the same complete asset roster — removal
@@ -875,15 +916,14 @@ impl Store {
                         .embedded_assets
                         .as_ref()
                         .is_some_and(|assets| {
-                            assets.len() == envelope.assets.len()
-                                && envelope.assets.iter().all(|a| {
+                            assets.len() == roster.len()
+                                && roster.iter().all(|a| {
                                     assets.get(&a.name).is_some_and(|(sha, bytes)| {
                                         sha == &a.sha256 && *bytes == a.bytes
                                     })
                                 })
                         })
-                    && envelope
-                        .assets
+                    && roster
                         .iter()
                         .all(|a| embedded_asset(&a.name).is_some_and(|e| e.sha256 == a.sha256))
             }
@@ -938,20 +978,32 @@ impl Store {
         })
     }
 
-    /// Verify and pin a staged candidate without changing the record or
-    /// running generation. Every clone shares its lazy, immutable asset bytes.
-    pub fn prepare_activation(&self) -> Result<Option<PreparedSelection>, String> {
+    /// Verify and pin a staged candidate without changing the running
+    /// generation. Every clone shares its lazy, immutable asset bytes. A
+    /// candidate whose plan does not match its card is no longer staged, so
+    /// the next check of its head writes it again.
+    pub fn prepare_activation(&mut self) -> Result<Option<PreparedSelection>, String> {
         let Some(staged) = self.staged() else {
             return Ok(None);
         };
         let view = self.read_view(&staged.entry)?;
+        let plan = match read_card(&staged.plan, &view.plan) {
+            Ok(plan) => plan,
+            Err(mut reason) => {
+                self.clear_entry_references(&staged.entry);
+                if let Err(write) = self.write_record() {
+                    reason.push_str(&format!("; could not persist the refusal: {write}"));
+                }
+                return Err(reason);
+            }
+        };
         let generation = Generation {
             entry: Some(view.sha.clone()),
             seq: view.seq,
         };
         Ok(Some(PreparedSelection {
             generation: generation.clone(),
-            plan: Arc::from(read_card(&staged.plan, &view.plan)?),
+            plan: Arc::from(plan),
             assets: AssetSet::stored(generation, staged.assets_dir, view.assets),
         }))
     }
@@ -1071,12 +1123,16 @@ impl Store {
                 plan_path.display()
             ));
         }
-        let envelope = self.read_envelope(sha)?;
+        let mut envelope = self.read_envelope(sha)?;
+        if let Some(index) = &envelope.index {
+            let raw = read_card(&self.entry_dir(sha).join("assets.json"), &index.card)?;
+            envelope.read_index(&raw)?;
+        }
         Ok(EntryView {
             sha: sha.to_string(),
             seq: envelope.stream.seq,
+            assets: envelope.assets()?.to_vec(),
             plan: envelope.plan,
-            assets: envelope.assets,
         })
     }
 
@@ -1181,17 +1237,29 @@ impl Store {
         write_atomic(&self.record_path(), self.record.to_json().as_bytes(), true)
     }
 
+    /// Write `record` durably, then make it this store's: a failed write
+    /// leaves memory agreeing with the disk, so `status` reports nothing
+    /// staged that the next launch would not boot.
+    fn adopt_record(&mut self, record: Record) -> Result<(), String> {
+        if self.read_only().is_none() {
+            write_atomic(&self.record_path(), record.to_json().as_bytes(), true)?;
+        }
+        self.record = record;
+        Ok(())
+    }
+
     /// Write a boot mark — the failure count, the last-good bundle — whole
     /// but unsynced. `boot_started` runs before first pixel, where two full
     /// syncs cost 12–16 ms (2026-09-23, this Mac at load 74–122). A process
     /// crash keeps the write (the page cache has it); a power loss that loses
     /// the record loses only the mark, since `open` recovers the floor from
-    /// the signed entries and the accepted head stages again.
-    fn write_boot_mark(&self) -> Result<(), String> {
+    /// the signed entries and the accepted head stages again. `boot_succeeded`
+    /// assigns memory only after it returns, so a retry can still write it.
+    fn write_boot_mark(&self, record: &Record) -> Result<(), String> {
         if self.read_only().is_some() {
             return Ok(());
         }
-        write_atomic(&self.record_path(), self.record.to_json().as_bytes(), false)
+        write_atomic(&self.record_path(), record.to_json().as_bytes(), false)
     }
 
     /// Build one entry under a temporary name and rename it into place. Whole
@@ -1232,6 +1300,10 @@ impl Store {
             if tmp.join("assets").exists() {
                 std::fs::rename(tmp.join("assets"), &assets).map_err(|e| e.to_string())?;
             }
+            if tmp.join("assets.json").exists() {
+                std::fs::rename(tmp.join("assets.json"), target.join("assets.json"))
+                    .map_err(|e| e.to_string())?;
+            }
             sync_dir(&target)?;
             std::fs::rename(tmp.join("app.plan"), target.join("app.plan"))
                 .map_err(|e| e.to_string())?;
@@ -1268,10 +1340,15 @@ impl Store {
         // Only assets are taken from the binary, never a plan.
         self.obtain(&envelope.plan, head_url, fetch, &mut |_| None)?;
         blobs.place(&envelope.plan.sha256, &tmp.join("app.plan"))?;
+        if let Some(index) = &envelope.index {
+            // Read already, so its blob is here and verified.
+            blobs.place(&index.card.sha256, &tmp.join("assets.json"))?;
+        }
         let mut directories = std::collections::BTreeSet::from([tmp.to_path_buf()]);
-        for asset in &envelope.assets {
+        let base = envelope.asset_base(head_url)?;
+        for asset in envelope.assets()? {
             safe_name(&asset.name)?;
-            self.obtain(asset, head_url, fetch, embedded_asset)?;
+            self.obtain(asset, &base, fetch, embedded_asset)?;
             let path = tmp.join("assets").join(&asset.name);
             blobs.place(&asset.sha256, &path)?;
             directories.extend(
@@ -1296,11 +1373,11 @@ impl Store {
     fn obtain(
         &self,
         card: &crate::envelope::FileCard,
-        head_url: &str,
+        base: &str,
         fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
     ) -> Result<(), String> {
-        let url = resolve_url(head_url, &card.url)?;
+        let url = resolve_url(base, &card.url)?;
         let blobs = self.blobs();
         if blobs.holds(card) {
             return Ok(());
@@ -1353,7 +1430,8 @@ impl Store {
     /// reader runs. Returns the digests the kept entries name, or `None`
     /// when this store writes nothing or cannot list its entries. Best
     /// effort. It runs where no download of this store can be in flight — at
-    /// open, and as a check finishes — and never touches a temporary.
+    /// open, and as the last outstanding check finishes — and never touches a
+    /// temporary.
     fn collect_entries(&self) -> Option<std::collections::BTreeSet<String>> {
         if self.read_only().is_some() {
             return None;
@@ -1380,14 +1458,22 @@ impl Store {
             if !keep.contains(&name) && remove_entry(&item.path()) {
                 continue;
             }
-            if let Ok(envelope) = read_bounded(
+            if let Ok(mut envelope) = read_bounded(
                 &item.path().join("exact.json"),
                 crate::MAX_ENVELOPE_BYTES as u64,
             )
             .and_then(|raw| Envelope::parse(&raw))
             {
-                digests.insert(envelope.plan.sha256);
-                digests.extend(envelope.assets.into_iter().map(|a| a.sha256));
+                digests.insert(envelope.plan.sha256.clone());
+                // A witness holds no index file, and so names no asset blobs.
+                if let Some(card) = envelope.index.as_ref().map(|index| index.card.clone()) {
+                    digests.insert(card.sha256.clone());
+                    let raw = read_card(&item.path().join("assets.json"), &card);
+                    if raw.and_then(|raw| envelope.read_index(&raw)).is_ok() {
+                        let assets = envelope.assets().unwrap_or_default();
+                        digests.extend(assets.iter().map(|a| a.sha256.clone()));
+                    }
+                }
             }
         }
         Some(digests)
@@ -1405,8 +1491,10 @@ pub fn head_url(origin: &str, channel: &str, compatibility_id: &str) -> String {
 }
 
 fn validate_card_urls(head_url: &str, envelope: &Envelope) -> Result<(), String> {
-    for card in std::iter::once(&envelope.plan).chain(envelope.assets.iter()) {
-        resolve_url(head_url, &card.url)?;
+    resolve_url(head_url, &envelope.plan.url)?;
+    let base = envelope.asset_base(head_url)?;
+    for card in envelope.assets()? {
+        resolve_url(&base, &card.url)?;
     }
     Ok(())
 }

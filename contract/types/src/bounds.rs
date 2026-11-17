@@ -9,7 +9,7 @@
 
 use crate::{err, Shapes, Ty, TypeError};
 use contract_syntax::Span;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The deepest a value may nest: the runner's `MAX_VALUE_DEPTH`.
 pub const MAX_TYPE_DEPTH: u32 = 64;
@@ -28,35 +28,50 @@ impl Shapes {
 
     /// Measure every shape once its fields are known; shapes are acyclic
     /// (`type-shape-recursive`), so each is measured from the ones it holds.
+    /// The walk keeps its own stack: a chain of thousands of shapes is
+    /// measured, and then refused as too deep, without exhausting the native one.
     pub(crate) fn measure_shapes(&mut self) {
-        fn shape(
-            name: &str,
-            map: &BTreeMap<String, Vec<(String, Ty)>>,
-            depths: &mut BTreeMap<String, u32>,
-        ) -> u32 {
-            if let Some(d) = depths.get(name) {
-                return *d;
+        /// The shape `t` holds, with the options and lists around it.
+        fn leaf(mut t: &Ty) -> (u32, Option<&str>) {
+            let mut wrappers = 0;
+            while let Ty::Option(inner) | Ty::List(inner) = t {
+                wrappers += 1;
+                t = inner;
+            }
+            match t {
+                Ty::Record(name) => (wrappers, Some(name)),
+                _ => (wrappers, None),
+            }
+        }
+        let map = &self.map;
+        let mut depths: BTreeMap<String, u32> = BTreeMap::new();
+        // A shape is pushed unopened, then again opened above what it holds,
+        // and measured when the opened entry comes back to the top.
+        let mut opened: BTreeSet<&str> = BTreeSet::new();
+        let mut stack: Vec<(&str, bool)> = map.keys().rev().map(|n| (n.as_str(), false)).collect();
+        while let Some((name, open)) = stack.pop() {
+            if depths.contains_key(name) {
+                continue;
             }
             let fields = map.get(name).map(Vec::as_slice).unwrap_or_default();
-            let inner = fields.iter().map(|(_, t)| ty(t, map, depths)).max();
-            let d = 1 + inner.unwrap_or(0);
-            depths.insert(name.to_owned(), d);
-            d
-        }
-        fn ty(
-            t: &Ty,
-            map: &BTreeMap<String, Vec<(String, Ty)>>,
-            depths: &mut BTreeMap<String, u32>,
-        ) -> u32 {
-            match t {
-                Ty::Option(inner) | Ty::List(inner) => 1 + ty(inner, map, depths),
-                Ty::Record(name) => shape(name, map, depths),
-                _ => 0,
+            if !open {
+                // A shape already opened would be a cycle, refused before this.
+                if opened.insert(name) {
+                    stack.push((name, true));
+                    stack.extend(
+                        fields
+                            .iter()
+                            .filter_map(|(_, t)| leaf(t).1)
+                            .map(|n| (n, false)),
+                    );
+                }
+                continue;
             }
-        }
-        let mut depths = BTreeMap::new();
-        for name in self.map.keys() {
-            shape(name, &self.map, &mut depths);
+            let inner = fields.iter().map(|(_, t)| match leaf(t) {
+                (wrappers, Some(held)) => wrappers + depths.get(held).copied().unwrap_or(1),
+                (wrappers, None) => wrappers,
+            });
+            depths.insert(name.to_owned(), 1 + inner.max().unwrap_or(0));
         }
         self.depths = depths;
     }

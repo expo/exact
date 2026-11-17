@@ -2,9 +2,16 @@
 // a keyboard does (#140), each repeat a keydown whose `repeat` is true.
 import { test, expect } from 'bun:test';
 import { chordKeys } from './agent-playwright.mjs';
-import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
+import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
 import { open } from './agent.mjs';
 import { launchFacts } from './agent-launch.mjs';
+
+test('a hover wheel accepts its point and modifiers; a plain hover refuses them', () => {
+  for (const extra of [{ at: [30, 40] }, { modifiers: 'Control' }]) {
+    expect(() => tapArguments({ hover: true, wheel: [3, 12], ...extra })).not.toThrow();
+    expect(() => tapArguments({ hover: true, ...extra })).toThrow(MalformedOperation);
+  }
+});
 
 test('tap midi is a MIDI input\'s message, its bytes two hex digits each; a testId `midi` keeps the other forms (LLP 1125 §4)', () => {
   expect(tapWords(['midi', 'keys', '90', '3c', '64'])).toEqual([null, { midi: { input: 'keys', data: [0x90, 0x3c, 0x64] } }]);
@@ -185,4 +192,15 @@ test('tap <image> pictureinpicture <control> names one control of Exact\'s pictu
   expect(tapWords(['page', 'pictureinpicture', 'hover'])).toEqual(['page', { pictureInPicture: 'hover' }]);
   expect(() => tapWords(['page', 'pictureinpicture'])).toThrow('pictureinpicture <control>');
   expect(() => tapWords(['page', 'pictureinpicture', 'back', 'close'])).toThrow('pictureinpicture <control>');
+});
+
+test('dblclick touch is a finger\'s double tap, carried on iOS, Chrome, Android and Windows (LLP 1057.001.000 §6)', () => {
+  expect(tapWords(['port', 'dblclick', 'touch'])).toEqual(['port', { dblclick: true, touch: true }]);
+  expect(tapWords(['port', 'dblclick', 'touch', 'at', '4', '5'])).toEqual(['port', { dblclick: true, touch: true, at: [4, 5] }]);
+  expect(() => tapWords(['port', 'contextmenu', 'touch'])).toThrow(MalformedOperation);
+  expect(pointerGap('ios', undefined, { dblclick: true, touch: true })).toBeNull();
+  expect(pointerGap('web', undefined, { dblclick: true, touch: true })).toBeNull();
+  expect(pointerGap('web', 'firefox', { dblclick: true, touch: true })).toContain('touch double tap');
+  for (const host of ['android', 'windows']) expect(pointerGap(host, undefined, { dblclick: true, touch: true, at: [4, 5] })).toBeNull();
+  for (const host of ['macos', 'linux']) expect(pointerGap(host, undefined, { dblclick: true, touch: true })).toContain('touch double tap');
 });

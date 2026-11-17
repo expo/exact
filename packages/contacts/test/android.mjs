@@ -15,11 +15,12 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, root, texts, ticket } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const app = 'contacts-calendar-fixture';
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const { check, failed } = checker();
-const built = resolve(root, 'host/android/app/build', app);
+const built = apkBuildDir(app);
 
 const build = spawnSync('bun', ['scripts/agent-android.mjs', 'build', app, '--apk'], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 28 });
 check('android', 'the fixture builds as an APK', build.status === 0, (build.stdout + build.stderr).slice(-2000));

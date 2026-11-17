@@ -860,6 +860,7 @@ fn reserved_capacity_refuses_without_callback_and_cancel_retires_without_activat
         body: None,
         max_body: 16,
         timeout: None,
+        speculative: false,
     };
     let (tx, rx) = mpsc::channel();
     let exchange = transport
@@ -1279,5 +1280,73 @@ fn a_destinations_error_allowance_bounds_collection_without_writing() {
         }
         assert!(destination.bytes.lock().unwrap().is_empty());
         assert_eq!(destination.finishes.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn a_blocking_adapter_carries_speculation_through_each_redirect_hop() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    struct Recording(mpsc::Sender<(String, bool)>);
+    impl crate::stdlib::fetch::Transport for Recording {
+        fn open(
+            &self,
+            request: &Request,
+            signal: &AbortSignal,
+        ) -> Result<crate::stdlib::fetch::StreamingResponse, HostError> {
+            self.0
+                .send((request.url.clone(), request.speculative))
+                .unwrap();
+            let mut headers = Headers::new();
+            let status = if request.url.ends_with("/first") {
+                headers.set_response("Location", "/second");
+                302
+            } else {
+                200
+            };
+            Ok(crate::stdlib::fetch::Response {
+                status,
+                status_text: String::new(),
+                headers,
+                body: Vec::new(),
+                url: request.url.clone(),
+                redirected: false,
+            }
+            .into_stream(request.body_limit(), signal.clone()))
+        }
+    }
+    struct Events(mpsc::Sender<Result<Collected, HostError>>);
+    impl FetchEvents for Events {
+        fn outcome(&self, result: Result<Collected, HostError>) {
+            self.0.send(result).unwrap();
+        }
+    }
+    for speculative in [true, false] {
+        let (send, seen) = mpsc::channel();
+        let fetch = crate::host::Host::with_transport(Box::new(Recording(send)))
+            .endow((*granted(&["a.example"])).clone())
+            .fetch;
+        let workers = Arc::new(BoundedWorkerPool::new(1, 2).unwrap());
+        let transport = Arc::new(fetch.blocking_adapter(workers));
+        let (send, done) = mpsc::channel();
+        let mut request = Request::get("https://a.example/first");
+        request.speculative = speculative;
+        fetch.start_async(
+            transport,
+            request,
+            None,
+            AbortSignal::default(),
+            CAPS,
+            Arc::new(Events(send)),
+        );
+        let result = done.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        assert_eq!(result.status, 200);
+        for path in ["first", "second"] {
+            assert_eq!(
+                seen.recv_timeout(Duration::from_secs(10)).unwrap(),
+                (format!("https://a.example/{path}"), speculative)
+            );
+        }
+        assert!(seen.try_recv().is_err());
     }
 }

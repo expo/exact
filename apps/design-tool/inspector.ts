@@ -22,7 +22,7 @@ const SOURCES: Record<string, string> = { authored: 'set here', dynamic: 'a dyna
 // The wire's row names that authors spell otherwise (contract/lower's
 // style_names.rs); any other is its name with dashes.
 const CSS: Record<string, string> = {
-  text_color: 'color', position_type: 'position', svg_mask: 'mask', placeholder_color: '::placeholder color',
+  text_color: 'color', position_type: 'position', svg_mask: 'mask', placeholder_color: '::placeholder color', backdrop_color: '::backdrop background-color',
   text_stroke_width: '-webkit-text-stroke-width', text_stroke_color: '-webkit-text-stroke-color', control_corner_style: '-exact-corner-style',
   ...Object.fromEntries(['tint_color', 'exit_animation', 'layout_transition', 'press_scale', 'drag_timeline', 'symbol_rendering', 'symbol_palette', 'symbol_value',
     'symbol_effect', 'press_haptic', 'content_transition', 'scroll_edge_effect', 'hover_effect', 'smart_invert', 'animation_trigger', 'control_size', 'fit', 'mode']
@@ -31,7 +31,7 @@ const CSS: Record<string, string> = {
 // The rows lowering writes itself with no source place, at their own defaults (stage 15 D4 batch 1 #5): a symbol's
 // tint as `currentcolor` (contract/lower symbols/ink.rs). Folded with the rows nothing sets, never named as editable.
 const LOWERED: Record<string, string> = { tint_color: 'currentcolor' };
-// (Only a row with no source place: the join's own words for one, scripts/tamber-inspect.mjs `editableOf`; an authored
+// (Only a row with no source place: the join's own words for one, scripts/forma-inspect.mjs `editableOf`; an authored
 // row of the same value, a package's read-only one among them, has a place and another reason.)
 // A class's `color` lowers to the tint too, in its class: "a style's row (Name) the map gives no place for".
 const UNPLACED = /^(a value|a style's row \([^)]*\)) the map gives no place for: the source's to edit$/;

@@ -176,6 +176,7 @@ final class RasterLoaderTests: XCTestCase {
         XCTAssertEqual(loader.loadingOnScreen, 0)
         // Scrolled on screen, a parked view asks again and paints.
         let back = try XCTUnwrap(parked.first)
+        XCTAssertFalse(loader.loading(inside: back), "a landed picture stays complete while parked off screen")
         back.frame.origin = .zero
         NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: presenter.viewport.contentView)
         settle { back.raster != nil }
@@ -184,6 +185,34 @@ final class RasterLoaderTests: XCTestCase {
         XCTAssertEqual(images(loader).first { $0["view"] as? UInt32 == back.id }?["parked"] as? Bool, false)
         XCTAssertEqual(away.filter { $0.raster == nil }.count, parked.count)
         XCTAssertEqual(loader.diagnostics["parked"] as? Int, parked.count)
+    }
+    /// A picture parked off screen before its first outcome asks for nothing
+    /// until it shows, so a fragment's alignment cannot wait on it.
+    func testAPictureParkedBeforeItsFirstOutcomeIsNotLoadingInsideARoute() throws {
+        let (root, resolver, presenter, node, loader, window) = try fixture()
+        var shown: [NodeView] = []
+        defer {
+            loader.shutdown(); node.raster = nil; shown.forEach { $0.raster = nil }; window.close()
+            try? FileManager.default.removeItem(at: root)
+        }
+        // Seventeen 600 × 600 pictures on screen hold 23.7 of the 32 MiB, and
+        // an eighteenth's 8.5 MiB peak has no room beside them.
+        let side = 600 / window.backingScaleFactor
+        for i in 0..<17 {
+            let view = NodeView(id: UInt32(i + 2), kind: "image", presenter: presenter)
+            view.frame = NSRect(x: 0, y: 0, width: side, height: side)
+            presenter.views[view.id] = view; presenter.viewport.addSubview(view); shown.append(view)
+            try autoreleasepool { try png(root, "shown-\(i).png", width: 600, height: 600, identity: 60 + i) }
+            view.loadGeneration = 1
+            XCTAssertTrue(loader.load(view, source: "shown-\(i).png", resolver: resolver))
+        }
+        settle { shown.allSatisfy { $0.raster != nil } }
+        try png(root, "away.png", width: 600, height: 600, identity: 80)
+        node.frame = NSRect(x: 0, y: 10_000, width: side, height: side); node.loadGeneration = 1
+        XCTAssertTrue(loader.load(node, source: "away.png", resolver: resolver))
+        settle { self.images(loader).first { $0["view"] as? UInt32 == node.id }?["parked"] as? Bool == true }
+        XCTAssertFalse(loader.testAnnounced.contains { $0.view == node.id }, "parked before its load or error")
+        XCTAssertFalse(loader.loading(inside: node), "a parked picture is not loading")
     }
     /// A decode ImageIO declines is asked for again after a delay, loading
     /// all the while, and paints with no prop change, reload or new source.
@@ -289,6 +318,259 @@ final class RasterLoaderTests: XCTestCase {
         let revalidated = server.requests.filter { $0.hasPrefix("GET /revalidate ") }
         XCTAssertEqual(revalidated.count, 2)
         XCTAssertTrue(revalidated.last?.lowercased().contains("if-none-match: \"raster-v1\"") == true)
+    }
+
+    func testADownloadHeaderIsReadOnceAcrossDecodeSizes() throws {
+        let (root, resolver, presenter, node, loader, window) = try fixture()
+        defer {
+            loader.shutdown()
+            node.raster = nil
+            window.close()
+            try? FileManager.default.removeItem(at: root)
+            withExtendedLifetime(presenter) {}
+        }
+        try png(root, "image.png", width: 96, height: 64, identity: 7)
+        let server = try CachingRasterHTTP(body: Data(contentsOf: root.appendingPathComponent("image.png")))
+        defer { server.stop() }
+        let reads = RasterMetadata.testHeaderReads
+        node.loadGeneration = 1
+        loader.load(node, source: "http://127.0.0.1:\(server.port)/image?\(UUID())", resolver: resolver)
+        settle { node.raster != nil }
+        XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 1)
+        XCTAssertEqual(loader.testAnnounced.map(\.failure), [nil])
+        XCTAssertEqual(node.raster?.image.naturalSize, CGSize(width: 96, height: 64))
+        node.frame.size = CGSize(width: 10, height: 5)
+        loader.resized(node)
+        settle { loader.diagnostics["decoded"] as? Int == 2 }
+        XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 1)
+        XCTAssertEqual(server.requests.count, 1)
+        XCTAssertEqual(loader.testAnnounced.map(\.failure), [nil])
+        XCTAssertEqual(node.raster?.image.naturalSize, CGSize(width: 96, height: 64))
+    }
+
+    func testRetainedHTTPPicturesIgnoreFreshnessWithinTheDocument() throws {
+        for path in ["fresh", "no-store", "revalidate"] {
+            let (root, resolver, presenter, node, loader, window) = try fixture()
+            defer {
+                loader.shutdown(); node.raster = nil; window.close()
+                try? FileManager.default.removeItem(at: root)
+                withExtendedLifetime(presenter) {}
+            }
+            try png(root, "image.png", width: 128, height: 64, identity: 20)
+            let server = try CachingRasterHTTP(body: Data(contentsOf: root.appendingPathComponent("image.png")))
+            defer { server.stop() }
+            let name = "http://127.0.0.1:\(server.port)/\(path)?\(UUID())"
+            node.frame.size = CGSize(width: 24 / window.backingScaleFactor, height: 12 / window.backingScaleFactor)
+            var natural = CGSize.zero
+            presenter.onIntrinsic = { natural = $0.last?.1 ?? .zero }
+            let reads = RasterMetadata.testHeaderReads
+            func show(_ generation: Int) {
+                node.loadGeneration = generation
+                XCTAssertTrue(loader.load(node, source: name, resolver: resolver))
+                settle { loader.testAnnounced.count == generation }
+            }
+            func pop(rest: Bool = true) {
+                loader.cancel(node.id); node.raster = nil
+                if rest { loader.trimCold() }
+            }
+            func checkRetained(_ picture: ObjectIdentifier, _ pixels: Data) throws {
+                XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(node.raster?.image)), picture)
+                XCTAssertEqual(try XCTUnwrap(node.raster?.image.image.dataProvider?.data) as Data, pixels)
+                XCTAssertEqual(node.raster?.image.naturalSize, CGSize(width: 128, height: 64))
+                XCTAssertEqual(natural, CGSize(width: 128, height: 64))
+                XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 1)
+                XCTAssertEqual(loader.diagnostics["metadataReads"] as? Int, 1)
+                XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 1)
+                XCTAssertEqual(server.requests.count, 1)
+                XCTAssertTrue(loader.testAnnounced.allSatisfy { $0.failure == nil })
+            }
+            show(1)
+            let picture = ObjectIdentifier(try XCTUnwrap(node.raster?.image))
+            let pixels = try XCTUnwrap(node.raster?.image.image.dataProvider?.data) as Data
+            pop(rest: false)
+            try png(root, "new.png", width: 256, height: 128, identity: 220)
+            server.replace(try Data(contentsOf: root.appendingPathComponent("new.png")))
+            show(2)
+            try checkRetained(picture, pixels)
+            pop()
+            show(3)
+            try checkRetained(picture, pixels)
+            pop()
+            server.replace(Data("not an image".utf8))
+            show(4)
+            try checkRetained(picture, pixels)
+
+            loader.cancel(node.id); node.raster = nil
+            node.loadGeneration = 5
+            XCTAssertTrue(loader.load(node, source: name + "-new", resolver: resolver))
+            settle { loader.testAnnounced.count == 5 }
+            XCTAssertNil(node.raster)
+            XCTAssertNotNil(loader.testAnnounced.last?.failure)
+            XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 1)
+            XCTAssertEqual(loader.diagnostics["metadataReads"] as? Int, 2)
+            XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 2)
+            XCTAssertEqual(server.requests.count, 2)
+        }
+    }
+
+    func testRestRetiresForgottenFilesBeforeTrimmingReusablePictures() throws {
+        for name in ["picture.png", "app:/data/picture.png"] {
+            let (root, resolver, presenter, node, loader, window) = try fixture()
+            defer {
+                loader.shutdown(); node.raster = nil; window.close()
+                AppFiles.learn(["roots": [String: String]()])
+                try? FileManager.default.removeItem(at: root)
+                withExtendedLifetime(presenter) {}
+            }
+            AppFiles.learn(["roots": ["data": root.path]])
+            try png(root, "picture.png", width: 64, height: 48, identity: 20)
+            let spool = "data:image/png;base64," + (try Data(contentsOf: root.appendingPathComponent("picture.png"))).base64EncodedString()
+            node.loadGeneration = 1
+            XCTAssertTrue(loader.load(node, source: spool, resolver: resolver))
+            settle { node.raster != nil }
+            let picture = ObjectIdentifier(try XCTUnwrap(node.raster?.image))
+            let bytes = exact_raster_stats(loader.id).pinned_bytes
+            loader.cancel(node.id); node.raster = nil
+            node.loadGeneration = 2
+            XCTAssertTrue(loader.load(node, source: name, resolver: resolver))
+            settle { node.raster != nil }
+            loader.cancel(node.id); node.raster = nil
+            XCTAssertEqual(exact_raster_stats(loader.id).cold_entries, 2)
+            loader.trimCold(keeping: bytes)
+            XCTAssertEqual(exact_raster_stats(loader.id).cold_entries, 1)
+            XCTAssertEqual(exact_raster_stats(loader.id).cold_bytes, bytes)
+            node.loadGeneration = 3
+            XCTAssertTrue(loader.load(node, source: spool, resolver: resolver))
+            settle { node.raster != nil }
+            XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(node.raster?.image)), picture)
+            XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 2)
+            XCTAssertEqual(loader.testAnnounced.map(\.failure), [nil, nil, nil])
+        }
+    }
+
+    func testRestRereadsAReplacedFileAtTheSameDecodeSize() throws {
+        for name in ["picture.png", "app:/data/picture.png"] {
+            let (root, resolver, presenter, node, loader, window) = try fixture()
+            let again = NodeView(id: 2, kind: "image", presenter: presenter)
+            defer {
+                loader.shutdown(); node.raster = nil; again.raster = nil; window.close()
+                AppFiles.learn(["roots": [String: String]()])
+                try? FileManager.default.removeItem(at: root)
+                withExtendedLifetime(presenter) {}
+            }
+            AppFiles.learn(["roots": ["data": root.path]])
+            try png(root, "picture.png", width: 128, height: 64, identity: 20)
+            let frame = CGRect(x: 0, y: 0, width: 24 / window.backingScaleFactor, height: 12 / window.backingScaleFactor)
+            node.frame = frame; node.loadGeneration = 1
+            var natural = CGSize.zero
+            presenter.onIntrinsic = { natural = $0.last?.1 ?? .zero }
+            let reads = RasterMetadata.testHeaderReads
+            XCTAssertTrue(loader.load(node, source: name, resolver: resolver))
+            settle { node.raster != nil }
+            let pixels = try XCTUnwrap(node.raster?.image.image.dataProvider?.data) as Data
+            XCTAssertEqual(node.raster?.image.image.width, 64)
+            XCTAssertEqual(natural, CGSize(width: 128, height: 64))
+            XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 2)
+            loader.cancel(node.id); node.raster = nil
+            node.removeFromSuperview(); presenter.views.removeValue(forKey: node.id)
+            loader.trimCold()
+
+            try png(root, "replacement.png", width: 256, height: 128, identity: 220)
+            try Data(contentsOf: root.appendingPathComponent("replacement.png"))
+                .write(to: root.appendingPathComponent("picture.png"), options: .atomic)
+            presenter.views[again.id] = again; presenter.viewport.addSubview(again)
+            again.frame = frame; again.loadGeneration = 2
+            XCTAssertTrue(loader.load(again, source: name, resolver: resolver))
+            settle { again.raster != nil }
+            XCTAssertEqual(again.raster?.image.image.width, 64)
+            XCTAssertEqual(again.raster?.image.image.height, 32)
+            XCTAssertEqual(again.raster?.image.naturalSize, CGSize(width: 256, height: 128))
+            XCTAssertEqual(natural, CGSize(width: 256, height: 128))
+            XCTAssertNotEqual(try XCTUnwrap(again.raster?.image.image.dataProvider?.data) as Data, pixels)
+            XCTAssertEqual(loader.diagnostics["metadataReads"] as? Int, 2)
+            XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 2)
+            XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 4)
+            XCTAssertEqual(loader.testAnnounced.map(\.failure), [nil, nil])
+        }
+    }
+
+    func testRestDropsAColdFileSizeWhileAnotherSizeIsLive() throws {
+        for name in ["picture.png", "app:/data/picture.png"] {
+            let (root, resolver, presenter, node, loader, window) = try fixture()
+            let live = NodeView(id: 2, kind: "image", presenter: presenter)
+            defer {
+                loader.shutdown(); node.raster = nil; live.raster = nil; window.close()
+                AppFiles.learn(["roots": [String: String]()])
+                try? FileManager.default.removeItem(at: root)
+                withExtendedLifetime(presenter) {}
+            }
+            AppFiles.learn(["roots": ["data": root.path]])
+            try png(root, "picture.png", width: 128, height: 64, identity: 20)
+            node.frame.size = CGSize(width: 24 / window.backingScaleFactor, height: 12 / window.backingScaleFactor)
+            node.loadGeneration = 1
+            XCTAssertTrue(loader.load(node, source: name, resolver: resolver))
+            settle { node.raster != nil }
+            let pixels = try XCTUnwrap(node.raster?.image.image.dataProvider?.data) as Data
+            XCTAssertEqual(node.raster?.image.image.width, 64)
+
+            presenter.views[live.id] = live; presenter.viewport.addSubview(live)
+            live.frame.size = CGSize(width: 128 / window.backingScaleFactor, height: 64 / window.backingScaleFactor)
+            live.loadGeneration = 1
+            XCTAssertTrue(loader.load(live, source: name, resolver: resolver))
+            settle { live.raster != nil }
+            let livePicture = ObjectIdentifier(try XCTUnwrap(live.raster?.image))
+            let livePixels = try XCTUnwrap(live.raster?.image.image.dataProvider?.data) as Data
+            XCTAssertEqual(live.raster?.image.image.width, 128)
+            loader.cancel(node.id); node.raster = nil
+            let before = exact_raster_stats(loader.id)
+            XCTAssertEqual(before.cold_entries, 1)
+            XCTAssertEqual(before.subscribers, 1)
+            loader.trimCold()
+            let after = exact_raster_stats(loader.id)
+            XCTAssertEqual(after.cold_entries, 0)
+            XCTAssertEqual(after.evicted - before.evicted, 1)
+            XCTAssertEqual(after.subscribers, before.subscribers)
+            XCTAssertEqual(after.pinned_bytes, before.pinned_bytes)
+            XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 2)
+
+            try png(root, "replacement.png", width: 128, height: 64, identity: 220)
+            try Data(contentsOf: root.appendingPathComponent("replacement.png"))
+                .write(to: root.appendingPathComponent("picture.png"), options: .atomic)
+            let reads = RasterMetadata.testHeaderReads
+            node.loadGeneration = 2
+            XCTAssertTrue(loader.load(node, source: name, resolver: resolver))
+            settle { node.raster != nil }
+            XCTAssertEqual(node.raster?.image.image.width, 64)
+            XCTAssertEqual(node.raster?.image.naturalSize, CGSize(width: 128, height: 64))
+            XCTAssertNotEqual(try XCTUnwrap(node.raster?.image.image.dataProvider?.data) as Data, pixels)
+            XCTAssertEqual(loader.diagnostics["decoded"] as? Int, 3)
+            XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 1)
+            XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(live.raster?.image)), livePicture)
+            XCTAssertEqual(try XCTUnwrap(live.raster?.image.image.dataProvider?.data) as Data, livePixels)
+            XCTAssertEqual(loader.testAnnounced.map(\.failure), [nil, nil, nil])
+        }
+    }
+
+    func testAMalformedDownloadAnnouncesOnlyItsError() throws {
+        for text in ["not an image", "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"8\"><g></svg>"] {
+            let (root, resolver, presenter, node, loader, window) = try fixture()
+            defer {
+                loader.shutdown()
+                node.raster = nil
+                window.close()
+                try? FileManager.default.removeItem(at: root)
+                withExtendedLifetime(presenter) {}
+            }
+            let server = try CachingRasterHTTP(body: Data(text.utf8))
+            defer { server.stop() }
+            node.loadGeneration = 1
+            loader.load(node, source: "http://127.0.0.1:\(server.port)/broken?\(UUID())", resolver: resolver)
+            settle { !loader.testAnnounced.isEmpty }
+            XCTAssertNil(node.raster)
+            XCTAssertEqual(loader.testAnnounced.count, 1)
+            XCTAssertNotNil(loader.testAnnounced.first?.failure)
+            XCTAssertEqual(server.requests.count, 1)
+        }
     }
 
     /// A stored image that is stale within its `stale-while-revalidate`
@@ -623,6 +905,28 @@ final class RasterLoaderTests: XCTestCase {
         for _ in 0..<100 { loader.resized(node) }
         XCTAssertEqual(loader.diagnostics["decoded"] as? Int, decoded)
     }
+    func testFragmentLoadingEndsAtTheFirstImageOutcome() throws {
+        let (root, resolver, presenter, node, loader, window) = try fixture()
+        defer { loader.shutdown(); node.raster = nil; window.close(); try? FileManager.default.removeItem(at: root) }
+        try png(root, "picture.png", width: 1200, height: 600, identity: 51)
+        node.loadGeneration += 1
+        loader.testRequest = { _ in (0, 8) }
+        loader.load(node, source: "picture.png", resolver: resolver)
+        XCTAssertTrue(loader.loading(inside: node))
+        loader.testRequest = nil
+        loader.reconcile()
+        settle { node.raster != nil }
+        XCTAssertFalse(loader.loading(inside: node))
+        loader.testRequest = { _ in (0, 8) }
+        node.frame.size = CGSize(width: 400, height: 200)
+        loader.resized(node)
+        XCTAssertNotNil(node.raster, "a resolution retry keeps the first picture")
+        XCTAssertGreaterThan(loader.loadingOnScreen, 0)
+        XCTAssertFalse(loader.loading(inside: node), "a resolution retry cannot prolong fragment alignment")
+        node.loadGeneration += 1
+        loader.load(node, source: "replacement.png", resolver: resolver)
+        XCTAssertTrue(loader.loading(inside: node), "a new source has its own outcome")
+    }
     func testRetiringTwoHangingHTTPInspectionsFreesWorkersForAnotherSession() throws {
         for operation in ["cancel", "reset", "pause", "shutdown"] {
             let server = try HangingRasterHTTP()
@@ -736,6 +1040,160 @@ final class RasterLoaderTests: XCTestCase {
         // Height fills at half the source's scale: 800 × 0.5, at the screen's scale.
         XCTAssertEqual(node.raster?.image.image.width, min(800, Int(400 * scale)))
     }
+    /// A picture the core holds, shown again by a new view (a row scrolled back
+    /// on): its request is a cache hit, taken in the pass that makes it.
+    private func remount(_ name: String) throws -> (URL, AssetResolver, Presenter, NodeView, NodeView, RasterLoader, NSWindow) {
+        let (root, resolver, presenter, first, loader, window) = try fixture()
+        try png(root, name, width: 100, height: 50, identity: 31)
+        first.loadGeneration = 1
+        XCTAssertTrue(loader.load(first, source: name, resolver: resolver))
+        settle { first.raster != nil }
+        // The row leaves: its view goes, the pixels stay in the core, cold.
+        loader.cancel(first.id); first.raster = nil
+        let second = NodeView(id: 2, kind: "image", presenter: presenter)
+        presenter.views[2] = second; presenter.viewport.addSubview(second)
+        second.frame = first.frame; second.loadGeneration = 1
+        return (root, resolver, presenter, first, second, loader, window)
+    }
+    func testACachedPictureLandsInOnePass() throws {
+        let (root, resolver, presenter, first, second, loader, window) = try remount("again.png")
+        defer { loader.shutdown(); second.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        XCTAssertTrue(loader.load(second, source: "again.png", resolver: resolver))
+        // One pass the wake runs, with no turn of the run loop: it asks and takes the hit.
+        loader.reconcile(.wake)
+        XCTAssertNotNil(second.raster)
+    }
+    func testARemountedRowPaintsInTheBatchThatMountsIt() throws {
+        let (root, resolver, presenter, first, second, loader, window) = try remount("row.png")
+        defer { loader.shutdown(); second.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        presenter.testInBatch { XCTAssertTrue(loader.load(second, source: "row.png", resolver: resolver)) }
+        // The batch's end painted it: the row and its photo commit together.
+        XCTAssertNotNil(second.raster)
+    }
+    func testAMountPassPublishesSizesAndEventsOnTheNextTurn() throws {
+        let (root, resolver, presenter, first, second, loader, window) = try remount("later.png")
+        defer { loader.shutdown(); second.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        var sizes: [(UInt32, CGSize?)] = []
+        presenter.onIntrinsic = { sizes += $0 }
+        let announced = loader.testAnnounced.count
+        presenter.testInBatch { XCTAssertTrue(loader.load(second, source: "later.png", resolver: resolver)) }
+        XCTAssertNotNil(second.raster)
+        // LLP 1011, "Events": `load` and the size go out on the next main turn, never inside the batch.
+        XCTAssertFalse(sizes.contains { $0.0 == 2 })
+        XCTAssertEqual(loader.testAnnounced.count, announced)
+        settle { sizes.contains { $0.0 == 2 } && loader.testAnnounced.contains { $0.view == 2 } }
+    }
+    func testADirectPassInsideABatchPublishesNothing() throws {
+        let (root, resolver, presenter, first, second, loader, window) = try remount("direct.png")
+        defer { loader.shutdown(); second.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        var sizes: [(UInt32, CGSize?)] = []
+        presenter.onIntrinsic = { sizes += $0 }
+        // A retry, a resize or a display change asks inside the batch: it leaves the hit to a later pass,
+        // and nothing reaches the runner while the batch applies.
+        presenter.testInBatch {
+            XCTAssertTrue(loader.load(second, source: "direct.png", resolver: resolver))
+            loader.reconcile()
+            XCTAssertNil(second.raster)
+            XCTAssertTrue(sizes.isEmpty)
+        }
+        XCTAssertNotNil(second.raster)
+        XCTAssertTrue(sizes.isEmpty)
+        settle { sizes.contains { $0.0 == 2 } }
+    }
+    func testAMountPassSkippedWhilePausedLeavesLaterOnesScheduled() throws {
+        let (root, resolver, presenter, first, second, loader, window) = try remount("paused.png")
+        let third = NodeView(id: 3, kind: "image", presenter: presenter)
+        defer { loader.shutdown(); second.raster = nil; third.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        // The host leaves its window inside the batch: its mount pass does nothing.
+        presenter.testInBatch {
+            XCTAssertTrue(loader.load(second, source: "paused.png", resolver: resolver))
+            loader.setPaused(true)
+        }
+        loader.setPaused(false)
+        settle { second.raster != nil }
+        // A later batch still paints its cached row at its end.
+        loader.cancel(second.id); second.raster = nil
+        presenter.views[3] = third; presenter.viewport.addSubview(third)
+        third.frame = second.frame; third.loadGeneration = 1
+        presenter.testInBatch { XCTAssertTrue(loader.load(third, source: "paused.png", resolver: resolver)) }
+        XCTAssertNotNil(third.raster)
+    }
+    func testAMountPassTakesNothingNotReady() throws {
+        let (root, resolver, presenter, first, loader, window) = try fixture()
+        let second = NodeView(id: 2, kind: "image", presenter: presenter)
+        defer { loader.shutdown(); first.raster = nil; second.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime(presenter) {} }
+        try png(root, "fresh.png", width: 1600, height: 800, identity: 41)
+        // Its header read and one small decode held: a larger view asks for a decode the core lacks.
+        first.loadGeneration = 1
+        XCTAssertTrue(loader.load(first, source: "fresh.png", resolver: resolver))
+        settle { first.raster != nil }
+        loader.cancel(first.id); first.raster = nil
+        presenter.views[2] = second; presenter.viewport.addSubview(second)
+        second.frame = NSRect(x: 0, y: 0, width: 300, height: 150); second.loadGeneration = 1
+        // Its decode is declined once, as a busy system's is: never ready while the batch ends.
+        loader.testDecline(next: 1)
+        let passes = loader.testReconciliations
+        presenter.testInBatch { XCTAssertTrue(loader.load(second, source: "fresh.png", resolver: resolver)) }
+        XCTAssertEqual(loader.testReconciliations, passes + 1, "the mount pass ran")
+        XCTAssertNil(second.raster)
+        // The worker decodes it again after the decline's delay, and a later turn paints it, as before.
+        settle { second.raster != nil }
+    }
+    /// A picture whose header the core has read and whose first decode it
+    /// holds, cancelled: a new, larger view of it asks for a decode the core
+    /// lacks, as a boot's batch does.
+    private func primed(_ name: String, identity: Int) throws -> (URL, AssetResolver, Presenter, NodeView, NodeView, RasterLoader, NSWindow) {
+        let (root, resolver, presenter, first, loader, window) = try fixture()
+        try png(root, name, width: 1600, height: 800, identity: identity)
+        first.loadGeneration = 1
+        XCTAssertTrue(loader.load(first, source: name, resolver: resolver))
+        settle { first.raster != nil }
+        loader.cancel(first.id); first.raster = nil
+        let node = NodeView(id: 2, kind: "image", presenter: presenter)
+        presenter.views[2] = node; presenter.viewport.addSubview(node)
+        node.frame = NSRect(x: 0, y: 0, width: 300, height: 150); node.loadGeneration = 1
+        return (root, resolver, presenter, first, node, loader, window)
+    }
+    /// A boot asked for a picture and a worker decoded it while the boot still
+    /// applied. The boot's end takes it, so it paints in the boot's first
+    /// frame, not on the wake a turn later.
+    func testABootPassPaintsAPictureDecodedWhileTheBootApplied() throws {
+        let (root, resolver, presenter, first, node, loader, window) = try primed("boot.png", identity: 51)
+        defer { loader.shutdown(); node.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        XCTAssertTrue(loader.load(node, source: "boot.png", resolver: resolver))
+        // A direct pass asks and leaves what it finds ready to a later pass.
+        loader.reconcile()
+        XCTAssertNil(node.raster)
+        // The worker decodes while main is still busy: no turn of the run loop, so no wake runs.
+        let deadline = Date().addingTimeInterval(60)
+        while !loader.testReady(node.id), Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+        XCTAssertTrue(loader.testReady(node.id), "the worker decoded it")
+        var sizes: [(UInt32, CGSize?)] = []
+        presenter.onIntrinsic = { sizes += $0 }
+        let announced = loader.testAnnounced.count
+        loader.bootPass()
+        XCTAssertNotNil(node.raster, "on its layer in the boot's transaction")
+        // LLP 1011, "Events": its size and `load` go out on the next main turn.
+        XCTAssertTrue(sizes.isEmpty)
+        XCTAssertEqual(loader.testAnnounced.count, announced)
+        settle { sizes.contains { $0.0 == node.id } && loader.testAnnounced.contains { $0.view == node.id } }
+    }
+    /// A picture whose header is read and which nothing has asked for yet: a
+    /// boot pass leaves it to the wake, which asks.
+    func testABootPassTakesNothingNotReadyAndAsksForNothing() throws {
+        let (root, resolver, presenter, first, node, loader, window) = try primed("later.png", identity: 52)
+        defer { loader.shutdown(); node.raster = nil; window.close(); try? FileManager.default.removeItem(at: root); withExtendedLifetime((presenter, first)) {} }
+        XCTAssertTrue(loader.load(node, source: "later.png", resolver: resolver))
+        var asked = 0
+        loader.testRequest = { _ in asked += 1; return (0, nil) }
+        loader.bootPass()
+        XCTAssertEqual(asked, 0, "a boot pass makes no request")
+        // The same pass as a direct one asks: the header is in, so the count proves something.
+        loader.reconcile()
+        XCTAssertEqual(asked, 1, "a direct pass asks for it")
+        XCTAssertNil(node.raster)
+        loader.testRequest = nil
+    }
     /// Cold pixels are evicted before a decode waits, so pixels no view
     /// holds never lower the resolution a visible image decodes at.
     func testColdPixelsDoNotLowerAResolution() throws {
@@ -839,10 +1297,12 @@ private final class CachingRasterHTTP: @unchecked Sendable {
     private let listener: Int32
     private let lock = NSLock()
     private var seen: [String] = []
-    private let body: Data
+    private var body: Data
+    private var revision = 1
     let port: UInt16
     let refresh = DispatchSemaphore(value: 0)
     var requests: [String] { lock.lock(); defer { lock.unlock() }; return seen }
+    func replace(_ body: Data) { lock.lock(); self.body = body; revision += 1; lock.unlock() }
     init(body: Data) throws {
         self.body = body
         let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -880,15 +1340,15 @@ private final class CachingRasterHTTP: @unchecked Sendable {
             if request.range(of: Data("\r\n\r\n".utf8)) != nil { break }
         }
         let text = String(decoding: request, as: UTF8.self)
-        lock.lock(); seen.append(text); lock.unlock()
-        let validate = text.hasPrefix("GET /revalidate ") || text.hasPrefix("GET /swr")
-        let notModified = validate && text.lowercased().contains("if-none-match: \"raster-v1\"")
+        lock.lock(); seen.append(text); let body = self.body, revision = self.revision; lock.unlock()
+        let validate = text.hasPrefix("GET /revalidate") || text.hasPrefix("GET /swr")
+        let notModified = validate && text.lowercased().contains("if-none-match: \"raster-v\(revision)\"")
         // A refresh behind a stale image waits for the test to release it;
         // `must-revalidate`'s is slow
         if notModified, text.hasPrefix("GET /swr?") { _ = refresh.wait(timeout: .now() + 10) }
         let waits = ["must", "vary", "old", "aged", "skew", "asctime"].contains { text.hasPrefix("GET /swr-\($0)?") }
         if notModified, waits { Thread.sleep(forTimeInterval: 1.5) }
-        let policy = text.hasPrefix("GET /no-store ") ? "no-store"
+        let policy = text.hasPrefix("GET /no-store") ? "no-store"
             : text.hasPrefix("GET /swr-must?") ? "max-age=0, must-revalidate, stale-while-revalidate=60"
             : text.hasPrefix("GET /swr-aged?") ? "max-age=0, stale-while-revalidate=40"
             : text.hasPrefix("GET /swr-skew?") ? "max-age=0, stale-while-revalidate=31"
@@ -901,7 +1361,7 @@ private final class CachingRasterHTTP: @unchecked Sendable {
         let asctime = DateFormatter(); asctime.locale = Locale(identifier: "en_US_POSIX")
         asctime.timeZone = TimeZone(secondsFromGMT: 0); asctime.dateFormat = "EEE MMM d HH:mm:ss yyyy"
         let stamp = text.hasPrefix("GET /swr-asctime?") ? asctime.string(from: Date().addingTimeInterval(-3600)) : date.string(from: Date().addingTimeInterval(text.hasPrefix("GET /swr-aged?") ? -30 : text.hasPrefix("GET /swr-skew?") ? -20 : 0))
-        let header = "HTTP/1.1 \(notModified ? "304 Not Modified" : "200 OK")\r\nDate: \(stamp)\r\nCache-Control: \(policy)\r\n\(extra)ETag: \"raster-v1\"\r\nContent-Type: image/png\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(notModified ? "304 Not Modified" : "200 OK")\r\nDate: \(stamp)\r\nCache-Control: \(policy)\r\n\(extra)ETag: \"raster-v\(revision)\"\r\nContent-Type: image/png\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
         let response = Data(header.utf8) + payload
         response.withUnsafeBytes { bytes in
             var offset = 0

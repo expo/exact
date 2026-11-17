@@ -2,6 +2,7 @@ import Foundation
 import CoreText
 // Independent Foundation oracle, never linked into the app.
 @testable import ExactKit
+@testable import ExactCore
 // @ref LLP 1044.000 §6 S8 — decode the existing Apple JSON wire once, before
 // presentation. Style names/values still come from kernel/tables/schema.json;
 // this is a consumer of that wire, not another declaration table.
@@ -57,8 +58,10 @@ extension CodingUserInfoKey {
 struct OracleBatchOp: Decodable {
     enum Kind: String {
         case create, props, style, children, paragraph, frame, content, present, roots, destroy
+        case layoutHits, layoutHitsWithdrawn, layoutPromote
         case fieldContent, flow, surface, command, hold, collections, region, router, title, language, unknown
         case svg, animations, canvas2d, reorder, exit, rank, roles
+        case sound // LLP 1096 D8, as Batch's: a real session's boot sends its voice table's files
         case heightDrag = "height-drag", transformDrag = "transform-drag", retireMotion = "retire-motion"
     }
     let op: Kind
@@ -72,12 +75,13 @@ struct OracleBatchOp: Decodable {
     var ids: [UInt32] = []
     var runs: [OracleInlineText] = []
     var x = 0.0, y = 0.0, w = 0.0, h = 0.0
+    var fitHeight: Double?
     var property = ""
     // Rare adapters retain their existing input shape. Common ops never build it.
     var payload: [String: Any] = [:]
 
     enum CodingKeys: String, CodingKey {
-        case op, id, kind, props, set, clear, style, handlers, ids, runs, x, y, w, h, property, roles
+        case op, id, kind, props, set, clear, style, handlers, ids, runs, x, y, w, h, fitHeight, property, roles
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -100,6 +104,7 @@ struct OracleBatchOp: Decodable {
             y = try c.decodeIfPresent(Double.self, forKey: .y) ?? 0
             w = try c.decodeIfPresent(Double.self, forKey: .w) ?? 0
             h = try c.decodeIfPresent(Double.self, forKey: .h) ?? 0
+            if op == .content { fitHeight = try c.decodeIfPresent(Double.self, forKey: .fitHeight) }
             property = try c.decodeIfPresent(String.self, forKey: .property) ?? ""
         case .destroy: break
         case .roles: style = try c.decodeIfPresent(OracleNodeStyle.self, forKey: .roles) ?? [:]
@@ -140,6 +145,25 @@ struct OracleBatch: Decodable {
             ?? OracleBatch(ops: [], timers: false, motion: false, clock: nil, error: "unreadable batch")
     }
 
+}
+
+struct OracleBatchMetadata: Decodable {
+    let canvas, waitContinue, frames, canvasOwed, controls, layoutProvisional: Bool?
+    let unchanged, storeReadPending, storeActivationPending, busy, requests, spatial: Bool?
+    let landing, stored, unsupported, facts, wakelock, mustFinish: Bool?
+    let waits: [Double]?
+    let canvasImages, alerts, journal, announced: [String]?
+    let live: String?
+    let design, modes: OracleBatchValue?
+    let seq: [Double]?
+    let nativeTimers: [Timer]?
+
+    struct Timer: Decodable {
+        let index, interval, tolerance: UInt32
+        let generation: String
+        let due: Double
+        let once: Bool
+    }
 }
 
 // @ref LLP 1044.000 §6 S1 — textual descendants are paragraph values.
@@ -371,5 +395,177 @@ extension NodeView {
     /// `border` (`contentOp`), for a view a test makes without a presenter
     func applyContentBox(padding: [Double], border: [Double] = [0, 0, 0, 0]) {
         applyFieldContent(contentOp(Int(id), bounds.width, bounds.height, padding: padding, border: border))
+    }
+}
+
+// Preserve the pre-record Foundation conversions independently of the schema.
+extension OracleBatchOp {
+    var contentRect: CGRect? {
+        guard let r = payload["rect"] as? [Double], r.count == 4 else { return nil }
+        return CGRect(x: r[0], y: r[1], width: r[2], height: r[3])
+    }
+    var contentPadding: [CGFloat?]? {
+        guard let sides = payload["padding"] as? [Any], sides.count == 4 else { return nil }
+        return sides.map { ($0 as? NSNumber).map { CGFloat($0.doubleValue) } }
+    }
+    var layoutBoxes: [LayoutBoxRecord]? {
+        guard let boxes = payload["boxes"] as? [[Any]], !boxes.isEmpty else { return nil }
+        return boxes.compactMap { box in
+            guard box.count >= 3, let f = box[1] as? [NSNumber], f.count == 4, let id = box[2] as? NSNumber else { return nil }
+            return LayoutBoxRecord(before: (box[0] as? NSNumber)?.uint32Value,
+                frame: CGRect(x: f[0].doubleValue, y: f[1].doubleValue, width: f[2].doubleValue, height: f[3].doubleValue),
+                id: id.uint32Value, end: box.count > 3 ? (box[3] as? NSNumber)?.uint32Value : nil)
+        }
+    }
+    var layoutFrame: CGRect? {
+        guard let f = payload["frame"] as? [NSNumber], f.count == 4 else { return nil }
+        return CGRect(x: f[0].doubleValue, y: f[1].doubleValue, width: f[2].doubleValue, height: f[3].doubleValue)
+    }
+    var layoutChildren: [LayoutChildRecord]? {
+        guard let children = payload["children"] as? [[Any]] else { return nil }
+        return children.compactMap { pair in
+            guard pair.count == 2, let id = pair[0] as? NSNumber,
+                  let f = pair[1] as? [NSNumber], f.count == 4 else { return nil }
+            return LayoutChildRecord(id: id.uint32Value,
+                frame: CGRect(x: f[0].doubleValue, y: f[1].doubleValue, width: f[2].doubleValue, height: f[3].doubleValue))
+        }
+    }
+}
+
+extension NodeView {
+    func applyFieldContent(_ payload: [String: Any]) {
+        var object = payload
+        object["op"] = "fieldContent"
+        let data = try! JSONSerialization.data(withJSONObject: ["ops": [object]])
+        applyFieldContent(Batch.decode(data).ops[0])
+    }
+}
+
+struct OracleCollectionSnapshot {
+    struct Row {
+        let view: UInt32
+        let root: UInt32
+        let epoch: UInt64
+        /// Logical position; -1 when a snapshot omits it.
+        let index: Int
+        let size: Double?
+        let measured: Bool
+    }
+    struct Fixed {
+        let view: UInt32
+        let roots: [UInt32]
+        let epoch: UInt64
+        let size: Double
+    }
+    struct Correction {
+        let sequence: UInt64
+        let offset: Double
+        /// An anchor's correction: the offset it was taken at (relative).
+        var from: Double? = nil
+        /// Animate there (LLP 1070.000 §6.2): a smooth `scrollIntoView`, or
+        /// a `scroll-behavior: smooth` list following its end.
+        var smooth = false
+    }
+    let view: UInt32
+    /// The main axis (LLP 1070 H1): a row list scrolls on x, and `extent`,
+    /// a correction's offset and every measured size run along it.
+    let horizontal: Bool
+    /// The outer list whose mounted row holds this one (LLP 1070 N1).
+    let parent: UInt32?
+    let revision: UInt64
+    let sequence: UInt64
+    let extent: Double
+    let rows: [Row]
+    let fixed: [Fixed]
+    let correction: Correction?
+    /// Logical item count, mounted or not.
+    let count: Int
+    /// A limited report left window rows unbuilt: another report is owed.
+    let pending: Bool
+    /// A `scrollIntoView` under way (LLP 1070.000): its corrections are the
+    /// app's, applied whatever the reader scrolled since, until the reader's
+    /// gesture. `waiting`: it waits for the reader's scroll to end (§2.6).
+    let seeking: Bool
+    let waiting: Bool
+    /// Which request that is: a gesture counts against the one it began after.
+    let request: UInt64
+    /// The latest request the list took, under way or ended (0 for none). A
+    /// host compares it before and after an input to tell whether a handler
+    /// asked for a row in answer.
+    let lastRequest: UInt64
+    var underWay: Bool { seeking || waiting }
+
+    init?(_ value: [String: Any]) {
+        guard let view = Self.viewID(value["view"]), let revision = Self.uint(value["revision"]),
+              let sequence = Self.uint(value["scrollSequence"]), let extent = Self.number(value["totalExtent"]),
+              let rawRows = value["rows"] as? [[String: Any]] else { return nil }
+        var seen = Set<UInt32>()
+        var rows: [Row] = []
+        for item in rawRows {
+            guard let id = Self.viewID(item["view"]), let root = Self.viewID(item["root"]),
+                  let epoch = Self.uint(item["epoch"]), seen.insert(id).inserted else { return nil }
+            rows.append(Row(view: id, root: root, epoch: epoch, index: Self.uint(item["index"]).map { Int(clamping: $0) } ?? -1,
+                            size: Self.number(item["size"]), measured: item["measured"] as? Bool ?? false))
+        }
+        var fixed: [Fixed] = []
+        if let value = value["fixed"] {
+            guard let items = value as? [[String: Any]], items.count == 2 else { return nil }
+            for item in items {
+                guard let id = Self.viewID(item["view"]), let epoch = Self.uint(item["epoch"]), epoch == 1,
+                      let size = Self.number(item["size"]), let roots = item["roots"] as? [Any],
+                      seen.insert(id).inserted else { return nil }
+                let ids = roots.compactMap(Self.viewID)
+                guard ids.count == roots.count else { return nil }
+                fixed.append(Fixed(view: id, roots: ids, epoch: epoch, size: size))
+            }
+        }
+        guard fixed.isEmpty || (value["axis"] as? String) != "x" else { return nil }
+        var correction: Correction?
+        if let raw = value["correction"], !(raw is NSNull) {
+            guard let raw = raw as? [String: Any], let seq = Self.uint(raw["scrollSequence"]),
+                  let offset = Self.signed(raw["offset"]) else { return nil }
+            correction = Correction(sequence: seq, offset: offset, from: Self.signed(raw["from"]), smooth: raw["smooth"] as? Bool == true)
+        }
+        self.view = view; self.revision = revision; self.sequence = sequence
+        self.horizontal = (value["axis"] as? String) == "x"
+        self.parent = Self.viewID(value["parent"])
+        self.extent = extent; self.rows = rows; self.fixed = fixed; self.correction = correction
+        self.count = Self.uint(value["count"]).map { Int(clamping: $0) } ?? rows.count
+        self.pending = (value["pending"] as? NSNumber)?.boolValue ?? false
+        self.seeking = value["seeking"] as? Bool == true
+        self.waiting = value["waiting"] as? Bool == true
+        self.request = Self.uint(value["request"]) ?? 0
+        self.lastRequest = Self.uint(value["lastRequest"]) ?? 0
+    }
+    private static func uint(_ value: Any?) -> UInt64? {
+        // Integral JSON numbers read directly; a fraction or sign refuses.
+        if let n = value as? NSNumber, CFNumberIsFloatType(n) == false {
+            return n.int64Value >= 0 ? n.uint64Value : nil
+        }
+        if let n = value as? NSNumber {
+            // An integral double below 2^53 is its own digits; formatting
+            // one to parse it back cost a tenth of a built row.
+            let d = n.doubleValue
+            if d.sign == .plus, d < 9_007_199_254_740_992, d.rounded(.towardZero) == d { return UInt64(d) }
+            return UInt64(n.stringValue)
+        }
+        if let s = value as? String { return UInt64(s) }
+        return nil
+    }
+    private static func viewID(_ value: Any?) -> UInt32? {
+        guard let n = uint(value), n > 0 else { return nil }
+        return UInt32(exactly: n)
+    }
+    /// A correction's offset and an anchor's `from`: negative only in the
+    /// padding before the first row (LLP 1010 §6.9; a `scrollIntoView` there,
+    /// or a report from there that a kept row's correction moves on from).
+    private static func signed(_ value: Any?) -> Double? {
+        guard let n = value as? NSNumber, n.doubleValue.isFinite else { return nil }
+        return abs(n.doubleValue) <= Double(Float.greatestFiniteMagnitude) ? n.doubleValue : nil
+    }
+    private static func number(_ value: Any?) -> Double? {
+        guard let n = value as? NSNumber else { return nil }
+        let d = n.doubleValue
+        return d.isFinite && d >= 0 && d <= Double(Float.greatestFiniteMagnitude) ? d : nil
     }
 }

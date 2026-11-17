@@ -13,6 +13,7 @@ pub mod text_style;
 pub use decorations::{atom_faces, decoration_styles};
 pub use fonts::{font_alias, font_family_names, runtime_font_family};
 
+use exact_kernel::style::safe_area_properties::SafeAreaProperties;
 use exact_kernel::style::ColorValue;
 use exact_kernel::{Color, Dimension, Display, Overflow, RowValue, StyleId, StyleProps};
 use exact_motion::{Easing, Property, TimingFunction, Transition, TransitionProperty, Transitions};
@@ -33,6 +34,8 @@ pub struct Skipped {
 pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 
 /// The `cssText` for a node's set rows, plus what was skipped.
+/// Keep `em` and viewport units for the browser: its control fonts and viewport
+/// variants can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
     css_text_in(style, font_names, false)
 }
@@ -51,7 +54,11 @@ fn css_text_in(
 ) -> (String, Vec<Skipped>) {
     let authored = |out: &mut String, id| {
         use exact_kernel::style::relative::Unit;
-        let Some((unit, n)) = style.relative.get(id).filter(|_| relative) else {
+        let Some((unit, n)) = style
+            .relative
+            .get(id)
+            .filter(|(unit, _)| relative || matches!(unit, Unit::Em | Unit::Viewport(_)))
+        else {
             return false;
         };
         match unit {
@@ -63,12 +70,19 @@ fn css_text_in(
                 num_into(out, n);
                 out.push_str("em");
             }
+            Unit::Viewport(unit) => {
+                num_into(out, n);
+                out.push_str(unit.name());
+            }
             // @ref LLP 1115 D3 — a text style is the ramp's size at CSS's
             // `medium`, in `rem`, so it follows the browser's root size.
             // @ref LLP 1137 — a length ramp likewise.
             Unit::TextStyle(_) | Unit::Ramp(_) => {
                 let medium = exact_kernel::style::relative::MEDIUM;
-                num_into(out, n * unit.basis(medium, medium, 1.0) / medium);
+                num_into(
+                    out,
+                    n * unit.basis(medium, medium, 1.0, &exact_kernel::Env::default()) / medium,
+                );
                 out.push_str("rem");
             }
             Unit::TextStyleAtMost(_) => out.push_str(&unit.capped_css(n)),
@@ -82,29 +96,73 @@ fn css_text_in(
     let mut skipped = Vec::new();
     // @ref LLP 1061: row scale and host feedback multiply independently.
     let press = press_composes(style);
+    let shift = style.mask.union(style.written).has(StyleId::PressTranslate);
+    if shift {
+        out.push_str("--exact-translate-composes:1;");
+        if style.mask.has(StyleId::Translate) {
+            out.push_str("--exact-base-translated:1;");
+        }
+        for (axis, px, pct) in [
+            ("x", style.translate.x, style.translate_percent.x),
+            ("y", style.translate.y, style.translate_percent.y),
+            ("z", style.translate_z, 0.0),
+        ] {
+            push_text!(&mut out, "--exact-translate-{}:", axis);
+            translate_axis(&mut out, px, pct);
+            out.push(';');
+        }
+    }
     for id in style.mask.union(style.written).iter() {
         if !style.mask.has(id) && clears::push(&mut out, id, press) {
             continue;
         }
         let value = style.get(id);
         match (id, &value) {
+            (StyleId::TranslateVelocity, RowValue::Vec2(v)) => {
+                push_text!(
+                    &mut out,
+                    "--exact-translate-velocity:{} {};",
+                    num(v.x),
+                    num(v.y)
+                );
+            }
             (StyleId::Transition, RowValue::Transitions(t)) => {
                 let (mut text, spring_skipped) = transition_css(t);
-                if press {
-                    // CSS transitions sit outside the additive animation stack.
-                    // Transition the row's typed number so a press multiplies
-                    // its current value, not the transition's final target.
-                    text = text.replace("scale ", "--exact-scale ");
-                    if let Some(tr) = t.matching(Property::Scale) {
+                // Transition the authored base below the press's animation stack.
+                for (compose, property, name, bases) in [
+                    (press, Property::Scale, "scale", &["--exact-scale"][..]),
+                    (
+                        shift,
+                        Property::Translate,
+                        "translate",
+                        &[
+                            "--exact-translate-x",
+                            "--exact-translate-y",
+                            "--exact-translate-z",
+                        ][..],
+                    ),
+                ] {
+                    if !compose {
+                        continue;
+                    }
+                    text = text.replace(&format!("{name} "), &format!("{} ", bases[0]));
+                    if let Some(tr) = t.matching(property) {
                         let mut tr = tr.clone();
-                        tr.property = TransitionProperty::Property(Property::Scale);
-                        let (scale, _) = transition_css(&Transitions(vec![tr]));
-                        if !scale.is_empty() {
+                        tr.property = TransitionProperty::Property(property);
+                        let (own, _) = transition_css(&Transitions(vec![tr]));
+                        if !own.is_empty() {
                             if !text.is_empty() {
                                 text.push(',');
                             }
-                            text.push_str("scale 0s,");
-                            text.push_str(&scale.replace("scale ", "--exact-scale "));
+                            push_text!(&mut text, "{} 0s,", name);
+                            for (i, base) in bases.iter().enumerate() {
+                                if i > 0 {
+                                    text.push(',');
+                                }
+                                text.push_str(
+                                    &own.replace(&format!("{name} "), &format!("{base} ")),
+                                );
+                            }
                         }
                     }
                 }
@@ -122,7 +180,7 @@ fn css_text_in(
             // is in the page's stylesheet (`Batch::keyframes`).
             (StyleId::Animation, RowValue::Animations(a)) => {
                 if let Some(link) = crate::link::linked().animations.filter(|_| !a.0.is_empty()) {
-                    push_text!(&mut out, "animation:{};", (link.list)(a, press));
+                    push_text!(&mut out, "animation:{};", (link.list)(a, press || shift));
                 }
             }
             // @ref LLP 1063 — not CSS properties: custom properties the page's
@@ -137,8 +195,24 @@ fn css_text_in(
                     push_text!(
                         &mut out,
                         "--exact-exit-animation:{};",
-                        (link.list)(a, press)
+                        (link.list)(a, press || shift)
                     );
+                }
+            }
+            // @ref LLP 1013.001 D1 — a route's entrance and exit: custom
+            // properties shared.js reads as the route change happens, its
+            // `none` written as itself (the author's cut). The rules they
+            // name are in the page's stylesheet, as `animation`'s.
+            (StyleId::ViewTransitionNew | StyleId::ViewTransitionOld, RowValue::Animations(a)) => {
+                if let Some(link) = crate::link::linked().animations {
+                    let name = match id {
+                        StyleId::ViewTransitionNew => "--exact-view-transition-new",
+                        _ => "--exact-view-transition-old",
+                    };
+                    match a.0.is_empty() {
+                        true => push_text!(&mut out, "{}:none;", name),
+                        false => push_text!(&mut out, "{}:{};", name, (link.list)(a, false)),
+                    }
                 }
             }
             // @ref LLP 1057.003 D2 — a drag timeline is no timeline the
@@ -154,9 +228,27 @@ fn css_text_in(
             // @ref LLP 1055.002 — a clock is no CSS timeline either: the
             // animations play on the page's, and the glue sets their start
             // (navigation.js `animationClocks`).
+            // @ref LLP 1057.003 D5 — `scroll()` and `view()` are CSS's own
+            // row: the browser runs them, off the main thread. A browser
+            // without `animation-timeline` would play them on the clock, so
+            // they are paused there (`--exact-timeline-play`, index.html) and
+            // the glue puts them out of effect. A name is paused for the drag
+            // code, which finds what it names: a drag timeline it seeks, a
+            // scroll or view timeline it hands to the browser, as CSS's own
+            // row (motion-glue.js `followTimelines`). Written here, a name that
+            // finds no CSS timeline makes the browser's animation progress-based,
+            // which a drag cannot seek in time.
             (StyleId::AnimationTimeline, RowValue::AnimationTimeline(t)) => {
                 if let Some(clock) = t.clock() {
                     push_text!(&mut out, "--exact-animation-clock:{};", clock);
+                } else if t.anonymous().is_some() {
+                    let t = t.css();
+                    push_text!(
+                        &mut out,
+                        "--exact-animation-timeline:{};animation-timeline:{};animation-play-state:var(--exact-timeline-play,paused);--exact-css-timeline:1;",
+                        t,
+                        t
+                    );
                 } else if t.0.is_some() {
                     push_text!(
                         &mut out,
@@ -167,7 +259,36 @@ fn css_text_in(
             }
             (StyleId::AnimationRange, RowValue::AnimationRange(r)) => {
                 if r.0.is_some() {
-                    push_text!(&mut out, "--exact-animation-range:{};", r.css());
+                    let r = r.css();
+                    push_text!(
+                        &mut out,
+                        "--exact-animation-range:{};animation-range:{};",
+                        r,
+                        r
+                    );
+                }
+            }
+            // @ref LLP 1057.003 D5 — CSS's own rows, and the names, which
+            // the drag code's lookup reads: a scroll or view timeline
+            // shadows a drag timeline of its name, as on the native hosts.
+            (StyleId::ScrollTimelineName, RowValue::TimelineName(n)) => {
+                if let Some(name) = &n.0 {
+                    push_text!(
+                        &mut out,
+                        "scroll-timeline-name:{};--exact-scroll-timeline:{};",
+                        name,
+                        name
+                    );
+                }
+            }
+            (StyleId::ViewTimelineName, RowValue::TimelineName(n)) => {
+                if let Some(name) = &n.0 {
+                    push_text!(
+                        &mut out,
+                        "view-timeline-name:{};--exact-view-timeline:{};",
+                        name,
+                        name
+                    );
                 }
             }
             // @ref LLP 1057.003 D4 — CSS's own row, for the timelines the
@@ -182,6 +303,15 @@ fn css_text_in(
                         s,
                         s
                     );
+                }
+            }
+            // @ref LLP 1123 D5 — runtime custom properties are the browser's own
+            (StyleId::SafeAreaProperties, RowValue::SafeAreaProperties(c)) => {
+                for (name, value) in c.iter() {
+                    SafeAreaProperties::write_name(name, &mut out);
+                    out.push(':');
+                    dimension(&mut out, value.clone());
+                    out.push(';');
                 }
             }
             (StyleId::LayoutTransition, RowValue::Transitions(t)) => {
@@ -236,7 +366,12 @@ fn css_text_in(
             // @ref LLP 1077 D8 — `rotate` is the angle and its axis, and
             // `translate` x, y and z: one declaration each.
             (StyleId::Rotate, RowValue::Number(n)) if style.rotate_axis.0 != [0.0, 0.0, 1.0] => {
-                push_text!(&mut out, "rotate:{} ", style.rotate_axis.css());
+                push_text!(
+                    &mut out,
+                    "--exact-rotate-axis:{};rotate:{} ",
+                    style.rotate_axis.css(),
+                    style.rotate_axis.css()
+                );
                 num_into(&mut out, *n as f32);
                 out.push_str("deg;");
             }
@@ -268,6 +403,20 @@ fn css_text_in(
                 num_into(&mut out, *n as f32);
                 out.push(';');
             }
+            (StyleId::PressTranslate, RowValue::Vec2(v)) => {
+                out.push_str("--exact-press-translate:");
+                let pct = style.press_translate_percent;
+                translate_axis(&mut out, v.x, pct.x);
+                out.push(' ');
+                translate_axis(&mut out, v.y, pct.y);
+                out.push(';');
+                for (axis, px, pct) in [("x", v.x, pct.x), ("y", v.y, pct.y)] {
+                    push_text!(&mut out, "--exact-press-{}:", axis);
+                    translate_axis(&mut out, px, pct);
+                    out.push(';');
+                }
+            }
+            (StyleId::PressTranslatePercent, _) => {}
             (StyleId::PressScale, RowValue::Number(n)) => {
                 if press {
                     out.push_str("scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:");
@@ -419,6 +568,9 @@ fn css_text_in(
             // boundary's tuple (LLP 1121 D7): nothing to write, none skipped (F30).
             (StyleId::RotateAxis | StyleId::TranslateZ | StyleId::TranslatePercent, _) => {}
             (StyleId::Mode, _) => {}
+            // @ref LLP 1123 D4 — no host chrome covers a page the browser
+            // lays out: nothing is cleared, so there is nothing to turn off.
+            (StyleId::SafeArea, _) => {}
             // Where a grouped row's separator starts (index.html), and which
             // way a leading symbol moves it, inherited as the direction is.
             (StyleId::Direction, RowValue::Enum(dir)) => {
@@ -455,26 +607,29 @@ fn css_text_in(
     (out, skipped)
 }
 
-/// Whether a node's press feedback composes through `--exact-scale`
-/// (LLP 1061): its `scale` is the important product of the row's number and
-/// the feedback's factor, so an animation of `scale` reaches it only through
-/// `--exact-scale`.
+/// Whether animations need the authored bases used by press feedback.
+pub(crate) fn press_animations(style: &StyleProps) -> bool {
+    press_composes(style) || style.mask.union(style.written).has(StyleId::PressTranslate)
+}
+
+/// Whether scale is the product of its authored base and the press factor.
 pub(crate) fn press_composes(style: &StyleProps) -> bool {
     style.mask.has(StyleId::PressScale) && style.press_scale != 1.0
 }
 
-/// Whether `a` needs the pressable node's rule: its keyframes animate `scale`.
+/// Whether keyframes need authored bases beneath press feedback.
 fn press_rule(a: &exact_motion::animation::Animation, press: bool) -> bool {
     press
-        && a.keyframes
-            .0
-            .iter()
-            .any(|f| f.values.iter().any(|(p, _)| *p == Property::Scale))
+        && a.keyframes.0.iter().any(|f| {
+            f.values
+                .iter()
+                .any(|(p, _)| matches!(p, Property::Scale | Property::Translate))
+        })
 }
 
 /// The `@keyframes` rule's name an animation plays on a node: its own, or, on
-/// a pressable node whose keyframes animate `scale`, the rule that also
-/// animates `--exact-scale`. An animated custom property keeps Chrome from
+/// a pressable node whose keyframes animate scale or translate, the rule that
+/// also animates their base properties. An animated custom property keeps Chrome from
 /// compositing the whole animation, so only the nodes that read one get it.
 pub fn keyframes_name(a: &exact_motion::animation::Animation, press: bool) -> String {
     let mut name = a.name.clone();
@@ -485,24 +640,60 @@ pub fn keyframes_name(a: &exact_motion::animation::Animation, press: bool) -> St
 }
 
 /// The body of the rule [`keyframes_name`] names. The pressable node's copies
-/// each `scale` keyframe into `--exact-scale`: its important `scale`
-/// composition wins over the animation's own.
+/// scale and translation into their base properties; the composed CSS
+/// properties win over the animation's own.
 pub fn keyframes_css(a: &exact_motion::animation::Animation, press: bool) -> String {
-    let text = a.keyframes.css();
+    let text = rotation_keyframes_css(&a.keyframes);
     if !press_rule(a, press) {
         return text;
     }
+    press_keyframes_css(&text)
+}
+
+/// Base properties for keyframes beneath host press feedback.
+pub fn press_keyframes_css(text: &str) -> String {
     let mut out = String::new();
-    let mut rest = text.as_str();
-    while let Some(at) = rest.find("scale:") {
-        let end = at + rest[at..].find(';').expect("a keyframe declaration ends");
-        out.push_str(&rest[..=end]);
-        out.push_str("--exact-");
-        out.push_str(&rest[at..=end]);
-        rest = &rest[end + 1..];
+    for part in text.split_inclusive(';') {
+        out.push_str(part);
+        let declaration = part.rsplit_once('{').map_or(part, |(_, d)| d);
+        if let Some(value) = declaration.strip_prefix("scale:") {
+            out.push_str("--exact-scale:");
+            out.push_str(value);
+        } else if let Some(value) = declaration.strip_prefix("translate:") {
+            let Some((px, pct)) =
+                exact_kernel::style::space::translate(value.trim_end_matches(';'))
+            else {
+                continue;
+            };
+            for (name, px, pct) in [
+                ("x", px.x, pct.x),
+                ("y", px.y, pct.y),
+                (
+                    "z",
+                    exact_kernel::style::space::translate_z(value.trim_end_matches(';'))
+                        .unwrap_or(0.0),
+                    0.0,
+                ),
+            ] {
+                push_text!(&mut out, "--exact-translate-{}:", name);
+                translate_axis(&mut out, px, pct);
+                out.push(';');
+            }
+        }
     }
-    out.push_str(rest);
     out
+}
+
+/// Bare angles use the node's axis; explicit keyframe axes stay in CSS rotate.
+pub fn rotation_keyframes_css(frames: &exact_motion::Keyframes) -> String {
+    frames.css_values(|p, v| {
+        let text = exact_motion::animation::value_css(p, v);
+        if p == Property::Rotate && [v.y, v.z, v.w] == [0.0; 3] {
+            format!("var(--exact-rotate-axis,z) {text}")
+        } else {
+            text
+        }
+    })
 }
 
 /// Send each `@keyframes` rule `style`'s animations name, and its exit's,
@@ -515,7 +706,7 @@ pub(crate) fn send_keyframes(
     let Some(link) = crate::link::linked().animations else {
         return;
     };
-    let press = press_composes(style);
+    let press = press_animations(style);
     for a in style.animation.0.iter().chain(&style.rare.exit_animation.0) {
         let name = (link.name)(a, press);
         if !sent.contains(&name) {
@@ -620,7 +811,9 @@ fn lowered(id: StyleId, value: &RowValue<'_>) -> bool {
         | RowValue::DragTimeline(_)
         | RowValue::AnimationTimeline(_)
         | RowValue::AnimationRange(_)
-        | RowValue::TimelineScope(_) => false,
+        | RowValue::TimelineScope(_)
+        | RowValue::SafeAreaProperties(_)
+        | RowValue::TimelineName(_) => false,
         _ => true,
     }
 }
@@ -697,6 +890,8 @@ fn spell_property(out: &mut String, id: StyleId) {
         StyleId::TintColor => return out.push_str("--exact-tint"),
         // @ref LLP 1104 D3 — `::placeholder`'s colour, read by index.html.
         StyleId::PlaceholderColor => return out.push_str("--exact-placeholder-color"),
+        // @ref LLP 1035.001 D11 — `::backdrop`'s colour, read by neutral.css.
+        StyleId::BackdropColor => return out.push_str("--exact-backdrop-color"),
         // The tint of a glass material, read by index.html's glass rule.
         StyleId::GlassTint => return out.push_str("--exact-glass-tint"),
         // @ref LLP 1061 D7 — the pressed paint: custom properties input-glue.js
@@ -712,6 +907,16 @@ fn spell_property(out: &mut String, id: StyleId) {
         StyleId::HitSlopRight => return out.push_str("--exact-hit-slop-right"),
         StyleId::HitSlopBottom => return out.push_str("--exact-hit-slop-bottom"),
         StyleId::HitSlopLeft => return out.push_str("--exact-hit-slop-left"),
+        // @ref LLP 1057.001.000 D1 — a zoomable scroller's range, which the
+        // runtime's zoom module reads from the element's own style.
+        StyleId::MinZoom => return out.push_str("--exact-min-zoom"),
+        StyleId::MaxZoom => return out.push_str("--exact-max-zoom"),
+        // @ref LLP 1123 D9 — the safe area where a box is, as an author
+        // sets it: index.html registers each as an inherited length.
+        StyleId::LocalInsetTop => return out.push_str("--exact-safe-area-inset-top"),
+        StyleId::LocalInsetRight => return out.push_str("--exact-safe-area-inset-right"),
+        StyleId::LocalInsetBottom => return out.push_str("--exact-safe-area-inset-bottom"),
+        StyleId::LocalInsetLeft => return out.push_str("--exact-safe-area-inset-left"),
         StyleId::PositionType => return out.push_str("position"),
         StyleId::BackdropFilter => return out.push_str("backdrop-filter"),
         StyleId::SvgMask => return out.push_str("mask"),
@@ -744,6 +949,13 @@ fn dashed(out: &mut String, name: &str) {
         }
         out.push_str(word);
     }
+}
+
+/// Colour `c` as CSS, as a colour row writes it.
+pub(crate) fn colour(c: exact_kernel::ColorValue) -> String {
+    let mut out = String::new();
+    declared(&mut out, StyleId::TextColor, &RowValue::ColorValue(c));
+    out
 }
 
 fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
@@ -789,6 +1001,9 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::AnimationTimeline(t) => out.push_str(&t.css()),
         RowValue::AnimationRange(r) => out.push_str(&r.css()),
         RowValue::TimelineScope(s) => out.push_str(&s.css()),
+        RowValue::SafeAreaProperties(c) => out.push_str(&c.css()),
+        RowValue::TimelineName(n) => out.push_str(&n.css()),
+        RowValue::ViewTimelineInset(i) => out.push_str(&i.css()),
         RowValue::Paint(p) => out.push_str(&p.css()),
         RowValue::DashArray(d) => out.push_str(&d.css()),
         RowValue::Transform(t) => out.push_str(&t.css()),
@@ -835,6 +1050,8 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
             | StyleId::Scale
             // CSS `zoom`, an iframe's alone (LLP 1020.002 D6).
             | StyleId::Zoom
+            | StyleId::MinZoom
+            | StyleId::MaxZoom
             // SVG's unitless numbers (LLP 1055 D2); `r`, `cx`, `cy` are lengths.
             | StyleId::FillOpacity
             | StyleId::StrokeOpacity
@@ -866,6 +1083,9 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
 /// play its curve from rest as `linear()`, as every native host does (LLP
 /// 1062 D3).
 pub fn transition_css(t: &Transitions) -> (String, bool) {
+    if t.0.is_empty() {
+        return ("none".into(), false);
+    }
     let mut text = String::new();
     let mut spring = false;
     let mut push = |name: &str, duration: f64, easing: &Easing, delay: f64| {
@@ -883,12 +1103,19 @@ pub fn transition_css(t: &Transitions) -> (String, bool) {
     for tr in &t.0 {
         match &tr.timing {
             TimingFunction::Spring(config) => {
+                // CSS still needs the spring's property coverage, even when
+                // WAAPI plays its curve. Zero time starts no CSS transition.
+                if matches!(tr.property, TransitionProperty::All)
+                    || matches!(tr.property, TransitionProperty::Property(p) if p.springs())
+                {
+                    push(transition_property(tr), 0.0, &Easing::Ease, 0.0);
+                }
                 let names: Vec<&str> = match tr.property {
                     // Every property no spring drives as physics, the four
                     // sides as their shorthand.
                     TransitionProperty::All => Property::ALL
                         .into_iter()
-                        .chain([Property::D])
+                        .chain(Property::TRANSITION_ONLY)
                         .filter(|p| !p.springs() && *p != Property::ShadowColor)
                         .map(|p| match p {
                             Property::BorderTopColor => "border-color",
@@ -995,6 +1222,7 @@ pub(crate) fn dimension(out: &mut String, d: Dimension) {
         // CSS's own `min()`, `max()` and `clamp()`: the browser resolves
         // them, the insets with the rest (LLP 1001 §2, 2026-10-07).
         Dimension::Compare(c) => exact_kernel::style::env::browser_css(c, out),
+        Dimension::Keyword(k) => out.push_str(k.css()),
     }
 }
 
@@ -1039,13 +1267,18 @@ mod flow_tests;
 mod writer_tests {
     use super::*;
 
-    /// The writers before they wrote in place: joined parts.
     fn transition_joined(t: &Transitions) -> (String, bool) {
+        if t.0.is_empty() {
+            return ("none".into(), false);
+        }
         let mut parts = Vec::new();
         let mut spring = false;
         for tr in &t.0 {
             match &tr.timing {
-                TimingFunction::Spring(_) => spring = true,
+                TimingFunction::Spring(_) => {
+                    spring = true;
+                    parts.push(format!("{} 0s ease 0s", transition_property(tr)));
+                }
                 TimingFunction::Easing(e) => parts.push(format!(
                     "{} {}s {} {}s",
                     transition_property(tr),
@@ -1061,11 +1294,13 @@ mod writer_tests {
     #[test]
     fn transitions_and_linear_easings_write_what_joining_wrote() {
         for text in [
+            "none",
             "opacity 1s",
             "opacity 250ms ease-in-out, all 0.5s cubic-bezier(0.4, 0, 0.2, 1) 100ms, translate -exact-spring(180, 12, 1)",
             "opacity 1s steps(4, jump-both), height 200ms linear 50ms",
             "opacity 1s linear(0, 0.2, 0.6 60%, 0.8, 1), translate 1s linear(0 0% 20%, 1 80% 100%)",
             "translate -exact-spring(180, 12, 1)",
+            "filter 400ms ease, opacity 1s",
         ] {
             let t = Transitions::parse(text).unwrap();
             assert_eq!(transition_css(&t), transition_joined(&t), "{text}");
@@ -1089,6 +1324,8 @@ mod writer_tests {
             transition_css(&t),
             (format!("background-color {curve}"), false)
         );
+        let t = Transitions::parse("filter -exact-spring(180, 12, 1) 0s 100ms").unwrap();
+        assert_eq!(transition_css(&t), (format!("filter {curve}"), false));
         let t = Transitions::parse("opacity 1s, all -exact-spring(180, 12, 1) 0s 100ms").unwrap();
         let (text, skipped) = transition_css(&t);
         assert!(skipped, "the compositor rows' spring is the host's");
@@ -1098,9 +1335,9 @@ mod writer_tests {
             .collect();
         assert_eq!(
             names.join(" "),
-            "opacity 1s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
+            "opacity 1s ease 0s,all 0s ease 0s,stroke-dashoffset r color background-color fill stroke cx cy x y \
              rx ry border-color --exact-tint box-shadow font-weight font-stretch \
-             font-variation-settings d "
+             font-variation-settings d filter "
         );
     }
 }

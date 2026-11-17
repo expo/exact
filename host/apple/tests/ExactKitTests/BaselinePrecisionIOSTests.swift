@@ -22,6 +22,10 @@ final class BaselinePrecisionIOSTests: XCTestCase {
                 let label = UILabel(); label.font = engine.font(size: size, weight: 400, family: 0, italic: false)
                 label.text = "Hxg"; label.textColor = .black
                 label.traitOverrides.displayScale = scale; label.updateTraitsIfNeeded()
+                // displayScale alone leaves the backing layer at the screen's scale.
+                // Match the capture scale so layer.render does not resample the glyphs.
+                label.contentScaleFactor = scale
+                XCTAssertEqual(label.layer.contentsScale, scale)
                 label.frame = CGRect(origin: .zero, size: label.sizeThatFits(CGSize(width: 100, height: 100)))
                 let format = UIGraphicsImageRendererFormat(); format.scale = scale; format.opaque = false; format.preferredRange = .standard
                 func render(_ paint: (CGContext) -> Void) -> UIImage {
@@ -33,6 +37,7 @@ final class BaselinePrecisionIOSTests: XCTestCase {
                 }
                 let exact = render { TextEngine.draw(paragraph, spec: spec, in: CGRect(x: 0, y: 0, width: 80, height: 30), context: $0) }
                 let native = render { label.layer.render(in: $0) }
+                let nativeDirect = render { _ in label.drawText(in: label.bounds) }
                 func inkRows(_ image: UIImage) throws -> ClosedRange<Int> {
                     let cg = try XCTUnwrap(image.cgImage), bytes = try XCTUnwrap(cg.dataProvider?.data) as Data
                     let rows = (0..<cg.height).filter { y in
@@ -46,15 +51,17 @@ final class BaselinePrecisionIOSTests: XCTestCase {
                 let job = TextRasterJob(source: engine.attributed(spec), ranges: paragraph.lines.map { CTLineGetStringRange($0) },
                                         baselines: paragraph.baselines, flush: 0, box: CGRect(x: 0, y: 0, width: 80, height: 30),
                                         size: CGSize(width: 80, height: 30), scale: scale)
-                let raster = try XCTUnwrap(job.render(lines: paragraph.lines)), pixels = try XCTUnwrap(raster.pixels)
+                let raster = try XCTUnwrap(job.render()), pixels = try XCTUnwrap(raster.pixels)
                 let worker = render { _ in UIImage(cgImage: pixels, scale: scale, orientation: .up).draw(in: raster.frame) }
                 let actual = try inkRows(exact), expected = try inkRows(native)
-                XCTAssertEqual(try inkRows(worker), actual, "the worker and direct painter place the same ink")
+                XCTAssertEqual(CapturePixels.bytes(worker.cgImage), CapturePixels.bytes(exact.cgImage),
+                               "the worker and direct painter produce the same coverage")
                 print("painted baseline \(scale)x \(size)pt: Exact ink=\(actual) UILabel ink=\(expected) normal heights=\(paragraph.height)/\(label.bounds.height)")
-                XCTAssertEqual(actual.lowerBound, expected.lowerBound, "first ink row at \(scale)x, \(size)pt")
-                // UILabel paints one more descender row in these two 2x cases.
-                let extra = scale == 2 && size != 17 ? 1 : 0
-                XCTAssertEqual(actual.upperBound, expected.upperBound - extra)
+                XCTAssertEqual(CapturePixels.bytes(nativeDirect.cgImage), CapturePixels.bytes(native.cgImage),
+                               "UILabel's direct draw and backing layer agree")
+                XCTAssertEqual(actual, expected, "complete ink span at \(scale)x, \(size)pt")
+                XCTAssertEqual(CapturePixels.bytes(exact.cgImage), CapturePixels.bytes(native.cgImage),
+                               "UILabel's glyph coverage at \(scale)x, \(size)pt")
                 XCTAssertEqual(paragraph.height, [13: CGFloat(16), 16: 18, 17: 20][Int(size)], "Chrome's line height retains UIKit's glyph placement")
                 if let directory = ProcessInfo.processInfo.environment["EXACT_PIXEL_CAPTURES"] {
                     for (name, image) in [("exact", exact), ("label", native)] {

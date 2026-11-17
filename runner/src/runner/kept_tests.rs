@@ -286,7 +286,7 @@ fn refusal_before_readiness_restores_the_seed_and_its_identity_eligibility() {
     let before = r.kernel().export(None).unwrap();
     assert!(matches!(
         r.act("refuse", vec![Value::str("B")]),
-        Err(RunnerError::Trap(_))
+        Err(RunnerError::Evaluation { .. })
     ));
     assert_eq!(r.kernel().export(None).unwrap(), before);
     shows(&r, "kept");
@@ -327,7 +327,10 @@ fn async_activation_is_provisional_and_a_context_change_supersedes_its_full_requ
     r.data.ready = true;
     r.data.later = true;
     r.data_ready().unwrap();
-    let first = r.take_requests().remove(0).ticket;
+    let first = r.take_requests().remove(0);
+    // The launch's own ask, not a refresh (LLP 1162.000 D1).
+    assert!(!first.forced);
+    let first = first.ticket;
     shows(&r, "kept");
     assert!(
         !state(&r).kept_seed,
@@ -624,7 +627,7 @@ fn a_ready_source_gets_no_kept_seed_even_when_its_first_answer_is_slow() {
 }
 
 #[test]
-fn runner_owned_facts_never_admit_or_persist_kept_answers() {
+fn runner_owned_facts_forget_stale_kept_answers_and_never_persist_live_values() {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let number = b.primitive(TypeKind::Number);
     let time = b.record("Time", &[("epochAtZero", number)]);
@@ -646,8 +649,76 @@ fn runner_owned_facts_never_admit_or_persist_kept_answers() {
         r.resource("answer"),
         Some(&Value::record(vec![Value::Number(1000.)]))
     );
-    assert_eq!(answer_writes(&r), 0);
+    let writes: Vec<_> = r
+        .store
+        .writes()
+        .iter()
+        .filter(|w| w.name == kept::kept_name("answer"))
+        .collect();
+    assert_eq!(writes.len(), 1, "only the stale entry's removal");
+    assert!(writes[0].value.is_none());
+    assert!(r.store.kept(&kept::kept_name("answer")).is_none());
     assert!(r.data.asks.is_empty());
+}
+
+#[test]
+fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
+    for source in exact_plan::RUNNER_OWNED_SOURCES {
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let number = b.primitive(TypeKind::Number);
+        let record = b.record("Record", &[("value", number)]);
+        let name = b.str("world");
+        let mut arg = Asm::new();
+        arg.str(name);
+        let arg = b.code(arg);
+        let row = b.resource("answer", source, &[arg], record, None);
+        b.set_resource_reader(row, true);
+        b.surface("world", &[]);
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+        let mut plan = b.finish().unwrap();
+        let snapshot = entry(
+            &[Value::str("world")],
+            &Value::record(vec![Value::Number(9.)]),
+        );
+        for keep in [false, true] {
+            plan.resources[0].keep = keep;
+            let allowed = keep && *source == crate::surface_record::SOURCE;
+            assert_eq!(
+                kept::kept_surface(&plan, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            assert_eq!(
+                kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            let decoded = Plan::decode(&plan.encode()).unwrap();
+            assert_eq!(
+                kept::kept_surface(&decoded, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+        }
+        plan.resources[0].transient = true;
+        assert!(!kept::kept_surface(&plan, 0), "{source}");
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
+        let decoded = Plan::decode(&plan.encode()).unwrap();
+        assert!(!kept::kept_surface(&decoded, 0), "{source}");
+        plan.resources[0].transient = false;
+        plan.surfaces = Default::default();
+        assert!(
+            !kept::kept_surface(&plan, 0),
+            "a kept reader needs a declared surface: {source}"
+        );
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
+    }
 }
 
 #[test]
@@ -669,6 +740,39 @@ fn a_cold_boot_forgets_kept_answers_no_declared_reader_seeds() {
         .collect();
     assert_eq!(removed, [gone.as_str()]);
     assert_eq!(answer_writes(&r), 0);
+}
+
+/// What a host leaves out of its snapshot (past `Store::KEPT_TOTAL_BYTES`)
+/// it names after the boot, and what the boot would have forgotten is.
+#[test]
+fn a_cold_boot_forgets_the_kept_entries_the_host_did_not_read() {
+    let removed = |r: &Runner<Source>| -> Vec<String> {
+        (r.store.writes().iter())
+            .filter(|w| w.value.is_none())
+            .map(|w| w.name.clone())
+            .collect()
+    };
+    let (answer, gone) = (kept::kept_name("answer"), kept::kept_name("gone"));
+    let mut r = seeded();
+    r.forget_unread_kept(&[answer.clone(), gone.clone()]);
+    shows(&r, "kept");
+    assert_eq!(removed(&r), [gone], "a read entry stays");
+    let mut transient = plan(2, false);
+    transient.resources[0].transient = true;
+    let mut r = boot(transient, Source::default(), Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(
+        removed(&r),
+        std::slice::from_ref(&answer),
+        "a transient reader's"
+    );
+    let source = Source {
+        private: Some("health-read"),
+        ..Source::default()
+    };
+    let mut r = boot(plan(2, false), source, Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(removed(&r), [answer], "an app that keeps no answers");
 }
 
 #[test]
@@ -716,6 +820,7 @@ fn the_runner_answers_exactly_the_plan_s_own_sources() {
         crate::viewport::SOURCE,
         crate::page::SOURCE,
         crate::surface_record::SOURCE,
+        crate::canvas_performance::SOURCE,
         crate::time::SOURCE,
         crate::transport::SOURCE,
         crate::midi::SOURCE,
@@ -756,7 +861,7 @@ fn a_refused_commit_does_not_forget_a_kept_answer() {
     r.data.value = Value::str(&"x".repeat(kept::MAX_KEPT_BYTES));
     assert!(matches!(
         r.act("refuse", vec![Value::str("B")]),
-        Err(RunnerError::Trap(_))
+        Err(RunnerError::Evaluation { .. })
     ));
     assert!(
         kept_answer(&r),
@@ -778,13 +883,14 @@ fn a_refusal_after_boot_is_journaled_and_a_rolled_back_one_is_not() {
     // A refusal the trap undoes is not said; the seed stands.
     assert!(r.act("refuse", vec![Value::str("B")]).is_err());
     assert!(refused(&r).is_empty());
-    // An identity change that stands is, with the arguments it asks for.
+    // An identity change that stands is, with the argument that differs
+    // and the state it reads.
     r.act("car", vec![Value::str("C")]).unwrap();
     let lines = refused(&r);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].ends_with(
-            "answer did not use its kept answer: kept for [\"A\"], this launch asks for [\"C\"]"
+            "answer did not use its kept answer: identifying argument 1 differs from the one it was kept for, reading state car"
         ),
         "{lines:?}"
     );
@@ -798,6 +904,23 @@ fn three() -> Plan {
         let r = b.resource(name, "answer", &[], string, Some(&Value::str("loading")));
         b.set_resource_reader(r, true);
         b.set_resource_initial_args(r, &[]);
+    }
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    b.finish().unwrap()
+}
+
+/// Three store readers whose first identity has a caller-chosen length.
+fn three_with_identity(first: &str) -> Plan {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    for (name, identity) in [("a", first), ("b", "b"), ("c", "c")] {
+        let value = b.str(identity);
+        let mut arg = Asm::new();
+        arg.str(value);
+        let arg = b.code(arg);
+        let r = b.resource(name, "answer", &[arg], string, Some(&Value::str("loading")));
+        b.set_resource_reader(r, true);
+        b.set_resource_initial_args(r, &[Value::str(identity)]);
     }
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
     b.finish().unwrap()
@@ -825,10 +948,51 @@ fn kept_answers_over_their_total_forget_the_longest_other() {
         .collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(
-        said[0].contains("forgot `a`'s (204810 bytes) to keep `c`'s"),
+        said[0].contains(
+            "forgot `a`'s kept answer to keep `c`'s, so the next launch shows `a`'s placeholder"
+        ),
         "{}",
         said[0]
     );
+}
+
+#[test]
+fn an_admitted_seed_with_invalid_unchanged_arguments_says_why() {
+    let snapshot = vec![(kept::kept_name("a"), kept::encode(&[], &Value::str("kept")))];
+    let mut r = boot(three(), Source::default(), snapshot);
+    let mut states: Vec<_> = r
+        .resources
+        .iter_mut()
+        .map(|resource| resource.state.take())
+        .collect();
+    r.admit_kept(0, &[], false, false, &mut states);
+    let line = r
+        .keeping
+        .refused
+        .iter()
+        .find_map(|(i, line)| (*i == 0).then_some(line))
+        .unwrap();
+    assert!(line.ends_with("a did not use its kept answer: its request arguments are invalid"));
+}
+
+#[test]
+fn eviction_diagnostics_do_not_measure_identifying_arguments() {
+    let evicted = |identity: &str| {
+        let source = Source {
+            value: Value::str(&"x".repeat(200 * 1024)),
+            ..Source::default()
+        };
+        let mut r = boot(three_with_identity(identity), source, Vec::new());
+        r.data.ready = true;
+        r.data_ready().unwrap();
+        let line = r
+            .journal()
+            .find(|line| line.contains("kept answers are at most 512 KiB together"))
+            .unwrap()
+            .to_owned();
+        line
+    };
+    assert_eq!(evicted("short"), evicted(&"private".repeat(40)));
 }
 
 /// `resource … transient` (LLP 1156.005 D4): the answer is neither shown

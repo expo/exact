@@ -181,6 +181,7 @@ impl crate::Module {
             inst.dirty = true;
             if let Some(gpu) = &self.gpu {
                 inst.surface.device_ready(gpu.device.features());
+                inst.report_color_space();
                 if let Some(config) = &inst.config {
                     inst.surface.prepare_assets(
                         &gpu.device,

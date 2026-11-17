@@ -15,6 +15,7 @@ import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, makeFixture, root } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const argv = process.argv.slice(2), flag = (f) => argv.includes(f) ? argv[argv.indexOf(f) + 1] : null;
 const emulator = flag('--emulator'), given = flag('--app') && resolve(flag('--app'));
@@ -32,7 +33,7 @@ const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_O
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the APK builds, compiling Gamepad.kt', built.status === 0, (built.stdout + built.stderr).slice(-3000));
-  const out = resolve(root, 'host/android/app/build', name);
+  const out = apkBuildDir(app);
   const generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('android', 'the roster binds the gamepad module', roster.includes('exact.gamepad.GamepadModule'), roster || `no ${generated}`);

@@ -167,6 +167,52 @@ final class SheetHostMacTests: XCTestCase {
         f.settle()
     }
 
+    func testAPaintedDialogBackdropIsAHitInNativePointReads() throws {
+        let page = """
+        component Probe
+          state hit = "unread"
+          state hits = "unread"
+          action read(e: PointerEvent)
+            hit = match elementFromPoint(e.clientX, e.clientY) { case some(id) => id, case none => "none" }
+            hits = elementsFromPoint(e.clientX, e.clientY).join(",")
+          view
+            column id="page" width="100%" height="100%"
+              text `${hit} ${hits}` testId="status"
+              dialog id="box" testId="box" width=300 height=180 pointer-events="none" pointermove=read
+                column id="tip" testId="tip" popover="manual" pointer-events="auto" position="absolute" left=0 top=0 width=50 height=50
+
+        """
+        let f = try SheetFixture(page: page)
+        fixture = f
+        f.presenter.dialogs.painted = true
+        let dialog = try f.node("box"), p = f.presenter
+        p.dialogs.show(dialog)
+        f.settle()
+        func read(_ at: NSPoint, _ expected: String, file: StaticString = #filePath, line: UInt = #line) {
+            let sample = PointerSample(x: 0, y: 0, buttons: 0, pressure: 0, type: "mouse", id: 1, clientX: at.x, clientY: at.y)
+            f.session.apply(f.session.runtime.pointer(dialog.id, .move, sample, now: f.session.now()))
+            XCTAssertEqual(f.status, expected, file: file, line: line)
+        }
+        let backdrop = try XCTUnwrap(p.viewport.hitTest(NSPoint(x: 5, y: 5)) as? DialogBackdrop)
+        read(NSPoint(x: 5, y: 5), "box box")
+        p.menus.painted = true
+        p.menus.show(try f.node("tip"), from: nil)
+        let tip = try f.node("tip"), clip = p.viewport.contentView
+        let shown = clip.convert(NSPoint(x: 5, y: 5), from: tip)
+        let at = NSPoint(x: shown.x - clip.bounds.minX, y: shown.y - clip.bounds.minY)
+        XCTAssertFalse(clip.convert(dialog.bounds, from: dialog).contains(shown))
+        let nativePoint = p.viewport.superview?.convert(shown, from: clip) ?? shown
+        let delivered = try XCTUnwrap(p.viewport.hitTest(nativePoint))
+        XCTAssertTrue(delivered === tip || delivered.isDescendant(of: tip), "\(delivered)")
+        read(at, "tip tip,box")
+        p.menus.close(tip, restoreFocus: false)
+        backdrop.isHidden = true
+        XCTAssertFalse(p.viewport.hitTest(NSPoint(x: 5, y: 5)) is DialogBackdrop)
+        read(NSPoint(x: 5, y: 5), "none")
+        backdrop.isHidden = false
+        read(NSPoint(x: -1, y: 5), "none")
+    }
+
     /// LLP 1123 D2: the runner reads a sheet's dialog by its block, which the
     /// dialog sits in by its own frame. A dialog with 20-point side margins
     /// in a sheet: `frame` and `elementFromPoint` answer where AppKit shows

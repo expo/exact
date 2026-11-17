@@ -72,7 +72,7 @@ async function storageTypes() {
   const lossy: number = batch[0].lastInsertRowid;
   // `fs.compressImage` as the docs give it (LLP 1069.002 A1): options in, the record out.
   const image = await storage.fs.compressImage(path, storage.fs.directories.cache + '/out.jpg', {maxDimension: 1024, maxBytes: 1_000_000});
-  const shrunk: {path: string; type: 'image/jpeg'; size: number; width: number; height: number} = image;
+  const shrunk: {path: string; type: 'image/jpeg' | 'image/png'; size: number; width: number; height: number} = image;
   // @ts-expect-error the engine's positional binding is not the app interface
   await storage.fs.compressImage(path, path, 1024, 1_000_000);
   // `fs.transformImage` (LLP 1133.019 D14): the edit in, what was written out.
@@ -142,8 +142,13 @@ impl Drop for Fixture {
 /// which the default checks skip: an Ibex refresh once replaced the
 /// declaration with the engine's positional binding and nothing failed.
 #[test]
-fn generated_request_init_names_every_fetch_cache_mode() {
+fn generated_request_init_names_cache_modes_and_preloads() {
     let declarations = contract::typescript(&contract::compile(CONTRACT).unwrap()).unwrap();
+    assert!(declarations.contains("exactPreload?: string;"));
+    assert!(declarations.contains("exactPrefetch?: boolean;"));
+    assert!(declarations.contains(
+        "Checked on every host; the request is made as written. No host holds its reply yet."
+    ));
     assert!(declarations.contains("cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\";"));
 }
 
@@ -153,7 +158,9 @@ fn compress_image_is_declared_as_the_docs_give_it() {
     for line in [
         "compressImage(from: string, to: string, options: CompressImageOptions): Promise<CompressedImage>;",
         "readonly maxDimension: number;",
-        "readonly maxBytes: number;",
+        "readonly maxBytes?: number;",
+        "readonly quality?: number;",
+        "({ readonly maxBytes: number } | { readonly quality: number });",
         "readonly type?: \"image/jpeg\" | \"image/png\";",
         "readonly type: \"image/jpeg\" | \"image/png\";",
         "readonly width: number;",
@@ -170,9 +177,8 @@ fn compress_image_is_declared_as_the_docs_give_it() {
     // The engine's positional binding is the prelude's to adapt, never the app's.
     assert!(!declared.contains("compressImage(from: string, to: string, maxDimension"));
     let reference = include_str!("../../../../docs/reference.md");
-    assert!(
-        reference.contains("`storage.fs.compressImage(from, to, {maxDimension, maxBytes, type})`")
-    );
+    assert!(reference
+        .contains("`storage.fs.compressImage(from, to, {maxDimension, maxBytes, quality, type})`"));
     assert!(reference.contains("`storage.fs.transformImage(from, to, options)`"));
 }
 
@@ -245,6 +251,88 @@ const wrong: Result<'board'> = [{ id: 'mv', name: 'Mountain View', zone: 4, dist
 }
 
 #[test]
+#[ignore = "async lane: typechecks mixed providers with tsc"]
+fn mixed_providers_require_only_the_typescript_half() {
+    let plan = contract::compile(CONTRACT).unwrap();
+    let fixture = Fixture::new();
+    let rust = vec!["save".into(), "search".into()];
+    let declarations = contract::typescript_exporting(&plan, None, &rust).unwrap();
+    fixture.write("app.contract.d.ts", &declarations);
+    let mixed = r#"
+import type { TypeScriptAnswer, TypeScriptSources, Args, Sources } from './app.contract.d.ts';
+const sources: TypeScriptSources = { find: () => null };
+export const answer: TypeScriptAnswer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
+const rustArgs: Args<'save'> = ['Palo', true];
+declare const complete: Sources;
+complete.save(rustArgs, {} as any, {} as any);
+// @ts-expect-error Rust sources remain outside the TypeScript dispatcher
+answer('save', rustArgs, {} as any, {} as any);
+"#;
+    let output = fixture.check(mixed);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let summary = declarations.split("\n\n").next().unwrap();
+    assert!(summary.contains("//   find:"));
+    assert!(!summary.contains("//   save:") && !summary.contains("//   search:"));
+    for (bad, missing) in [
+        (mixed.replace("{ find: () => null }", "{}"), "find"),
+        (
+            mixed.replace("sources: TypeScriptSources", "sources: Sources"),
+            "search",
+        ),
+    ] {
+        let output = fixture.check(&bad);
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains(missing));
+    }
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(&plan, None, &["search".into()]).unwrap(),
+    );
+    let output = fixture.check(mixed);
+    assert!(
+        !output.status.success(),
+        "moving save to TypeScript must require it"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("save"));
+
+    fixture.write("app.contract.d.ts", &contract::typescript(&plan).unwrap());
+    let output = fixture.check(
+        &VALID
+            .split("\ndeclare const store:")
+            .next()
+            .unwrap()
+            .replace("Sources", "TypeScriptSources")
+            .replace("Answer", "TypeScriptAnswer"),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    fixture.write(
+        "app.contract.d.ts",
+        &contract::typescript_exporting(
+            &plan,
+            None,
+            &["save".into(), "search".into(), "find".into()],
+        )
+        .unwrap(),
+    );
+    let output = fixture.check("import type { TypeScriptSource, TypeScriptSources, Sources } from './app.contract.d.ts';\nconst sources: TypeScriptSources = {};\n// @ts-expect-error all sources belong to Rust\nconst source: TypeScriptSource = 'find';\n// @ts-expect-error Sources still requires every provider\nconst complete: Sources = {};\n");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 #[ignore = "async lane: typechecks the guides' TypeScript examples with tsc; bun scripts/async.mjs runs it"]
 fn every_typescript_example_in_the_guides_checks_against_its_contracts_types() {
     // LLP 1086 D10: each `ts` block after a `contract` block in the same
@@ -266,6 +354,9 @@ fn every_typescript_example_in_the_guides_checks_against_its_contracts_types() {
             }
         };
         fixture.write("app.contract.d.ts", &contract::typescript(&plan).unwrap());
+        for (name, body) in &block.files {
+            fixture.write(name, body);
+        }
         let output = fixture.check(&block.body);
         if !output.status.success() {
             failures.push(format!(
@@ -786,12 +877,10 @@ fn types_check_is_read_only_and_build_reports_only_changed_declarations() {
 #[test]
 #[ignore = "async lane: typechecks the design's token union with tsc; bun scripts/async.mjs runs it"]
 fn a_data_module_returning_an_unknown_token_fails_tsc() {
-    let dir = std::env::temp_dir().join(format!("exact-types-tokens-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::scratch::Scratch::new(format!("exact-types-tokens-{}", std::process::id()));
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  brand = #c8102e\n  surface.card = #ffffff\n  space.row = 12px\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  brand = #c8102e\n  surface.card = #ffffff\n  space.row = 12px\n",
     )
     .unwrap();
     std::fs::write(

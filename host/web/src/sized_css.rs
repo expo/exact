@@ -18,15 +18,19 @@ pub(super) fn canvas_css(node: &NodeFacts<'_>, parent: Option<&NodeFacts<'_>>, c
     use exact_kernel::{Dimension, PositionType, StyleId};
     let style = &node.style;
     let given = |id: StyleId, value: Dimension| style.mask.has(id) && value != Dimension::Auto;
+    // A size keyword is written, but its content is the natural size the
+    // fallback stands in for (LLP 1001.001 D5).
+    let numeric = |id: StyleId, value: Dimension| style.mask.has(id) && !value.is_content_sized();
     let (width, height) = (
         given(StyleId::Width, style.width.clone()),
         given(StyleId::Height, style.height.clone()),
     );
+    let numeric_height = numeric(StyleId::Height, style.height.clone());
     css.push_str("contain:size;");
-    if !in_flow(node) || parent.is_none_or(|p| !aligns(p)) {
+    if parent.is_none_or(|p| !aligns(p)) {
         css.push_str("justify-self:start;");
     }
-    if !height {
+    if !numeric_height {
         css.push_str("contain-intrinsic-size:300px 150px;");
     }
     if style.rare.aspect_ratio.defers_to_natural() {
@@ -34,7 +38,7 @@ pub(super) fn canvas_css(node: &NodeFacts<'_>, parent: Option<&NodeFacts<'_>>, c
     }
     if !given(StyleId::MinHeight, style.min_height.clone()) {
         css.push_str(
-            if height || given(StyleId::MaxHeight, style.max_height.clone()) {
+            if numeric_height || numeric(StyleId::MaxHeight, style.max_height.clone()) {
                 "min-height:0;"
             } else {
                 "min-height:min-content;"
@@ -81,8 +85,8 @@ fn in_flow(node: &NodeFacts<'_>) -> bool {
     )
 }
 
-/// A parent's `justify-items` that aligns (`start`, `center`, …) aligns an in-flow child, in block
-/// flow too since the kernel's 6d81878b30: a host's `justify-self: start` is not written over it.
+/// An aligning parent's `justify-items` applies in block flow and to an
+/// absolute child's static position. The host leaves `justify-self` unset.
 fn aligns(parent: &NodeFacts<'_>) -> bool {
     use exact_kernel::JustifyItems as J;
     !matches!(parent.style.justify_items, J::Normal | J::Stretch)

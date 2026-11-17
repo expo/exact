@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { devNull, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { withLock } from './build-lock.mjs';
 
 /** The staged capabilities and their seam entries, demangled. */
@@ -34,6 +35,24 @@ export const BINARYEN_DOWNLOAD = `https://github.com/WebAssembly/binaryen/releas
 const FEATURES = ['--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', '--enable-reference-types'];
 
 const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', maxBuffer: 1 << 28, ...options });
+
+/** GPU packaging needs wasm-bindgen; wasm-opt remains optional. */
+export function webGpuTools(env = process.env) {
+  const ready = run('wasm-bindgen', ['--version'], { env });
+  if (ready.error || ready.status !== 0) throw new Error(`wasm-bindgen unavailable; run bun scripts/exact.mjs setup in the SDK checkout: ${ready.error?.message ?? ready.stderr ?? ''}`);
+}
+
+/** Package one GPU crate as its browser module and return its size note. */
+export function packageGpuWasm(crate, wasm, stage, stem, { env, profile }) {
+  const [dir, name] = stem.includes('/') ? [resolve(stage, 'gpu'), stem.slice(4)] : [stage, stem];
+  const wb = run('wasm-bindgen', ['--target', 'web', '--no-typescript', '--out-dir', dir, '--out-name', name, wasm], { env, stdio: 'inherit' });
+  if (wb.status !== 0) throw new Error(`wasm-bindgen ${crate} failed`);
+  const bg = resolve(stage, `${stem}_bg.wasm`);
+  // EXACT_WEB_NAMES retains GPU function names for profiles, as it does for app.wasm.
+  const o = profile === 'gpu-dev' ? { status: null } : run('wasm-opt', ['-Oz', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', env.EXACT_WEB_NAMES === '1' ? '-g' : '--strip-debug', '--strip-producers', '-o', bg, bg], { env, stdio: 'inherit' });
+  const bytes = readFileSync(bg), kib = n => `${(n / 1024).toFixed(0)} KiB`;
+  return `${stem}_bg.wasm ${kib(bytes.length)} (${kib(gzipSync(bytes, { level: 9 }).length)} gzip${o.status === 0 ? ', wasm-opt' : ''}), ${stem}.js ${kib(readFileSync(resolve(stage, `${stem}.js`)).length)}`;
+}
 
 export function normalizeDemangled(name) {
   // GNU prints unpadded crate hashes; LLVM omits them. Keep slices like [f64].

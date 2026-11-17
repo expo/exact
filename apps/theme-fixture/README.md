@@ -1,6 +1,6 @@
 # Theme fixture
 
-LLP 1121 stage 2's fixture: a design (`app.tamber`) with one app axis,
+LLP 1121 stage 2's fixture: a design (`app.forma`) with one app axis,
 `dark-style = black | dim  under scheme=dark`, and the tokens a page reads (a
 ground, a card, text, a hairline, a gradient, a shadow, an SVG's paint).
 The page follows the window's modes (`setMode`, the agent's `prefer mode`);

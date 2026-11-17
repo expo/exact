@@ -1,0 +1,18 @@
+component App
+  state presses: number = 0
+  action go
+    presses = presses + 1
+  view
+    column height="100%" width="100%" testId="root"
+      list virtualized=true appearance="none" testId="list" flex=1 min-height=0 estimated-item-height=250
+        for n in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] key=n
+          column
+            row gap=12 padding-left=16 padding-right=16 padding-bottom=20 align-items="flex-start"
+              for p in [0, 1] key=p
+                column flex=1 min-width=0
+                  button press=go testId=`card-${n}-${p}` appearance="none" width="100%" display="flex" flex-direction="column" gap=8 color="blue"
+                    image "app:/photo.png" width="100%" height=80
+                    text "A product" font-size=14
+                    row gap=6 align-items="baseline"
+                      text "$19" font-weight=700
+                      text "$29" color="gray"

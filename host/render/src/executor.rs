@@ -2,23 +2,37 @@
 //! (grant-checked transport, ordered and independent lanes, continuations on
 //! its workers), with a wake the rendering thread waits on instead of a UI
 //! loop. Dropping it aborts whatever is still in flight.
+pub use exact_executor::pump;
+use exact_executor::{Core, SharedHttpCache, StreamHost, WorkerBudget};
 use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
-#[path = "../../apple/src/executor_core.rs"]
-#[allow(dead_code)] // `run` is the core's own tests' entry
-mod core;
-#[path = "../../apple/src/executor_pump.rs"]
-pub mod pump;
-/// A new executor waits for a native-worker slot under test: the crate's own
-/// tests, and the integration binary, whose every test's servers and renders
-/// share one process's bound (`test-wait`, which only the dev-dependency on
-/// this crate turns on). A server refuses (`Busy`) at the bound instead.
-const WAIT_FOR_SLOT: bool = cfg!(any(test, feature = "test-wait"));
+/// Each test thread shares a worker budget among its servers and renders. The
+/// dev-dependency enables this for integration tests; production shares one process bound.
+const BUDGET: WorkerBudget = if cfg!(any(test, feature = "test-budget")) {
+    WorkerBudget::Thread
+} else {
+    WorkerBudget::Process
+};
+
+thread_local! {
+    static HTTP_CACHE: std::cell::RefCell<Option<SharedHttpCache>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn set_http_cache(cache: SharedHttpCache) {
+    HTTP_CACHE.with(|current| *current.borrow_mut() = Some(cache));
+}
+
+fn http_cache() -> SharedHttpCache {
+    static BUILD: std::sync::OnceLock<SharedHttpCache> = std::sync::OnceLock::new();
+    HTTP_CACHE
+        .with(|current| current.borrow().clone())
+        .unwrap_or_else(|| BUILD.get_or_init(SharedHttpCache::new).clone())
+}
 
 /// The native core with a condition variable for its wake.
 pub struct Executor {
-    core: core::Core,
+    core: Core,
     wake: Arc<(Mutex<bool>, Condvar)>,
 }
 
@@ -26,13 +40,17 @@ impl Executor {
     /// Start the core's owners under `grants` (the render's, never more
     /// than the app's).
     pub fn start(grants: &str) -> Self {
+        Self::start_with_cache(grants, http_cache())
+    }
+
+    pub(crate) fn start_with_cache(grants: &str, cache: SharedHttpCache) -> Self {
         // @ref LLP 1048.000 D10 — a server, not an app on a device: its
         // fetches go over rustls on macOS too (Charlie, 2026-09-29), not
         // NSURLSession, whose per-call cost was ~30% of a RealWorld page's CPU.
         // `EXACT_RENDER_TRANSPORT=platform` keeps the platform's (a check
         // against the platform, or a way back).
         let platform = std::env::var("EXACT_RENDER_TRANSPORT").as_deref() == Ok("platform");
-        let transport: core::StreamHost = if platform {
+        let transport: StreamHost = if platform {
             Arc::new(ibex2::host::Host::new)
         } else {
             Arc::new(|| {
@@ -56,7 +74,7 @@ impl Executor {
             .map(|g| host.endow(g));
         let wake = Arc::new((Mutex::new(false), Condvar::new()));
         let signal = wake.clone();
-        let core = core::Core::start_on(
+        let core = Core::start_on(
             bindings,
             grants,
             Box::new(move || {
@@ -66,7 +84,9 @@ impl Executor {
                 ready.notify_all();
             }),
             transport,
+            BUDGET,
         );
+        core.set_shared_http_cache(cache);
         Self { core, wake }
     }
 

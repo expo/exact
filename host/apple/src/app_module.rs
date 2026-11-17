@@ -31,7 +31,10 @@ pub type CallFn = extern "C" fn(*mut c_void, *const u8, usize, *mut c_void);
 
 /// Where a synchronous call's answer lands: on the caller's stack.
 #[derive(Default)]
-struct Slot(Option<(u32, Vec<u8>)>);
+struct Slot {
+    answer: Option<(u32, Vec<u8>)>,
+    loading: std::time::Duration,
+}
 
 /// The synchronous call for a session's app module behind `call` and `ctx`.
 pub fn caller(call: CallFn, ctx: *mut c_void) -> exact_runner::NativeCall {
@@ -44,7 +47,8 @@ pub fn caller(call: CallFn, ctx: *mut c_void) -> exact_runner::NativeCall {
             body.len(),
             &mut slot as *mut Slot as *mut c_void,
         );
-        match slot.0 {
+        exact_runner::Native::record_library_load(slot.loading);
+        match slot.answer {
             Some((200, reply)) => Ok(reply),
             Some((_, message)) => Err(String::from_utf8_lossy(&message).into_owned()),
             None => Err("the app module did not answer the call".into()),
@@ -55,7 +59,8 @@ pub fn caller(call: CallFn, ctx: *mut c_void) -> exact_runner::NativeCall {
 /// Answer a synchronous call, before `call` returns: status 200 carries the
 /// JSON reply, any other a refusal. `slot` came from a [`CallFn`] call still
 /// running; `bytes` is null or valid for `len` bytes. A second answer
-/// replaces the first.
+/// replaces the first. Status 102 reports library-load seconds before the final answer
+/// (LLP 1067.000.001 D7); it does not replace that answer.
 pub fn answer(slot: *mut c_void, status: u32, bytes: *const u8, len: usize) {
     if slot.is_null() {
         return;
@@ -67,7 +72,20 @@ pub fn answer(slot: *mut c_void, status: u32, bytes: *const u8, len: usize) {
         unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec()
     };
     // SAFETY: the slot lives on the stack of the `caller` call that is running.
-    unsafe { (*(slot as *mut Slot)).0 = Some((status, body)) };
+    let slot = unsafe { &mut *(slot as *mut Slot) };
+    if status == 102 {
+        // An interim load report, in seconds, before the final answer. The C table is unchanged.
+        if let Some(seconds) = std::str::from_utf8(&body)
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
+            if let Ok(time) = std::time::Duration::try_from_secs_f64(seconds) {
+                slot.loading = slot.loading.saturating_add(time);
+            }
+        }
+    } else {
+        slot.answer = Some((status, body));
+    }
 }
 
 /// Answer one long native call: `status` 200 carries the JSON reply, any
@@ -166,6 +184,31 @@ mod tests {
         assert_eq!(call(b"refuse").unwrap_err(), "refused");
         let silent = caller(silent, 9 as *mut c_void);
         assert!(silent(b"1").unwrap_err().contains("did not answer"));
+    }
+
+    extern "C" fn loaded(_: *mut c_void, _: *const u8, _: usize, slot: *mut c_void) {
+        for report in [b"1.3".as_slice(), b"NaN", b"-1", b"invalid"] {
+            super::answer(slot, 102, report.as_ptr(), report.len());
+        }
+        super::answer(slot, 200, b"{}".as_ptr(), 2);
+    }
+
+    #[test]
+    fn a_load_report_preserves_the_answer_and_reaches_only_the_callers_clock() {
+        let before = exact_runner::Native::library_load_time();
+        assert_eq!(caller(loaded, std::ptr::null_mut())(b"{}").unwrap(), b"{}");
+        assert_eq!(
+            exact_runner::Native::library_load_time() - before,
+            std::time::Duration::from_millis(1300)
+        );
+        std::thread::spawn(|| {
+            assert_eq!(
+                exact_runner::Native::library_load_time(),
+                std::time::Duration::ZERO
+            )
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

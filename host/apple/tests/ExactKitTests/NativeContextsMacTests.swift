@@ -27,6 +27,10 @@ final class NativeContextsMacTests: XCTestCase {
         let unnamed = NativeViews.roots(session: second, agent: true, namedStore: nil)
         XCTAssertNotEqual(unnamed.data, roots["data"])
         XCTAssertTrue(unnamed.data.contains("exact-agent-"), "an unnamed drive stays away from real app files")
+        defer { try? FileManager.default.removeItem(atPath: (unnamed.data as NSString).deletingLastPathComponent) }
+        for root in [unnamed.data, unnamed.cache, unnamed.temporary] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root), "a package's walk starts at an existing root: \(root)")
+        }
     }
     func testANativeButtonIsAToolbarItemItsProminentStyleProminent() throws {
         _ = NSApplication.shared

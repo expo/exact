@@ -41,7 +41,7 @@ struct BarInputs: Equatable {
     var selection: [UInt32] = []
     var barRoute = false, hasStack = false, backInToolbar = false
     var split: [UInt32] = []
-    var listOwnsWindow = true
+    var listOwnsWindow = false
     var modal: UInt32?
     var sheet = false, sidebar = false, sidebarItems = false
     /// The page is in the bar's window, and the window's toolbar is still the bar's.
@@ -152,7 +152,7 @@ extension WindowToolbarHost {
         inputs.back = navigation.backFacts
         let split = navigation.split
         if split.active, let shown = split.shown { inputs.split = [shown.root.id, shown.list.id, shown.detail?.id ?? 0] }
-        inputs.listOwnsWindow = split.listOwnsWindow
+        inputs.listOwnsWindow = split.listOwns
         inputs.modal = presenter.dialogs.active?.id
         let routes = [navigation.headerRoute?.route, navigation.splitHeaderRoutes?.owner, navigation.splitHeaderRoutes?.beside].compactMap { $0 }
         inputs.routes = routes.map { route in route.id << 2 | (visible(route) ? 1 : 0) | (route.inert ? 2 : 0) }
@@ -297,7 +297,7 @@ extension WindowToolbarHost {
         lines.append("header \(header.map { "\($0.header.id) lead \($0.leading.map(\.id)) trail \($0.trailing.map(\.id)) backs \($0.backs.map(\.id))" } ?? "-")")
         lines.append("beside \(beside.map { "\($0.header.id) lead \($0.leading.map(\.id)) trail \($0.trailing.map(\.id))" } ?? "-") parts \(besideParts.map(\.node.id))")
         lines.append("order \(toolbar?.items.map(\.itemIdentifier.rawValue) ?? [])")
-        lines.append("back \(backItem.isEnabled) segments \(segments.summary(overflow: false).map { s in "\(s["tablist"] ?? "") \(s["label"] ?? "") \(s["selected"] ?? "") \((s["tabs"] as? [[String: Any]] ?? []).map { "\($0["id"] ?? "")/\($0["title"] ?? "")/\($0["enabled"] ?? "")" })" } ?? "-") \(segments.item?.isEnabled ?? false) \(segments.item?.subitems.map { "\($0.label)/\($0.isEnabled)" } ?? [])")
+        lines.append("back \(backItem.isEnabled) history \(historyItem.subitems.map(\.isEnabled)) segments \(segments.summary(overflow: false).map { s in "\(s["tablist"] ?? "") \(s["label"] ?? "") \(s["selected"] ?? "") \((s["tabs"] as? [[String: Any]] ?? []).map { "\($0["id"] ?? "")/\($0["title"] ?? "")/\($0["enabled"] ?? "")" })" } ?? "-") \(segments.item?.isEnabled ?? false) \(segments.item?.subitems.map { "\($0.label)/\($0.isEnabled)" } ?? [])")
         lines.append("search \(search.node?.id.description ?? "-") \(search.item.map { "\($0.label) | \($0.searchField.placeholderString ?? "") | \($0.isEnabled) | \($0.searchField.accessibilityLabel() ?? "")" } ?? "-")")
         for id in items.keys.sorted() {
             guard let item = items[id] else { continue }

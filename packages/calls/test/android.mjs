@@ -13,6 +13,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker } from '../../camera/test/fixture.mjs';
 import { ensureShells } from '../../../scripts/app-shells.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const here = import.meta.dir, pkg = resolve(here, '..'), root = resolve(pkg, '../..');
 const run = (cmd, args, cwd, env = process.env) => {
@@ -51,7 +52,7 @@ try {
   const strict = build();
   check('android', 'a build checks the graph against the lock and checksums', strict.status === 0, (strict.stdout + strict.stderr).slice(-2000));
 
-  const out = resolve(root, 'host/android/app/build', name);
+  const out = apkBuildDir(app);
   const roster = existsSync(resolve(out, 'extensions/exact/app/ExactExtensions.kt')) ? readFileSync(resolve(out, 'extensions/exact/app/ExactExtensions.kt'), 'utf8') : '';
   check('android', 'the roster binds the implementation', roster.includes('exact.calls.CallsModule'), roster);
   const merged = existsSync(out) && readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));

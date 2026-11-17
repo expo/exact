@@ -348,7 +348,18 @@ pub fn reply<D: DataSource>(runner: &Runner<D>, request: &str) -> String {
             s.push(',');
         }
         s.push_str("{\"name\":");
-        quote(plan.str(plan.resources[r].name), &mut s);
+        // A child's resource counts every instance's asks under the name
+        // its component declares (LLP 1035.005.004 D8).
+        let name = plan.str(plan.resources[r].name);
+        let owned = plan.resources[r].owner.is_some();
+        quote(
+            if owned {
+                crate::agent::declared_name(name)
+            } else {
+                name
+            },
+            &mut s,
+        );
         let _ = write!(s, ",\"asked\":{n}}}");
     }
     let _ = write!(s, "],\"walked\":{walked},\"truncated\":{truncated}}}");

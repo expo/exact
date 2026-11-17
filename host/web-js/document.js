@@ -121,9 +121,9 @@ function publish() {
  * rt.js `After`), as the web host projects after every batch; Escape on a
  * modal route presses its back, and `navigate` takes a popstate's location
  * (unheard, `hostBack` and `hostGo` are the router's own). */
-export function projectRoots(history, navigate, say, after, hostBack, hostGo, routeMatches) {
+export function projectRoots(history, navigate, say, after, hostBack, hostGo, routeMatches, canonical) {
   const root = document.getElementById("exact-root"), project = () => history.project(root, say);
-  history.connect(root, navigate, say, hostBack, hostGo, routeMatches, true);
+  history.connect(root, navigate, say, hostBack, hostGo, routeMatches, true, canonical);
   after.push(project, markDocument); history.activate(root, say);
 }
 

@@ -374,10 +374,10 @@ component Weatherlight
                 button press=toggleMotion testId="pause-sky" aria-label=(animated ? "Pause sky animation" : "Play sky animation") width=(40 * k) height=(40 * k) border-radius=(20 * k) display="flex" flex-direction="row" align-items="center" justify-content="center" background-color="-exact-fill"
                   text (animated ? "Ⅱ" : "▷") color="-exact-label" font-size=(14 * k)
               column gap=3
-                text (pending(forecast) ? "UPDATING FORECAST" : outlook.selectedLabel) testId="selected-label" font-size=(10 * k) font-weight=600 letter-spacing=2 color="-exact-secondary-label"
+                text (pending(forecast) ? "UPDATING FORECAST" : outlook.selectedLabel) testId="selected-label" font-size=(10 * k) font-weight=600 letter-spacing=2 color="-exact-label"
                 text (outlook.ready ? outlook.temp : "—°") testId="temperature" font-size=(92 * k) font-weight=300 letter-spacing=-6 line-height=`${100 * k}px` color="-exact-label"
                 text (outlook.ready ? outlook.condition : "Finding your patch of sky…") testId="condition" font-size=(22 * k) font-family="serif" color="-exact-label"
-                text outlook.range font-size=(13 * k) color="-exact-secondary-label" margin-top=8
+                text outlook.range font-size=(13 * k) color="-exact-label" margin-top=8
               row justify-content="space-between" align-items="center" flex-wrap="wrap" gap=12
                 text (outlook.ready ? outlook.summary : "The forecast will appear here when it arrives.") font-size=(13 * k) color="-exact-label" max-width=650
                 if selected != "now"

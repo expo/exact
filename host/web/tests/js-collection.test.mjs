@@ -20,7 +20,7 @@ function collectionRuntime() {
   const given = { viewId, Views, write() {}, writeItem() {}, Refusal: Error, Hosts: {}, Before: [], After: [], settled() {},
     Map: class extends Map { constructor(...args) { super(...args); mapCount++; } } };
   const names = [...new Set([...imports('list.js').flatMap(i => i.local ?? []), ...Object.keys(given)])];
-  const { Collection, report, Lists, HeightPreview } = Function(...names, `${source}; return { Collection, report, Lists, HeightPreview };`)(
+  const { Collection, report, Lists, HeightPreview, SizeIndex } = Function(...names, `${source}; return { Collection, report, Lists, HeightPreview, SizeIndex };`)(
     ...names.map(n => n in given ? given[n] : function () {}));
   const make = (horizontal = false) => {
     const c = new Collection({}, { x: horizontal, pw: [], ph: [], est: 100 }, null);
@@ -38,8 +38,19 @@ function collectionRuntime() {
   };
   const facts = c => ({ view: c.view, revision: c.revision, scroll_sequence: c.geometry?.scroll_sequence ?? 0,
     offset: 0, port_main: 600, port_cross: 320, cross: 320, padding: [0, 0], focus_view: null, interaction_view: null, measurements: [] });
-  return { make, facts, send: f => report(null, f, {}), HeightPreview, maps: () => mapCount };
+  return { make, facts, send: f => report(null, f, {}), HeightPreview, SizeIndex, maps: () => mapCount };
 }
+
+test('a partly visible lead leaves the first visible data key and its signed offset', () => {
+  const { make } = collectionRuntime(), c = make();
+  c.index.fixed = [300, 800];
+  Object.assign(c.el, { scrollTop: 150, clientHeight: 200 });
+  expect(c.scrollAnchor()).toEqual(['0', -150]);
+  c.el.scrollTop = 0;
+  expect(c.scrollAnchor()).toEqual([null, 0]);
+  c.el.scrollTop = 10350;
+  expect(c.scrollAnchor()).toEqual([null, 0]);
+});
 
 test('collection padding alone publishes a revision and rejects older same-token feedback', () => {
   for (const horizontal of [false, true]) {
@@ -165,4 +176,18 @@ test('collection normal fast path retains noise, revives zeros and discards old-
     expect(c.zeros.size).toBe(0);
     expect([c.index.leading, c.index.trailing]).toEqual([30, 70]);
   }
+});
+
+
+test('fixed items have separate anchoring identities and stay outside data windows', () => {
+  const { SizeIndex } = collectionRuntime(), index = new SizeIndex(100);
+  index.replace(['n:1', 'n:2', 'n:3']);index.fixed = [300, 800];
+  expect([index.len,index.total,index.prefix(0),index.rowAt(850)]).toEqual([3,1400,300,null]);
+  const tail = index.anchor(850,200,false), lead = index.anchor(150,200,false), end = index.anchor(1200,200,true);
+  index.replace(['n:0', 'n:1', 'n:2', 'n:3']);
+  expect(index.restoreAnchor(tail,200)).toBe(950);
+  expect(index.restoreAnchor(lead,200)).toBe(150);
+  index.fixed[1] = 900;
+  expect(index.restoreAnchor(end,200)).toBe(1400);
+  expect(index.window(1200,200,[0,0]).segments).toEqual([]);
 });

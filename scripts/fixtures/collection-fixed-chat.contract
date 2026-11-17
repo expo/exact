@@ -1,0 +1,20 @@
+component App
+  state rows = range(100)
+  state tail = 800
+  action grow
+    tail = tail + 200
+  action clear
+    rows = rows.slice(0, 0)
+  action prepend
+    rows = [-1].concat(rows)
+  view
+    column
+      button "Grow trail" press=grow testId="grow"
+      button "Older messages" press=prepend testId="prepend"
+      button "Empty transcript" press=clear testId="clear"
+      list virtualized=true appearance="none" width=300 height=200 estimated-item-height=40 scrollFollowEnd=true testId="chat"
+        text "Conversation" height=600 margin-bottom=20 testId="lead"
+        for n in rows key=n
+          text `Message ${n}` height=40 testId=`message-${n}`
+        view height=tail display="flex" flex-direction="column" justify-content="flex-end" testId="trail"
+          text "End of conversation" testId="reply"

@@ -155,7 +155,7 @@ export function arrangeDrags({ w, views, viewId, api, lower, ops, now, applyBatc
     let velocity = [0, 0];
     if (certified) { w.m_measured(active.holds.get(active.binding.wrapper), t); velocity = [w.m_scratch(0), w.m_scratch(1)].map(v => Number.isFinite(v) ? v : 0); }
     active.velocity = velocity;
-    const dispatched = certified ? L().drop(active.token, geometryOf(f)) : (L().cancel(active.token), false);
+    const dispatched = certified ? L().drop(active.token, geometryOf(f), f.now) : (L().cancel(active.token), false);
     return reply(certified, !!dispatched, [...extra, ...lower()]);
   }
   const controller = arrangeController({ views, collections: new Proxy({}, { get: (_, k) => L()?.controller()?.[k] }), motion: api, request, applyBatch, now, generation: () => 0, inert: inertAncestor,

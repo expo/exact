@@ -147,7 +147,7 @@ enum SvgPaint {
     }()
 
     /// A layer covering `rect` (user units) with the gradient drawn in it.
-    private static func gradient(_ g: [String: Any], rect: CGRect, scale: CGFloat, dark: Bool, color: (Any?, Bool) -> CGColor?) -> CALayer? {
+    static func gradient(_ g: [String: Any], rect: CGRect, scale: CGFloat, dark: Bool, color: (Any?, Bool) -> CGColor?) -> CALayer? {
         let rect = rect.integral.insetBy(dx: -1, dy: -1)
         // A shape too large for one bitmap at its scale gets fewer pixels,
         // stretched: a gradient is smooth, and is never dropped.
@@ -215,6 +215,11 @@ enum SvgPaint {
             if spread != 0, len2 > 0 {
                 let ts = corners.map { (($0.x - p1.x) * d.x + ($0.y - p1.y) * d.y) / len2 }
                 let lo = floor(ts.min() ?? 0), hi = ceil(ts.max() ?? 1)
+                if hi - lo > CGFloat(periodsAsStops) {
+                    return sampled(ctx, rect: rect, m: m, stops: stops, reflect: spread == 1, space: space) {
+                        (($0.x - p1.x) * d.x + ($0.y - p1.y) * d.y) / len2
+                    }
+                }
                 stops = repeated(stops, from: Int(lo), to: Int(hi), reflect: spread == 1)
                 (p1, p2) = (CGPoint(x: p1.x + d.x * lo, y: p1.y + d.y * lo), CGPoint(x: p1.x + d.x * hi, y: p1.y + d.y * hi))
             }
@@ -229,6 +234,12 @@ enum SvgPaint {
                 // pads until the island draws it (LLP 1055.000 §0).
                 let far = corners.map { hypot($0.x - c.x, $0.y - c.y) }.max() ?? r
                 let n = max(1, Int(ceil(far / r)))
+                if n > periodsAsStops {
+                    let radius = r
+                    return sampled(ctx, rect: rect, m: m, stops: stops, reflect: spread == 1, space: space) {
+                        hypot($0.x - c.x, $0.y - c.y) / radius
+                    }
+                }
                 stops = repeated(stops, from: 0, to: n, reflect: spread == 1)
                 r *= CGFloat(n)
             }
@@ -238,11 +249,14 @@ enum SvgPaint {
         return ctx.makeImage()
     }
 
+    /// The most periods a repeating gradient is drawn as, each one a copy of
+    /// the stops; past it, `sampled` evaluates it per pixel.
+    private static let periodsAsStops = 256
+
     /// The stops over periods `from..<to` of the gradient vector, in one
     /// 0–1 range; `reflect` mirrors every other period.
     private static func repeated(_ stops: [(CGFloat, CGColor)], from: Int, to: Int, reflect: Bool) -> [(CGFloat, CGColor)] {
         let periods = max(1, to - from)
-        guard periods <= 256 else { return stops }
         var out: [(CGFloat, CGColor)] = []
         for k in from..<(from + periods) {
             let flip = reflect && (k % 2 != 0)
@@ -250,6 +264,36 @@ enum SvgPaint {
             for (o, c) in period { out.append(((CGFloat(k - from) + o) / CGFloat(periods), c)) }
         }
         return out
+    }
+
+    /// `ctx`'s pixels, each the repeating gradient at the pixel's centre:
+    /// `at` maps a point in gradient space to the gradient's parameter, and
+    /// one period drawn into a strip gives the colour there.
+    private static func sampled(_ ctx: CGContext, rect: CGRect, m: CGAffineTransform, stops: [(CGFloat, CGColor)],
+                                reflect: Bool, space: CGColorSpace, at: (CGPoint) -> CGFloat) -> CGImage? {
+        let n = 1024
+        guard let grad = make(stops, space), let pixels = ctx.data,
+              let strip = CGContext(data: nil, width: n, height: 1, bitsPerComponent: 8, bytesPerRow: n * 4, space: space,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let period = strip.data?.assumingMemoryBound(to: UInt32.self) else { return nil }
+        strip.drawLinearGradient(grad, start: .zero, end: CGPoint(x: n, y: 0), options: [])
+        let (w, h) = (ctx.width, ctx.height)
+        let inverse = m.inverted()
+        // The first row in memory is the rect's top (`draw` flips y).
+        for y in 0..<h {
+            let row = (pixels + y * ctx.bytesPerRow).assumingMemoryBound(to: UInt32.self)
+            let py = rect.minY + (CGFloat(y) + 0.5) * rect.height / CGFloat(h)
+            for x in 0..<w {
+                let px = rect.minX + (CGFloat(x) + 0.5) * rect.width / CGFloat(w)
+                let t = at(CGPoint(x: px, y: py).applying(inverse))
+                guard t.isFinite else { continue }
+                let k = floor(t)
+                var f = t - k
+                if reflect, k.truncatingRemainder(dividingBy: 2) != 0 { f = 1 - f }
+                row[x] = period[min(n - 1, Int(f * CGFloat(n)))]
+            }
+        }
+        return ctx.makeImage()
     }
 
     private static func make(_ stops: [(CGFloat, CGColor)], _ space: CGColorSpace) -> CGGradient? {

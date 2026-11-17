@@ -1,0 +1,7 @@
+component App
+  action choose(value: string)
+    setScheme(value)
+  view
+    main width="100%" height="100%" background-color="light-dark(#ffffff, #000000)"
+      button "Dark" press=choose("dark") testId="dark"
+      button "System" press=choose("system") testId="system"

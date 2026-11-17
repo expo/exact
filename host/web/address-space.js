@@ -7,6 +7,8 @@
 import { isCloudMetadata, isLocalNetwork } from './grant-admission.js';
 
 const RANK = { public: 0, local: 1, loopback: 2 };
+/** The origin a request that carries none is checked as: not the app's, so D6's rule applies to it. */
+export const UNATTRIBUTED = 'unattributed';
 /**
  * The space of `host` as written: `loopback`, `local` or `public`; a name the browser resolves is `public` here. The
  * cloud metadata address, which no grant admits as local, is in the browser's local space all the same.

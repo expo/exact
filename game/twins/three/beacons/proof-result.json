@@ -1,8 +1,8 @@
 {
   "pass": true,
-  "started": "2026-09-17T15:58:24.215Z",
-  "finished": "2026-09-17T15:58:42.189Z",
-  "seconds": 17.974,
+  "started": "2026-11-13T12:02:06.789Z",
+  "finished": "2026-11-13T12:02:08.686Z",
+  "seconds": 1.897,
   "checks": [
     {
       "name": "A: real three.js r186 and WebGL draw calls",
@@ -11,6 +11,11 @@
     },
     {
       "name": "A: title and accessible Play button",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "A: Space on the focused Play button starts the game",
       "pass": true,
       "detail": null
     },
@@ -115,6 +120,11 @@
     },
     {
       "name": "B: title and accessible Play button",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "B: Space on the focused Play button starts the game",
       "pass": true,
       "detail": null
     },
@@ -292,8 +302,8 @@
   },
   "screenshot": "playing.png",
   "browserPids": [
-    46493,
-    48138,
-    48794
+    60319,
+    60338,
+    60357
   ]
 }

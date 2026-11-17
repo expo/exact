@@ -422,7 +422,7 @@ pub enum Event {
 /// at its end, `scrollHeight - scrollTop - clientHeight` as on the web).
 /// A native host's `scrollWidth`/`scrollHeight` is its client size plus its
 /// scroll range, so the difference is the range it clamps to.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollEvent {
     /// The offset from the start, along x (`scrollLeft`).
     pub left: f64,
@@ -436,6 +436,23 @@ pub struct ScrollEvent {
     pub client_width: f64,
     /// The scrollport's height (`clientHeight`).
     pub client_height: f64,
+    /// A zoomable container's zoom (`scrollZoom`, LLP 1057.001.000 D2); 1
+    /// on any other scroller.
+    pub zoom: f64,
+}
+
+impl Default for ScrollEvent {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            top: 0.0,
+            width: 0.0,
+            height: 0.0,
+            client_width: 0.0,
+            client_height: 0.0,
+            zoom: 1.0,
+        }
+    }
 }
 
 impl ScrollEvent {
@@ -452,6 +469,7 @@ impl ScrollEvent {
             Value::Number(self.client_height),
             key,
             Value::Number(offset),
+            Value::Number(self.zoom),
         ])
     }
 }
@@ -744,21 +762,33 @@ impl Event {
     }
 
     /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
-    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative.
+    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
+    /// then a zoomable container's zoom, above 0; a scroller that does not
+    /// zoom leaves it out.
     pub fn scroll_payload(payload: &str) -> Option<Self> {
+        let (payload, zoom) = match payload.matches(',').count() {
+            6 => {
+                let (rest, zoom) = payload.rsplit_once(',')?;
+                (rest, exact_num::parse_f64(zoom).ok()?)
+            }
+            _ => (payload, 1.0),
+        };
         let [left, top, width, height, client_width, client_height] = tuple::<6>(payload)?;
         ([left, top].iter().all(|v| v.is_finite())
             && [width, height, client_width, client_height]
                 .iter()
-                .all(|v| v.is_finite() && *v >= 0.0))
-        .then_some(Self::Scroll(ScrollEvent {
-            left,
-            top,
-            width,
-            height,
-            client_width,
-            client_height,
-        }))
+                .all(|v| v.is_finite() && *v >= 0.0)
+            && zoom.is_finite()
+            && zoom > 0.0)
+            .then_some(Self::Scroll(ScrollEvent {
+                left,
+                top,
+                width,
+                height,
+                client_width,
+                client_height,
+                zoom,
+            }))
     }
 }
 
@@ -887,80 +917,6 @@ impl<D: DataSource> Runner<D> {
             .map_err(ActionBindingError::Dispatch)
     }
 
-    fn binding_projection(
-        &self,
-        code: Code,
-        frames: &[super::Frame],
-        string_bytes: &mut usize,
-    ) -> Result<BindingScalar, ActionBindingRefusal> {
-        use ActionBindingRefusal::{Limit, Unsupported};
-        if code.len > 128 {
-            return Err(Limit);
-        }
-        let mut r = crate::vm::instructions(self.plan.code(code)).peekable();
-        let first = binding_step(&mut r)?;
-        let op = first.op;
-        let mut value = match op {
-            Opcode::Number => Value::Number(first.number),
-            Opcode::Bool => Value::Bool(first.args[0] != 0),
-            Opcode::Unit => Value::Unit,
-            Opcode::Str => {
-                let id = exact_plan::StrId(first.args[0] as u32);
-                if binding_step(&mut r)?.op != Opcode::Return || r.peek().is_some() {
-                    return Err(Unsupported);
-                }
-                return BindingScalar::string(self.plan.str(id), string_bytes);
-            }
-            Opcode::LoadSlot => {
-                let id = first.args[0] as u32;
-                let row = self.plan.slots.get(id as usize).ok_or(Unsupported)?;
-                match self.plan.owner_region(row) {
-                    Some(owner) => super::Frame::row_of(frames, owner.0)
-                        .and_then(|slots| slots.borrow().get(&id).cloned())
-                        .ok_or(Unsupported)?,
-                    None => self.slots.get(id as usize).cloned().ok_or(Unsupported)?,
-                }
-            }
-            Opcode::LoadItem | Opcode::LoadBound => {
-                let depth = first.args[0] as usize;
-                let frame = frames
-                    .len()
-                    .checked_sub(depth + 1)
-                    .and_then(|i| frames.get(i))
-                    .ok_or(Unsupported)?;
-                (if op == Opcode::LoadItem {
-                    &frame.item
-                } else {
-                    &frame.bound
-                })
-                .clone()
-                .ok_or(Unsupported)?
-            }
-            _ => return Err(Unsupported),
-        };
-        let mut fields = 0;
-        loop {
-            let step = binding_step(&mut r)?;
-            match step.op {
-                Opcode::Return if r.peek().is_none() => {
-                    return BindingScalar::capture(&value, string_bytes)
-                }
-                Opcode::Field => {
-                    fields += 1;
-                    if fields > 8 {
-                        return Err(Limit);
-                    }
-                    let index = step.args[0] as usize;
-                    let Value::Record(record) = &value else {
-                        return Err(Unsupported);
-                    };
-                    value = record.get(index).cloned().ok_or(Unsupported)?;
-                }
-                _ => return Err(Unsupported),
-            }
-        }
-    }
-
     fn binding_action(
         &self,
         id: ActionsId,
@@ -1080,9 +1036,9 @@ impl<D: DataSource> Runner<D> {
             let action = handler.action;
             let _ = write!(what, " ({})", self.plan.str(self.plan.action(action).name));
             let mut args = Vec::new();
-            for a in handler.args.iter() {
+            for (k, a) in handler.args.iter().enumerate() {
                 let code = self.plan.arg(a).expr;
-                args.push(self.eval(code, &[], &frames)?);
+                args.push(self.eval_argument(code, &frames, (view, node, name, k))?);
             }
             let before = super::collection::EdgeState::capture(self, &frames);
             let receipt = self.run_action(action, args, &frames)?;
@@ -1102,7 +1058,10 @@ impl<D: DataSource> Runner<D> {
                 return self.as_origin(origin, |r| r.arrived(|r| r.dispatch_event(view, event)));
             }
         }
-        self.arrived(|r| r.dispatch_event(view, event))
+        self.arrived(|r| {
+            r.note_input(&event);
+            r.dispatch_event(view, event)
+        })
     }
 
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
@@ -1381,7 +1340,7 @@ impl<D: DataSource> Runner<D> {
         };
         // A package view's declared event (`view_event.rs`).
         if let Event::Message(text) = &event {
-            if let Some(done) = self.view_event(node, text, &frames, what) {
+            if let Some(done) = self.view_event(view, node, text, &frames, what) {
                 return done;
             }
         }
@@ -1394,9 +1353,9 @@ impl<D: DataSource> Runner<D> {
             .cloned()
             .ok_or(RunnerError::NoHandler { view, event: name })?;
         let mut args = Vec::new();
-        for a in handler.args.iter() {
+        for (k, a) in handler.args.iter().enumerate() {
             let code = self.plan.arg(a).expr;
-            let value = match self.eval(code, &[], &frames) {
+            let value = match self.eval_argument(code, &frames, (view, node, name, k)) {
                 Ok(value) => value,
                 Err(error) => {
                     let name = self.plan.action(handler.action).name;
@@ -1496,3 +1455,5 @@ impl<D: DataSource> Runner<D> {
 
 #[cfg(test)]
 mod retained_binding_tests;
+
+mod projection;

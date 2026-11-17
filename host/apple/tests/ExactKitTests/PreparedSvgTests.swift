@@ -12,33 +12,39 @@ class PreparedSvgTests: XCTestCase {
         return s
     }
 
-    private func shapePath(_ scene: SvgScene) -> CGPath? {
-        (scene.root.sublayers?.first as? CAShapeLayer)?.path
+    private func shapePath(_ scene: SvgScene) throws -> CGPath {
+        #if os(macOS)
+        let content = scene.root
+        #else
+        let content = try XCTUnwrap(scene.root.sublayers?.first)
+        #endif
+        let shape = try XCTUnwrap(content.sublayers?.first as? CAShapeLayer)
+        return try XCTUnwrap(shape.path)
     }
 
-    func testAPreparedPathThatChangesIsRedrawn() {
+    func testAPreparedPathThatChangesIsRedrawn() throws {
         let svg = SvgScene()
         svg.apply(scene([0, 0, 0, 1, 10, 0, 1, 10, 10, 3], prepared: true), dark: false, clock: nil)
-        let first = shapePath(svg)
-        XCTAssertEqual(first?.boundingBox, CGRect(x: 0, y: 0, width: 10, height: 10))
+        let first = try shapePath(svg)
+        XCTAssertEqual(first.boundingBox, CGRect(x: 0, y: 0, width: 10, height: 10))
         svg.apply(scene([0, 0, 0, 1, 40, 0, 1, 40, 30, 3], prepared: true), dark: false, clock: nil)
-        XCTAssertEqual(shapePath(svg)?.boundingBox, CGRect(x: 0, y: 0, width: 40, height: 30))
+        XCTAssertEqual(try shapePath(svg).boundingBox, CGRect(x: 0, y: 0, width: 40, height: 30))
     }
 
-    func testAPreparedPathThatDidNotChangeIsLeftAlone() {
+    func testAPreparedPathThatDidNotChangeIsLeftAlone() throws {
         let svg = SvgScene()
         let path: [Double] = [0, 0, 0, 1, 10, 0, 1, 10, 10, 3]
         svg.apply(scene(path, prepared: true), dark: false, clock: nil)
-        let first = shapePath(svg)
+        let first = try shapePath(svg)
         svg.apply(scene(path, prepared: true), dark: false, clock: nil)
-        XCTAssertTrue(shapePath(svg) === first)
+        XCTAssertTrue(try shapePath(svg) === first)
     }
 
-    func testAPreparedPathIsTheRawOne() {
+    func testAPreparedPathIsTheRawOne() throws {
         let path: [Double] = [0, 2, 3, 2, 5, 7, 11, 13, 17, 19, 23, 1, 4, 9, 3]
         let raw = SvgScene(), prepared = SvgScene()
         raw.apply(scene(path, prepared: false), dark: false, clock: nil)
         prepared.apply(scene(path, prepared: true), dark: false, clock: nil)
-        XCTAssertEqual(shapePath(raw), shapePath(prepared))
+        XCTAssertEqual(try shapePath(raw), try shapePath(prepared))
     }
 }

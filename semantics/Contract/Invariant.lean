@@ -5,26 +5,28 @@ reach, from boot, by any sequence of host events.
 The laws in `Contract.Axiomatic` are about one action. This file lifts
 them to runs. A host can do only two things to a configuration: deliver an
 event to an element it shows (`dispatch`) or move the clock (`advance`).
-The first runs the action of a handler the view rendered, the second the
-actions of timers boot started; neither changes anything except through
-`runAction`. So an invariant of a program is proved by
+The first runs a handler's action; the second runs timers, continuations
+and queued sends. An invariant of a program is proved by
 `Reachable.invariant`: it holds after `boot`, every `runAction` of a
 handler the program's view declares preserves it, every `runAction` of a
-task's action does, and moving the clock does.
+task or continuation does, every `nextCommit` does, and moving the clock does.
 
 For a property of one slot (the common case), `Reachable.slotIn` reduces
 those obligations to the values the slot can start with (`SlotOrigin`)
-and to the action bodies (`BodyKeeps`): a body that never assigns or sends
+and to the action bodies (`BodyKeeps`). `SlotInvariant` carries the slot
+property together with the possible answers of its waiting sends, so a
+queue mutation's drain keeps it too. A body that never assigns or sends
 into the slot keeps it (`Stmt.noAssigns`, `Stmt.noSends`, decided by
 `decide`), and one that does is proved with the Hoare logic (`wp`,
-`BodyKeeps.of_wp`) against `actionEnv`. `Event.step_slotIn` is the same
-for a property every action keeps, from any configuration;
+`BodyKeeps.of_wp`) against `actionEnv`. `Event.step_slotInvariant` is the
+same from any configuration where the slot and waiting answers keep the
+property. `Event.step_slotIn` needs only the slot when no drain writes it;
 `Reachable.advance_untouched` says what the clock cannot change.
 
-Nothing here needs `conforms`, `Value.equal` or `Value.same`: a step that
-refuses keeps the configuration, so only what a commit writes matters, and
-`runAction_commit` says that. (`Contract.TypeInvariant` is the invariant
-that does read `conforms`: every slot of its declared type.)
+Slot properties need no assumptions about `conforms`, `Value.equal` or
+`Value.same`: refusal keeps the slots, and `runAction_commit` and
+`nextCommit_slots` describe the committed writes. `Contract.TypeInvariant`
+proves the property that does read `conforms`: every slot has its declared type.
 -/
 import Contract.Axiomatic
 
@@ -93,6 +95,27 @@ theorem handlerLists_append {a b : List Node} :
   | nil => simp [Node.handlerLists]
   | cons n ns ih => simp [Node.handlerLists, ih]
 
+private theorem handlerLists_windowed (children : List Node) :
+    Node.handlerLists (children.map (fun child => match child with
+      | .each .. => .element "#window" [] [] [] [child]
+      | _ => child)) = Node.handlerLists children := by
+  induction children with
+  | nil => rfl
+  | cons child rest ih => cases child <;> simp [Node.handlerLists, Node.handlerList, ih]
+
+private theorem handlerLists_renderChildren (tag : String) (props : List (String × Expr))
+    (children : List Node) :
+    Node.handlerLists (if tag == "list" &&
+        ((lookupField "virtualized" props).map tabLiteral matches .some (.bool true)) then
+      children.map (fun child => match child with
+        | .each .. => .element "#window" [] [] [] [child]
+        | _ => child)
+      else children) = Node.handlerLists children := by
+  by_cases h : (tag == "list" &&
+    ((lookupField "virtualized" props).map tabLiteral matches .some (.bool true))) = true
+  · simp [h, handlerLists_windowed]
+  · simp [h]
+
 /-- A rendered element carries only handlers its view declares. -/
 theorem render_handlers : ∀ fuel,
     (∀ {cx ls nodes live vs live'}, render fuel cx ls nodes live = .ok (vs, live') →
@@ -128,7 +151,11 @@ theorem render_handlers : ∀ fuel,
           simp only [Node.handlerList]
           refine .single (fun _ h => List.mem_append_left _ h) ?_
           split at hk
-          · exact (ihR hk).mono fun _ h => List.mem_append_right _ h
+          · refine (ihR hk).mono fun x h => ?_
+            have h' : x ∈ Node.handlerLists children :=
+              (congrArg (fun handlers => x ∈ handlers)
+                (handlerLists_renderChildren tag props children)).mp h
+            exact List.mem_append_right _ h'
           · simp only [Except.pure_ok_iff, Prod.mk.injEq] at hk
             rw [← hk.1]; exact .nil
         | when tag c thn els =>
@@ -155,7 +182,7 @@ theorem render_handlers : ∀ fuel,
     · intro cx ls tag arm body live vs live' h
       unfold render.renderArm at h
       simp only [Except.bind_ok_iff] at h
-      obtain ⟨_, _, h⟩ := h
+      obtain ⟨_, _, _, _, h⟩ := h
       exact ihR h
     · intro cx ls tag x ix key body items i seen live vs live' h
       cases items with
@@ -163,7 +190,7 @@ theorem render_handlers : ∀ fuel,
       | cons item items =>
         unfold render.renderRows at h
         simp only [Except.bind_ok_iff] at h
-        obtain ⟨_, _, _, _, _, _, ⟨vs1, l1⟩, h1, ⟨vs2, l2⟩, h2, h⟩ := h
+        obtain ⟨_, _, _, _, _, _, _, _, ⟨vs1, l1⟩, h1, ⟨vs2, l2⟩, h2, h⟩ := h
         simp only [Except.pure_ok_iff, Prod.mk.injEq] at h
         obtain ⟨rfl, -⟩ := h
         exact (ihR h1).append (ihW h2)
@@ -220,6 +247,26 @@ theorem nextCommit_frame {p o c m c' out}
        obtain ⟨cx, hr⟩ := update_render (by assumption)
        exact ⟨gateStep_actions (by assumption), .inr ⟨cx, _, hr⟩⟩)
 
+/-- A `then`'s commit refuses with the configuration unchanged, or runs
+its action. -/
+theorem thenCommit_cases {p o c a args rows ls c' out}
+    (h : thenCommit p o c a args rows ls = (c', out)) :
+    c' = c ∨ ∃ vs, runAction p o c a vs rows = (c', out) := by
+  simp only [thenCommit] at h
+  split at h
+  · exact .inr ⟨_, h⟩
+  all_goals exact .inl (Prod.mk.inj h).1.symm
+
+/-- So does the `then` of an instance's send row, in some rows. -/
+theorem ownedThen_cases {p o c i a c' out} (h : ownedThen p o c i a = (c', out)) :
+    c' = c ∨ ∃ vs rows, runAction p o c a vs rows = (c', out) := by
+  simp only [ownedThen] at h
+  split at h
+  · rcases thenCommit_cases h with h | ⟨vs, h⟩
+    · exact .inl h
+    · exact .inr ⟨vs, _, h⟩
+  · exact .inl (Prod.mk.inj h).1.symm
+
 /-- A dispatch either refuses with the configuration unchanged, or runs
 the action of a handler on an element the view shows: the handler's
 curried arguments evaluated in the element's scope, then the payload. -/
@@ -250,12 +297,13 @@ of `T`, and any way of finishing that keeps `J`. -/
 theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List String)
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ T)
+    (hpickO : ∀ c i w a, pick c = Option.some (.owned i w a) → a ∈ T)
     (hpickN : ∀ c m w, pick c = Option.some (.next m w) → isQueue p m = true)
     (hfinish : ∀ c, J c → (∀ tm ∈ c.timers, tm.action ∈ A) → J (finish c).1 ∧
       ∀ tm ∈ (finish c).1.timers, tm.action ∈ A)
-    (hclock : ∀ (c : Config) ts t ar ns, J c → (∀ tm ∈ ts, tm.action ∈ A) →
-      J { c with timers := ts, now := t, armed := ar, nexts := ns })
-    (hrun : ∀ c c' out a, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a [] [] = (c', out) → J c')
+    (hclock : ∀ (c : Config) ts t ar ns srs, J c → (∀ tm ∈ ts, tm.action ∈ A) →
+      J { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
+    (hrun : ∀ c c' out a args rows, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a args rows = (c', out) → J c')
     (hdrain : ∀ c c' out m, J c → isQueue p m = true → nextCommit p o c m = (c', out) → J c') :
     ∀ n c, J c → (∀ tm ∈ c.timers, tm.action ∈ A) →
       J (advance.go p o due pick finish n c).1 ∧
@@ -275,7 +323,7 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
       generalize hr : nextCommit p o
         { c with nexts := c.nexts.filter (·.1 != m), now := if c.now < w then w else c.now } m = r
       have hJ' := hclock c c.timers (if c.now < w then w else c.now) c.armed
-        (c.nexts.filter (·.1 != m)) hJ hA
+        (c.nexts.filter (·.1 != m)) c.sendRows hJ hA
       obtain ⟨c₂, out₂⟩ := r
       have hf := (nextCommit_frame hr).1
       have hJ₂ := hdrain _ _ _ _ hJ' (hpickN c m w hp) hr
@@ -283,62 +331,90 @@ theorem advance_go {p o due pick finish} (J : Config → Prop) (A T : List Strin
         obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map hf hy
         exact he ▸ hA y₀ hy₀
       cases out₂ with
-      | ok => exact advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+      | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
       | refused => exact ⟨hJ₂, hA₂⟩
       | poisoned => exact ⟨hJ₂, hA₂⟩
     next m w a hp =>
       dsimp only
-      generalize hr : runAction p o
+      generalize hr : thenCommit p o
         { c with armed := c.armed.filter (·.1 != m), now := if c.now < w then w else c.now }
-        a [] [] = r
+        a (thenArgsOf p m) [] [] = r
       have hJ' := hclock c c.timers (if c.now < w then w else c.now) (c.armed.filter (·.1 != m))
-        c.nexts hJ hA
+        c.nexts c.sendRows hJ hA
       obtain ⟨c₂, out₂⟩ := r
-      have hf := (runAction_frame hr).1
-      have hJ₂ := hrun _ _ _ _ hJ' (.inr (hpick c m w a hp)) hr
-      have hA₂ : ∀ y ∈ c₂.timers, y.action ∈ A := fun y hy => by
-        obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map hf hy
-        exact he ▸ hA y₀ hy₀
+      have hrun' : J c₂ ∧ ∀ y ∈ c₂.timers, y.action ∈ A := by
+        rcases thenCommit_cases hr with rfl | ⟨vs, hr⟩
+        · exact ⟨hJ', hA⟩
+        · refine ⟨hrun _ _ _ _ _ _ hJ' (.inr (hpick c m w a hp)) hr, fun y hy => ?_⟩
+          obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map (runAction_frame hr).1 hy
+          exact he ▸ hA y₀ hy₀
+      obtain ⟨hJ₂, hA₂⟩ := hrun'
       cases out₂ with
-      | ok => exact advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
-      | refused => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ hJ₂ hA₂, hA₂⟩
-      | poisoned => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ hJ₂ hA₂, hA₂⟩
+      | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+      | refused => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
+      | poisoned => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
+    next i w a hp =>
+      dsimp only
+      generalize hr : ownedThen p o
+        { c with sendRows := disarm c.sendRows i, now := if c.now < w then w else c.now } i a = r
+      have hJ' := hclock c c.timers (if c.now < w then w else c.now) c.armed c.nexts
+        (disarm c.sendRows i) hJ hA
+      obtain ⟨c₂, out₂⟩ := r
+      have hrun' : J c₂ ∧ ∀ y ∈ c₂.timers, y.action ∈ A := by
+        rcases ownedThen_cases hr with rfl | ⟨vs, rows, hr⟩
+        · exact ⟨hJ', hA⟩
+        · refine ⟨hrun _ _ _ _ _ _ hJ' (.inr (hpickO c i w a hp)) hr, fun y hy => ?_⟩
+          obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map (runAction_frame hr).1 hy
+          exact he ▸ hA y₀ hy₀
+      obtain ⟨hJ₂, hA₂⟩ := hrun'
+      cases out₂ with
+      | ok => exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+      | refused => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
+      | poisoned => exact ⟨hclock c₂ c₂.timers c₂.now c₂.armed _ c₂.sendRows hJ₂ hA₂, hA₂⟩
     split
     · exact hfinish c hJ hA
     next tm i hd =>
+    split
+    · exact ⟨hJ, hA⟩
     have htm := hA tm (hdue c tm i hd)
     have hset : ∀ y ∈ c.timers.set i tm.fired, y.action ∈ A := fun y hy => by
       rcases List.mem_or_eq_of_mem_set hy with hy | rfl
       · exact hA y hy
       · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact htm
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := tm.next }
+    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
       tm.action [] [] = r
-    have hJ' := hclock c _ tm.next c.armed c.nexts hJ hset
+    have hJ' := hclock c _ (if tm.change && tm.next < c.now then c.now else tm.next) c.armed c.nexts
+      c.sendRows hJ hset
     obtain ⟨c₂, out₂⟩ := r
     have hf := (runAction_frame hr).1
-    have hJ₂ := hrun _ _ _ _ hJ' (.inl htm) hr
+    have hJ₂ := hrun _ _ _ _ _ _ hJ' (.inl htm) hr
     have hA₂ : ∀ y ∈ c₂.timers, y.action ∈ A := fun y hy => by
       obtain ⟨y₀, hy₀, he⟩ := action_mem_of_map hf hy
       exact he ▸ hset y₀ hy₀
     cases out₂ with
-    | ok => exact advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
+    | ok =>
+      dsimp only
+      split
+      · exact ⟨hJ₂, hA₂⟩
+      · exact advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c₂ hJ₂ hA₂
     | refused => exact ⟨hJ₂, hA₂⟩
     | poisoned => exact ⟨hJ₂, hA₂⟩
 
 theorem advance_go_eq {p o due pick finish} (J : Config → Prop) (A T : List String)
     (hdue : ∀ c tm i, due c = Option.some (tm, i) → tm ∈ c.timers)
     (hpick : ∀ c m w a, pick c = Option.some (.andThen m w a) → a ∈ T)
+    (hpickO : ∀ c i w a, pick c = Option.some (.owned i w a) → a ∈ T)
     (hpickN : ∀ c m w, pick c = Option.some (.next m w) → isQueue p m = true)
     (hfinish : ∀ c, J c → (∀ tm ∈ c.timers, tm.action ∈ A) → J (finish c).1 ∧
       ∀ tm ∈ (finish c).1.timers, tm.action ∈ A)
-    (hclock : ∀ (c : Config) ts t ar ns, J c → (∀ tm ∈ ts, tm.action ∈ A) →
-      J { c with timers := ts, now := t, armed := ar, nexts := ns })
-    (hrun : ∀ c c' out a, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a [] [] = (c', out) → J c')
+    (hclock : ∀ (c : Config) ts t ar ns srs, J c → (∀ tm ∈ ts, tm.action ∈ A) →
+      J { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
+    (hrun : ∀ c c' out a args rows, J c → (a ∈ A ∨ a ∈ T) → runAction p o c a args rows = (c', out) → J c')
     (hdrain : ∀ c c' out m, J c → isQueue p m = true → nextCommit p o c m = (c', out) → J c')
     {n c c' out} (hJ : J c) (hA : ∀ tm ∈ c.timers, tm.action ∈ A)
     (h : advance.go p o due pick finish n c = (c', out)) : J c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
-  have := advance_go J A T hdue hpick hpickN hfinish hclock hrun hdrain n c hJ hA
+  have := advance_go J A T hdue hpick hpickO hpickN hfinish hclock hrun hdrain n c hJ hA
   rw [h] at this; exact this
 
 theorem foldl_pick{α : Type} {f : Option α → α → Option α} (hf : ∀ b x, f b x = b ∨ f b x = .some x) :
@@ -402,20 +478,47 @@ theorem dueNext_queue {p : Program} {nexts t m w} (h : dueNext p nexts t = .some
     · exact hb r hr
   · exact hb r hr
 
+/-- The `then` of an instance's send row is a mutation's. -/
+theorem dueOwned_mem {p : Program} {rs t i w a} (h : dueOwned p rs t = .some (i, w, a)) :
+    a ∈ thenActions p := by
+  unfold dueOwned at h
+  refine foldl_inv
+    (fun (b : Option (Nat × F64 × String)) => ∀ r, b = .some r → r.2.2 ∈ thenActions p)
+    (sendOrder p rs) Option.none (fun _ h => nomatch h) ?_ (i, w, a) h
+  intro b x _ hb r hr
+  obtain ⟨sr, j⟩ := x
+  have key : ∀ a', ((p.mutations.find? (·.name == sr.mutation)).bind (·.andThen)) = some a' →
+      a' ∈ thenActions p := fun a' ha' => by
+    obtain ⟨md, hmd, hma⟩ := Option.bind_eq_some_iff.mp ha'
+    exact List.mem_filterMap.mpr ⟨md, List.mem_of_find?_eq_some hmd, hma⟩
+  dsimp only at hr
+  split at hr
+  · split at hr
+    · split at hr
+      · cases hr; exact key _ (by assumption)
+      · split at hr
+        · cases hr; exact key _ (by assumption)
+        · exact hb r hr
+    · exact hb r hr
+  · exact hb r hr
+
 theorem thenPick_then {p c t timer m w a} (h : thenPick p c t timer = .some (.andThen m w a)) :
     a ∈ thenActions p := by
   unfold thenPick at h
-  split at h
-  · split at h
-    · cases h; exact dueThen_mem ‹_›
-    · cases h
-  · cases h
+  split at h <;> (repeat' split at h) <;> first
+    | (cases h; done)
+    | (cases h; exact dueThen_mem (by assumption))
+
+theorem thenPick_owned {p c t timer i w a} (h : thenPick p c t timer = .some (.owned i w a)) :
+    a ∈ thenActions p := by
+  unfold thenPick at h
+  split at h <;> (repeat' split at h) <;> first
+    | (cases h; done)
+    | (cases h; exact dueOwned_mem (by assumption))
 
 theorem thenPick_next {p c t timer m w} (h : thenPick p c t timer = .some (.next m w)) : False := by
   unfold thenPick at h
-  split at h
-  · split at h <;> cases h
-  · cases h
+  split at h <;> (repeat' split at h) <;> cases h
 
 /-- What the clock picks to run as a `then` is a mutation's `then`. -/
 theorem clockPick_then {p c t timer m w a} (h : clockPick p c t timer = .some (.andThen m w a)) :
@@ -427,6 +530,16 @@ theorem clockPick_then {p c t timer m w a} (h : clockPick p c t timer = .some (.
     · exact thenPick_then h
   · exact thenPick_then h
 
+/-- What the clock picks to run as an instance's `then` is a mutation's `then`. -/
+theorem clockPick_owned {p c t timer i w a} (h : clockPick p c t timer = .some (.owned i w a)) :
+    a ∈ thenActions p := by
+  unfold clockPick at h
+  split at h
+  · split at h
+    · cases h
+    · exact thenPick_owned h
+  · exact thenPick_owned h
+
 /-- What the clock picks to run as a `next` is a `queue` mutation's. -/
 theorem clockPick_next {p c t timer m w} (h : clockPick p c t timer = .some (.next m w)) :
     isQueue p m = true := by
@@ -437,20 +550,21 @@ theorem clockPick_next {p c t timer m w} (h : clockPick p c t timer = .some (.ne
     · exact (thenPick_next h).elim
   · exact (thenPick_next h).elim
 
-/-- Moving the clock only runs timers' actions and armed `then`s: an
-invariant that every such action preserves, and that does not depend on
-the timers, the clock or what is armed, holds after an advance. -/
+/-- An invariant kept by timer actions, continuations and queued send
+commits survives an advance, provided changing scheduling fields keeps it. -/
 theorem advance_preserves {p o} (I : Config → Prop) (A : List String)
-    (hclock : ∀ (c : Config) ts t ar ns, I c → I { c with timers := ts, now := t, armed := ar, nexts := ns })
-    (hrun : ∀ c c' out a, I c → (a ∈ A ∨ a ∈ thenActions p) → runAction p o c a [] [] = (c', out) → I c')
+    (hclock : ∀ (c : Config) ts t ar ns srs,
+      I c → I { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
+    (hrun : ∀ c c' out a args rows, I c → (a ∈ A ∨ a ∈ thenActions p) →
+      runAction p o c a args rows = (c', out) → I c')
     (hdrain : ∀ c c' out m, I c → isQueue p m = true → nextCommit p o c m = (c', out) → I c')
     {c t c' out} (hI : I c) (hA : ∀ tm ∈ c.timers, tm.action ∈ A)
     (h : advance p o c t = (c', out)) : I c' ∧ ∀ tm ∈ c'.timers, tm.action ∈ A := by
   simp only [advance] at h
   split at h
   · cases h; exact ⟨hI, hA⟩
-  refine advance_go_eq I A (thenActions p) ?_ ?_ ?_ ?_ (fun c ts t ar ns hc _ => hclock c ts t ar ns hc)
-    hrun hdrain hI hA h
+  refine advance_go_eq I A (thenActions p) ?_ ?_ ?_ ?_ ?_
+    (fun c ts t ar ns srs hc _ => hclock c ts t ar ns srs hc) hrun hdrain hI hA h
   · intro c tm i hd
     rcases foldl_pick (by
         intro b x
@@ -461,10 +575,12 @@ theorem advance_preserves {p o} (I : Config → Prop) (A : List String)
     · exact List.mem_zipIdx h |>.2.2 ▸ List.getElem_mem _
   · intro c m w a hp
     exact clockPick_then hp
+  · intro c i w a hp
+    exact clockPick_owned hp
   · intro c m w hp
     exact clockPick_next hp
   · intro c hc ha
-    exact ⟨hclock c c.timers _ c.armed c.nexts hc, ha⟩
+    exact ⟨hclock c c.timers _ c.armed c.nexts c.sendRows hc, ha⟩
 
 /-! ## Boot -/
 
@@ -673,12 +789,13 @@ theorem runAction_framed {p o c name args rows c' out} (hf : Framed p c)
 /-- `Reachable.invariant`, with the frame carried along. -/
 theorem Reachable.invariant_framed {p : Program} (I : Config → Prop)
     (hboot : ∀ o, I (Contract.boot p o).1)
-    (hclock : ∀ (c : Config) ts t ar ns, I c → I { c with timers := ts, now := t, armed := ar, nexts := ns })
+    (hclock : ∀ (c : Config) ts t ar ns srs,
+      I c → I { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
     (hhandler : ∀ o c c' out ev a args env ls vs payload rows, I c →
       (ev, a, args) ∈ Node.handlerLists p.view → ListR env false ls args vs →
       runAction p o c a (vs ++ payload) rows = (c', out) → I c')
-    (htask : ∀ o c c' out, ∀ a ∈ clockActions p, I c →
-      runAction p o c a [] [] = (c', out) → I c')
+    (htask : ∀ o c c' out, ∀ a ∈ clockActions p, ∀ args rows, I c →
+      runAction p o c a args rows = (c', out) → I c')
     (hdrain : ∀ o c c' out m, I c → isQueue p m = true → nextCommit p o c m = (c', out) → I c') :
     ∀ c, Reachable p c → I c ∧ Framed p c := by
   intro c h
@@ -708,8 +825,8 @@ theorem Reachable.invariant_framed {p : Program} (I : Config → Prop)
       generalize hd : Contract.advance p o _ t = r
       obtain ⟨c', out⟩ := r
       have := advance_preserves (p := p) (o := o) (fun c => I c ∧ HandlersFrom (Node.handlerLists p.view) c.view)
-        (p.tasks.map (·.action)) (fun c ts t ar ns h => ⟨hclock c ts t ar ns h.1, h.2⟩)
-        (fun c c' out a h ha hr => ⟨htask o c c' out a (List.mem_append.mpr ha) h.1 hr, by
+        (p.tasks.map (·.action)) (fun c ts t ar ns srs h => ⟨hclock c ts t ar ns srs h.1, h.2⟩)
+        (fun c c' out a args rows h ha hr => ⟨htask o c c' out a (List.mem_append.mpr ha) args rows h.1 hr, by
             obtain ⟨-, hv⟩ := runAction_frame hr
             rcases hv with hv | ⟨cx, live, hr⟩
             · exact hv ▸ h.2
@@ -729,12 +846,13 @@ payload follows them), by every task's action, and by moving the clock.
 A refused step keeps the configuration, so it needs no case. -/
 theorem Reachable.invariant {p : Program} (I : Config → Prop)
     (hboot : ∀ o, I (Contract.boot p o).1)
-    (hclock : ∀ (c : Config) ts t ar ns, I c → I { c with timers := ts, now := t, armed := ar, nexts := ns })
+    (hclock : ∀ (c : Config) ts t ar ns srs,
+      I c → I { c with timers := ts, now := t, armed := ar, nexts := ns, sendRows := srs })
     (hhandler : ∀ o c c' out ev a args env ls vs payload rows, I c →
       (ev, a, args) ∈ Node.handlerLists p.view → ListR env false ls args vs →
       runAction p o c a (vs ++ payload) rows = (c', out) → I c')
-    (htask : ∀ o c c' out, ∀ a ∈ clockActions p, I c →
-      runAction p o c a [] [] = (c', out) → I c')
+    (htask : ∀ o c c' out, ∀ a ∈ clockActions p, ∀ args rows, I c →
+      runAction p o c a args rows = (c', out) → I c')
     (hdrain : ∀ o c c' out m, I c → isQueue p m = true → nextCommit p o c m = (c', out) → I c') :
     ∀ c, Reachable p c → I c :=
   fun c h => (Reachable.invariant_framed I hboot hclock hhandler htask hdrain c h).1
@@ -742,8 +860,8 @@ theorem Reachable.invariant {p : Program} (I : Config → Prop)
 /-- A reachable configuration's elements carry only handlers the view
 declares, and its timers run only tasks' actions. -/
 theorem Reachable.framed {p c} (h : Reachable p c) : Framed p c :=
-  (Reachable.invariant_framed (fun _ => True) (fun _ => trivial) (fun _ _ _ _ _ _ => trivial)
-    (fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => trivial) (fun _ _ _ _ _ _ _ _ => trivial)
+  (Reachable.invariant_framed (fun _ => True) (fun _ => trivial) (fun _ _ _ _ _ _ _ => trivial)
+    (fun _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ => trivial) (fun _ _ _ _ _ _ _ _ _ _ => trivial)
     (fun _ _ _ _ _ _ _ _ => trivial) c h).2
 
 /-! ## Reading simple expressions
@@ -795,6 +913,14 @@ theorem actionEnv_global {p c rows x st} (hst : p.states.find? (·.name == x) = 
 /-- Slot `x`, where present, holds a value with property `V`. -/
 def SlotIn (x : String) (V : Value → Prop) (slots : List (String × Value)) : Prop :=
   ∀ v, lookup x slots = .some v → V v
+
+/-- Every answer a waiting send into `x` could land has `V`. -/
+def QueuedIn (x : String) (V : Value → Prop) (queued : List (String × String × List Value)) : Prop :=
+  ∀ q ∈ queued, q.1 = x → ∀ v, V (.some v)
+
+/-- The slot has `V`, and its waiting sends can only land values with `V`. -/
+def SlotInvariant (x : String) (V : Value → Prop) (c : Config) : Prop :=
+  SlotIn x V c.slots ∧ QueuedIn x V c.queued
 
 theorem lookup_mem {x : String} {v : Value} :
     ∀ {l : List (String × Value)}, lookup x l = .some v → (x, v) ∈ l
@@ -1002,6 +1128,53 @@ theorem BodyKeeps.untouched {p x V c name args rows}
   ⟨fun v hv => (nomatch ExecR.noAssign hx (hn a ha).1 v hv),
    fun s hs hx' => (nomatch ExecR.noSend hx (hn a ha).2 s hs hx')⟩
 
+/-- A send left waiting is one of the action's sends. -/
+theorem splitSends_queued_sub {p c sends q} (h : q ∈ (splitSends p c sends).2) : q ∈ sends := by
+  suffices hs : ∀ s, s ∈ (splitSends p c sends).1 ∨ s ∈ (splitSends p c sends).2 → s ∈ sends from
+    hs q (.inr h)
+  unfold splitSends
+  apply foldl_inv
+    (fun acc : List (String × String × List Value) × List (String × String × List Value) =>
+      ∀ s, s ∈ acc.1 ∨ s ∈ acc.2 → s ∈ sends)
+    sends ([], [])
+  · simp
+  · intro acc t ht ih s hs
+    split at hs
+    · exact ih s hs
+    split at hs
+    · rcases hs with hs | hs
+      · exact ih s (.inl hs)
+      · rcases List.mem_append.mp hs with hs | hs
+        · exact ih s (.inr hs)
+        · obtain rfl := List.mem_singleton.mp hs; exact ht
+    · rcases hs with hs | hs
+      · rcases List.mem_append.mp hs with hs | hs
+        · exact ih s (.inl hs)
+        · obtain rfl := List.mem_singleton.mp hs; exact ht
+      · exact ih s (.inr hs)
+
+/-- Refusal keeps the waiting sends; a standing action adds only sends
+whose possible answers its body keeps. Poisoning drops the queue. -/
+theorem runAction_queuedIn {p o c name args rows c' out x V} (hq : QueuedIn x V c.queued)
+    (hk : BodyKeeps p x V c name args rows)
+    (h : runAction p o c name args rows = (c', out)) : QueuedIn x V c'.queued := by
+  simp only [runAction] at h
+  repeat' split at h
+  all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h)
+  all_goals first
+    | exact hq
+    | solve | simp [QueuedIn]
+    | (intro q hq' hx v
+       rcases List.mem_append.mp hq' with ho | hn
+       · exact hq q ho hx v
+       · exact (hk _ (by assumption) _ (exec_sound (by assumption))).2
+           q (splitSends_queued_sub hn) hx v)
+
+theorem runAction_slotInvariant {p o c name args rows c' out x V} (hs : SlotInvariant x V c)
+    (hk : BodyKeeps p x V c name args rows)
+    (h : runAction p o c name args rows = (c', out)) : SlotInvariant x V c' :=
+  ⟨runAction_slotIn hs.1 hk h, runAction_queuedIn hs.2 hk h⟩
+
 /-- A queued send's commit (LLP 1092 D3) writes its mutation's slot alone. -/
 theorem nextCommit_lookup {p o c m c' out x} (hx : x ≠ m) (h : nextCommit p o c m = (c', out)) :
     lookup x c'.slots = lookup x c.slots := by
@@ -1030,29 +1203,83 @@ theorem nextCommit_untouched {p o c m c' out x} (hx : isQueue p x = false) (hm :
     (h : nextCommit p o c m = (c', out)) : lookup x c'.slots = lookup x c.slots :=
   nextCommit_lookup (fun he => by rw [he, hm] at hx; cases hx) h
 
+/-- A drain only removes waiting sends, including when its ask refuses. -/
+theorem nextCommit_queuedIn {p o c m c' out x V} (hq : QueuedIn x V c.queued)
+    (h : nextCommit p o c m = (c', out)) : QueuedIn x V c'.queued := by
+  simp only [nextCommit] at h
+  repeat' split at h
+  all_goals (simp only [Prod.mk.injEq] at h; obtain ⟨rfl, -⟩ := h)
+  all_goals first
+    | exact hq
+    | solve | simp [QueuedIn]
+    | exact fun q h hx => hq q (List.mem_of_mem_eraseP h) hx
+
+/-- A drain lands an answer only for a waiting send. Refusals either
+drop that send or keep it stalled; neither changes the slot. -/
+theorem nextCommit_slotInvariant {p o c m c' out x V} (hs : SlotInvariant x V c)
+    (h : nextCommit p o c m = (c', out)) : SlotInvariant x V c' := by
+  refine ⟨?_, nextCommit_queuedIn hs.2 h⟩
+  by_cases hx : x = m
+  · subst m
+    by_cases hq : ∃ q ∈ c.queued, q.1 = x
+    · obtain ⟨q, hq, hx⟩ := hq
+      rcases nextCommit_slots h with he | ⟨v, -, he⟩
+      · simpa only [he] using hs.1
+      · intro w hw
+        rw [he, lookup_setSlot] at hw
+        cases hl : lookup x c.slots <;> simp [hl] at hw
+        next u => exact hw ▸ hs.2 q hq hx v
+    · have hn : c.queued.find? (·.1 == x) = .none := by
+        apply List.find?_eq_none.mpr
+        intro q hq'
+        simpa using fun hx => hq ⟨q, hq', hx⟩
+      simp only [nextCommit, hn] at h
+      split at h <;> cases h <;> exact hs.1
+  · intro v hv
+    exact hs.1 v (by rwa [nextCommit_lookup hx h] at hv)
+
 /-- A property of slot `x` holds after boot when every value it can start
 with has it. -/
 theorem boot_slotIn {p o x V} (h : ∀ v, SlotOrigin p x v → V v) :
     SlotIn x V (boot p o).1.slots := fun v hv =>
   h v (boot_slots_origin (out := (boot p o).2) rfl x v (lookup_mem hv))
 
-/-- **Invariants of one slot.** `SlotIn x V` holds of every reachable
-configuration when every value `x` can start with has `V`, and the body
-of every action a handler or a task names keeps it. The slot is not a
-`queue` mutation's, whose answers an advance lands (LLP 1092; that case is
-the restriction `semantics/README.md` names). -/
-theorem Reachable.slotIn {p : Program} {x : String} {V : Value → Prop} (hq : isQueue p x = false)
+/-- Boot has no waiting sends, even when it refuses. -/
+theorem boot_queued {p o} : (boot p o).1.queued = [] := by
+  generalize hb : boot p o = r
+  obtain ⟨c, out⟩ := r
+  simp only [boot] at hb
+  repeat' split at hb
+  all_goals (cases hb; rfl)
+
+/-- **Invariants of one slot and its waiting answers.** Every value `x`
+can start with has `V`, and every handler, task and continuation keeps
+it. Waiting sends carry their answer property to their drain commits
+(LLP 1092 D12). -/
+theorem Reachable.slotInvariant {p : Program} {x : String} {V : Value → Prop}
     (hboot : ∀ v, SlotOrigin p x v → V v)
     (hhandler : ∀ c ev a args env ls vs payload rows, SlotIn x V c.slots →
       (ev, a, args) ∈ Node.handlerLists p.view → ListR env false ls args vs →
       BodyKeeps p x V c a (vs ++ payload) rows)
-    (htask : ∀ c, ∀ a ∈ clockActions p, SlotIn x V c.slots → BodyKeeps p x V c a [] []) :
-    ∀ c, Reachable p c → SlotIn x V c.slots :=
-  Reachable.invariant (fun c => SlotIn x V c.slots) (fun _ => boot_slotIn hboot) (fun _ _ _ _ _ h => h)
+    (htask : ∀ c, ∀ a ∈ clockActions p, ∀ args rows, SlotIn x V c.slots → BodyKeeps p x V c a args rows) :
+    ∀ c, Reachable p c → SlotInvariant x V c :=
+  Reachable.invariant (SlotInvariant x V)
+    (fun _ => ⟨boot_slotIn hboot, by simp [QueuedIn, boot_queued]⟩) (fun _ _ _ _ _ _ h => h)
     (fun _ c _ _ ev a args env ls vs payload rows hs hh hvs hr =>
-      runAction_slotIn hs (hhandler c ev a args env ls vs payload rows hs hh hvs) hr)
-    (fun _ c _ _ a ha hs hr => runAction_slotIn hs (htask c a ha hs) hr)
-    (fun _ _ _ _ _ hs hm hr => fun v hv => hs v (by rwa [nextCommit_untouched hq hm hr] at hv))
+      runAction_slotInvariant hs (hhandler c ev a args env ls vs payload rows hs.1 hh hvs) hr)
+    (fun _ c _ _ a ha args rows hs hr => runAction_slotInvariant hs (htask c a ha args rows hs.1) hr)
+    (fun _ _ _ _ _ hs _ hr => nextCommit_slotInvariant hs hr)
+
+/-- The slot projection of `Reachable.slotInvariant`, including queue
+mutation slots whose waiting answers land during an advance. -/
+theorem Reachable.slotIn {p : Program} {x : String} {V : Value → Prop}
+    (hboot : ∀ v, SlotOrigin p x v → V v)
+    (hhandler : ∀ c ev a args env ls vs payload rows, SlotIn x V c.slots →
+      (ev, a, args) ∈ Node.handlerLists p.view → ListR env false ls args vs →
+      BodyKeeps p x V c a (vs ++ payload) rows)
+    (htask : ∀ c, ∀ a ∈ clockActions p, ∀ args rows, SlotIn x V c.slots → BodyKeeps p x V c a args rows)
+    (c : Config) (hc : Reachable p c) : SlotIn x V c.slots :=
+  (Reachable.slotInvariant hboot hhandler htask c hc).1
 
 /-- A slot no action assigns can only change by a send's answer, which is
 always a `some`: a property of it that every `some` has, every action
@@ -1063,9 +1290,31 @@ theorem BodyKeeps.of_noAssign {p x V c name args rows}
   ⟨fun v hv => (nomatch ExecR.noAssign hx (hn a (List.mem_of_find?_eq_some ha)) v hv),
    fun _ _ _ v => hV v⟩
 
-/-- **A slot property every action keeps** holds after any event from any
-configuration where it held, reachable or not: a dispatch runs one action
-or none, an advance a sequence of them. -/
+/-- A property of a slot and its waiting answers that every action keeps
+survives any event, from reachable or arbitrary configurations. -/
+theorem Event.step_slotInvariant {p o c x V} (ev : Event)
+    (hk : ∀ c name args rows, SlotIn x V c.slots → BodyKeeps p x V c name args rows)
+    (hs : SlotInvariant x V c) : SlotInvariant x V (ev.step p o c).1 := by
+  cases ev with
+  | dispatch target event payload =>
+    simp only [Event.step]
+    generalize hd : Contract.dispatch p o c target event payload = r
+    obtain ⟨c', out⟩ := r
+    rcases dispatch_cases hd with h | ⟨n, ev, a, args, env, vs, -, -, -, hr⟩
+    · subst h; exact hs
+    · exact runAction_slotInvariant hs (hk _ _ _ _ hs.1) hr
+  | advance t =>
+    simp only [Event.step]
+    generalize hd : Contract.advance p o c t = r
+    obtain ⟨c', out⟩ := r
+    exact (advance_preserves (SlotInvariant x V) (c.timers.map (·.action))
+      (fun _ _ _ _ _ _ h => h)
+      (fun _ _ _ _ _ _ h _ hr => runAction_slotInvariant h (hk _ _ _ _ h.1) hr)
+      (fun _ _ _ _ hs _ hr => nextCommit_slotInvariant hs hr) hs
+      (fun tm h => List.mem_map_of_mem h) hd).1
+
+/-- A property of a slot no drain writes needs no assumption about
+waiting sends in an arbitrary configuration. -/
 theorem Event.step_slotIn {p o c x V} (ev : Event) (hq : isQueue p x = false)
     (hk : ∀ c name args rows, SlotIn x V c.slots → BodyKeeps p x V c name args rows)
     (hs : SlotIn x V c.slots) : SlotIn x V (ev.step p o c).1.slots := by
@@ -1082,9 +1331,20 @@ theorem Event.step_slotIn {p o c x V} (ev : Event) (hq : isQueue p x = false)
     generalize hd : Contract.advance p o c t = r
     obtain ⟨c', out⟩ := r
     exact (advance_preserves (fun c => SlotIn x V c.slots) (c.timers.map (·.action))
-      (fun _ _ _ _ _ h => h) (fun _ _ _ a h _ hr => runAction_slotIn h (hk _ _ _ _ h) hr)
+      (fun _ _ _ _ _ _ h => h) (fun _ _ _ _ _ _ h _ hr => runAction_slotIn h (hk _ _ _ _ h) hr)
       (fun _ _ _ _ hs hm hr => fun v hv => hs v (by rwa [nextCommit_untouched hq hm hr] at hv)) hs
       (fun tm h => List.mem_map_of_mem h) hd).1
+
+/-- Moving the clock preserves a slot invariant when the tasks and
+continuations keep it; drains use the waiting sends' answer property. -/
+theorem Reachable.advance_slotInvariant {p c o t c' out x V} (hc : Reachable p c)
+    (hk : ∀ c, ∀ a ∈ clockActions p, ∀ args rows, SlotIn x V c.slots → BodyKeeps p x V c a args rows)
+    (hs : SlotInvariant x V c) (h : advance p o c t = (c', out)) : SlotInvariant x V c' :=
+  (advance_preserves (SlotInvariant x V) (p.tasks.map (·.action))
+    (fun _ _ _ _ _ _ h => h)
+    (fun c _ _ a args rows h ha hr =>
+      runAction_slotInvariant h (hk c a (List.mem_append.mpr ha) args rows h.1) hr)
+    (fun _ _ _ _ h _ hr => nextCommit_slotInvariant h hr) hs hc.framed.2 h).1
 
 /-- **What the clock cannot change.** When `x` is not a `queue` mutation
 (whose waiting sends an advance asks) and no task's action assigns or sends
@@ -1095,13 +1355,91 @@ theorem Reachable.advance_untouched {p c o t c' out x} (hc : Reachable p c) (hq 
       Stmt.noAssigns x a.body = true ∧ Stmt.noSends x a.body = true)
     (h : advance p o c t = (c', out)) : lookup x c'.slots = lookup x c.slots :=
   (advance_preserves (fun c' => lookup x c'.slots = lookup x c.slots) (p.tasks.map (·.action))
-    (fun _ _ _ _ _ h => h)
-    (fun _ _ _ a h ha hr => by
+    (fun _ _ _ _ _ _ h => h)
+    (fun _ _ _ a _ _ h ha hr => by
       rw [runAction_untouched (fun ad had => hn ad (List.mem_of_find?_eq_some had) (by
         have := List.find?_some had
         simp only [beq_iff_eq] at this
         exact this ▸ List.mem_append.mpr ha)) hr, h])
     (fun _ _ _ _ h hm hr => by rw [nextCommit_untouched hq hm hr, h])
     rfl hc.framed.2 h).1
+
+namespace QueueInvariantExample
+
+private def program : Program := {
+  mutations := [{ name := "reply", ty := .string, queue := true }]
+  actions := [{ name := "send", params := [], body := [
+    .send "reply" "echo" [.str "first"], .send "reply" "echo" [.str "second"]] }]
+  view := [.element "button" [] [("testId", .str "send")] [("press", "send", [])] []]
+}
+
+private def IsReply (v : Value) : Prop := v = .none ∨ ∃ w, v = .some w
+
+private theorem keeps {c name args rows} : BodyKeeps program "reply" IsReply c name args rows :=
+  .of_noAssign (by decide) (fun v => .inr ⟨v, rfl⟩)
+
+private theorem starts : ∀ v, SlotOrigin program "reply" v → IsReply v := by
+  rintro v (⟨st, hst, -⟩ | ⟨m, hm, hn, rfl⟩ | ⟨hr, -⟩)
+  · simp [program] at hst
+  · exact .inl rfl
+  · simp [program] at hr
+
+example : ∀ c, Reachable program c → SlotIn "reply" IsReply c.slots :=
+  Reachable.slotIn starts (by intros; exact keeps) (by intros; exact keeps)
+
+private theorem invariant : ∀ c, Reachable program c → SlotInvariant "reply" IsReply c :=
+  Reachable.slotInvariant starts (by intros; exact keeps) (by intros; exact keeps)
+
+example {o c} (hc : Reachable program c) (ev : Event) :
+    SlotInvariant "reply" IsReply (ev.step program o c).1 :=
+  ev.step_slotInvariant (by intros; exact keeps) (invariant c hc)
+
+private def oracle : Oracle := { answers := [
+  ("echo", [.str "first"], .str "one"), ("echo", [.str "second"], .str "two")] }
+
+private def sent : Config := (dispatch program oracle (boot program oracle).1 "send" "press" .none).1
+
+private theorem sent_reachable : Reachable program sent :=
+  .step oracle (.dispatch "send" "press" .none) (.boot oracle)
+
+example {o t} : SlotInvariant "reply" IsReply (advance program o sent t).1 :=
+  sent_reachable.advance_slotInvariant (by intros; exact keeps) (invariant sent sent_reachable) rfl
+
+example {p o} : SlotInvariant "reply" IsReply (nextCommit p o sent "reply").1 :=
+  nextCommit_slotInvariant (invariant sent sent_reachable) rfl
+
+#guard sent.queued.length == 1 && Value.same ((lookup "reply" sent.slots).getD .unit) (.some (.str "one"))
+
+#guard let (c, out) := advance program oracle sent 0
+  c.queued.isEmpty && Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "two")) &&
+    match out with | .ok => true | _ => false
+
+-- A source refusal drops its send. A later refusal keeps it stalled.
+#guard let (c, out) := nextCommit program {} sent "reply"
+  c.queued.isEmpty && Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "one")) &&
+    match out with | .refused _ => true | _ => false
+
+#guard let badShape : Oracle := { answers := [("echo", [.str "second"], .bool true)] }
+  let (c, out) := nextCommit program badShape sent "reply"
+  c.queued.isEmpty && Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "one")) &&
+    match out with | .refused _ => true | _ => false
+
+#guard let badUpdate := { program with derives := [{ name := "bad", ty := .string, body := .var "missing" }] }
+  let (c, out) := nextCommit badUpdate oracle sent "reply"
+  c.queued.length == 1 && c.stalled.length == 1 &&
+    Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "one")) &&
+    match out with | .refused _ => true | _ => false
+
+#guard let badView := { program with view := [.element "text" [.var "missing"] [] [] []] }
+  let (c, out) := nextCommit badView oracle sent "reply"
+  c.queued.isEmpty && Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "two")) &&
+    match out with | .poisoned _ => true | _ => false
+
+#guard let full := { sent with queued := List.replicate queueBound ("reply", "echo", [.str "second"]) }
+  let (c, out) := runAction program oracle full "send" [] []
+  c.queued.length == queueBound && Value.same ((lookup "reply" c.slots).getD .unit) (.some (.str "one")) &&
+    match out with | .refused _ => true | _ => false
+
+end QueueInvariantExample
 
 end Contract

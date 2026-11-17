@@ -116,3 +116,55 @@ fn a_type_nests_at_most_sixty_four_deep() {
     contract::compile(&view(&lists(64), "\"a\"")).unwrap();
     assert_eq!(refused(&view(&lists(65), "\"a\"")), "type-too-deep");
 }
+
+/// The cycle and depth walks keep their own stacks: a chain of thousands of
+/// shapes is refused as too deep on a 2 MiB thread, in either declaration
+/// order, and a cycle at its far end is still found.
+#[test]
+fn a_long_shape_chain_is_refused_without_exhausting_the_stack() {
+    // `S{i}` holds `S{i + 1}`; the last holds `last`.
+    let chain = |n: usize, last: &str, reversed: bool| {
+        let mut shapes: Vec<String> = (0..n)
+            .map(|i| {
+                let next = if i + 1 < n {
+                    format!("S{}", i + 1)
+                } else {
+                    last.to_owned()
+                };
+                format!("shape S{i}\n  next: {next}\n")
+            })
+            .collect();
+        if reversed {
+            shapes.reverse();
+        }
+        shapes.concat() + "component App\n  view\n    text \"hello\"\n"
+    };
+    // A wide graph: one shape holding thousands of shallow ones.
+    let wide = (0..5_000)
+        .map(|i| format!("shape W{i}\n  v: number\n"))
+        .collect::<String>()
+        + "shape Top\n"
+        + &(0..5_000)
+            .map(|i| format!("  w{i}: W{i}[]\n"))
+            .collect::<String>()
+        + "component App\n  view\n    text \"hello\"\n";
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            contract::compile(&chain(64, "number", false)).unwrap();
+            contract::compile(&chain(64, "number", true)).unwrap();
+            for n in [65, 20_000] {
+                for reversed in [false, true] {
+                    let error = contract::compile(&chain(n, "number", reversed)).unwrap_err();
+                    assert_eq!(error.id, "type-too-deep", "{n} {reversed}: {error}");
+                }
+            }
+            let error = contract::compile(&chain(20_000, "S19990", false)).unwrap_err();
+            assert_eq!(error.id, "type-shape-recursive", "{error}");
+            assert!(error.message.contains("S19990 -> "), "{error}");
+            contract::compile(&wide).unwrap();
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

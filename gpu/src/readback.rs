@@ -83,7 +83,8 @@ impl Readback {
                 .zip(mapped.chunks_exact(self.row as usize))
             {
                 if bgra {
-                    for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                    for (d, s) in std::iter::zip(dst.as_chunks_mut::<4>().0, src.as_chunks::<4>().0)
+                    {
                         d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
                     }
                 } else {
@@ -145,6 +146,10 @@ impl Module {
             self.error = format!("readback: {} bytes for {} pixels", out.len(), len / 4);
             return None;
         }
+        // The host composes these untagged RGBA8 bytes as sRGB, even when
+        // this surface normally draws into a Display P3 swapchain.
+        let presentation_space = target::granted(inst.config.as_ref());
+        inst.surface.color_space_granted(ColorSpace::Srgb);
         inst.surface.prepare_assets(&gpu.device, &gpu.queue, format);
         if inst.readback.as_ref().is_none_or(|r| {
             r.texture.width() != width
@@ -154,19 +159,39 @@ impl Module {
             inst.readback = Some(Readback::new(gpu, width, height, format));
         }
         let target = inst.readback.as_ref().unwrap();
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        let mut recording = crate::frame::Recording::begin(&gpu.device);
         let wants = inst.surface.render(
             &frame,
             &gpu.device,
             &gpu.queue,
-            &mut encoder,
+            &mut recording.encoder,
             &target.view,
             format,
         );
-        target.copy(&mut encoder);
-        gpu.queue.submit([encoder.finish()]);
+        target.copy(&mut recording.encoder);
+        let commands = match recording.finish() {
+            Ok(commands) => commands,
+            Err(e) => {
+                if presentation_space != ColorSpace::Srgb {
+                    inst.surface.color_space_granted(presentation_space);
+                }
+                inst.drain();
+                self.error = inst.surface.take_error().map_or(e, |SurfaceError(own)| own);
+                return None;
+            }
+        };
+        let (_, submit_ms) =
+            crate::performance::time(inst.performance.enabled(), || gpu.queue.submit([commands]));
+        if let Some(ms) = submit_ms {
+            inst.performance.submitted(ms);
+        }
         inst.surface.submitted();
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))]
+        self.pipeline_cache.save_metal();
         let result = target.read(gpu, &mut out[..len]);
+        if presentation_space != ColorSpace::Srgb {
+            inst.surface.color_space_granted(presentation_space);
+        }
         inst.drain();
         if let Some(SurfaceError(e)) = inst.surface.take_error() {
             self.error = e;
@@ -175,6 +200,13 @@ impl Module {
         match result {
             Ok(()) => {
                 inst.dirty = false;
+                // A canvas with no target of its own is shown by its host
+                // composing these pixels (Linux's display baseline): a
+                // complete frame is presented. One with a target is only
+                // being captured.
+                if inst.presentation.is_none() && !inst.has_ring() && inst.surface.frame_ready() {
+                    inst.presented.now();
+                }
                 Some(wants)
             }
             Err(e) => {
@@ -254,8 +286,10 @@ mod tests {
             let mut output = vec![77; len + 4];
             assert_eq!(module.readback_into(id, &frame, &mut output), Some(true));
             assert!(output[..len]
-                .chunks_exact(4)
-                .all(|pixel| pixel == [red as u8, 0, 255, 255]));
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [red as u8, 0, 255, 255]));
             assert_eq!(&output[len..], &[77; 4], "caller suffix remains untouched");
             let mut short = vec![77; len - 1];
             assert!(module.readback_into(id, &frame, &mut short).is_none());

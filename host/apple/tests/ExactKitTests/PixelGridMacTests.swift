@@ -12,14 +12,15 @@ final class PixelGridMacTests: XCTestCase {
     private var window: NSWindow!
     override func tearDown() { window?.close(); window = nil; page = nil }
 
-    private func presenter() -> Presenter {
+    private func presenter() throws -> Presenter {
         _ = NSApplication.shared
         let p = Presenter()
         p.viewport.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
         window = NSWindow(contentRect: p.viewport.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = p.viewport
-        XCTAssertEqual(window.backingScaleFactor, 2, "the rounding this checks is a 2x display's")
+        // The rounding this checks is a 2x display's; a 1x one (a headless Mac's virtual display) has none to check.
+        guard window.backingScaleFactor == 2 else { throw XCTSkip("a 2x display's rounding; this display is \(window.backingScaleFactor)x") }
         page = p.root
         return p
     }
@@ -38,7 +39,7 @@ final class PixelGridMacTests: XCTestCase {
     }
 
     func testABoxOffTheGridIsDrawnOnIt() throws {
-        let p = presenter()
+        let p = try presenter()
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [0, 0, 0, 255]]],
@@ -56,7 +57,7 @@ final class PixelGridMacTests: XCTestCase {
     }
 
     func testEdgesThatMeetInLayoutMeetWhenDrawnAtAnyDepth() throws {
-        let p = presenter()
+        let p = try presenter()
         // A child 0.4 into a parent at 10.3 is at 10.7: pixel 21.4, so 21,
         // where the sibling that meets it in layout begins too. Rounded from
         // its parent's drawn edge (10.5 + 0.4 = 10.9, pixel 22) it would not.
@@ -85,7 +86,7 @@ final class PixelGridMacTests: XCTestCase {
     }
 
     func testABoxInAScrollersDocumentIsOnTheGrid() throws {
-        let p = presenter()
+        let p = try presenter()
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "view", "style": ["overflow_y": "auto", "overflow_x": "hidden"]],
@@ -110,7 +111,7 @@ final class PixelGridMacTests: XCTestCase {
     }
 
     func testAPageZoomRoundsToItsDevicePixels() throws {
-        let p = presenter()
+        let p = try presenter()
         p.viewport.magnification = 1.25
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
@@ -138,7 +139,7 @@ final class PixelGridMacTests: XCTestCase {
     /// baseline at its place on the page; rounded in its box, which the
     /// padding leaves off the grid, a line sat a device pixel low.
     func testABaselineRoundsAtItsPlaceOnThePage() throws {
-        let p = presenter()
+        let p = try presenter()
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "text", "props": ["text": "export function outline("]],

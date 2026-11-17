@@ -1,12 +1,14 @@
 import { navigableURL } from "./urls.js";
 // LLP 1045 D4: a list marker ends at the paragraph indent, like an outside HTML list marker.
-export function renderMarkup(el, json) {
+export function renderMarkup(el, json, adopting = false) {
   let pieces;
   try {
     pieces = JSON.parse(json);
   } catch {
     pieces = [];
   }
+  // Atom pills need activation even when an empty label left no server placeholder.
+  if (adopting && !pieces.some(piece => piece[6])) return false;
   el.replaceChildren();
   let box = el, start = true;
   const paragraph = (indent) => {
@@ -79,4 +81,5 @@ export function renderMarkup(el, json) {
       }
     });
   }
+  return true;
 }

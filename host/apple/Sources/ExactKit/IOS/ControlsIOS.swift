@@ -16,6 +16,15 @@ import UIKit
 /// it, with its own symbols (`ExactRadio`, RadioIOS.swift). VoiceOver reads
 /// a checkbox as it reads UIKit's own toggles (`updateAccessibility`).
 class ExactCheckbox: UIControl {
+    /// Where the surface draws it, inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    override var accessibilityFrame: CGRect {
+        get { placedAccessibilityFrame ?? super.accessibilityFrame }
+        set { super.accessibilityFrame = newValue }
+    }
+    override var accessibilityActivationPoint: CGPoint {
+        get { placedActivationPoint(from: super.accessibilityActivationPoint) ?? super.accessibilityActivationPoint }
+        set { super.accessibilityActivationPoint = newValue }
+    }
     var isOn = false { didSet { if isOn != oldValue { setNeedsDisplay(); updateAccessibility() } } }
     var ariaUnavailable = false { didSet { if ariaUnavailable != oldValue { updateAccessibility() } } }
     var accent: UIColor? { didSet { setNeedsDisplay() } }
@@ -127,6 +136,8 @@ final class ControlHost: NSObject {
     var kinds: [UInt32: String] = [:]
     /// The size last reported per control, so each is published once.
     private var reported: [UInt32: CGSize] = [:]
+    /// Sizes measured and not yet reported (`reportMeasured`).
+    private var measured: [(UInt32, CGSize?)] = []
     /// A select's menu as last built, so a batch that leaves it alone does not rebuild it.
     var menus: [UInt32: SelectMenu] = [:]
     /// A range's last reported value while it moves, so each is sent once.
@@ -136,6 +147,8 @@ final class ControlHost: NSObject {
     var appliedRange: [UInt32: String] = [:]
     /// A radio's group from the kernel (`exact_radio_group`; x2apps survey #2).
     var radioGroup: ((UInt32) -> RadioGroup)?
+    /// A painted group's keys from the kernel (`exact_role_keys`; LLP 1166.000 D2).
+    var roleKeys: ((_ view: UInt32, _ key: String?, _ focused: UInt32?) -> RoleKeys?)?
     /// A select's choice the bound value has not caught up with yet.
     var picked: [UInt32: String] = [:]
     /// Each `progress`'s activity indicator (ProgressIOS.swift): a view,
@@ -186,10 +199,13 @@ final class ControlHost: NSObject {
         // tvOS has no UISwitch; a checkbox stands in.
         case "switch": made = ExactCheckbox(frame: .zero)
         #else
-        case "switch": made = UISwitch()
+        case "switch": made = ExactSwitch()
         #endif
         case "checkbox": made = ExactCheckbox(frame: .zero)
-        case "radio": made = ExactRadio(frame: .zero) // x2apps survey #2
+        case "radio":
+            let radio = ExactRadio(frame: .zero)
+            radio.owner = node
+            made = radio
         case "button": made = makeNativeButton(node) // LLP 1069.011
         default: made = makeValueControl(kind, node.id)
         }
@@ -273,14 +289,15 @@ final class ControlHost: NSObject {
     /// Asks for every face again at its next read.
     func facesChanged() { faces.removeAll() }
 
-    /// Configures again a control whose accent follows the tint (`AccentColor`,
-    /// `Highlight`) when the tint changes: a native button's configuration draws
-    /// colours made from its value (`carriedAccent`), and a share of it is a value
-    /// control's own tint (`ownTintColor`). Not while UIKit dims the tint, which it
-    /// shows unchanged after, nor for a control still leaving after its owner went.
+    /// A native button's configuration stores colours made from the owner's tint. A value control
+    /// stores a share as its own tint. Refresh them when that tint changes, except while UIKit dims
+    /// it, or after a leaving control's owner has gone.
     func tintChanged(_ owner: NodeView) {
         guard owner.tintAdjustmentMode != .dimmed, presenter.views[owner.id] === owner,
-              owner.style["accent_color"]?.namesTint == true, let control = controls[owner.id] else { return }
+              let control = controls[owner.id] else { return }
+        let face = face(owner.id)
+        guard owner.style["accent_color"]?.namesTint == true || [face.rows.button, face.rows.title, face.rows.subtitle, face.rows.symbol]
+            .contains(where: { $0.values.contains(where: \.namesTint) }) else { return }
         configure(control, owner, on: nil)
     }
 
@@ -329,7 +346,7 @@ final class ControlHost: NSObject {
             }
             if !(control is NativeButtonIOS) {
                 assign(control, \.isEnabled, !owner.disabled)
-                assign(control, \.accessibilityLabel, owner.authoredLabel)
+                assign(control, \.accessibilityLabel, owner.controlLabel)
                 assign(control, \.accessibilityIdentifier, owner.props["testId"])
             }
             // A native button's box is its frame (below): its natural size is
@@ -378,16 +395,30 @@ final class ControlHost: NSObject {
                 sizes.append((owner.id, natural))
             }
         }
-        // Published outside the batch being applied, as images' are; a
-        // control destroyed before then reports nothing.
         if !sizes.isEmpty {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let live = sizes.filter { self.controls[$0.0] != nil && self.presenter.views[$0.0] != nil }
-                if !live.isEmpty { self.presenter.onIntrinsic?(live) }
-            }
+            measured += sizes
+            DispatchQueue.main.async { [weak self] in self?.presenter.session?.reportMeasured() }
         }
         syncProgress()
+    }
+
+    /// Sizes measured and not yet reported.
+    var owesSizes: Bool { !measured.isEmpty }
+
+    /// Lays out with the sizes measured since the last report, when the session
+    /// says (`ExactSession.reportMeasured`): once the batch being applied is,
+    /// before its frame shows, so a box under a layout transition never shows
+    /// where the default size put it (#134); else, for a sync outside a batch,
+    /// on the next turn or once the owner's earlier batches land. A control
+    /// destroyed before then reports nothing. A layout can size a control
+    /// again (a select's wrapped title): a few rounds, as it settles.
+    func reportMeasured() {
+        for _ in 0..<3 where !measured.isEmpty {
+            var latest: [UInt32: CGSize?] = [:]
+            for (id, size) in measured where controls[id] != nil && presenter.views[id] != nil { latest[id] = size }
+            measured = []
+            if !latest.isEmpty { presenter.onIntrinsic?(latest.map { ($0.key, $0.value) }) }
+        }
     }
 
     /// Configures `control` from its owner: its accent as UIKit's tint
@@ -429,6 +460,9 @@ final class ControlHost: NSObject {
         guard !changed.contains(owner.id), !touched.contains(owner.id), let control = controls[owner.id],
               control.superview === owner.controlMount,
               !(control is NativeButtonIOS) || faces[owner.id] != nil else { return false }
+        // A grouped toggle row's switch is named by the row's words (`controlLabel`).
+        if let row = owner.groupedToggleRow, ([row] + row.container.subviews.compactMap { $0 as? NodeView })
+            .contains(where: { changed.contains($0.id) || touched.contains($0.id) }) { return false }
         var at = presenter.accessibilityParent(of: owner)
         while let view = at {
             if let node = view as? NodeView, touched.contains(node.id) { return false }
@@ -485,16 +519,16 @@ final class ControlHost: NSObject {
         guard let control = controls[node.id] else { return nil }
         if let b = control as? NativeButtonIOS { return nativeObservation(b) }
         if let value = valueObservation(control) {
-            return value.merging(["size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]) { a, _ in a }
+            return value.merging(["size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]) { a, _ in a }
         }
         #if os(tvOS)
         let on = (control as? ExactCheckbox)?.isOn ?? false
         return ["view": "checkbox", "on": on,
-                "size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]
+                "size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]
         #else
         let on = (control as? UISwitch)?.isOn ?? (control as? ExactCheckbox)?.isOn ?? false
         return ["view": control is UISwitch ? "UISwitch" : control is ExactRadio ? "radio" : "checkbox", "on": on,
-                "size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]
+                "size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]
         #endif
     }
 
@@ -512,6 +546,34 @@ final class ControlHost: NSObject {
         appliedRange.removeAll()
         picked.removeAll()
         faces.removeAll()
+    }
+}
+
+extension NodeView {
+    /// A control's accessible name: its own; but where a grouped list shows its authored nodes
+    /// (tvOS, and any list UIKit does not draw), the switch or checkbox that ends one of its rows
+    /// is the row's one element, as UIKit's list cell is on iOS (`GroupedCell.toggle`), named by
+    /// the row's label, else its own, else the row's words.
+    var controlLabel: String? {
+        guard let row = groupedToggleRow else { return authoredLabel }
+        let name = row.authoredLabel ?? authoredLabel ?? row.accessibleName
+        return name.isEmpty ? nil : name
+    }
+
+    /// The row of a grouped list (`listStyle`) whose trailing switch or checkbox this is: the
+    /// last child of a row of a section's group, as the kernel reads a toggle row
+    /// (`Kernel::grouped_toggle`).
+    var groupedToggleRow: NodeView? {
+        guard kind == "control", ["switch", "checkbox"].contains(ControlKinds.kind(props)) else { return nil }
+        func parent(_ view: UIView?) -> NodeView? {
+            var at = view?.superview
+            while let v = at { if let node = v as? NodeView { return node }; at = v.superview }
+            return nil
+        }
+        guard let row = parent(self), let group = parent(row), !["header", "footer"].contains(group.props["semanticTag"]),
+              let list = parent(parent(group)), list.kind == "list", list.props["listStyle"] != nil,
+              row.container.subviews.last(where: { $0 is NodeView }) === self else { return nil }
+        return row
     }
 }
 

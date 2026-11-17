@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 import { standIns } from './stand-ins.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 // A keydown an input method processed is composing (UI Events, legacy `keyCode` 229): WebKit sends the Enter that
 // commits a composition after `compositionend`, `isComposing` false and `keyCode` 229, and web code skips it with
@@ -12,7 +15,7 @@ import { standIns } from './stand-ins.mjs';
 // (gpu-glue.js's guards are the same test; surface-record.test.mjs sends them its fixture's events.)
 // rt.js beside the modules it imports: the real ones it binds with, stand-ins for the rest (as form-chrome.test.mjs).
 const webJs = resolve(import.meta.dir, '../../web-js');
-const REAL = ['rt.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js'];
 const STUBS = standIns(REAL);
 const chords = ['../glue.js', '../document-glue.js'].map(file => `(() => { ${glueDeclarations(readFileSync(new URL(file, import.meta.url), 'utf8'), ['keyChord'])}; return keyChord; })()`);
 let server;
@@ -31,7 +34,7 @@ beforeAll(() => {
 });
 afterAll(() => server?.stop(true));
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCode-229 keydown is composing`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a keyCode-229 keydown is composing`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();
@@ -64,7 +67,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCo
   } finally { await browser.close(); }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a keyCode-229 keydown fires no shortcut, key press or prompt Return`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a keyCode-229 keydown fires no shortcut, key press or prompt Return`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const page = await browser.newPage();

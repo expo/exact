@@ -226,19 +226,11 @@ fn attr_words(file: &File, pick: impl Fn(&Attr) -> Option<String> + Copy) -> Vec
                     out.extend(attrs.iter().filter_map(|a| pick(a).map(|w| (w, a.span))));
                     walk(children, out, pick);
                 }
-                Node::Use { children, .. } => walk(children, out, pick),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, out, pick);
-                    walk(otherwise, out, pick);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, out, pick);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, out, pick),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, out, pick);
-                    walk(none, out, pick);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

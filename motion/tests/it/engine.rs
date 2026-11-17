@@ -92,6 +92,54 @@ fn a_matching_declaration_transitions_from_the_current_value() {
 }
 
 #[test]
+fn an_unchanged_target_keeps_its_curve_only_while_transition_property_covers_it() {
+    for curve in ["opacity 1s linear", "opacity -exact-spring()"] {
+        for played in [false, true] {
+            for (next, covered) in [
+                ("none", false),
+                ("scale 1s", false),
+                ("all 0s", true),
+                ("opacity 0s", true),
+            ] {
+                let mut engine = engine_with(Transitions::parse(curve).unwrap().0);
+                engine.observe(opacity(0.0)).unwrap();
+                if played {
+                    engine.play_transition(NODE, Property::Opacity).unwrap();
+                }
+                engine.advance(0.1).unwrap();
+                engine.frame();
+                let end = engine.settle_time();
+                let shown = engine.value(NODE, Property::Opacity);
+                engine
+                    .set_transitions(NODE, Transitions::parse(next).unwrap())
+                    .unwrap();
+                engine.observe(opacity(0.0)).unwrap();
+                assert_eq!(
+                    engine.is_active(NODE, Property::Opacity),
+                    covered,
+                    "{curve} → {next}, played={played}"
+                );
+                assert_eq!(engine.is_played(NODE, Property::Opacity), played && covered);
+                if covered {
+                    assert_eq!(engine.settle_time(), end);
+                    assert_eq!(engine.value(NODE, Property::Opacity), shown);
+                    assert!(engine.frame().is_empty());
+                } else {
+                    assert_eq!(engine.settle_time(), None);
+                    assert!(engine.quiescent());
+                    assert_eq!(engine.value(NODE, Property::Opacity), Some(Value::ZERO));
+                    let frame = engine.frame();
+                    assert_eq!(frame.len(), 1);
+                    assert_eq!(frame[0].value, Value::ZERO);
+                    engine.advance(2.0).unwrap();
+                    assert!(engine.frame().is_empty());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn the_clock_is_a_seek() {
     let run = |steps: &[f64]| {
         let mut engine = engine_with(vec![ease(TransitionProperty::All, 1.0, Easing::EaseInOut)]);
@@ -107,6 +155,38 @@ fn the_clock_is_a_seek() {
         direct, stepped,
         "the value depends on t, not on the path to t"
     );
+}
+
+/// An underdamped spring passes through rest near each turning point before
+/// it settles; it ends at its settle time whatever the frames sampled, as
+/// its lowered frames do (LLP 1003 §4, §7).
+#[test]
+fn a_spring_ends_at_its_settle_time_at_any_frame_rate() {
+    let run = |hz: Option<f64>, end: f64| {
+        let mut engine = engine_with(vec![Transition::new(
+            TransitionProperty::Property(Property::Opacity),
+            0.0,
+            TimingFunction::Spring(SpringConfig::default()),
+        )]);
+        engine.observe(opacity(0.0)).unwrap();
+        let settle = engine.settle_time().unwrap();
+        let mut k = 1.0;
+        while let Some(t) = hz.map(|hz| k / hz).filter(|&t| t < end) {
+            engine.advance(t).unwrap();
+            k += 1.0;
+        }
+        engine.advance(end).unwrap();
+        let value = engine.value(NODE, Property::Opacity).unwrap().x.to_bits();
+        (settle, value, engine.quiescent())
+    };
+    let (settle, ..) = run(None, 0.0);
+    for end in [settle - 0.01, 1.4667, 1.6, settle + 0.5] {
+        let seek = run(None, end);
+        for hz in [30.0, 50.0, 60.0, 120.0, 240.0] {
+            assert_eq!(run(Some(hz), end), seek, "{hz} Hz to {end}");
+        }
+        assert_eq!(seek.2, end >= settle, "done at {end} only from {settle}");
+    }
 }
 
 #[test]
@@ -460,7 +540,8 @@ fn a_removed_node_holds_no_property_and_one_removed_property_leaves_the_rest() {
     let mut engine = Engine::default();
     let every = Property::ALL
         .into_iter()
-        .chain([Property::Layout, Property::D]);
+        .chain([Property::Layout])
+        .chain(Property::TRANSITION_ONLY);
     let slots = Property::SLOTS;
     for (node, held) in [(1u64, 0..slots), (2, 0..4), (3, slots - 6..slots)] {
         for property in every.clone().skip(held.start).take(held.len()) {

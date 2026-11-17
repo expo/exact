@@ -1,0 +1,25 @@
+// data: carousel
+// A root derive refuses a commit; an inlined child derive in an each subject poisons it.
+component App
+  state n = 1
+  state child = false
+  derive visible = range(n).map(i => range(200).includes(i)).length
+  action grow
+    n = 225
+  action show
+    child = true
+  view
+    column
+      button press=grow testId="grow"
+        text "Grow"
+      button press=show testId="show"
+        text "Show child"
+      text `${visible}` testId="visible"
+      column
+        if child
+          Child()
+component Child
+  derive visible = range(225).map(i => range(200).includes(i))
+  view
+    for x in visible key=x
+      text `${x}`

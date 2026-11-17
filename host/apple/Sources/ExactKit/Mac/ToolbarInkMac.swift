@@ -20,7 +20,7 @@ final class ToolbarInkMac {
         button.tag = Int(node.id)
         button.bezelStyle = .texturedRounded
         button.title = face?.title ?? item.title
-        button.image = symbolInk.flatMap { ink in item.image.map { FaceSymbol.tinted($0, ink) } } ?? item.image
+        button.image = (face?.symbol.map(FaceSymbol.isOriginal) == true ? nil : symbolInk).flatMap { ink in item.image.map { FaceSymbol.tinted($0, ink) } } ?? item.image
         button.imagePosition = button.title.isEmpty ? .imageOnly : button.image == nil ? .noImage : .imageLeading
         button.contentTintColor = titleInk
         button.attributedTitle = NSAttributedString(string: button.title,

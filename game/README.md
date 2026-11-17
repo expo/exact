@@ -118,7 +118,7 @@ A bare name (`bun game/new.mjs my-game`) creates `game/games/my-game`; a path ch
 the directory. From an empty directory, `bun /path/to/exact2/game/new.mjs .` works too.
 A game outside this checkout — `bun scripts/exact.mjs new ../my-game --game` makes
 one, as `exact new` makes an app — also gets an app's `exact.mjs` and `AGENTS.md`:
-`bun exact.mjs test-rust` (the hostless tests), `web`, `web-build`, `test web`
+`bun exact.mjs test-rust` (Rust tests), `web`, `web-build`, `test web`
 (each `*.test.contract`; also `macos`, `ios`), `agent`, `mac`, `ios`, `windows`, `contract`,
 `prove` and `feedback`, with the exact2 checkout named once (LLP 1086).
 Generation resolves the generated workspace offline against the current SDK lock, so
@@ -139,7 +139,10 @@ The crate is `<Game::ID>-logic` and the bundle id `com.exact.<Game::ID>`; the ti
 follows the directory name. Run the Rust tests with
 `bun game/app/shells.mjs ./my-game --test` — in a fresh clone too, with no bake and
 no environment variables. It generates `.shells/`, resolves offline and locked, runs
-the determinism lints and then `cargo test` on the game's crates.
+the determinism lints and then `cargo test` on the game's crates. Tests in
+`linux/tests/*.rs` are copied beside the generated Linux shell and run as Cargo
+integration tests after building the game's GPU module. They can drive the
+production presenter and the game's surface without a window or a GPU device.
 The generated workspace carries the SDK's Rust toolchain pin, including for games
 outside the SDK. Explicit `cargo +toolchain` and `RUSTUP_TOOLCHAIN` overrides still
 apply. Run direct Cargo commands from the game's `.shells/` directory so they also load its deterministic compiler
@@ -414,6 +417,7 @@ device mid-hold neither presses again nor drops.
 | Move with keys, a stick or touch | `Stick::wasd().or_arrows().or_pad(Pad::Left).or_touch(Region::Left)`; `.dead_zone(0.15)` (radial, the default) and `.curve(Curve::Power(1.5))` shape the pad's reading (Beacons) |
 | Throttle and brake | `Stick::pad(Pad::Triggers)`: forward is `GamepadR2`'s travel less `GamepadL2`'s |
 | Move by tilting the device | `Stick::wasd().or_tilt(Tilt { max_degrees: 20.0, dead_zone: 2.0 })`, fed by the app's `startSensorInput(surface="world", sensor="gravity")` (LLP 1133.013 D6): full deflection at `max_degrees` from level, nothing within `dead_zone` degrees, nothing before the first sample or after the input ends (`exact_game::tilt_stick` is the map). Level is the first sample, or what the tick sets with `w.set_tilt_neutral("move", gravity)` from a posted reading, from the next tick (Beacons' `tilt x y z`) |
+| Read a component for many entity handles | `let rows = world.components::<Health>();` then `rows.get(entity)` or `rows.has(entity)`; resolves the column once, keeps reads live and leases only each returned row. Drop the handle before spawning, removing or restoring. Ordinary `get` and `has` work as before. |
 | Read a sensor every frame | `input.sensor(SensorKind::Gyroscope)`, the latest sample, which holds through ticks that receive none and is gone after the input ends; `input.sensor_samples(kind)`, this tick's own samples, every one the host delivered |
 | Sprint after holding a key | `.hold("sprint", &["ShiftLeft", "GamepadL1"], 0.2)`: `pressed` when held 200 ms, `held` until release; a shorter press fires nothing (Beacons) |
 | A double tap | `.double("roll", &["Space"], 0.25)`: `pressed` on a second press within 250 ms |
@@ -446,7 +450,7 @@ pushed as far, the lower index); a button is down while any pad holds it. Per ho
 | Host | Reads | Limits |
 |---|---|---|
 | Web | the Gamepad API, polled each frame while a pad is connected; a pad without the standard mapping is reported (`pad 1 connected unmapped` in the journal) and delivers nothing | as the browser exposes pads |
-| macOS, iOS, tvOS | GameController's extended gamepad, on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
+| macOS, iOS, tvOS | GameController's extended gamepad, opened only for a world that reads pads (an action or a rebinding names a pad button or stick, or a tick calls `Input::pad`), on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
 | Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key; releases readings when the reader's window loses focus or the activity stops, keeping slots | every pad is reported standard; the host reads no pad's state on focus gain, so a pad reports itself with its next event, and a button held while unfocused reads up until pressed again |
 | Linux | evdev, at each report, stamped with the report's time moved into the host's clock by one origin per read and kept when that report moves the pads to a canvas, so readings buffered in one read keep their spacing and several pads' arrive in the order they happened (ties by index, then as read); in the kernel's gamepad layout (Xbox drivers' letters read as their positions); a pad's state is read when it opens and delivered ahead of the reports buffered since | pads present at launch only; every pad is reported standard |
 | Windows | XInput's four slots, every 8 ms while one is connected and every 250 ms otherwise, while the window has focus, and all four at once when it regains focus, so a pad unplugged meanwhile reads gone | `GamepadHome` is never down (XInput does not report the guide button); a reading is stamped at its poll |
@@ -545,6 +549,7 @@ nothing yet.
 | A painted, visible sky | The same `EnvironmentMap` with `visible: true` (and `rotation` to turn it) |
 | Mouse look | `input.pointer()`'s `delta` is the device's motion this tick, not a difference of positions. Mark the canvas `data-pointer-lock="true"` (declared in `app.json`'s `data`) and a mouse press captures the mouse on the web, macOS and iPadOS (`GCMouse`) until Escape or blur, so the delta never stops at an edge; the Linux host always sends evdev's relative motion. |
 | Turn the drawn camera between ticks | Put `MouseLook { yaw_per_point, pitch_per_point, pitch_limit }` on the camera at the rates the tick turns it by: the drawn camera and its children turn by `Sim::unshown_motion()`, so a turn shows at the next frame whatever the tick and display rates (`engine/tests/look.rs`). Presentation only; insert it in `setup` or register it. |
+| Frame the launch camera for the canvas's size | `fn first_frame(w: &mut World, input: &Input, args: &Self::Args)` on the `Game`: it runs once for each world `setup` made, with `input.viewport()` the canvas's size, before the first tick and before the first frame is drawn, so that frame already shows the framed pose. A restored world never runs it (its save holds what it wrote), nor does a world that ticked before it had a canvas. Calling `World::invalidate_presentation()` does not rerun it. It writes the simulation as `setup` does, so the same size frames the same world (`engine/tests/first_frame.rs`) |
 | Right or middle mouse button | Bind it as a key: `.button("aim", &["MouseRight"])`; `MouseLeft` and `MouseMiddle` too (`MOUSE_BUTTONS`). Touch contacts press none. |
 | Start a selection rectangle | `input.pointer().and_then(\|p\| p.press_origin)` is the latest MouseLeft/touch Down point, even if movement and Up reach the same tick. Gate commands on your action's pressed/released edges. The origin survives normal Up and saves; Cancel, Blur or replacement clears it. |
 | Several fingers at once | `input.pointers()` (every contact down, by id) and `input.pointer_events()` (this tick's Down, Up and Cancel edges, in order); [Controls](#controls) has a multi-finger grab |
@@ -592,7 +597,34 @@ again; no app data module is needed. The whole record may be up to 16 MiB of JSO
 the limit, or one the shape refuses, leaves the last accepted one standing and is
 named, with its size and the limit, in the app's log and the agent's
 `state.surfaceRefusals`.
-Only the first live canvas owns a given surface's public record.
+A surface may have more than one live canvas, on two routes at once (a table and a
+preview pushed over it): each canvas runs a world of its own, and the first live one
+alone publishes the surface's record. When that canvas goes, the record clears, and the
+next canvas of the surface to mount publishes it; one already live stays silent.
+
+The record also carries `presented: bool`, which the host adds and the game cannot
+publish (`publish("presented", …)` panics): true once a complete frame of the
+current world has been handed to the compositor, on every host. It is false at
+launch, and again after a restore, a restart or a lost GPU device, until the next
+such frame; a loading cover over the canvas waits on it, since a value published
+from `setup` means only that the declared assets loaded, not that a frame drew
+(`if !hud.presented` in the view). It changes only at those moments, never per
+frame. After applying app data inside the same world, call
+`w.invalidate_presentation()` to declare a new picture. It uses the same
+`presented` reset as restore: `presented` is true again only after a complete
+frame whose shown models and textures are delivered and prepared, so a look
+whose bytes have not arrived does not count as presented. Until then no frame
+of the new picture is drawn, but the world keeps ticking and taking input and
+messages, so a later message can still replace or cancel the look; a game that
+should pause meanwhile binds its pause to `presented`. It also resets draw
+histories, without changing simulation state, saves or hashes. Call it once
+after the replacement, not every tick. It does not rerun `Game::first_frame`,
+which remains limited to a world made by `setup`.
+
+A performance HUD reads the canvas's renderer, memory and audio facts through a
+separate resource, `exactCanvasPerformance("world")`, updated about once a
+second and only while a plan reads it; every field is an option and is `none`
+where the host cannot measure it ([the field list](../docs/contract-for-agents.md)).
 
 `w.emit("won")` separately queues a string for the canvas's `message=` handler.
 Undelivered events save in order but stay outside the simulation hash.
@@ -966,7 +998,7 @@ accessibility and controls; the world owns the canvas contents. A HUD button wit
 `action="jump"` holds that `Actions` action while pressed; its `aria-keyshortcuts`
 takes its chord (the key with exactly its modifiers) before the focused world hears
 it and presses the action once per keydown, never on its repeats, moving no focus,
-on every host (the rule `host/linux/src/presenter/shortcuts.rs` states). The bake warns
+on every host (the rule `host/painted/src/presenter/shortcuts.rs` states). The bake warns
 when `Actions` bind the same key. Show touch controls under
 `exactViewport().pointer == "coarse"` ([recipe](recipes/touch-controls.md)). Hosts consume
 declaration data without a build dependency on the engine or gameplay. The GPU
@@ -990,7 +1022,12 @@ storage work starts after first pixel. This linked composition uses `rust: false
 Keep saves, scores and settings in app storage (SQLite or files under `app:/data`,
 with `exact-data.workspace = true`), not under `secret.keep`, which is for secrets;
 `docs/reference.md`, "Rust data sources", has the requests and a best-times example.
-Games without `game.data` add no data-source dependency.
+Games without `game.data` add no data-source dependency. Their Apple builds take one shared host
+(`game/app/apple`, `exact-game-apple`), and the game's own Apple crate holds only its plan and
+compat.json. Two cases keep the game's own host: a `Cargo.lock` captured before that crate existed
+(`bun exact.mjs lock` refreshes it with the shared host), and a game whose entry differs from the
+generated one, for example because it has preloads. Games reuse
+the compiled host only when their builds share a build directory (`CARGO_BUILD_BUILD_DIR`, below).
 
 [Tennis](games/tennis/README.md) uses one for HTTP: the world publishes a numbered
 question, `resource plan = jev(hud.ask)` posts it, and the answer returns as a
@@ -1066,7 +1103,8 @@ six core checks.
 
 Put models, sprite PNGs and WAV or Ogg Vorbis sounds under `art/`;
 [the baker](bake/README.md) produces validated `.model`, `.tex` and `.sound` assets,
-each texture as RGBA8, BC and ASTC files of which a device fetches one
+each texture as RGBA8, BC and ASTC files of which a device fetches one, and an
+Apple bundle holds only its devices' family
 ([texture payloads](bake/README.md#texture-payloads)). Name the authored `x.tex`
 everywhere. Declare simulation dependencies in `Game::ASSETS`; setup waits for them.
 Put everything else the game shows in `Game::STREAMED`: those are fetched from the
@@ -1075,6 +1113,12 @@ stays resident. Simulation cannot read a streamed asset (`w.model` is None), so
 load order never reaches the hash; a save refuses only while a shown one is in
 flight. A model a tick animates or reads belongs in `ASSETS`. Streamed names are
 models and textures (sounds are not streamed yet), and never also in `ASSETS`.
+Under the live clock a renderer's first frame waits only for what the world presents
+(the models entities' meshes name, sprite and material-override textures, and their
+models' textures); a look registered at tick zero and not shown is prepared after that
+frame, a few milliseconds a frame, and textures are written to the GPU off the
+presenting thread. On Apple the files are read off the main thread too. Under the
+agent's clock everything is prepared before the first frame, as before.
 Models and sprites need the asset-capable module; sounds and untextured emitters do
 not. `assets/` is the bake's output, not a test's input: a hostless test builds its world
 with `exact_game::sim_with_art!(Options::default())`, which bakes the game's `art/` in
@@ -1160,7 +1204,7 @@ bun app/shells.mjs --test
 ```
 
 The last command checks the SDK lock, then lints and tests every in-tree game's
-crates in its own workspace. Generated adapters are products, not empty test harnesses.
+crates in its own workspace, including any `linux/tests/*.rs`.
 Pass an app directory to test only that app: `bun app/shells.mjs /path/to/my-game --test`.
 Run the affected game's real-host proof too. Device lifecycle tests are opt-in:
 `cargo test -p exact-game-render surface_lifecycle -- --ignored` on a GPU host.

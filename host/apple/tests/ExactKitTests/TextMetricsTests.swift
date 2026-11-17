@@ -18,6 +18,67 @@ func regionInvalidationFixture(ops: [[String: Any]], protected: Set<UInt32>) -> 
 }
 
 final class TextMetricsTests: XCTestCase {
+    func testEstimatedReaderGeometrySettlesOnlyAtItsAcceptedWidth() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "reader-provisional")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = session.presenter.viewport
+        RegionTextExecutor.queue.isSuspended = true
+        defer {
+            RegionTextExecutor.queue.isSuspended = false
+            window.close(); session.destroy()
+        }
+        let text = String(repeating: "Estimated reader paragraph words ", count: 2400)
+        XCTAssertGreaterThan(text.utf8.count, 65536)
+        let source = """
+        component App
+          state flags = [false]
+          action read
+            flags = [frame("paragraph").provisional, measure("paragraph").provisional, frame("holder").provisional, measure("holder").provisional, frame("peer").provisional, measure("peer").provisional]
+          view
+            box
+              button "Read" press=read testId="read"
+              box id="holder"
+                text "\(text)" id="paragraph" testId="paragraph"
+              box id="peer" position="absolute" left=0 top=0 width=20 height=20
+        """
+        XCTAssertNil(session.boot(plan: try TableFixture.plan(source), size: CGSize(width: 600, height: 400)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "paragraph" })
+        let read = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "read" })
+        let reader = try XCTUnwrap(session.text.readerParagraphs[node.id])
+        func check(_ pending: Bool) throws {
+            p.press(read.id)
+            let wire = session.runtime.agent("{\"op\":\"state\"}")
+            let state = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(wire.utf8)) as? [String: Any])
+            let slots = try XCTUnwrap(state["slots"] as? [String: Any])
+            XCTAssertEqual(slots["flags"] as? [Bool], [pending, pending, pending, pending, false, false])
+        }
+        try check(true)
+        XCTAssertNil(reader.accepted)
+        session.resize(CGSize(width: 420, height: 400))
+        try check(true)
+        XCTAssertEqual(reader.metrics(width: 420).baseline, -2)
+        RegionTextExecutor.queue.isSuspended = false
+        waitFor("the reader accepts the successor width") {
+            reader.accepted?.metadata.offeredWidth == 420
+        }
+        XCTAssertGreaterThanOrEqual(reader.metrics(width: 420).baseline, 0)
+        try check(false)
+        RegionTextExecutor.queue.isSuspended = true
+        session.resize(CGSize(width: 600, height: 400))
+        try check(true)
+        XCTAssertEqual(reader.metrics(width: 600).baseline, -2)
+        XCTAssertEqual(reader.metrics(width: 600).height, reader.metrics(width: 420).height)
+        RegionTextExecutor.queue.isSuspended = false
+        waitFor("the reader accepts the original width again") {
+            reader.accepted?.metadata.offeredWidth == 600
+        }
+        try check(false)
+    }
+
     /// LLP 1053: `direction: rtl` is the base writing direction, so a Latin
     /// word that starts the paragraph sits at the right of the Hebrew.
     func testRtlDirectionIsTheParagraphBaseDirection() {

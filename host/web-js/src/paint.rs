@@ -3,9 +3,17 @@
 use exact_kernel::{paint_order, NodeFacts, NodeType, PropId, SortedMap, StyleId, StyleProps};
 use exact_plan::{BindingKind, BindingsRow, Plan};
 
-/// The authored integer, shared by the CSS write and the paint fact.
-pub const Z_INDEX: &str =
-    "v=>v!=null&&v!==\"auto\"?Math.max(-2147483645,Math.min(2147483645,Math.trunc(Number(v)))):null";
+/// The CSS value, with NaN for a value outside the row's grammar.
+pub const Z_INDEX: &str = r#"v=>{
+  if(v==null)return null;
+  if(typeof v==='string'){
+    const t=v.trim();
+    if(!t)return null;
+    if(/^(auto|unset)$/i.test(t))return t.toLowerCase();
+  }
+  const n=typeof v==='number'?v:typeof v==='string'&&/^[+-]?\d+$/.test(v.trim())?Number(v):NaN;
+  return Number.isInteger(n)&&n>=-2147483648&&n<=2147483647?Math.max(-2147483645,Math.min(2147483645,n)):NaN;
+}"#;
 
 const MOTION: [StyleId; 4] = [
     StyleId::Transition,
@@ -13,6 +21,39 @@ const MOTION: [StyleId; 4] = [
     StyleId::LayoutTransition,
     StyleId::ExitAnimation,
 ];
+
+/// `motion-words.js`, its one placeholder filled.
+fn motion_words() -> String {
+    include_str!("../motion-words.js").replace(
+        "MAX_LINEAR_STOPS",
+        &exact_motion::easing::MAX_LINEAR_STOPS.to_string(),
+    )
+}
+
+/// The transition grammar, its paint policy and the last curve covering layout.
+#[allow(clippy::field_reassign_with_default)]
+pub fn transitions() -> String {
+    let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
+        .iter()
+        .flat_map(|p| [p.name(), p.css_name()])
+        .chain(["all", "border-color"])
+        .chain(exact_motion::Property::TRANSITION_ONLY.map(|p| p.name()))
+        .filter_map(|name| {
+            let transition = exact_motion::Transitions::parse(name).ok()?;
+            let mut style = StyleProps::default();
+            style.transition = transition;
+            style.mask.set(StyleId::Transition);
+            Some((name, own(&style).policy))
+        })
+        .collect();
+    include_str!("../transition-paint.js")
+        .replace(
+            "MAX_TRANSITIONS",
+            &exact_motion::MAX_TRANSITIONS.to_string(),
+        )
+        .replace("WORDS", &motion_words())
+        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
+}
 
 fn own(style: &StyleProps) -> paint_order::Own {
     paint_order::own_from(paint_order::Facts {
@@ -49,11 +90,17 @@ const DIM: u32 = 131072;
 pub fn attributes(node: &NodeFacts<'_>, attrs: &mut SortedMap<String, String>) {
     let s = node.style;
     let mut authored = s.clone();
-    for row in MOTION.into_iter().chain([StyleId::ZIndex]) {
+    for row in MOTION
+        .into_iter()
+        .chain([StyleId::ZIndex, StyleId::PressTranslate])
+    {
         authored.mask.clear(row);
     }
     let mut policy = StyleProps::default();
-    for row in MOTION.into_iter().chain([StyleId::TintColor]) {
+    for row in MOTION
+        .into_iter()
+        .chain([StyleId::TintColor, StyleId::PressTranslate])
+    {
         if s.mask.has(row) {
             policy.mask.set(row);
         }
@@ -126,12 +173,10 @@ pub fn attributes(node: &NodeFacts<'_>, attrs: &mut SortedMap<String, String>) {
     if bits & ISOLATION != 0 {
         attrs.insert("data-exact-own-isolation".into(), String::new());
     }
-    if s.mask.has(StyleId::ZIndex) {
+    if let Some(z) = s.z_index.filter(|_| s.mask.has(StyleId::ZIndex)) {
         attrs.insert(
             "data-exact-zi".into(),
-            s.z_index
-                .clamp(-paint_order::Z_MAX, paint_order::Z_MAX)
-                .to_string(),
+            z.clamp(-paint_order::Z_MAX, paint_order::Z_MAX).to_string(),
         );
     }
 }
@@ -161,6 +206,7 @@ pub fn needed(plan: &Plan, parts: &[Option<exact_web::host::template::Parts>]) -
                             plan,
                             NodeType::from_wire(plan.nodes.get(i).unwrap().node_type).unwrap(),
                             &b,
+                            transitions,
                         )
                         .is_some()
                 })
@@ -170,7 +216,12 @@ pub fn needed(plan: &Plan, parts: &[Option<exact_web::host::template::Parts>]) -
 /// The attribute and its value expression, with `v` the binding's value.
 /// The tests are own_from's value tests, in the row's authored vocabulary.
 #[allow(clippy::field_reassign_with_default)]
-pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, String)> {
+pub fn binding(
+    plan: &Plan,
+    kind: NodeType,
+    b: &BindingsRow,
+    transitions: impl FnOnce() -> String,
+) -> Option<(String, String)> {
     let bits = |value: String| Some((format!("data-exact-f-{}-{}", b.kind as u8, b.id), value));
     let flag = |bit: u32, test: &str| bits(format!("({test})?{bit}:0"));
     if b.kind == BindingKind::Prop {
@@ -192,39 +243,19 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
         StyleId::PositionType => return bits(format!(
             "v==null||v===\"static\"?0:{POSITION}|(v===\"sticky\"?{STACK}:0)|(v===\"absolute\"?{ABSOLUTE}:0)")),
         StyleId::Display => return flag(FLEX, "v===\"flex\"||v===\"grid\""),
-        StyleId::ZIndex => return Some(("data-exact-zi".into(), format!("({Z_INDEX})(v)"))),
+        StyleId::ZIndex => return Some(("data-exact-zi".into(), format!("(z=>Number.isInteger(z)?z:null)(({Z_INDEX})(v))"))),
         StyleId::WrapFlow => return flag(WRAP, "v===\"both\""),
         StyleId::TintColor if kind == NodeType::Image => return flag(POLICY, "v!=null"),
         StyleId::Isolation => return flag(ISOLATION | STACK, "v===\"isolate\""),
-        // Set where the kernel accepts a value named by the binding.
-        StyleId::LayoutTransition | StyleId::ExitAnimation => {
-            let (bits, values) = if id == StyleId::LayoutTransition {
-                (LAYOUT | POLICY, crate::presence::layout_transitions(plan, plan.code(b.expr)))
-            } else {
-                (POLICY, crate::presence::exit_animations(plan, plan.code(b.expr), false))
-            };
+        StyleId::LayoutTransition => return flag(LAYOUT | POLICY, &format!("({})(v,false)?.held", transitions())),
+        // Exits still resolve names and keyframes at build time.
+        StyleId::ExitAnimation => {
+            let values = crate::presence::exit_animations(plan, plan.code(b.expr), false);
             let table = serde_json::to_string(&values.held.keys().collect::<Vec<_>>()).unwrap();
-            return flag(bits, &format!("typeof v===\"string\"&&{table}.includes(v)"));
+            return flag(POLICY, &format!("typeof v===\"string\"&&{table}.includes(v)"));
         }
         StyleId::Transition => {
-            let properties: std::collections::BTreeMap<_, _> = exact_motion::Property::ALL
-                .iter()
-                .flat_map(|p| [p.name(), p.css_name()])
-                .chain(["all", "border-color"])
-                .filter_map(|name| {
-                    let transition = exact_motion::Transitions::parse(name).ok()?;
-                    // This row is behind DerefMut; it cannot be a StyleProps initializer.
-                    let mut style = StyleProps::default();
-                    style.transition = transition;
-                    style.mask.set(StyleId::Transition);
-                    Some((name, own(&style).policy))
-                })
-                .collect();
-            let predicate = include_str!("../transition-paint.js")
-                .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
-                .replace("MAX_TRANSITIONS", &exact_motion::MAX_TRANSITIONS.to_string())
-                .replace("MAX_LINEAR_STOPS", &exact_motion::easing::MAX_LINEAR_STOPS.to_string());
-            return flag(POLICY, &format!("({predicate})(v)"));
+            return flag(POLICY, &format!("({})(v,false)?.stacks", transitions()));
         }
         StyleId::Animation => {
             let names: Vec<_> = plan
@@ -248,13 +279,15 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
                 })
                 .map(|k| plan.str(k.name))
                 .collect();
-            return flag(
-                POLICY,
-                &format!(
-                    "v!=null&&String(v).split(/[\\s,]+/).some(n=>{}.includes(n))",
-                    serde_json::to_string(&names).unwrap()
-                ),
-            );
+            // Which word is the name is the shorthand's grammar's to say:
+            // `1s EASE` plays no keyframes `EASE` (LLP 1055 D5). The names
+            // are the author's, so they go in last: a keyframes named
+            // `MAX_ANIMATIONS` must not be read as a placeholder.
+            let predicate = include_str!("../animation-paint.js")
+                .replace("MAX_ANIMATIONS", &exact_motion::MAX_ANIMATIONS.to_string())
+                .replace("WORDS", &motion_words())
+                .replace("NAMES", &serde_json::to_string(&names).unwrap());
+            return flag(POLICY, &format!("({predicate})(v)"));
         }
         // A number token's name (LLP 1121 D7) stands for its value: one that
         // varies may be below 1; a name no token has is unset, 1.
@@ -280,6 +313,7 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
         }
         StyleId::PressScale => "v!=null&&Number(v)!==1",
         StyleId::Perspective => "v!=null&&parseFloat(v)>0",
+        StyleId::PressTranslate => return flag(POLICY, "v!=null&&String(v).trim()!==\"\"&&!/^(none|unset|initial|revert|revert-layer)$/i.test(String(v).trim())"),
         StyleId::Translate
         | StyleId::Scale
         | StyleId::Rotate

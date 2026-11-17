@@ -117,6 +117,12 @@ fn return_replaces_a_selection_through_an_inline_edge() {
         ("- **bo|ld|**", "- **bo**\n- |"),
         ("- [**bo|ld|**](u)", "- [**bo**](u)\n- |"),
         ("- [do|cs](u) and [wo|rd](v)", "- [do](u)\n- [|rd](v)"),
+        // A selection from the list marker removes it and still splits the link.
+        (
+            "|- [do|cs](https://example.com)",
+            "\n[|cs](https://example.com)",
+        ),
+        ("|- **bo|ld**", "\n**|ld**"),
     ] {
         assert_eq!(run(before, Command::Newline), after, "{before}");
     }
@@ -269,6 +275,22 @@ fn return_continues_a_list_and_ends_it_on_an_empty_item() {
         run("1. a|\n2. b\n   - x\n3. c\n\n1. other", Command::Newline),
         "1. a\n2. |\n3. b\n   - x\n4. c\n\n1. other"
     );
+    // A lazy line continues the item above it (CommonMark 0.31.2 §5.2's
+    // paragraph continuation text): the items after it still count on. A
+    // fence or a rule at the item's indent starts a block, and ends the list.
+    assert_eq!(
+        run("1. hello|\nworld\n2. next", Command::Newline),
+        "1. hello\n2. |\nworld\n3. next"
+    );
+    assert_eq!(
+        run("1. a|\n2. b\nlazy\n3. c", Command::Newline),
+        "1. a\n2. |\n3. b\nlazy\n4. c"
+    );
+    for end in ["```\n2. x\n```", "---\n2. x"] {
+        let source = format!("1. a|\n2. b\n{end}");
+        let after = format!("1. a\n2. |\n3. b\n{end}");
+        assert_eq!(run(&source, Command::Newline), after, "{source}");
+    }
     assert_eq!(run("9) nine|", Command::Newline), "9) nine\n10) |");
     assert_eq!(run("plain|", Command::Newline), "plain\n|");
     assert_eq!(
@@ -288,4 +310,18 @@ fn a_footnote_command_numbers_itself_and_opens_its_definition() {
         run("A[^1] claim|.\n\n[^1]: one\n", Command::Footnote),
         "A[^1] claim[^2].\n\n[^1]: one\n\n[^2]: |"
     );
+    // At the end of the source the definition starts a line of its own.
+    for (before, after) in [
+        ("Text\n\n|", "Text\n\n[^1]\n\n[^1]: |"),
+        ("Text\n|", "Text\n[^1]\n\n[^1]: |"),
+        ("Text|", "Text[^1]\n\n[^1]: |"),
+        ("|", "[^1]\n\n[^1]: |"),
+    ] {
+        assert_eq!(run(before, Command::Footnote), after, "{before:?}");
+        let source = after.replace('|', "");
+        let notes = style(&source, None).footnotes;
+        assert_eq!(notes.len(), 1, "{source:?}");
+        assert_eq!(notes[0].references.len(), 1, "{source:?}");
+        assert!(notes[0].definition.is_some(), "{source:?}");
+    }
 }

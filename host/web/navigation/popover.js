@@ -90,14 +90,23 @@ function insetAt(p, open) {
 }
 const popoverSources = new WeakMap();
 /** What opened popover `pop` last (its `beforetoggle`'s source): a menu's invoker, for menu-rows.js. */ export const popoverSource = (pop) => popoverSources.get(pop) ?? null;
-globalThis.document?.addEventListener?.("beforetoggle", (e) => {
-  if (e.target.hasAttribute("popover") && e.newState === "open") {
-    popoverSources.set(e.target, e.source ?? null);
-    e.target.toggleAttribute("data-exact-chooser", !!e.source?.checkVisibility() && e.target.getAttribute("role") === "alertdialog" && !e.target.querySelector(":scope > [data-exact-text], input"));
-    insetAt(e.target);
-  }
-  // a chooser (LLP 1021) its invoker opened, the invoker still shown: neutral.css draws it there, as a menu
-}, true);
+/** Keeps each popover's source as it opens, marks a chooser and places a popover opened at a point. The wasm host's
+ * glue.js calls it, and a JS target page whose plan has a dialog, a menu or a popover, or which has a page module
+ * (host/web-js/build.mjs): another page has no popover in its root, and its bundle drops this (LLP 1047.002 D1). Once
+ * per page: a second call adds nothing. */
+let placing = false;
+export function placePopovers() {
+  if (placing) return;
+  placing = true;
+  globalThis.document?.addEventListener?.("beforetoggle", (e) => {
+    if (e.target.hasAttribute("popover") && e.newState === "open") {
+      popoverSources.set(e.target, e.source ?? null);
+      e.target.toggleAttribute("data-exact-chooser", !!e.source?.checkVisibility() && e.target.getAttribute("role") === "alertdialog" && !e.target.querySelector(":scope > [data-exact-text], input"));
+      insetAt(e.target);
+    }
+    // a chooser (LLP 1021) its invoker opened, the invoker still shown: neutral.css draws it there, as a menu
+  }, true);
+}
 function popoverObservation(root) {
   const pop = [...root.querySelectorAll("[popover]:popover-open")].at(-1), source = pop && popoverSources.get(pop);
   const id = (el) => globalThis.exact?.viewId?.(el) ?? Number(el.dataset.view);

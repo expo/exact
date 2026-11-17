@@ -50,8 +50,23 @@ impl Bundle {
         self
     }
 
+    /// The asset index's bytes: its cards resolve against its own URL,
+    /// `<stream>/assets.json`, so `./assets/<name>` is `<stream>/assets/<name>`.
+    pub(crate) fn index(&self) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "assets": self.assets.iter().map(|(name, bytes)| serde_json::json!({
+                "name": name,
+                "url": format!("./assets/{name}"),
+                "sha256": sha256_hex(bytes),
+                "bytes": bytes.len(),
+            })).collect::<Vec<_>>(),
+        }))
+        .unwrap()
+    }
+
     /// The head as JSON, and the files the origin serves, by URL.
     pub(crate) fn publish(&self) -> (String, HashMap<String, Vec<u8>>) {
+        let index = self.index();
         let mut envelope = serde_json::json!({
             "exact": 1,
             "app": { "id": self.app, "name": "Caltrain" },
@@ -62,12 +77,6 @@ impl Bundle {
                 "formatVersion": 4,
                 "kernelSchema": "0123456789abcdef",
             },
-            "assets": self.assets.iter().map(|(name, bytes)| serde_json::json!({
-                "name": name,
-                "url": format!("./assets/{name}"),
-                "sha256": sha256_hex(bytes),
-                "bytes": bytes.len(),
-            })).collect::<Vec<_>>(),
             "stream": {
                 "app": self.app,
                 "channel": self.channel,
@@ -76,6 +85,14 @@ impl Bundle {
             },
             "release": "2026-09-03T18:04:11Z-7f1c",
         });
+        if !self.assets.is_empty() {
+            envelope["assets"] = serde_json::json!({
+                "url": "./assets.json",
+                "sha256": sha256_hex(&index),
+                "bytes": index.len(),
+                "count": self.assets.len(),
+            });
+        }
         if let Some((message, store)) = &self.sunset {
             envelope["sunset"] = match store {
                 Some(url) => serde_json::json!({ "message": message, "store": url }),
@@ -102,6 +119,9 @@ impl Bundle {
             self.plan.clone()
         };
         files.insert(format!("{base}/app.plan"), plan);
+        if !self.assets.is_empty() {
+            files.insert(format!("{base}/assets.json"), index);
+        }
         for (name, bytes) in &self.assets {
             files.insert(format!("{base}/assets/{name}"), bytes.clone());
         }

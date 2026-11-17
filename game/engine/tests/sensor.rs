@@ -251,3 +251,22 @@ fn a_world_without_sensors_gains_no_sensor_state() {
     tilted.run(200.);
     assert!(tilted.world().try_resource::<SensorState>().is_none());
 }
+
+/// A zero gravity sample is no neutral: the first nonzero one is, so a tilt
+/// steers from there, and a save taken after the zero restores.
+#[test]
+fn a_zero_gravity_sample_is_not_the_neutral() {
+    let mut sim = started::<Tilted>();
+    sim.input(gravity(10., [0.0, 0.0, 0.0, 0.0]));
+    sim.run(50.);
+    assert_eq!(stick(&sim), Vec2::ZERO);
+    let mut restored = Sim::<Tilted>::new(()).unwrap();
+    restored.restore(&sim.save().unwrap()).unwrap();
+    restored.advance(0., Clock::Seekable);
+    sim.input(gravity(60., LEVEL));
+    sim.run(50.);
+    assert_eq!(stick(&sim), Vec2::ZERO, "the first nonzero sample is level");
+    sim.input(gravity(110., TILTED));
+    sim.run(50.);
+    assert!((stick(&sim).x + 0.88).abs() < 0.01, "{}", stick(&sim));
+}

@@ -63,7 +63,7 @@ pub fn generate(profile: Profile, budget: usize) -> Result<String, &'static str>
         out.push_str("```rust\n");
     }
     if profile == Profile::Table {
-        out.push_str("| Sequence | State | Payload | Note |\n| --- | --- | --- | --- |\n");
+        out.push_str("| SequenceWithALongUnbreakableHeaderThatCannotWrap | State | PayloadWithAnEvenLongerUnbreakableHeaderThatCannotWrap | Note |\n| --- | --- | --- | --- |\n");
     }
     let suffix = if profile == Profile::Code {
         "```\n"

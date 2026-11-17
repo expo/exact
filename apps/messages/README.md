@@ -8,9 +8,10 @@ at `da3b4d6ad3d6a4ac9fa95fb2efd9a532bdf0544e`. Its `ui-metrics.md`, Composer,
 ChatScreen, and native balloon-path implementation supply the measurements. The
 reference's MIT license is in `assets/reference-LICENSE.txt`.
 
-It is a pixel-match port of that reference, with its colours and sizes written
-out in hex and points, not a style guide: a new app leaves those unsaid and names
-colour roles (LLP 1115, `docs/contract-for-agents.md`, "Prefer native controls").
+The reference supplies its geometry and motion. Chrome and bubbles use platform
+colour roles; conversation and model avatars retain their identifying hues. For
+a new app, leave control metrics unsaid (LLP 1115,
+`docs/contract-for-agents.md`, "Prefer native controls").
 
 Run from the repository root in two terminals:
 
@@ -50,16 +51,28 @@ Send motion uses the reference's spring coefficients, delay, and squash timing.
 The demo's Add menu can receive messages, append fifty rows, toggle typing, or reset.
 Light/dark colors and reduced-motion settings follow the host.
 
+The transcript virtualizes keyed message rows, opens at the end and follows new
+messages while the reader is there. Typing, errors and the empty-conversation
+prompt share a final collection row. The source still returns the complete
+message array; virtualization bounds mounted views, not source answers or storage.
+
 Validation: `bun test ./apps/messages/app.test.ts` covers persistence, grouping,
 context isolation, cumulative streaming, retry, and cancellation. App drives have
 exercised browser and simulator layouts and real Gemini/GPT responses. Exact's
 `scripts/agent.mjs --app messages` targets this app through the standard driver.
+After building the web and headless Linux hosts,
+`bun test ./apps/messages/transcript.test.mjs` drives local conversations through
+scrolling, eviction, appends, replies, deletion, typing, streaming and errors:
+12,000 messages on the web and 1,000 on headless Linux, where the full snapshot
+of 12,000 messages exceeds the source's 100 ms turn budget.
+Latest, composer focus and sending use keyed scroll requests, independent of
+the transcript's estimated height. Each drive uses its own service port.
 
 Fidelity limits: this is a source-measured port, not a completed pixel-diff
 certification against the running Expo app. Wrapped balloons currently use CSS
 shrink-to-fit rather than Expo's custom longest-line fitting. The Add card and
 message menu use Exact glass; the Add card does not reproduce UIKit's keyboard-
 overlapping popover. Send uses a uniform squash rather than independently deforming
-width and height, and tail changes are immediate. The transcript is eager, so the
-reference's 100,000-row performance is not claimed. Native keyboard and physical-
-device gesture parity need a direct reference recording.
+width and height, and tail changes are immediate. The reference's 100,000-row
+performance is not claimed. Native keyboard and physical-device gesture parity
+need a direct reference recording.

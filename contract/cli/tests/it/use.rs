@@ -1,5 +1,6 @@
 //! LLP 1017 P8: `use Name from "./file.contract"`, resolved by path.
 
+use crate::scratch::Scratch;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -78,11 +79,8 @@ fn a_use_in_a_text_has_no_path_to_resolve_from() {
     assert_eq!(e.id, "contract-use-unresolved");
 }
 
-fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("exact2-use-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn temp_dir(name: &str) -> Scratch {
+    Scratch::new(format!("exact2-use-{name}-{}", std::process::id()))
 }
 
 #[test]

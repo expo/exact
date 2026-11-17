@@ -80,6 +80,13 @@ impl<'b, B: Brush> RangedBuilder<'b, B> {
         self.lcx.inline_boxes.push(inline_box);
     }
 
+    /// Starts a new shaping run at text index `index`: no ligature, kerning
+    /// or contextual form joins the characters on either side of it, as an
+    /// inline box's padding, border or margin separates them in CSS.
+    pub fn push_shaping_break(&mut self, index: usize) {
+        self.lcx.shaping_breaks.push(index);
+    }
+
     /// Set the callback which will be called as a first provider of line breaking decisions.
     ///
     /// See [`LineBreakOverrideFn`] for more details.
@@ -419,6 +426,7 @@ fn build_into_layout<B: Brush>(
     // Sort the inline boxes as subsequent code assumes that they are in text index order.
     // Note: It's important that this is a stable sort to allow users to control the order of contiguous inline boxes
     lcx.inline_boxes.sort_by_key(|b| b.index);
+    lcx.shaping_breaks.sort_unstable();
 
     {
         let query = fcx.collection.query(&mut fcx.source_cache);
@@ -427,6 +435,7 @@ fn build_into_layout<B: Brush>(
             query,
             &lcx.style_table,
             &lcx.inline_boxes,
+            &lcx.shaping_breaks,
             &lcx.info,
             lcx.bidi.levels(),
             &mut lcx.scx,

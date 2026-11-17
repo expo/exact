@@ -1,5 +1,7 @@
 //! Element lowering keeps its large per-tag temporaries off the recursive view path.
 
+#[path = "custom_props.rs"]
+mod custom_props;
 use super::*;
 
 pub(super) struct ElementStep<'n> {
@@ -57,7 +59,9 @@ impl Lowerer<'_> {
         let button_context = grouped::button_context(attrs);
         let separated = grouped::row_separator(attrs);
         let acting = grouped::actions::said(attrs);
+        let shadow_part = grouped::shadow::part(attrs);
         let (mut sheet, unmarked) = grouped::split(attrs);
+        sheet.retain(|a| grouped::shadow::part(std::slice::from_ref(a)).is_none());
         let attrs = unmarked.as_ref().unwrap_or(attrs);
         // A `delete=` no list row expanded does nothing (`lower-delete-row`).
         let kept = swipe_rows::stray(attrs);
@@ -83,6 +87,9 @@ impl Lowerer<'_> {
             .collect();
         let styles = |name: &str| self.styles.get(name).map(Vec::as_slice);
         let (class_label, mut expanded) = crate::class::rows(attrs, &styles, &unwritten)?.unzip();
+        if let (Some(rows), Some(card)) = (&mut expanded, shadow_part) {
+            grouped::shadow::class_rows(rows, card);
+        }
         // The class's rows by their places: a rewrite below (an animation's
         // longhands composed, a grouped list's rows inserted) moves rows
         // across `class_len`, never their spans (LLP 1122 D6's address).
@@ -138,7 +145,9 @@ impl Lowerer<'_> {
                 && !contract_types::records::is_record_call("startsWith", &self.types.shapes),
         );
         crate::popover_surface::check_authored(expanded)?;
-        let surfaced = crate::popover_surface::implied(expanded, *span);
+        let surfaced = crate::popover_surface::implied(attrs, *span, &|name| {
+            self.styles.get(name).map(Vec::as_slice)
+        });
         let added: Vec<Attr> = inked
             .into_iter()
             .chain(painted_group)
@@ -156,6 +165,7 @@ impl Lowerer<'_> {
         menus::check_menu_keys(expanded, parent_tag.is_none())?;
         values::check_position_area(expanded)?;
         menus::check_invoker(tag, expanded)?;
+        crate::tips::check(expanded, *span)?;
         crate::alert_parts::check_authored(expanded)?;
         tags::check_exclusion(&t, expanded, self.parent_positioned)?;
         // @ref LLP 1121 D3 — a motion token an expansion carried in (a
@@ -164,6 +174,9 @@ impl Lowerer<'_> {
         let timed = crate::motion::attrs(expanded, &crate::theme::motion_tokens());
         let expanded = timed.as_deref().unwrap_or(expanded);
         let composed = self.compose_animation(expanded)?;
+        if shadow_part == Some(false) {
+            grouped::shadow::check_animations(expanded, &self.keyframes)?;
+        }
         let expanded = composed.as_deref().unwrap_or(expanded);
         let in_svg = svg::in_svg(self.svg_depth > 0, parent_tag);
         let lengths = svg::coerce_lengths(tag, in_svg, expanded);
@@ -356,7 +369,11 @@ impl Lowerer<'_> {
         // @ref LLP 1116.009 D3 — and a sheet is never transparent.
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
-        let nav_place = self.nav_place.enter(tag, expanded, children, *span)?;
+        // @ref LLP 1013.001 D4 — a route's entrance and exit, by its place.
+        self.check_route_parts(&self.nav_place, tag, expanded)?;
+        let nav_place = self
+            .nav_place
+            .enter(first, tag, expanded, children, *span)?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too
@@ -583,7 +600,13 @@ impl Lowerer<'_> {
         }
         let flex = tags::flex_container(tag, expanded);
         self.element_children = !children.is_empty();
+        let (custom, refused_custom) = custom_props::merged(expanded, scope, &self.types.shapes);
+        self.errors.extend(refused_custom);
         for (index, a) in expanded.iter().enumerate() {
+            // Its custom properties are bound as one row, after the others
+            if exact_kernel::style::safe_area_properties::is_author_name(&a.name) {
+                continue;
+            }
             if let Some(e) = flex.and_then(|f| tags::multicol_on_flex(f, a).err()) {
                 self.errors.push(e);
                 continue;
@@ -592,6 +615,10 @@ impl Lowerer<'_> {
                 || refused.contains(&a.name.as_str())
                 || dataset::word(&a.name).is_some()
             {
+                continue;
+            }
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+                self.errors.push(e);
                 continue;
             }
             if let Err(e) = self.attr(
@@ -699,6 +726,26 @@ impl Lowerer<'_> {
                 origins.resize(bindings.len(), origin);
             }
         }
+        if let Some(a) = &custom {
+            let control = contract_syntax::payload_control(tag, attrs);
+            let font = &font;
+            if let Err(e) = self.attr(
+                tag,
+                control,
+                a,
+                scope,
+                locals,
+                &mut bindings,
+                &mut handlers,
+                &mut surface,
+                font,
+            ) {
+                self.errors.push(native::name_the_fix(n, e));
+            }
+            if let Some(origins) = &mut origins {
+                origins.resize(bindings.len(), Origin::Own(None));
+            }
+        }
         // @ref LLP 1116.006 D2 — no box where no split shows it (the web shell shows it).
         if routes::split_placeholder(expanded).is_some() {
             let none = self.fixed(true, "none");
@@ -732,6 +779,7 @@ impl Lowerer<'_> {
                 a.span,
             );
         }
+        crate::zoom::check(tag, t.node_type, expanded, children, *span)?;
         // The web draws a hit slop as a pseudo-element, which an element the
         // browser replaces cannot have (Charlie, 2026-11-10).
         if matches!(
@@ -749,6 +797,23 @@ impl Lowerer<'_> {
                 return err(
                     "lower-hit-slop",
                     format!("`{}` on `{tag}`: the web draws a slop as a pseudo-element, which a replaced element has none of. Put it on the box or button that holds the `{tag}`", a.name),
+                    a.span,
+                );
+            }
+        }
+        // @ref LLP 1123 D4 — the opt-out is a content owner's: a route or a
+        // tab panel, whose host clears its chrome. On any other box it would
+        // turn nothing off.
+        if let Some(a) = expanded.iter().find(|a| a.name == "-exact-safe-area") {
+            let owner = expanded.iter().any(|b| {
+                b.name == "navigationKey"
+                    || (b.name == "role"
+                        && matches!(&b.value, contract_syntax::Expr::Str(r, _) if r == "tabpanel"))
+            });
+            if !owner {
+                return err(
+                    "lower-attr-value",
+                    format!("`{}` turns off a content owner's clearance of its chrome, so it goes on a route (a box with `navigationKey`) or a `tabpanel`; elsewhere pad with `var(--exact-safe-area-inset-*)`", a.name),
                     a.span,
                 );
             }
@@ -842,20 +907,17 @@ impl Lowerer<'_> {
             );
         }
         if t.node_type.is_text_leaf() {
-            // Regions have no node of their own: a dynamic Markdown
-            // paragraph's each/when still produces only text runs.
-            // An image in the text is the paragraph's own child (LLP
-            // 1011.002), never a run's: its box is placed in the paragraph.
+            // Regions have no node of their own: a `for`, `if` or `match`
+            // among a paragraph's runs produces only its runs (LLP 1011.002
+            // D1). An image in the text is the paragraph's own child, never
+            // a run's: its box is placed in the paragraph.
             fn run(c: &Node, images: bool) -> bool {
                 match c {
                     Node::Element { tag, .. } => {
                         matches!(tag.as_str(), "text" | "time") || images && tag == "image"
                     }
-                    Node::Each { body, .. } => body.iter().all(|c| run(c, images)),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).all(|c| run(c, images)),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().all(|c| run(c, images)),
                 }
             }
             // A `text` that holds runs, not a string or a `time` value.
@@ -868,11 +930,8 @@ impl Lowerer<'_> {
             fn has_image(c: &Node) -> bool {
                 match c {
                     Node::Element { tag, .. } => tag == "image",
-                    Node::Each { body, .. } => body.iter().any(has_image),
-                    Node::When {
-                        then, otherwise, ..
-                    } => then.iter().chain(otherwise).any(has_image),
-                    _ => false,
+                    Node::Use { .. } | Node::Children { .. } => false,
+                    region => region.children().any(has_image),
                 }
             }
             let columns = expanded

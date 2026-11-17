@@ -236,10 +236,94 @@ fn shortcuts_are_refused_where_the_platform_has_none() {
     assert!(logs(&r).contains("NotSupportedError"), "{}", logs(&r));
 }
 
+#[test]
+fn a_file_face_keeps_the_tools_string_parameter() {
+    let app = App::new("file-face", "component App\n  state path = \"\"\n  tool save writes closed \"Save a file.\" = save returns path\n  action save(image: string)\n    path = image\n  view\n    main\n      text path\n");
+    let good = json!({"tools": {"save": {"title": "Save", "doors": ["apple"],
+        "parameters": {"image": {"type": "file", "accept": ["image/png", "image/jpeg", "image/heic"]}}}}});
+    let compile = |intents: &Json| {
+        std::fs::write(
+            app.0.join("app.json"),
+            json!({"app": {"id": "com.exact.fileface", "name": "File Face"}, "intents": intents})
+                .to_string(),
+        )
+        .unwrap();
+        contract::compile_path_all(&app.0.join("app.contract"), false).map(|(p, _)| p)
+    };
+    let plan = compile(&good).unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(exact_runner::uses(&plan).has(exact_runner::Capability::Picker));
+    let face: Json = serde_json::from_str(plan.str(plan.tools[0].face)).unwrap();
+    assert_eq!(
+        face["parameters"]["image"]["accept"],
+        good["tools"]["save"]["parameters"]["image"]["accept"]
+    );
+    let selected = exact_runner::uses(&plan);
+    let mut runner = Runner::boot(
+        plan.clone(),
+        NoData,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    runner.set_device_links(exact_runner::DeviceLinks {
+        picker: selected
+            .has(exact_runner::Capability::Picker)
+            .then_some(exact_runner::PickerLinks::LINKED),
+        ..exact_runner::DeviceLinks::CORE
+    });
+    let picked: Json = serde_json::from_str(
+        &exact_runner::agent::answer(&mut runner, r#"{"op":"pickedPath","name":"image.png"}"#)
+            .unwrap()
+            .0,
+    )
+    .unwrap();
+    assert!(picked["path"]
+        .as_str()
+        .unwrap()
+        .starts_with("app:/tmp/picked/"));
+    let mut changed = good.clone();
+    changed["tools"]["save"]["parameters"]["image"]["accept"] = json!(["application/pdf"]);
+    let moved = compile(&changed).unwrap();
+    assert_ne!(plan.str(plan.tools[0].face), moved.str(moved.tools[0].face));
+    for doors in [json!(["web"]), json!(["android"]), Json::Null] {
+        let mut bad = good.clone();
+        bad["tools"]["save"]["doors"] = doors;
+        assert!(format!("{:?}", compile(&bad).unwrap_err()).contains("intents-file-door"));
+    }
+    for accept in [
+        json!([]),
+        json!(["image/unknown"]),
+        json!(["inode/directory"]),
+        Json::Null,
+    ] {
+        let mut bad = good.clone();
+        bad["tools"]["save"]["parameters"]["image"]["accept"] = accept;
+        assert!(format!("{:?}", compile(&bad).unwrap_err()).contains("intents-file-accept"));
+    }
+    let mut entity = good.clone();
+    entity["tools"]["save"]["parameters"]["image"]["entity"] = json!("book");
+    assert!(format!("{:?}", compile(&entity).unwrap_err()).contains("intents-face-type"));
+}
+
+#[test]
+fn a_face_parameter_must_be_an_object() {
+    let app = App::new("bad-face", "component App\n  state path = \"\"\n  tool save writes closed \"Save a file.\" = save returns path\n  action save(image: string)\n    path = image\n  view\n    text path\n");
+    for parameter in [Json::Null, json!(3), json!("file"), json!([])] {
+        std::fs::write(app.0.join("app.json"), json!({"app": {"id": "com.exact.badface", "name": "Bad Face"}, "intents": {"tools": {"save": {"doors": ["apple"], "parameters": {"image": parameter}}}}}).to_string()).unwrap();
+        let errors = contract::compile_path_all(&app.0.join("app.contract"), false)
+            .err()
+            .unwrap();
+        assert!(format!("{errors:?}").contains("intents-face-type"));
+    }
+}
+
 /// LLP 1133.023 D5, D8, D10: `intents.tools` in `app.json` faces a tool. A
 /// face is stored with the doors it reaches and its digest; one naming no
-/// tool, a parameter of another type, or a door with no confirmation for a
-/// `destroys` tool is refused; and a door is held to its face's digest.
+/// tool, a parameter of another type, a door with no confirmation for a
+/// `destroys` tool, or the web door for a tool with a blank description or a
+/// name over 128 characters is refused; and a door is held to its face's
+/// digest.
 #[test]
 fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     let tools = "  state last = \"\"\n  tool log writes closed \"Log a page.\" = log\n  tool drop destroys \"Drop a book.\" = drop\n  action log(id: string, page: number)\n    last = `${id} ${page}`\n  action drop(id: string)\n    last = id\n  action follow(url: string)";
@@ -278,6 +362,26 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     );
     let digest = log["digest"].as_str().unwrap().to_owned();
     assert_eq!(digest.len(), 64);
+    // A face on the web door is offered to a browser's agent, so a page
+    // that would wait for the reader activates `idle` (LLP 1048.007 D1).
+    assert!(exact_runner::activation::offers_tools(&plan));
+
+    // A parameter's description is the face's, and the digest covers it:
+    // a door that compiled the old words is refused (`face`).
+    let mut described = good.clone();
+    described["tools"]["log"]["parameters"]["page"]["description"] = json!("The page reached.");
+    write(&described);
+    let plan = compile().unwrap_or_else(|e| panic!("{e:?}"));
+    let log = face(&plan, "log");
+    assert_eq!(
+        log["parameters"]["page"]["description"],
+        "The page reached."
+    );
+    assert_ne!(log["digest"], digest);
+    let mut native = good.clone();
+    native["tools"]["log"]["doors"] = json!(["apple"]);
+    write(&native);
+    assert!(!exact_runner::activation::offers_tools(&compile().unwrap()));
 
     let refused = |intents: Json, id: &str| {
         write(&intents);
@@ -296,6 +400,45 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     let mut missing = good.clone();
     missing["tools"]["nothing"] = json!({ "title": "Nothing" });
     refused(missing, "intents-tool");
+
+    // Through the web door, WebMCP (§3, §4.2) needs a description and a name
+    // of at most 128 characters; a face without that door takes an empty
+    // description.
+    let faced = |name: &str, doors: Option<Json>| {
+        let mut intents = good.clone();
+        let mut log = intents["tools"]["log"].clone();
+        if let Some(doors) = doors {
+            log["doors"] = doors;
+        }
+        intents["tools"] = json!({ name: log, "drop": good["tools"]["drop"] });
+        intents
+    };
+    let with = |name: &str, description: &str| {
+        let line = format!("tool {name} writes closed \"{description}\" = log");
+        let replaced = source.replacen("tool log writes closed \"Log a page.\" = log", &line, 1);
+        std::fs::write(app.0.join("app.contract"), replaced).unwrap();
+    };
+    with("log", "");
+    refused(faced("log", None), "intents-web-description");
+    with("log", "   ");
+    refused(
+        faced("log", Some(json!(["web"]))),
+        "intents-web-description",
+    );
+    with("log", "");
+    write(&faced("log", Some(json!(["apple", "android"]))));
+    compile().unwrap_or_else(|e| panic!("no web door: {e:?}"));
+    let long = format!("l{}", "o".repeat(128));
+    with(&long, "Log a page.");
+    refused(faced(&long, None), "intents-web-name");
+    let longest = &long[1..];
+    with(longest, "Log a page.");
+    write(&faced(longest, None));
+    let plan = compile().unwrap_or_else(|e| panic!("128 characters: {e:?}"));
+    assert_eq!(
+        face(&plan, longest)["doors"],
+        json!(["apple", "android", "web"])
+    );
 
     // The description is part of the signature, so of the digest.
     let moved = source.replace("Log a page.", "Log the page.");
@@ -326,4 +469,92 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
         "{calls}"
     );
     assert_eq!(calls[1]["outcome"], "ok", "{calls} {}", logs(&r));
+}
+
+/// LLP 1111.000 D1: `mcp` is a door a face names, never a default. A face
+/// naming it alone keeps the plan's types; naming another door too, it is
+/// held to scalars; the entity and unknown-parameter checks hold on every
+/// face; a `destroys` tool may name it, since the Mac asks the person.
+#[test]
+fn an_mcp_face_keeps_the_plans_types() {
+    let source = r#"shape Item
+  name: string
+  aisle: enum<"produce", "dairy">
+
+component App
+  state items: Item[] = []
+  tool add writes "Add an item." = add
+    returns items
+  tool drop destroys "Remove every item." = drop
+  action add(item: Item, note: option<string>)
+    items = items.concat([item])
+  action drop
+    items = []
+  view
+    text `${items.length}`
+"#;
+    let app = App::new("mcp-faces", source);
+    let write = |tools: Json| {
+        let intents = json!({ "entities": { "book": { "title": "Book" } }, "tools": tools });
+        let manifest =
+            json!({ "app": { "id": "com.exact.mcp", "name": "Mcp" }, "intents": intents });
+        std::fs::write(app.0.join("app.json"), manifest.to_string()).unwrap();
+        contract::compile_path_all(&app.0.join("app.contract"), false).map(|(plan, _)| plan)
+    };
+    let refused = |tools: Json, id: &str| {
+        let errors = format!("{:?}", write(tools).unwrap_err());
+        assert!(errors.contains(id), "{id}: {errors}");
+    };
+    let plan = write(json!({
+        "add": { "title": "Add", "doors": ["mcp"] },
+        "drop": { "title": "Drop", "doors": ["apple", "mcp"] },
+    }))
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let face = |name: &str| -> Json {
+        let row = (plan.tools.iter())
+            .find(|t| plan.str(t.name) == name)
+            .unwrap();
+        serde_json::from_str(plan.str(row.face)).unwrap()
+    };
+    assert_eq!(face("add")["doors"], json!(["mcp"]));
+    assert_eq!(face("drop")["doors"], json!(["apple", "mcp"]));
+    assert!(
+        !exact_runner::activation::offers_tools(&plan),
+        "no face reaches the web"
+    );
+    let signature = contract::faces::tool_signature(&plan, 0);
+    assert_eq!(
+        signature["parameters"],
+        json!([
+            ["item", r#"Item{name:string,aisle:enum<"produce","dairy">}"#],
+            ["note", "option<string>"]
+        ]),
+        "an enum's cases are in the signature"
+    );
+    assert_eq!(signature["sends"], false);
+
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp", "apple"] } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp", "web"] } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp"], "parameters": { "note": { "entity": "author" } } } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["mcp"], "parameters": { "other": {} } } }),
+        "intents-face-type",
+    );
+    refused(
+        json!({ "add": { "title": "Add", "doors": ["tcp"] } }),
+        "intents-door",
+    );
+    refused(
+        json!({ "drop": { "title": "Drop", "doors": ["mcp", "android"] } }),
+        "intents-destroys-door",
+    );
 }

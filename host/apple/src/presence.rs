@@ -47,6 +47,7 @@ struct Leaving {
 /// What the host keeps for exits and layout transitions.
 #[derive(Debug, Default)]
 pub(crate) struct Presence {
+    pub(super) looks: exact_kernel::motion::LookMotion,
     leaving: Vec<Leaving>,
     /// Views whose destroy waits for a leaving view's end.
     held: IdSet<ViewId>,
@@ -71,6 +72,19 @@ pub(crate) struct Presence {
 }
 
 impl<D: DataSource> Host<D> {
+    /// A host-known look changes scale through the same motion engine as authored targets.
+    pub fn look_motion(&mut self, view: ViewId, states: u8, now_ms: f64) -> String {
+        self.now_ms = self.now_ms.max(now_ms);
+        let mut batch = Batch::new();
+        let _ = self.engine.advance(self.engine_time(self.now_ms));
+        if let Some(node) = self.runner.kernel().node(view) {
+            let result = self.presence.looks.observe(&node, states, &mut self.engine);
+            debug_assert!(result.is_ok());
+        }
+        self.present(&mut batch, false);
+        self.finish(batch, None)
+    }
+
     /// A receipt's exits, before its destroys reach the batch: each leaving
     /// view and everything under it stay with the presenter. A view this
     /// batch created was never presented, so it simply goes.
@@ -164,7 +178,7 @@ impl<D: DataSource> Host<D> {
     pub(super) fn restyle_leaving(&self, view: ViewId, batch: &mut Batch) {
         if let Some(l) = self.presence.leaving.iter().find(|l| l.view == view) {
             let shown = self.shown_paint(motion_node(l.key));
-            let env = self.runner.kernel().env();
+            let env = self.runner.kernel().env_of(view);
             let own = l.animations.properties().contains(&Property::Color);
             batch.style(view, &style::restyle_presented(&l.style, &env, &shown, own));
         }
@@ -200,7 +214,7 @@ impl<D: DataSource> Host<D> {
             self.runner.canvas_frame();
             // A commit that sent stops the jump: the next send would drop
             // its reply (LLP 1016 D5).
-            let stopped = a.error.is_some() || a.stopped_on_request || step >= to;
+            let stopped = a.error.is_some() || a.stopped_on_request || a.needs_apply || step >= to;
             let failed = error.or(a.error.map(|e| format!("{e:?}")));
             (batch, error) = self.commit_tree(&a.receipts, failed, batch);
             if let Some(e) = self.arrange_after_commit(&mut batch) {
@@ -410,9 +424,10 @@ impl<D: DataSource> Host<D> {
             }) else {
                 continue;
             };
-            if Property::PAINT.contains(&p.property) {
+            if Property::PAINT.contains(&p.property) || p.property == Property::Filter {
                 // @ref LLP 1055.000 D6 — an `svg`'s scene shows its colours;
-                // a box's are its style, re-sent with the presented values.
+                // a box's are its style, re-sent with the presented values,
+                // and so is its filter (LLP 1003.002 D8).
                 if !self.svg.touch(self.runner.kernel(), view) {
                     let inherits = p.property == Property::Color;
                     if let Some((_, changed)) = colored.iter_mut().find(|(id, _)| *id == view) {
@@ -459,10 +474,10 @@ impl<D: DataSource> Host<D> {
     ) {
         // A layout box is presented as its offset from the laid-out
         // origin and its size's difference from the laid-out size;
-        // identity is `0 0 0 0`. The other three are one or two numbers.
+        // identity is `0 0 0 0`. Rotation carries its angle and axis.
         let values = match property {
             Property::Layout => layout_presented(&self.engine, node, value),
-            Property::Translate => [value.x, value.y, value.z, value.w],
+            Property::Translate | Property::Rotate => [value.x, value.y, value.z, value.w],
             _ => [value.x, 0.0, 0.0, 0.0],
         };
         let identity = match property.identity() {
@@ -472,16 +487,19 @@ impl<D: DataSource> Host<D> {
         if identity && (boot || batch.at_identity(view, property.name())) {
             return;
         }
-        // A run has no box of its own to move, and transforms do not apply
-        // to a non-replaced inline box (CSS Transforms 1 §3).
-        if self.inline_runs.contains_key(&view) || self.svg.presented(view) {
+        // A layout-only box has no layer. A run has no box of its own to
+        // move: transforms do not apply to non-replaced inline boxes (CSS Transforms 1 §3).
+        if self.flat.nodes.contains(&view)
+            || self.inline_runs.contains_key(&view)
+            || self.svg.presented(self.runner.kernel(), view)
+        {
             return;
         }
         if self.native_protected_id(view) && !self.native_current() {
             return;
         }
-        if property == Property::Layout {
-            batch.present4(view, "layout", values);
+        if matches!(property, Property::Layout | Property::Rotate) {
+            batch.present4(view, property.name(), values);
         } else if property == Property::Translate && (values[2] != 0.0 || values[3] != 0.0) {
             // Its percentages ride as `w` and `h`; the presenter
             // resolves them against the box (chess diary #4).

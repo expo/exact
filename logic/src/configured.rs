@@ -28,8 +28,18 @@ macro_rules! configured {
                 $crate::exact_runner::DataSource::set_document_owner(&mut self.0, owner)
             }
 
+            fn render_web(&mut self) {
+                $crate::exact_runner::DataSource::render_web(&mut self.0)
+            }
+
             fn app_id(&self) -> &str {
                 $crate::exact_runner::DataSource::app_id(&self.0)
+            }
+            fn launch(&self) -> Option<$crate::exact_runner::request::Launch> {
+                $crate::exact_runner::DataSource::launch(&self.0)
+            }
+            fn preloads(&self) -> &[$crate::exact_runner::request::Preload] {
+                $crate::exact_runner::DataSource::preloads(&self.0)
             }
             fn grants(&self) -> &str {
                 $crate::exact_runner::DataSource::grants(&self.0)
@@ -187,6 +197,9 @@ macro_rules! configured {
             ) -> Result<(), $crate::exact_runner::DataError> {
                 $crate::exact_runner::DataSource::module_landed(&mut self.0, store, token, outcome)
             }
+            fn take_reports(&mut self) -> Vec<$crate::exact_runner::Report> {
+                $crate::exact_runner::DataSource::take_reports(&mut self.0)
+            }
             fn module_delivery(
                 &mut self,
                 store: &mut $crate::exact_runner::Store,
@@ -204,6 +217,33 @@ macro_rules! configured {
             fn take_logs(&mut self) -> Vec<String> {
                 $crate::exact_runner::DataSource::take_logs(&mut self.0)
             }
+            fn parse_tool(
+                &mut self,
+                fetch: Option<u64>,
+                continuation: Option<u64>,
+                store: &mut $crate::exact_runner::Store,
+                source: &str,
+                args: &[$crate::exact_plan::Value],
+                outcome: $crate::exact_runner::Outcome,
+            ) -> Result<$crate::exact_runner::Answer, $crate::exact_runner::DataError> {
+                $crate::exact_runner::DataSource::parse_tool(
+                    &mut self.0,
+                    fetch,
+                    continuation,
+                    store,
+                    source,
+                    args,
+                    outcome,
+                )
+            }
+
+            fn module_identity(
+                &self,
+                source: &str,
+            ) -> Option<$crate::exact_runner::ModuleIdentity> {
+                $crate::exact_runner::DataSource::module_identity(&self.0, source)
+            }
+
             fn take_aborted(&mut self) -> Vec<u64> {
                 $crate::exact_runner::DataSource::take_aborted(&mut self.0)
             }

@@ -24,7 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let generated = Instant::now();
         let document = markdown_parse::parse(black_box(&text), &str::to_owned);
         let parsed = Instant::now();
-        let values = markdown_parse::value::blocks(black_box(&document));
+        let blocks = markdown_parse::value::block_groups(&document).count();
+        let values = markdown_parse::value::into_blocks_with_tables(black_box(document));
         let converted = Instant::now();
         black_box(&values);
         println!(
@@ -32,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             profile.name(),
             bytes,
             text.len(),
-            document.blocks.len(),
+            blocks,
             sample,
             (generated - started).as_secs_f64() * 1000.0,
             (parsed - generated).as_secs_f64() * 1000.0,

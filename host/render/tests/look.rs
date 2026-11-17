@@ -34,6 +34,7 @@ fn render_without_a_shell_uses_neutral_roles_in_both_projections() {
             Ids::Any,
             projection,
             0.0,
+            &Default::default(),
         )
         .unwrap();
         assert_eq!(roles::column(), Column::Neutral);

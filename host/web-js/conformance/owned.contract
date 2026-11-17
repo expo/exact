@@ -1,0 +1,66 @@
+// data: carousel
+// Synthetic conformance plan: a child's requests (LLP 1035.005.004) on the
+// wasm runner and the JS target, on Carousel's `long(n, c)`, which answers
+// `c` `n` times at once. Each Book screen owns its request, asked while
+// `shown`, and one that reads that answer; Counter, outside every region,
+// owns one as long-lived as the root. The steps make, replace, refresh and
+// destroy instances and close and reopen a gate; the agent's `owned` and
+// `instances` are compared after each.
+routes nav
+  list "/"
+  book "/book/:id"
+
+component App
+  state shown = true
+  action open(id: string)
+    nav = push(nav, path("book", id))
+  action swap(id: string)
+    nav = replace(nav, path("book", id))
+  action back
+    nav = back(nav)
+  action toggle
+    shown = !shown
+  view
+    main
+      row
+        button "Open 1" press=open("1") testId="open-1"
+        button "Open 2" press=open("2") testId="open-2"
+        button "Swap 3" press=swap("3") testId="swap-3"
+        button "Back" press=back testId="back"
+        button "Toggle" press=toggle testId="toggle"
+      Counter(label="o")
+      for e in stack(nav) key=e.id
+        if e.name == "book"
+          Book(id=e.params.id, shown=shown)
+        else
+          text "List" testId="list"
+
+component Book
+  props
+    id: string
+    shown: bool
+  state n = 1
+  resource body = long(n, id) when shown as shape string else empty()
+  derive tag = body == "" ? "none" : body
+  resource echo = long(2, tag) as shape string
+  action more
+    n = n + 1
+  action reload
+    refresh body
+  view
+    column
+      text `${id}: ${body} ${echo} ${pending(body)}` testId=`book-${id}`
+      button "More" press=more testId=`more-${id}`
+      button "Reload" press=reload testId=`reload-${id}`
+
+component Counter
+  props
+    label: string
+  state n = 2
+  resource got = long(n, label) as shape string
+  action more
+    n = n + 1
+  view
+    row
+      text got testId="got"
+      button "More" press=more testId="more-outside"

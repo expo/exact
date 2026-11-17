@@ -1,10 +1,16 @@
 //! Caltrain on Android's Canvas host (LLP 1076 §3.3): the host's JNI
-//! (`exact_linux::canvas_jni!`) over the app's data source, its baked plan and
+//! (`exact_painted::canvas_jni!`) over the app's data source, its baked plan and
 //! its hatches. The reader (`host/android`) loads this library as
 //! `libexactcanvas.so`.
 
 #[cfg(target_os = "android")]
 include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
+// The home-screen widget's JNI (LLP 1126.003 D9).
 #[cfg(target_os = "android")]
-exact_linux::canvas_jni!(caltrain_data::Caltrain, hatches = crate::exact_hatches());
+include!(concat!(env!("OUT_DIR"), "/widgets.rs"));
+#[cfg(target_os = "android")]
+exact_widgets!(caltrain_data::Caltrain);
+
+#[cfg(target_os = "android")]
+exact_painted::canvas_jni!(caltrain_data::Caltrain, hatches = crate::exact_hatches());

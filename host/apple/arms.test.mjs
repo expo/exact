@@ -1,61 +1,70 @@
-import { test } from 'bun:test';
+import { test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources } from './arms.mjs';
+import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { evictArms, keepRoster, keptRoster, probeDigest, rosterRoutes, snapshotSources } from './arms.mjs';
 
-test('an arm keeps its three last used copies, another arm whose name ends in it keeps its own, and a day-old half-written copy goes', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-arms-'));
+test('a qualified native roster is bound to the exact probe bytes, including when imported from a simulator run', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-roster-'));
+  const probe = resolve(dir, 'probe'), receipt = resolve(dir, 'qualification.json');
+  const roster = JSON.stringify({ 'native-view': { firstFrame: true }, extensions: {} });
+  const bytes = Buffer.from('first compiled probe'), hash = createHash('sha256').update(bytes).digest('hex');
+  const env = { EXACT_NATIVE_ROSTERS: receipt };
   try {
-    const name = 'libexact_modules.dylib';
-    const at = (file, secondsAgo) => {
-      writeFileSync(join(dir, file), '');
-      const t = new Date(Date.now() - secondsAgo * 1000);
-      utimesSync(join(dir, file), t, t);
-    };
-    const keys = ['0000000000000001', '0000000000000002', '0000000000000003', '0000000000000004'];
-    keys.forEach((key, i) => at(`${key}-${name}`, i * 10));
-    at(`0000000000000009-probe-${name}`, 1000);
-    at(`0000000000000004-${name}.roster`, 0);
-    at(`0000000000000003-${name}.roster`, 0);
-    at(`0000000000000001-${name}.42.tmp`, 2 * 86_400);
-    at(`0000000000000002-${name}.43.tmp`, 60);
-    evictArms(dir, name);
-    assert.deepEqual(readdirSync(dir).sort(), [
-      `0000000000000001-${name}`, `0000000000000002-${name}`, `0000000000000002-${name}.43.tmp`,
-      `0000000000000003-${name}`, `0000000000000003-${name}.roster`, `0000000000000009-probe-${name}`,
-    ]);
+    writeFileSync(probe, bytes);
+    expect(keptRoster(probe, {})).toBeUndefined();
+    keepRoster(probe, roster); expect(keptRoster(probe, {})).toBe(roster);
+    writeFileSync(probe, 'changed compiled probe');
+    expect(keptRoster(probe, {})).toBeUndefined();
+    writeFileSync(receipt, JSON.stringify({ version: 1, probes: [{ probeSha256: hash, roster }] }));
+    expect(keptRoster(probe, env)).toBeUndefined();
+    writeFileSync(probe, bytes); writeFileSync(`${probe}.roster`, '{}');
+    expect(keptRoster(probe, env)).toBe(roster);
+    expect(JSON.parse(readFileSync(`${probe}.roster`, 'utf8')).probeSha256).toBe(hash);
+    expect(keptRoster(probe, {})).toBe(roster);
+    writeFileSync(`${probe}.roster`, '{}');
+    writeFileSync(receipt, JSON.stringify({ version: 1, probes: [{ probeSha256: hash, roster }, { probeSha256: hash, roster }] }));
+    expect(() => keptRoster(probe, env)).toThrow('duplicate');
+    expect(() => keepRoster(probe, '[]')).toThrow('JSON object');
+    expect(() => keepRoster(probe, '{')).toThrow();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("a build compiles its sources as they were when it began, keyed and reported by the author's paths", () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-arms-'));
+test('a probe qualification covers its launcher, library, packages and frameworks after relocation', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-probe-artifact-'));
+  const probe = resolve(dir, 'probe'), moved = resolve(dir, 'moved');
+  const files = ['ExactRosterProbe', 'libexact_modules.dylib', 'libPackage.dylib', 'Frameworks/Dependency.framework/Dependency'];
+  const roster = JSON.stringify({ 'native-view': { firstFrame: true } });
   try {
-    const authored = join(dir, 'Pad.swift');
-    writeFileSync(authored, 'let a = 1\n');
-    const snapshot = snapshotSources([authored], join(dir, 'build'));
-    writeFileSync(authored, 'let a = 2\n'); // the author's edit while the build runs
-    assert.equal(readFileSync(snapshot.copies[0], 'utf8'), 'let a = 1\n');
-    assert.equal(snapshot.key(snapshot.copies[0]), authored);
-    assert.equal(snapshot.key('-O'), '-O');
-    const real = join(realpathSync(join(dir, 'build')), 'Pad.swift');
-    assert.equal(snapshot.authored(`${real}:1:5: error: x\n${snapshot.copies[0]}:2:1: note: y`), `${authored}:1:5: error: x\n${authored}:2:1: note: y`);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("a probe's roster is kept beside its copy, read back by the next build, and none is kept for a copy that has none", () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-arms-'));
-  try {
-    const copy = join(dir, '0000000000000001-probe-roster-simulator');
-    writeFileSync(copy, '');
-    assert.equal(keptRoster(copy), undefined);
-    assert.equal(keptRoster(undefined), undefined); // an arm placed with no copy (a macOS build's own artifact)
-    keepRoster(copy, '{"map-view":{"firstFrame":true}}');
-    assert.equal(keptRoster(copy), '{"map-view":{"firstFrame":true}}');
-    assert.equal(keptRoster(join(dir, '0000000000000002-probe-roster-simulator')), undefined); // another key's
-    keepRoster(undefined, '{}');
-    assert.deepEqual(readdirSync(dir).sort(), ['0000000000000001-probe-roster-simulator', '0000000000000001-probe-roster-simulator.roster']);
+    for (const file of files) {
+      mkdirSync(resolve(probe, file, '..'), { recursive: true });
+      writeFileSync(resolve(probe, file), file);
+    }
+    const hash = probeDigest(probe);
+    cpSync(probe, moved, { recursive: true });
+    assert.equal(probeDigest(moved), hash);
+    const receipt = resolve(dir, 'qualification.json');
+    writeFileSync(receipt, JSON.stringify({ version: 1, probes: [{ probeSha256: hash, roster }] }));
+    const env = { EXACT_NATIVE_ROSTERS: receipt };
+    assert.equal(keptRoster(moved, env), roster);
+    for (const file of files) {
+      writeFileSync(resolve(moved, file), 'changed');
+      assert.equal(keptRoster(moved, env), undefined, file);
+      writeFileSync(resolve(moved, file), file);
+    }
+    rmSync(resolve(moved, files[2]));
+    assert.equal(keptRoster(moved, env), undefined);
+    for (let i = 0; i < 4; i++) {
+      const cached = resolve(dir, `${i.toString(16).padStart(16, '0')}-probe-artifact`);
+      cpSync(probe, cached, { recursive: true });
+      keepRoster(cached, roster);
+      utimesSync(cached, i + 1, i + 1);
+    }
+    evictArms(dir, 'probe-artifact');
+    assert.equal(readdirSync(dir).filter(f => /-probe-artifact$/.test(f)).length, 3);
+    assert.equal(readdirSync(dir).filter(f => /-probe-artifact.roster$/.test(f)).length, 3);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

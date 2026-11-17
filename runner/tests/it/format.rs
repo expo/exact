@@ -15,8 +15,20 @@
 //! `Dec 31, 1` for 1 BC or `Jan 1, 10000`, or throws past TimeClip's range.
 //! Bun prints U+0020 before AM/PM, so no row is normalized.
 
-use exact_plan::{Stdlib, Value};
-use exact_runner::{formatting, stdlib::format_time};
+use exact_plan::{Plan, Stdlib, Value};
+use exact_runner::stdlib::{format_time, format_time_two_digit};
+
+/// A plan with no strings tables: every entry formats `en-US`, as a call
+/// whose format locale is `""` (or absent) does.
+static PLAN: std::sync::LazyLock<Plan> = std::sync::LazyLock::new(|| {
+    exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1)
+        .finish()
+        .unwrap()
+});
+
+fn formatting(f: Stdlib, args: &[Value]) -> Option<Value> {
+    exact_runner::formatting(f, args, &PLAN)
+}
 
 /// (epochMs, utcOffset, formatTime "short", formatDate "medium", formatDate "month-year").
 #[rustfmt::skip]
@@ -715,6 +727,69 @@ fn date(ms: f64, offset: f64, style: &str) -> Value {
     .expect("a date")
 }
 
+#[test]
+fn day_keys_are_calendar_dates_at_every_offset() {
+    let label = |key: &str, offset: f64, style: &str| {
+        formatting(
+            Stdlib::FormatDate,
+            &[Value::str(key), Value::Number(offset), Value::str(style)],
+        )
+    };
+    for (key, medium, month_year) in [
+        ("2026-10-16", "Oct 16, 2026", "October 2026"),
+        ("2024-02-29", "Feb 29, 2024", "February 2024"),
+        ("2000-02-29", "Feb 29, 2000", "February 2000"),
+        ("2400-02-29", "Feb 29, 2400", "February 2400"),
+        ("0001-01-01", "Jan 1, 1", "January 1"),
+        ("0099-12-31", "Dec 31, 99", "December 99"),
+        ("9999-12-31", "Dec 31, 9999", "December 9999"),
+    ] {
+        for offset in [-1080.0, -720.0, -420.0, 0.0, 345.5, 840.0, 1080.0] {
+            for (style, want) in [("medium", medium), ("month-year", month_year), ("iso", key)] {
+                assert_eq!(
+                    label(key, offset, style),
+                    Some(Value::str(want)),
+                    "{key} {offset} {style}"
+                );
+            }
+        }
+    }
+    for key in [
+        "",
+        "2026-02-29",
+        "1900-02-29",
+        "2100-02-29",
+        "2024-04-31",
+        "2024-00-01",
+        "2024-13-01",
+        "2024-01-00",
+        "2024-01-32",
+        "0000-01-01",
+        "10000-01-01",
+        "2024-2-09",
+        "24-02-09",
+        "2024/02/09",
+        " 2024-02-09",
+        "2024-02-09 ",
+        "2024-02-09\n",
+        "2024-02-09T00:00:00Z",
+        "1707436800000",
+        "２０２４-02-09",
+        "2024-٠٢-09",
+    ] {
+        for style in ["medium", "month-year", "iso"] {
+            assert_eq!(
+                label(key, 0.0, style),
+                Some(Value::str("")),
+                "{key:?} {style}"
+            );
+        }
+    }
+    for offset in [f64::NAN, f64::INFINITY, -1081.0, 1080.1] {
+        assert_eq!(label("2026-10-16", offset, "medium"), Some(Value::str("")));
+    }
+}
+
 fn number(n: f64) -> Value {
     formatting(
         Stdlib::FormatNumber,
@@ -800,13 +875,60 @@ fn decimal_percent_and_currency_numbers_are_intl_s() {
         STYLED.len() + CURRENCY.len(),
         wrong.join("\n")
     );
-    // The table is the roster's literal choice, code for code.
+    // The table is the roster's literal choice, code for code; the
+    // parameter's range is `decimal`'s digits.
     let listed: Vec<&str> = Stdlib::FormatNumber.params()[2]
         .split(" | ")
+        .filter(|c| c.starts_with('"'))
         .map(|c| c.trim_matches('"'))
         .collect();
     let tested: Vec<&str> = CURRENCY.iter().map(|c| c.0).collect();
     assert_eq!(listed, tested);
+}
+
+/// expo/exact#491: `formatTime`'s `"2-digit"`, `formatDate`'s `"month-day"`
+/// and `formatNumber(n, "decimal", digits)`, as Chrome's `Intl` prints
+/// `{ hour: "2-digit", minute: "2-digit" }`, `{ month: "short", day:
+/// "numeric" }` and `{ minimumFractionDigits: d, maximumFractionDigits: d }`.
+#[test]
+fn two_digit_hours_month_days_and_fixed_digits_are_intl_s() {
+    for (ms, offset, time, month_day) in [
+        (0.0, 0.0, "12:00 AM", "Jan 1"),
+        (-0.5, 60.0, "01:00 AM", "Jan 1"),
+        (3_720_000.0, 0.0, "01:02 AM", "Jan 1"),
+        (43_200_000.0, 0.0, "12:00 PM", "Jan 1"),
+        (45_000_000.0, 0.0, "12:30 PM", "Jan 1"),
+        (1_790_000_000_000.7, 345.0, "07:58 PM", "Sep 21"),
+        (1_791_762_120_000.0, -420.0, "04:42 PM", "Oct 11"),
+        (1_767_225_540_000.0, 330.0, "05:29 AM", "Jan 1"),
+    ] {
+        assert_eq!(format_time_two_digit(ms, offset), Value::str(time), "{ms}");
+        assert_eq!(date(ms, offset, "month-day"), Value::str(month_day), "{ms}");
+    }
+    let fixed = |n: f64, d: f64| {
+        formatting(
+            Stdlib::FormatNumber,
+            &[Value::Number(n), Value::str("decimal"), Value::Number(d)],
+        )
+    };
+    for (n, want) in [
+        (1.005, ["1", "1.0", "1.01", "1.0050"]),
+        (2.5, ["3", "2.5", "2.50", "2.5000"]),
+        (-0.0, ["-0", "-0.0", "-0.00", "-0.0000"]),
+        (-0.001, ["-0", "-0.0", "-0.00", "-0.0010"]),
+        (-1234.5, ["-1,235", "-1,234.5", "-1,234.50", "-1,234.5000"]),
+        (
+            123_456.789,
+            ["123,457", "123,456.8", "123,456.79", "123,456.7890"],
+        ),
+    ] {
+        for (d, want) in [0.0, 1.0, 2.0, 4.0].into_iter().zip(want) {
+            assert_eq!(fixed(n, d), Some(Value::str(want)), "{n} at {d}");
+        }
+    }
+    assert_eq!(fixed(f64::NAN, 2.0), Some(Value::str("")));
+    assert_eq!(fixed(1.0, 101.0), None, "past the roster's 0..=100");
+    assert_eq!(fixed(1.0, 1.5), None, "a whole number of digits");
 }
 
 /// D7: every entry prints `""` for a non-finite argument or an offset past
@@ -971,6 +1093,39 @@ const DAYS: &[(f64, f64, f64, &str, &str, &str)] = &[
     (1767225540000.0, 1798761540000.0, 330.0, "Jan 1, 2026", "Jan 1, 2026 at 5:29 AM", "1/1/26"),
     (253402300799999.0, 253402300799999.0, 0.0, "Today", "Today at 11:59 PM", "11:59 PM"),
 ];
+
+/// `formatDay`'s `"section"` (LLP 1168.000 D5) in `en-US`, from Saturday
+/// 2026-11-14 12:00 UTC, as LLP 1168.000's table prints it: the words, a
+/// weekday six days either side, a date with its weekday past them, and the
+/// year only in another year; the year's turn either way.
+#[rustfmt::skip]
+const SECTIONS: &[(f64, f64, &str)] = &[
+    (1794657600000.0, 1794657600000.0, "Today"), // 2026-11-14
+    (1794614340000.0, 1794657600000.0, "Yesterday"), // 2026-11-13
+    (1794700800000.0, 1794657600000.0, "Tomorrow"), // 2026-11-15
+    (1794484800000.0, 1794657600000.0, "Thursday"), // 2026-11-12
+    (1794398400000.0, 1794657600000.0, "Wednesday"), // 2026-11-11
+    (1794139200000.0, 1794657600000.0, "Sunday"), // 2026-11-08
+    (1794916800000.0, 1794657600000.0, "Tuesday"), // 2026-11-17
+    (1795176000000.0, 1794657600000.0, "Friday"), // 2026-11-20
+    (1794052800000.0, 1794657600000.0, "Sat, Nov 7"), // 2026-11-07
+    (1795262400000.0, 1794657600000.0, "Sat, Nov 21"), // 2026-11-21
+    (1792065600000.0, 1794657600000.0, "Thu, Oct 15"), // 2026-10-15
+    (1795521600000.0, 1794657600000.0, "Tue, Nov 24"), // 2026-11-24
+    (1746360000000.0, 1794657600000.0, "Sun, May 4, 2025"), // 2025-05-04
+    (1798200000000.0, 1798977600000.0, "Fri, Dec 25, 2026"), // 2026-12-25
+    (1799755200000.0, 1798632000000.0, "Tue, Jan 12, 2027"), // 2027-01-12
+];
+
+#[test]
+fn a_section_label_names_a_chat_s_day() {
+    let wrong: Vec<String> = SECTIONS
+        .iter()
+        .filter(|&&(then, now, want)| day(then, now, 0.0, "section") != Some(Value::str(want)))
+        .map(|(then, _, want)| format!("{then}: {want}"))
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
 
 fn day(then: f64, now: f64, offset: f64, mode: &str) -> Option<Value> {
     formatting(

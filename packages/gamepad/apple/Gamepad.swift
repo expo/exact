@@ -57,7 +57,8 @@ public final class GamepadModule: ExactPackage {
             return reply(name == "getGamepads" ? ["available": false, "gamepads": [Any](), "current": NSNull()] : ["error": "NotSupportedError"])
         }
         // A send without `index` is for the pad in use when it arrives (D2).
-        let index = (args["index"] as? Double).map(Int.init) ?? registry.current
+        // An index that is not a whole number names no pad.
+        let index = (args["index"] as? Double).map { Int(exactly: $0) } ?? registry.current
         let named = index.flatMap { registry.pads[$0] != nil ? $0 : nil }
         switch name {
         case "getGamepads":
@@ -325,12 +326,12 @@ fileprivate final class Registry {
     /// disconnecting `leaves` ms after the registry was made, when it says.
     private func inject(_ spec: [String: Any], after: (Double, @escaping () -> Void) -> () -> Void) {
         let controller = GCController.withExtendedGamepad()
-        let wanted = (spec["index"] as? Double).map { min(Int($0), ExactPads.most - 1) }
+        let wanted = (spec["index"] as? Double).flatMap { Int(exactly: $0) }.map { min($0, ExactPads.most - 1) }
         guard let index = slots.take(controller, at: wanted) else { return }
         connections += 1
         let pad = Pad(controller, connection: connections, injected: spec)
         pads[index] = pad
-        let pressed = (spec["pressed"] as? [Double] ?? []).map(Int.init).filter { (0..<17).contains($0) }
+        let pressed = (spec["pressed"] as? [Double] ?? []).compactMap { Int(exactly: $0) }.filter { (0..<17).contains($0) }
         for b in pressed { pad.elements[b]?.setValue(1) }
         if !pressed.isEmpty { current = index }
         if let ms = spec["leaves"] as? Double { _ = after(ms) { [weak self] in self?.disconnect(controller) } }

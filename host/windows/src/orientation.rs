@@ -7,7 +7,7 @@
 //! readback is `GetDisplayAutoRotationPreferences`.
 #![allow(unsafe_code)]
 
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 use exact_runner::orientation::{conflict_line, Session, ORIENTATIONS};
 use exact_runner::DataSource;
 use windows_sys::Win32::Devices::Display::{

@@ -255,20 +255,7 @@ fn selects<'a>(e: &'a Expr, nav: &str, scope: &mut Bound<'a>, out: &mut Vec<Lowe
                 }
             }
         }
-        // A binder hides an outer name of its own for its body.
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            selects(subject, nav, scope, out);
-            scope.push((var, None));
-            selects(some, nav, scope, out);
-            scope.pop();
-            return selects(none, nav, scope, out);
-        }
+        // A `let` of a push names the push.
         Expr::Let {
             name, value, body, ..
         } => {
@@ -279,17 +266,14 @@ fn selects<'a>(e: &'a Expr, nav: &str, scope: &mut Bound<'a>, out: &mut Vec<Lowe
             scope.pop();
             return;
         }
-        Expr::Arrow { params, body, .. } => {
-            let depth = scope.len();
-            scope.extend(params.iter().map(|p| (p.as_str(), None)));
-            selects(body, nav, scope, out);
-            scope.truncate(depth);
-            return;
-        }
         _ => {}
     }
-    for x in parts(e) {
+    // Another binder hides an outer name of its own for its body.
+    for (x, binds) in e.scoped_operands() {
+        let depth = scope.len();
+        scope.extend(binds.iter().map(|name| (name, None)));
         selects(x, nav, scope, out);
+        scope.truncate(depth);
     }
 }
 
@@ -647,22 +631,15 @@ fn handlers<'n>(nodes: &'n [Node], out: &mut Vec<&'n Expr>) {
                 );
                 handlers(children, out);
             }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                handlers(then, out);
-                handlers(otherwise, out);
-            }
-            Node::Each { body, .. } => handlers(body, out),
-            Node::Match { some, none, .. } => {
-                handlers(&some.1, out);
-                handlers(none, out);
-            }
             Node::Use { args, children, .. } => {
                 out.extend(args.iter().map(|a| &a.value));
                 handlers(children, out);
             }
-            Node::Children { .. } => {}
+            node => {
+                for list in node.child_lists() {
+                    handlers(list, out);
+                }
+            }
         }
     }
 }
@@ -705,7 +682,7 @@ fn keyed_by(attrs: &[Attr]) -> Option<&Expr> {
 fn mentions(e: &Expr, is: &dyn Fn(&str) -> bool) -> bool {
     match e {
         Expr::Ident(n, _) | Expr::Call(n, _, _) if is(n) => true,
-        _ => parts(e).into_iter().any(|x| mentions(x, is)),
+        _ => e.operands().any(|x| mentions(x, is)),
     }
 }
 
@@ -715,40 +692,8 @@ fn names<'e>(e: &'e Expr, out: &mut BTreeSet<&'e str>) {
     if let Expr::Ident(n, _) | Expr::Call(n, _, _) = e {
         out.insert(n.as_str());
     }
-    for x in parts(e) {
+    for x in e.operands() {
         names(x, out);
-    }
-}
-
-/// An expression's own subexpressions.
-fn parts(e: &Expr) -> Vec<&Expr> {
-    match e {
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().collect(),
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Arrow { body: x, .. } => vec![x],
-        Expr::Binary(_, a, b, _) => vec![a, b],
-        Expr::Ternary(a, b, c, _) => vec![a, b, c],
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => vec![subject, some, none],
-        Expr::Let { value, body, .. } => vec![value, body],
-        Expr::Template(parts, _) => parts
-            .iter()
-            .filter_map(|p| match p {
-                TemplatePart::Expr(x) => Some(x),
-                TemplatePart::Text(_) => None,
-            })
-            .collect(),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {
-            Vec::new()
-        }
     }
 }
 

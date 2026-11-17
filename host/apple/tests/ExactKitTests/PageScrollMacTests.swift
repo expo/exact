@@ -255,6 +255,40 @@ final class PageScrollMacTests: XCTestCase {
         XCTAssertTrue(called)
     }
 
+    func testDeferredGeometrySettlesWithoutNestingAndStopsAnOscillation() {
+        _ = NSApplication.shared
+        for limit in [4, 20] {
+            let p = Presenter()
+            defer { p.onViewportFit = nil }
+            var count = 0, depth = 0, maximumDepth = 0
+            func batch(_ cover: Bool) -> Batch {
+                batchFixture(ops: [["op": "props", "id": 1, "set": ["viewportFit": cover ? "cover" : "auto"]]],
+                             timers: false, motion: false, clock: nil, error: nil)
+            }
+            p.onViewportFit = {
+                count += 1
+                guard count < limit else { return }
+                let cover = count % 2 == 0
+                XCTAssertTrue(p.deferGeometry {
+                    depth += 1
+                    maximumDepth = max(maximumDepth, depth)
+                    p.apply(batch(cover))
+                    depth -= 1
+                })
+            }
+            p.apply(batchFixture(ops: [
+                ["op": "create", "id": 1, "kind": "view", "props": ["viewportFit": "cover"]],
+                ["op": "roots", "ids": [1]]
+            ], timers: false, motion: false, clock: nil, error: nil))
+            XCTAssertEqual(maximumDepth, 1, "a correction returns before the next correction starts")
+            if limit == 4 {
+                XCTAssertEqual(count, limit, "a converging sequence finishes synchronously")
+            } else {
+                XCTAssertLessThan(count, limit, "an oscillation stops in bounded work")
+            }
+        }
+    }
+
     func testNonzeroInsetsContinueToBePinnedToZero() {
         let (p, _) = fixture()
         p.viewport.contentInsets = NSEdgeInsets(top: 7, left: 11, bottom: 13, right: 17)

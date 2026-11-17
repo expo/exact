@@ -1,0 +1,70 @@
+routes nav
+  tab home "/"
+    detail "/detail"
+    find "/find"
+    sheet "/sheet"
+  tab other "/other"
+
+component App
+  state contained = true
+  state inset = false
+  state query = ""
+  action open(name: string)
+    nav = push(nav, "/" + name)
+  action back
+    nav = back(nav)
+  action selectTab(name: string)
+    nav = select(nav, name)
+  action contain
+    contained = not contained
+  action toggleInset
+    inset = not inset
+  action search(value: string)
+    query = value
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" testId="navigation" width=(contained ? "320px" : "100%") height=(contained ? "620px" : "100%") margin-left=(contained ? "24px" : "0px") margin-top=(contained ? "80px" : "0px") overflow=(contained ? "auto" : "visible")
+      button position="absolute" left=0 top=0 bottom=0 width=80 appearance="none" press=toggleInset testId="sidebar"
+        text "Sidebar"
+      for t in nav.tabs key=t.name
+        column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+          for e in t.stack key=e.id
+            Screen(entry=e, query=query, search=search, open=open, back=back, contain=contain, inset=inset, toggleInset=toggleInset)
+      row role="tablist" height=44
+        for t in nav.tabs key=t.name
+          button role="tab" aria-controls=`panel-${t.name}` aria-selected=(t.name == nav.tab) press=selectTab(t.name)
+            text t.name
+      if contained
+        column height=1200 testId="outer-content"
+
+component Screen
+  props
+    entry: Entry
+    query: string
+    search: action
+    open: action
+    back: action
+    contain: action
+    inset: bool
+    toggleInset: action
+  view
+    column navigationKey=`${entry.id}` navigationPresentation=(entry.name == "sheet" ? "modal" : "") navigationScroll="content" testId=`route-${entry.name}` position="absolute" inset=0 left=(inset ? "80px" : "0px") display="flex" flex-direction="column"
+      header
+        if entry.name == "sheet"
+          button id="back" press=back
+            text "Close"
+        text entry.name role="heading" aria-level=2
+        if entry.name == "find"
+          input type="search" value=query input=search placeholder="Search" aria-label="Search" testId="search"
+      scroll id="content" testId="content" flex=1 min-height=0
+        button press=open("detail") testId="open-detail"
+          text "Detail"
+        button press=open("find") testId="open-find"
+          text "Search"
+        button press=open("sheet") testId="open-sheet"
+          text "Sheet"
+        button press=contain testId="contain"
+          text "Contain"
+        button press=toggleInset testId="inset"
+          text "Inset"
+        column height=700
+        input value=query input=search testId="field" aria-label="Draft"

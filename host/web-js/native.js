@@ -2,9 +2,9 @@
 // 1071 §7): the wasm host's own `native-glue.js` over the app's module
 // artifact (`modules/index.js`, its `modules/web/`), and over the views its
 // packages serve (views.js, LLP 1133.001 D1). A loaded chunk,
-// fetched after first paint by the first module element (rt.js `nm`) or a
+// activated after first paint by the first module element (rt.js `nm`) or a
 // TypeScript source's `native` (ts-data.js); an app without modules never
-// has it.
+// has it. The build may preload the chunk without evaluating it.
 import './native-glue.js';
 
 // The runner's dispatch codes (native-glue.js `DISPATCH`) as the runtime's
@@ -39,6 +39,14 @@ export const pageTable = () => globalThis.exact.nativeModule();
 export function pageModule({ changed, agent, now }) {
   page ??= globalThis.exact.pageNative(true, { changed, ready: () => true, generation: () => 0, agent, now });
   return page.then(p => ({
-    later: request => p.later(btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(request))))).then(JSON.parse),
+    later: request => p.later(base64(new TextEncoder().encode(JSON.stringify(request)))).then(JSON.parse),
   }));
+}
+
+/** Bytes as base64, a slice at a time: spreading a whole request into one
+ * `String.fromCharCode` call overflows the stack past a few hundred KB. */
+function base64(bytes) {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 16384) text += String.fromCharCode(...bytes.subarray(i, i + 16384));
+  return btoa(text);
 }

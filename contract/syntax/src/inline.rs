@@ -15,7 +15,8 @@
 //! with its own state (owned by the arm around that `children`).
 
 use crate::ast::{
-    Action, Attr, Binding, Component, Expr, File, Node, Param, ResourceDecl, Stmt, TypeExpr,
+    Action, Attr, Binding, Component, Expr, File, MutationDecl, Node, Param, ResourceDecl, Stmt,
+    TypeExpr,
 };
 use crate::notfound::{implicit_notfound, implicit_notfound_view};
 use crate::parser::SyntaxError;
@@ -74,19 +75,21 @@ pub fn inline(file: &File) -> Result<Vec<Node>, SyntaxError> {
     Ok(expand(file)?.root.view)
 }
 
-/// The root as the plan sees it (LLP 1017 P4c): its view inlined, plus the
+/// The expanded root (LLP 1017 P4c): its view inlined, plus the
 /// `state`s and `action`s of every stateful child use, renamed apart with
 /// the use's number, each owned by the instance it belongs to ([`Owner`]);
-/// a child's `derive` is an expression substituted at each read.
+/// a child's `derive` is substituted at each read in this view. Lowering may
+/// replace those reads with loads of one executable row per use.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Expanded {
     /// The root, with the children's declarations appended.
     pub root: Component,
+    /// At-read instance expressions available for sharing during lowering.
+    pub thunks: Vec<Thunk>,
     /// For each of `root.states`, what owns it.
     pub owners: Vec<Owner>,
     /// Every component instantiation, in the order the inliner expanded
-    /// them; entry 0 is the root (LLP 1035.005 D3). Empty unless source
-    /// provenance was requested with `expand_mapped`. An element's
+    /// them; entry 0 is the root (LLP 1035.005 D3). An element's
     /// `instance` and the two vectors below index it.
     pub instances: Vec<Instance>,
     /// For each of `root.states`, the instance whose component declared it
@@ -94,6 +97,42 @@ pub struct Expanded {
     pub state_instances: Vec<u32>,
     /// For each of `root.actions`, the same.
     pub action_instances: Vec<u32>,
+    /// For each of `root.resources`, what owns it (LLP 1035.005.004 D1):
+    /// `Root` for the root's own and the device facts hoisted to it; a
+    /// child's lifted `name#N`, the instance of its use, as a state's.
+    pub resource_owners: Vec<Owner>,
+    /// For each of `root.resources`, the instance whose component declared it.
+    pub resource_instances: Vec<u32>,
+    /// For each of `root.mutations`, what owns it, as for a resource
+    /// (LLP 1035.005.004 D6).
+    pub mutation_owners: Vec<Owner>,
+    /// For each of `root.mutations`, the instance whose component declared it.
+    pub mutation_instances: Vec<u32>,
+    /// For each of `root.mutations`, the arguments its `then` action takes:
+    /// a child's lifted action's captured props, read in the use site's
+    /// scope; empty for the root's.
+    pub mutation_then_args: Vec<Vec<Expr>>,
+    /// Every use of a component that declares a request, with the repetition
+    /// around it a request may not be under (D1): what the type check refuses.
+    pub owned_uses: Vec<OwnedUse>,
+    /// Each region tag's declaring instance, for compile-time cost reports.
+    pub region_instances: BTreeMap<u32, u32>,
+}
+
+/// One instance expression. Source expansion keeps substitution; lowering
+/// may replace its occurrences with a load of one executable row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Thunk {
+    /// A name outside the authored namespace.
+    pub name: String,
+    /// The resolved expression in the use site's scope.
+    pub expr: Expr,
+    /// The instance frame in which the expression is evaluated.
+    pub owner: Owner,
+    /// The declaring component use in the source map.
+    pub instance: u32,
+    /// The declaration or argument's source span.
+    pub span: crate::Span,
 }
 
 /// What owns a slot of the expanded root, and so when its initializer runs.
@@ -118,6 +157,30 @@ pub enum Owner {
         /// Which of its arms.
         arm: u8,
     },
+}
+
+/// A repetition around a use whose count the data sets, not the router
+/// (LLP 1035.005.004 D1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Repeat {
+    /// A `for` over data, written at this span.
+    Each(crate::Span),
+    /// A virtualized list, whose rows its window makes and retires.
+    List(crate::Span),
+}
+
+/// A use of a component that declares a request (LLP 1035.005.004 D1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedUse {
+    /// The component used.
+    pub component: String,
+    /// The instance the use makes.
+    pub instance: u32,
+    /// The use site.
+    pub span: crate::Span,
+    /// The innermost data-sized repetition around the use, through every
+    /// wrapper and slot fill; `None` where the use may own requests.
+    pub repeat: Option<Repeat>,
 }
 
 /// One component instantiation the inliner expanded (LLP 1035.005 D3):
@@ -189,6 +252,87 @@ pub fn hygiene(expanded: &mut Expanded, file: &File) {
     calls::hygiene(&mut expanded.root.actions, &record_constructors(file));
 }
 
+/// The spans of the calls a child writes of a name it declares no action,
+/// `action` prop or injected action of. An action is in its own component's
+/// scope only (LLP 1089 D1), so such a call is a `fn`'s, a standard
+/// function's or the strings' `t`. Inlining lifts it into the root
+/// unchanged, where the root's action of that name would otherwise capture it.
+pub fn free_calls(file: &File) -> BTreeSet<crate::Span> {
+    fn statements<'a>(body: &'a [Stmt], out: &mut Vec<&'a Expr>) {
+        for s in body {
+            match s {
+                Stmt::Let { expr, .. } | Stmt::Assign { expr, .. } => out.push(expr),
+                Stmt::Command { args, .. } | Stmt::Send { args, .. } => out.extend(args),
+                Stmt::If {
+                    cond,
+                    then,
+                    otherwise,
+                    ..
+                } => {
+                    out.push(cond);
+                    statements(then, out);
+                    statements(otherwise, out);
+                }
+                Stmt::Match {
+                    subject,
+                    some,
+                    none,
+                    ..
+                } => {
+                    out.push(subject);
+                    statements(&some.1, out);
+                    statements(none, out);
+                }
+                Stmt::Call { args, body, .. } => {
+                    out.extend(args);
+                    statements(body, out);
+                }
+                Stmt::Refresh { .. } => {}
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    // A child declares no `task` or `sequence`, which the type pass refuses.
+    for c in file.components.iter().skip(1) {
+        let mut exprs: Vec<&Expr> = Vec::new();
+        exprs.extend(
+            c.provides
+                .iter()
+                .chain(&c.states)
+                .chain(&c.derives)
+                .map(|b| &b.expr),
+        );
+        for r in &c.resources {
+            exprs.extend(r.args.iter().chain(&r.gate));
+            exprs.extend(r.placeholder.iter().flat_map(|p| &p.args));
+            exprs.extend(
+                r.each
+                    .iter()
+                    .flat_map(|e| std::iter::once(&e.list).chain(&e.key)),
+            );
+        }
+        for a in &c.actions {
+            statements(&a.body, &mut exprs);
+        }
+        exprs.extend(Node::walk(&c.view).flat_map(Node::exprs));
+        let own = |name: &str| {
+            c.actions.iter().any(|a| a.name == name)
+                || c.props
+                    .iter()
+                    .chain(&c.injects)
+                    .any(|p| p.name == name && p.ty.as_ref().is_some_and(is_action))
+        };
+        for e in exprs.into_iter().flat_map(Expr::walk) {
+            if let Expr::Call(name, _, span) = e {
+                if !own(name) {
+                    out.insert(*span);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The file's record constructors: every declared shape that is not also a
 /// `fn`. A call naming one builds that record ahead of any name in scope
 /// (LLP 1035.005.000 D3), so expansion never replaces such a call's head.
@@ -204,33 +348,11 @@ fn record_constructors(file: &File) -> BTreeSet<String> {
 /// Whether `e` holds a `none` or a `[]` outside an [`Expr::Typed`]: a leaf
 /// whose element type only a declaration can say.
 fn untyped_leaf(e: &Expr) -> bool {
-    use crate::ast::TemplatePart;
     match e {
         Expr::None(_) => true,
-        Expr::List(items, _) => items.is_empty() || items.iter().any(untyped_leaf),
-        Expr::Typed(..)
-        | Expr::Number(..)
-        | Expr::Str(..)
-        | Expr::Bool(..)
-        | Expr::Ident(..)
-        | Expr::Arrow { .. } => false,
-        Expr::Template(parts, _) => parts
-            .iter()
-            .any(|p| matches!(p, TemplatePart::Expr(x) if untyped_leaf(x))),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Unary(_, x, _) => untyped_leaf(x),
-        Expr::Call(_, args, _) => args.iter().any(untyped_leaf),
-        Expr::Binary(_, a, b, _) => untyped_leaf(a) || untyped_leaf(b),
-        Expr::Ternary(a, b, c, _) => untyped_leaf(a) || untyped_leaf(b) || untyped_leaf(c),
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => untyped_leaf(subject) || untyped_leaf(some) || untyped_leaf(none),
-        Expr::Let { value, body, .. } => untyped_leaf(value) || untyped_leaf(body),
+        Expr::List(items, _) if items.is_empty() => true,
+        Expr::Typed(..) | Expr::Arrow { .. } => false,
+        _ => e.operands().any(untyped_leaf),
     }
 }
 
@@ -246,7 +368,7 @@ fn absent(span: crate::Span) -> Expr {
 
 fn expand_with_sites(
     file: &File,
-    capture_sites: bool,
+    _capture_sites: bool,
     typed_props: bool,
 ) -> (Expanded, Vec<SyntaxError>) {
     // Same-component calls first, each in its own component's scope (LLP
@@ -328,21 +450,24 @@ fn expand_with_sites(
         arms: Vec::new(),
         tabs: false,
         next_tag: 1,
+        region_instances: BTreeMap::new(),
+        thunks: Vec::new(),
         extra_states: Vec::new(),
         extra_actions: Vec::new(),
+        extra_resources: Vec::new(),
+        extra_mutations: Vec::new(),
+        owned_uses: Vec::new(),
+        repeats: Vec::new(),
+        router_rows: Vec::new(),
         instance: 0,
-        capture_sites,
+        capture_sites: true,
         typed_props,
         errors: Vec::new(),
-        instances: if capture_sites {
-            vec![Instance {
-                component: file.components[0].name.clone(),
-                parent: None,
-                span: file.components[0].span,
-            }]
-        } else {
-            Vec::new()
-        },
+        instances: vec![Instance {
+            component: file.components[0].name.clone(),
+            parent: None,
+            span: file.components[0].span,
+        }],
     };
     let none = BTreeMap::new();
     let mut subst = Subst::new(&none, &records);
@@ -370,38 +495,50 @@ fn expand_with_sites(
     let view = inline_nodes(&renamed, &mut subst, &mut ctx).unwrap_or_default();
     root.view = view;
     let mut owners = vec![Owner::Root; root.states.len()];
-    let mut state_instances = if capture_sites {
-        vec![0; root.states.len()]
-    } else {
-        Vec::new()
-    };
+    let mut state_instances = vec![0; root.states.len()];
     for (b, owner, instance) in ctx.extra_states {
         root.states.push(b);
         owners.push(owner);
-        if capture_sites {
-            state_instances.push(instance);
-        }
+        state_instances.push(instance);
     }
-    let mut action_instances = if capture_sites {
-        vec![0; root.actions.len()]
-    } else {
-        Vec::new()
-    };
+    let mut action_instances = vec![0; root.actions.len()];
     for (a, instance) in ctx.extra_actions {
         root.actions.push(a);
-        if capture_sites {
-            action_instances.push(instance);
-        }
+        action_instances.push(instance);
+    }
+    let mut resource_owners = vec![Owner::Root; root.resources.len()];
+    let mut resource_instances = vec![0; root.resources.len()];
+    for (r, owner, instance) in ctx.extra_resources {
+        root.resources.push(r);
+        resource_owners.push(owner);
+        resource_instances.push(instance);
+    }
+    let mut mutation_owners = vec![Owner::Root; root.mutations.len()];
+    let mut mutation_instances = vec![0; root.mutations.len()];
+    let mut mutation_then_args = vec![Vec::new(); root.mutations.len()];
+    for (m, owner, instance, then_args) in ctx.extra_mutations {
+        root.mutations.push(m);
+        mutation_owners.push(owner);
+        mutation_instances.push(instance);
+        mutation_then_args.push(then_args);
     }
     calls::resolve(&mut root.actions, &records, &mut ctx.errors);
     let mut errors = called_errors;
     errors.append(&mut ctx.errors);
     let expanded = Expanded {
         root,
+        thunks: ctx.thunks,
         owners,
         instances: ctx.instances,
+        region_instances: ctx.region_instances,
         state_instances,
         action_instances,
+        resource_owners,
+        resource_instances,
+        mutation_owners,
+        mutation_instances,
+        mutation_then_args,
+        owned_uses: ctx.owned_uses,
     };
     (expanded, errors)
 }
@@ -434,11 +571,25 @@ struct Ctx<'a> {
     tabs: bool,
     /// The next region tag.
     next_tag: u32,
+    region_instances: BTreeMap<u32, u32>,
     /// The children's `state`s lifted into the root, with their owners and
     /// the instance that declared them.
     extra_states: Vec<(Binding, Owner, u32)>,
+    thunks: Vec<Thunk>,
     /// The children's `action`s lifted into the root, with their instance.
     extra_actions: Vec<(Action, u32)>,
+    /// The children's requests lifted into the root, with their owners and
+    /// the instance that declared them (LLP 1035.005.004 D1).
+    extra_resources: Vec<(ResourceDecl, Owner, u32)>,
+    /// The children's mutations lifted into the root, with their owners, the
+    /// instance that declared them and their `then`'s arguments (D6).
+    extra_mutations: Vec<(MutationDecl, Owner, u32, Vec<Expr>)>,
+    owned_uses: Vec<OwnedUse>,
+    /// The data-sized repetitions around the current site, outermost first.
+    repeats: Vec<Repeat>,
+    /// The binders of the `for`s over a router's tabs around the current
+    /// site: a `for` over one's `stack` is the router's too.
+    router_rows: Vec<String>,
     /// The instantiation whose view is being inlined: 0 at the root.
     instance: u32,
     capture_sites: bool,
@@ -471,6 +622,9 @@ impl Ctx<'_> {
     /// A fresh region tag.
     fn tag(&mut self) -> u32 {
         let tag = self.next_tag;
+        if self.capture_sites {
+            self.region_instances.insert(tag, self.instance);
+        }
         self.next_tag += 1;
         tag
     }
@@ -582,6 +736,14 @@ fn inline_nodes(
                 if has("navigationKey") {
                     ctx.tabs = has("navigationBack");
                 }
+                // Its rows come and go with its window (LLP 1068): a
+                // repetition no request may be under.
+                let windowed = attrs.iter().any(|a| {
+                    a.name == "virtualized" && !matches!(literal(&a.value), Expr::Bool(false, _))
+                });
+                if windowed {
+                    ctx.repeats.push(Repeat::List(*span));
+                }
                 // @ref LLP 1075.003 §9.14 — a tab panel's contents are made
                 // when its tab is first selected: they are one arm, which
                 // owns the state of the children used in it, as an `if`'s
@@ -602,6 +764,9 @@ fn inline_nodes(
                     inline_nodes(children, subst, ctx)
                 };
                 ctx.tabs = tabs;
+                if windowed {
+                    ctx.repeats.pop();
+                }
                 out.push(Node::Element {
                     tag: tag.clone(),
                     positional: positional
@@ -642,12 +807,27 @@ fn inline_nodes(
                 ..
             } => {
                 let tag = ctx.tag();
+                let list = subst_expr(list, subst);
+                // A row of a router's tabs or stack is a tab or a screen
+                // someone opened; any other `for` repeats as its data does
+                // (LLP 1035.005.004 D1).
+                let routed = router_rows(&list, ctx);
+                match routed {
+                    Some(true) => ctx.router_rows.push(var.clone()),
+                    Some(false) => {}
+                    None => ctx.repeats.push(Repeat::Each(*span)),
+                }
                 let body = ctx.in_arm(tag, 0, |ctx| inline_nodes(body, subst, ctx));
+                match routed {
+                    Some(true) => drop(ctx.router_rows.pop()),
+                    Some(false) => {}
+                    None => drop(ctx.repeats.pop()),
+                }
                 out.push(Node::Each {
                     tag,
                     var: var.clone(),
                     index: index.clone(),
-                    list: subst_expr(list, subst),
+                    list,
                     key: subst_expr(key, subst),
                     body: body?,
                     span: *span,
@@ -675,6 +855,27 @@ fn inline_nodes(
         ctx.site_depth -= usize::from(is_site);
     }
     Ok(out)
+}
+
+/// Whether a `for` over `list` makes the router's rows: `Some(true)` for its
+/// tabs (`nav.tabs`), `Some(false)` for a stack (`stack(nav)`, or `t.stack`
+/// of a tab `t`), `None` for any other list.
+fn router_rows(list: &Expr, ctx: &Ctx<'_>) -> Option<bool> {
+    let slot = &ctx.file.routes.as_ref()?.slot;
+    match list {
+        Expr::Member(of, field, _) if field == "tabs" => {
+            matches!(&**of, Expr::Ident(name, _) if name == slot).then_some(true)
+        }
+        Expr::Member(of, field, _) if field == "stack" => matches!(
+            &**of,
+            Expr::Ident(name, _) if ctx.router_rows.contains(name)
+        )
+        .then_some(false),
+        Expr::Call(f, args, _) if f == "stack" => {
+            matches!(args.as_slice(), [Expr::Ident(name, _)] if name == slot).then_some(false)
+        }
+        _ => None,
+    }
 }
 
 // View binders must differ from lifted declarations as well as parent names:

@@ -91,6 +91,8 @@ abstract class ExactExtension(val context: ExtensionContext) {
 
     /** The view's node is gone. */
     open fun destroyView(view: android.view.View) {}
+    /** The hosted view's activity lifecycle, separate from the session's foreground fact (LLP 1133.021). */
+    open fun viewLifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {}
 
     /**
      * View [id] of [session] was displayed or hidden, by the origin of the commit that did it (`app`, `tool` or
@@ -151,7 +153,7 @@ interface ExtensionRoster {
 /** What an extension may use of the host. */
 class ExtensionContext internal constructor(val application: Context, private val name: String) {
     /** The activity that shows the app now, if one does: a permission's rationale is read from it. */
-    val activity: Activity? get() = Exact.reader?.get()
+    val activity: Activity? get() = Extensions.front()
 
     /**
      * Under the agent, unless the drive bound this extension as in production (`--bind`): an implementation that is its
@@ -162,9 +164,42 @@ class ExtensionContext internal constructor(val application: Context, private va
     /** The session this instance belongs to. Android runs one session a process. */
     val session: String = "1"
 
+    /** The session's label, the same at every launch, which what a package keeps for one session is keyed by: `main`,
+     * the one session a process runs here, as an Apple app's window is. */
+    val label: String = "main"
+
+    /** The session's directories behind `app:/data`, `app:/cache` and `app:/tmp`: the app's own, or under the agent its
+     * drive's store (a named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches). */
+    val data: java.io.File get() = root(0)
+    val cache: java.io.File get() = root(1)
+    val temporary: java.io.File get() = root(2)
+    /**
+     * Whether those directories are a drive's store and not the app's own, which holds under the agent whether or not
+     * the drive bound this extension (`--bind`, [agent]). What an implementation keeps outside them (a job, a record
+     * in the app's private files) it keeps apart from the app's by this, never by [agent]. A library with no such
+     * entry point is not this build's, and the question throws: the app's storage is never assumed.
+     */
+    val scratch: Boolean get() = Native.scratchStorage()
+    private fun root(index: Int): java.io.File =
+        java.io.File(try { Native.appRoot(index) } catch (e: UnsatisfiedLinkError) { null } ?: application.cacheDir.path)
+
     /** Who made the call being answered now, `app`, `tool` or `wake`, read at [ExactExtension.later]'s entry: a
      * capture's first lease is refused to a tool's read (LLP 1133.009 D6). */
     var origin = "app"
+        internal set
+
+    /** The calling source's grants, captured before returning from later; retries retain this ceiling. */
+    var authority = ""
+        internal set
+
+    /**
+     * Whether the call being answered now has a person's activation, read at [ExactExtension.later]'s entry: the app
+     * made it within a few seconds of a press or a key the session heard, HTML's
+     * [transient activation](https://html.spec.whatwg.org/multipage/interaction.html#transient-activation). A timer's
+     * or an answer's code inside that window has it too, as on the web; a tool's or a wake's call never does. It says
+     * nothing of whether an activity shows now ([visible]).
+     */
+    var userActivation = false
         internal set
 
     /** The number the runner gave the send being answered now, which a later [ExactExtension.cancel] names; null for
@@ -198,8 +233,23 @@ class ExtensionContext internal constructor(val application: Context, private va
      * (`FLAG_GRANT_READ_URI_PERMISSION`), or null when it names none ([Files], LLP 1133.024 D22 item 2). */
     fun contentUri(path: String): android.net.Uri? = fileToRead(path)?.let { Files.uri(application, it) }
 
-    /** Whether the activity is resumed: a prompt shows only over a resumed activity (LLP 1133.010 D8). */
+    /** Whether the activity is resumed. */
     val resumed: Boolean get() = Extensions.resumedNow
+
+    /** Whether the activity shows, resumed or paused under a dialog: Android lets an app with a visible activity start
+     * another (["Restrictions on starting activities from the background"](https://developer.android.com/guide/components/activities/background-starts)),
+     * as Credential Manager starts its sheet. */
+    val visible: Boolean get() = Extensions.visibleNow
+
+    /**
+     * [go] with the activity once it is resumed, on the main thread: at once when it is; asked while it shows but is
+     * paused, as it is when a permission dialog's answer arrives (`onRequestPermissionsResult` comes before
+     * `onResume`), at the resume. For a prompt the platform keeps only over the app's own top activity: SystemUI
+     * dismisses a `BiometricPrompt` whose app is not the top activity of a visible task (LLP 1133.010 D8). [failed]
+     * has `InvalidStateError` with no activity showing, `AbortError` when the app stopped before the resume. The
+     * function returned withdraws a wait, answering neither.
+     */
+    fun whenResumed(failed: (String) -> Unit, go: (Activity) -> Unit): () -> Unit = Extensions.whenResumed(failed, go)
 
     /** Whether the app is in the foreground, as the runner's admission reads it ([ExactExtension.foreground]). */
     var foreground = true
@@ -252,12 +302,18 @@ class ExtensionContext internal constructor(val application: Context, private va
     /**
      * Raise the interface's wake event [event] with [args] for the platform's own [id] (LLP 1133.017 D8): the events
      * of one id are one wake, run with the wake's origin, and [ended] hears its outcome once, on the main thread:
-     * `completed`, `expired`, `superseded`, `refused`, or `unheard` when no handler hears it. Its one channel to the
-     * runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/modules/wakes.rs`).
+     * `completed`, `expired`, `superseded`, `refused`, or `unheard` when no handler hears it. With no activity
+     * showing, `completed` says the store's writes are on disk too, and a wake whose writes are not is `expired`.
+     * Its one channel to the runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/modules/wakes.rs`).
      */
     fun wake(event: String, args: JSONArray, id: String, ended: (String) -> Unit = {}) {
         this.ended[id] = ended
         changed("exact-wake:" + JSONObject().put("extension", name).put("event", event).put("args", args).put("id", id))
+    }
+
+    /** The platform ended custody of this wake, including one still queued for delivery. */
+    fun expireWake(id: String) {
+        changed("exact-wake-expired:" + JSONObject().put("extension", name).put("id", id))
     }
 
     /** Every `img` showing picture [source] is emptied and fires `error`, and no reply in flight draws (LLP 1133.019
@@ -268,6 +324,18 @@ class ExtensionContext internal constructor(val application: Context, private va
     fun changedPicture(source: String) = Exact.pictureChanged(source, false)
 
     fun log(line: String) { Log.i("exact", line) }
+
+    /** A line for the session's journal, which the agent's `logs` reads. Main thread. */
+    fun journal(line: String) = Exact.journal(line)
+
+    /**
+     * The intent a tap on what this extension posts starts (a notification's content intent or action, LLP 1133.004
+     * D6; LLP 1133.004.000 D4): the app's unexported alias, which comes forward and opens [navigate] as a link's
+     * location, or, without one, raises the interface's event [event] with [args] with a person's origin, once the
+     * session can hear it. A `PendingIntent` made from it is the app's alone to send.
+     */
+    fun activation(event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
+        Activations.intent(application, name, event, args, navigate)
 
     /**
      * The platform's dialog for [permissions], in one request (`Activity.requestPermissions`), then [done], on the main
@@ -295,13 +363,29 @@ class ExtensionContext internal constructor(val application: Context, private va
     /**
      * Start [intent] for its result (`Activity.startActivityForResult`), then [done] on the main thread with the
      * result code and the result's data (LLP 1133.018 D13 item 2): a picker's or an editor's answer. A result that
-     * reaches an activity made again meanwhile settles the call, since the call is the process's. With no activity in
-     * front, or no app that handles [intent], nothing starts and [done] has `Activity.RESULT_CANCELED`.
+     * reaches an activity made again meanwhile settles the call, since the call is the process's.
+     *
+     * The activity starts over the app's resumed activity. Asked while that one shows but is paused, as it is when a
+     * permission dialog's result arrives (`onRequestPermissionsResult` comes before `onResume`), the start waits for
+     * the resume; the app stopping first ends the wait. When nothing starts, [failed] has why, as a DOMException name:
+     * `InvalidStateError` with no activity showing, `AbortError` when the app stopped before the start,
+     * `NotFoundError` when no app handles [intent], `NotAllowedError` when the platform refused the start (a
+     * `SecurityException`: `ACTION_IMAGE_CAPTURE` from an app that declares CAMERA and does not hold it), and
+     * `UnknownError` for any other refusal.
+     *
+     * The function returned withdraws a start still waiting for the resume, answering neither [failed] nor [done], and
+     * says whether it did: a call let go ([ExactExtension.cancel]) withdraws its start so that no sheet opens for it.
      */
-    fun startActivityForResult(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) = Extensions.start(intent, done)
+    fun startActivityForResult(intent: android.content.Intent, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(intent, failed, done)
+
+    /** [startActivityForResult], where a start that did not happen is [done] with `Activity.RESULT_CANCELED`. */
+    fun startActivityForResult(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(intent, { done(Activity.RESULT_CANCELED, null) }, done)
 
     /** [startActivityForResult] for a [android.content.IntentSender]: a Play services resolution's (Google Pay's sheet). */
-    fun startIntentSenderForResult(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) = Extensions.start(sender, done)
+    fun startIntentSenderForResult(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) =
+        Extensions.start(sender, { done(Activity.RESULT_CANCELED, null) }, done)
 
     /**
      * The app's handler [handler] run for the work [handle] names (LLP 1133.016 D15 item 1): one the call that made
@@ -332,6 +416,35 @@ class ExtensionContext internal constructor(val application: Context, private va
     companion object {
         /** The embedder's decision on leaving the app ([leave]); null lets every URL go. */
         @JvmStatic var leaving: ((String, String) -> Boolean)? = null
+
+        /** [ExtensionContext.activation] for extension [extension] with no session: a receiver's, which posts what an
+         * extension scheduled while the app was not running. */
+        @JvmStatic fun activation(context: Context, extension: String, event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
+            Activations.intent(context, extension, event, args, navigate)
+
+        /**
+         * The intent a notification's action starts (LLP 1133.004 stage 2): [event] of [extension] with [args], the
+         * name of [action] (a declared action's record) and the reply written into `args[chosen]`, raised only while
+         * the plan declares [action]; the notification [tag], [id] is closed. Activities only: Android shows a
+         * background action in the foreground (LLP 1133.004.000 D5). An action with a text field reads its reply
+         * under [Activations.REPLY].
+         */
+        @JvmStatic fun action(context: Context, extension: String, event: String, args: JSONArray, chosen: Int, action: JSONObject, tag: String, id: Int): android.content.Intent =
+            Activations.action(context, extension, event, args, chosen, action, tag, id)
+
+        /** The `RemoteInput` key of an action's text field. */
+        const val REPLY = Activations.REPLY
+
+        /**
+         * The app's session for a platform callback that may run with no activity (a job, a worker, a receiver;
+         * LLP 1133.017 D7, D10): [ready] hears, on the main thread, whether the process's host has booted, its data
+         * module is active and its `"start": "load"` extensions are made. Where no activity has set the process up,
+         * the host boots here with no view, hidden as a stopped activity's is, and an activity made later adopts
+         * it; with no first pixel to wait for, its data module activates at once. A wake raised in it
+         * ([wake]) ends `completed` only once the store's writes are on disk, so the caller may give its job back at
+         * the wake's outcome.
+         */
+        @JvmStatic fun session(context: Context, ready: (Boolean) -> Unit) = Headless.session(context, ready)
     }
 
     /** [requestPermissions] for [name], keeping the history [permission] reads. */
@@ -409,9 +522,14 @@ internal object Extensions {
     /** The events raised so far ([ExtensionContext.emit]). */
     var emitted = 0
     private var application: Context? = null
+    /** The activity is resumed ([resumed], [paused]). */
     private var foreground = false
+    /** The activity shows: started and not stopped ([started], [stopped]). */
+    private var visible = false
+    /** The activity that shows the app; a test sets its own. */
+    internal var front: () -> Activity? = { Exact.reader?.get() }
     private val permissions = PermissionRequests { names, code ->
-        val activity = Exact.reader?.get()
+        val activity = front()
         if (activity == null) false else { activity.requestPermissions(names, code); true }
     }
 
@@ -438,21 +556,23 @@ internal object Extensions {
         }
     }
 
-    /** The activity was made: the host binds the names of the extensions the APK carries. */
-    fun bind(activity: Activity) {
+    /** The process's host is set up, by the activity [context] or with none: the host binds the names of the
+     * extensions the APK carries. */
+    fun bind(context: Context) {
+        val app = context.applicationContext
         if (application == null) {
-            val dm = activity.applicationContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+            val dm = app.getSystemService(android.hardware.display.DisplayManager::class.java)
             dm?.registerDisplayListener(displays, android.os.Handler(android.os.Looper.getMainLooper()))
-            told = angle(activity)
+            told = angle(context as? Activity)
+            application = app
         }
-        if (application == null) application = activity.applicationContext
-        Presence.application = activity.applicationContext
-        AudioFocus.application = activity.applicationContext
+        Presence.application = app
+        AudioFocus.application = app
         if (roster.isNotEmpty()) Exact.bindExtensions(roster.keys.joinToString("\n"))
     }
 
     /**
-     * Request [id]'s call, the runner's body: `{"extension", "source"|"send", "args", "preferred"?}`, `{"extension",
+     * Request [id]'s call, the runner's body: `{"extension", "source"|"send", "args", "preferred"?, "userActivation"?}`, `{"extension",
      * "release", "args"?}`, `{"extension", "preferred"}`, `{"extension", "dispose"}`, `{"extension", "foreground"}`, or
      * `{"extension", "view", "displayed"|"bound", "origin"}` (a package view's report, LLP 1133.008 D8 item 2),
      * `{"extension", "surface", "displayed", "origin"}` (a canvas its input feeds, LLP 1133.013 D6),
@@ -505,6 +625,8 @@ internal object Extensions {
                 }
                 declared.isNotEmpty() -> {
                     extension.context.origin = request.optString("origin").ifEmpty { "app" }
+                    extension.context.authority = request.optString("authority")
+                    extension.context.userActivation = request.optBoolean("userActivation")
                     extension.context.request = if (request.has("request")) request.getInt("request") else null
                     extension.later(declared, request.optJSONObject("args") ?: JSONObject(), request.opt("preferred"), reply)
                 }
@@ -523,7 +645,11 @@ internal object Extensions {
                     reply(JSONObject())
                 }
                 request.has("woke") -> {
-                    val (woke, outcome) = request.getString("woke") to request.optString("outcome", "completed")
+                    val woke = request.getString("woke")
+                    // With no activity showing, Android may kill the process once the wake's job is given back: what
+                    // the handler committed is on disk first, or the wake did not complete.
+                    val outcome = request.optString("outcome", "completed")
+                        .let { if (it == "completed" && !visible && !Exact.drainStore()) "expired" else it }
                     extension.context.ended.remove(woke)?.invoke(outcome)
                     extension.woke(woke, outcome)
                     reply(JSONObject())
@@ -556,6 +682,10 @@ internal object Extensions {
 
     /** Whether the activity is resumed ([resumed], [paused]). */
     val resumedNow: Boolean get() = foreground
+
+    /** Whether the activity shows, resumed or paused under a dialog ([started], [stopped]): what Android's own rule for
+     * a start from the foreground reads, an app with a visible activity. */
+    val visibleNow: Boolean get() = visible
 
     /** The extension that serves the authenticator entry (LLP 1133.010 D13), made if need be. */
     fun authenticator(): ExactAuthenticator? = roster.keys.firstNotNullOfOrNull { extension(it) as? ExactAuthenticator }
@@ -596,6 +726,9 @@ internal object Extensions {
         }
         override fun update(view: android.view.View, props: JSONObject) { extension(name)?.update(view, props) }
         override fun events(view: android.view.View, emit: (String, String) -> Unit) { emits[view] = emit }
+        override fun lifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {
+            extension(name)?.viewLifecycle(view, event, state)
+        }
         override fun destroy(view: android.view.View) { emits.remove(view); extension(name)?.destroyView(view) }
     }
 
@@ -605,42 +738,83 @@ internal object Extensions {
     private val results = HashMap<Int, (Int, android.content.Intent?) -> Unit>()
     private var started = 0
 
-    fun start(intent: android.content.Intent, done: (Int, android.content.Intent?) -> Unit) {
-        val activity = Exact.reader?.get()
-        if (activity == null || !foreground) return done(Activity.RESULT_CANCELED, null)
-        // Request codes of their own range, apart from permission requests (0x4000–0x4fff).
-        val code = RESULTS + (started++ % 0x1000)
-        results[code] = done
-        try {
-            activity.startActivityForResult(intent, code)
-        } catch (e: android.content.ActivityNotFoundException) {
-            results.remove(code)
-            done(Activity.RESULT_CANCELED, null)
-        }
+    /** A start for a result: [go] starts it from the activity with its request code. */
+    private class Start(val go: (Activity, Int) -> Unit, val failed: (String) -> Unit, val done: (Int, android.content.Intent?) -> Unit)
+
+    /** The starts asked while the activity showed paused, made at the next resume ([ExtensionContext.startActivityForResult]). */
+    private val waiting = ArrayList<Start>()
+
+    fun start(intent: android.content.Intent, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        start(Start({ activity, code -> activity.startActivityForResult(intent, code) }, failed, done))
+
+    fun start(sender: android.content.IntentSender, failed: (String) -> Unit, done: (Int, android.content.Intent?) -> Unit) =
+        start(Start({ activity, code -> activity.startIntentSenderForResult(sender, code, null, 0, 0, 0) }, failed, done))
+
+    /** Made or refused now, or waiting for the resume; the function returned withdraws a waiting one. */
+    private fun start(start: Start): () -> Boolean {
+        if (front() == null || !visible) { start.failed("InvalidStateError"); return { false } }
+        if (!foreground) { waiting += start; return { waiting.remove(start) } }
+        launch(start)
+        return { false }
     }
 
-    fun start(sender: android.content.IntentSender, done: (Int, android.content.Intent?) -> Unit) {
-        val activity = Exact.reader?.get()
-        if (activity == null || !foreground) return done(Activity.RESULT_CANCELED, null)
+    private fun launch(start: Start) {
+        val activity = front() ?: return start.failed("InvalidStateError")
+        // Request codes of their own range, apart from permission requests (0x4000–0x4fff).
         val code = RESULTS + (started++ % 0x1000)
-        results[code] = done
-        try {
-            activity.startIntentSenderForResult(sender, code, null, 0, 0, 0)
+        results[code] = start.done
+        val refusal = try {
+            start.go(activity, code)
+            return
+        } catch (e: android.content.ActivityNotFoundException) {
+            "NotFoundError"
+        } catch (e: SecurityException) {
+            "NotAllowedError"
         } catch (e: android.content.IntentSender.SendIntentException) {
-            results.remove(code)
-            done(Activity.RESULT_CANCELED, null)
+            // The sender's PendingIntent was cancelled.
+            "InvalidStateError"
+        } catch (e: RuntimeException) {
+            Log.w("exact", "an extension's activity did not start", e)
+            "UnknownError"
         }
+        results.remove(code)
+        start.failed(refusal)
     }
 
     /** [Activity.onActivityResult]: the answer of the call that started it, if this process made one. */
     fun activityResult(code: Int, result: Int, data: android.content.Intent?) { results.remove(code)?.invoke(result, data) }
 
+    /** A call of [ExtensionContext.whenResumed] that waits. */
+    private class Resume(val failed: (String) -> Unit, val go: (Activity) -> Unit)
+
+    /** The calls waiting for the next resume ([ExtensionContext.whenResumed]). */
+    private val resumes = ArrayList<Resume>()
+
+    fun whenResumed(failed: (String) -> Unit, go: (Activity) -> Unit): () -> Unit {
+        val activity = front()
+        if (activity == null || !visible) { failed("InvalidStateError"); return {} }
+        if (foreground) { go(activity); return {} }
+        val wait = Resume(failed, go)
+        resumes += wait
+        return { resumes.remove(wait) }
+    }
+
     /** [Activity.onRequestPermissionsResult]: the answer to the request up. */
     fun permissionsResult(code: Int, names: Array<String>, grants: IntArray) = permissions.result(code, names, grants)
 
-    /** [Activity.onResume]: a result that never came (the activity was made again) is read as the state now. */
+    /** [Activity.onStart]. */
+    fun started() { visible = true }
+
+    /** [Activity.onResume]: the starts and calls that waited for it are made, then a permission result that never came
+     * (the activity was made again) is read as the state now. */
     fun resumed() {
         foreground = true
+        val starts = waiting.toList()
+        waiting.clear()
+        starts.forEach(::launch)
+        val calls = resumes.toList()
+        resumes.clear()
+        calls.forEach { call -> front()?.let(call.go) ?: call.failed("InvalidStateError") }
         permissions.resumed()
         made.values.forEach { it.resumed() }
     }
@@ -650,5 +824,18 @@ internal object Extensions {
         foreground = false
         permissions.paused()
         made.values.forEach { it.paused() }
+    }
+
+    /** [Activity.onStop] of the activity that shows the app: the starts and calls waiting for a resume end, unless it
+     * stops to be made again for a configuration change ([changing]), whose successor makes them. */
+    fun stopped(changing: Boolean) {
+        visible = false
+        if (changing) return
+        val starts = waiting.toList()
+        waiting.clear()
+        starts.forEach { it.failed("AbortError") }
+        val calls = resumes.toList()
+        resumes.clear()
+        calls.forEach { it.failed("AbortError") }
     }
 }

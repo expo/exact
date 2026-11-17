@@ -1,6 +1,6 @@
 //! Compile an entry's reachable component tree with typed, replaceable data. No request, timer or handler enters this plan.
 
-use super::{check, referenced_styles, refusal, visit_nodes};
+use super::{check, referenced_styles, refusal};
 use crate::{
     manifest::{Activity, Configuration, WatchEntry, Widget, WATCH_KIND},
     CompileError, Manifest,
@@ -102,6 +102,11 @@ pub fn compile_entries(
     if let Some(watch) = watch {
         match crate::compile_watch(app, &watch) {
             Ok(mut plan) => {
+                if watch.sync.selected() {
+                    let phone = crate::compile_path(&path).map_err(|e| vec![e])?;
+                    crate::watch_sync::plans(&watch.sync, &phone, &plan)
+                        .map_err(|m| refusal("watch-sync", m, Span::default()))?;
+                }
                 plan.app_id.clone_from(&manifest.id);
                 entries.insert(
                     WATCH_KIND.to_owned(),
@@ -171,9 +176,11 @@ fn viewport_shape(shape: &TypeExpr, file: &File, at: Span) -> Result<(), Vec<Com
     };
     for field in &declared.fields {
         let expected = match field.name.as_str() {
-            "width" | "height" | "horizontalViewportSegments" | "verticalViewportSegments" => {
-                "number"
-            }
+            "width"
+            | "height"
+            | "horizontalViewportSegments"
+            | "verticalViewportSegments"
+            | "keyboardHeight" => "number",
             "prefersReducedMotion" | "prefersReducedTransparency" | "accessibilityTextSize" => {
                 "bool"
             }
@@ -403,7 +410,7 @@ pub(super) fn compile_file(
         let before = reached.len();
         for c in &file.components {
             if reached.contains(&c.name) {
-                visit_nodes(&c.view, &mut |n| {
+                Node::walk(&c.view).for_each(|n| {
                     if let Node::Use { name, .. } = n {
                         reached.insert(name.clone());
                     }
@@ -482,7 +489,7 @@ pub(super) fn compile_file(
         }
     };
     for c in &file.components {
-        visit_nodes(&c.view, &mut |n| {
+        Node::walk(&c.view).for_each(|n| {
             if let Node::Element { attrs, .. } = n {
                 font_attrs(attrs);
             }
@@ -558,6 +565,7 @@ pub(super) fn compile_file(
             placeholder: None,
             each: None,
             transient: false,
+            keep: false,
             gate: None,
             span: at,
         });

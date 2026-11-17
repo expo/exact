@@ -101,6 +101,25 @@ final class FlightScaleIOSTests: XCTestCase {
         XCTAssertEqual(clip.layer.cornerRadius, 20, accuracy: 0.01, "its 40 at half scale")
     }
 
+    /// A destination taller than its scroller comes into view by CSSOM
+    /// View's `nearest` (LLP 1013.000 D5), as Chrome scrolls it: a 600-point
+    /// card in a 400-point port showing 1000 to 1400 stays put when it
+    /// covers the port, and otherwise aligns its end, which is the edge
+    /// nearer the port.
+    func testATallDestinationScrollsByNearest() {
+        for (top, expected) in [(CGFloat(900), CGFloat(1000)), (700, 900), (300, 500)] {
+            let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 402, height: 400))
+            scroll.contentInsetAdjustmentBehavior = .never
+            scroll.contentSize = CGSize(width: 402, height: 3000)
+            let scene = Scene(cardIn: scroll)
+            scene.screen.addSubview(scroll)
+            scroll.contentOffset.y = 1000
+            scene.card.frame = CGRect(x: 0, y: top, width: 402, height: 600)
+            scene.fly(0.5)
+            XCTAssertEqual(scroll.contentOffset.y, expected, "a card at \(top)")
+        }
+    }
+
     /// Two flights overlapping in the flight layer paint by their views'
     /// ranks: the clip stands in for its card among them.
     func testAClipRanksAsItsViewAmongFlights() throws {

@@ -122,3 +122,19 @@ extension TextEngine {
         return origins.count
     }
 }
+
+/// An atom icon before resolution, then its resolved picture geometry (LLP 1045.000 D4).
+package struct AtomIconRun: Hashable, Sendable {
+    package var source: String
+    package var size: CGFloat?
+    package var sizeEm: Bool
+    package var gap: CGFloat?
+    package var gapEm: Bool
+    package var rtl: Bool
+    package var capHeight: CGFloat = 0
+    package var loaded = false
+    package init(source: String, size: CGFloat?, sizeEm: Bool, gap: CGFloat?, gapEm: Bool, rtl: Bool) {
+        self.source = source; self.size = size; self.sizeEm = sizeEm
+        self.gap = gap; self.gapEm = gapEm; self.rtl = rtl
+    }
+}

@@ -6,11 +6,13 @@ import AppKit
 /// background does (LLP 1115.000 D7.1), and ends the reader's text selection.
 package final class PageScrollView: NSScrollView {
     var visibleSizeChanged: (() -> Void)?
+    var personScrolled: (() -> Void)?
     private var visibleSize = NSSize.zero
     private var styleObserver: NSObjectProtocol?
 
     package override init(frame: NSRect) {
         super.init(frame: frame)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted), name: NSScrollView.willStartLiveScrollNotification, object: self)
         followScrollerStyle()
         styleObserver = NotificationCenter.default.addObserver(forName: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil, queue: .main) { [weak self] _ in self?.followScrollerStyle() }
@@ -43,6 +45,7 @@ package final class PageScrollView: NSScrollView {
     var lostKey: (() -> Void)?
     private var keyObserver: NSObjectProtocol?
     deinit {
+        NotificationCenter.default.removeObserver(self)
         if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
         if let styleObserver { NotificationCenter.default.removeObserver(styleObserver) }
     }
@@ -79,6 +82,12 @@ package final class PageScrollView: NSScrollView {
     package override func mouseEntered(with event: NSEvent) { pointerTracking?(event) }
     package override func mouseMoved(with event: NSEvent) { pointerTracking?(event) }
     package override func mouseExited(with event: NSEvent) { pointerTracking?(event) }
+
+    @objc private func liveScrollStarted() { personScrolled?() }
+    package override func scrollWheel(with event: NSEvent) {
+        personScrolled?() // A mouse wheel's notches need not begin a live scroll.
+        super.scrollWheel(with: event)
+    }
 
     private var documentFit: DocumentFit?
     private var prefittingDocument = false
@@ -147,6 +156,7 @@ package final class PageScrollView: NSScrollView {
     package override func mouseDown(with event: NSEvent) {
         let hit = window?.contentView?.hitTest(event.locationInWindow)
         if let focused = window?.firstResponder as? NodeView, let hit, hit.isDescendant(of: focused) {} else { pressedGround?() }
+        if TitleBarAreaMac.doubleClicked(event, on: hit) { return }
         super.mouseDown(with: event)
     }
     /// AppKit turns automatic titlebar insets back on when this view
@@ -163,6 +173,7 @@ package final class PageScrollView: NSScrollView {
     package override func tile() {
         super.tile()
         pinInsets()
+        insetScrollersFromChrome()
         syncElasticity()
         let size = contentView.bounds.size
         if visibleSize != size {
@@ -192,6 +203,33 @@ package final class PageScrollView: NSScrollView {
         if automaticallyAdjustsContentInsets { automaticallyAdjustsContentInsets = false }
         if contentInsets.top != 0 || contentInsets.left != 0 || contentInsets.bottom != 0 || contentInsets.right != 0 {
             contentInsets = NSEdgeInsetsZero
+        }
+    }
+}
+
+extension NSScrollView {
+    /// The scrollers keep clear of the window's title bar and toolbar, as
+    /// in a window with a full-size content view whose scroll view AppKit
+    /// insets (`automaticallyAdjustsContentInsets`), while the content
+    /// still scrolls beneath them: `viewport-fit=cover`'s page, or a
+    /// `scroll` node in it. Only the scrollers move (`scrollerInsets`); the
+    /// content insets stay zero, so the clip, the document and the kernel's
+    /// viewport are as CSS lays them out. The inset on each side is how far
+    /// this view reaches into the window outside `contentLayoutRect`.
+    func insetScrollersFromChrome() {
+        var insets = NSEdgeInsetsZero
+        if let window, window.styleMask.contains(.fullSizeContentView), !isHiddenOrHasHiddenAncestor {
+            let safe = convert(window.contentLayoutRect, from: nil), box = bounds
+            let above = max(0, box.maxY - max(safe.maxY, box.minY)), below = max(0, min(safe.minY, box.maxY) - box.minY)
+            insets.top = isFlipped ? below : above
+            insets.bottom = isFlipped ? above : below
+            insets.left = max(0, min(safe.minX, box.maxX) - box.minX)
+            insets.right = max(0, box.maxX - max(safe.maxX, box.minX))
+        }
+        let now = scrollerInsets
+        // Setting the insets tiles again, which asks here again: equal, it stops.
+        if now.top != insets.top || now.left != insets.left || now.bottom != insets.bottom || now.right != insets.right {
+            scrollerInsets = insets
         }
     }
 }

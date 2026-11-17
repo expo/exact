@@ -17,6 +17,7 @@ import { closeFilesystemReader, filesystemLock } from '../scripts/filesystem.mjs
 import { publicFileCards } from '../host/web/serve.mjs';
 import { takeWarmGame } from '../host/web-js/module.mjs';
 import { webInputDigests } from '../scripts/agent-launch.mjs';
+import { webSourceRoots } from '../host/web/build.mjs';
 import { decodePng } from '../scripts/png.mjs';
 
 /** Some runtime-created stacks omit the informative Error message. */
@@ -1072,7 +1073,9 @@ async function runProof(meta, script) {
       if (host === 'web' && takeWarmGame(appInfo, dist, {...process.env, EXACT_GAME_PROOF_PROFILE:profile})) {
         const marker = resolve(dist, '.exact-build.json');
         const built = JSON.parse(readFileSync(marker, 'utf8'));
-        built.inputs = webInputDigests(appInfo, false);
+        built.inputsAt = Date.now();
+        built.inputRoots = webSourceRoots(appInfo, false);
+        built.inputs = webInputDigests(appInfo, false, built.inputRoots);
         built.files = await publicFileCards(dist).finally(closeFilesystemReader);
         writeFileSync(marker, JSON.stringify(built) + '\n');
         return;

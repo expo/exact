@@ -6,9 +6,9 @@
 // App Attest capability on a phone (test/checklist.md).
 //
 //   bun test packages/attestation/test/verify.test.mjs
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
 import { X509Certificate, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { APPLE_ROOT, nonceOf, said, verifier } from './verify.mjs';
@@ -134,8 +134,12 @@ test('substitute tokens only under --substitute, with the same lifecycle', async
   expect((await v.verify({ ...proof('assertion', 2), clientData: 'other' })).error).toBe('nonce');
 });
 
+const scratches = [];
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
+
 test("Play's token is decoded by Google with the service account, then its request hash checked", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'exact-play-')), file = join(dir, 'key.json');
+  scratches.push(dir);
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
   writeFileSync(file, JSON.stringify({ client_email: 'fixture@project.iam.gserviceaccount.com', token_uri: 'https://oauth2.example/token',
     private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) }));

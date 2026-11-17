@@ -115,21 +115,23 @@ class BoxShadowTests: XCTestCase {
     }
 
     /// `clip` beside `visible` clips one axis, square (CSS Overflow 3 §3.1):
-    /// the children's box spans the node on that axis and reaches far past
-    /// it on the other, in the node's coordinates.
+    /// the children's box spans the node on that axis and their overflow
+    /// on the other, in the node's coordinates.
     func testAOneAxisClipClipsItsChildrenInABoxAcrossThatAxisOnly() throws {
         var style = raised
         style["box_shadow"] = nil
         style["overflow_x"] = "clip"; style["overflow_y"] = "visible"
         let n = node(style, children: 1)
         let box = try XCTUnwrap(n.clipBox)
+        let child = try XCTUnwrap(box.subviews.first as? NodeView)
+        child.frame = CGRect(x: -20, y: -20, width: 220, height: 220)
         XCTAssertFalse(n.clipsToBounds)
         XCTAssertTrue(box.clipsToBounds)
         XCTAssertEqual(box.subviews.compactMap { ($0 as? NodeView)?.id }, [2])
         XCTAssertEqual(box.frame.minX, 0)
         XCTAssertEqual(box.frame.width, 100)
-        XCTAssertLessThan(box.frame.minY, -10_000)
-        XCTAssertGreaterThan(box.frame.maxY, 10_000)
+        XCTAssertLessThanOrEqual(box.frame.minY, -20)
+        XCTAssertGreaterThanOrEqual(box.frame.maxY, 200)
         XCTAssertEqual(box.convert(CGPoint(x: 5, y: 7), to: n), CGPoint(x: 5, y: 7))
         #if os(iOS)
         XCTAssertEqual(box.layer.cornerRadius, 0)
@@ -140,8 +142,6 @@ class BoxShadowTests: XCTestCase {
         #endif
         #if os(macOS)
         // The child is hit below the node, where it shows, and not beside it.
-        let child = try XCTUnwrap(box.subviews.first as? NodeView)
-        child.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
         let page = FlippedView(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
         page.addSubview(n)
         XCTAssertTrue(n.hitTest(NSPoint(x: 50, y: 100)) === child)
@@ -150,14 +150,14 @@ class BoxShadowTests: XCTestCase {
         // The box follows the node's size.
         n.frame = CGRect(x: 0, y: 0, width: 150, height: 40)
         XCTAssertEqual(box.frame.width, 150)
-        XCTAssertLessThan(box.frame.minY, -10_000)
+        XCTAssertLessThanOrEqual(box.frame.minY, -20)
         // The other axis.
         style["overflow_x"] = "visible"; style["overflow_y"] = "clip"
         n.applyStyle(style)
         XCTAssertTrue(n.clipBox === box)
         XCTAssertEqual(box.frame.minY, 0)
         XCTAssertEqual(box.frame.height, 40)
-        XCTAssertLessThan(box.frame.minX, -10_000)
+        XCTAssertLessThanOrEqual(box.frame.minX, -20)
         XCTAssertEqual(box.convert(CGPoint(x: 5, y: 7), to: n), CGPoint(x: 5, y: 7))
         // Both axes: the node clips itself again, children back home.
         style["overflow_x"] = "clip"

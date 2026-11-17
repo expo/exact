@@ -53,6 +53,7 @@ final class RegionController {
     deinit { service?.close() }
     func reset() {
         if session?.state == .destroyed { service?.close() } else { lifetime?.reset() }
+        for id in members { session?.presenter.views[id]?.needsDisplay = true }
         snapshot = nil; pendingAnswer = nil; sources.removeAll(); artifacts.removeAll()
         busy = false; submitted = 0; submittedRaster = 0; candidate = nil; accepted = nil
         surface?.suspend(); surface?.removeFromSuperview(); surface = nil; failure = nil; desiredRaster = nil; members.removeAll()
@@ -108,7 +109,6 @@ final class RegionController {
             surface?.invalidateRetainedSource()
         }
         for op in regionOps {
-            // @ref LLP 1043.000 §3 D7 — retire opaque raster before native flow.
             if op.payload["disabled"] as? String != nil { reset(); continue }
             guard let next = RegionSnapshot(op.payload) else { refuse("invalid region wire"); continue }
             if generation != session.generation || snapshot?.incarnation != next.incarnation {
@@ -156,7 +156,10 @@ final class RegionController {
             guard let wire = session.runtime.regionRequest(snapshot.request, knownSource: existing == nil ? 0 : snapshot.source),
                   RegionSnapshot.uint(wire["request"]) == snapshot.request,
                   let width = wire["width"] as? Double, let height = wire["height"] as? Double,
-                  width.isFinite, height.isFinite else { refuse("stale or malformed region request"); return }
+                  width.isFinite, height.isFinite,
+                  let rows = wire["exclusions"] as? [[String: Any]] else { refuse("stale or malformed region request"); return }
+            let exclusions = rows.compactMap(TextFlowShape.init)
+            guard exclusions.count == rows.count else { refuse("invalid region exclusions"); return }
             let source: RegionTextSource
             if let existing { source = existing }
             else {
@@ -174,7 +177,7 @@ final class RegionController {
             }
             busy = true; submitted = snapshot.request
             service.submit(.shape(RegionShapeRequest(id: snapshot.request, sourceID: snapshot.source,
-                source: source, width: width, height: height, generation: generation)))
+                source: source, width: width, height: height, generation: generation, exclusions: exclusions)))
         } else if let desiredRaster, submittedRaster != desiredRaster.serial {
             busy = true; submittedRaster = desiredRaster.serial; service.submit(.raster(desiredRaster))
         }
@@ -196,6 +199,10 @@ final class RegionController {
             return
         case .abandoned:
             submitted = 0
+        case .nativeFlow(let request):
+            if submitted == request.id { submitted = 0 }
+            guard request.generation == generation, snapshot?.request == request.id else { schedule(); return }
+            session.apply(session.runtime.regionFallback(request.id))
         case .shape(let value):
             if submitted == value.id { submitted = 0 }
             guard value.generation == generation, snapshot?.request == value.id else { schedule(); return }

@@ -415,14 +415,20 @@ test('explicit focus in a commit precedes autofocus and its authored side effect
   expect(calls).toEqual(['explicit']);
 });
 
-test('KeyP forbids texture uploads and pipeline creation as well as requiring new geometry', async () => {
+test('residency counts uploads across readiness resets and rejects extra work', async () => {
   const {checkResidency}=await import('./render/tests/residency.mjs');
-  const state=(textureUploads=0,meshUploads=0,pipelineCreations=0)=>({ready:true,gpu:{afterReady:{textureUploads,meshUploads,pipelineCreations,modelSkinBufferReallocations:0}}});
-  for (const error of ['none','texture','pipeline']) {
-    const checks=[], responses=[{before:state(),after:state()}, {before:state(),after:state(1)}, {before:state(1),after:state(1)},
-      {before:state(1),after:state(error==='texture'?2:1,1,error==='pipeline'?1:0)}];
+  const work=(meshUploads=0,textureUploads=0,pipelineCreations=0)=>({textureUploads,meshUploads,pipelineCreations,modelSkinBufferReallocations:0});
+  const state=(before=work(),after=work())=>({ready:true,gpu:{beforeReady:before,afterReady:after}});
+  for (const reset of [false,true]) for (const error of ['none','missing','texture','pipeline']) {
+    const initial=state(work(4,1,31),work(0,0,1));
+    const uploads=work(error==='missing'?0:1,error==='texture'?1:0,error==='pipeline'?1:0);
+    const after=reset
+      ? state(work(4+uploads.meshUploads,1+uploads.textureUploads,32+uploads.pipelineCreations))
+      : state(work(4,1,31),work(uploads.meshUploads,uploads.textureUploads,1+uploads.pipelineCreations));
+    const checks=[], responses=[...Array.from({length:3},()=>({before:initial,after:initial})),{before:initial,after}];
     await checkResidency({run:async()=>responses.shift()}, {}, (name,ok)=>checks.push([name,ok]), ()=>{});
-    expect(checks.find(([name])=>name==='new model name reuses textures and pipelines')[1]).toBe(error==='none');
+    expect(checks.filter(([,ok])=>!ok).map(([name])=>name), `${reset} ${error}`).toEqual(
+      error==='none' ? [] : [error==='missing' ? 'new model name uploads geometry after arrival' : 'new model name reuses textures and pipelines']);
   }
 });
 
@@ -699,7 +705,7 @@ for (const scenario of ['report','repin','external-repin', ...['ordinary','repea
 
 
 test('clock settle diagnostic names busy, held input, and logs on a real unsettled reply', async () => {
-  const source=readFileSync(resolve(import.meta.dir,'../scripts/agent.mjs'),'utf8');
+  const source=readFileSync(resolve(import.meta.dir,'../scripts/agent-session.mjs'),'utf8');
   const a=source.indexOf("    async clock("), b=source.indexOf('\n    /** Pixels as PNG',a);
   expect(a).toBeGreaterThanOrEqual(0); expect(b).toBeGreaterThan(a);
   const s={now:0,op:async req=>{expect(req).toEqual({op:'clock',settle:true});return {clock:100,settled:false,world:{changing:['player']}};}};
@@ -716,7 +722,7 @@ test('clock settle diagnostic names busy, held input, and logs on a real unsettl
 function pinLiterals(path, text) {
   const evidence=/(^|\/)(artifacts|diaries)\/|^game\/(bench|bakeoff\/[^/]+)\/results\/|^(llp|issues|vendor)\//;
   if(/(^|\/)(Cargo\.lock|bun\.lock|shells\.lock)$/.test(path) || path.endsWith('/pins.json') || evidence.test(path) || path==='scripts/fixtures/fonts/SOURCE.md') return [];
-  const generated = path === '.llp/skills-receipt.json' || path.endsWith('/.baked-assets.json') || ['update/tests/it/fixtures/publisher/canonical.bin','update/tests/it/fixtures/publisher/exact.json'].includes(path);
+  const generated = path === '.llp/skills-receipt.json' || path.endsWith('/.baked-assets.json') || ['update/tests/it/fixtures/publisher/canonical.bin','update/tests/it/fixtures/publisher/exact.json','update/tests/it/fixtures/publisher/assets.json'].includes(path);
   if (generated) return [];
   const samples = new Set(['b510eca2e2ef33f62f9ed57d6e7ce2d10'+'ebb2bdebc4a8e59d347719ba81abdf4', 'a1e3b04de97b11de564ce6e53b95f02954'+'a297f0008183ac63a4f5974f6b32d8', 'd97044e701822bac5a62696459b27d7b3'+'75aada5de8574ed4362edbba94771f7']);
   const constants=new Set(['9e3779b1'+'85ebca87','c2b2ae3d'+'27d4eb4f'].map(v=>'0x'+v));

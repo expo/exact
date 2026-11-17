@@ -418,6 +418,32 @@ final class SurfaceControlTests: XCTestCase {
         XCTAssertEqual(controlEvents.last?["phase"] as? String,"move")
         withExtendedLifetime(window) {}
     }
+    /// A pinch reaches a canvas that takes raw input as two touch contacts, as a real one does (#659).
+    func testAgentPinchOnAnInputCanvasIsTwoContacts() {
+        let (s, canvas, button) = fixture(); defer { s.destroy() }
+        let window=UIWindow(frame:CGRect(x:0,y:0,width:200,height:200)); window.addSubview(s.presenter.viewport); window.isHidden = false
+        var above: UIView? = canvas.superview
+        while let v = above, v !== window { v.frame = window.bounds; above = v.superview }
+        button.frame = CGRect(x:0,y:0,width:60,height:60)
+        controlEvents=[]
+        let reply = s.agentInstance.canvasTap(["id":100,"pinch":2.0])
+        XCTAssertNil(reply?["error"], "\(String(describing: reply))")
+        XCTAssertEqual(reply?["pinch"] as? Double, 2)
+        let pointers = controlEvents.filter { $0["t"] as? String == "pointer" }
+        XCTAssertEqual(pointers.map { "\($0["phase"]!) \($0["id"]!)" }, ["down 1","down 2"] + Array(repeating: ["move 1","move 2"], count: 8).flatMap { $0 } + ["up 1","up 2"])
+        XCTAssertTrue(pointers.allSatisfy { $0["kind"] as? String == "touch" })
+        // Level about the middle, from 60 apart (0.3 of the canvas) to 120.
+        let x = { (phase: String, id: Int) in pointers.last { $0["phase"] as? String == phase && $0["id"] as? Int == id }?["x"] as? Double }
+        XCTAssertEqual(x("down", 1), 70); XCTAssertEqual(x("down", 2), 130)
+        XCTAssertEqual(x("up", 1), 40); XCTAssertEqual(x("up", 2), 160)
+        XCTAssertTrue(pointers.allSatisfy { $0["y"] as? Double == 100 })
+        XCTAssertEqual(pointers.filter { $0["phase"] as? String == "move" && $0["id"] as? Int == 2 }.compactMap { $0["dx"] as? Double }.reduce(0, +), 30, accuracy: 0.001)
+        // A finger on a control over the canvas is refused, and nothing is sent.
+        button.frame = CGRect(x:0,y:0,width:100,height:200); controlEvents=[]
+        XCTAssertNotNil(s.agentInstance.canvasTap(["id":100,"pinch":2.0])?["error"])
+        XCTAssertTrue(controlEvents.isEmpty)
+        withExtendedLifetime(window) {}
+    }
     #endif
     func testImmutableControlBindingAndClearCancel() {
         let (s, canvas, button) = fixture()

@@ -149,6 +149,35 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertEqual(session.appliedBatches, before + 1, "allocation and measurement do not feed back")
     }
 
+    func testAPanesReachOfTheBottomEdgeIsTheSameWhetherTheRoutePadsItOrNot() throws {
+        let session = try booted(), primary = try node("primary")
+        session.presenter.press(try node("cap").id)
+        func told(_ height: CGFloat) -> HostBlock {
+            let block = HostBlock.size(CGSize(width: 600, height: height))
+            session.apply(session.runtime.blocks([(primary.id, block)]))
+            return block
+        }
+        var held: BottomReach?
+        func reaches(_ block: HostBlock, below slack: CGFloat) -> Bool {
+            BottomReach.reaches(primary, end: primary.frame.maxY, told: block, slack: slack, held: &held)
+        }
+        // A route padding 25 points for a bar tells the pane 266, which it fills; unpadded it is told 291 and stops at its
+        // 280-point maximum. Read from the padded layout, the pane would take the edge there and give it back unpadded.
+        let padded = told(266)
+        XCTAssertEqual(primary.frame.maxY, 266)
+        let batches = session.appliedBatches
+        XCTAssertFalse(reaches(padded, below: 25), "the pane is measured in the block it would be told unpadded")
+        XCTAssertEqual(primary.frame.maxY, 266, "measuring leaves the committed layout")
+        XCTAssertEqual(session.appliedBatches, batches, "measuring sends nothing")
+        XCTAssertFalse(reaches(padded, below: 25), "a held answer stands while the layout does")
+        XCTAssertFalse(reaches(told(291), below: 0))
+        XCTAssertEqual(primary.frame.maxY, 280)
+        // A pane that fills its unpadded block reaches the edge in either state
+        XCTAssertTrue(reaches(told(230), below: 25))
+        XCTAssertTrue(reaches(told(255), below: 0))
+        XCTAssertFalse(reaches(told(230), below: 60), "nor in a block past its maximum")
+    }
+
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         let (session, controller, pane) = try fixture()

@@ -3,6 +3,10 @@
 use exact_kernel::{Kernel, PropId, StyleId};
 use exact_runner::{DataError, DataSource, Event, Runner, Value};
 use serde_json::Value as Json;
+#[path = "it/scratch.rs"]
+#[allow(dead_code)]
+mod scratch;
+use scratch::Scratch;
 
 struct NoData;
 impl DataSource for NoData {
@@ -53,6 +57,9 @@ component App
         text "Replace"
 "##
     );
+    let plan = contract::compile(&source).unwrap();
+    let entry = contract::web_linked(&plan, &serde_json::json!({}));
+    assert!(entry.contains("shadows"), "{entry}");
     let mut runner = boot(&source);
     let first = prop(&runner, "editor", PropId::Decorations);
     assert_eq!(
@@ -156,8 +163,7 @@ fn set_range_text_has_no_undo_mode_and_range_geometry_is_action_only() {
 
 #[test]
 fn imported_aliases_and_private_declarations_stay_in_the_fields_source_scope() {
-    let dir = std::env::temp_dir().join(format!("exact-decoration-scope-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-decoration-scope-{}", std::process::id()));
     std::fs::write(
         dir.join("child.contract"),
         r##"decoration shared color="#111111"

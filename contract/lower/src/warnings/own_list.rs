@@ -9,8 +9,9 @@
 
 use super::{path, WALKS};
 use crate::LowerError;
-use contract_syntax::{Expr, FnDecl, Node, TemplatePart};
-use contract_types::{infer, Ref, Scope, Shapes, Ty};
+use contract_checking::{Checking, View};
+use contract_syntax::{Expr, FnDecl};
+use contract_types::{infer, Shapes, Ty};
 use std::collections::BTreeSet;
 
 /// How deep a `fn` calling a `fn` is followed to a walk of its parameter.
@@ -60,65 +61,8 @@ fn walks(e: &Expr, name: &str, fns: &[FnDecl], depth: usize) -> bool {
     {
         return true;
     }
-    let mut found = false;
-    children(e, &mut |x, binds| {
-        found |= !binds.contains(&name) && walks(x, name, fns, depth);
-    });
-    found
-}
-
-/// Each sub-expression of `e` with the names it binds there.
-fn children<'e>(e: &'e Expr, f: &mut impl FnMut(&'e Expr, &[&str])) {
-    match e {
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    f(x, &[]);
-                }
-            }
-        }
-        Expr::Ternary(a, b, c, _) => {
-            for x in [a, b, c] {
-                f(x, &[]);
-            }
-        }
-        Expr::Binary(_, a, b, _) => {
-            f(a, &[]);
-            f(b, &[]);
-        }
-        Expr::Unary(_, inner, _)
-        | Expr::Some(inner, _)
-        | Expr::NamedArg(_, inner, _)
-        | Expr::Typed(inner, _, _)
-        | Expr::Member(inner, _, _) => f(inner, &[]),
-        Expr::Call(_, items, _) | Expr::List(items, _) => {
-            for x in items {
-                f(x, &[]);
-            }
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            f(subject, &[]);
-            f(some, &[var.as_str()]);
-            f(none, &[]);
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            f(value, &[]);
-            f(body, &[name.as_str()]);
-        }
-        Expr::Arrow { params, body, .. } => {
-            let names: Vec<&str> = params.iter().map(String::as_str).collect();
-            f(body, &names);
-        }
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
-    }
+    e.scoped_operands()
+        .any(|(x, binds)| !binds.contains(name) && walks(x, name, fns, depth))
 }
 
 impl Own<'_> {
@@ -145,89 +89,30 @@ impl Own<'_> {
                 }
             }
         }
-        let mut inner = Vec::new();
-        children(e, &mut |x, binds| inner.push((x, without(rows, binds))));
-        for (x, rows) in inner {
-            self.expr(x, &rows);
+        for (x, binds) in e.scoped_operands() {
+            let binds: Vec<&str> = binds.iter().collect();
+            self.expr(x, &without(rows, &binds));
         }
     }
 
-    fn nodes(&mut self, nodes: &[Node], scope: &Scope, rows: &[(String, String)]) {
-        for node in nodes {
-            match node {
-                Node::Element {
-                    positional,
-                    attrs,
-                    children,
-                    ..
-                } => {
-                    for e in positional.iter().chain(attrs.iter().map(|a| &a.value)) {
-                        self.expr(e, rows);
-                    }
-                    self.nodes(children, scope, rows);
+    fn nodes(&mut self, view: &View<'_>) {
+        let shapes = self.shapes;
+        let declared = self.declared.clone();
+        for (node, _, rows) in view.scoped_with(Vec::<(String, String)>::new(), |node, scope, rows, binds| {
+            let names: Vec<_> = binds.iter().collect();
+            let mut inner = without(rows, &names);
+            if let Some((_, _, _, list, _)) = node.repetition() {
+                let records = matches!(infer(list, scope, shapes), Ok(Ty::List(t)) if matches!(*t, Ty::Record(ref n) if declared.contains(n.as_str())));
+                if let Some((list, root)) = path(list).filter(|(_, root)| records && !names.contains(root)) {
+                    inner.push((list, root.to_owned()));
                 }
-                Node::When {
-                    cond,
-                    then,
-                    otherwise,
-                    ..
-                } => {
-                    self.expr(cond, rows);
-                    self.nodes(then, scope, rows);
-                    self.nodes(otherwise, scope, rows);
-                }
-                Node::Each {
-                    var,
-                    index,
-                    list,
-                    body,
-                    ..
-                } => {
-                    self.expr(list, rows);
-                    let item = match infer(list, scope, self.shapes) {
-                        Ok(Ty::List(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let records =
-                        matches!(&item, Ty::Record(n) if self.declared.contains(n.as_str()));
-                    let mut binds = vec![var.as_str()];
-                    binds.extend(index.as_deref());
-                    let mut inner = without(rows, &binds);
-                    // A list named by the row's own variable is another list.
-                    if let Some((l, root)) =
-                        path(list).filter(|(_, r)| records && !binds.contains(r))
-                    {
-                        inner.push((l, root.to_string()));
-                    }
-                    let mut within = scope.clone();
-                    within.push_each(var, index.as_deref(), item);
-                    self.nodes(body, &within, &inner);
-                }
-                Node::Match {
-                    subject,
-                    some,
-                    none,
-                    ..
-                } => {
-                    self.expr(subject, rows);
-                    let bound = match infer(subject, scope, self.shapes) {
-                        Ok(Ty::Option(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let mut within = scope.clone();
-                    within.push_region(Some((some.0.clone(), Ref::Bound(0), bound)));
-                    self.nodes(&some.1, &within, &without(rows, &[some.0.as_str()]));
-                    let mut none_scope = scope.clone();
-                    none_scope.push_region(None);
-                    self.nodes(none, &none_scope, rows);
-                }
-                Node::Use { args, children, .. } => {
-                    for a in args {
-                        self.expr(&a.value, rows);
-                    }
-                    self.nodes(children, scope, rows);
-                }
-                Node::Children { .. } => {}
+            }
+            inner
+        }) {
+            if let Some((_, _, _, list, _)) = node.repetition() {
+                self.expr(list, &rows);
+            } else {
+                for expr in node.expressions() { self.expr(expr, &rows); }
             }
         }
     }
@@ -242,24 +127,17 @@ fn without(rows: &[(String, String)], binds: &[&str]) -> Vec<(String, String)> {
 }
 
 /// `lower-row-own-list`'s sites in the expanded root's view.
-pub(super) fn own_list(checked: &contract_types::Checked<'_>) -> Vec<LowerError> {
-    let root = &checked.expanded.root;
-    let Some(types) = checked.types.components.first() else {
+pub(super) fn own_list(checking: &Checking<'_>) -> Vec<LowerError> {
+    let Some(_) = checking.declarations().next() else {
         return Vec::new();
     };
     let mut own = Own {
-        fns: &checked.file.fns,
-        shapes: &checked.types.shapes,
-        declared: checked
-            .file
-            .shapes
-            .iter()
-            .map(|s| s.name.as_str())
-            .collect(),
+        fns: checking.functions(),
+        shapes: checking.shapes(),
+        declared: checking.declared_shapes().collect(),
         seen: BTreeSet::new(),
         out: Vec::new(),
     };
-    let scope = checked.types.component_scope(root, types);
-    own.nodes(&root.view, &scope, &[]);
+    own.nodes(&checking.expanded());
     own.out
 }

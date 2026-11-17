@@ -1,0 +1,30 @@
+{
+  "$schema": "../../scripts/app.schema.json",
+  "name": "Forma Host",
+  "short_name": "Forma Host",
+  "id": "com.exact.formahost",
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#ffffff",
+  "background_color": "#ffffff",
+  "app": {
+    "id": "com.exact.formahost",
+    "name": "Forma Host"
+  },
+  "modules": ["exact-swatch"],
+  "hatches": { "swatch": ["android"] },
+  "host": {
+    "ios": {
+      "minimumOS": "17.0",
+      "deviceFamily": ["iphone", "ipad"]
+    },
+    "macos": {
+      "minimumOS": "14.0",
+      "window": { "width": 402, "height": 700, "minWidth": 320, "minHeight": 420 }
+    }
+  },
+  "deploy": {
+    "store": { "macos": "0", "ios": "0" }
+  },
+  "rust": { "data": { "crate": "forma-host-data", "type": "forma_host_data::FormaHost", "source": "forma_host_data::FormaHost" } }
+}

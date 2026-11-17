@@ -1,11 +1,22 @@
 // What follows first pixel: the app module, the data source, native views.
 // @ref LLP 1027 D4 — app logic loads after first pixel.
 // @ref LLP 1024 D3 — native views attach after the paint gate.
+// @ref LLP 1027.008 D1–D3 — an owner-placed TypeScript module is evaluated from the first draw.
 import Foundation
 import QuartzCore
 import ExactCore
 
 extension ExactSession {
+    /// A barless launch may still be transferring its navigation owner.
+    /// Work queued by the first apply must not load a library in that gap.
+    func afterBootOwner(_ work: @escaping () -> Void) {
+        #if os(iOS)
+        presenter.navigation.afterBootOwner(work)
+        #else
+        work()
+        #endif
+    }
+
     func firstDrawn(generation drawnGeneration: Int, token: UInt64) {
         guard state != .destroyed, generation == drawnGeneration else { return }
         if firstDrawMs == nil { firstDrawMs = ExactEnv.wall() }
@@ -13,20 +24,75 @@ extension ExactSession {
         ExactLaunch.shared.drawn(self)
         guard activatedGeneration != drawnGeneration else { return }
         activatedGeneration = drawnGeneration
+        app.replicateStore?()
+        #if os(iOS)
+        if presenter.navigation.bootOwnerDrawn({ [weak self] in self?.queueFirstDraw(drawnGeneration, token: token) }) { return }
+        #endif
+        queueFirstDraw(drawnGeneration, token: token)
+    }
+
+    private func queueFirstDraw(_ drawnGeneration: Int, token: UInt64) {
+        // A draw held for the boot owner can be released by the session's own teardown.
+        guard state != .destroyed, generation == drawnGeneration else { return }
+        if runtime.evaluatesFromDraw, preparedGeneration != drawnGeneration { return evaluateFromDraw(drawnGeneration, token: token) }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed, generation == drawnGeneration else { return }
+            dataPreparing = true
+            afterFirstDraw(drawnGeneration, token: token)
+        }
+    }
+
+    /// What follows first pixel on this thread, in order: the notification
+    /// categories (registered before any answer), the app's native module,
+    /// autofocus and kept documents, then the data source: posted to the
+    /// owner to be evaluated or, when it has been, activated in this turn.
+    private func afterFirstDraw(_ drawnGeneration: Int, token: UInt64) {
+        declareNotificationCategories { [weak self] in
+            guard let self, state != .destroyed, generation == drawnGeneration else { return }
+            dataPreparing = false
             // Prepare before any source calls the module (LLP 1067.000 D8).
             let started = CACurrentMediaTime()
             natives.prepareAppModule()
             ExactLaunch.shared.modulePrepared(self, seconds: CACurrentMediaTime() - started)
             presenter.releaseLaunchAutofocus() // the next turn, never waiting on a loading source
             restoreKeptDocuments() // before any answer reads a kept document (LLP 1069.010.000 D4)
-            if preparedGeneration != drawnGeneration { prepareData(drawnGeneration, token: token) } else { activateData(drawnGeneration, token: token) }
+            if preparedGeneration != drawnGeneration { return prepareData(drawnGeneration, token: token) }
+            openNativeViews(drawnGeneration)
+            activateData(drawnGeneration, token: token)
         }
     }
 
     /// Whether activation still has work queued: the agent's settle waits for it.
     var activationInFlight: Bool { natives.activationQueued || dataPreparing }
+
+    /// The module's evaluation, posted to the owner from the draw's own
+    /// callback, a turn of this thread before `prepareData` would post it
+    /// (LLP 1027.008 D1). Nothing here waits for it: when it has ended, the
+    /// rest of what follows first pixel is posted back, in the same order
+    /// (D2). It needs nothing of this thread, since a native call outside an
+    /// answer is refused. `dataPreparing` is set before the post, so a system
+    /// notice meanwhile goes to the owner without waiting (`tellSoon`), and
+    /// the agent's settle waits from the draw on.
+    private func evaluateFromDraw(_ drawnGeneration: Int, token: UInt64) {
+        preparedGeneration = drawnGeneration
+        dataPreparing = true
+        ExactLaunch.shared.evaluating(self)
+        let runtime = runtime
+        Owner.shared.post {
+            let started = CACurrentMediaTime()
+            runtime.prepareData()
+            let ended = CACurrentMediaTime()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                ExactLaunch.shared.evaluated(self, from: started, to: ended)
+                guard state != .destroyed, generation == drawnGeneration else {
+                    if preparedGeneration == drawnGeneration { dataPreparing = false }
+                    return
+                }
+                afterFirstDraw(drawnGeneration, token: token)
+            }
+        }
+    }
 
     /// The data source activates on the owner thread, where a TypeScript
     /// module evaluates its top level, while this thread goes on: images
@@ -34,7 +100,9 @@ extension ExactSession {
     /// held this thread for the whole evaluation (325 ms for a 2 MB catalog
     /// on an iPhone 17 Pro Max). A call this thread makes to the runtime
     /// meanwhile still waits its turn behind it: on a cold launch, the
-    /// page's facts when the app becomes active do.
+    /// page's facts when the app becomes active do. A source the draw did
+    /// not post (`evaluateFromDraw`) comes here: a Rust source, a module on
+    /// a worker, and on a Mac a module that keeps documents.
     private func prepareData(_ drawnGeneration: Int, token: UInt64) {
         preparedGeneration = drawnGeneration
         dataPreparing = true
@@ -78,6 +146,7 @@ extension ExactSession {
         }
         storeRefresh.record(batch)
         retryStoreActivation()
+        deliverNotificationResponses()
         deliverModuleEvents() // a launching activation, once the module and the data are up (LLP 1133.004 D6)
         NotificationCenter.default.post(name: Self.dataActivated, object: self)
         canvases.loadIfNeeded()
@@ -117,28 +186,36 @@ extension ExactSession {
     /// D6): held from launch until first pixel and the data's activation,
     /// then raised into the runner and heard in order, once. `activation` is
     /// true only for a platform callback that reports a person's act on its
-    /// own UI.
-    func raiseModuleEvent(extension name: String, event: String, args: String, activation: Bool) {
+    /// own UI. `background` makes it a notification's background action
+    /// the person chose (LLP 1133.004 stage 2): the host's id for it, whether
+    /// the session was booted for it, and whether no view is seen.
+    func raiseModuleEvent(extension name: String, event: String, args: String, activation: Bool,
+                          background: (id: String, cold: Bool, hidden: Bool)? = nil) {
         guard state != .destroyed else { return }
-        let body: [String: Any] = ["extension": name, "event": event, "args": (try? JSONSerialization.jsonObject(with: Data(args.utf8))) ?? [],
+        var body: [String: Any] = ["extension": name, "event": event, "args": (try? JSONSerialization.jsonObject(with: Data(args.utf8))) ?? [],
                                    "activation": activation, "deliver": false]
+        if let background { body["background"] = background.id; body["cold"] = background.cold; body["hidden"] = background.hidden }
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         if heldModuleEvents.count >= Self.heldModuleEventBound {
             heldModuleEvents.removeFirst()
             log("\(name).\(event): dropped (held before the session could hear it)")
         }
         heldModuleEvents.append(String(decoding: data, as: UTF8.self))
-        if dataGeneration != nil { deliverModuleEvents() }
+        if dataActivated { deliverModuleEvents() }
     }
 
     /// Each held module event raised into the runner, which bounds each
     /// event's own; then everything the runner queued is heard, once (an
     /// agent's tap of a listed entry too).
     func deliverModuleEvents() {
-        guard state != .destroyed, booted, firstDrawMs != nil, !runtime.holds("deliverModuleEvents()") else { return } // (kept for after: ResetGate)
+        guard state != .destroyed, booted, dataActivated, firstDrawMs != nil, !runtime.holds("deliverModuleEvents()") else { return } // (kept for after: ResetGate)
         let held = heldModuleEvents
         heldModuleEvents = []
-        for json in held { apply(runtime.moduleEvent(json)) }
+        for json in held {
+            let event = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+            if let id = event?["background"] as? String, !beginBackgroundAction(id) { continue }
+            apply(runtime.moduleEvent(json))
+        }
         apply(runtime.moduleEvent("{}"))
     }
 
@@ -150,5 +227,6 @@ extension ExactSession {
         }
         heldModuleEvents = []
         if booted { _ = runtime.moduleEvent("{\"unheard\":true}") }
+        endBackgroundActions()
     }
 }

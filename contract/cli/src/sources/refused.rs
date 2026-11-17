@@ -3,6 +3,7 @@
 //! what the later passes find in the declarations around it.
 
 use crate::CompileError;
+use contract_syntax::Hidden;
 
 /// The syntax refusals of every source the loader read, and the names the
 /// refused declarations and members declared.
@@ -10,7 +11,7 @@ use crate::CompileError;
 pub(crate) struct Refused {
     pub(crate) errors: Vec<CompileError>,
     /// With the source each was refused in.
-    pub(crate) hidden: Vec<(u32, contract_syntax::Hidden)>,
+    pub(crate) hidden: Vec<(u32, Hidden)>,
     /// A source whose declarations could not all be told apart: nothing after
     /// the syntax is checked.
     pub(crate) whole: bool,
@@ -18,9 +19,8 @@ pub(crate) struct Refused {
 
 impl Refused {
     /// `result`, after the syntax refusals when there are any: then a later
-    /// pass's refusal is kept only when it names nothing refused, since one
-    /// that does may say no more than that the thing is missing, and is no
-    /// `type-cannot-infer`, since what completed a type may be in what was
+    /// pass's refusal is kept unless a refused declaration's absence caused
+    /// it, or it is `type-cannot-infer`, since what completed a type may be in what was
     /// refused (an action that wrote `selected = some(1)`).
     pub(crate) fn join<T>(
         &self,
@@ -41,32 +41,110 @@ impl Refused {
         Err(all)
     }
 
-    /// Whether `e` names something refused.
+    /// Whether `e` reports what a refused declaration would have answered.
     pub(crate) fn hides(&self, e: &CompileError) -> bool {
-        self.hidden
-            .iter()
-            .any(|(_, h)| mentions(&e.message, &h.name))
+        self.hidden.iter().any(|(source, h)| caused(e, *source, h))
     }
 }
 
-/// Whether `text` holds `name` as a whole word.
-fn mentions(text: &str, name: &str) -> bool {
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    text.match_indices(name).any(|(i, _)| {
-        !text[..i].chars().next_back().is_some_and(word)
-            && !text[i + name.len()..].chars().next().is_some_and(word)
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::mentions;
-
-    #[test]
-    fn a_name_is_mentioned_as_a_whole_word() {
-        assert!(mentions("unknown name `count`", "count"));
-        assert!(mentions("count + 1", "count"));
-        assert!(!mentions("`counter` is a number", "count"));
-        assert!(!mentions("recount", "count"));
+/// Whether `e` is a consequence of `h`'s declaration being refused: a
+/// diagnostic only that declaration's kind answers, about its name, within
+/// the component a member belongs to. An action passed down as an `action`
+/// prop is checked where the child calls it, so what says the name is no
+/// action is not held to the component.
+fn caused(e: &CompileError, source: u32, h: &Hidden) -> bool {
+    let passed = matches!(
+        e.id.as_str(),
+        "syntax-call-target" | "analyze-unknown-action" | "type-unknown-command"
+    );
+    if let Some((first, last)) = h.lines.filter(|_| !passed) {
+        if e.span.source_id != source || !(first..=last).contains(&e.span.line) {
+            return false;
+        }
+    }
+    let (name, message) = (h.name.as_str(), &e.message);
+    let member = h.component.is_some();
+    let kind = |kinds: &[&str]| kinds.contains(&h.kind.as_str());
+    // A `use` line's names may be of any kind.
+    let declared = |kinds: &[&str]| !member && (h.kind == "use" || kind(kinds));
+    // What a call of the name reaches without the declaration: the `path()`
+    // intrinsic, a roster function or no function at all.
+    let callable = declared(&["fn", "source"]) || member && kind(&["action"]);
+    match e.id.as_str() {
+        "contract-use-unknown" => {
+            !member
+                && message
+                    .split_once("` declares no component, shape, style, function, keyframes, or timeline ")
+                    .is_some_and(|(_, subject)| subject.starts_with(&format!("`{name}`;")))
+        }
+        "type-unknown-name" => {
+            (member || declared(&["fn", "source", "shape", "routes"]))
+                && message.starts_with(&format!("unknown name `{name}`"))
+        }
+        "type-unknown" => {
+            declared(&["shape"]) && message.starts_with(&format!("unknown type `{name}`"))
+        }
+        "syntax-unknown-component" | "type-unknown-component" | "analyze-unknown-component" => {
+            declared(&["component"]) && message.starts_with(&format!("unknown component `{name}`"))
+        }
+        "type-unknown-function" => {
+            (callable || declared(&["shape"]))
+                && message.starts_with(&format!("`{name}` is not in the stdlib roster"))
+                || callable
+                    && (message == &format!("declare `routes` to use `{name}`")
+                        || name == "empty"
+                            && message
+                                == "write `[]` for an empty list; `empty()` is only a resource's `else`")
+        }
+        "lower-unknown-class" => {
+            declared(&["style"]) && message == &format!("`class={name}`: no `style {name}` in this file")
+        }
+        "lower-animation-name" => {
+            declared(&["keyframes"])
+                && message == &format!("`animation` names `{name}`, and no `keyframes {name}` is declared")
+        }
+        "syntax-call-target" | "analyze-unknown-action" | "type-unknown-command" => {
+            (callable || member) && message.starts_with(&format!("`{name}` is "))
+        }
+        "type-assign-not-state" => {
+            member && kind(&["state", "mutation"]) && message.starts_with(&format!("`{name}` is "))
+        }
+        "type-send-not-mutation" => {
+            member && kind(&["mutation"]) && message.starts_with(&format!("`{name}` is "))
+        }
+        "type-refresh-not-resource"
+        | "type-refreshes-not-resource"
+        | "type-current-argument" => {
+            member && kind(&["resource"]) && message.starts_with(&format!("`{name}` is "))
+        }
+        "type-pending-argument" | "type-failed-argument" | "type-failure-argument" => {
+            member
+                && kind(&["resource", "mutation"])
+                && message.starts_with(&format!("`{name}` is "))
+        }
+        // `path()` is the intrinsic unless a `fn path` is declared; an
+        // action never replaces it. Every `route-unknown` is the intrinsic's,
+        // some about the route table without naming `path`.
+        "route-unknown" => name == "path" && declared(&["fn"]),
+        "type-now-renamed" => {
+            callable && name == "now" && message == contract_syntax::idioms::NOW_REFUSED
+        }
+        "type-refused-idiom" => {
+            callable
+                && (contract_syntax::idioms::refusal(name).is_some_and(|why| message == &why)
+                    || name == "replace"
+                        && message.starts_with("`replace(nav, location)` is the router's"))
+        }
+        // The roster function of the same name checked the call instead.
+        "type-argument" => {
+            name == "path"
+                && declared(&["fn"])
+                && message.starts_with("`path()` expects a string or number, given `")
+                || callable
+                    && message.starts_with("argument ")
+                    && message.contains(&format!(" of `{name}` expects "))
+        }
+        "type-arity" => callable && message.starts_with(&format!("`{name}` takes ")),
+        _ => false,
     }
 }

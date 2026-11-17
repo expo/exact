@@ -9,7 +9,8 @@ use exact_kernel::ViewId;
 
 /// A placement records the block's rectangle in its holding view's local
 /// coordinates. A content offset names a scrollport, including at zero;
-/// an absent offset names a fixed allocation (`Scrolled::place`).
+/// an absent offset names a fixed allocation. Without a host block, it only
+/// clips the subtree in its direct parent's coordinates (`Scrolled::place`).
 pub type BlockPlacement = ([f64; 4], ViewId, Option<[f64; 2]>);
 
 impl<D: DataSource> Runner<D> {
@@ -30,7 +31,9 @@ impl<D: DataSource> Runner<D> {
     /// holds it in the host as in the document (`None` forgets one): what
     /// `frame`, `elementFromPoint` and the intersection observer read their
     /// subtrees through, each root keeping its place among its siblings
-    /// (`Scrolled::place`, LLP 1123 D2).
+    /// (`Scrolled::place`, LLP 1123 D2). A root without a host block keeps
+    /// its ordinary mapping and uses the rectangle only as a clip; its holder
+    /// must be its direct parent and its offset absent.
     pub fn place_blocks(&mut self, placements: &[(ViewId, Option<BlockPlacement>)]) {
         for &(view, placement) in placements {
             self.scrolled.place(&self.kernel, view, placement);
@@ -50,5 +53,11 @@ impl<D: DataSource> Runner<D> {
     /// rescaling the box or its descendants (LLP 1051.000 D1).
     pub fn top_layer_frames(&mut self, frames: &[TopLayerFrame], modal: Option<usize>) {
         self.scrolled.top_layer_frames(&self.kernel, frames, modal);
+    }
+
+    /// The host's input-accepting backdrop for the front modal, in viewport
+    /// points, sampled with its top-layer frames. Each frame report clears it.
+    pub fn top_layer_backdrop(&mut self, backdrop: Option<crate::geometry::TopLayerBackdrop>) {
+        self.scrolled.top_layer_backdrop(&self.kernel, backdrop);
     }
 }

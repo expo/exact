@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { respond } from '../../packages/passkeys/test/authenticator.mjs';
 import { androidOrigin } from './relying-party.mjs';
+import { androidAssociation } from '../../host/web/association.mjs';
 
 export const DOMAIN = 'exact-auth-fixture.expo.app';
 const SLUG = 'exact-auth-fixture';
@@ -39,12 +40,15 @@ const app = JSON.parse(readFileSync(new URL('./app.json', import.meta.url), 'utf
 const team = app.host?.ios?.team, certificates = app.host?.android?.certificates ?? [];
 if (!team || !certificates.length) throw new Error('app.json needs host.ios.team and host.android.certificates');
 
-/** The two association files' contents, and the origins the relying party accepts for the domain (D6). */
-export const files = {
-  'apple-app-site-association': { webcredentials: { apps: [`${team}.${app.id}`, `${SIMULATOR_PREFIX}.${app.id}`] } },
-  'assetlinks.json': [{ relation: ['delegate_permission/common.get_login_creds'],
-    target: { namespace: 'android_app', package_name: app.id, sha256_cert_fingerprints: certificates } }],
-};
+/** The domain's Apple and Android passkey association files (D6). */
+export function associationFiles(manifest) {
+  const team = manifest.host?.ios?.team;
+  return {
+    'apple-app-site-association': { webcredentials: { apps: [`${team}.${manifest.app.id}`, `${SIMULATOR_PREFIX}.${manifest.app.id}`] } },
+    'assetlinks.json': [androidAssociation(manifest)],
+  };
+}
+export const files = associationFiles(app);
 const rps = { [DOMAIN]: [`https://${DOMAIN}`, ...certificates.map(androidOrigin)] };
 
 async function stage(dir) {

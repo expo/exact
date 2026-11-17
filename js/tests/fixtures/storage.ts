@@ -8,6 +8,7 @@ const grants = "fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widge
 let tail: Promise<unknown> = Promise.resolve();
 let saves: Promise<unknown> = Promise.resolve(), saveError = "";
 let shared: Promise<{text:string}>;
+let nativeLeaseBody = "";
 
 // Background work (LLP 1097): the last save started and not awaited, and
 // the last failure a background step reported to the app.
@@ -32,6 +33,47 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
   }
   if (op === "shared-wait") return shared.then(() => ({text: "waited"}));
   const song = storage.fs.directories.data + "/song";
+  if (op === "storage-handoff") {
+    const opened = storage.sqlite.open("app:/data/notes.db");
+    const getter = (globalThis as any).__exact_storage_promise;
+    const raw = getter?.();
+    return opened.then(async db => {
+      const leaked = raw && await raw;
+      await db.close();
+      return {text: leaked ? "raw database exposed" : "private"};
+    });
+  }
+  if (op === "read-before-exclusive") {
+    const pending = storage.fs.readFile(storage.fs.directories.data + "/native-order");
+    return store.exclusive("session", () => { nativeLeaseBody = value; })
+      .then(() => pending)
+      .then(bytes => ({text: new TextDecoder().decode(bytes) + " " + nativeLeaseBody}));
+  }
+  if (op === "exclusive-only") {
+    return store.exclusive("session", () => {
+      store.set("session", value);
+      return {text: "entered " + value};
+    });
+  }
+  if (op === "worker-retirement") {
+    return (async () => {
+      const db = await storage.sqlite.open("app:/data/notes.db");
+      const first = db.execute("INSERT INTO notes VALUES ('submitted')");
+      const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+      first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+      orphan.catch(() => {});
+      await Promise.all([first, orphan]);
+      await db.close();
+      return {text: "written"};
+    })();
+  }
+  if (op === "timeout-queue") {
+    const first = storage.fs.atomicWriteFile(song, bytes(value));
+    const orphan = storage.fs.atomicWriteFile(song + "-orphan", bytes(value));
+    first.catch(() => storage.fs.atomicWriteFile(song + "-reaction", bytes(value)).catch(() => {}));
+    orphan.catch(() => {});
+    return Promise.all([first, orphan]).then(() => ({text: "written"}));
+  }
   // The summary's edit: answered from memory, saved unawaited, in the answer.
   if (op === "save") {
     saving = storage.fs.atomicWriteFile(song, bytes(value)).catch((e) => { lastError = String(e.code); });
@@ -74,6 +116,15 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     storage.fs.atomicWriteFile(song, bytes(value)).then(() => native.call({value})).catch((e) => { lastError = e.message; });
     return {text:"saved " + value};
   }
+  // What background work may do: draw randomness, after a write alone, after a combinator over one, or after a
+  // database's own step (LLP 1069.005 D3).
+  if (op === "save-then-draw" || op === "save-all-then-draw" || op === "query-then-draw") {
+    const draw = () => { lastError = crypto.randomUUID().length + "/" + crypto.getRandomValues(new Uint8Array(4)).length; };
+    const work = op === "query-then-draw" ? storage.sqlite.open("app:/data/notes.db").then(db => db.query("SELECT 1 AS one").then(draw).finally(() => db.close()))
+      : (op === "save-all-then-draw" ? Promise.all([storage.fs.writeFile(song, bytes(value))]) : storage.fs.writeFile(song, bytes(value))).then(draw);
+    work.catch((e) => { lastError = e.message; });
+    return {text:"saved " + value};
+  }
   // A background write that fails: its promise rejects, as on the web.
   if (op === "save-bad") {
     storage.fs.writeFile(storage.fs.directories.data + "/absent/file", bytes(value)).catch((e) => { lastError = String(e.code); });
@@ -86,6 +137,7 @@ function answer(source:string, args:unknown[], store:Store, storage:Storage, nat
     return {text:"answered"};
   }
   if (op === "last-error") return {text:lastError};
+  if (op === "reset-error") { lastError = ""; return {text:"reset"}; }
   // Each part appended to one log, awaited in turn: two such answers
   // interleave at their awaits, as two async calls do on the web (D4.5).
   if (op === "append") {
@@ -125,6 +177,9 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     catch(error:any) { return {text:'refused: ' + error.message}; }
   }
   if (op === 'native-direct') return {text: String(native!.call({value}).text)}; // no bake branch
+  // A number each way across the native seam, read back exactly (native_later.rs).
+  if (op === 'native-number') return {text: String(native!.call({n: Number(value)}).text)};
+  if (op === 'later-number') return {text: String((await native!.later({n: Number(value)})).text)};
   // A turn over its budget the first time, then at once (a load-caused refusal asked again: overrun.rs).
   if (op === 'busy-once') { if (!busyOnceDone) { busyOnceDone = true; let acc = 0; for (let i = 0; i < 30000000; i++) acc = (acc + i * 7) % 1000003; return {text: String(acc)}; } return {text: 'answered'}; }
   // A turn of the module's own work, `value` iterations long (the turn budget's test: turn_budget.rs).
@@ -137,6 +192,20 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     } catch(error:any) { return {text:error.message}; }
   }
   if (op === "placeholder") return {text: ""};
+  if (op === "doc-file-codes") {
+    const out: string[] = [];
+    for (const path of [value, value + "/child"]) {
+      for (const step of [
+        () => storage.fs.readdir(path),
+        () => storage.fs.mkdir(path),
+        () => storage.fs.rm(path),
+      ]) {
+        try { await step(); out.push("allowed"); }
+        catch (error: any) { out.push(error.kind + " " + error.code); }
+      }
+    }
+    return {text: out.join(" ")};
+  }
   if (op === "doc-link") {
     const steps = [
       () => storage.fs.readFile(value),
@@ -167,7 +236,8 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {
-    await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved"));
+    try { await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved")); }
+    catch (e: any) { return {text: `${e.kind} ${e.code}`}; }
     return {text: (await storage.fs.recentDocuments()).map((d) => d.path).join(",")};
   }
   // LLP 1069.010.000 D1, D2a: the answer watches a chosen file and its
@@ -324,6 +394,10 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
       () => storage.fs.readdir(data + "/note"),
       () => storage.fs.mkdir(data + "/full").then(() => storage.fs.writeFile(data + "/full/x", new Uint8Array([1]))).then(() => storage.fs.rm(data + "/full")),
       () => storage.sqlite.open("app:/data/other.db"),
+      // A folder where a file is read or copied from is EISDIR, as on the web; the copy makes no file.
+      () => storage.fs.mkdir(data + "/folder").then(() => storage.fs.readFile(data + "/folder")),
+      () => storage.fs.copyFile(data + "/folder", data + "/folder-copy"),
+      () => storage.fs.stat(data + "/folder-copy"),
     ];
     for (const step of steps) {
       try { await step(); out.push("ok"); } catch (e:any) { out.push(e.kind + " " + e.code + " " + e.message); }
@@ -350,6 +424,30 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     ];
     for (const step of steps) {
       try { await step(); out.push("ok"); } catch (e:any) { out.push(e.name + " " + e.code + " " + e.message); }
+    }
+    return {text: out.join("\n")};
+  }
+  // An explicit `quality` (LLP 1069.002 A1.12): each record's type, size,
+  // width and height, then each refusal's name and message, in one answer.
+  if (op === "compress-quality") {
+    const data = storage.fs.directories.data, out: string[] = [];
+    const steps: (() => Promise<any>)[] = [
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/low.jpg", { maxDimension: 32, quality: 0.1 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/high.jpg", { maxDimension: 32, quality: 1 }),
+      () => storage.fs.stat(data + "/high.jpg").then(high =>
+        storage.fs.compressImage(data + "/in.jpg", data + "/capped.jpg", { maxDimension: 32, maxBytes: high.size, quality: 1 })),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/plain.png", { maxDimension: 32, maxBytes: 2_000_000, type: "image/png" }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/quality.png", { maxDimension: 32, maxBytes: 2_000_000, quality: 0.1, type: "image/png" }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: 1.5 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: NaN }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: null as any }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32 } as any),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, maxBytes: 0, quality: 2 }),
+      () => storage.fs.compressImage(data + "/in.jpg", data + "/x.jpg", { maxDimension: 32, quality: 0.5, type: "image/webp" as any }),
+    ];
+    for (const step of steps) {
+      try { const r = await step(); out.push([r.type, r.size, r.width, r.height].join(" ")); }
+      catch (e:any) { out.push(e.name + " " + e.message); }
     }
     return {text: out.join("\n")};
   }
@@ -536,6 +634,19 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   if (op === "peek") {
     try { return {text: value + ":" + String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/note")))}; }
     catch (_) { return {text: value + ":empty"}; }
+  }
+  // Each write of `value` from one buffer refilled after the call, behind an operation in flight: the file holds
+  // what was passed. (Returns each file's contents, joined.)
+  if (op === "reused-buffer") {
+    const data = storage.fs.directories.data, buffer = bytes(value), view = new Uint8Array(buffer.buffer, 1);
+    const writes = [storage.fs.mkdir(data + "/reused"),
+      storage.fs.writeFile(data + "/reused/write", buffer),
+      storage.fs.atomicWriteFile(data + "/reused/atomic", view),
+      storage.fs.appendFile(data + "/reused/append", buffer.buffer)];
+    buffer.fill(63);
+    await Promise.all(writes);
+    const read = async (name: string) => String.fromCharCode(...new Uint8Array(await storage.fs.readFile(data + "/reused/" + name)));
+    return {text:[await read("write"), await read("atomic"), await read("append")].join(",")};
   }
   if (op === "read-at") return {text:String.fromCharCode(...new Uint8Array(await storage.fs.readFile(storage.fs.directories.data + "/" + value)))};
   if (op === "read-size") {

@@ -696,3 +696,120 @@ fn path_errors_identify_names_and_ordered_parameters_without_changing_validation
         );
     }
 }
+
+/// LLP 1030.004 D2: a window opened at a route shows that screen alone. A
+/// push and Back stay above it, a retarget makes another screen its only
+/// visit, and another tab is seeded at its root when it is selected.
+#[test]
+fn a_rooted_launch_is_the_screen_alone() {
+    let t = &corpus().tables["interview"];
+    let r = success(Router::launch_rooted(t, "/prompt/7/write#draft"));
+    assert_eq!(r.tab, "prompts");
+    assert_eq!(r.tabs.len(), 1);
+    let only = &r.tabs[0].stack;
+    assert_eq!(only.len(), 1);
+    assert_eq!(
+        (only[0].name.as_str(), only[0].url.as_str()),
+        ("write", "/prompt/7/write")
+    );
+    assert_eq!(
+        (only[0].tab.as_str(), only[0].fragment.as_str()),
+        ("prompts", "draft")
+    );
+    assert_eq!(only[0].params["question"], "7");
+    assert_eq!((only[0].id, r.next), (0, 1));
+    // No Back from the root.
+    assert_eq!(success(back(t, r.clone())), r);
+
+    // A push stacks above the root, and Back returns to it.
+    let pushed = success(push(t, r.clone(), "/people/ann"));
+    assert_eq!(depth(&pushed), 2);
+    assert_eq!(success(back(t, pushed.clone())).tabs, r.tabs);
+    // Reselecting the tab pops to the rooted screen, not the tab's route.
+    assert_eq!(
+        top(&success(select(t, pushed.clone(), "prompts")))
+            .unwrap()
+            .name,
+        "write"
+    );
+
+    // At depth one the root takes another location of its own route only.
+    let other = success(replace(t, r.clone(), "/prompt/8/write"));
+    assert_eq!(
+        (top(&other).unwrap().id, top(&other).unwrap().url.as_str()),
+        (0, "/prompt/8/write")
+    );
+    let (same, refusal) = replace(t, r.clone(), "/prompts");
+    assert_eq!(same, r);
+    assert_eq!(
+        refusal.unwrap().message,
+        "replace cannot change the tab's root route"
+    );
+
+    // Another tab is seeded at its root, in declaration order, and kept.
+    let home = success(select(t, pushed.clone(), "home"));
+    assert_eq!(home.tab, "home");
+    assert_eq!(
+        home.tabs
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["home", "prompts"]
+    );
+    assert_eq!(
+        top(&home).map(|e| (e.name.as_str(), e.id)),
+        Some(("home", 2))
+    );
+    let back_again = success(select(t, home.clone(), "prompts"));
+    assert_eq!(stack(&back_again), stack(&pushed));
+    let messages = success(open(t, home, "/messages"));
+    assert_eq!(
+        messages
+            .tabs
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>(),
+        ["home", "prompts", "messages"]
+    );
+    let (unknown, refusal) = select(t, r.clone(), "settings");
+    assert_eq!(
+        (unknown, refusal.unwrap().message),
+        (r.clone(), "unknown tab settings".into())
+    );
+
+    // A retarget makes the new location the only visit; ids go on.
+    let moved = success(root(t, pushed, "/settings"));
+    assert_eq!(moved.tab, "profile");
+    assert_eq!(moved.tabs.len(), 1);
+    assert_eq!(
+        stack(&moved)
+            .iter()
+            .map(|e| (e.name.as_str(), e.id))
+            .collect::<Vec<_>>(),
+        [("settings", 2)]
+    );
+    assert_eq!(moved.next, 3);
+    // `interview` absorbs an unmatched location in its notfound route.
+    assert_eq!(
+        top(&success(root(t, moved, "/no/such"))).unwrap().name,
+        "notfound"
+    );
+    let plain = &corpus().tables["plain"];
+    let r = success(Router::launch_rooted(plain, "/item/3"));
+    let (same, refusal) = root(plain, r.clone(), "/no/such");
+    assert_eq!(
+        (same, refusal.unwrap().message),
+        (r, "no route matches /no/such".into())
+    );
+}
+
+/// Before any launch a select still names no tab.
+#[test]
+fn select_before_launch_is_refused() {
+    let t = &corpus().tables["interview"];
+    let (r, refusal) = select(t, Router::default(), "home");
+    assert_eq!(
+        (r, refusal.unwrap().message),
+        (Router::default(), "unknown tab home".into())
+    );
+}

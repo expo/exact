@@ -3,6 +3,10 @@ use super::*;
 mod cosmetics;
 #[path = "surface_tests/frames.rs"]
 mod frames;
+#[path = "surface_tests/later.rs"]
+mod later;
+#[path = "surface_tests/performance.rs"]
+mod performance;
 #[path = "surface_tests/prepare.rs"]
 mod prepare;
 #[path = "surface_tests/quality.rs"]
@@ -502,17 +506,18 @@ fn presentation_trace_is_opt_in_read_once_and_never_advances_the_clock() {
     let reply: Reply =
         exact_game::json::from_str(&s.agent(r#"{"op":"state","trace":"read"}"#).unwrap()).unwrap();
     // 14 timing/position slots, then the drawn world-to-clip matrix and the
-    // canvas's pixel size (18), so the feel probe can project positions to pixels.
-    assert_eq!(reply.trace.stride, 32);
+    // canvas's pixel size (18), then the frame's pointer sample (5).
+    assert_eq!(reply.trace.stride, 37);
     assert!(!reply.trace.overflow);
-    assert_eq!(reply.trace.frames.len(), 96);
-    let rows: Vec<_> = reply.trace.frames.chunks_exact(32).collect();
+    assert_eq!(reply.trace.frames.len(), 111);
+    let rows: Vec<_> = reply.trace.frames.as_chunks::<37>().0.iter().collect();
     // Seekable T = [17, 25, 34] ms, L = 0, step = 1000/60 ms.
     // R = T - step = [1/3, 25/3, 52/3] ms; x = R/step = [.02, .5, 1.04].
     for (row, x) in rows.iter().zip([0.02, 0.5, 1.04]) {
         assert!((row[2] - x).abs() < 1e-6);
         assert_eq!(&row[5..8], &[0., 0., 8.]);
         assert_eq!(&row[30..32], &[64., 64.]);
+        assert_eq!(&row[32..37], &[0.; 5]);
         // Column-major projection, exactly the analyzer's homogeneous divide.
         let m = &row[14..30];
         let clip_w = m[3] + m[15]; // known world point (1,0,0)
@@ -683,6 +688,10 @@ fn fresh_touch_region_matches_rendered_and_headless_worlds() {
             dy: 0.,
             kind: exact_gpu::PointerKind::Touch,
             buttons: 1,
+            shift_key: false,
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
             at_ms: 0.,
         });
     }
@@ -1018,7 +1027,7 @@ fn control_json_reaches_world_and_unknown_names_refuse_without_poisoning_it() {
 }
 
 /// The rows the Linux presenter sends for a pad's 150 ms and 210 ms presses
-/// (`host/linux`'s `pad_report_times_survive_the_read_and_the_first_owner`),
+/// (`host/painted`'s `pad_report_times_survive_the_read_and_the_first_owner`),
 /// parsed as the canvas parses them: the shorter is a tap, the longer a hold.
 #[test]
 fn pad_rows_tap_and_hold_by_their_report_times() {
@@ -1428,48 +1437,4 @@ fn srgb_target_matches_shader_transfer_after_hdr_rendering() {
         !WorldSurface::<Move>::default().srgb_target(),
         "the four-sample path is unchanged"
     );
-}
-
-#[test]
-fn world_perf_difference_reads_only_the_requested_ticks_over_the_wire() {
-    #[derive(Default, exact_game::Data)]
-    struct Sample {
-        count: u64,
-    }
-    #[derive(Default, exact_game::Data)]
-    struct Spans {
-        spans: Vec<Sample>,
-        error: String,
-    }
-    #[allow(non_snake_case)]
-    #[derive(Default, exact_game::Data)]
-    struct Metrics {
-        tickSpans: Spans,
-    }
-    #[derive(Default, exact_game::Data)]
-    struct WorldState {
-        perf: Metrics,
-    }
-    #[derive(Default, exact_game::Data)]
-    struct Reply {
-        world: WorldState,
-    }
-    let mut s = surface();
-    s.agent(r#"{"op":"clock","now":0}"#);
-    s.agent(r#"{"op":"state","perf":true}"#);
-    s.agent(r#"{"op":"clock","now":34}"#);
-    let read = |text: String| {
-        exact_game::json::from_str::<Reply>(&text)
-            .unwrap()
-            .world
-            .perf
-            .tickSpans
-    };
-    let window = read(s.agent(r#"{"op":"state","span_since":1}"#).unwrap());
-    assert!(!window.spans.is_empty());
-    assert!(window.spans.iter().all(|s| s.count == 1));
-    let all = read(s.agent(r#"{"op":"state","span_since":0}"#).unwrap());
-    assert!(all.spans.iter().all(|s| s.count == 2));
-    let backwards = read(s.agent(r#"{"op":"state","span_since":3}"#).unwrap());
-    assert!(backwards.error.contains("counters went back"));
 }

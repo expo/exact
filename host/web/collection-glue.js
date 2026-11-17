@@ -22,17 +22,20 @@ export function collectionBytes(facts, fill = {}) {
   }
   const velocity = Number.isFinite(fill.velocity) ? fill.velocity : 0;
   const limit = Number.isInteger(fill.limit) && fill.limit >= 0 ? Math.min(fill.limit, 0xfffffffe) : 0xffffffff;
-  const bytes = new Uint8Array(100 + rows.length * 20), d = new DataView(bytes.buffer);
+  const viewOffset = fill.viewOffset;
+  if (viewOffset != null && !(Number.isFinite(viewOffset) && Math.abs(viewOffset) <= 3.4028234663852886e38)) throw Error("invalid collection view offset");
+  const bytes = new Uint8Array(100 + rows.length * 20 + (viewOffset == null ? 0 : 8)), d = new DataView(bytes.buffer);
   d.setUint32(0, 4, true); d.setUint32(4, facts.view, true);
   d.setBigUint64(8, u64(facts.revision), true); d.setBigUint64(16, u64(facts.scroll_sequence), true);
   [facts.offset, facts.port_main, facts.port_cross, facts.cross, facts.padding[0], facts.padding[1]].forEach((n, i) => d.setFloat64(24 + i * 8, n, true));
   d.setUint32(72, facts.focus_view ?? 0, true); d.setUint32(76, facts.interaction_view ?? 0, true);
   d.setFloat64(80, velocity, true); d.setUint32(88, limit, true);
-  d.setUint32(92, (fill.ancestorMoving ? 1 : 0) | (fill.scrolling ? 32 : 0) | (fill.gesture ? 64 : 0) | (fill.animating ? 128 : 0), true); d.setUint32(96, rows.length, true);
+  d.setUint32(92, (fill.ancestorMoving ? 1 : 0) | (fill.scrolling ? 32 : 0) | (fill.gesture ? 64 : 0) | (fill.animating ? 128 : 0) | (viewOffset == null ? 0 : 256), true); d.setUint32(96, rows.length, true);
   rows.forEach((row, i) => {
     d.setUint32(100 + i * 20, row.view, true); d.setBigUint64(104 + i * 20, u64(row.epoch), true);
     d.setFloat64(112 + i * 20, row.size, true);
   });
+  if (viewOffset != null) d.setFloat64(100 + rows.length * 20, viewOffset, true);
   return bytes;
 }
 
@@ -213,6 +216,41 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
     return { raw: port.start - origin - bounce, portStart: port.start, portMain: port.main, portCross: port.cross,
       cross: s.el[A.crossClient] - number(css[A.crossPads[0]]) - number(css[A.crossPads[1]]), padding: [leading, number(css[A.padEnd])] };
   }
+  // Fixed children share their authored formatting context. The physical
+  // window boundaries delimit their extent; no logical row position is
+  // subtracted, and authored padding retains its own meaning.
+  function fixedMeasurements(s, g) {
+    const fixed = s.snapshot.fixed;
+    if (!fixed?.length) return [];
+    if (s.axis !== 'y' || fixed.length !== 2) throw Error('fixed collection content needs a vertical list with lead and trail geometry');
+    // Offset geometry is layout geometry; client rects include paint transforms.
+    const top = el => {
+      let at = el.offsetTop;
+      for (let p = el.offsetParent; p; p = p.offsetParent) at += p.offsetTop + p.clientTop;
+      return at;
+    };
+    const origin = top(s.el) + s.el.clientTop + g.padding[0];
+    const roots = fixed.map(item => item.roots.map(id => {
+      const el = views.get(id), shell = el?.parentElement;
+      return shell?.hasAttribute('data-exact-list-item') ? shell : el;
+    }).filter(Boolean));
+    const bounds = el => {
+      const css = getComputedStyle(el);
+      if (el.hasAttribute('data-exiting') || css.position === 'absolute' || css.position === 'fixed') return null;
+      if (!el.getClientRects().length) {
+        if (css.display !== 'contents') return null;
+        const children = [...el.children].map(bounds).filter(Boolean);
+        return children.length ? [Math.min(...children.map(b => b[0])), Math.max(...children.map(b => b[1]))] : null;
+      }
+      const at = top(el);
+      return [at - number(css.marginTop), at + el.offsetHeight + number(css.marginBottom)];
+    };
+    const middle = [...s.el.children].filter(el => !roots.some(group => group.includes(el))).map(bounds).filter(Boolean);
+    const bottom = Math.max(origin, ...roots.flat().map(bounds).filter(Boolean).map(b => b[1]));
+    const start = middle[0]?.[0] ?? roots[1].map(bounds).find(Boolean)?.[0] ?? bottom;
+    const end = middle.at(-1)?.[1] ?? start;
+    return fixed.map((item, side) => ({ view: item.view, epoch: item.epoch, size: Math.max(0, side ? bottom - end : start - origin) }));
+  }
   const dimensionsOf = g => `${g.portCross},${g.portMain},${g.cross}`;
   function liveView(s, element) {
     let owner;
@@ -358,11 +396,18 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
       // the index's. A row never notified, or notified at no size (unrendered, or empty), is read here.
       const reflowed = g && s.dimensions !== null && dimensionsOf(g) !== s.dimensions, mainOf = o => +o.split(',')[A.size === 'height' ? 1 : 0];
       const known = row => { const o = reflowed || s.written.has(row.el) ? null : s.observed.get(row.el); return o && mainOf(o) > 0 ? o : null; };
+      // A wrapper hidden with its root, as a list with a gap hides one (sizing.rs `sync_undisplayed`), is a row of no
+      // extent, not one unrendered: it has no rects, and the rest of the window is measured without it.
+      const none = new Set(!g ? [] : s.rows.filter(row => {
+        const top = views.get(row.root);
+        return !!row.el?.isConnected && !!top && row.el.contains(top) && getComputedStyle(row.el).display === 'none' && getComputedStyle(top).display === 'none';
+      }));
       const visible = g && g.portMain > 0 && g.cross > 0
-        && s.rows.every(row => row.el.isConnected && (known(row) || row.el.getClientRects().length));
+        && s.rows.every(row => row.el.isConnected && (none.has(row) || known(row) || row.el.getClientRects().length));
       if (visible) {
         const origin = g.portStart - g.raw;
         measurements = s.rows.map(row => {
+          if (none.has(row)) { const start = origin + row.start; rects.push({ [A.start]: start, [A.end]: start }); return { view: row.view, epoch: row.epoch, size: 0 }; }
           const o = known(row);
           if (o) { const size = mainOf(o), start = origin + row.start; rects.push({ [A.start]: start, [A.end]: start + size }); measuredSizes.set(row.el, o); return { view: row.view, epoch: row.epoch, size }; }
           const rect = row.el.getBoundingClientRect();
@@ -370,11 +415,15 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
           measuredSizes.set(row.el, `${rect.width},${rect.height}`);
           return { view: row.view, epoch: row.epoch, size: rect[A.size] };
         });
+        measurements.push(...fixedMeasurements(s, g));
         s.written.clear();
       } else if (releases.includes(s)) {
         g = { raw: old.offset, portCross: old.port_cross, portMain: old.port_main, cross: old.cross, padding: old.padding };
+        measurements.push(...(s.snapshot.fixed ?? []).map(item => ({ view: item.view, epoch: item.epoch, size: item.size })));
       } else continue;
       readScroll(s);
+      // The window may report a destination while first reveal follows the actual port.
+      const viewOffset = visible ? Math.max(-g.padding[0], g.raw) : s.viewOffset;
       // The jump's target, clamped as the browser will: reported before it
       // is assigned, so its rows exist before any frame shows it.
       if (jump != null) {
@@ -389,7 +438,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
         padding: g.padding, focus_view: pins[0], interaction_view: pins[1], measurements };
       // What the report says of the reader: motion under way, and a gesture since the request
       const reader = s.activity.moving, gesture = s.request != null && !!s.input;
-      const signature = [facts.offset, facts.scroll_sequence, dimensions, ...g.padding, ...pins, reader, gesture, s.animating != null,
+      const signature = [viewOffset, facts.offset, facts.scroll_sequence, dimensions, ...g.padding, ...pins, reader, gesture, s.animating != null,
         ...measurements.flatMap(r => [r.view, r.epoch, r.size])].join('|');
       for (const [el, value] of measuredSizes) if (s.observed.has(el)) s.observed.set(el, value);
       if (s.signature === signature && jump == null && !s.snapshot.pending) continue;
@@ -402,7 +451,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
       const outer = s.snapshot.parent == null ? null : states.get(s.snapshot.parent);
       // The agent's settle ends motion and builds all a report owes at once,
       // as the native pumps do.
-      const fill = { velocity: v, scrolling: reader, gesture, animating: s.animating != null, ancestorMoving: !settling && !agent && !!outer && velocity(outer) !== 0, limit: settling || agent ? null : jump != null ? 2
+      const fill = { viewOffset, velocity: v, scrolling: reader, gesture, animating: s.animating != null, ancestorMoving: !settling && !agent && !!outer && velocity(outer) !== 0, limit: settling || agent ? null : jump != null ? 2
         : Math.max(1, fits(s, deadline - now()), rowsToCover(s, rects, g, v * interval * 2 / 1000)) };
       let bytes;
       try { bytes = collectionBytes(facts, fill); } catch { continue; }
@@ -421,6 +470,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
       // An anchor correction in the reply already moved the port there.
       if (jump != null) { s.jump = null; if (s.offset === at) move(s, jump); }
       if (accepted) {
+        s.viewOffset = viewOffset;
         s.reportedMoving = reader;
         s.signature = signature; s.lastFacts = facts;
         if (s.clamp === clamp) s.clamp = null; // reported; one in its own commit is the next report's
@@ -465,8 +515,13 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
       for (let n = r.target; n && n !== s.el; n = n.parentNode) if (s.observed.has(n)) { s.written.add(n); break; }
     }
   }
+  function layoutBoxes(el) {
+    if (!el) return [];
+    return getComputedStyle(el).display === 'contents' ? [...el.children].flatMap(layoutBoxes) : [el];
+  }
   function observe(s) {
-    const elements = new Set([s.el, s.port, ...s.rows.map(r => r.el)]);
+    const fixed = (s.snapshot.fixed ?? []).flatMap(item => item.roots.flatMap(id => layoutBoxes(views.get(id))));
+    const elements = new Set([s.el, s.port, ...s.rows.map(r => r.el), ...fixed]);
     for (const el of s.observed.keys()) if (!elements.has(el)) { s.observer.unobserve(el); s.observed.delete(el); s.written.delete(el); }
     touch(s);
     for (const el of elements) {
@@ -564,7 +619,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
         ||!g||old?.interaction_view!==lease.view||old.offset!==Math.max(-g.padding[0],g.raw)
         ||old.port_cross!==g.portCross||old.port_main!==g.portMain||old.cross!==g.cross
         ||s.port[AXES[s.axis].offset]!==s.offset) return null;
-      const facts={...old,revision:s.snapshot.revision,interaction_view:view,measurements:[]};
+      const facts={...old,revision:s.snapshot.revision,interaction_view:view,measurements:(s.snapshot.fixed ?? []).map(item => ({view:item.view,epoch:item.epoch,size:item.size}))};
       const bytes=collectionBytes(facts);reportsLeft--;delivering=true;let accepted;
       try { accepted=report(bytes,facts)!==false; } finally { delivering=false; }
       if(!accepted)return null;
@@ -597,7 +652,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
             dimensions: null, signature: null, lastFacts: null, corrected: null, anchor: el.style.overflowAnchor, requestAt: -Infinity };
           // A smooth correction's ticks are never sampled as travel.
           s.activity = activity(s);
-          s.scrolled = () => { const own = hostMoves(s), changed = readScroll(s); if (!own) sample(s); if (changed) enqueue(s, true); };
+          s.scrolled = () => { const own = hostMoves(s), changed = readScroll(s); if (!own) sample(s); if (changed || s.animating != null) enqueue(s, true); };
           s.observer = new ResizeObserver(entries => {
             let changed = false, resizedPort = false, pending = false;
             for (const { target } of entries) {
@@ -633,6 +688,10 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
         const epochs = new Map(s.rows.map(row => [row.view, row.epoch]));
         const freshRows = snapshot.rows.some(row => epochs.get(row.view) !== row.epoch);
         s.snapshot = snapshot;
+        for (const fixed of snapshot.fixed ?? []) for (const id of fixed.roots) {
+          const root = views.get(id), shell = root?.hasAttribute('data-exact-list-item') ? root : root?.parentElement;
+          if (shell?.hasAttribute('data-exact-list-item')) { shell.$collectionFixed = true; shell.setAttribute('role', 'presentation'); }
+        }
         s.sequence = s.sequence > BigInt(snapshot.scrollSequence) ? s.sequence : BigInt(snapshot.scrollSequence);
         for (const row of s.rows) if (row.el) rowOwners.delete(row.el);
         s.rows = snapshot.rows.map(row => ({ ...row, el: views.get(row.view) }));
@@ -756,7 +815,7 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
         if (!f || !s.valid || !s.el.isConnected) continue;
         touch(s); // a row this commit wrote inside is read at the next pass, which its own notification asks for
         const css = getComputedStyle(s.el);
-        if (number(css[A.padStart]) !== f.padding[0] || number(css[A.padEnd]) !== f.padding[1]) enqueue(s, true);
+        if (s.snapshot.fixed?.length || number(css[A.padStart]) !== f.padding[0] || number(css[A.padEnd]) !== f.padding[1]) enqueue(s, true);
       }
     },
     // An authored offset on a collection (glue.js): on the list's own axis

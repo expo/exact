@@ -102,6 +102,10 @@ fn device_event_json_preserves_every_variant_and_refuses_fields_by_name() {
                     dy: 0.5,
                     kind: device,
                     buttons: 1,
+                    shift_key: false,
+                    ctrl_key: false,
+                    alt_key: false,
+                    meta_key: false,
                     at_ms: 2.0
                 }
             );
@@ -114,9 +118,33 @@ fn device_event_json_preserves_every_variant_and_refuses_fields_by_name() {
             dy: -120.0,
             x: 2.0,
             y: 3.0,
+            shift_key: false,
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
             at_ms: 4.0
         }
     );
+    // The modifiers held, the web's names; a pinch is a wheel with Control.
+    assert_eq!(
+        parse_input(r#"{"t":"wheel","dx":0,"dy":-8,"x":2,"y":3,"ctrlKey":true,"at":4}"#).unwrap(),
+        InputEvent::Wheel {
+            dx: 0.0,
+            dy: -8.0,
+            x: 2.0,
+            y: 3.0,
+            shift_key: false,
+            ctrl_key: true,
+            alt_key: false,
+            meta_key: false,
+            at_ms: 4.0
+        }
+    );
+    assert!(matches!(
+        parse_input(r#"{"t":"pointer","phase":"down","id":1,"x":0,"y":0,"dx":0,"dy":0,"kind":"mouse","buttons":1,"shiftKey":true,"altKey":false,"metaKey":true,"at":2}"#).unwrap(),
+        InputEvent::Pointer { shift_key: true, ctrl_key: false, alt_key: false, meta_key: true, .. }
+    ));
+    assert!(parse_input(r#"{"t":"wheel","dx":0,"dy":0,"x":0,"y":0,"ctrlKey":1,"at":4}"#).is_err());
     assert_eq!(
         parse_input(r#"{"t":"blur","at":5}"#).unwrap(),
         InputEvent::Blur { at_ms: 5.0 }
@@ -250,7 +278,7 @@ mod seams {
     use exact_gpu::{wgpu, Frame, InputEvent, Registry, Surface, SurfaceError, Value};
     use std::cell::{Cell, RefCell};
     thread_local! { static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) }; }
-    /// `gpu_drew` after `fed`'s last render, before its flush
+    // `gpu_drew` after `fed`'s last render, before its flush
     thread_local! { static DREW: Cell<u32> = const { Cell::new(0) }; }
     thread_local! { static BINDS: RefCell<Vec<Option<f64>>> = const { RefCell::new(Vec::new()) }; }
     /// A live-clock render once the canvas's drawable, acquired off this
@@ -392,7 +420,7 @@ mod seams {
         BINDS.with(|b| assert_eq!(*b.borrow(), [None, Some(500.0)]));
         assert_eq!(
             exact_gpu::native::published(id).as_deref(),
-            Some(r#"{"phase":"bind"}"#)
+            Some(r#"{"phase":"bind","presented":false}"#)
         );
         assert_eq!(gpu_published(id), u32::MAX);
         gpu_seekable(true);
@@ -419,7 +447,7 @@ mod seams {
         assert_ne!(n, u32::MAX);
         assert_eq!(
             unsafe { std::slice::from_raw_parts(gpu_out_ptr(), n as usize) },
-            br#"{"phase":"agent"}"#
+            br#"{"phase":"agent","presented":false}"#
         );
         assert_eq!(gpu_published(id), u32::MAX);
         assert_eq!(unsafe { gpu_agent(id, b"{}".as_ptr(), 2) }, 0);
@@ -465,7 +493,7 @@ mod seams {
         assert_eq!(gpu_dirty(id), 1);
         assert_eq!(
             exact_gpu::native::published(id).as_deref(),
-            Some(r#"{"phase":"restore"}"#)
+            Some(r#"{"phase":"restore","presented":false}"#)
         );
         assert_eq!(exact_gpu::native::carry(id).unwrap(), Some(vec![3, 4, 5]));
         assert_eq!(
@@ -719,11 +747,13 @@ fn headless_ownership_keeps_every_non_drawing_seam() {
     assert!(m.input(id, &InputEvent::Blur { at_ms: 23. }));
     assert!(!m.take_messages(id).is_empty());
     assert!(m.take_messages(id).is_empty());
-    assert_eq!(m.take_published(id).as_deref(), Some("{}"));
+    // The module's `presented` rides in every record (LLP 1009 D9).
+    let unpresented = Some(r#"{"presented":false}"#);
+    assert_eq!(m.take_published(id).as_deref(), unpresented);
     assert!(m.take_published(id).is_none());
     assert!(m.restore(id, &[1, 2, 3], exact_gpu::Restore::Open));
     assert_eq!(m.carry(id).unwrap(), Some(vec![1, 2, 3]));
-    assert_eq!(m.take_published(id).as_deref(), Some("{}"));
+    assert_eq!(m.take_published(id).as_deref(), unpresented);
     let f = Frame {
         width: 10.,
         height: 10.,
@@ -881,17 +911,17 @@ fn lifecycle_and_clock_reach_surfaces_without_a_device() {
     m.set_seekable(true); // only changes are delivered
     let agent = m.create_headless("probe").unwrap();
     for id in [live, agent] {
-        for code in [0, 1, 2, 3, 999] {
+        for code in [0, 1, 2, 3, 4, 999] {
             m.lifecycle(id, code);
         }
     }
     assert_eq!(
         m.agent(live, "").unwrap(),
-        "clock:false,clock:true,Hidden,Visible,Interrupted,Resumed"
+        "clock:false,clock:true,Hidden,Visible,Interrupted,Resumed,Activated"
     );
     assert_eq!(
         m.agent(agent, "").unwrap(),
-        "clock:true,Hidden,Visible,Interrupted,Resumed"
+        "clock:true,Hidden,Visible,Interrupted,Resumed,Activated"
     );
     m.set_seekable(false);
     assert!(m.agent(agent, "").unwrap().ends_with("clock:false"));
@@ -1128,6 +1158,50 @@ fn storage_capacity_is_independent_of_inter_stage_capacity() {
 }
 
 #[test]
+fn v3d_limits_are_not_exceeded() {
+    // Mesa cdc6a0bf, v3dv_device.c:get_device_properties, v3dv_limits.h and v3d_limits.h:
+    // https://gitlab.freedesktop.org/mesa/mesa/-/tree/cdc6a0bfed71b22cfbb5ce7f6b778ee3fdedf409/src/broadcom
+    // V3D 4.2, without V3D_WEBGPU_OVERRIDE; unspecified wgpu fields stay conservative.
+    let available = wgpu::Limits {
+        max_texture_dimension_1d: 4096,
+        max_texture_dimension_2d: 4096,
+        max_texture_dimension_3d: 4096,
+        max_texture_array_layers: 2048,
+        max_color_attachments: 4,
+        max_inter_stage_shader_variables: 15, // wgpu: 64 / 4 - 1 for position
+        max_compute_workgroup_storage_size: 32768,
+        max_compute_invocations_per_workgroup: 256,
+        max_compute_workgroup_size_x: 256,
+        max_compute_workgroup_size_y: 256,
+        max_compute_workgroup_size_z: 256,
+        max_compute_workgroups_per_dimension: 65535,
+        min_uniform_buffer_offset_alignment: 32,
+        min_storage_buffer_offset_alignment: 32,
+        ..wgpu::Limits::default()
+    };
+    let requested = exact_gpu::requested_limits(available.clone());
+    requested.check_limits_with_fail_fn(&available, false, |name, requested, available| {
+        panic!("{name}: requested {requested}, available {available}")
+    });
+    assert_eq!(requested.max_texture_dimension_2d, 4096);
+    assert!(requested.max_inter_stage_shader_variables >= 13); // Ink's vertex output
+    assert!(requested.max_storage_buffers_per_shader_stage >= 8); // Vello's coarse pass
+    assert!(requested.max_compute_invocations_per_workgroup >= 256);
+
+    // Alignment minima go the opposite way from capacities. Also exercise
+    // capacities not covered by using_resolution or the storage grant above.
+    let weaker = wgpu::Limits {
+        min_uniform_buffer_offset_alignment: 512,
+        min_storage_buffer_offset_alignment: 512,
+        max_uniform_buffer_binding_size: 8192,
+        max_vertex_attributes: 12,
+        max_sampled_textures_per_shader_stage: 8,
+        ..available
+    };
+    assert!(exact_gpu::requested_limits(weaker.clone()).check_limits(&weaker));
+}
+
+#[test]
 fn child_count_shrink_retires_each_index_exactly_once() {
     use exact_gpu::{ChildrenMode, Surface};
     #[derive(Default)]
@@ -1184,4 +1258,72 @@ fn child_count_shrink_retires_each_index_exactly_once() {
     assert_eq!(module.agent(id, ""), Some("[1, 2, 3]".into()));
     assert!(module.children_count(id, 0));
     assert_eq!(module.agent(id, ""), Some("[1, 2, 3, 0]".into()));
+}
+
+#[test]
+fn a_canvas_size_reaches_its_surface_and_a_non_size_is_refused() {
+    use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+    #[derive(Default)]
+    struct Sized(Vec<(f32, f32)>);
+    impl Surface for Sized {
+        fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            Ok(())
+        }
+        fn size(&mut self, width: f32, height: f32) -> bool {
+            self.0.push((width, height));
+            false
+        }
+        fn agent(&mut self, _: &str) -> Option<String> {
+            Some(format!("{:?}", self.0))
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            _: &mut wgpu::CommandEncoder,
+            _: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            false
+        }
+    }
+    static REGISTRY: Registry = Registry {
+        surfaces: &[("sized", 0, || Box::<Sized>::default())],
+        shaders: &[],
+    };
+    let mut module = Module::new(&REGISTRY);
+    let id = module.create_headless("sized").unwrap();
+    assert!(module.size(id, 240., 360.));
+    for (width, height) in [
+        (0., 360.),
+        (240., -1.),
+        (f32::NAN, 360.),
+        (240., f32::INFINITY),
+    ] {
+        assert!(!module.size(id, width, height));
+        assert!(module.take_error().contains("not a canvas size"));
+    }
+    assert!(!module.size(id + 1, 240., 360.));
+    assert_eq!(module.take_error(), "no such canvas");
+    assert_eq!(module.agent(id, ""), Some("[(240.0, 360.0)]".into()));
+}
+
+#[cfg(not(target_os = "macos"))]
+mod shader_roster_abi {
+    use super::*;
+
+    static REGISTRY: Registry = Registry {
+        surfaces: &[],
+        shaders: &[("primary_shader", 1), ("shared_shader", 2)],
+    };
+    exact_gpu::module!(REGISTRY);
+
+    #[test]
+    fn shader_roster_comes_from_this_module_without_a_device() {
+        let len = gpu_shader_names();
+        // SAFETY: the ABI keeps its output buffer until the next call.
+        let bytes = unsafe { std::slice::from_raw_parts(gpu_out_ptr(), len as usize) };
+        assert_eq!(bytes, br#"["primary_shader","shared_shader"]"#);
+    }
 }

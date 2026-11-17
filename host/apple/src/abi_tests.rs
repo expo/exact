@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 
 #[path = "abi_entry_tests.rs"]
 mod entries;
+#[path = "abi_held_tests.rs"]
+mod held;
 #[path = "abi_longpoll_tests.rs"]
 mod long_poll;
 #[cfg(unix)]
@@ -161,6 +163,17 @@ fn plan_and_module_reloads_keep_the_document_owner() {
     );
     let reply = bridge.host.as_mut().unwrap().answer_hold(&request).unwrap();
     let doc = exact_runner::agent::field_str(&reply, "doc").unwrap();
+    // A picker's `startIn` opens in the chosen file's folder (LLP 1173 D2).
+    let mut folder = |path: &str, owner: u64| {
+        let request = format!(r#"{{"op":"documentFolder","owner":{owner},"path":"{path}"}}"#);
+        bridge.host.as_mut().unwrap().answer_hold(&request).unwrap()
+    };
+    let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert_eq!(
+        exact_runner::agent::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
+        parent.to_str()
+    );
+    assert_eq!(folder(&doc, u64::from(rt) + 1), "{}");
     let resolves = |bridge: &mut Bridge<DocumentOwnerSource>| {
         use ibex2::stdlib::fs::{DocumentError, DocumentLease, FsOp, FsResult};
         let owner = bridge.host.as_mut().unwrap().runner_mut().data().owner;
@@ -1421,76 +1434,10 @@ fn candidate_profiles_are_isolated_until_commit_and_after_discard() {
     check(&mut bridge, "icc:assets/candidate.icc");
 }
 
-#[test]
-fn block_axis_records_distinguish_size_maximum_and_route_fitting() {
-    use exact_kernel::{BlockAxis, HostBlock};
-    let plan = contract::compile(
-        "component Page\n  view\n    column\n      box testId=\"route\" width=480 height=300\n",
-    )
-    .unwrap()
-    .encode();
-    let mut bridge = Bridge::new();
-    bridge.boot(&plan, StorageModule::default(), Hooks::none(), 800.0, 600.0);
-    let k = bridge.host.as_ref().unwrap().runner().kernel();
-    let id = k.node_by_key(k.find_by_test_id("route")[0]).unwrap().id;
-    for (width, height, expected, size) in [
-        (
-            2.0_f32,
-            2.0_f32,
-            HostBlock {
-                width: BlockAxis::Fit(400.0),
-                height: BlockAxis::Fit(200.0),
-            },
-            (480.0, 300.0),
-        ),
-        (
-            1.0,
-            1.0,
-            HostBlock {
-                width: BlockAxis::AtMost(400.0),
-                height: BlockAxis::AtMost(200.0),
-            },
-            (400.0, 200.0),
-        ),
-        (
-            2.0,
-            1.0,
-            HostBlock {
-                width: BlockAxis::Fit(400.0),
-                height: BlockAxis::AtMost(200.0),
-            },
-            (480.0, 200.0),
-        ),
-        (
-            0.0,
-            0.0,
-            HostBlock {
-                width: BlockAxis::Is(400.0),
-                height: BlockAxis::Is(200.0),
-            },
-            (400.0, 200.0),
-        ),
-    ] {
-        let bytes: Vec<_> = [
-            id,
-            4,
-            400.0_f32.to_bits(),
-            200.0_f32.to_bits(),
-            width.to_bits(),
-            height.to_bits(),
-        ]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
-        bridge.input_write(&bytes);
-        let len = bridge.covers(bytes.len());
-        let batch = std::str::from_utf8(bridge.output_bytes(len as usize)).unwrap();
-        assert!(batch.contains("\"error\":null"), "{batch}");
-        let k = bridge.host.as_ref().unwrap().runner().kernel();
-        assert_eq!(k.host_block(id), Some(expected));
-        assert_eq!(k.host_block_size(id), Some(size));
-    }
-}
+#[path = "abi_block_tests.rs"]
+mod blocks;
 
+#[path = "abi_role_keys_tests.rs"]
+mod role_keys;
 #[path = "abi_roles_tests.rs"]
 mod roles;

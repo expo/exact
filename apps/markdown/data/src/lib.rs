@@ -540,6 +540,7 @@ impl DataSource for Markdown {
                 | Outcome::Storage(_)
                 | Outcome::Surface(_)
                 | Outcome::Message(_)
+                | Outcome::Messages(_)
                 | Outcome::Closed { .. },
             ) => Err(format!("{asked} was not read")),
         };

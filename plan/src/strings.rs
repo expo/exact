@@ -123,6 +123,40 @@ fn pieces(text: &str) -> impl Iterator<Item = Result<Piece<'_>, String>> {
     })
 }
 
+/// The hour cycle a locale's Unicode extension forces (`hc-h23` in
+/// `ca-gregory-hc-h23`): `h12` or `h23`, the two the format data carries;
+/// `h11` and `h24` force none.
+pub fn hour_cycle(extension: &str) -> Option<&str> {
+    let mut subtags = extension.split('-');
+    while let Some(key) = subtags.next() {
+        if key.eq_ignore_ascii_case("hc") {
+            return match subtags.next()? {
+                c if c.eq_ignore_ascii_case("h12") => Some("h12"),
+                c if c.eq_ignore_ascii_case("h23") => Some("h23"),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// The hour cycle `tag`'s Unicode extension forces (`en-US-u-hc-h23`).
+fn tag_hour_cycle(tag: &str) -> Option<&str> {
+    hour_cycle(tag.find("-u-").map_or("", |at| &tag[at + 3..]))
+}
+
+/// The format locale (LLP 1054.000.003 D6): the resolved table's whole
+/// name, then, apart by a space no tag holds, the hour cycle the viewer's
+/// regional format forces (`exactTime()`'s `formatLocale`,
+/// `en-US-u-hc-h23`), unless the table's own name forces one: `de h23`,
+/// `de-u-ca-gregory`.
+pub fn format_tag(table: &str, format_locale: &str) -> String {
+    match tag_hour_cycle(format_locale).filter(|_| tag_hour_cycle(table).is_none()) {
+        Some(cycle) => format!("{table} {cycle}"),
+        None => table.to_owned(),
+    }
+}
+
 impl Plan {
     /// The table the viewer's `requested` locale (BCP 47) reads: the
     /// longest subtag prefix a table is named for, compared without case
@@ -163,6 +197,24 @@ impl Plan {
             .or_else(|| find(self.locales.first()?))
     }
 
+    /// The format data of the table a format locale names ([`format_tag`]'s
+    /// `de h23`), and the hour cycle it forces, `h12` or `h23`: the one
+    /// after the space, else the table name's own (LLP 1054.000.003 D6).
+    /// `None` for a table the plan does not have or that carries no data.
+    pub fn format_data<'a>(&'a self, locale: &'a str) -> Option<(&'a str, Option<&'a str>)> {
+        let (table, cycle) = match locale.split_once(' ') {
+            Some((table, cycle)) => (table, Some(cycle).filter(|c| matches!(*c, "h12" | "h23"))),
+            None => (locale, tag_hour_cycle(locale)),
+        };
+        let data = self
+            .locales
+            .iter()
+            .find(|row| self.str(row.name) == table)
+            .map(|row| self.str(row.format))
+            .filter(|data| !data.is_empty())?;
+        Some((data, cycle))
+    }
+
     /// Strings and their slot come together; each table is sorted by key
     /// (lookup is a binary search) and named once.
     pub(crate) fn validate_texts(&self) -> Result<(), PlanError> {
@@ -182,6 +234,30 @@ impl Plan {
                 }
             }
             None if !self.locales.is_empty() => return Err(bad("locales", 0, "name")),
+            None => {}
+        }
+        // The format slot comes with format data in every row, as the
+        // compiler bakes it (LLP 1054.000.003 D6).
+        let formats = self
+            .locales
+            .iter()
+            .filter(|row| !self.str(row.format).is_empty())
+            .count();
+        match self.format {
+            Some(id) => {
+                let slot = self.slot(id);
+                if self.type_(slot.ty).kind != TypeKind::String
+                    || slot.owner.is_some()
+                    || slot.late
+                    || slot.persist
+                    || self.locale == Some(id)
+                    || formats != self.locales.len()
+                    || formats == 0
+                {
+                    return Err(bad("header", 0, "format"));
+                }
+            }
+            None if formats > 0 => return Err(bad("locales", 0, "format")),
             None => {}
         }
         for (i, row) in self.locales.iter().enumerate() {

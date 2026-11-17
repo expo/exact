@@ -20,8 +20,8 @@ const INTERFACE: &str = r#"{
   },
   "views": {
     "pin-board": {
-      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>" },
-      "events": ["change", { "event": "moveend", "args": ["Camera"] }]
+      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>", "mode": "option<enum<rent|order>>" },
+      "events": ["change", { "event": "moveend", "args": ["Camera"] }, { "event": "modechange", "args": ["enum<rent|order>"] }]
     }
   },
   "names": []
@@ -111,6 +111,75 @@ fn a_record_list_prop_reaches_the_view_as_its_json() {
             { "id": "pier", "latitude": 37.8087, "longitude": -122.4098 }
         ])
     );
+}
+
+#[test]
+fn an_implementation_dependency_keeps_the_interfaces_view_declaration() {
+    for package in ["@acme/pinboard-web", "@zoo/pinboard-web"] {
+        let app = App::new("implementation", APP);
+        let at = app.0.join("node_modules").join(package);
+        std::fs::create_dir_all(&at).unwrap();
+        std::fs::write(
+            at.join("package.json"),
+            json!({ "name": package, "version": "1.0.0", "exports": { ".": "./exact.json" } })
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            at.join("exact.json"),
+            json!({
+                "kind": "implementation", "implements": "@fixture/pinboard@^1.0",
+                "platform": "web", "views": ["pin-board"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            app.0.join("package.json"),
+            json!({ "dependencies": { package: "1.0.0", "@fixture/pinboard": "1.0.0" } })
+                .to_string(),
+        )
+        .unwrap();
+        let mut declaration: serde_json::Value = serde_json::from_str(INTERFACE).unwrap();
+        declaration["views"]["pin-board"]["displayed"] = json!(true);
+        declaration["views"]["pin-board"]["props"]["latitude"] =
+            json!({ "type": "number", "binds": true });
+        std::fs::write(
+            app.0.join("node_modules/@fixture/pinboard/exact.json"),
+            declaration.to_string(),
+        )
+        .unwrap();
+        let mut r = boot(&app);
+        assert_eq!(props(&r)["latitude"], "37.8");
+        let pins: serde_json::Value =
+            serde_json::from_str(props(&r)["pins"].as_str().unwrap()).unwrap();
+        assert_eq!(pins[0]["id"], "ferry");
+        let view = &r.plan().views[0];
+        assert!(view.displayed);
+        assert_eq!(r.plan().str(view.binds), "latitude");
+        let key = r.kernel().find_by_test_id("board")[0];
+        let id = r.kernel().node_by_key(key).unwrap().id;
+        let sent = json!({ "exact:event": "moveend", "args": [{ "latitude": 1, "longitude": 2, "zoom": 13 }] });
+        r.dispatch(id, Event::Message(sent.to_string())).unwrap();
+        assert_eq!(r.slot("moved"), Some(&Value::str("1 2 13")));
+        for (before, after, name) in [
+            (
+                "latitude=37.8 zoomLevel=",
+                "latitdue=37.8 zoomLevel=",
+                "latitdue",
+            ),
+            ("moveend=ended", "zoomend=ended", "zoomend"),
+        ] {
+            std::fs::write(app.0.join("app.contract"), APP.replace(before, after)).unwrap();
+            let refused = app.compile().map(|_| ()).unwrap_err();
+            assert!(
+                refused.iter().any(
+                    |e| e.id == "lower-native-attr" && e.message.contains(&format!("`{name}`"))
+                ),
+                "{package}: {refused:?}"
+            );
+        }
+    }
 }
 
 /// A non-layout prop may share a known attribute's name, as `exact-camera`'s
@@ -252,6 +321,150 @@ fn a_prop_is_held_to_its_declared_type() {
             .iter()
             .any(|e| e.id == "contract-view-prop" && e.message.contains("`pins`")),
         "{refused:?}"
+    );
+}
+
+/// An enum is held to a declared enum by its cases: a prop takes one whose
+/// every case the package names, and an event's handler one that holds
+/// every case the event carries.
+#[test]
+fn an_enum_is_held_to_the_cases_a_view_declares() {
+    let with = |state: &str, param: &str| {
+        APP.replace(
+            "  state picked = \"\"\n",
+            &format!("  state picked = \"\"\n  state mode: {state} = \"rent\"\n  action switched(m: {param})\n    picked = m\n"),
+        )
+        .replace(" change=pick", " change=pick mode=mode modechange=switched")
+    };
+    let refused = |name: &str, src: &str| -> Vec<String> {
+        match App::new(name, src).compile() {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors.iter().map(|e| e.id.to_string()).collect(),
+        }
+    };
+    let rent = "enum<\"rent\">";
+    let wide = "enum<\"rent\", \"order\", \"late\">";
+    assert_eq!(
+        refused("enum-fits", &with(rent, wide)),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        refused("enum-prop", &with(wide, wide)),
+        ["contract-view-prop"]
+    );
+    assert_eq!(
+        refused("enum-event", &with(rent, rent)),
+        ["lower-handler-type"]
+    );
+}
+
+#[test]
+fn a_package_view_refuses_undeclared_props() {
+    for (before, after, name) in [
+        (
+            "latitude=37.8 zoomLevel=",
+            "latitdue=37.8 zoomLevel=",
+            "latitdue",
+        ),
+        ("zoomLevel=zoom", "zoomLevell=zoom", "zoomLevell"),
+    ] {
+        let app = App::new("unknown-prop", &APP.replace(before, after));
+        let refused = app
+            .compile()
+            .map(|_| ())
+            .expect_err("an undeclared prop must be refused");
+        assert!(
+            refused.iter().any(|e| e.id == "lower-native-attr"
+                && e.message.contains(&format!("`{name}`"))
+                && e.message.contains("`pin-board`")),
+            "{after}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn a_package_view_refuses_undeclared_handlers() {
+    for handler in ["zoomend=\"ended\"", "zoomend=ended"] {
+        let app = App::new("unknown-event", &APP.replace("moveend=ended", handler));
+        let refused = app
+            .compile()
+            .map(|_| ())
+            .expect_err("an undeclared handler must be refused");
+        assert!(
+            refused.iter().any(|e| e.id == "lower-native-attr"
+                && e.message.contains("`zoomend`")
+                && e.message.contains("`pin-board`")),
+            "{handler}: {refused:?}"
+        );
+    }
+}
+
+#[test]
+fn an_empty_package_view_declaration_still_refuses_unknown_attributes() {
+    let app = App::new(
+        "empty-view",
+        "component App\n  view\n    pin-board latitude=37.8\n",
+    );
+    let mut declaration: serde_json::Value = serde_json::from_str(INTERFACE).unwrap();
+    declaration["views"]["pin-board"] = json!({});
+    std::fs::write(
+        app.0.join("node_modules/@fixture/pinboard/exact.json"),
+        declaration.to_string(),
+    )
+    .unwrap();
+    let refused = app
+        .compile()
+        .map(|_| ())
+        .expect_err("no package props are declared");
+    assert!(
+        refused.iter().any(|e| e.id == "lower-native-attr"
+            && e.message.contains("`latitude`")
+            && e.message.contains("`pin-board`")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_package_view_keeps_box_attributes_and_common_events() {
+    let app = App::new(
+        "common-event",
+        &APP.replace(
+            "testId=\"board\"",
+            "testId=\"board\" width=200 height=100 role=\"img\" aria-label=\"Pins\" message=pick",
+        ),
+    );
+    let mut r = boot(&app);
+    let key = r.kernel().find_by_test_id("board")[0];
+    let node = r.kernel().node_by_key(key).unwrap();
+    assert_eq!(node.style.width, Dimension::Points(200.0));
+    assert_eq!(node.style.height, Dimension::Points(100.0));
+    assert_eq!(node.props.str(PropId::AccessibilityRole), Some("img"));
+    assert_eq!(node.props.str(PropId::AccessibilityLabel), Some("Pins"));
+    r.dispatch(node.id, Event::Message("ferry".into())).unwrap();
+    assert_eq!(r.slot("picked"), Some(&Value::str("ferry")));
+    assert_eq!(props(&r)["latitude"], "37.8");
+    assert!(props(&r).get("message").is_none());
+}
+
+#[test]
+fn an_app_module_keeps_arbitrary_scalar_props() {
+    let app = App::new(
+        "app-module",
+        "component App\n  state zoom = 11\n  view\n    local-board testId=\"board\" latitdue=37.8 zoomLevell=zoom zoomend=\"ended\" enabled=true\n",
+    );
+    std::fs::write(
+        app.0.join("app.json"),
+        json!({
+            "app": { "id": "com.exact.typed", "name": "Typed" },
+            "modules": ["local-board"]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let r = boot(&app);
+    assert_eq!(
+        props(&r),
+        json!({ "latitdue": "37.8", "zoomLevell": "11", "zoomend": "ended", "enabled": "true" })
     );
 }
 

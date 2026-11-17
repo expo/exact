@@ -26,6 +26,7 @@ pub(crate) fn register(world: &mut World) {
         .register::<crate::Opacity>()
         .register::<crate::Tint>()
         .register::<MouseLook>()
+        .register::<PointerPan>()
         .register::<Visible>()
         .register::<Ambient>()
         .register::<Follow>()

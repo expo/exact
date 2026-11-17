@@ -13,6 +13,7 @@ fn one(op: impl FnOnce(&mut Batch)) -> String {
 
 fn request(ticket: u64, request: Request, forced: bool) -> RequestOut {
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "feed \"home\"".into(),
@@ -529,6 +530,11 @@ fn an_idle_timeout_is_refused_by_name_on_the_wasm_host() {
         crate::batch::request_refusal(&request.idle_timeout(60_000)),
         Some("an idle timeout is unavailable on the web's wasm host")
     );
+    // A Rust source's two-way socket (LLP 1016.003) is refused, not opened to only listen.
+    assert_eq!(
+        crate::batch::request_refusal(&Request::socket("wss://example.test/feed")),
+        Some("Request::socket is unavailable on the web's wasm host")
+    );
 }
 
 /// LLP 1016.000 D10 on the web page: an upload's op says so (the page sends
@@ -648,5 +654,32 @@ fn streams_polls_and_uploads_keep_unsaid_and_explicit_default_distinct() {
                 "{kind}"
             );
         }
+    }
+}
+
+#[test]
+fn prefetch_is_ignored_for_web_reads_and_refused_for_sends_and_other_work() {
+    let mut read = request(1, Request::get("https://example.test").prefetch(), false);
+    read.class = exact_runner::RequestClass::Read;
+    let batch: serde_json::Value = serde_json::from_str(&one(|b| b.request(&read))).unwrap();
+    assert_eq!(batch["ops"][0]["op"], "request");
+    assert!(batch["ops"][0].get("prefetch").is_none());
+    for invalid in [
+        request(2, Request::get("https://example.test").prefetch(), false),
+        request(3, Request::continuation(7).prefetch(), false),
+        request(
+            4,
+            Request::get("https://example.test")
+                .body_to("app:/data/a")
+                .prefetch(),
+            false,
+        ),
+    ] {
+        let batch: serde_json::Value = serde_json::from_str(&one(|b| b.request(&invalid))).unwrap();
+        assert_eq!(batch["ops"][0]["op"], "refuse");
+        assert_eq!(
+            batch["ops"][0]["message"],
+            "exactPrefetch requires a plain HTTP read"
+        );
     }
 }

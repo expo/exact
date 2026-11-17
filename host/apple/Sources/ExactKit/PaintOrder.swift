@@ -147,8 +147,16 @@ extension NodeView {
         #if os(macOS)
         let place = { (child: PaintView) in position(child.siblingPaintRank)! }
         #else
+        // A navigation root's children beside the routes go above the native container where its box extends
+        // past the routes' boxes (`NavigationHost.clearBesideRoutes`): those at or below its rank go into the step
+        // above it, in their own ranks' order, so their `z-index` still orders them among themselves
+        let plane = position(1)
+        let lowest = plane == nil ? nil : children.lazy.compactMap { ($0 as? NodeView)?.clearsNavigation == true ? position($0.siblingPaintRank) : nil }.min()
         let place = { (child: PaintView) -> CGFloat in
             let own = position(child.siblingPaintRank)!
+            if let node = child as? NodeView, node.clearsNavigation, let plane, let lowest, own <= plane {
+                return plane + 0.0001 + 0.0008 * (plane > lowest ? (own - lowest) / (plane - lowest) : 1)
+            }
             guard let over = (child as? NodeView)?.bandOver, let under = position(over) else { return own }
             return max(own, under + 0.0005)
         }
@@ -161,7 +169,7 @@ extension NodeView {
         }
         dense?.top = top
         #if os(iOS) || os(tvOS)
-        (parent as? ScrollView)?.keepPlatformViewsOver()
+        if parent is ScrollView || parent is PresentationMount { parent.keepPlatformViewsOver() }
         #endif
     }
 
@@ -278,17 +286,21 @@ extension NSView {
 #endif
 
 #if os(iOS) || os(tvOS)
-extension ScrollView {
-    /// UIKit hangs a scroller's edge effect (iOS 26) in a view after its
-    /// content, at depth 0, to draw over it. A child ranked above 0 (one
-    /// holding a native button, a `position: relative` card, a `z-index`)
-    /// would paint over the effect and run sharp under the bar, so each
-    /// view of UIKit's after the last ranked child goes to the top child's
-    /// depth, where its later place puts it over them. One with a depth of
-    /// its own (the indicators' 1000, a view sent behind) keeps it. After a
-    /// ranking, and after UIKit's layout, which adds and moves its views.
-    /// Skip the session viewport, whose children include native presentations.
-    /// A route viewport holds only its document and keeps UIKit's effects above it.
+extension UIView {
+    /// UIKit adds views of its own after the nodes they draw over, at
+    /// depth 0: a scroller's edge effect (iOS 26), and the highlight a
+    /// context menu grows a row from in its route's `PresentationMount`
+    /// (`LiftTarget.container`), while UIKit hides the row itself. A child
+    /// ranked above 0 (a positioned route, one holding a native button, a
+    /// `position: relative` card, a `z-index`) would paint over them: the
+    /// effect would run sharp under the bar and the row would show blank.
+    /// So each view of UIKit's after the last ranked child goes to the top
+    /// child's depth, where its later place puts it over them. One with a
+    /// depth of its own (the indicators' 1000, a view sent behind) keeps it.
+    /// After a ranking, after UIKit's layout, which adds and moves its views,
+    /// and as a mount gains one. Skip the session viewport, whose children
+    /// include native presentations. A route viewport holds only its document
+    /// and keeps UIKit's effects above it.
     func keepPlatformViewsOver() {
         if let viewport = self as? Viewport, viewport.documentNode == nil { return }
         guard let top = DensePaintRanks.existing(self)?.top, top > 0 else { return }
@@ -319,18 +331,27 @@ extension NodeView {
     /// The same front-to-back order, with flat layers in their actual tree
     /// slots. Decoration layers never become input targets.
     static func hitChildren(in holder: UIView, at point: CGPoint, with event: UIEvent?,
-                            visit: ((UIView) -> UIView?)? = nil) -> UIView? {
+                            visit: ((UIView) -> UIView?)? = nil, captureLayoutHit: ((LayoutHit) -> Void)? = nil) -> UIView? {
         let views = holder.subviews
         func hit(_ view: UIView) -> UIView? {
             if let visit { return visit(view) }
             return view.hitTest(holder.convert(point, to: view), with: event)
         }
         let layers = holder.layer.sublayers ?? []
-        guard layers.contains(where: { $0.flatHit != nil }) else {
+        let layoutHits = LayoutHits.at(holder)
+        guard layoutHits != nil || layers.contains(where: { $0.flatHit != nil }) else {
             for view in hitOrder(views) { if let found = hit(view) { return found } }
             return nil
         }
         let byLayer = Dictionary(uniqueKeysWithValues: views.map { (ObjectIdentifier($0.layer), $0) })
+        func hitLayer(_ layer: CALayer) -> UIView? {
+            if let view = byLayer[ObjectIdentifier(layer)] { return hit(view) }
+            if !layer.isHidden, let flat = layer.flatHit, let owner = flat.owner,
+               !owner.inert, owner.style["pointer_events"]?.string != "none",
+               flat.frames.contains(where: { $0.contains(point) }) { return owner }
+            return nil
+        }
+        if let boxes = layoutHits { return boxes.hit(in: holder, at: point, layers: layers, visit: hitLayer, capture: captureLayoutHit) }
         let depth = layers.first?.zPosition ?? 0
         let ordered: [CALayer]
         if layers.allSatisfy({ $0.zPosition == depth }) { ordered = layers.reversed() }
@@ -340,11 +361,7 @@ extension NodeView {
             }.map(\.element)
         }
         for layer in ordered {
-            if let view = byLayer[ObjectIdentifier(layer)] {
-                if let found = hit(view) { return found }
-            } else if !layer.isHidden, let flat = layer.flatHit, let owner = flat.owner,
-                      !owner.inert, owner.style["pointer_events"]?.string != "none",
-                      flat.frames.contains(where: { $0.contains(point) }) { return owner }
+            if let found = hitLayer(layer) { return found }
         }
         return nil
     }

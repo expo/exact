@@ -330,6 +330,20 @@ fn a_fetch_carries_its_timeout_signal_as_its_deadline() {
     assert_eq!(result(&r, "result"), said("TimeoutError"));
 }
 
+/// The runner's clock is fractional; the deadline a fetch gives the host is
+/// a whole number of ms, never before the signal's own (#770).
+#[test]
+fn a_fetch_timeout_on_a_fractional_clock_is_whole_ms() {
+    for (at, ms) in [(0.5, 251), (6803.346587, 251)] {
+        let mut r = runner();
+        seek(&mut r, at);
+        r.act("fetchTimeout", vec![]).unwrap();
+        let fetches = pump(&mut r);
+        assert_eq!(fetches.len(), 1, "at {at}");
+        assert_eq!(fetches[0].request.timeout_ms, Some(ms), "at {at}");
+    }
+}
+
 #[test]
 fn a_let_go_answer_never_runs_its_timer() {
     let mut r = runner();

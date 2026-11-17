@@ -56,6 +56,36 @@ final class ContentIndexTests: XCTestCase {
         XCTAssertEqual(query("book"), [])
     }
 
+    #if canImport(CoreSpotlight)
+    /// Spotlight's answer to a key's first change leaves it pending while a
+    /// later change is unanswered: a crash then leaves the later one to the
+    /// next launch.
+    func testAnAnswerUnmarksOnlyTheChangeItAnswers() throws {
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
+        let first = try XCTUnwrap(ExactContentIndex.stamps["book:1"])
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke, 2020")]))
+        let second = try XCTUnwrap(ExactContentIndex.stamps["book:1"])
+        XCTAssertNotEqual(first, second)
+        ExactContentIndex.acknowledge(["book:1"], stamp: first)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, ["book:1"], "the newer change is still unanswered")
+        ExactContentIndex.acknowledge(["book:1"], stamp: second)
+        ExactContentIndex.file = ExactContentIndex.file
+        XCTAssertEqual(ExactContentIndex.pendingKeys, [])
+    }
+
+    /// A change the mirror could not write is not told to Spotlight.
+    func testAChangeTheMirrorCouldNotWriteIsNotTold() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let blocked = directory.appendingPathComponent("file")
+        try Data().write(to: blocked)
+        ExactContentIndex.file = blocked.appendingPathComponent("exact-content-index.json")
+        XCTAssertNil(ExactContentIndex.set(kind: "book", [book("2", "Dune", "Frank Herbert")]))
+        XCTAssertEqual(ExactContentIndex.pendingKeys, ["book:2"])
+        XCTAssertNil(ExactContentIndex.stamps["book:2"])
+    }
+    #endif
+
     func testRefusalsChangeNothing() {
         XCTAssertNil(ExactContentIndex.set(kind: "book", [book("1", "Piranesi", "Susanna Clarke")]))
         XCTAssertEqual(ExactContentIndex.set(kind: "book", [JSONValue.fields(["id": "x", "title": "Away", "url": "https://example.com"])]), "TypeError")
@@ -91,6 +121,68 @@ final class ContentIndexTests: XCTestCase {
         NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
         XCTAssertEqual(body["taken"] as? Bool, true)
         wait(for: [refused], timeout: 5)
+    }
+
+    /// A task the system cancelled before its intent posted the call posts
+    /// the cancellation first (`withTaskCancellationHandler`), from any
+    /// thread: the call never reaches a session and is refused `cancelled`.
+    func testACallItsCallerCancelledFirstIsRefusedCancelled() {
+        let refused = expectation(description: "the door answers")
+        let body = NSMutableDictionary(dictionary: ["tool": "logPages", "args": ["page": 1], "door": "apple", "digest": ""])
+        body["reply"] = { (answer: [String: Any]) in
+            XCTAssertEqual(answer["outcome"] as? String, "refused")
+            XCTAssertEqual(answer["certainty"] as? String, "none")
+            XCTAssertEqual(answer["reason"] as? String, "cancelled")
+            refused.fulfill()
+        }
+        let posted = expectation(description: "the cancellation is posted")
+        DispatchQueue.global().async {
+            NotificationCenter.default.post(name: Notification.Name("exact.tools.cancel"), object: body)
+            posted.fulfill()
+        }
+        wait(for: [posted], timeout: 5)
+        NotificationCenter.default.post(name: Notification.Name("exact.tools.call"), object: body)
+        wait(for: [refused], timeout: 5)
+    }
+
+    /// Call B waits in the runner behind call A when its task is cancelled,
+    /// and A ends before B's next poll. The cancellation reaches the runner
+    /// as the notification is handled, so B is dropped, not dispatched as A
+    /// ends. The runner here is a stand-in that keeps B waiting until A ends
+    /// and then dispatches it unless it was told to cancel it first.
+    func testACallCancelledWhileItWaitsInTheRunnerIsDroppedBeforeTheCallAheadEnds() {
+        var aRunning = true, bCancelled = false, bDispatched = false, ops: [String] = []
+        let agent = { (text: String) -> String in
+            let request = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
+            let op = request["op"] as? String ?? ""
+            ops.append(op)
+            if op == "cancel" {
+                if aRunning { bCancelled = true }
+                return #"{"call":2,"state":"ended"}"#
+            }
+            if aRunning { return #"{"call":2,"state":"waiting"}"# }
+            if bCancelled { return #"{"outcome":"refused","certainty":"none","reason":"cancelled","message":"Its caller cancelled it before it ran."}"# }
+            bDispatched = true
+            return #"{"outcome":"ok","certainty":"applied","reason":""}"#
+        }
+        let cancellation = ExactTools.Cancellation()
+        let body = NSMutableDictionary(dictionary: ["cancellation": cancellation])
+        let answered = expectation(description: "B is answered")
+        ExactTools.follow(2, agent: agent, cancellation: cancellation) { answer in
+            XCTAssertEqual(answer["reason"] as? String, "cancelled")
+            answered.fulfill()
+        }
+        XCTAssertEqual(ops, ["called"])
+        let handled = expectation(description: "the cancellation is handled on the main thread")
+        DispatchQueue.global().async {
+            NotificationCenter.default.post(name: Notification.Name("exact.tools.cancel"), object: body)
+            DispatchQueue.main.async { handled.fulfill() }
+        }
+        wait(for: [handled], timeout: 5)
+        XCTAssertEqual(ops.last, "cancel", "told as the notification is handled, not at the next poll")
+        aRunning = false
+        wait(for: [answered], timeout: 5)
+        XCTAssertFalse(bDispatched)
     }
 }
 #endif

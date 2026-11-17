@@ -26,7 +26,7 @@ EF198926-1958-489D-A7A4-9196E454DD3A as `Chat` (`dev.bakeoff.chat.b77d1bd`).
   persists: shipped messages are kept as deleted ids, added ones are removed.
 - **Jump to newest**: the list's `scroll` event sets `away` when the view is more than 1.5 screens
   (or 600 pt) above the end. A floating 44 pt chevron button then smooth-scrolls to the last row.
-  The chevron is an `app.tamber` icon token: an SF Symbol on iOS, an SVG on the web.
+  The chevron is an `app.forma` icon token: an SF Symbol on iOS, an SVG on the web.
 - **Persistence**: a test reloads and checks that sent messages, Sam's replies and deletions are
   still there.
 

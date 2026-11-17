@@ -16,6 +16,9 @@ use contract_types::{Checked, Ty};
 use std::fmt::Write as _;
 use std::path::Path;
 
+mod sharing;
+pub use sharing::{sharing_context, SharedExpression, SharedRegion, SharingContext};
+
 mod components;
 pub use components::{lean_components, lean_components_path};
 
@@ -114,6 +117,8 @@ fn emit_file(
             out: String::new(),
             checked: &checked,
             root: checked.expanded.root.clone(),
+            format_used: Default::default(),
+            records: Default::default(),
         };
         e.program(name)?;
         Ok(e.out)
@@ -133,6 +138,8 @@ pub fn emit_checked(checked: &Checked, name: &str) -> Result<String, CompileErro
         out: String::new(),
         checked,
         root: typed.root,
+        format_used: Default::default(),
+        records: Default::default(),
     };
     e.program(name)?;
     Ok(e.out)
@@ -144,10 +151,17 @@ struct Emitter<'a> {
     /// The expanded root with its uses' arguments ascribed
     /// (`contract_syntax::expand_typed`).
     root: Component,
+    /// Whether a localized formatter's call read the format slot.
+    format_used: std::cell::Cell<bool>,
+    /// [`Emitter::format_records`], once asked.
+    records: std::cell::OnceCell<Option<Vec<(String, String)>>>,
 }
 
 /// The name of the resolved locale's slot, as the plan names it.
 const LOCALE: &str = "#locale";
+
+/// The name of the format locale's slot (LLP 1054.000.003 D6).
+const FORMAT: &str = "#format";
 
 fn refuse(message: impl Into<String>, span: Span) -> CompileError {
     CompileError {
@@ -279,8 +293,22 @@ impl Emitter<'_> {
         }
         let _ = writeln!(o, "  states := [{}],", states.join(",\n    "));
         let _ = writeln!(o, "  derives := {},", self.derives_list(root, ct)?);
-        let _ = writeln!(o, "  resources := {},", self.resources_list(root, ct)?);
-        let _ = writeln!(o, "  mutations := {},", self.mutations_list(root, ct));
+        let _ = writeln!(
+            o,
+            "  resources := {},",
+            self.resources_list(root, ct, &self.checked.expanded.resource_owners)?
+        );
+        let expanded = &self.checked.expanded;
+        let _ = writeln!(
+            o,
+            "  mutations := {},",
+            self.mutations_list(
+                root,
+                ct,
+                &expanded.mutation_owners,
+                &expanded.mutation_then_args
+            )?
+        );
         let _ = writeln!(o, "  actions := {},", self.actions_list(&root.actions, ct)?);
         let _ = writeln!(o, "  tasks := {},", self.tasks_list(root)?);
         let _ = writeln!(o, "  view := {},", self.nodes(&root.view)?);
@@ -288,6 +316,20 @@ impl Emitter<'_> {
         let _ = writeln!(o, "  router := {},", self.router());
         let _ = writeln!(o, "  strings := {},", self.strings_list());
         let _ = writeln!(o, "  locale := {},", self.locale());
+        // The format slot follows the locale slot, as the compiler makes it
+        // for a program that formats with a table's data.
+        if let Some(locale) = self
+            .format_used
+            .get()
+            .then(|| self.locale_state())
+            .flatten()
+        {
+            o = o.replacen(
+                &locale,
+                &format!("{locale},\n    {}", self.format_state()),
+                1,
+            );
+        }
         let _ = writeln!(o, "  sources := {}", self.sources_list(ct));
         o.push_str("}\n");
         let _ = writeln!(self.out, "def {name} : Contract.Program := {{");
@@ -304,6 +346,48 @@ impl Emitter<'_> {
             string(LOCALE),
             string(&st.base)
         ))
+    }
+
+    /// The format locale's slot, initialized to the base table's name, as
+    /// the runner leaves it until a host tells a place.
+    fn format_state(&self) -> String {
+        let base = self
+            .checked
+            .types
+            .shapes
+            .strings
+            .as_deref()
+            .map_or("", |st| &st.base);
+        format!(
+            "{{ name := {}, ty := .string, init := (.str {}), owner := .none, late := false }}",
+            string(FORMAT),
+            string(base)
+        )
+    }
+
+    /// Each table's format data, base first, when one formats otherwise
+    /// than `en-US` (`contract_lower::formats::records`).
+    fn format_records(&self) -> Option<&[(String, String)]> {
+        self.records
+            .get_or_init(|| {
+                let st = self.checked.types.shapes.strings.as_deref()?;
+                let others = st.tables.keys().filter(|l| **l != st.base);
+                let names: Vec<&str> = std::iter::once(&st.base)
+                    .chain(others)
+                    .map(String::as_str)
+                    .collect();
+                let records = contract_lower::formats::records(names.iter().copied())?;
+                Some(names.iter().map(|n| n.to_string()).zip(records).collect())
+            })
+            .as_deref()
+    }
+
+    /// `CProgram.format`: the format slot, when a formatter reads it.
+    fn format(&self) -> String {
+        match self.format_used.get() {
+            true => format!(".some {}", string(FORMAT)),
+            false => ".none".into(),
+        }
     }
 
     /// `Program.locale`: the resolved locale's slot, when there are tables.
@@ -329,10 +413,21 @@ impl Emitter<'_> {
                 base.into_iter()
                     .chain(others)
                     .map(|(locale, table)| {
-                        let texts: Vec<String> = table
+                        let mut texts: Vec<String> = table
                             .iter()
                             .map(|(k, t)| format!("({}, {})", string(k), string(t)))
                             .collect();
+                        // A table's format data, under the key no table has
+                        // (`Format.formatKey`), when a formatter reads it.
+                        if let Some(record) = self
+                            .format_used
+                            .get()
+                            .then(|| self.format_records())
+                            .flatten()
+                            .and_then(|r| r.iter().find(|(n, _)| n == locale))
+                        {
+                            texts.push(format!("(\"\\u001Eformat\", {})", string(&record.1)));
+                        }
                         format!("({}, [{}])", string(locale), texts.join(", "))
                     })
                     .collect()
@@ -443,13 +538,30 @@ impl Emitter<'_> {
         Ok(format!("[{}]", derives.join(",\n    ")))
     }
 
+    /// `owners` is the expansion's `resource_owners` for the expanded root,
+    /// empty for a component as declared.
     fn resources_list(
         &self,
         root: &Component,
         ct: &contract_types::ComponentTypes,
+        owners: &[contract_syntax::Owner],
     ) -> Result<String, CompileError> {
         let mut resources = Vec::new();
         for (i, r) in root.resources.iter().enumerate() {
+            let args = r
+                .placeholder
+                .as_ref()
+                .filter(|p| p.source == contract_types::placeholder::EMPTY)
+                .map_or(&[][..], |p| p.args.as_slice());
+            let placeholder = contract_types::placeholder::materialize(
+                &ct.resources[i],
+                args,
+                &self.checked.types.shapes,
+                &r.name,
+                r.span,
+            )
+            .map_err(|mut all| CompileError::from(all.swap_remove(0)))?;
+            let placeholder = self.value(&placeholder, &ct.resources[i])?;
             // Over a list (LLP 1017.000 P4c): its element's name, list and key.
             let each = match &r.each {
                 Some(e) => format!(
@@ -468,8 +580,17 @@ impl Emitter<'_> {
                 Some(g) => format!(", gate := .some ({})", self.expr(g)?),
                 None => String::new(),
             };
+            // A child's resource (LLP 1035.005.004 D1): the arm whose
+            // instances own it, or `late` for a use outside every region.
+            let owner = match owners.get(i).copied() {
+                Some(contract_syntax::Owner::Arm { tag, arm }) => {
+                    format!(", owner := .some ({tag}, {arm})")
+                }
+                Some(contract_syntax::Owner::Instance) => ", late := true".into(),
+                Some(contract_syntax::Owner::Root) | None => String::new(),
+            };
             resources.push(format!(
-                "{{ name := {}, ty := {}, source := {}, args := {}{each}{gate} }}",
+                "{{ name := {}, ty := {}, source := {}, args := {}, placeholder := .some {placeholder}{each}{gate}{owner} }}",
                 string(&r.name),
                 ty(&ct.resources[i]),
                 string(&r.source),
@@ -495,33 +616,80 @@ impl Emitter<'_> {
         Ok(format!("[{}]", resources.join(",\n    ")))
     }
 
-    fn mutations_list(&self, root: &Component, ct: &contract_types::ComponentTypes) -> String {
-        let mutations: Vec<String> = root
-            .mutations
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                let refreshes: Vec<String> = m.refreshes.iter().map(|(r, _)| string(r)).collect();
-                let then = match &m.then {
-                    Some((a, _)) => format!(".some {}", string(a)),
-                    None => ".none".into(),
-                };
-                // `queue` (LLP 1092 D1) only where declared: the embedding
-                // of every other program is as it was. A `parallel` one is
-                // newest-wins there (LLP 1161.000 D7).
-                let queue = match m.mode {
-                    contract_syntax::MutationMode::Queue => ", queue := true",
-                    _ => "",
-                };
-                format!(
-                    "{{ name := {}, ty := {}, refreshes := [{}], andThen := {then}{queue} }}",
-                    string(&m.name),
-                    ty(&ct.mutations[i]),
-                    refreshes.join(", ")
-                )
-            })
-            .collect();
-        format!("[{}]", mutations.join(",\n    "))
+    /// A materialized placeholder, with record names restored from its type.
+    fn value(&self, value: &exact_plan::Value, ty: &Ty) -> Result<String, CompileError> {
+        use exact_plan::Value;
+        Ok(match (value, ty) {
+            (Value::Number(n), _) => format!("(.num (Contract.F64.ofBits 0x{:016x}))", n.to_bits()),
+            (Value::Bool(b), _) => format!("(.bool {b})"),
+            (v, _) if v.is_str() => format!("(.str {})", string(v.as_str().unwrap())),
+            (Value::Unit, _) => ".unit".into(),
+            (Value::Option(None), _) => ".none".into(),
+            (Value::Option(Some(v)), Ty::Option(t)) => format!("(.some {})", self.value(v, t)?),
+            (Value::List(items), Ty::List(t)) => {
+                format!("(.list {})", list(items, |v| self.value(v, t))?)
+            }
+            (Value::Record(values), Ty::Record(name)) => {
+                let fields = &self.checked.types.shapes.map[name];
+                let values = values
+                    .iter()
+                    .zip(fields)
+                    .map(|(v, (_, t))| self.value(v, t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                format!("(.record {} [{}])", string(name), values.join(", "))
+            }
+            _ => {
+                return Err(refuse(
+                    "a placeholder does not match its type",
+                    Span::default(),
+                ))
+            }
+        })
+    }
+
+    /// The mutations, each with what owns it and its `then`'s arguments
+    /// (LLP 1035.005.004 D6; empty for a component's own, as
+    /// `--components` emits them).
+    fn mutations_list(
+        &self,
+        root: &Component,
+        ct: &contract_types::ComponentTypes,
+        owners: &[contract_syntax::Owner],
+        then_args: &[Vec<contract_syntax::Expr>],
+    ) -> Result<String, CompileError> {
+        let mut mutations = Vec::new();
+        for (i, m) in root.mutations.iter().enumerate() {
+            let refreshes: Vec<String> = m.refreshes.iter().map(|(r, _)| string(r)).collect();
+            let then = match &m.then {
+                Some((a, _)) => format!(".some {}", string(a)),
+                None => ".none".into(),
+            };
+            // `queue` (LLP 1092 D1) only where declared: the embedding
+            // of every other program is as it was. A `parallel` one is
+            // newest-wins there (LLP 1161.000 D7).
+            let queue = match m.mode {
+                contract_syntax::MutationMode::Queue => ", queue := true",
+                _ => "",
+            };
+            let owner = match owners.get(i).copied() {
+                Some(contract_syntax::Owner::Arm { tag, arm }) => {
+                    format!(", owner := .some ({tag}, {arm})")
+                }
+                Some(contract_syntax::Owner::Instance) => ", late := true".into(),
+                Some(contract_syntax::Owner::Root) | None => String::new(),
+            };
+            let args = match then_args.get(i).filter(|a| !a.is_empty()) {
+                Some(args) => format!(", thenArgs := {}", list(args, |a| self.expr(a))?),
+                None => String::new(),
+            };
+            mutations.push(format!(
+                "{{ name := {}, ty := {}, refreshes := [{}], andThen := {then}{queue}{owner}{args} }}",
+                string(&m.name),
+                ty(&ct.mutations[i]),
+                refreshes.join(", ")
+            ));
+        }
+        Ok(format!("[{}]", mutations.join(",\n    ")))
     }
 
     /// Actions with their parameters' checked types (`ct.actions`, by
@@ -560,6 +728,7 @@ impl Emitter<'_> {
                 TaskKind::Every => ".every",
                 TaskKind::After => ".after",
                 TaskKind::Frame => ".frame",
+                TaskKind::Change => ".change",
             };
             // A gated task's gate and key (LLP 1092 D12), as D9 lowers them.
             let mut gate = String::new();
@@ -719,6 +888,15 @@ impl Emitter<'_> {
                             }
                             exact_plan::StdlibDefault::Str(s) => format!("(.str {})", string(s)),
                         });
+                    }
+                    // The format locale, last, as lowering passes it.
+                    if f.localized() {
+                        if self.format_records().is_some() {
+                            self.format_used.set(true);
+                            parts.push(format!("(.var {})", string(FORMAT)));
+                        } else {
+                            parts.push("(.str \"\")".into());
+                        }
                     }
                 }
                 format!("(.call {} [{}])", string(name), parts.join(", "))
@@ -968,7 +1146,7 @@ impl Emitter<'_> {
                 self.nodes(none)?
             ),
             Node::Use { name, span, .. } => {
-                return Err(refuse(format!("`{name}` was not expanded"), *span))
+                return Err(refuse(format!("`{name}` was not expanded"), *span));
             }
             Node::Children { span } => return Err(refuse("`children` was not expanded", *span)),
         })

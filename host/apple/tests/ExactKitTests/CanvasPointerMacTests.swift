@@ -6,6 +6,7 @@ import XCTest
 
 private var pointerEvents: [[String: Any]] = []
 private var canvasControlEvents: [[String: Any]] = []
+private var keyEvents: [[String: Any]] = []
 private var rawMoveSawContractQueued: [Bool] = []
 private var contractMoveQueued: (() -> Bool)?
 
@@ -19,6 +20,7 @@ final class CanvasPointerMacTests: XCTestCase {
         _ = NSApplication.shared
         pointerEvents = []
         canvasControlEvents = []
+        keyEvents = []
         rawMoveSawContractQueued = []
         contractMoveQueued = nil
         let s = ExactApp.shared.makeSession(label: "pointer-test")
@@ -31,6 +33,7 @@ final class CanvasPointerMacTests: XCTestCase {
             wantsInput: { _ in 1 }, input: { _, p, n in
                 let row = (try? JSONSerialization.jsonObject(with: Data(bytes: p!, count: n))) as? [String: Any] ?? [:]
                 if row["t"] as? String == "control" { canvasControlEvents.append(row) }
+                if row["t"] as? String == "key" { keyEvents.append(row) }
                 if row["t"] as? String == "pointer" {
                     pointerEvents.append(row)
                     if row["phase"] as? String == "move" { rawMoveSawContractQueued.append(contractMoveQueued?() == true) }
@@ -239,6 +242,35 @@ final class CanvasPointerMacTests: XCTestCase {
         pointerEvents = []
         XCTAssertTrue(input.pointer(mouse(.otherMouseDown, window, at: at(canvas, window, 60, 50)), phase: "down"))
         XCTAssertEqual(pointerEvents.first?["buttons"] as? Int, 4, "a made middle press (buttonNumber 0) is the middle button")
+        withExtendedLifetime(window) {}
+    }
+
+    /// A canvas disabled while a button or key is held still hears its
+    /// release, so its world holds nothing once enabled again and the next
+    /// press is a press, not a move.
+    func testAReleaseWhileDisabledReachesTheSurface() throws {
+        let (s, canvas, window) = fixture(); defer { s.destroy() }
+        let input = canvas.canvasInput as! CanvasInputHost
+        let point = at(canvas, window, 50, 50)
+        XCTAssertTrue(input.pointer(mouse(.leftMouseDown, window, at: point), phase: "down"))
+        canvas.props["disabled"] = "true"
+        XCTAssertFalse(input.pointer(mouse(.leftMouseDragged, window, at: point), phase: "move"), "no new input")
+        XCTAssertTrue(input.pointer(mouse(.leftMouseUp, window, at: point), phase: "up"))
+        canvas.props["disabled"] = nil
+        XCTAssertTrue(input.pointer(mouse(.leftMouseDown, window, at: point), phase: "down"))
+        XCTAssertEqual(rows.map(\.0), ["down", "up", "down"])
+        XCTAssertEqual(rows.map(\.1), [1, 0, 1])
+
+        XCTAssertTrue(window.makeFirstResponder(canvas))
+        func key(_ type: NSEvent.EventType) -> NSEvent {
+            NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                             context: nil, characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0)!
+        }
+        _ = input.key(key(.keyDown), down: true, source: canvas)
+        canvas.props["disabled"] = "true"
+        _ = input.key(key(.keyUp), down: false, source: canvas)
+        XCTAssertEqual(keyEvents.map { $0["down"] as? Bool }, [true, false], "the held key's release")
+        XCTAssertFalse(s.surfaceHost.input(canvas, ["t": "key", "code": "KeyB", "key": "b", "down": true, "repeat": false]))
         withExtendedLifetime(window) {}
     }
 

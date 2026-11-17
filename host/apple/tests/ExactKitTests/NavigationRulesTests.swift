@@ -189,23 +189,21 @@ final class NavigationRulesTests: XCTestCase {
         XCTAssertFalse(NavigationRules.dispatchesBack(shownKey: "", rootKey: "compose", sourceKey: "compose", modalActive: true))
     }
 
-    /// UIKit's finished pop decides: the app follows it when its top is among the routes UIKit took
-    /// away, however the source's node or the root's key fared during the swipe.
-    func testTheAppFollowsAPopUIKitFinished() {
-        // A swipe from Updates back to Settings: the app still names Updates
-        XCTAssertTrue(NavigationRules.appIsBehind(poppedKeys: ["updates"], uikitTop: "settings", shownKeys: ["settings", "updates"], rootKey: "updates"))
-        // UIKit's long-press Back menu took two routes away
-        XCTAssertTrue(NavigationRules.appIsBehind(poppedKeys: ["updates", "log"], uikitTop: "settings", shownKeys: ["settings", "updates", "log"], rootKey: "log"))
+    /// D2: a pop UIKit committed takes the router from its selected route to
+    /// the deepest route beneath it that UIKit kept.
+    func testAPopUIKitCommittedTakesTheRouterToTheDeepestRouteItKept() {
+        // UIKit's Back from Updates to Settings: one step, the authored Back
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: ["settings", "updates"], popped: ["updates"], selected: "updates")?.to, "settings")
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: ["settings", "updates"], popped: ["updates"], selected: "updates")?.steps, 1)
+        // UIKit's long-press Back menu, or a tap on the selected tab, took two routes: a history jump
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: ["settings", "updates", "log"], popped: ["updates", "log"], selected: "log")?.steps, 2)
         // The app selected Updates again during a pop from Log to Settings: the pop took it
-        XCTAssertTrue(NavigationRules.appIsBehind(poppedKeys: ["updates", "log"], uikitTop: "settings", shownKeys: ["settings", "updates"], rootKey: "updates"))
-        // Nothing popped is the app's top: nothing popped, or the app already went back
-        XCTAssertFalse(NavigationRules.appIsBehind(poppedKeys: [], uikitTop: "updates", shownKeys: ["settings", "updates"], rootKey: "updates"))
-        XCTAssertFalse(NavigationRules.appIsBehind(poppedKeys: ["updates"], uikitTop: "settings", shownKeys: ["settings"], rootKey: "settings"))
-        // A route the app pushed during the pop was never on UIKit's stack
-        XCTAssertFalse(NavigationRules.appIsBehind(poppedKeys: ["thread"], uikitTop: "inbox", shownKeys: ["inbox", "thread", "compose"], rootKey: "compose"))
-        // UIKit's top is above the app's top in the app's stack, or not in it
-        XCTAssertFalse(NavigationRules.appIsBehind(poppedKeys: ["updates"], uikitTop: "log", shownKeys: ["settings", "updates", "log"], rootKey: "updates"))
-        XCTAssertFalse(NavigationRules.appIsBehind(poppedKeys: ["updates"], uikitTop: "specs", shownKeys: ["settings", "updates"], rootKey: "updates"))
+        XCTAssertEqual(NavigationRules.backTarget(shownKeys: ["settings", "updates"], popped: ["updates", "log"], selected: "updates")?.to, "settings")
+        // The pop took a route under the one the app pushed meanwhile, or none of the router's
+        XCTAssertNil(NavigationRules.backTarget(shownKeys: ["inbox", "thread", "compose"], popped: ["thread"], selected: "compose"))
+        XCTAssertNil(NavigationRules.backTarget(shownKeys: ["settings", "updates"], popped: [], selected: "updates"))
+        // Nothing the router shows is left beneath the selected route
+        XCTAssertNil(NavigationRules.backTarget(shownKeys: ["updates"], popped: ["updates"], selected: "updates"))
     }
 
     /// D2's exception: the app replaced the swiped screen in place while the

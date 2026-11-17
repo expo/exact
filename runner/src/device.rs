@@ -15,6 +15,13 @@
 //!
 //! [`io_grants`]: crate::io_grants
 
+use crate::sandbox::{self, Sandbox};
+
+/// HealthKit on the Mac: its entitlement is restricted there, and Exact signs none (LLP 1030.005 D2).
+const HEALTH: Sandbox = Sandbox::Refused(
+    "HealthKit's entitlement is restricted on the Mac, and Exact signs none there",
+);
+
 /// One device a grant can name, and what each host calls it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Device {
@@ -29,7 +36,8 @@ pub struct Device {
     /// asks for in one request (LLP 1133.002 D6), and the normal ones granted
     /// at install (a foreground service's, LLP 1133.033 D16). One the platform retired at an API level
     /// is written `<name> maxSdkVersion=<level>`, which the manifest
-    /// declares as `android:maxSdkVersion` (LLP 1133.019 D4).
+    /// declares as `android:maxSdkVersion` (LLP 1133.019 D4), omitting it
+    /// when the app's minimum API is newer.
     pub android: &'static [&'static str],
     /// Android permissions derived beside `android` only where the app uses
     /// a module name that writes under the line (`"writes": true` in its
@@ -40,6 +48,15 @@ pub struct Device {
     /// The macOS hardened-runtime entitlement: without it a notarised build is
     /// silently refused, whatever `Info.plist` says.
     pub hardened: Option<&'static str>,
+    /// macOS signing entitlements only a provisioning profile authorizes
+    /// (Apple TN3125), apart from `hardened`, which any signature carries:
+    /// the Mac build signs them under a profile that allows them, and
+    /// without one signs none (`host/apple/presence.mjs`, `macProvisioning`).
+    pub macos_profile: &'static [&'static str],
+    /// What the Mac App Store's sandbox asks for the row (LLP 1030.005 D2):
+    /// its entitlements, the profile's keys, or a refusal. Unset only in a
+    /// row that has not been audited, which a store build refuses.
+    pub sandbox: Option<Sandbox>,
     /// The web `Permissions-Policy` feature, where the feature is policy-controlled.
     pub web: Option<&'static str>,
     /// Further `Permissions-Policy` features the row turns on beside `web`:
@@ -48,9 +65,10 @@ pub struct Device {
     /// iOS signing entitlements the device needs beside its usage strings
     /// (LLP 1069.008.000 D2): HealthKit authorizes nothing without its own.
     pub ios_entitlements: &'static [&'static str],
-    /// The value of each of `ios_entitlements` that is no boolean, by name:
-    /// NFC's reader-session formats are an array (LLP 1133.035 D16 item 2).
-    pub ios_entitlement_values: &'static [(&'static str, &'static [&'static str])],
+    /// The value of each of `ios_entitlements` and `macos_profile` that is no
+    /// boolean, by name: NFC's reader-session formats are an array (LLP
+    /// 1133.035 D16 item 2).
+    pub entitlement_values: &'static [(&'static str, &'static [&'static str])],
     /// A usage key written with this row's text when no granted row writes it
     /// (LLP 1069.008.000 D1): App Store Connect wants both HealthKit keys
     /// beside the entitlement, and iOS shows only the prompt an app asks for.
@@ -84,15 +102,13 @@ pub struct Device {
     /// D2): a kind's `<service>` is declared with every type its rows give
     /// it, so a later row adds a type to a kind (LLP 1133.032 D11 item 3).
     pub android_services: &'static [&'static str],
-    /// Android hardware features the row declares, each written
-    /// `<uses-feature android:name="android.hardware.<name>"
-    /// android:required="false"/>` so a store still offers the app to a
-    /// device without it (LLP 1133.037 D17: `usb.host`).
+    /// Android features by full name, required unless `required=false`
+    /// follows the name (LLP 1133.022 D18; LLP 1133.037 D17).
     pub android_features: &'static [&'static str],
 }
 
 /// What a row has unless it says otherwise.
-const ROW: Device = Device {
+pub(crate) const ROW: Device = Device {
     name: "",
     ios: &[],
     ios_flags: &[],
@@ -100,10 +116,12 @@ const ROW: Device = Device {
     android_writes: &[],
     macos: &[],
     hardened: None,
+    macos_profile: &[],
+    sandbox: None,
     web: None,
     policy: &[],
     ios_entitlements: &[],
-    ios_entitlement_values: &[],
+    entitlement_values: &[],
     companion: None,
     tvos: true,
     keeps_no_answers: false,
@@ -119,8 +137,37 @@ const ROW: Device = Device {
 
 /// Every device grant. Adding a row is one entry here and no host code.
 pub const DEVICES: &[Device] = &[
+    // Permission metadata for an app's native module (LLP 1067). The
+    // platform keys, permissions and features follow LLP 1133.022 D18;
+    // the module owns the Bluetooth calls.
+    Device {
+        name: "bluetooth",
+        sandbox: Some(Sandbox::Keys(&["device.bluetooth"])),
+        ios: &["NSBluetoothAlwaysUsageDescription"],
+        macos: &["NSBluetoothAlwaysUsageDescription"],
+        web: Some("bluetooth"),
+        android: &[
+            "android.permission.BLUETOOTH maxSdkVersion=30",
+            "android.permission.BLUETOOTH_CONNECT",
+        ],
+        android_features: &[
+            "android.hardware.bluetooth_le required=false",
+            "android.software.companion_device_setup",
+        ],
+        ..ROW
+    },
+    Device {
+        name: "bluetooth-background",
+        sandbox: Some(sandbox::NONE),
+        purpose: false,
+        needs: Some("bluetooth"),
+        ios_modes: &["bluetooth-central"],
+        tvos: false,
+        ..ROW
+    },
     Device {
         name: "microphone",
+        sandbox: Some(Sandbox::Keys(&["device.audio-input"])),
         ios: &["NSMicrophoneUsageDescription"],
         macos: &["NSMicrophoneUsageDescription"],
         hardened: Some("com.apple.security.device.audio-input"),
@@ -136,6 +183,7 @@ pub const DEVICES: &[Device] = &[
     // and tvOS's recording cell is later.
     Device {
         name: "microphone-background",
+        sandbox: Some(sandbox::NONE),
         ios_flags: &["ExactCapturesInBackground"],
         ios_modes: &["audio"],
         android: &[
@@ -157,6 +205,7 @@ pub const DEVICES: &[Device] = &[
     // No call service on a Mac, the web or tvOS.
     Device {
         name: "calls",
+        sandbox: Some(sandbox::NONE),
         ios_modes: &["audio", "voip"],
         android: &[
             "android.permission.MANAGE_OWN_CALLS",
@@ -170,19 +219,25 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
-    // The camera, `@exact/camera`'s (LLP 1133.008 D6). Its Android features
-    // are declared not required where the permission is (app/build.gradle.kts).
+    // The camera, `@exact/camera`'s (LLP 1133.008 D6). Android's `CAMERA`
+    // comes from opening one in the app (any use of `getUserMedia` under
+    // this line, its `derives`), not from the line alone: the system camera
+    // app needs none, and declared without being held it refuses the app the
+    // camera app (`takePhotoWithCameraApp`), which iOS's usage key, the
+    // line's, asks for. Its Android features are declared not required where
+    // the permission is (app/build.gradle.kts).
     Device {
         name: "camera",
+        sandbox: Some(Sandbox::Keys(&["device.camera"])),
         ios: &["NSCameraUsageDescription"],
         macos: &["NSCameraUsageDescription"],
         hardened: Some("com.apple.security.device.camera"),
         web: Some("camera"),
-        android: &["android.permission.CAMERA"],
         ..ROW
     },
     Device {
         name: "geolocation",
+        sandbox: Some(Sandbox::Keys(&["personal-information.location"])),
         ios: &["NSLocationWhenInUseUsageDescription"],
         macos: &[
             "NSLocationUsageDescription",
@@ -200,6 +255,7 @@ pub const DEVICES: &[Device] = &[
     // prompt opens with precise off (macOS has no such key).
     Device {
         name: "geolocation-approximate",
+        sandbox: Some(Sandbox::Keys(&["personal-information.location"])),
         ios: &["NSLocationWhenInUseUsageDescription"],
         ios_flags: &["NSLocationDefaultAccuracyReduced"],
         // Coarse alone: a ceiling on Android, where fine can then never be asked (D7).
@@ -220,6 +276,7 @@ pub const DEVICES: &[Device] = &[
     // watches a region under approximate location. No tvOS cell.
     Device {
         name: "geolocation-background",
+        sandbox: Some(Sandbox::Keys(&["personal-information.location"])),
         ios: &["NSLocationAlwaysAndWhenInUseUsageDescription"],
         macos: &[
             "NSLocationUsageDescription",
@@ -236,31 +293,42 @@ pub const DEVICES: &[Device] = &[
         ..ROW
     },
     // iOS's prompt text is fixed and the web's is not policy-controlled; the
-    // grant still gates the request.
+    // grant still gates the request. Android asks `POST_NOTIFICATIONS` from 13
+    // and grants it at install before; a timed post is armed again after a
+    // reboot, whose broadcast reaches only an app holding the boot permission,
+    // a normal one (LLP 1133.004.000 D5).
     Device {
         name: "notifications",
+        sandbox: Some(sandbox::NONE),
         ios: &[],
         macos: &[],
         hardened: None,
         web: None,
+        android: &[
+            "android.permission.POST_NOTIFICATIONS",
+            "android.permission.RECEIVE_BOOT_COMPLETED",
+        ],
         ..ROW
     },
     // A visible push (LLP 1133.004 §9 P2): the Push API's name. Nothing asks
     // about push itself (the prompt is notifications', which it needs), so no
     // purpose. The environment's value is the build's, by the signing
-    // (`host/apple/presence.mjs`). A Mac takes `aps-environment` only with a
-    // provisioning profile, so the row writes nothing there, as tvOS omits it.
+    // (`host/apple/presence.mjs`). A Mac spells the key with Apple's prefix
+    // and takes it only under a provisioning profile.
     Device {
         name: "push",
+        sandbox: Some(Sandbox::Profile),
         purpose: false,
         needs: Some("notifications"),
         ios_entitlements: &["aps-environment"],
+        macos_profile: &["com.apple.developer.aps-environment"],
         tvos: false,
         ..ROW
     },
     // Deviation: the web has no name; its speech API is gated by `microphone`.
     Device {
         name: "speech-recognition",
+        sandbox: Some(Sandbox::Keys(&[sandbox::CLIENT])),
         ios: &["NSSpeechRecognitionUsageDescription"],
         macos: &["NSSpeechRecognitionUsageDescription"],
         hardened: None,
@@ -273,6 +341,7 @@ pub const DEVICES: &[Device] = &[
     // macOS writes both (LLP 1133.019 D4).
     Device {
         name: "photos-add",
+        sandbox: Some(Sandbox::Keys(&["personal-information.photos-library"])),
         ios: &["NSPhotoLibraryAddUsageDescription"],
         macos: &[
             "NSPhotoLibraryAddUsageDescription",
@@ -295,6 +364,7 @@ pub const DEVICES: &[Device] = &[
     // permission from API 29, the host's oldest.
     Device {
         name: "photos",
+        sandbox: Some(Sandbox::Keys(&["personal-information.photos-library"])),
         ios: &["NSPhotoLibraryUsageDescription"],
         ios_flags: &["PHPhotoLibraryPreventAutomaticLimitedAccessAlert"],
         android: &[
@@ -316,6 +386,7 @@ pub const DEVICES: &[Device] = &[
     // with no entitlement, which is restricted there (D5). Not on tvOS.
     Device {
         name: "health-read",
+        sandbox: Some(HEALTH),
         ios: &["NSHealthShareUsageDescription"],
         macos: &["NSHealthShareUsageDescription"],
         ios_entitlements: &["com.apple.developer.healthkit"],
@@ -326,6 +397,7 @@ pub const DEVICES: &[Device] = &[
     },
     Device {
         name: "health-write",
+        sandbox: Some(HEALTH),
         ios: &["NSHealthUpdateUsageDescription"],
         macos: &["NSHealthUpdateUsageDescription"],
         ios_entitlements: &["com.apple.developer.healthkit"],
@@ -339,6 +411,7 @@ pub const DEVICES: &[Device] = &[
     // An app reading it keeps no answers (D8).
     Device {
         name: "contacts",
+        sandbox: Some(Sandbox::Keys(&["personal-information.addressbook"])),
         ios: &["NSContactsUsageDescription"],
         macos: &["NSContactsUsageDescription"],
         hardened: Some("com.apple.security.personal-information.addressbook"),
@@ -353,6 +426,7 @@ pub const DEVICES: &[Device] = &[
     // an upgrade, so an app may write both.
     Device {
         name: "calendar",
+        sandbox: Some(Sandbox::Keys(&["personal-information.calendars"])),
         ios: &["NSCalendarsFullAccessUsageDescription"],
         macos: &["NSCalendarsFullAccessUsageDescription"],
         hardened: Some("com.apple.security.personal-information.calendars"),
@@ -367,6 +441,7 @@ pub const DEVICES: &[Device] = &[
     // so the line derives both permissions there (D11).
     Device {
         name: "calendar-write-only",
+        sandbox: Some(Sandbox::Keys(&["personal-information.calendars"])),
         ios: &["NSCalendarsWriteOnlyAccessUsageDescription"],
         macos: &["NSCalendarsWriteOnlyAccessUsageDescription"],
         hardened: Some("com.apple.security.personal-information.calendars"),
@@ -387,6 +462,7 @@ pub const DEVICES: &[Device] = &[
     // until the host targets API 37, so the row writes Apple keys only.
     Device {
         name: "local-network",
+        sandbox: Some(Sandbox::Keys(&[sandbox::CLIENT])),
         ios: &["NSLocalNetworkUsageDescription"],
         macos: &["NSLocalNetworkUsageDescription"],
         ..ROW
@@ -397,6 +473,7 @@ pub const DEVICES: &[Device] = &[
     // cell is `later`, over passkeys). Not on tvOS, which has no biometry.
     Device {
         name: "local-auth",
+        sandbox: Some(sandbox::NONE),
         ios: &["NSFaceIDUsageDescription"],
         android: &["android.permission.USE_BIOMETRIC"],
         tvos: false,
@@ -406,6 +483,7 @@ pub const DEVICES: &[Device] = &[
     // for nothing, so no usage key; tvOS has no CoreMIDI (`unavailable`).
     Device {
         name: "midi",
+        sandbox: Some(sandbox::NONE),
         web: Some("midi"),
         tvos: false,
         ..ROW
@@ -417,6 +495,7 @@ pub const DEVICES: &[Device] = &[
     // pedometer APIs'), and tvOS has none of Core Motion's streams.
     Device {
         name: "motion",
+        sandbox: Some(sandbox::NONE),
         web: Some("accelerometer"),
         policy: &["gyroscope", "magnetometer"],
         tvos: false,
@@ -430,6 +509,7 @@ pub const DEVICES: &[Device] = &[
     // its build writes none.
     Device {
         name: "background-sync",
+        sandbox: Some(sandbox::NONE),
         purpose: false,
         ios_modes: &["fetch", "processing"],
         ios_tasks: &["refresh", "processing.network", "processing.network-power"],
@@ -437,6 +517,7 @@ pub const DEVICES: &[Device] = &[
     },
     Device {
         name: "periodic-background-sync",
+        sandbox: Some(sandbox::NONE),
         purpose: false,
         ios_modes: &["fetch"],
         ios_tasks: &["refresh"],
@@ -444,6 +525,7 @@ pub const DEVICES: &[Device] = &[
     },
     Device {
         name: "background-fetch",
+        sandbox: Some(sandbox::NONE),
         purpose: false,
         ..ROW
     },
@@ -453,32 +535,109 @@ pub const DEVICES: &[Device] = &[
     // `desktop:StartupTask` derives from `login-item`. Desktop only.
     Device {
         name: "login-item",
+        sandbox: Some(sandbox::NONE),
         purpose: false,
         tvos: false,
         ..ROW
     },
     Device {
         name: "global-shortcuts",
+        sandbox: Some(sandbox::NONE),
         purpose: false,
+        tvos: false,
+        ..ROW
+    },
+    // @ref LLP 1178 D4 — the displays and the pointer. Only the web asks:
+    // the browser's own prompt, which shows no purpose, behind the
+    // `window-management` policy feature. Natively nothing asks, and the line
+    // is the app's statement that it reads where the displays are.
+    Device {
+        name: "window-management",
+        sandbox: Some(sandbox::NONE),
+        purpose: false,
+        web: Some("window-management"),
+        tvos: false,
+        ..ROW
+    },
+    // @ref LLP 1178 D4 — a still of every display without a picker (LLP
+    // 1133.032 D9's row). macOS asks once (Screen Recording, TCC), which
+    // ScreenCaptureKit needs no sandbox entitlement for; Windows asks nothing.
+    // The web has no standing capture permission, so the row has no policy
+    // feature: `display-capture` is `getDisplayMedia`'s, a row of its own.
+    Device {
+        name: "screen-recording",
+        sandbox: Some(sandbox::NONE),
+        macos: &["NSScreenCaptureUsageDescription"],
         tvos: false,
         ..ROW
     },
     // App Attest and Play Integrity (LLP 1133.028 D6): nothing is shown or
     // asked. The entitlement's value, `development` or `production`, is the
     // build's to choose (`host/apple/build.mjs`); a Mac takes it only with a
-    // profile (D17), so no macOS key.
+    // profile (D17).
     Device {
         name: "attestation",
+        sandbox: Some(Sandbox::Profile),
         purpose: false,
         ios_entitlements: &["com.apple.developer.devicecheck.appattest-environment"],
+        macos_profile: &["com.apple.developer.devicecheck.appattest-environment"],
         ..ROW
     },
     // The stores' age signal (D10): the platform's sheet says what it asks,
     // and neither platform has a usage string. Not on tvOS.
     Device {
         name: "age-range",
+        sandbox: Some(Sandbox::Profile),
         purpose: false,
         ios_entitlements: &["com.apple.developer.declared-age-range"],
+        macos_profile: &["com.apple.developer.declared-age-range"],
+        tvos: false,
+        ..ROW
+    },
+    // Group Activities, for a package's SharePlay session (LLP 1133.001.000
+    // D3): nothing is asked here, since SharePlay's own interface does the
+    // asking. The entitlement is a Boolean (Apple, "Group Activities
+    // Entitlement"); a Mac takes it only with a profile. Not on tvOS.
+    Device {
+        name: "shareplay",
+        sandbox: Some(Sandbox::Profile),
+        purpose: false,
+        ios_entitlements: &["com.apple.developer.group-session"],
+        macos_profile: &["com.apple.developer.group-session"],
+        tvos: false,
+        ..ROW
+    },
+    // The iCloud key-value store, for an app's own Swift module (expo/exact#663):
+    // nothing is asked, and without the entitlement `NSUbiquitousKeyValueStore`
+    // keeps values on the one device. Its value is the team prefix and the
+    // bundle id, as `application-identifier` is (Apple, "Synchronizing app
+    // preferences with iCloud"), which the Apple build derives at signing
+    // (`host/apple/presence.mjs`); a Mac takes it only with a profile.
+    Device {
+        name: "icloud-kv",
+        sandbox: Some(Sandbox::Profile),
+        purpose: false,
+        ios_entitlements: &["com.apple.developer.ubiquity-kvstore-identifier"],
+        macos_profile: &["com.apple.developer.ubiquity-kvstore-identifier"],
+        ..ROW
+    },
+    // Sensitive Content Analysis, for an app's own module that calls
+    // `SCSensitivityAnalyzer` (expo/exact#708): nothing is asked and the
+    // framework has no usage key. The analyzer works only in an app signed
+    // with the client entitlement, an array holding `analysis` (Apple,
+    // "com.apple.developer.sensitivecontentanalysis.client"); whether it
+    // analyses is the person's own setting (`analysisPolicy`). iOS 17, and
+    // macOS 14 under a profile that authorizes it; not on tvOS.
+    Device {
+        name: "sensitive-content-analysis",
+        sandbox: Some(Sandbox::Profile),
+        purpose: false,
+        ios_entitlements: &["com.apple.developer.sensitivecontentanalysis.client"],
+        macos_profile: &["com.apple.developer.sensitivecontentanalysis.client"],
+        entitlement_values: &[(
+            "com.apple.developer.sensitivecontentanalysis.client",
+            &["analysis"],
+        )],
         tvos: false,
         ..ROW
     },
@@ -486,6 +645,7 @@ pub const DEVICES: &[Device] = &[
     // key for no Mac.
     Device {
         name: "tracking",
+        sandbox: Some(sandbox::NONE),
         ios: &["NSUserTrackingUsageDescription"],
         ..ROW
     },
@@ -496,6 +656,7 @@ pub const DEVICES: &[Device] = &[
     // boot and at the alarm's time; macOS, tvOS and the web have no alarm.
     Device {
         name: "alarms",
+        sandbox: Some(sandbox::NONE),
         ios: &["NSAlarmKitUsageDescription"],
         android: &[
             "android.permission.SCHEDULE_EXACT_ALARM",
@@ -516,10 +677,11 @@ pub const DEVICES: &[Device] = &[
     // nor the TV.
     Device {
         name: "nfc",
+        sandbox: Some(sandbox::NONE),
         ios: &["NFCReaderUsageDescription"],
         android: &["android.permission.NFC"],
         ios_entitlements: &["com.apple.developer.nfc.readersession.formats"],
-        ios_entitlement_values: &[("com.apple.developer.nfc.readersession.formats", &["TAG"])],
+        entitlement_values: &[("com.apple.developer.nfc.readersession.formats", &["TAG"])],
         tvos: false,
         ..ROW
     },
@@ -531,14 +693,16 @@ pub const DEVICES: &[Device] = &[
     // for apps on iOS or tvOS (D21).
     Device {
         name: "serial",
+        sandbox: Some(Sandbox::Keys(&["device.serial"])),
         web: Some("serial"),
         purpose: false,
         tvos: false,
-        android_features: &["usb.host"],
+        android_features: &["android.hardware.usb.host required=false"],
         ..ROW
     },
     Device {
         name: "hid",
+        sandbox: Some(Sandbox::Keys(&["device.usb", "device.bluetooth"])),
         web: Some("hid"),
         purpose: false,
         tvos: false,
@@ -546,10 +710,11 @@ pub const DEVICES: &[Device] = &[
     },
     Device {
         name: "usb",
+        sandbox: Some(Sandbox::Keys(&["device.usb"])),
         web: Some("usb"),
         purpose: false,
         tvos: false,
-        android_features: &["usb.host"],
+        android_features: &["android.hardware.usb.host required=false"],
         ..ROW
     },
 ];
@@ -692,6 +857,31 @@ pub fn permissions_policy(spec: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn bluetooth_background_needs_bluetooth_and_has_no_purpose_of_its_own() {
+        let spec = "device.bluetooth purpose.strap\ndevice.bluetooth-background";
+        let grants = device_grants(spec).unwrap();
+        assert_eq!(grants[0].purpose, "purpose.strap");
+        assert_eq!(
+            sandbox::device(grants[0].device),
+            Sandbox::Keys(&["device.bluetooth"])
+        );
+        assert!(permissions_policy(spec).contains("bluetooth=(self)"));
+        assert_eq!(grants[1].device.ios_modes, ["bluetooth-central"]);
+        assert!(grants[1].purpose.is_empty());
+        for bad in [
+            "device.bluetooth",
+            "device.bluetooth purpose.strap extra",
+            "device.bluetooth-background purpose.strap",
+            "device.bluetooth-background",
+        ] {
+            assert!(device_grants(bad).is_err(), "{bad}");
+        }
+        assert!(
+            device_grants("device.bluetooth-background").unwrap_err()[0].contains("grant-needs")
+        );
+    }
+
     /// LLP 1133.002 D7: the approximate line is a row of its own, granting
     /// the same web feature; an app writes it or the precise one, not both.
     #[test]
@@ -714,6 +904,10 @@ mod tests {
         let push = ok.iter().find(|g| g.device.name == "push").unwrap();
         assert!(push.purpose.is_empty());
         assert_eq!(push.device.ios_entitlements, ["aps-environment"]);
+        assert_eq!(
+            push.device.macos_profile,
+            ["com.apple.developer.aps-environment"]
+        );
         assert!(
             !push.device.tvos && push.device.hardened.is_none() && push.device.macos.is_empty()
         );
@@ -721,6 +915,20 @@ mod tests {
         assert!(alone[0].contains("(grant-needs)"), "{alone:?}");
         let named = device_grants("device.notifications n\ndevice.push purpose.push").unwrap_err();
         assert!(named[0].contains("names no purpose"), "{named:?}");
+    }
+
+    /// LLP 1133.004.000 D5: Android's notifications line derives the runtime
+    /// permission and the boot permission a timed post is armed again with.
+    #[test]
+    fn notifications_derive_the_post_and_boot_permissions_on_android() {
+        let grants = device_grants("device.notifications n").unwrap();
+        assert_eq!(
+            grants[0].device.android,
+            [
+                "android.permission.POST_NOTIFICATIONS",
+                "android.permission.RECEIVE_BOOT_COMPLETED"
+            ]
+        );
     }
 
     /// LLP 1133.021 D13: background location adds to precise location, and
@@ -790,6 +998,55 @@ mod tests {
         assert!(!rows[1].device.tvos && rows[0].device.tvos && rows[2].device.tvos);
     }
 
+    /// LLP 1133.001.000 D3: SharePlay names no purpose and signs Group
+    /// Activities' Boolean entitlement, on iOS and under a Mac profile.
+    #[test]
+    fn shareplay_signs_the_group_session_entitlement() {
+        let rows = device_grants("device.shareplay").unwrap();
+        let row = rows[0].device;
+        assert!(rows[0].purpose.is_empty());
+        assert_eq!(row.ios_entitlements, ["com.apple.developer.group-session"]);
+        assert!(row.entitlement_values.is_empty(), "a Boolean");
+        assert_eq!(row.macos_profile, ["com.apple.developer.group-session"]);
+        assert!(!row.tvos && row.ios.is_empty() && row.macos.is_empty() && row.web.is_none());
+        let errors = device_grants("device.shareplay purpose.play").unwrap_err();
+        assert!(errors[0].contains("names no purpose"), "{errors:?}");
+    }
+
+    /// The iCloud key-value store names no purpose and signs one entitlement,
+    /// whose value the Apple build derives, on iOS, tvOS and under a Mac profile.
+    #[test]
+    fn icloud_kv_signs_the_key_value_store_entitlement() {
+        let rows = device_grants("device.icloud-kv").unwrap();
+        let row = rows[0].device;
+        let key = "com.apple.developer.ubiquity-kvstore-identifier";
+        assert!(rows[0].purpose.is_empty());
+        assert_eq!(row.ios_entitlements, [key]);
+        assert!(row.entitlement_values.is_empty(), "derived at signing");
+        assert_eq!(row.macos_profile, [key]);
+        assert!(row.tvos && row.ios.is_empty() && row.android.is_empty() && row.web.is_none());
+        let errors = device_grants("device.icloud-kv purpose.sync").unwrap_err();
+        assert!(errors[0].contains("names no purpose"), "{errors:?}");
+    }
+
+    /// expo/exact#708: Sensitive Content Analysis names no purpose and signs
+    /// its client entitlement, valued `["analysis"]`, on iOS and under a Mac
+    /// profile; not on tvOS.
+    #[test]
+    fn sensitive_content_analysis_signs_the_client_entitlement() {
+        let rows = device_grants("device.sensitive-content-analysis").unwrap();
+        let row = rows[0].device;
+        let key = "com.apple.developer.sensitivecontentanalysis.client";
+        assert!(rows[0].purpose.is_empty());
+        assert_eq!(row.ios_entitlements, [key]);
+        assert_eq!(row.macos_profile, [key]);
+        assert_eq!(row.entitlement_values, [(key, &["analysis"][..])]);
+        assert!(!row.tvos && row.ios.is_empty() && row.macos.is_empty());
+        assert!(row.android.is_empty() && row.web.is_none());
+        let errors = device_grants("device.sensitive-content-analysis purpose.nudity").unwrap_err();
+        assert!(errors[0].contains("names no purpose"), "{errors:?}");
+    }
+
     #[test]
     fn health_is_two_rows_that_keep_no_answers() {
         // LLP 1069.008.000 D1, D7.
@@ -818,15 +1075,29 @@ mod tests {
         assert!(!permissions_policy("device.local-network purpose.lan").contains("local"));
     }
 
+    /// LLP 1178 D4: the display list's line names no purpose and turns on
+    /// the web's policy feature; the capture's names one and writes the Mac's key.
+    #[test]
+    fn window_management_and_screen_recording_are_desktop_lines() {
+        let all = device_grants("device.window-management").unwrap();
+        assert!(!all[0].device.purpose && !all[0].device.tvos);
+        assert!(permissions_policy("device.window-management").contains("window-management=(self)"));
+        assert!(device_grants("device.window-management purpose.screens").is_err());
+        let all = device_grants("device.screen-recording purpose.shot").unwrap();
+        assert_eq!(all[0].device.macos, ["NSScreenCaptureUsageDescription"]);
+        assert!(all[0].device.web.is_none() && all[0].device.ios.is_empty());
+        assert!(device_grants("device.screen-recording").is_err());
+    }
+
     #[test]
     fn the_policy_allows_what_is_granted_and_denies_the_rest() {
         assert_eq!(
             permissions_policy("device.microphone p\ndevice.speech-recognition q"),
-            "microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), serial=(), hid=(), usb=()"
+            "bluetooth=(), microphone=(self), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), window-management=(), serial=(), hid=(), usb=()"
         );
         assert_eq!(
             permissions_policy(""),
-            "microphone=(), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), serial=(), hid=(), usb=()"
+            "bluetooth=(), microphone=(), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), window-management=(), serial=(), hid=(), usb=()"
         );
     }
 

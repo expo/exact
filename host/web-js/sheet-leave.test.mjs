@@ -2,8 +2,10 @@
 // is a sheet the look draws stays, leaving, until its animation ends, whether the loop keeps a row beside it or
 // replaces all it holds (the runtime's fast path empties such a parent at once). It keeps its ids while it leaves, and
 // a focus the same commit asks for by an id it shares lands on the live route's. Build exact-web-js once before
-// running this test (docs/testing.md).
+// running this test (docs/testing.md). The buttons are the sheet's: the navigation root is the view's root, and
+// the loop of routes stays its only content.
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -21,16 +23,16 @@ const SOURCE = `component App
     stack = ["b"]
     focus("name")
   view
-    column
-      button "Replace" press=replace testId="replace"
-      button "Pop" press=pop testId="pop"
-      button "Save" press=save testId="save"
-      main navigationKey=top navigationBack="" position="relative" height=300
-        for r in stack key=r
-          column navigationKey=r navigationPresentation=(r == "sheet" ? "modal" : "") testId=\`route-\${r}\` position="absolute" top=0 right=0 bottom=0 left=0
-            text r
-            if r != "a"
-              input id="name" testId=\`name-\${r}\` aria-label="Name"
+    main navigationKey=top navigationBack="" position="relative" height=300
+      for r in stack key=r
+        column navigationKey=r navigationPresentation=(r == "sheet" ? "modal" : "") testId=\`route-\${r}\` position="absolute" top=0 right=0 bottom=0 left=0
+          text r
+          if r == "sheet"
+            button "Replace" press=replace testId="replace"
+            button "Pop" press=pop testId="pop"
+            button "Save" press=save testId="save"
+          if r != "a"
+            input id="name" testId=\`name-\${r}\` aria-label="Name"
 `;
 
 // A field's decorations are its runtime's to clear as the commit ends the field's scope, before the sheet is asked to
@@ -44,14 +46,13 @@ component App
   action pop
     stack = ["a"]
   view
-    column
-      button "Pop" press=pop testId="pop"
-      main navigationKey=top navigationBack="" position="relative" height=300
-        for r in stack key=r
-          column navigationKey=r navigationPresentation=(r == "sheet" ? "modal" : "") testId=\`route-\${r}\` position="absolute" top=0 right=0 bottom=0 left=0
-            text r
-            if r != "a"
-              textarea testId="field" aria-label="Field" value="hi @al" decorations=ranges width=200 height=60
+    main navigationKey=top navigationBack="" position="relative" height=300
+      for r in stack key=r
+        column navigationKey=r navigationPresentation=(r == "sheet" ? "modal" : "") testId=\`route-\${r}\` position="absolute" top=0 right=0 bottom=0 left=0
+          text r
+          if r != "a"
+            button "Pop" press=pop testId="pop"
+            textarea testId="field" aria-label="Field" value="hi @al" decorations=ranges width=200 height=60
 `;
 
 /** Presses `testId`'s button and reads the sheet as the commit leaves it, in the frame it lands: `null` once it is
@@ -81,7 +82,7 @@ async function served(source, run) {
   let server, browser;
   try {
     writeFileSync(resolve(dir, 'app.contract'), source);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
       const path = new URL(request.url).pathname.slice(1);

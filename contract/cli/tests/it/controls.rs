@@ -274,6 +274,37 @@ fn the_compiler_names_what_a_control_takes() {
     assert!(contract::compile(&app("input type=\"CHECKBOX\" checked=on change=set")).is_ok());
 }
 
+/// A prop read twice in one attribute is evaluated once, under a `let`
+/// around the attribute's choice; the choice is still the one the compiler
+/// classifies: a text field's kind, a style row's length or keyword, an
+/// enum prop's members.
+#[test]
+fn a_choice_reading_a_prop_twice_is_classified_as_the_choice() {
+    let app = |line: &str| {
+        format!(
+            "component App\n  state n = 1\n  view\n    Probe(shown=n > 0)\n\
+             component Probe\n  props\n    shown: bool\n  view\n    {line}\n\
+             component Kind\n  props\n    kind: enum<\"a\", \"b\">\n  view\n    text kind\n"
+        )
+    };
+    for line in [
+        "input type=(shown && shown ? \"text\" : \"password\")",
+        "row margin=(shown && shown ? 8 : \"auto\")",
+        "Kind(kind=(shown && shown ? \"a\" : \"b\"))",
+    ] {
+        if let Err(e) = contract::compile(&app(line)) {
+            panic!("{line}: {e}");
+        }
+    }
+    let e = contract::compile(&app("input type=(shown && shown ? \"text\" : \"submit\")"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains("lower-input-type") && e.contains("non-text control"),
+        "{e}"
+    );
+}
+
 const RADIOS: &str = r#"component App
   state color = "red"
   state tries = 0
@@ -1184,6 +1215,38 @@ fn a_range_and_a_determinate_progress_are_full_width_by_an_implied_row() {
     // Where the percentage has nothing to resolve against, its own 129.
     assert_eq!(width(&r, "fit"), 129.0);
     assert_eq!(width(&r, "fit-range"), 129.0);
+}
+
+/// LLP 1115.000 D10.4 (expo/exact#395): a `select` is no wider than what
+/// holds it, by a row lowering implies, `max-width: 100%`; one its author
+/// writes replaces it. Its longest option no longer runs it past a phone.
+#[test]
+fn a_select_is_no_wider_than_what_holds_it() {
+    use exact_kernel::{Dimension, StyleId};
+    let long = "option \"All Sources\" value=\"all\"\n        option \"Commentaries and Dictionaries\" value=\"library\"";
+    let mut r = boot(&format!(
+        "component App\n  state v = \"all\"\n  action pick(s: string)\n    v = s\n  view\n    column width=30 testId=\"root\"\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" testId=\"held\"\n        {long}\n      select value=v change=pick aria-label=\"Scope\" align-self=\"flex-start\" max-width=\"none\" testId=\"free\"\n        {long}\n"
+    ));
+    let row = |r: &Runner<NoData>, id: &str| {
+        let style = r.kernel().node(view_of(r, id)).unwrap().style;
+        (
+            style
+                .mask
+                .has(StyleId::MaxWidth)
+                .then_some(style.max_width.clone()),
+            style.written.has(StyleId::MaxWidth),
+        )
+    };
+    assert_eq!(row(&r, "held"), (Some(Dimension::Percent(100.0)), false));
+    assert!(row(&r, "free").1, "an authored maximum is written");
+    let root = view_of(&r, "root");
+    r.kernel_mut()
+        .compute_layout(root, exact_kernel::Offer::definite(320.0, 480.0))
+        .unwrap();
+    let width = |r: &Runner<NoData>, id: &str| r.kernel().node(view_of(r, id)).unwrap().frame.width;
+    // Its own width here is the 46 a select with no host to measure it has.
+    assert_eq!(width(&r, "free"), 46.0);
+    assert_eq!(width(&r, "held"), 30.0);
 }
 
 #[test]

@@ -1,0 +1,608 @@
+shape Field
+  section: number
+  id: number
+  label: string
+  on: bool
+component App
+  state fields = [
+    Field(section=0, id=0, label="Field 0-0", on=true),
+    Field(section=0, id=1, label="Field 0-1", on=true),
+    Field(section=0, id=2, label="Field 0-2", on=true),
+    Field(section=0, id=3, label="Field 0-3", on=true),
+    Field(section=0, id=4, label="Field 0-4", on=true),
+    Field(section=0, id=5, label="Field 0-5", on=true),
+    Field(section=0, id=6, label="Field 0-6", on=true),
+    Field(section=0, id=7, label="Field 0-7", on=true),
+    Field(section=1, id=8, label="Field 1-0", on=true),
+    Field(section=1, id=9, label="Field 1-1", on=true),
+    Field(section=1, id=10, label="Field 1-2", on=true),
+    Field(section=1, id=11, label="Field 1-3", on=true),
+    Field(section=1, id=12, label="Field 1-4", on=true),
+    Field(section=1, id=13, label="Field 1-5", on=true),
+    Field(section=1, id=14, label="Field 1-6", on=true),
+    Field(section=1, id=15, label="Field 1-7", on=true),
+    Field(section=2, id=16, label="Field 2-0", on=true),
+    Field(section=2, id=17, label="Field 2-1", on=true),
+    Field(section=2, id=18, label="Field 2-2", on=true),
+    Field(section=2, id=19, label="Field 2-3", on=true),
+    Field(section=2, id=20, label="Field 2-4", on=true),
+    Field(section=2, id=21, label="Field 2-5", on=true),
+    Field(section=2, id=22, label="Field 2-6", on=true),
+    Field(section=2, id=23, label="Field 2-7", on=true),
+    Field(section=3, id=24, label="Field 3-0", on=true),
+    Field(section=3, id=25, label="Field 3-1", on=true),
+    Field(section=3, id=26, label="Field 3-2", on=true),
+    Field(section=3, id=27, label="Field 3-3", on=true),
+    Field(section=3, id=28, label="Field 3-4", on=true),
+    Field(section=3, id=29, label="Field 3-5", on=true),
+    Field(section=3, id=30, label="Field 3-6", on=true),
+    Field(section=3, id=31, label="Field 3-7", on=true),
+    Field(section=4, id=32, label="Field 4-0", on=true),
+    Field(section=4, id=33, label="Field 4-1", on=true),
+    Field(section=4, id=34, label="Field 4-2", on=true),
+    Field(section=4, id=35, label="Field 4-3", on=true),
+    Field(section=4, id=36, label="Field 4-4", on=true),
+    Field(section=4, id=37, label="Field 4-5", on=true),
+    Field(section=4, id=38, label="Field 4-6", on=true),
+    Field(section=4, id=39, label="Field 4-7", on=true),
+    Field(section=5, id=40, label="Field 5-0", on=true),
+    Field(section=5, id=41, label="Field 5-1", on=true),
+    Field(section=5, id=42, label="Field 5-2", on=true),
+    Field(section=5, id=43, label="Field 5-3", on=true),
+    Field(section=5, id=44, label="Field 5-4", on=true),
+    Field(section=5, id=45, label="Field 5-5", on=true),
+    Field(section=5, id=46, label="Field 5-6", on=true),
+    Field(section=5, id=47, label="Field 5-7", on=true),
+    Field(section=6, id=48, label="Field 6-0", on=true),
+    Field(section=6, id=49, label="Field 6-1", on=true),
+    Field(section=6, id=50, label="Field 6-2", on=true),
+    Field(section=6, id=51, label="Field 6-3", on=true),
+    Field(section=6, id=52, label="Field 6-4", on=true),
+    Field(section=6, id=53, label="Field 6-5", on=true),
+    Field(section=6, id=54, label="Field 6-6", on=true),
+    Field(section=6, id=55, label="Field 6-7", on=true),
+    Field(section=7, id=56, label="Field 7-0", on=true),
+    Field(section=7, id=57, label="Field 7-1", on=true),
+    Field(section=7, id=58, label="Field 7-2", on=true),
+    Field(section=7, id=59, label="Field 7-3", on=true),
+    Field(section=7, id=60, label="Field 7-4", on=true),
+    Field(section=7, id=61, label="Field 7-5", on=true),
+    Field(section=7, id=62, label="Field 7-6", on=true),
+    Field(section=7, id=63, label="Field 7-7", on=true),
+    Field(section=8, id=64, label="Field 8-0", on=true),
+    Field(section=8, id=65, label="Field 8-1", on=true),
+    Field(section=8, id=66, label="Field 8-2", on=true),
+    Field(section=8, id=67, label="Field 8-3", on=true),
+    Field(section=8, id=68, label="Field 8-4", on=true),
+    Field(section=8, id=69, label="Field 8-5", on=true),
+    Field(section=8, id=70, label="Field 8-6", on=true),
+    Field(section=8, id=71, label="Field 8-7", on=true),
+    Field(section=9, id=72, label="Field 9-0", on=true),
+    Field(section=9, id=73, label="Field 9-1", on=true),
+    Field(section=9, id=74, label="Field 9-2", on=true),
+    Field(section=9, id=75, label="Field 9-3", on=true),
+    Field(section=9, id=76, label="Field 9-4", on=true),
+    Field(section=9, id=77, label="Field 9-5", on=true),
+    Field(section=9, id=78, label="Field 9-6", on=true),
+    Field(section=9, id=79, label="Field 9-7", on=true),
+    Field(section=10, id=80, label="Field 10-0", on=true),
+    Field(section=10, id=81, label="Field 10-1", on=true),
+    Field(section=10, id=82, label="Field 10-2", on=true),
+    Field(section=10, id=83, label="Field 10-3", on=true),
+    Field(section=10, id=84, label="Field 10-4", on=true),
+    Field(section=10, id=85, label="Field 10-5", on=true),
+    Field(section=10, id=86, label="Field 10-6", on=true),
+    Field(section=10, id=87, label="Field 10-7", on=true),
+    Field(section=11, id=88, label="Field 11-0", on=true),
+    Field(section=11, id=89, label="Field 11-1", on=true),
+    Field(section=11, id=90, label="Field 11-2", on=true),
+    Field(section=11, id=91, label="Field 11-3", on=true),
+    Field(section=11, id=92, label="Field 11-4", on=true),
+    Field(section=11, id=93, label="Field 11-5", on=true),
+    Field(section=11, id=94, label="Field 11-6", on=true),
+    Field(section=11, id=95, label="Field 11-7", on=true),
+    Field(section=12, id=96, label="Field 12-0", on=true),
+    Field(section=12, id=97, label="Field 12-1", on=true),
+    Field(section=12, id=98, label="Field 12-2", on=true),
+    Field(section=12, id=99, label="Field 12-3", on=true),
+    Field(section=12, id=100, label="Field 12-4", on=true),
+    Field(section=12, id=101, label="Field 12-5", on=true),
+    Field(section=12, id=102, label="Field 12-6", on=true),
+    Field(section=12, id=103, label="Field 12-7", on=true),
+    Field(section=13, id=104, label="Field 13-0", on=true),
+    Field(section=13, id=105, label="Field 13-1", on=true),
+    Field(section=13, id=106, label="Field 13-2", on=true),
+    Field(section=13, id=107, label="Field 13-3", on=true),
+    Field(section=13, id=108, label="Field 13-4", on=true),
+    Field(section=13, id=109, label="Field 13-5", on=true),
+    Field(section=13, id=110, label="Field 13-6", on=true),
+    Field(section=13, id=111, label="Field 13-7", on=true),
+    Field(section=14, id=112, label="Field 14-0", on=true),
+    Field(section=14, id=113, label="Field 14-1", on=true),
+    Field(section=14, id=114, label="Field 14-2", on=true),
+    Field(section=14, id=115, label="Field 14-3", on=true),
+    Field(section=14, id=116, label="Field 14-4", on=true),
+    Field(section=14, id=117, label="Field 14-5", on=true),
+    Field(section=14, id=118, label="Field 14-6", on=true),
+    Field(section=14, id=119, label="Field 14-7", on=true),
+    Field(section=15, id=120, label="Field 15-0", on=true),
+    Field(section=15, id=121, label="Field 15-1", on=true),
+    Field(section=15, id=122, label="Field 15-2", on=true),
+    Field(section=15, id=123, label="Field 15-3", on=true),
+    Field(section=15, id=124, label="Field 15-4", on=true),
+    Field(section=15, id=125, label="Field 15-5", on=true),
+    Field(section=15, id=126, label="Field 15-6", on=true),
+    Field(section=15, id=127, label="Field 15-7", on=true),
+    Field(section=16, id=128, label="Field 16-0", on=true),
+    Field(section=16, id=129, label="Field 16-1", on=true),
+    Field(section=16, id=130, label="Field 16-2", on=true),
+    Field(section=16, id=131, label="Field 16-3", on=true),
+    Field(section=16, id=132, label="Field 16-4", on=true),
+    Field(section=16, id=133, label="Field 16-5", on=true),
+    Field(section=16, id=134, label="Field 16-6", on=true),
+    Field(section=16, id=135, label="Field 16-7", on=true),
+    Field(section=17, id=136, label="Field 17-0", on=true),
+    Field(section=17, id=137, label="Field 17-1", on=true),
+    Field(section=17, id=138, label="Field 17-2", on=true),
+    Field(section=17, id=139, label="Field 17-3", on=true),
+    Field(section=17, id=140, label="Field 17-4", on=true),
+    Field(section=17, id=141, label="Field 17-5", on=true),
+    Field(section=17, id=142, label="Field 17-6", on=true),
+    Field(section=17, id=143, label="Field 17-7", on=true),
+    Field(section=18, id=144, label="Field 18-0", on=true),
+    Field(section=18, id=145, label="Field 18-1", on=true),
+    Field(section=18, id=146, label="Field 18-2", on=true),
+    Field(section=18, id=147, label="Field 18-3", on=true),
+    Field(section=18, id=148, label="Field 18-4", on=true),
+    Field(section=18, id=149, label="Field 18-5", on=true),
+    Field(section=18, id=150, label="Field 18-6", on=true),
+    Field(section=18, id=151, label="Field 18-7", on=true)
+  ]
+  state draft0 = ""
+  derive picked0 = fields.filter(f => f.section == 0 and f.on and f.label.length > 2)
+  derive labels0 = picked0.map(f => f.label).join(", ")
+  derive count0 = picked0.length
+  action edit0(value: string)
+    draft0 = value
+  state draft1 = ""
+  derive picked1 = fields.filter(f => f.section == 1 and f.on and f.label.length > 2)
+  derive labels1 = picked1.map(f => f.label).join(", ")
+  derive count1 = picked1.length
+  action edit1(value: string)
+    draft1 = value
+  state draft2 = ""
+  derive picked2 = fields.filter(f => f.section == 2 and f.on and f.label.length > 2)
+  derive labels2 = picked2.map(f => f.label).join(", ")
+  derive count2 = picked2.length
+  action edit2(value: string)
+    draft2 = value
+  state draft3 = ""
+  derive picked3 = fields.filter(f => f.section == 3 and f.on and f.label.length > 2)
+  derive labels3 = picked3.map(f => f.label).join(", ")
+  derive count3 = picked3.length
+  action edit3(value: string)
+    draft3 = value
+  state draft4 = ""
+  derive picked4 = fields.filter(f => f.section == 4 and f.on and f.label.length > 2)
+  derive labels4 = picked4.map(f => f.label).join(", ")
+  derive count4 = picked4.length
+  action edit4(value: string)
+    draft4 = value
+  state draft5 = ""
+  derive picked5 = fields.filter(f => f.section == 5 and f.on and f.label.length > 2)
+  derive labels5 = picked5.map(f => f.label).join(", ")
+  derive count5 = picked5.length
+  action edit5(value: string)
+    draft5 = value
+  state draft6 = ""
+  derive picked6 = fields.filter(f => f.section == 6 and f.on and f.label.length > 2)
+  derive labels6 = picked6.map(f => f.label).join(", ")
+  derive count6 = picked6.length
+  action edit6(value: string)
+    draft6 = value
+  state draft7 = ""
+  derive picked7 = fields.filter(f => f.section == 7 and f.on and f.label.length > 2)
+  derive labels7 = picked7.map(f => f.label).join(", ")
+  derive count7 = picked7.length
+  action edit7(value: string)
+    draft7 = value
+  state draft8 = ""
+  derive picked8 = fields.filter(f => f.section == 8 and f.on and f.label.length > 2)
+  derive labels8 = picked8.map(f => f.label).join(", ")
+  derive count8 = picked8.length
+  action edit8(value: string)
+    draft8 = value
+  state draft9 = ""
+  derive picked9 = fields.filter(f => f.section == 9 and f.on and f.label.length > 2)
+  derive labels9 = picked9.map(f => f.label).join(", ")
+  derive count9 = picked9.length
+  action edit9(value: string)
+    draft9 = value
+  state draft10 = ""
+  derive picked10 = fields.filter(f => f.section == 10 and f.on and f.label.length > 2)
+  derive labels10 = picked10.map(f => f.label).join(", ")
+  derive count10 = picked10.length
+  action edit10(value: string)
+    draft10 = value
+  state draft11 = ""
+  derive picked11 = fields.filter(f => f.section == 11 and f.on and f.label.length > 2)
+  derive labels11 = picked11.map(f => f.label).join(", ")
+  derive count11 = picked11.length
+  action edit11(value: string)
+    draft11 = value
+  state draft12 = ""
+  derive picked12 = fields.filter(f => f.section == 12 and f.on and f.label.length > 2)
+  derive labels12 = picked12.map(f => f.label).join(", ")
+  derive count12 = picked12.length
+  action edit12(value: string)
+    draft12 = value
+  state draft13 = ""
+  derive picked13 = fields.filter(f => f.section == 13 and f.on and f.label.length > 2)
+  derive labels13 = picked13.map(f => f.label).join(", ")
+  derive count13 = picked13.length
+  action edit13(value: string)
+    draft13 = value
+  state draft14 = ""
+  derive picked14 = fields.filter(f => f.section == 14 and f.on and f.label.length > 2)
+  derive labels14 = picked14.map(f => f.label).join(", ")
+  derive count14 = picked14.length
+  action edit14(value: string)
+    draft14 = value
+  state draft15 = ""
+  derive picked15 = fields.filter(f => f.section == 15 and f.on and f.label.length > 2)
+  derive labels15 = picked15.map(f => f.label).join(", ")
+  derive count15 = picked15.length
+  action edit15(value: string)
+    draft15 = value
+  state draft16 = ""
+  derive picked16 = fields.filter(f => f.section == 16 and f.on and f.label.length > 2)
+  derive labels16 = picked16.map(f => f.label).join(", ")
+  derive count16 = picked16.length
+  action edit16(value: string)
+    draft16 = value
+  state draft17 = ""
+  derive picked17 = fields.filter(f => f.section == 17 and f.on and f.label.length > 2)
+  derive labels17 = picked17.map(f => f.label).join(", ")
+  derive count17 = picked17.length
+  action edit17(value: string)
+    draft17 = value
+  state draft18 = ""
+  derive picked18 = fields.filter(f => f.section == 18 and f.on and f.label.length > 2)
+  derive labels18 = picked18.map(f => f.label).join(", ")
+  derive count18 = picked18.length
+  action edit18(value: string)
+    draft18 = value
+  action editField(value: string)
+    fields = fields.map(f => f.id % 1000 == 0 ? Field(section=f.section, id=f.id, label=value, on=f.on) : f)
+  action toggle
+    fields = fields.map(f => f.id % 1000 == 0 ? Field(section=f.section, id=f.id, label=f.label, on=!f.on) : f)
+  action rekey
+    fields = fields.map(f => Field(section=f.section, id=f.id + 1000, label=f.label, on=f.on))
+  view
+    column
+      input input=editField testId="field"
+      button "toggle" press=toggle testId="toggle"
+      button "rekey" press=rekey testId="rekey"
+      column
+        input value=draft0 input=edit0 testId="edit0"
+        text `${draft0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        text `${labels0}: ${count0}`
+        for field in picked0 key=field.id
+          text `${field.label} ${labels0}`
+      column
+        input value=draft1 input=edit1 testId="edit1"
+        text `${draft1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        text `${labels1}: ${count1}`
+        for field in picked1 key=field.id
+          text `${field.label} ${labels1}`
+      column
+        input value=draft2 input=edit2 testId="edit2"
+        text `${draft2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        text `${labels2}: ${count2}`
+        for field in picked2 key=field.id
+          text `${field.label} ${labels2}`
+      column
+        input value=draft3 input=edit3 testId="edit3"
+        text `${draft3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        text `${labels3}: ${count3}`
+        for field in picked3 key=field.id
+          text `${field.label} ${labels3}`
+      column
+        input value=draft4 input=edit4 testId="edit4"
+        text `${draft4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        text `${labels4}: ${count4}`
+        for field in picked4 key=field.id
+          text `${field.label} ${labels4}`
+      column
+        input value=draft5 input=edit5 testId="edit5"
+        text `${draft5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        text `${labels5}: ${count5}`
+        for field in picked5 key=field.id
+          text `${field.label} ${labels5}`
+      column
+        input value=draft6 input=edit6 testId="edit6"
+        text `${draft6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        text `${labels6}: ${count6}`
+        for field in picked6 key=field.id
+          text `${field.label} ${labels6}`
+      column
+        input value=draft7 input=edit7 testId="edit7"
+        text `${draft7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        text `${labels7}: ${count7}`
+        for field in picked7 key=field.id
+          text `${field.label} ${labels7}`
+      column
+        input value=draft8 input=edit8 testId="edit8"
+        text `${draft8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        text `${labels8}: ${count8}`
+        for field in picked8 key=field.id
+          text `${field.label} ${labels8}`
+      column
+        input value=draft9 input=edit9 testId="edit9"
+        text `${draft9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        text `${labels9}: ${count9}`
+        for field in picked9 key=field.id
+          text `${field.label} ${labels9}`
+      column
+        input value=draft10 input=edit10 testId="edit10"
+        text `${draft10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        text `${labels10}: ${count10}`
+        for field in picked10 key=field.id
+          text `${field.label} ${labels10}`
+      column
+        input value=draft11 input=edit11 testId="edit11"
+        text `${draft11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        text `${labels11}: ${count11}`
+        for field in picked11 key=field.id
+          text `${field.label} ${labels11}`
+      column
+        input value=draft12 input=edit12 testId="edit12"
+        text `${draft12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        text `${labels12}: ${count12}`
+        for field in picked12 key=field.id
+          text `${field.label} ${labels12}`
+      column
+        input value=draft13 input=edit13 testId="edit13"
+        text `${draft13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        text `${labels13}: ${count13}`
+        for field in picked13 key=field.id
+          text `${field.label} ${labels13}`
+      column
+        input value=draft14 input=edit14 testId="edit14"
+        text `${draft14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        text `${labels14}: ${count14}`
+        for field in picked14 key=field.id
+          text `${field.label} ${labels14}`
+      column
+        input value=draft15 input=edit15 testId="edit15"
+        text `${draft15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        text `${labels15}: ${count15}`
+        for field in picked15 key=field.id
+          text `${field.label} ${labels15}`
+      column
+        input value=draft16 input=edit16 testId="edit16"
+        text `${draft16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        text `${labels16}: ${count16}`
+        for field in picked16 key=field.id
+          text `${field.label} ${labels16}`
+      column
+        input value=draft17 input=edit17 testId="edit17"
+        text `${draft17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        text `${labels17}: ${count17}`
+        for field in picked17 key=field.id
+          text `${field.label} ${labels17}`
+      column
+        input value=draft18 input=edit18 testId="edit18"
+        text `${draft18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        text `${labels18}: ${count18}`
+        for field in picked18 key=field.id
+          text `${field.label} ${labels18}`

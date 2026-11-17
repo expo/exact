@@ -1,12 +1,16 @@
 //! Attribute values checked against what they set, at compile time: a
 //! literal style value by the kernel's own row parser, a computed one and a
 //! prop by type (LLP 1017 P1a).
+// @ref LLP 1123 D5 — length tokens written as their values where nothing binds one
+#[path = "length_tokens.rs"]
+mod length_tokens;
 use crate::style_names::press_refusal;
 use crate::{edits, err, media, symbols, tags, vocab, FontUse, LowerError};
 use contract_syntax::{Attr, Expr, Span, TemplatePart, UnOp};
 use contract_types::{Ref, Scope, Shapes, Ty};
 use exact_kernel::style::sides as box_sides;
 use exact_kernel::{PropId, StyleId, StyleProps, StyleValue, StyleValueError};
+pub(crate) use length_tokens::{call_tokens, fallback_tokens, grid_tokens};
 use std::{cell::Cell, rc::Rc};
 /// A literal, as an author wrote it, for a message.
 fn literal_text(e: &Expr) -> String {
@@ -32,64 +36,6 @@ fn constant_text(e: &Expr) -> Option<String> {
         _ => None,
     }
 }
-/// A grid track list with each length token it names written as the token's
-/// value (`minmax(card-min-width, 1fr)`, the loader having written
-/// `var(--card-min-width)` as the name), as a browser substitutes `var()` before
-/// it parses the tracks (CSS Variables 1 §3). Only a token with one value in
-/// every app mode is written in; the kernel's track parser refuses any other.
-pub(crate) fn grid_tokens(a: &Attr, rows: &[StyleId]) -> Option<Attr> {
-    if !rows
-        .iter()
-        .any(|r| matches!(r, StyleId::GridTemplateColumns | StyleId::GridTemplateRows))
-    {
-        return None;
-    }
-    fn write(e: &mut Expr, changed: &mut bool) {
-        match e {
-            Expr::Str(text, _) => {
-                let mut out = String::with_capacity(text.len());
-                let mut rest = text.as_str();
-                while let Some(start) = rest.find(|c: char| c.is_ascii_alphabetic()) {
-                    let (before, word) = rest.split_at(start);
-                    let end = word
-                        .find(|c: char| {
-                            !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-                        })
-                        .unwrap_or(word.len());
-                    // A word that follows a digit is the number's unit (`1fr`, `9.5rem`).
-                    let unit = before.ends_with(|c: char| c.is_ascii_digit() || c == '.');
-                    out.push_str(before);
-                    match crate::theme::measure_written(&word[..end]).filter(|_| !unit) {
-                        Some((exact_tamber::Kind::Length, values)) if values.len() == 1 => {
-                            out.push_str(&values[0]);
-                            *changed = true;
-                        }
-                        _ => out.push_str(&word[..end]),
-                    }
-                    rest = &word[end..];
-                }
-                out.push_str(rest);
-                *text = out;
-            }
-            Expr::Ternary(_, yes, no, _)
-            | Expr::Match {
-                some: yes,
-                none: no,
-                ..
-            } => {
-                write(yes, changed);
-                write(no, changed);
-            }
-            Expr::Let { body, .. } => write(body, changed),
-            _ => {}
-        }
-    }
-    let mut out = a.clone();
-    let mut changed = false;
-    write(&mut out.value, &mut changed);
-    changed.then_some(out)
-}
-
 /// `navigationSplit`'s column width written as a number: its text, as the
 /// prop carries it (LLP 1116.004 D1.2).
 pub(crate) fn split_width(prop: PropId, e: &Expr) -> Option<Expr> {
@@ -169,6 +115,7 @@ fn spacing_tree(e: &Expr) -> bool {
         Expr::Str(s, _) => s == "auto",
         Expr::Ternary(_, a, b, _) => spacing_tree(a) && spacing_tree(b),
         Expr::Match { some, none, .. } => spacing_tree(some) && spacing_tree(none),
+        Expr::Let { body, .. } => spacing_tree(body),
         _ => numeric_literal(e).is_some(),
     }
 }
@@ -211,13 +158,15 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::UnknownEnumValue { style: StyleId::FontVariantLigatures } => "expected `normal`, `none`, or a space-separated list taking at most one of each pair: `common-ligatures` or `no-common-ligatures`, `discretionary-ligatures` or `no-discretionary-ligatures`, `historical-ligatures` or `no-historical-ligatures`, `contextual` or `no-contextual`".into(),
         StyleValueError::UnknownEnumValue { style } => format!(
             "expected one of {}",
-            style.enum_names().iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
+            vocab::authored_names(*style).iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
         ),
         StyleValueError::AutoNotAdmitted { .. } => "`auto` is not admitted here".into(),
+        StyleValueError::KeywordNotAdmitted { style: StyleId::Width | StyleId::Height | StyleId::MinWidth | StyleId::MinHeight | StyleId::MaxWidth | StyleId::MaxHeight } => "`content` is a `flex-basis` value; a size takes `min-content`, `max-content` or `fit-content`".into(),
+        StyleValueError::KeywordNotAdmitted { .. } => "a size keyword (`min-content`, `max-content`, `fit-content`) is a value of `width`, `height`, their minimums and maximums, and `flex-basis` only".into(),
         StyleValueError::OutOfRange { .. } => "out of the row's range".into(),
         StyleValueError::BadColor { .. } => "a color is a CSS colour: hex, `rgb()`, `hsl()`, `hwb()`, a named colour, `transparent`, or one in its own space: `color(display-p3 1 0 0)`, `oklch()`, `oklab()`, `lab()`, `lch()` (LLP 1100) — `light-dark(a, b)` of two, a role (`\"-exact-secondary-label\"`, `\"CanvasText\"`: LLP 1095, LLP 1081), or `-exact-platform-color(ios <name>Color, …, <fallback>)` written whole as a string literal".into(),
         StyleValueError::BadShapeOutside { .. } => "expected none, circle(), ellipse(), inset() with one round radius, or polygon() with at most 64 vertices; lengths are points/px or percentages".into(),
-        StyleValueError::BadClipPath { .. } => "expected none or path() with explicit absolute M/L/Q/C/Z commands and separated finite coordinates".into(),
+        StyleValueError::BadClipPath { .. } => "expected none, polygon(), inset() with optional round radii, circle(), ellipse() (px or %), path() with valid SVG path data in CSS pixels, or url(#id) on an SVG element".into(),
         StyleValueError::BadAspectRatio { .. } => "expected auto, a ratio (`16 / 9`, or a number), or both (`auto 4 / 3`); numbers are nonnegative".into(),
         StyleValueError::BadBackgroundImage { .. } => "expected none, or up to four of linear-gradient(…), radial-gradient(…) and conic-gradient(…)".into(),
         StyleValueError::BadMaskImage { .. } => "expected none, or one linear-gradient(…), radial-gradient(…) or conic-gradient(…)".into(),
@@ -226,10 +175,13 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::BadFontFeatures { .. } => "expected normal, or up to sixteen OpenType features as `\"cv05\", \"tnum\" 1, \"liga\" off`: a quoted four-character tag and an optional non-negative integer, `on` or `off` (CSS Fonts 4 §6.12)".into(),
         StyleValueError::BadCornerShape { .. } => "expected one to four of round, squircle, square, bevel, scoop, notch, superellipse(<number>) or -exact-continuous".into(),
         StyleValueError::BadDragTimeline { .. } => "expected none, or a `--name` and an optional axis (`x` or `y`)".into(),
-        StyleValueError::BadAnimationTimeline { .. } => "expected auto or a `--name`".into(),
-        StyleValueError::BadAnimationRange { .. } => "expected normal, or two distinct lengths (`0px 300px`)".into(),
+        StyleValueError::BadAnimationTimeline { .. } => "expected auto, a `--name`, `scroll([nearest | root | self] [block | inline | x | y])` or `view([axis] [inset])`".into(),
+        StyleValueError::BadAnimationRange { .. } => "expected normal, or one or two distinct ends, each normal, a length or percentage, or a range name (cover, contain, entry, exit, entry-crossing, exit-crossing) with an optional length or percentage (`0px 300px`, `entry 20% cover 50%`)".into(),
         StyleValueError::BadPositionTryFallbacks { .. } => "expected none, or comma-separated attempts, each one to three of flip-block, flip-inline and flip-start, applied in order; flip-x, flip-y and named rules are not implemented".into(),
         StyleValueError::BadTimelineScope { .. } => "expected none, all, or `--name`s separated by commas".into(),
+        StyleValueError::BadSafeAreaProperties { .. } => "expected `--name: <length>` declarations: a length in px, rem, a percentage, a viewport unit, env(), var(), or calc(), min(), max() or clamp() of these; a name is `--` and an identifier that does not start `--exact-`".into(),
+        StyleValueError::BadTimelineName { .. } => "expected none or one `--name`".into(),
+        StyleValueError::BadViewTimelineInset { .. } => "expected one or two of auto and a length or percentage, the start then the end".into(),
         StyleValueError::BadTransition { .. } => "unsupported transition property or invalid timing components; exact2 supports transform components, opacity, paint and SVG properties, and admitted numeric height transitions; general layout interpolation is not implemented".into(),
         StyleValueError::BadPaint { .. } => "SVG paint is `none`, `currentcolor`, or a colour (hex, `rgb()`, `hsl()`, `hwb()`, a named colour, `light-dark()`); paint servers (`url(#…)`) are refused (LLP 1055 D12)".into(),
         StyleValueError::BadDashArray { .. } => "`stroke-dasharray` is `none` or non-negative numbers separated by spaces or commas".into(),
@@ -317,35 +269,14 @@ fn scheme_colour(a: &Attr, rows: &[StyleId]) -> Result<(), LowerError> {
 /// Whether `e` puts a `-exact-platform-color(` literal into a value it computes.
 fn builds_platform_color(e: &Expr) -> bool {
     let named = |t: &str| t.contains("-exact-platform-color(");
-    match e {
+    let written = match e {
         Expr::Str(t, _) => named(t),
-        Expr::Template(parts, _) => parts.iter().any(|p| match p {
-            contract_syntax::TemplatePart::Text(t) => named(t),
-            contract_syntax::TemplatePart::Expr(e) => builds_platform_color(e),
-        }),
-        Expr::Some(e, _)
-        | Expr::Member(e, _, _)
-        | Expr::NamedArg(_, e, _)
-        | Expr::Unary(_, e, _)
-        | Expr::Typed(e, _, _) => builds_platform_color(e),
-        Expr::Arrow { body, .. } => builds_platform_color(body),
-        Expr::Call(_, args, _) => args.iter().any(builds_platform_color),
-        Expr::Binary(_, l, r, _) => builds_platform_color(l) || builds_platform_color(r),
-        Expr::Ternary(c, y, n, _) => [c, y, n].iter().any(|e| builds_platform_color(e)),
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => [subject, some, none]
+        Expr::Template(parts, _) => parts
             .iter()
-            .any(|e| builds_platform_color(e)),
-        Expr::Let { value, body, .. } => {
-            builds_platform_color(value) || builds_platform_color(body)
-        }
-        Expr::List(items, _) => items.iter().any(builds_platform_color),
-        Expr::Number(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => false,
-    }
+            .any(|p| matches!(p, contract_syntax::TemplatePart::Text(t) if named(t))),
+        _ => false,
+    };
+    written || e.operands().any(builds_platform_color)
 }
 /// `position-area` places a popover against the invoker that opens it (its
 /// implicit anchor, LLP 1021 §5): there is no `anchor-name`, so on any other
@@ -364,6 +295,25 @@ pub(crate) fn check_position_area(attrs: &[Attr]) -> Result<(), LowerError> {
         "lower-css-position-area",
         "`position-area` and `position-try-fallbacks` are admitted on a `popover` only: its anchor is the button whose `popovertarget` opens it. `anchor-name` and `position-anchor` are not implemented",
         a.span,
+    )
+}
+/// A keyword CSS defines that no presenter builds: the row's reason, then
+/// the keywords an author may write instead.
+fn refused_keyword(row: StyleId, name: &str, v: &str, span: Span) -> Result<(), LowerError> {
+    let (id, why) = match row {
+        // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
+        // host has text selection (the web, macOS, iOS).
+        StyleId::UserSelect => ("lower-css-user-select", "it keeps a selection from leaving its element, and the native presenters' text selection ownership has no such bound"),
+        StyleId::WrapFlow => ("lower-attr-value", "CSS Exclusions defines it, and exact2 v1 builds `both` (an exclusion) and `auto` (none)"),
+        _ => ("lower-attr-value", "no presenter builds it"),
+    };
+    err(
+        id,
+        format!(
+            "`{name}=\"{v}\"` is not implemented: {why}. Write one of {}",
+            vocab::authored_names(row).join(", ")
+        ),
+        span,
     )
 }
 /// Refuse `paragraphDirs` except on a `textarea` with a literal
@@ -386,7 +336,6 @@ pub(crate) fn check_paragraph_dirs(tag: &str, attrs: &[Attr]) -> Result<(), Lowe
     )
 }
 impl crate::Lowerer<'_> {
-    /// `check_style_value` with this lowering's shapes.
     pub(crate) fn check_style(
         &self,
         a: &Attr,
@@ -406,6 +355,14 @@ pub(crate) fn check_style_value(
     scope: &Scope,
     shapes: &Shapes,
 ) -> Result<(), LowerError> {
+    if rows.contains(&StyleId::PressTranslate) {
+        let leaves = contract_checking::value_leaves(&a.value);
+        for leaf in leaves.filter(|v| matches!(v, Expr::Str(..))) {
+            let mut literal = a.clone();
+            literal.value = leaf.clone();
+            style_value(&literal, rows, ty, fonts, scope, shapes)?;
+        }
+    }
     // A pin names the design's axes, which the runner resolves (LLP 1121 D5).
     if rows == [StyleId::Mode] {
         return crate::theme::mode_pins(a);
@@ -435,6 +392,18 @@ fn style_value(
         .any(|r| matches!(r, StyleId::Resize | StyleId::UserSelect))
     {
         super::shorthands::portable_literal(&a.value, &a.name)?;
+        // Other string rows may carry runtime design-token names.
+        if !matches!(a.value, Expr::Str(..)) {
+            for value in contract_checking::value_leaves(&a.value) {
+                let literal = Attr {
+                    value: value.clone(),
+                    span: value.span(),
+                    ..a.clone()
+                };
+                style_value(&literal, rows, ty, fonts, scope, shapes)?;
+            }
+            return Ok(());
+        }
     }
     if four_sided(rows) {
         if let Some(sides) = super::shorthands::sides(&a.name, &a.value)? {
@@ -511,39 +480,40 @@ fn style_value(
                     span,
                 );
             }
-            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own.
-            if v.to_ascii_lowercase().contains("--exact-") {
+            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
+            // but for the safe area an author reads (LLP 1123 D9).
+            let read = ["top", "right", "bottom", "left"]
+                .map(|edge| format!("{}{edge}", exact_kernel::style::env::LOCAL_PREFIX));
+            let others = read.iter().fold(v.clone(), |v, name| v.replace(name, ""));
+            if others.to_ascii_lowercase().contains("--exact-") {
                 return err(
                     "lower-attr-value",
                     format!("`--exact-*` names are the host's own; write the author's `-exact-` name: `{}=\"{v}\"`", a.name),
                     span,
                 );
             }
-            // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
-            // host has text selection (the web, macOS, iOS); `contain` names
-            // a selection behaviour no native presenter has.
-            if rows.contains(&StyleId::UserSelect) && v == "contain" {
-                return err("lower-css-user-select", "CSS `user-select=\"contain\"` is not implemented by the native presenters: it keeps a selection from leaving its element, and their text selection ownership has no such bound. Supported values are auto, none, text and all", span);
+            // @ref LLP 1043.000 §3 D1 — the schema's `refused` keywords, which
+            // the wire keeps and `contract vocab` leaves out.
+            if let Some(row) = rows
+                .iter()
+                .find(|row| row.refused_enum_names().contains(&v.trim()))
+            {
+                return refused_keyword(*row, &a.name, v.trim(), span);
             }
             if rows.contains(&StyleId::PositionArea)
                 && !StyleId::PositionArea.enum_names().contains(&v.trim())
             {
                 return err("lower-css-position-area", format!("`position-area=\"{v}\"`: exact2 places an invoker's popover in a subset of CSS `position-area`: {}. Logical areas and other spellings are not implemented by the native top layers", StyleId::PositionArea.enum_names().join(", ")), span);
             }
-            if rows.contains(&StyleId::WrapFlow) && !matches!(v.as_str(), "auto" | "both") {
-                return err("lower-attr-value", "unsupported `wrap-flow` value: CSS Exclusions defines it; exact2 v1 implements `both` (or `auto`)", span);
-            }
-            if rows.contains(&StyleId::FlexBasis)
-                && matches!(
-                    v.trim(),
-                    "content" | "min-content" | "max-content" | "fit-content"
-                )
+            if let Some(why) = rows
+                .iter()
+                .find_map(|row| sizing::refusal(*row, &a.name, v.trim()))
             {
-                return err("lower-flex-basis", format!("CSS flex-basis `{v}` requires intrinsic basis sizing; exact2 dimension rows represent auto, lengths and percentages, and do not implement that intrinsic sizing mode. Use auto for a basis taken from the main-size property"), span);
+                return err("lower-attr-value", why, span);
             }
             if rows.contains(&StyleId::Transition) {
                 if let Err(reason) = exact_motion::Transitions::parse(v) {
-                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on admitted height owners";
+                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow, filter; font-weight, font-stretch, font-variation-settings; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on admitted height owners";
                     let why = match reason {
                         exact_motion::ParseError::UnknownProperty(property) => {
                             crate::motion::layout_property_refusal(&property, supported).unwrap_or_else(|| format!("`{property}` is not a supported transition property: transitions animate {supported}"))
@@ -856,17 +826,12 @@ fn style_value(
     Ok(())
 }
 fn css_wide_branches(e: &Expr, rows: &[StyleId]) -> bool {
-    match e {
+    contract_checking::value_leaves(e).all(|leaf| match leaf {
         Expr::Str(s, _) => rows
             .iter()
             .all(|row| StyleValue::Text(s.as_str().into()).unsets(*row)),
-        Expr::Ternary(_, yes, no, _) => css_wide_branches(yes, rows) && css_wide_branches(no, rows),
-        Expr::Match { some, none, .. } => {
-            css_wide_branches(some, rows) && css_wide_branches(none, rows)
-        }
-        Expr::Let { body, .. } | Expr::Typed(body, _, _) => css_wide_branches(body, rows),
         _ => false,
-    }
+    })
 }
 #[derive(Clone)]
 struct Bound<'a> {
@@ -1006,6 +971,18 @@ pub(crate) fn bool_words(prop: PropId) -> Option<(&'static str, &'static str)> {
         _ => None,
     }
 }
+/// Whether a literal `target` is HTML's (empty, or `_blank`, `_self`,
+/// `_parent`, `_top`, matched ASCII case-insensitively) or a name an author
+/// may give a window: not starting with `_`, and not `window-<n>`.
+fn target_literal(s: &str) -> bool {
+    if let Some(rest) = s.strip_prefix('_') {
+        return ["blank", "self", "parent", "top"]
+            .iter()
+            .any(|k| rest.eq_ignore_ascii_case(k));
+    }
+    !s.strip_prefix("window-")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
 /// A prop attribute's value by the prop's type: text for most, a bool for
 /// `disabled`, a whole number for `aria-level`, either for [`bool_words`].
 pub(crate) fn check_prop_value(
@@ -1016,22 +993,28 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if prop == PropId::AccessibilityRole {
+        crate::roles::check(value)?;
+    }
     let want = tags::prop_ty(prop);
     if prop == PropId::Popover
         && matches!(ty, Ty::Option(inner) if matches!(**inner, Ty::String | Ty::Enum(_) | Ty::Unknown))
     {
         return Ok(());
     }
-    // An app's browsing contexts are its window and new ones: `_parent` and
-    // `_top` name frames an app does not have, a name one it cannot open.
-    if prop == PropId::Target
-        && matches!(value, Expr::Str(s, _) if !matches!(s.as_str(), "_blank" | "_self"))
-    {
-        return err(
-            "lower-attr-value",
-            "`target` takes \"_blank\" or \"_self\"",
-            span,
-        );
+    // @ref LLP 1030.004 D1 — HTML's keywords, in any case, or a window's
+    // name. `window-<n>` is the agent's label for an unnamed window.
+    if let (PropId::Target, Expr::Str(s, _)) = (prop, value) {
+        if !target_literal(s) {
+            return err(
+                "lower-attr-value",
+                format!(
+                    "`target` accepts {}; given \"{s}\"",
+                    vocab::accepts(prop).unwrap()
+                ),
+                span,
+            );
+        }
     }
     if prop == PropId::StatusBarStyle
         && matches!(value, Expr::Str(s, _) if !matches!(s.as_str(), "light-content" | "dark-content" | "auto"))
@@ -1239,17 +1222,10 @@ pub(crate) fn check_prop_value(
 }
 /// The string literals `e` can be: itself, or the arms of a `?:`, `match` or `let`.
 fn string_leaves<'e>(e: &'e Expr, out: &mut Vec<(&'e str, Span)>) {
-    match e {
-        Expr::Str(s, span) => out.push((s, *span)),
-        Expr::Ternary(_, a, b, _)
-        | Expr::Match {
-            some: a, none: b, ..
-        } => {
-            string_leaves(a, out);
-            string_leaves(b, out);
+    for leaf in contract_checking::value_leaves(e) {
+        if let Expr::Str(s, span) = leaf {
+            out.push((s, *span));
         }
-        Expr::Let { body: inner, .. } | Expr::Typed(inner, _, _) => string_leaves(inner, out),
-        _ => {}
     }
 }
 /// @ref LLP 1053.000.000 D6 — where a glass group cannot be: beside the
@@ -1454,5 +1430,6 @@ fn multicol_value(rows: &[StyleId], v: &str) -> Option<&'static str> {
     }
     None
 }
+mod sizing;
 #[cfg(test)]
 mod tests;

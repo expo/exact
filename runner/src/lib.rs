@@ -44,6 +44,7 @@ pub mod activation;
 pub mod agent;
 pub mod auth;
 pub mod bridge;
+pub mod canvas_capture;
 pub use bridge::icon_of;
 pub mod commands;
 pub mod compare;
@@ -53,15 +54,20 @@ pub mod delivery;
 pub mod design;
 pub mod desktop;
 pub mod device;
+pub mod entry;
 pub mod failure;
+pub mod fetch_template;
 pub mod file_pickers;
 mod format;
+/// The native hosts' frame-health reducer (LLP 1079.000 §5.1): Apple's and Android's collectors.
+pub mod frame_health;
 pub mod geometry;
 pub mod grants;
 pub mod hardened;
 pub mod head;
 pub mod held;
 pub mod instance;
+pub mod launch_env;
 pub mod listen;
 pub mod lists;
 pub mod local_network;
@@ -70,14 +76,18 @@ pub mod page;
 pub mod perf;
 pub mod presence;
 pub mod process;
+mod program;
+pub use program::Program;
 pub mod request;
 pub mod runner;
+pub mod sandbox;
 pub mod save_file;
 /// The picker's helpers a host shares (LLP 1069.002): types by name,
 /// `accept` matching, the HEIC rule, a `type @t` answer's paths.
 pub use runner::picker as picker_support;
 /// A received share's helpers a host shares (LLP 1133.024 D2, D3).
 pub use runner::picker::shared as share_in;
+pub mod canvas_performance;
 pub mod machine;
 pub mod midi;
 pub mod rows;
@@ -106,10 +116,10 @@ pub use format::formatting;
 pub use head::Head;
 pub use instance::collection::{set_bootstrap_extent, set_lead_scale};
 pub use instance::collection::{
-    AnchorCorrection, CollectionFeedback, CollectionFill, CollectionRow, CollectionSnapshot,
-    FeedbackError, ListAxis, ReorderBinding, ReorderEnding, ReorderFrame, ReorderGeometry,
-    ReorderPhase, ReorderProgress, ReorderStart, ReorderStep, ReorderToken, ReorderWrapper,
-    RowMeasurement,
+    AnchorCorrection, CollectionFeedback, CollectionFill, CollectionFixed, CollectionRow,
+    CollectionSnapshot, FeedbackError, ListAxis, ReorderBinding, ReorderEnding, ReorderFrame,
+    ReorderGeometry, ReorderPhase, ReorderProgress, ReorderStart, ReorderStep, ReorderToken,
+    ReorderWrapper, RowMeasurement,
 };
 pub use instance::{DocNode, DocTree, DocTreeError, ListLinks, SurfaceUpdate, LISTS};
 pub use page::Page;
@@ -118,41 +128,70 @@ pub use request::{
     io_grants, Answer, CacheMode, CompletionTiming, Dispatch, FailureKind, HttpScheduling,
     LongPoll, Message, Outcome, Placement, Redirect, Reply, Request, RequestClass, RequestOut,
     Response, RetryReader, Retrying, SocketOp, SocketOrigin, SocketSend, SurfaceOutcome,
-    SurfaceRequest, Work, BODY_TO_HELD_BYTES, BODY_WRITTEN, LONG_POLL_REPLY, MAX_BODY_FROM_BYTES,
-    MAX_BODY_FROM_PATH, MAX_BODY_TO_BYTES, MAX_HOST_WORK_BYTES, MAX_TIMEOUT_MS, NATIVE_URL,
+    SurfaceRequest, Work, BODY_TO_HELD_BYTES, BODY_WRITTEN, LONG_POLL_REPLY, MAX_BODY_FROM_PATH,
+    MAX_BODY_TO_BYTES, MAX_HOST_WORK_BYTES, MAX_TIMEOUT_MS, NATIVE_URL,
 };
 pub use runner::{
-    canvas_engine, press_writes_router, routing, virtual_frame, Advanced, Announce, AuthLinks,
-    BackgroundState, BlockPlacement, CallOrigin, CanvasEngine, CanvasLink, CanvasList, Carried,
-    Checkpoint, Command, ControlValue, DataError, DataSource, DataSourceWrapper, DeviceLinks,
-    DrawReply, DrawRequest, Drawn, DropEvent, Event, FieldSelection, FormatLink, Geometry,
-    GeometryLink, Hold, HoldAnswer, InFlight, InputDetails, Interrupt, Intersection, KeyModifiers,
-    KeyboardEvent, Limits, ListTextPolicy, ListTextPosition, MouseEvent, Native, NativeCall,
-    NativeHandler, Overlaid, Picked, PickerLinks, PickerRequest, PointerEvent, PreloadWake,
-    ResizeRect, RouterChange, RouterLink, Routing, Runner, RunnerError, RunnerLinks, ScrollEvent,
-    SelectionDirection, SnapshotModule, SocketReader, SocketState, StackSplit, StreamCount,
-    SurfaceAnswer, Target, Timed, UploadEnd, UploadMark, WheelEvent, Write, BACKGROUND,
-    JOURNAL_RING, MAX_CLOCK_MS, PICKED, QUEUE_BOUND, RESIZE_UNDELIVERED, TIMER_FIRE_LIMIT,
-    VIRTUAL_FRAME_MS,
+    canvas_engine, launch_matches, press_writes_router, routing, virtual_frame, Advanced, Announce,
+    AuthLinks, BackgroundState, BlockPlacement, CallOrigin, CanvasEngine, CanvasLink, CanvasList,
+    Carried, Checkpoint, Command, Completion, CompletionCapability, CompletionReply,
+    CompletionSubscription, Console, ControlValue, DataError, DataSource, DataSourceWrapper,
+    DeviceLinks, DrawReply, DrawRequest, Drawn, DropEvent, Event, FieldSelection, FormatLink,
+    Geometry, GeometryLink, Hold, HoldAnswer, InFlight, InputDetails, Interrupt, Intersection,
+    KeyModifiers, KeyboardEvent, Limits, ListTextPolicy, ListTextPosition, MouseEvent, Native,
+    NativeCall, NativeHandler, Overlaid, Picked, PickerLinks, PickerRequest, PointerEvent,
+    PreloadWake, Report, Reporter, ResizeRect, RouterChange, RouterLink, Routing, Runner,
+    RunnerError, RunnerLinks, ScrollEvent, SelectionDirection, SnapshotModule, SocketReader,
+    SocketState, StackSplit, StreamCount, SurfaceAnswer, Target, Timed, UploadEnd, UploadMark,
+    WheelEvent, Write, BACKGROUND, JOURNAL_RING, MAX_CLOCK_MS, PICKED, QUEUE_BOUND,
+    RESIZE_UNDELIVERED, TIMER_FIRE_LIMIT, VIRTUAL_FRAME_MS,
 };
-pub use runner::{AppState, LiveApplied, LiveRefusal, Place, Tamber};
+pub use runner::{AppState, Forma, LiveApplied, LiveRefusal, Place};
 pub use runner::{CallHow, WakeHow};
+pub use runner::{ModuleIdentity, ModuleInstance};
 pub use upload::{UPLOAD_PROGRESS, UPLOAD_SENDING};
-/// The binding core's names (LLP 1121 D12): what `contract tamber gen rust`
+/// The binding core's names (LLP 1121 D12): what `contract forma gen rust`
 /// writes (`pub const SURFACE_CARD: Token<Color>`) and resolves.
-pub mod tamber {
+pub mod forma {
     pub use crate::runner::{
-        ColorKind as Color, Font, Kind, LengthKind as Length, NumberKind as Number, Place, Tamber,
+        ColorKind as Color, Font, Forma, Kind, LengthKind as Length, NumberKind as Number, Place,
         Token, TypeKind as Type,
     };
 }
 pub use secrets::{SecretLease, SecretWait, SharedSecrets};
 pub use store::{Socket, SocketCall, Store, StoreChange, StoreError, StoreWrite};
 pub use uses::{svg_filters, svg_islands, uses, Capability, Uses};
-pub use viewport::{Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, Viewport};
+pub use viewport::{Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, Update, Viewport};
 pub use vm::Trap;
 
 /// Timer admission observations shared by all hosts.
 pub use runner::{
     frame_at_or_after, Admitted, IdleObservation, NativeTimer, TaskTiming, Wait, WaitKinds, Waits,
 };
+
+/// A test's directory, removed when dropped, so a test that fails or panics
+/// leaves nothing in the system temp directory.
+#[cfg(test)]
+pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

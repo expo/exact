@@ -82,7 +82,7 @@ pub(crate) fn roles(e: &Expr) -> Option<Expr> {
 }
 
 /// A template's text when every part of it is a literal.
-fn constant(parts: &[TemplatePart]) -> Option<String> {
+pub(crate) fn constant(parts: &[TemplatePart]) -> Option<String> {
     parts.iter().try_fold(String::new(), |mut out, part| {
         match part {
             TemplatePart::Text(t) => out.push_str(t),
@@ -175,7 +175,7 @@ pub(crate) fn aliases(e: &Expr, platform: &mut Vec<LowerError>) -> Vec<LowerErro
             platform.push(LowerError {
                 id: "lower-symbol-platform",
                 message: format!(
-                    "symbol `sf/{sf}` draws only on Apple, and the app ships {}, where it is blank. {role}{}eclare an icon token for them: in app.tamber's `icons` (a new app.tamber's first line is `tamber <name>`), `icon.{token} = icon(sf \"{sf}\", svg \"icons/{token}.svg\")`, with `assets/icons/{token}.svg` drawn as {} (a Material Symbols SVG is), and write `symbol:icon.{token}`{}",
+                    "symbol `sf/{sf}` draws only on Apple, and the app ships {}, where it is blank. {role}{}eclare an icon token for them: in app.forma's `icons` (a new app.forma's first line is `forma <name>`), `icon.{token} = icon(sf \"{sf}\", svg \"icons/{token}.svg\")`, with `assets/icons/{token}.svg` drawn as {} (a Material Symbols SVG is), and write `symbol:icon.{token}`{}",
                     targets.iter().map(|t| t.described()).collect::<Vec<_>>().join(" and "),
                     if role.is_empty() { "D" } else { "d" },
                     crate::icons::TEMPLATE,
@@ -235,7 +235,7 @@ pub(crate) fn check(e: &Expr, span: Span) -> Result<(), LowerError> {
             return err(
                 "lower-attr-value",
                 format!(
-                    "symbol `{role}` is not a role; {near}`contract vocab symbol` lists the roles; or name any SF Symbol as `symbol:sf/<name>` (`symbol:sf/{}`), drawn on Apple and blank elsewhere, so a tab or button that must show everywhere takes a role or an icon token (`icons` in app.tamber)",
+                    "symbol `{role}` is not a role; {near}`contract vocab symbol` lists the roles; or name any SF Symbol as `symbol:sf/<name>` (`symbol:sf/{}`), drawn on Apple and blank elsewhere, so a tab or button that must show everywhere takes a role or an icon token (`icons` in app.forma)",
                     role
                 ),
                 span,

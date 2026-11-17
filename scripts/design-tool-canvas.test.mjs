@@ -3,7 +3,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { request } from 'node:http';
 import { spawnOwned } from './test-children.mjs';
@@ -11,7 +11,7 @@ import { HEARTBEAT_RACE, ROOT, SLOW, TOOL_DIST, TOOL_ORIGIN, drive, lines, signa
 
 toolTurns();
 
-// T2's server clocks (tamber-timing.mjs's test knobs; the real ones in the slow lane, EXACT_SLOW_TESTS=1): the long
+// T2's server clocks (forma-timing.mjs's test knobs; the real ones in the slow lane, EXACT_SLOW_TESTS=1): the long
 // poll's wait, a POST client's presence, a GET long poll's (the lease a closed tool's pin is held for), the sweep. As
 // the real ones are, chosen so the lease's window below (from a GET long poll's lease, less a wait and a sweep) lies
 // past a POST client's lease and a sweep: a pin handed back on the POST lease fails it.
@@ -52,12 +52,13 @@ async function polledBuild(base, id) {
 
 test('T2: the canvas frames the dev loop\'s page, sandboxed, at the size chosen; builds are listed with their effective facts, a pin on one moves only it, a reloaded build gets it back, and the tool gone hands it back', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-canvas-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
   const listener = (await import('node:http')).createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise(ok => listener.close(ok));
-  const dist = mkdtempSync(join(tmpdir(), 'exact-design-tool-canvas-dist-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-design-tool-canvas-dist-')), 'dist');
   const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--port', String(port)], { cwd: ROOT, env: { ...timed(CLOCKS), EXACT_APP_DIR: app, EXACT_WEB_DIST: dist }, stdio: ['ignore', 'pipe', 'pipe'] });
   let tool, other, driving = true, saidPlan = null;
   try {
@@ -66,8 +67,8 @@ test('T2: the canvas frames the dev loop\'s page, sandboxed, at the size chosen;
     await devSaid.until(l => l.includes(`127.0.0.1:${port}/`), 600_000);
     // Its page built (a build that failed frames an error page, which never registers as the frame's build).
     expect(devSaid.seen.filter(l => l.includes('does not build'))).toEqual([]);
-    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, env: timed(CLOCKS), stdio: ['ignore', 'pipe', 'pipe'] });
-    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000);
+    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, env: timed(CLOCKS), stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000);
     other = await polledBuild(base, 'linux-1');
     // A build's report reaches the tool on its long poll.
     const wait = ['clock +4000 real', 'clock data'], registered = signals('canvas');
@@ -76,7 +77,7 @@ test('T2: the canvas frames the dev loop\'s page, sandboxed, at the size chosen;
     // registration is the drive's signal to go on.
     saidPlan = (async () => {
       while (driving) {
-        const listed = await fetch(`${TOOL_ORIGIN}/__tamber/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
+        const listed = await fetch(`${TOOL_ORIGIN}/__forma/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
         const page = listed?.ok?.builds?.find(b => b.host === 'web-js' && b.planDigest);
         if (page) { registered.fire(1); return page.planDigest; }
         await Bun.sleep(300);
@@ -163,6 +164,6 @@ test('T2: the canvas frames the dev loop\'s page, sandboxed, at the size chosen;
     if (tool) await stop(tool);
     await stop(dev);
     rmSync(app, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 900_000);

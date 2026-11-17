@@ -40,7 +40,7 @@ component App
   action toggle(id: string)
     saved = saved.includes(id) ? saved.filter(s => s != id) : saved.concat([id])
   view
-    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+    main navigationKey=`${top(nav).id}` navigate=follow testId="app" width="100%" height="100%"
       display="flex" flex-direction="column"
       column flex=1 min-height=0 position="relative"
         for t in nav.tabs key=t.name

@@ -1,7 +1,7 @@
 ```prompt Connect a serial, HID or USB device
-Make the Exact app in this folder list and open a serial port, a HID device or a USB device. Use https://github.com/expo/exact/blob/main/docs/recipes/usb-hid-serial.md as the source for each step. The exact2 checkout has the same page at docs/recipes/usb-hid-serial.md.
+Make the Exact app in this folder list and open a serial port, a HID device or a USB device. Use https://github.com/expo/exact/blob/main/docs/recipes/usb-hid-serial.md as the source for each step. The Exact checkout has the same page at docs/recipes/usb-hid-serial.md.
 
-1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is.
 2. If I did not say which kind of device (serial, HID or USB) and how to know it (its vendor and product, and for serial the baud rate), ask me before you write code.
 3. Install the package: `bun <exact2>/scripts/exact.mjs add serial .` (or `hid`, or `usb`). Grant `device.serial`, `device.hid` or `device.usb`, with no purpose.
 4. In app.ts, choose the list from the status, as the recipe shows: `attachedPorts()` or `attachedDevices(filters=…)` when `attachedList` is true, else `getPorts()` or `getDevices()`. A list that fails at launch stops the app, so never call the wrong one. Send and read the bytes in app.ts, as base64 strings.

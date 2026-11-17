@@ -1,0 +1,78 @@
+// data: completion-storm
+// Synthetic conformance plan: a child's sends (LLP 1035.005.004 D6) on both
+// executors, on Completion Storm's sources: `settings(c, _)` answers now with
+// count `c`; `fixtureStats()` answers later (a loopback fetch whose failure
+// is the answer the source shapes). Each Book screen owns `quick` and `slow`,
+// whose `then`s hand a number to the root's `note`, reading the screen's own
+// answer. The steps send on a screen, send on two screens apart, and leave a
+// screen in the commit that sends, which forgets the send: its reply changes
+// nothing and its `then` does not run. Each step waits for the one before to
+// land, so the `then`s run in one order on both. The root paints the page
+// white over the data app's manifest background.
+routes nav
+  list "/"
+  book "/book/:id"
+
+shape Settings
+  count: number
+  errors: number
+
+shape Control
+  message: string
+  received: number
+  issued: number
+  held: number
+
+component App
+  state log = ""
+  action open(id: string)
+    nav = push(nav, path("book", id))
+  action back
+    nav = back(nav)
+  action note(n: number)
+    log = `${log} ${n}`
+  view
+    column testId="root" height="100%" box-sizing="border-box" padding=10 gap=6 background-color="#ffffff"
+      text log testId="log"
+      row gap=4
+        button press=open("1") testId="open-1"
+          text "open 1"
+        button press=open("2") testId="open-2"
+          text "open 2"
+        button press=back testId="back"
+          text "back"
+      for e in stack(nav) key=e.id
+        if e.name == "book"
+          Book(id=e.params.id, show=note, leaveScreen=back)
+        else
+          text "List" testId="list"
+
+component Book
+  props
+    id: string
+    show: action
+    leaveScreen: action
+  mutation quick as shape Settings then got
+  mutation slow as shape Control then slowed
+  derive count = match quick { case some(s) => s.count, case none => 0 }
+  action now
+    send quick = settings(id, "0")
+  action got
+    show(count)
+  action later
+    send slow = fixtureStats()
+  action slowed
+    show(100 + count)
+  action leave
+    send slow = fixtureStats()
+    leaveScreen()
+  view
+    column gap=4
+      text `${id}: quick ${count} slow ${pending(slow) ? "pending" : "settled"}` testId=`book-${id}`
+      row gap=4
+        button press=now testId=`now-${id}`
+          text "now"
+        button press=later testId=`later-${id}`
+          text "later"
+        button press=leave testId=`leave-${id}`
+          text "leave"

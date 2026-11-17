@@ -325,8 +325,9 @@ final class NativeButtonFocusMacTests: XCTestCase {
             var focuses: [UInt32] = [], blurs: [UInt32] = []
             p.onFocus = { focuses.append($0) }; p.onBlur = { blurs.append($0) }
             p.focusElement(["before"])
-            let forward: [UInt32] = enabled ? [3, 4, 5, 6, 7] : [3, 4, 5, 6]
-            let backward: [UInt32] = enabled ? [6, 5, 4, 3, 2] : [5, 4, 3]
+            // Off, the select (6) is no stop, as an NSPopUpButton is none, though it hears focus and keys.
+            let forward: [UInt32] = enabled ? [3, 4, 5, 6, 7] : [3, 4, 5]
+            let backward: [UInt32] = enabled ? [6, 5, 4, 3, 2] : [4, 3]
             for id in forward {
                 deliver(p, try key("\t", 48))
                 let owner = p.keyView(of: try XCTUnwrap(p.views[id]))
@@ -342,8 +343,8 @@ final class NativeButtonFocusMacTests: XCTestCase {
                 deliver(p, try key("\t", 48, flags: .shift))
                 XCTAssertTrue(window.firstResponder === p.keyView(of: try XCTUnwrap(p.views[id])))
             }
-            XCTAssertEqual(focuses, enabled ? [3, 4, 5, 6, 6, 5, 4, 3] : [3, 4, 5, 6, 5, 4, 3])
-            XCTAssertEqual(blurs, enabled ? [3, 4, 5, 6, 6, 5, 4, 3] : [3, 4, 5, 6, 5, 4])
+            XCTAssertEqual(focuses, enabled ? [3, 4, 5, 6, 6, 5, 4, 3] : [3, 4, 5, 4, 3])
+            XCTAssertEqual(blurs, enabled ? [3, 4, 5, 6, 6, 5, 4, 3] : [3, 4, 5, 4])
             window.close(); window = nil
         }
     }

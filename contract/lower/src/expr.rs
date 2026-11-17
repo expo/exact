@@ -62,8 +62,39 @@ pub fn command_args<'e>(name: &str, args: &'e [Expr]) -> Vec<Option<&'e Expr>> {
     }
     // `saveFile(id, text=, suggestedName=)` lowers as `(id, none,
     // suggestedName, text)`: four, where the copy of a file is three.
-    if name == "saveFile" && args.iter().any(|a| matches!(a, Expr::NamedArg(..))) {
-        return vec![args.first(), None, named("suggestedName"), named("text")];
+    // @ref LLP 1173 D2 — `startIn=` makes either five, `(id, from,
+    // suggestedName, none, startIn)` or `(id, none, suggestedName, text,
+    // startIn)`, and trails each picker's: `(id, multiple, startIn)`
+    // (`multiple` `none` when absent), `(id, startIn)`, `(id,
+    // suggestedName, startIn)`. A call without it lowers as before.
+    let start_in = named("startIn");
+    if name == "saveFile" {
+        let mut positional = args.iter().filter(|a| !matches!(a, Expr::NamedArg(..)));
+        let id = positional.next();
+        let mut out = match named("text") {
+            Some(text) => vec![id, None, named("suggestedName"), Some(text)],
+            None => vec![id, positional.next(), positional.next()],
+        };
+        if start_in.is_some() {
+            out.resize(4, None);
+            out.push(start_in);
+        }
+        return out;
+    }
+    if matches!(
+        name,
+        "showOpenFilePicker" | "showDirectoryPicker" | "showSaveFilePicker"
+    ) {
+        let mut out: Vec<_> = args
+            .iter()
+            .filter(|a| !matches!(a, Expr::NamedArg(..)))
+            .map(Some)
+            .collect();
+        if start_in.is_some() {
+            out.resize(if name == "showDirectoryPicker" { 1 } else { 2 }, None);
+            out.push(start_in);
+        }
+        return out;
     }
     // @ref LLP 1096 D2, LLP 1125 D10 — the sound first, then `at`, `gain`,
     // `group`, `playbackRate` and `pan`, `none` where the author left the
@@ -79,11 +110,12 @@ pub fn command_args<'e>(name: &str, args: &'e [Expr]) -> Vec<Option<&'e Expr>> {
         let mut positional = args.iter().filter(|a| !matches!(a, Expr::NamedArg(..)));
         return vec![positional.next(), positional.next(), named("at")];
     }
-    // The Web Share API's members and `stopSounds`' group, in a fixed
-    // order, `none` where the author gave none.
+    // The Web Share API's members, `stopSounds`' group and `setSounds`'
+    // options, in a fixed order, `none` where the author gave none.
     let order: &[&str] = match name {
         "share" => &["title", "text", "url", "files"],
         "stopSounds" => &["group"],
+        "setSounds" => &["group", "gain", "playbackRate", "pan", "ramp"],
         _ => return args.iter().map(Some).collect(),
     };
     order
@@ -124,6 +156,12 @@ pub(crate) fn compile(
     scope: &Scope,
     locals: &mut u16,
 ) -> Result<Ty, LowerError> {
+    if !scope.in_action() {
+        if let Some((row, ty)) = l.shared_expression(e, scope)? {
+            asm.load_derive(row);
+            return Ok(ty);
+        }
+    }
     Ok(match e {
         Expr::Number(n, _) => {
             asm.number(*n);
@@ -141,7 +179,7 @@ pub(crate) fn compile(
         Expr::NamedArg(_, _, span) => {
             return err(
                 "lower-named-argument",
-                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`; another call's arguments are positional",
+                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`, `saveFile` and the file pickers' `startIn=`; another call's arguments are positional",
                 *span,
             )
         }
@@ -290,7 +328,7 @@ pub(crate) fn compile(
                 return compile(l, asm, &template, scope, locals);
             }
             if !l.fns.contains_key(name.as_str())
-                && contract_types::strings::is_text_call(name, scope)
+                && contract_types::strings::is_text_call(name, *span, scope, &l.types.shapes)
             {
                 return l.text_call(asm, args, *span, scope, locals);
             }
@@ -439,6 +477,9 @@ pub(crate) fn compile(
                         asm.str(id);
                     }
                 }
+            }
+            if f.localized() {
+                l.push_format_locale(asm)?;
             }
             asm.call(f);
             match (f, given.first(), given.get(1)) {

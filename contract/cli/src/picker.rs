@@ -30,19 +30,11 @@ fn accepts(file: &File) -> Vec<(String, Span)> {
                     }
                     walk(children, out);
                 }
-                Node::Use { children, .. } => walk(children, out),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    walk(then, out);
-                    walk(otherwise, out);
+                node => {
+                    for list in node.child_lists() {
+                        walk(list, out);
+                    }
                 }
-                Node::Each { body, .. } => walk(body, out),
-                Node::Match { some, none, .. } => {
-                    walk(&some.1, out);
-                    walk(none, out);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
@@ -82,16 +74,22 @@ pub fn handled(manifest: &Manifest) -> Vec<String> {
 
 /// Why the manifest's `share_target.action` cannot be delivered (LLP
 /// 1133.024 D1): a share arrives as that location, so its path must be one
-/// the app's routes match, as a route literal's must.
+/// the app's routes match, as a route literal's must, by the router's own
+/// rule. A browser navigates to the action as written (Web Share Target,
+/// "Handling incoming shares"), and the router matches a path with a trailing
+/// `/` to no pattern, so `/share/` is refused for a route `/share`, not
+/// rewritten.
 fn share_target_route(file: &File, manifest: &Manifest) -> Option<String> {
     let action = manifest.json.get("share_target")?.get("action")?.as_str()?;
-    let path: Vec<&str> = action
-        .split(['?', '#'])
-        .next()
-        .unwrap_or("")
-        .split('/')
-        .filter(|s| !s.is_empty())
-        .collect();
+    let table = file.routes.as_ref().map(contract_types::routes::table);
+    let matches = |location: &str| {
+        table
+            .as_ref()
+            .is_some_and(|t| t.matches_pattern(location).is_some())
+    };
+    if matches(action) {
+        return None;
+    }
     let patterns: Vec<&str> = file
         .routes
         .iter()
@@ -99,23 +97,19 @@ fn share_target_route(file: &File, manifest: &Manifest) -> Option<String> {
         .filter(|r| !r.notfound)
         .map(|r| r.pattern.as_str())
         .collect();
-    let matches = |pattern: &&str| {
-        let want: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
-        want.len() == path.len()
-            && want
-                .iter()
-                .zip(&path)
-                .all(|(w, h)| w.starts_with(':') || w == h)
-    };
-    if patterns.iter().any(matches) {
-        return None;
-    }
     let routes = if patterns.is_empty() {
         "it declares none".to_owned()
     } else {
         patterns.join(", ")
     };
-    Some(format!("share_target.action `{action}` matches none of the app's routes ({routes}): a share arrives as that location"))
+    let path = action.split(['?', '#']).next().unwrap_or("");
+    let hint = match path.strip_suffix('/') {
+        Some(bare) if !bare.is_empty() && matches(bare) => {
+            format!("; a path ending in `/` matches no route, so write `{bare}`")
+        }
+        _ => String::new(),
+    };
+    Some(format!("share_target.action `{action}` matches none of the app's routes ({routes}): a share arrives as that location{hint}"))
 }
 
 /// Every file input's `accept` in `file` against the app at `app_root`
@@ -194,19 +188,11 @@ fn missing_targets(file: &File) -> Vec<CompileError> {
                     }
                     ids(children, found, dynamic);
                 }
-                Node::Use { children, .. } => ids(children, found, dynamic),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    ids(then, found, dynamic);
-                    ids(otherwise, found, dynamic);
+                node => {
+                    for list in node.child_lists() {
+                        ids(list, found, dynamic);
+                    }
                 }
-                Node::Each { body, .. } => ids(body, found, dynamic),
-                Node::Match { some, none, .. } => {
-                    ids(&some.1, found, dynamic);
-                    ids(none, found, dynamic);
-                }
-                Node::Children { .. } => {}
             }
         }
     }
@@ -249,4 +235,33 @@ fn missing_targets(file: &File) -> Vec<CompileError> {
         }
     }
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_dotless_declared_suffix_bounds_picker_accept() {
+        let dir = std::env::temp_dir().join(format!(
+            "exact-picker-dotless-suffix-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = std::panic::catch_unwind(|| {
+            std::fs::write(
+                dir.join("app.json"),
+                r#"{"name":"Board","app":{"id":"test.board","name":"Board"},"file_handlers":[{"action":"/","accept":{"application/x-studio-board+json":["board"]}}]}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("app.contract"),
+                "component App\n  view\n    input type=\"file\" accept=\".board\"\n",
+            )
+            .unwrap();
+            crate::compile_path(&dir.join("app.contract")).unwrap();
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+        if let Err(error) = result {
+            std::panic::resume_unwind(error);
+        }
+    }
 }

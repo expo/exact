@@ -1,0 +1,60 @@
+// LLP 1069.010.000 D4's hard rows by an editor: a Markdown editor over a
+// document the person chose, kept (`doc.keep`). Save is the app's own atomic
+// replace, expecting the file it last read (D2a); the document is watched, so
+// another program's replacement shows (D1). `kept.drives.mjs` drives it.
+shape Opened
+  text: string
+  modifiedMs: number
+  size: number
+  error: string
+
+shape Saved
+  error: string
+
+shape Kept
+  path: string
+  name: string
+
+component KeptEditor
+  state path = ""
+  state draft = ""
+  state edited = false
+  // The file the draft began from, which a save expects to replace (D2a).
+  state baseMs = 0
+  state baseSize = 0
+  resource doc = openDocument(path) as shape Opened
+  resource recent = keptDocuments() as shape Kept[]
+  mutation saved as shape Saved refreshes doc then afterSave
+  action opened(value: string)
+    path = value
+    edited = false
+  action choose
+    showOpenFilePicker("open-file")
+  action edit(value: string)
+    if not edited
+      baseMs = doc.modifiedMs
+      baseSize = doc.size
+    draft = value
+    edited = true
+  action save
+    send saved = saveDocument(path, edited ? draft : doc.text, edited ? baseMs : doc.modifiedMs, edited ? baseSize : doc.size)
+  // Saved, the draft is the file again; refused, it stays the person's.
+  action afterSave
+    match saved
+      case some(s)
+        if s.error == ""
+          edited = false
+      case none
+        edited = edited
+  view
+    column padding=16 gap=8
+      input id="open-file" value=path change=opened testId="open-file" aria-label="Path"
+      button "Open…" press=choose testId="choose"
+      text path testId="path"
+      text doc.error testId="error"
+      text doc.text testId="on-disk"
+      textarea id="editor" value=(edited ? draft : doc.text) input=edit markup="markdown" testId="editor" aria-label="Document"
+      button "Save" press=save testId="save"
+      text match saved { case some(s) => s.error == "" ? "saved" : s.error, case none => "" } testId="saved"
+      for k in recent key=k.path
+        text k.path testId="kept"

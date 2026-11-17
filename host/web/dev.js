@@ -54,8 +54,8 @@ const utf8Compare = (a, b) => {
   for (let i = 0; i < Math.min(aa.length, bb.length); i++) if (aa[i] !== bb[i]) return aa[i] - bb[i];
   return aa.length - bb.length;
 };
-// The trees a generation carries (serve.mjs `listAssets`), entry plans (`plans/`) among them.
-const validName = (name) => typeof name === "string" && /^(assets|deck|shaders|plans)\//.test(name)
+// The trees a generation carries (serve.mjs `assetTrees`), entry plans (`plans/`) and activity schemas among them.
+const validName = (name) => typeof name === "string" && /^(assets|deck|shaders|plans|activities)\//.test(name)
   && !name.includes("\\") && !name.includes(":") && !name.includes("\0")
   && name.split("/").every((part) => part && part !== "." && part !== "..");
 const sameOrigin = (path, base) => {
@@ -92,23 +92,46 @@ async function readEnvelope(url, signal) {
   const response = await readBounded(sameOrigin(url, location.href), 64 * 1024, signal);
   return { envelope: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.bytes)), url: response.url };
 }
-async function fetchGeneration(message, signal, first = false) {
+async function fetchGeneration(message, signal, first = false, held = () => null) {
   const started = performance.now();
   const { envelope, url } = await readEnvelope(message.envelope, signal);
   const identity = envelope.dev;
   if (envelope.exact !== 1 || !validIdentity(identity) || identity.epoch !== message.epoch
-      || identity.seq !== message.seq || identity.generation !== message.generation || identity.program !== message.program || !Array.isArray(envelope.assets)) throw new Error("the fetched envelope does not name the announced generation");
+      || identity.seq !== message.seq || identity.generation !== message.generation || identity.program !== message.program) throw new Error("the fetched envelope does not name the announced generation");
   // The page's first generation is fetched inside glue's boot, compat known.
   if (!first) await globalThis.exact.ready;
   if (envelope.app?.id !== globalThis.exact.compat?.inputs?.app) throw new Error("the dev generation names another app");
   const assets = new Map(), names = new Set();
-  const load = async (card, name) => {
+  const load = async (card, name, kept, readSignal = signal) => {
     if (!card || !Number.isSafeInteger(card.bytes) || card.bytes < 0 || card.bytes > 64 * 1024 * 1024 || !/^[0-9a-f]{64}$/.test(card.sha256)) throw new Error(`invalid payload card: ${name}`);
     const path = sameOrigin(card.url, url);
-    const { bytes } = await readBounded(path, card.bytes, signal);
+    // An unchanged asset keeps the bytes this page fetched and verified for its live generation.
+    if (kept?.sha256 === card.sha256 && kept.bytes?.length === card.bytes) return { bytes: kept.bytes, url: path, sha256: card.sha256 };
+    const { bytes } = await readBounded(path, card.bytes, readSignal);
     if (bytes.length !== card.bytes || await digest(bytes) !== card.sha256) throw new Error(`payload integrity failed: ${name}`);
     return { bytes, url: path, sha256: card.sha256 };
   };
+  // A file under assets/ or deck/ is read when the page asks for it (`read`), as the built site fetches it, and
+  // kept once read and verified, for this generation and the next that has it unchanged: a page holds the files
+  // it uses, not every texture family of the folder. Media loads from the file's generation URL. The plan, its
+  // tables, shaders and modules are read with the generation.
+  const deferred = name => /^(assets|deck)\//.test(name) && name !== "assets/exact-tables.json";
+  const later = (card, name, kept) => {
+    if (!card || !Number.isSafeInteger(card.bytes) || card.bytes < 0 || card.bytes > 64 * 1024 * 1024 || !/^[0-9a-f]{64}$/.test(card.sha256)) throw new Error(`invalid payload card: ${name}`);
+    const held = kept?.sha256 === card.sha256 && kept.size === card.bytes && kept.held || { bytes: null, reading: null };
+    return { url: sameOrigin(card.url, url), sha256: card.sha256, size: card.bytes, held, get bytes() { return held.bytes; },
+      read: (readSignal = AbortSignal.timeout(20000)) => held.bytes ? Promise.resolve(held.bytes)
+        : held.reading ??= load(card, name, null, readSignal).then(r => held.bytes = r.bytes).finally(() => { held.reading = null; }) };
+  };
+  // The asset cards are in the index the envelope names, at most 4 MiB
+  // (update/src/envelope.rs); a generation with no assets names none.
+  const index = envelope.assets;
+  if (index !== undefined && (!Number.isSafeInteger(index?.count) || index.bytes > 4 * 1024 * 1024)) throw new Error("invalid or oversized asset index card");
+  const listed = index ? await load(index, "assets.json") : null;
+  envelope.assets = listed ? JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(listed.bytes)).assets : [];
+  if (!Array.isArray(envelope.assets) || envelope.assets.length !== (index?.count ?? 0)) throw new Error("the asset index does not hold the cards its envelope counts");
+  // Its cards resolve against its own URL.
+  if (listed) envelope.assets = envelope.assets.map((card) => ({ ...card, url: new URL(card?.url, listed.url).href }));
   for (const card of envelope.assets) {
     if (!validName(card.name) || names.has(card.name)) throw new Error("invalid or duplicate asset name");
     names.add(card.name);
@@ -120,11 +143,14 @@ async function fetchGeneration(message, signal, first = false) {
   if (rust && (!rust.wasm || Object.keys(rust).some(k => !["wasm", "native", "tiered"].includes(k)))) throw new Error("invalid Rust manifest");
   const rustCards = rust ? Object.values(rust).flatMap(v => [v.receipt, v.module]) : [];
   const cards = [envelope.plan, ...envelope.assets, ...moduleCards, ...rustCards];
+  // Match the server and its retained dev cache quota (serve.mjs).
   if (cards.some((card) => !Number.isSafeInteger(card?.bytes) || card.bytes < 0 || card.bytes > 64 * 1024 * 1024)
-      || cards.reduce((sum, card) => sum + card.bytes, 0) > 256 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
+      || cards.reduce((sum, card) => sum + card.bytes, 0) > 4 * 1024 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
   // All admitted payloads are independent. One bounded queue avoids separate
   // network rounds for the plan, assets and module without raising concurrency.
-  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name]),
+  // Read now, after the page booted: an announcement of the generation it boots is fetched beside that boot.
+  const live = held();
+  const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.filter(card => !deferred(card.name)).map(card => [card, card.name, live?.get(card.name)]),
     ...(envelope.module ? ['receipt', 'web'].map(key => [envelope.module[key], `module ${key}`]) : []),
     ...(rust ? [[rust.wasm.receipt, 'Rust receipt'], [rust.wasm.module, 'Rust Wasm']] : [])];
   const loaded = new Array(jobs.length);
@@ -135,9 +161,10 @@ async function fetchGeneration(message, signal, first = false) {
       loaded[index] = await load(...jobs[index]);
     }
   }));
-  const plan = loaded[0];
-  envelope.assets.forEach((card, index) => assets.set(card.name, loaded[index + 1]));
-  const moduleAt = 1 + envelope.assets.length;
+  const plan = loaded[0], read = envelope.assets.filter(card => !deferred(card.name));
+  read.forEach((card, index) => assets.set(card.name, loaded[index + 1]));
+  for (const card of envelope.assets) if (deferred(card.name)) assets.set(card.name, later(card, card.name, live?.get(card.name)));
+  const moduleAt = 1 + read.length;
   const module = envelope.module ? { receipt: loaded[moduleAt].bytes, script: loaded[moduleAt + 1].bytes } : null;
   const rustPayload = rust ? { receipt: loaded.at(-2).bytes, module: loaded.at(-1).bytes } : null;
   const canonical = { assets: [...envelope.assets].sort((a, b) => utf8Compare(a.name, b.name)).map((a) => ({ bytes: a.bytes, name: a.name, sha256: a.sha256 })),
@@ -220,12 +247,19 @@ if (es) {
   }
   // The module loader uses this implementation on trusted LAN HTTP too.
   globalThis.exact.moduleDigest = digest;
-  let retry = null, activeGeneration = null;
+  let retry = null, activeGeneration = null, firstAssets = null;
+  // A trapped module runs nothing more (wasm/boot.js `stopModule`): the next generation reloads the page.
+  const trapped = () => globalThis.exact.trapped;
+  globalThis.exact.onTrap = (error) => {
+    show(`${error}\napp.wasm trapped, and the page stopped calling it. The next save reloads the page; reload now to start again.`, "trap");
+  };
+  if (trapped()) globalThis.exact.onTrap(trapped());
   // Inspect mode's outline, hidden on a new generation (set below).
   let outlineNone = () => {};
-  const client = generationClient({ fetchGeneration, programChanged: () => { clearTimeout(retry); location.reload(); },
+  const client = generationClient({ fetchGeneration: (message, signal) => fetchGeneration(message, signal, false, () => activeGeneration?.assets ?? firstAssets), programChanged: () => { clearTimeout(retry); location.reload(); },
     apply: async (candidate, current) => {
       if (!current()) return false;
+      if (trapped()) { if (new URLSearchParams(location.search).get('agent') !== '1') location.reload(); return false; }
       const t = performance.now();
       const names = candidate.surfaceAssets;
       const liveAssets = Array.isArray(names) && names.length && activeGeneration && sameModule(candidate.module, activeGeneration.module) && sameModule(candidate.rust, activeGeneration.rust)
@@ -253,8 +287,9 @@ if (es) {
     // An inspect outline drawn on the old generation's boxes goes.
     applied: (candidate) => { clearTimeout(retry); if (stillUntil) stillEnds(); show(null); generations += 1; outlineNone(); delete globalThis.exact.designDigest; syncDesign(); channel.plan = candidate?.generation ?? channel.plan; knownPlan(candidate?.planSha256); if (channel.held) command(channel.held); else if (channel.nonce) status(); rehold(); },
     failed: (error, current) => {
-      show(String(error)); console.error("exact dev:", String(error));
       clearTimeout(retry);
+      if (trapped()) return; // said once, by `onTrap`; the next generation reloads
+      show(String(error)); console.error("exact dev:", String(error));
       // A deterministic host refusal needs a new edit, not repeated execution
       // of the same candidate every 250 ms. Network discovery still retries.
       if (error.hostRefused) return;
@@ -277,6 +312,8 @@ if (es) {
       try {
         const candidate = await fetchGeneration(JSON.parse(firstMeta.content), AbortSignal.timeout(15000), true);
         if (!candidate.rust) { client.adopt(candidate.generation); activeGeneration = candidate; }
+        // A Rust module is applied as an update of this generation, which keeps these assets.
+        else firstAssets = candidate.assets;
         return candidate;
       } catch (error) { show(String(error)); console.error("exact dev:", String(error)); return null; }
     };
@@ -406,14 +443,14 @@ if (es) {
   const modes = async () => { const x = globalThis.exact; await x.ready; return x.wasm?.exact_set_mode ? JSON.parse(x.readOut(x.wasm.exact_set_mode(x.writeIn("?")))).modes ?? null : null; };
   // The design this build runs: the runner's, said beside any answer (a
   // batch for no structure changes nothing).
-  const designNow = async () => { const x = globalThis.exact; await x.ready; if (typeof x.wasm?.exact_design_rows !== "function") return null; const out = JSON.parse(x.readOut(x.wasm.exact_design_rows(x.writeIn(JSON.stringify({ kind: "tamber-batch", structure: "", base: "", design: "", tokens: [] })))));  return out.design ?? null; };
+  const designNow = async () => { const x = globalThis.exact; await x.ready; if (typeof x.wasm?.exact_design_rows !== "function") return null; const out = JSON.parse(x.readOut(x.wasm.exact_design_rows(x.writeIn(JSON.stringify({ kind: "forma-batch", structure: "", base: "", design: "", tokens: [] })))));  return out.design ?? null; };
   // The root's own size, the app's `setRootFontSize` rule set aside (navigation.js `beneathApp`).
   const hostSize = () => { const rule = document.getElementById("exact-root-font-size"); if (rule) rule.disabled = true; try { return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16; } finally { if (rule) rule.disabled = false; } };
   // The facts as they paint: the root's `color-scheme` (the app's
   // `setScheme` over the pin's, over the browser's `light dark`), resolved by
   // the system's scheme, which is a pin's while one is held.
   // The digest of the plan this page runs, which its source map names
-  // (tamber/1.8): read from the runner once per generation.
+  // (forma/1.8): read from the runner once per generation.
   // (None said is kept too: asked again only with the next generation. A
   // generation this page verified says its plan's digest itself.)
   let planDigestOf, planDigestNow = null;
@@ -550,6 +587,7 @@ if (es) {
     // An app whose manifest fixes `userInterfaceStyle` ignores the system's, as on iOS; a copy still shows its pin.
     const scheme = p?.scheme && (copy || !["light", "dark"].includes(document.querySelector('meta[name="color-scheme"]')?.content)) ? p.scheme : null;
     sheet.textContent = scheme ? `:root{color-scheme:${scheme}${copy ? "!important" : ""}}` : "";
+    if (copy) x.asked?.scheme?.apply();
     if ((x.systemScheme ?? null) !== scheme) { x.systemScheme = scheme; dispatchEvent(new Event("resize")); }
     // The root font size as `prefer` sets it (navigation.js): the size an
     // app's percentage is of, too.
@@ -650,7 +688,7 @@ if (es) {
   // generation finds the node by its site and instance path again, or says
   // it is gone.
   // A click's selection carries a token (`click`), and the outline that
-  // answers it names it (tamber/1.7): that one leaves the page where it is,
+  // answers it names it (forma/1.7): that one leaves the page where it is,
   // since the copy clicked is under the pointer. A refresh of it re-sends
   // its token, so an answer to either report stays put. A token is this
   // page's inspect session (a random prefix, new each time inspect mode
@@ -921,7 +959,7 @@ if (es) {
     if (r.reason) end(revision, at.epoch);
     report(r.reason ? { kind: "held", state: null, reason: r.reason, revision } : { kind: "held", state: h.state, revision });
   };
-  // `{select: {up, plan, from, instance}}` (tamber/1.16; 1.17 by this page's own tree), as host/web-js/inspect-dev.js's
+  // `{select: {up, plan, from, instance}}` (forma/1.16; 1.17 by this page's own tree), as host/web-js/inspect-dev.js's
   // `selectUp`: walking up from the selection, its own copy seen, each ancestor of a copy not yet seen is one step; at
   // step `up` it lands on that copy's outermost ancestor, with fewer on the root, reported with `moved: {up, stepped}`.
   // Each site's copy is the plan's `copies`, sent with inspect mode on, once per plan.
@@ -1033,7 +1071,7 @@ if (es) {
       })().catch(error => { show(String(error), "gpu"); console.error('exact dev:', error); });
       return;
     }
-    if (message.kind === "tamber-batch" || message.kind === "tamber-snapshot") { design(message); return; }
+    if (message.kind === "forma-batch" || message.kind === "forma-snapshot") { design(message); return; }
     if (message.kind === "hold") {
       if (message.revision < lastRevision) { ended.clear(); epoch += 1; }
       lastRevision = message.revision;

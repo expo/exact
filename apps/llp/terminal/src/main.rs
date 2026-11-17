@@ -1,4 +1,4 @@
-//! `llp [corpus-or-document] [--size COLSxROWS] [op …]`: the LLP reader in
+//! `llp [corpus-or-document] [--size COLSxROWS] [--drive op …]`: the LLP reader in
 //! this terminal, or headless under the agent's verbs (see
 //! [`exact_terminal::cli`]). With no path it opens the nearest `llp/`
 //! directory above the working directory.
@@ -29,7 +29,7 @@ fn main() -> std::process::ExitCode {
     };
     exact_terminal::cli::run_embedded(
         args,
-        llp_data::Llp::starting_at(&path.to_string_lossy()),
+        || llp_data::Llp::starting_at(&path.to_string_lossy()),
         include_bytes!(concat!(env!("OUT_DIR"), "/terminal.plan")),
         exact_terminal::host::Mode::Fullscreen,
     )

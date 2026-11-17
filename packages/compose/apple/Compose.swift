@@ -33,9 +33,12 @@ import AppKit
 public final class ComposeModule: NSObject, ExactPackage {
     let context: ExactPackageContext
     #if os(iOS)
-    private var shown: (view: UIViewController, request: Int?, kind: String, reply: ([String: Any]) -> Void)?
+    /// The composer in flight, from before its attachments are read: `view`
+    /// is nil until it shows, and `id` tells a read that finishes whether it
+    /// is still the one in flight.
+    private var shown: (id: UUID, view: UIViewController?, request: Int?, kind: String, reply: ([String: Any]) -> Void)?
     #elseif os(macOS)
-    private var sharing: (service: NSSharingService, kind: String, reply: ([String: Any]) -> Void)?
+    private var sharing: (service: NSSharingService, request: Int?, kind: String, reply: ([String: Any]) -> Void)?
     #endif
     private var said: [String: Any]?
 
@@ -146,12 +149,18 @@ public final class ComposeModule: NSObject, ExactPackage {
         if MFMailComposeViewController.canSendMail() {
             if shown != nil { return reply(["error": "InvalidStateError", "message": "a composer is already shown"]) }
             guard let top = top() else { return reply(["error": "InvalidStateError", "message": "no window to show the composer in"]) }
-            let request = context.request
-            // Each attachment is read off the main thread, then the composer shows.
+            let id = UUID()
+            shown = (id, nil, context.request, "email", reply)
+            // Each attachment is read off the main thread, then the composer
+            // shows, unless a cancel or the session's end came meanwhile.
             DispatchQueue.global(qos: .userInitiated).async {
                 let data = f.attachments.map { (url: $0, data: try? Data(contentsOf: $0)) }
                 DispatchQueue.main.async { [self] in
-                    if data.contains(where: { $0.data == nil }) { return reply(["error": "NotReadableError", "message": "an attachment could not be read"]) }
+                    guard shown?.id == id else { return }
+                    if data.contains(where: { $0.data == nil }) {
+                        shown = nil
+                        return reply(["error": "NotReadableError", "message": "an attachment could not be read"])
+                    }
                     let view = MFMailComposeViewController()
                     view.mailComposeDelegate = self
                     view.setToRecipients(f.to)
@@ -163,7 +172,7 @@ public final class ComposeModule: NSObject, ExactPackage {
                         let type = UTType(filenameExtension: a.url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                         view.addAttachmentData(a.data!, mimeType: type, fileName: a.url.lastPathComponent)
                     }
-                    shown = (view, request, "email", reply)
+                    shown?.view = view
                     say(f.line("email", "shown"))
                     top.present(view, animated: true)
                 }
@@ -199,7 +208,7 @@ public final class ComposeModule: NSObject, ExactPackage {
         view.body = f.body
         if !f.subject.isEmpty { view.subject = f.subject }
         for url in f.attachments { view.addAttachmentURL(url, withAlternateFilename: url.lastPathComponent) }
-        shown = (view, context.request, "message", reply)
+        shown = (UUID(), view, context.request, "message", reply)
         say(f.line("message", "shown"))
         top.present(view, animated: true)
         #elseif os(macOS)
@@ -251,7 +260,7 @@ public final class ComposeModule: NSObject, ExactPackage {
         service.recipients = recipients
         if let subject, !subject.isEmpty { service.subject = subject }
         service.delegate = self
-        sharing = (service, kind, reply)
+        sharing = (service, context.request, kind, reply)
         say(f.line(kind, "shown"))
         service.perform(withItems: items)
     }
@@ -261,14 +270,21 @@ public final class ComposeModule: NSObject, ExactPackage {
         #if os(iOS)
         guard let s = shown, s.request == request else { return }
         shown = nil
-        s.view.dismiss(animated: true)
+        s.view?.dismiss(animated: true)
+        s.reply(["error": "AbortError"])
+        #elseif os(macOS)
+        // Mail's or Messages's window stays the person's; the call ends.
+        guard let s = sharing, s.request == request else { return }
+        sharing = nil
         s.reply(["error": "AbortError"])
         #endif
     }
 
     public func destroy(_ done: @escaping () -> Void) {
         #if os(iOS)
-        if let s = shown { shown = nil; s.view.dismiss(animated: false); s.reply(["error": "AbortError"]) }
+        if let s = shown { shown = nil; s.view?.dismiss(animated: false); s.reply(["error": "AbortError"]) }
+        #elseif os(macOS)
+        if let s = sharing { sharing = nil; s.reply(["error": "AbortError"]) }
         #endif
         done()
     }

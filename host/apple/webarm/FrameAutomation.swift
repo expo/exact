@@ -37,6 +37,9 @@ final class FrameAutomation {
     private var nextId = 0
     /// Evaluations in flight in the current document, by number.
     private var evaluations: [Int: ([String: Any]) -> Void] = [:]
+    /// `captureScreenshot` calls in flight, by number: they end with the
+    /// frame, as evaluations do, and outlive a navigation.
+    private var captures: [Int: ([String: Any]) -> Void] = [:]
     /// A `performActions` in flight: its number and how it ends early.
     private var acting: (id: Int, end: ([String: Any]) -> Void)?
     private var keys: [String: Set<String>] = [:]
@@ -92,8 +95,9 @@ final class FrameAutomation {
     /// The frame unmounted or changed its web view: every call in flight ends.
     func end(_ why: String) {
         let answer: [String: Any] = ["error": "NotFoundError", "message": why]
-        let pending = evaluations.values
+        let pending = Array(evaluations.values) + Array(captures.values)
         evaluations = [:]
+        captures = [:]
         pending.forEach { $0(answer) }
         acting?.end(answer)
         acting = nil
@@ -138,7 +142,11 @@ final class FrameAutomation {
             let path = request["path"] as? String ?? ""
             var command: [String: Any] = ["op": op, "path": path, "file": request["pathFile"] as? String ?? ""]
             if let clip = request["clip"] as? [String: Any] { command["clip"] = ["x", "y", "width", "height"].map { (clip[$0] as? NSNumber) ?? 0 } }
-            return arm.capture(command) { width, height, error, message in
+            nextId += 1
+            let number = nextId
+            captures[number] = reply
+            return arm.capture(command) { [weak self] width, height, error, message in
+                guard let reply = self?.captures.removeValue(forKey: number) else { return }
                 reply(error.isEmpty ? ["path": path, "width": width, "height": height] : ["error": error, "message": message])
             }
         }

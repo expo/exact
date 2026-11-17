@@ -42,6 +42,7 @@ enum RegionAnswer: Sendable {
     case raster(RegionRaster)
     case selection(RegionSelectionRequest, [RegionSelectionSnapshot])
     case abandoned(id: UInt64, generation: Int)
+    case nativeFlow(RegionShapeRequest)
     case pixelsBusy(RegionRasterRequest)
     case refused(RegionJob, String)
 }
@@ -185,15 +186,19 @@ final class RegionService: @unchecked Sendable {
                         // owners or keep a separate source/width history.
                         for binding in layouts.values where binding.generation == request.generation &&
                             binding.sourceID == request.sourceID && binding.layout.source === request.source {
-                            if preparation == nil { preparation = binding.layout.preparation }
-                            if binding.layout.metadata.offeredWidth == request.width {
+                            if preparation == nil && binding.layout.preparation.emergencyHyphens ==
+                                (request.exclusions.isEmpty && request.source.emergencyHyphens) {
+                                preparation = binding.layout.preparation
+                            }
+                            if binding.layout.metadata.offeredWidth == request.width &&
+                                binding.layout.metadata.exclusions == request.exclusions {
                                 existing = binding.layout; break
                             }
                         }
                     }
                     if let existing {
-                        // Shape depends on captured source and width, not the
-                        // height offer. The fresh artifact still answers only
+                        // Shape depends on captured source, width and resolved
+                        // exclusions. The fresh artifact still answers only
                         // this exact request ID/full kernel offer.
                         layout = existing
                     } else {
@@ -201,10 +206,19 @@ final class RegionService: @unchecked Sendable {
                             : request.width < 0 ? CGFloat.infinity : request.width
                         beforeLayoutConstruction()
                         do {
-                            layout = try RegionWorkerLayout.shape(request.source, width: width, retainHits: request.width >= 0,
-                                                                 preparation: preparation, compact: request.compact, beforeMetadata: {
+                            let checkpoint = {
                                 if self.abandonShape(request, epoch: jobEpoch) { throw RegionShapeCheckpoint.abandoned }
-                            })
+                            }
+                            if request.exclusions.isEmpty {
+                                layout = try RegionWorkerLayout.shape(request.source, width: width, retainHits: request.width >= 0,
+                                    preparation: preparation, compact: request.compact, beforeMetadata: checkpoint)
+                            } else {
+                                guard request.width >= 0 else { return .nativeFlow(request) }
+                                layout = try RegionWorkerLayout.shapeFlow(request.source, width: width, exclusions: request.exclusions,
+                                    preparation: preparation, beforeMetadata: checkpoint)
+                            }
+                        } catch RegionFlowFallback.incomplete {
+                            return .nativeFlow(request)
                         } catch RegionShapeCheckpoint.abandoned {
                             // The shape's partial allocations unwind inside
                             // this turn's autoreleasepool before UI delivery.

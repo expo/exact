@@ -12,6 +12,190 @@ use exact_kernel::StyleValue;
 type Frames<'a> = &'a [(u32, [f32; 4])];
 type Images<'a> = &'a [(u32, Option<(f32, f32)>)];
 
+/// Chrome 156.0.8078.4: identical 18px line boxes share their baseline even
+/// when one is the anonymous item of a taller flex container.
+#[test]
+fn anonymous_text_placement_reaches_the_parent_baseline() {
+    let mut wrong = Vec::new();
+    for css in [
+        "display:flex;align-items:center",
+        "display:flex;flex-direction:column;justify-content:center",
+        "display:grid;align-items:center",
+        "display:grid;align-content:center",
+        "display:flex;align-items:center;column-count:2;column-gap:20px",
+    ] {
+        let expected = 41.0;
+        let k = lay_out_with(
+            props(&css_rows(
+                "display:flex;align-items:baseline;width:400px;line-height:18px",
+            )),
+            vec![
+                (2, 1, css_rows(&format!("{css};width:100px;height:100px"))),
+                (3, 1, css_rows("width:100px")),
+            ],
+            &[(2, "X"), (3, "X")],
+            &[],
+        );
+        wrong.extend(mismatches(css, &k, &[(3, [100.0, expected, 100.0, 18.0])]));
+        let offset = k.text_line_offset(&k.node(2).unwrap());
+        if (offset - expected).abs() > 0.01 {
+            wrong.push(format!("{css}: line offset {offset}, expected {expected}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Chrome 156.0.8078.4, 18px line boxes. The grid sizes its anonymous
+/// item and tracks before aligning them; its baseline follows that item.
+#[test]
+fn anonymous_grid_text_uses_track_sizing_and_alignment() {
+    for (css, height, offset) in [
+        ("height:100px;align-items:end", 100.0, 82.0),
+        (
+            "height:100px;align-items:center;grid-template-rows:10px",
+            100.0,
+            -4.0,
+        ),
+        ("height:100px;align-items:stretch", 100.0, 0.0),
+        (
+            "height:100px;align-items:center;grid-template-rows:60px",
+            100.0,
+            21.0,
+        ),
+        (
+            "height:100px;align-content:end;align-items:center;grid-template-rows:60px",
+            100.0,
+            61.0,
+        ),
+        ("align-items:center;grid-template-rows:60px", 60.0, 21.0),
+        (
+            "align-items:center;grid-template-rows:60px 40px;gap:10px",
+            110.0,
+            21.0,
+        ),
+        ("height:100px;padding:10px;align-items:center", 120.0, 41.0),
+    ] {
+        let k = lay_out_with(
+            props(&css_rows(
+                "display:flex;align-items:baseline;width:400px;line-height:18px",
+            )),
+            vec![
+                (2, 1, css_rows(&format!("display:grid;width:100px;{css}"))),
+                (3, 1, css_rows("width:100px")),
+            ],
+            &[(2, "X"), (3, "X")],
+            &[],
+        );
+        let node = k.node(2).unwrap();
+        assert_eq!(node.frame.height, height, "{css}");
+        assert_eq!(k.text_line_offset(&node), offset, "{css}");
+        let top = if css.contains("padding:") { 10.0 } else { 0.0 };
+        assert_eq!(
+            k.node(3).unwrap().frame.y - node.frame.y,
+            offset + top,
+            "{css}"
+        );
+    }
+}
+
+/// Chrome 156: clipped flex text and calculated grid tracks use the
+/// same anonymous item for their baseline and their published line origin.
+#[test]
+fn anonymous_text_clipping_and_calculated_tracks_keep_the_baseline() {
+    let mut wrong = Vec::new();
+    for (css, text, expected) in [
+        (
+            "display:flex;align-items:center;padding-bottom:20px;overflow:clip",
+            "X",
+            41.0,
+        ),
+        (
+            "display:flex;align-items:center;padding-bottom:20px;overflow:auto",
+            "X",
+            41.0,
+        ),
+        (
+            "display:flex;align-items:center;padding-bottom:20px;overflow:hidden",
+            "X",
+            41.0,
+        ),
+        (
+            "display:flex;align-items:center;padding-bottom:20px;overflow:scroll",
+            "X",
+            41.0,
+        ),
+        (
+            "display:grid;grid-template-rows:calc(100% - 40px);align-items:center",
+            "X",
+            21.0,
+        ),
+        (
+            "display:grid;grid-template-columns:50px;justify-content:center;align-items:center",
+            "XXXX XXXX",
+            32.0,
+        ),
+    ] {
+        let k = lay_out_with(
+            props(&css_rows(
+                "display:flex;align-items:baseline;width:400px;line-height:18px",
+            )),
+            vec![
+                (2, 1, css_rows(&format!("{css};width:100px;height:100px"))),
+                (3, 1, css_rows("width:100px")),
+            ],
+            &[(2, text), (3, "X")],
+            &[],
+        );
+        if css.contains("grid-template-columns") {
+            let item = k.text_item_box(&k.node(2).unwrap()).unwrap();
+            assert_eq!(
+                (item.x, item.y, item.width, item.height),
+                (25.0, 32.0, 50.0, 36.0)
+            );
+        }
+        for (what, got) in [
+            ("line origin", k.text_line_offset(&k.node(2).unwrap())),
+            ("baseline sibling", k.node(3).unwrap().frame.y),
+        ] {
+            if got != expected {
+                wrong.push(format!("{css}: {what} {got}, expected {expected}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Chrome 156, 18px line boxes: a grid text's scrollable overflow holds
+/// its anonymous item where the grid placed it, so a scrolling ancestor
+/// reaches a line placed outside the text's box. The kernel's scroll sizes
+/// are the content's extent, not clamped to the client box as Chrome's are.
+#[test]
+fn anonymous_grid_text_overflow_follows_its_placed_item() {
+    for (root, css, text, content) in [
+        (
+            "width:200px;height:100px;overflow:auto",
+            "display:grid;grid-template-rows:200px;align-items:end;width:100px;height:100px",
+            (100.0, 200.0),
+            (100.0, 200.0),
+        ),
+        (
+            "width:50px;height:100px;overflow:auto",
+            "display:grid;grid-template-columns:200px;justify-items:end;width:40px;height:100px",
+            (200.0, 100.0),
+            (200.0, 100.0),
+        ),
+    ] {
+        let k = lay_out_with(
+            props(&css_rows(root)),
+            vec![(2, 1, css_rows(css))],
+            &[(2, "X")],
+            &[],
+        );
+        assert_eq!(k.node(2).unwrap().content, text, "{css}: the text's");
+        assert_eq!(k.node(1).unwrap().content, content, "{css}: the root's");
+    }
+}
+
 fn run(
     cases: impl FnOnce(
         &mut dyn FnMut(&str, Rows, Vec<(u32, u32, Rows)>, &[(u32, &str)], Images, Frames),
@@ -1093,4 +1277,81 @@ fn a_column_is_as_tall_as_its_items_clamped_by_max_height() {
         ));
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Chrome 157.0.8103.78: a line's gap is outside its free space, so a line
+/// whose flex factors sum below one distributes that share of the space left
+/// after the gap (CSS Flexbox §9.7 step 4b), growing and shrinking alike.
+#[test]
+fn fractional_flex_factors_share_the_space_beside_the_gap() {
+    let mut wrong = Vec::new();
+    for (container, item, a, b) in [
+        // Each item holds a 100-point child, the first case's automatic minimum.
+        (
+            "display:flex;width:300px;column-gap:40px",
+            "flex-grow:0.25;height:10px",
+            [0.0, 0.0, 115.0, 10.0],
+            [155.0, 0.0, 115.0, 10.0],
+        ),
+        (
+            "display:flex;width:300px;column-gap:40px",
+            "flex-grow:0.25;height:10px;width:0px",
+            [0.0, 0.0, 65.0, 10.0],
+            [105.0, 0.0, 65.0, 10.0],
+        ),
+        (
+            "display:flex;width:200px;column-gap:40px",
+            "flex-shrink:0.25;height:10px;width:100px;min-width:0px",
+            [0.0, 0.0, 90.0, 10.0],
+            [130.0, 0.0, 90.0, 10.0],
+        ),
+    ] {
+        let k = lay_out_with(
+            props(&css_rows("width:400px")),
+            vec![
+                (2, 1, css_rows(container)),
+                (3, 2, css_rows(item)),
+                (4, 3, css_rows("width:100px;height:10px")),
+                (5, 2, css_rows(item)),
+                (6, 5, css_rows("width:100px;height:10px")),
+            ],
+            &[],
+            &[],
+        );
+        wrong.extend(mismatches(item, &k, &[(3, a), (5, b)]));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Chrome 157.0.8103.78: a column flex item holding a 100-point child and a
+/// 10-point child pulled up 90 points over it is 20 tall, whether the item is
+/// a block or a column flex container and whether its line wraps.
+#[test]
+fn a_column_flex_item_is_as_tall_as_its_content() {
+    let mut wrong = Vec::new();
+    for (wrap, item) in [
+        ("wrap", ""),
+        ("wrap", "display:flex;flex-direction:column"),
+        ("nowrap", "display:flex;flex-direction:column"),
+    ] {
+        let column = format!("display:flex;flex-direction:column;flex-wrap:{wrap}");
+        let k = lay_out_with(
+            props(&css_rows("width:400px")),
+            vec![
+                (
+                    2,
+                    1,
+                    css_rows(&format!("{column};width:100px;height:300px")),
+                ),
+                (3, 2, css_rows(item)),
+                (4, 3, css_rows("width:10px;height:100px")),
+                (5, 3, css_rows("width:10px;height:10px;margin-top:-90px")),
+            ],
+            &[],
+            &[],
+        );
+        let case = format!("{wrap} {item}");
+        wrong.extend(mismatches(&case, &k, &[(3, [0.0, 0.0, 100.0, 20.0])]));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

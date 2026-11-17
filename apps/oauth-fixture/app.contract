@@ -27,6 +27,8 @@ component OAuthFixture
     send signedIn = signInHere(profile)
   action signOut
     send signedOut = signOut(profile)
+  action endSession
+    send signedOut = endSession(profile)
   action reload
     refresh me
   action choose(p: string)
@@ -55,6 +57,8 @@ component OAuthFixture
           text "Reload"
         button press=signOut testId="sign-out"
           text "Sign Out"
+        button press=endSession testId="end-session"
+          text "Sign Out of Provider"
       else
         button press=signIn disabled=pending(signedIn) buttonStyle="filled" testId="sign-in"
           text "Sign In"

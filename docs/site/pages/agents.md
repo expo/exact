@@ -16,6 +16,8 @@ For a website (pages served to a browser), the guide is [Start here: a website w
 
 Add `.md` to a page's URL to get the page as Markdown: `/recipes/money` is `/recipes/money.md`, and the home page is `/index.md`. Each page's HTML names its Markdown with `<link rel="alternate" type="text/markdown">`.
 
+`bun exact.mjs serve dist` (the site's `bun start`) also answers a page's own URL with its Markdown when the request's `Accept` header prefers `text/markdown`: `/recipes/money` then returns the content of `/recipes/money.md`, with `Vary: Accept`. Only `bun run build` writes the `.md` files. When a page is asked for after a source changed, `serve` builds the site again without them. Until `bun run build` runs again, `/recipes/money.md` is not found and `/recipes/money` returns HTML. A static host does not read the header, so add `.md` there.
+
 Each Markdown page starts with frontmatter (`title`, `description` and `modificationDate`) and a pointer to `/llms.txt`. Its links go to other Markdown pages, or to the file on GitHub.
 
 ## llms.txt
@@ -25,6 +27,10 @@ Each Markdown page starts with frontmatter (`title`, `description` and `modifica
 ## sitemap.md
 
 `/sitemap.md` lists the same pages by section, nested as the guides nest. Each line has the page's Markdown URL, its type (Guide, How-to, Reference), the date it last changed, a summary, and its prerequisites: the page to read before it.
+
+## robots.txt
+
+`/robots.txt` allows every crawler, and it states a content signal for all crawlers and for each AI crawler it names: `search=yes, ai-input=yes, ai-train=yes`. Search indexing, use as input for AI answers, and AI training are all permitted.
 
 ## Open in your agent
 

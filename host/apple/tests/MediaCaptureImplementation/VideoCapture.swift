@@ -1,0 +1,1 @@
+../../../../packages/media-capture/apple/VideoCapture.swift

@@ -327,3 +327,45 @@ pub fn numbers(bits: &[u64], dir: &Path) -> Result<Vec<String>, String> {
     );
     run_module(&module, dir, "numbers")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "async lane: needs the Lean toolchain"]
+    fn stdlib_equations_fit_the_default_heartbeat_budget() {
+        build_targets(&["Contract.Eval"]).unwrap();
+        let dir = crate::work_dir().join("stdlib-equations");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("equations-{}.lean", std::process::id()));
+        std::fs::write(
+            &file,
+            r#"import Contract.Eval
+
+example (env : Contract.Env) :
+    Contract.stdlib env "performanceNow" [] = .ok (.num env.now) := by
+  simp only [Contract.stdlib]
+
+example (env : Contract.Env) :
+    Contract.routing env "push" [] = .error (.unsupported "roster entry `push`") := by
+  simp only [Contract.routing]
+  rfl
+"#,
+        )
+        .unwrap();
+        // Lazy equation generation uses the command-line options, not `set_option`.
+        let out = Command::new(lake())
+            .args(["env", "lean", "-DmaxHeartbeats=200000"])
+            .arg(&file)
+            .current_dir(project())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}

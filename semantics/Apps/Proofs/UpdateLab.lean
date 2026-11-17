@@ -35,8 +35,8 @@ theorem results_shape : ∀ m ∈ ["tsResult", "rustResult", "rustExecutorResult
   have hn : ∀ a ∈ updateLab.actions, Stmt.noAssigns m a.body = true := by
     simp only [List.mem_cons, List.mem_nil_iff, or_false] at hm
     rcases hm with rfl | rfl | rfl <;> decide
-  refine Reachable.slotIn (by simp only [List.mem_cons, List.mem_nil_iff, or_false] at hm; rcases hm with rfl | rfl | rfl <;> decide) ?_ (fun _ _ _ _ _ _ _ _ _ _ _ _ => .of_noAssign hn fun v => .inr ⟨v, rfl⟩)
-    (fun _ _ _ _ => .of_noAssign hn fun v => .inr ⟨v, rfl⟩)
+  refine Reachable.slotIn ?_ (fun _ _ _ _ _ _ _ _ _ _ _ _ => .of_noAssign hn fun v => .inr ⟨v, rfl⟩)
+    (fun _ _ _ _ _ _ => .of_noAssign hn fun v => .inr ⟨v, rfl⟩)
   rintro v (⟨st, hst, hname, -⟩ | ⟨_, -, -, rfl⟩ | ⟨hr, -⟩)
   · simp only [updateLab, List.mem_cons, List.mem_nil_iff, or_false] at hst
     simp only [List.mem_cons, List.mem_nil_iff, or_false] at hm
@@ -126,7 +126,8 @@ theorem counter_keeps {c name args rows} (hc : SlotIn "counter" CounterOK c.slot
     cases hv with
     | binop h₁ h₂ h₃ =>
       rw [EvalR.var_global (by simp [actionLocals, lookup])] at h₁
-      simp only [Env.global, actionEnv, updateLab, List.find?, beq_self_eq_true] at h₁
+      simp only [Env.global, actionEnv, Env.withOwned_prog, Env.withOwned_slots, updateLab, List.find?,
+        beq_self_eq_true] at h₁
       cases hl : lookup "counter" c.slots with
       | none => rw [hl] at h₁; cases h₁
       | some w =>
@@ -145,8 +146,8 @@ sequence of taps, inputs and clock moves. It never reaches a non-integer,
 zero, a negative number or infinity, however many times `increment` runs:
 past `2^53` adding one rounds back (ties to even). -/
 theorem counter_always : ∀ c, Reachable updateLab c → SlotIn "counter" CounterOK c.slots :=
-  Reachable.slotIn (by decide) counter_boot (fun _ _ _ _ _ _ _ _ _ hc _ _ => counter_keeps hc)
-    (fun _ _ _ hc => counter_keeps hc)
+  Reachable.slotIn counter_boot (fun _ _ _ _ _ _ _ _ _ hc _ _ => counter_keeps hc)
+    (fun _ _ _ _ _ hc => counter_keeps hc)
 
 /-- **The counter is at least one**, in the IEEE order the program's `<`
 and `>=` compare with. -/

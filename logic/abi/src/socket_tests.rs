@@ -55,7 +55,7 @@ impl DataSource for Feed {
 
 fn call(store: &mut Store, source: &str, outcome: Option<Outcome>) -> Result<Answer, DataError> {
     let mut module = Session::new(Feed);
-    let request = call_request(store, source, &[], outcome.as_ref()).unwrap();
+    let request = call_request(None, store, source, &[], outcome.as_ref()).unwrap();
     module.dispatch(&request).unwrap();
     call_reply(module.output(), store)
 }

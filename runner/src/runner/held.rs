@@ -31,6 +31,10 @@ pub struct Asked {
     pub root: Option<Value>,
 }
 
+/// The store's name for the scheme the app chose (`setScheme`), beside its
+/// persisted state as `setLocale`'s choice is (`time::CHOSEN`). JSON text.
+pub(crate) const SCHEME: &str = "exact.state.#scheme";
+
 /// A hold: the scheme, the pinned axes at their values, the root size.
 pub type Hold<'a> = (bool, &'a [(&'a str, &'a str)], bool);
 
@@ -152,8 +156,32 @@ impl<D: super::DataSource> Runner<D> {
         }
     }
 
+    /// The scheme a plan that runs `setScheme` chose at an earlier launch,
+    /// asked again in the boot's commands, so every host shows it from the
+    /// first frame.
+    pub(super) fn ask_kept_scheme(&mut self) {
+        if !crate::uses::chooses_scheme(&self.plan) {
+            return;
+        }
+        let Some(scheme) = (self.store.kept(SCHEME))
+            .and_then(super::persist::decode_string)
+            .filter(|s| s == "light" || s == "dark")
+        else {
+            return;
+        };
+        let scheme = Value::str(&scheme);
+        self.held.asked.scheme = Some(scheme.clone());
+        self.commands.push(Command {
+            name: "setScheme".into(),
+            args: vec![scheme],
+            source: None,
+        });
+    }
+
     /// The commit's `setScheme`s and `setRootFontSize`s from `from` on,
-    /// each kept as asked; one the host holds taken out, not applied.
+    /// each kept as asked; one the host holds taken out, not applied. The
+    /// scheme is kept in the store for the next launch: `"light"` or
+    /// `"dark"`, and anything else (`"system"`) forgets it.
     pub(super) fn take_held(&mut self, from: usize) {
         let mut i = from;
         while i < self.commands.len() {
@@ -163,6 +191,14 @@ impl<D: super::DataSource> Runner<D> {
             );
             let held = match name {
                 "setScheme" => {
+                    match arg.as_ref().and_then(Value::as_str) {
+                        Some(s @ ("light" | "dark")) => {
+                            let mut text = String::new();
+                            crate::agent::quote(s, &mut text);
+                            self.store.keep(SCHEME, text.into_bytes());
+                        }
+                        _ => self.store.forget_kept(SCHEME),
+                    }
                     self.held.asked.scheme = arg;
                     self.held.scheme
                 }

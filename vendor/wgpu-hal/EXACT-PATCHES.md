@@ -1,4 +1,4 @@
-# wgpu-hal 30.0.1 — fourteen local patches: five in Metal, nine in Vulkan
+# wgpu-hal 30.0.1 — seventeen local patches: seven in Metal, nine in Vulkan, one in D3D12
 
 Complete crates.io archive, including the upstream MIT/Apache licenses and
 `.cargo_vcs_info.json`. No dependency upgrade. Patch 11 offers an explicit native arithmetic-only f16 opt-in. Every changed
@@ -10,8 +10,9 @@ place is marked `EXACT (EXACT-PATCHES.md, n)` in the source.
 - Upstream VCS revision: 40f4a34ebaf56f9a046231f54125ad046239d3f3
 - Implemented: 2026-09-30, the rest lane of the performance program; vendoring
   ruled by the orchestrator the same day (LLP 1009 D7).
-- Only `exact-gpu` links this version (LLP 1009 D1); the 2D canvas's vello
-  uses wgpu-hal 29 from crates.io, untouched.
+- `exact-gpu` (LLP 1009 D1) and `exact-ink` (`host/ink`, through wgpu 30)
+  link this version; the 2D canvas's vello uses wgpu-hal 29 from crates.io,
+  untouched.
 
 ## Why
 
@@ -77,7 +78,7 @@ submit and alone — what `gpu/tests/it/frame.rs` holds patches 1 and 2 to
 others once).
 
 `Cargo.toml` and `build.rs`: the package has `links = "exact_wgpu_hal"` and
-its build script prints `cargo::metadata=patches=12`, so `exact-gpu`'s build
+its build script prints `cargo::metadata=patches=15`, so `exact-gpu`'s build
 script sees `DEP_EXACT_WGPU_HAL_PATCHES`. Cargo applies `[patch.crates-io]`
 only from the workspace root: an app in a workspace of its own that lacks the
 line would link the published crate. `gpu/build.rs` refuses that build and
@@ -232,7 +233,7 @@ This avoids another public feature bit and a fork of wgpu-core/types. It is an
 Exact-native policy, not an upstreamable WebGPU feature grant. An upstream fix
 should separate arithmetic from uniform storage and make Naga declare only
 capabilities its output uses. `gpu/build.rs` requires the patch count in the
-crate's metadata (now 12) on Android as well as Apple, and Android names the
+crate's metadata (now 16) on Android as well as Apple, and Android names the
 direct HAL dependency so Cargo supplies that metadata.
 
 ## 12. A lost device's swapchain lets go of a held image (Vulkan)
@@ -274,6 +275,74 @@ requires at least 2^30, so the adapter's `max_buffer_size` limit was 0 and
 A value below 2^30 is now read as not reported, as on a driver without
 maintenance4: the memory allocation limit and the platform cap still bound
 it. A conformant driver is unaffected. Upstreamable.
+
+## 15. Optional persistent Metal pipelines
+
+`src/metal/binary_archive.rs`, `device.rs`, `adapter.rs`, `mod.rs`.
+`Device::install_binary_archive` installs an optional device-owned binary archive.
+Standard render and compute pipeline creation first tries the archive with
+`FailOnBinaryArchiveMiss`, then adds a missing pipeline and compiles normally.
+A mutex excludes additions and snapshots from each other; every cache error leaves
+the ordinary compilation path available. `BinaryArchive::data` serializes through
+a temporary file because Metal accepts a file URL, not bytes.
+The file of the last snapshot (before one, the file the archive was restored
+from) is kept until an addition or the archive's end, and a snapshot of an archive
+that gained nothing since is read from it: Metal serializes such an archive by
+moving its last file, once, and fails after that. A process keeps these files in
+`exact-metal/<pid>/` under the temporary directory beside a lock it holds for
+life; a killed process removes nothing, so the first use in a process removes
+the directories whose lock is free.
+The caller owns the persistent envelope, identity and atomic file replacement.
+`BinaryArchive::counts` reports lookup hits and misses; `additions` counts only
+successful render and compute additions, so a failed addition cannot trigger a snapshot.
+Mesh pipelines keep their existing path. The metadata revision is 15.
+A simulator build (`target_abi = "sim"`) installs no archive: the simulator's
+Metal aborts the process serializing one (`MTLReportFailure` under
+`-[_MTLBinaryArchive legacySerializeToURL:options:error:]`, iOS 27 simulator).
+
+This follows Apple's [binary archive workflow](https://developer.apple.com/documentation/metal/creating-binary-archives-from-device-built-pipeline-state-objects).
+The seam stays outside wgpu's portable `PipelineCache`, whose core header validates
+only Vulkan adapters in version 30. No dependency version or public feature changes.
+
+## 16. Shader libraries compiled ahead of time (Metal)
+
+`src/metal/shipped.rs`, `src/metal/device.rs` (`load_shader`), `src/metal/mod.rs`.
+`load_shader` writes MSL for each pipeline stage, which Metal compiles to AIR in
+`newLibraryWithSource` on every launch its shader cache misses, a fresh install's
+first. `set_shader_libraries(libraries, sources)` names, once per process, a
+directory of `<key>.metallib` files and one to record into. The key is FNV-1a 64 over
+the compile options (MSL version, preserve-invariance) and the MSL text. A stage whose
+key has a library loads it (`newLibraryWithURL`); one without compiles the source as
+before and, when a record directory is set, writes `<key>.metal` and `<key>.json`
+there. A library Metal refuses falls back to the source. `exact-gpu` names the
+bundle's `exact-metal/` and, in a development build, the app's `.exact/metal/`;
+`host/apple/shader-libraries.mjs` compiles what was recorded for each build's SDK.
+Metadata revision 16. Exact policy; not upstreamable as written.
+
+On an M5 Max (macOS 27), a game's 28 first-frame pipelines with the OS's shader
+cache and the pipeline archive empty: 3,740 to 3,878 ms compiling the sources,
+821 to 1,070 ms from the shipped libraries. On an iPhone 17e simulator, a fresh
+install: 3,993 to 4,289 ms against 3,750 to 4,040 ms; there the GPU compile, which
+no library holds and no archive can keep on a simulator, is most of it.
+
+## 17. The D3D12 debug-message handler is removed by its handle
+
+`src/auxil/dxgi/exception.rs`, `src/auxil/shared_registration.rs`,
+`src/dx12/device.rs`. A device made with validation registers a vectored
+exception handler that logs D3D12's debug messages, counted across devices.
+Upstream discarded the handle
+[`AddVectoredExceptionHandler`](https://learn.microsoft.com/windows/win32/api/errhandlingapi/nf-errhandlingapi-addvectoredexceptionhandler)
+returned and passed the handler's address to
+[`RemoveVectoredExceptionHandler`](https://learn.microsoft.com/windows/win32/api/errhandlingapi/nf-errhandlingapi-removevectoredexceptionhandler),
+which takes that handle, so no handler was ever removed: each device made
+after the last was dropped registered another, and every exception the
+process raised walked them all. The count now keeps the handle and the last
+device removes it; a failed registration is logged, removes nothing, and is
+tried again by the next device. `Device::new` registers only once nothing
+after it can fail, so a device whose construction fails leaves no
+registration behind. Metadata revision 17. Upstreamable.
+`cargo test --manifest-path vendor/wgpu-hal/Cargo.toml --lib shared_registration`
+runs on any host.
 
 ## Updating
 

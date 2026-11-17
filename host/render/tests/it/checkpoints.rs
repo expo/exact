@@ -21,7 +21,7 @@ fn waiting_request_pages_name_large_checkpoints() {
     ).unwrap();
     let server = Server::bind(
         Serve {
-            dist: dir.clone(),
+            dist: dir.to_path_buf(),
             port: 0,
             name: "Answers".into(),
             origin: None,
@@ -57,5 +57,4 @@ fn waiting_request_pages_name_large_checkpoints() {
     assert_eq!(checkpoint["location"], "/");
     assert_eq!(checkpoint["answers"][0][3], "answer".repeat(300));
     drop(running);
-    std::fs::remove_dir_all(dir).unwrap();
 }

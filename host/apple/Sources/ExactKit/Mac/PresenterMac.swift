@@ -31,6 +31,7 @@ package final class Presenter {
     package var views: [UInt32: NodeView] = [:]
     /// The page viewport's programmatic element reveal, while AppKit owns its interpolation.
     var pageElementAnimation: UUID?
+    var fragmentHeld: FragmentHold?
     var personScrolls = 0, fragmentArm: (activation: Int, scrolls: Int)?, fragmentSeen = 0 // the person's wheels and live scrolls; the activation a router change asked a fragment's scroll for and their count then, which one since cancels; the last armed (Fragment.swift)
     lazy var focusEvents = FocusEvents(self)
     var inlineOwners: [UInt32: (owner: UInt32, index: Int)] = [:]
@@ -44,6 +45,7 @@ package final class Presenter {
     /// A view's props were written (`NodeView.props`' own observer).
     func propsChanged(_ view: NodeView) {
         chrome.note(view.id, props: view.props)
+        AriaCarriers.note(view, of: self)
         if view.disabled { view.showFieldFocus(false) }
         view.syncDisabledLook()
         view.relook() // a look holds on no disabled node (LLP 1121 D8)
@@ -89,6 +91,7 @@ package final class Presenter {
     var videoVisibility: VideoVisibilityHost?
     lazy package var collections = CollectionHost(self)
     lazy var stickies = StickyHost(self)
+    let tableGrid = TableGrid()
     /// Heavy leaves held while their rows are far or flying (LLP 1068 §5.1).
     lazy var leaves = HeavyLeaves(self)
     lazy package var selection = TextSelection(self)
@@ -167,6 +170,7 @@ package final class Presenter {
             return !self.applying && !self.resetting
         }
         viewport.pressedGround = { [weak self] in self?.selection.clear() }
+        viewport.personScrolled = { [weak self] in self?.personScrolls += 1 }
         viewport.pointerTracking = { [weak self] event in self?.trackPointer(event) }
         viewport.lostKey = { [weak self] in self?.windowLostKey() }
         viewport.modalAccessibilityChildren = { [weak self] in
@@ -199,7 +203,7 @@ package final class Presenter {
         scrollObserver = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification,
             object: viewport.contentView, queue: .main) { [weak self] _ in
             if let self { let o = viewport.contentView.bounds.origin; onScrolled?(nil, Double(o.x), Double(o.y)) }
-            self?.stickies.scrolled(nil); self?.scrolled(); self?.transformGeometry.changed(); self?.videoVisibility?.changed() }
+            self?.stickies.scrolled(nil); self?.scrolled(); self?.transformGeometry.changed(); self?.videoVisibility?.changed(); self?.tipsScrolled() }
     }
 
     deinit {
@@ -275,7 +279,9 @@ package final class Presenter {
         }
         let replacementsDeferred = !inScrollCallback && textRasters.replaceVisible(candidates, wait: sliceBudget)
         var rastersDeferred = false
-        for node in candidates where node.needsTextRaster && node.rastersText {
+        var drawn = Set<ObjectIdentifier>() // owed pixels that AppKit draws: `rastersText` is asked once a pass
+        for node in candidates where node.needsTextRaster {
+            guard node.rastersText else { drawn.insert(ObjectIdentifier(node)); continue }
             // On screen without pixels: now. Otherwise nearest first, a few a slice.
             if textIsVisible(node) {
                 if inScrollCallback {
@@ -295,7 +301,7 @@ package final class Presenter {
         // Region readers own their pixel bands and publish positioned layers.
         // The ordinary backing-store band must not invalidate them a second time.
         for node in textViewportIndex!.candidates(reach: Self.textBandSlack)
-            where node.readerParagraph == nil && node.needsTextRaster && !node.rastersText && !node.textIsSmall {
+            where node.needsTextRaster && (drawn.contains(ObjectIdentifier(node)) || !node.rastersText) && node.readerParagraph == nil && !node.textIsSmall {
             let want = textBand(node, reach: Self.textBandSlack)
             guard !want.isEmpty else { continue }
             let old = visibleText[node.id]
@@ -445,6 +451,7 @@ package final class Presenter {
     /// A scroll container moved. Nothing here may take long: AppKit is inside
     /// its scroll synchronizer, and the scrolling thread is waiting on it.
     func scrolled() {
+        refreshPixelatedImages()
         AnimatedRasters.shared.poke()
         followPointerAfterScroll()
         guard !applying, !inScrollCallback else { return }
@@ -589,8 +596,36 @@ package final class Presenter {
     }
     /// The first root's frame size, zero before the first batch.
     var rootSize: CGSize { root.subviews.first?.frame.size ?? .zero }
-    /// The page's canvas colour: the first root's background (white when unset).
-    var pageBackground: NSColor { viewport.backgroundColor }
+    /// The page's canvas colour as the viewport draws it: the first root's
+    /// opaque background, the window background when unset, and clear when
+    /// the root's is translucent, which the viewport leaves undrawn.
+    var pageBackground: NSColor { viewport.drawsBackground ? viewport.backgroundColor : .clear }
+    /// What covers the page where a route paints no ground of its own: the
+    /// canvas, or the window background behind a translucent one.
+    var opaqueGround: NSColor { viewport.drawsBackground ? viewport.backgroundColor : .windowBackgroundColor }
+
+    /// The page's canvas: the first root's background, else the theme's, else
+    /// the platform's (LLP 1115 D2).
+    func canvasColor() -> NSColor {
+        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
+        return (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
+    }
+
+    /// The viewport draws the canvas only where it is opaque. A translucent
+    /// one draws nothing, so what is behind the view shows through: the
+    /// window's background in the app's own window, and the containing
+    /// app's views behind an embedded `ExactView` (LLP 1031 D3). With
+    /// `drawsBackground` on, AppKit takes the scroll view for opaque and
+    /// backs it with the window background whatever the colour's alpha.
+    func paintCanvas(_ color: NSColor) {
+        var alpha: CGFloat = 1
+        viewport.effectiveAppearance.performAsCurrentDrawingAppearance { alpha = color.alphaComponent }
+        let draws = alpha >= 1
+        guard viewport.backgroundColor != color || viewport.drawsBackground != draws else { return }
+        viewport.backgroundColor = color
+        viewport.drawsBackground = draws
+        navigation.groundChanged()
+    }
 
     /// An asset's bytes changed (LLP 1030 D10): every image showing it loads
     /// it again — the old picture stays until the new one is decoded, as a
@@ -607,7 +642,8 @@ package final class Presenter {
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
         WakeLock.hold(self, false); releaseOrientationLock() // the new host's first batch says them again
         cancelPageElementScroll(viewport.contentView)
-        focusEvents.reset()
+        resetFragments()
+        focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
         pointerHeld = nil; pointerPath = []; pointerSource = nil; mouseChain.bubbledPress?.cancel()
         mouseChain.early = nil; mouseChain.reported = []; mouseChain.heldUp = nil; mouseChain.releaseAfterBubbling = false
         elements.reset()
@@ -647,6 +683,7 @@ package final class Presenter {
         hoveredInline = nil
         hoveredNodes = []; hovered = nil
         chrome = ChromeIndex()
+        AriaCarriers.forget(presenter: self)
         scrollers.removeAll()
         pendingScrolls.removeAll()
         heightBindings.removeAll()
@@ -680,7 +717,7 @@ package final class Presenter {
         viewport.syncElasticity()
         viewport.acceptDocumentFit()
     }
-    var onPress, onClose: ((UInt32) -> Void)?
+    var onPress, onClose, onCancel: ((UInt32) -> Void)?
     var onChange: ((UInt32, String) -> Void)?
     /// Images' intrinsic sizes, several at once under one layout.
     var onIntrinsic: (([(UInt32, CGSize?)]) -> Void)?
@@ -756,9 +793,10 @@ package final class Presenter {
     /// boxes where the viewer sees them (LLP 1051.000 D1).
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
     var onListIndex: ((UInt32, String) -> Int?)?
-    var onListText: ((UInt32, (String, Int, Int)?, (String, Int, Int)?) -> String)?
-    var interacting: UInt32 = 0
+    var onListText: ((UInt32, (String, Int, Int, Bool?)?, (String, Int, Int, Bool?)?) -> String)?
     private(set) var listViews: [UInt32: NodeView] = [:]
+    /// Views this batch renewed for another list item (RenewMac.swift), and the accessibility watch that allows it.
+    var renewing = Set<UInt32>(), rowReuseWatch: [NSKeyValueObservation] = []
 
     /// Everything kept for `id`, out of the maps (not out of the window);
     /// `forget` releases its resources too, as a destroy does and a leaving
@@ -887,7 +925,7 @@ package final class Presenter {
     /// window; the browser fires no blur on removal, so neither does this
     /// host), and never while a batch is being applied — it waits for the
     /// batch to finish, then goes if its view survived it.
-    private var applying = false
+    var applying = false
     var isApplying: Bool { applying }
     /// Each painted popover's region not yet told the kernel, the latest, with the view it is for (`tellRegion`).
     var regionsUntold: [UInt32: (view: ObjectIdentifier?, block: HostBlock?)] = [:]
@@ -898,6 +936,22 @@ package final class Presenter {
     /// In `reset`, from its first teardown (FocusEvents keeps the focus it last reported: ResetGate).
     private(set) var resetting = false
     private var pendingGeometry: (() -> Void)?
+    private var drainingGeometry = false
+
+    private func settleGeometry() {
+        guard !drainingGeometry else { return }
+        drainingGeometry = true
+        defer { drainingGeometry = false }
+        for _ in 0..<8 {
+            guard let geometry = pendingGeometry else { return }
+            pendingGeometry = nil
+            geometry()
+        }
+        if pendingGeometry != nil {
+            pendingGeometry = nil
+            session?.log("Geometry did not settle after 8 corrections")
+        }
+    }
 
     /// Window chrome can synchronously resize ExactView while an older batch
     /// is still being installed. Commit its geometry after that batch, so the
@@ -908,7 +962,7 @@ package final class Presenter {
         return true
     }
     private var waiting: [(UInt32, () -> Void)] = []
-    private var afterBatchWork: [() -> Void] = []
+    var afterBatchWork: [() -> Void] = []
     /// Work for after the batch being applied, or now: a hatch's act on an
     /// element never lands inside a batch (LLP 1075.003 §3.4).
     func afterBatch(_ work: @escaping () -> Void) { if applying { afterBatchWork.append(work) } else { work() } }
@@ -1043,7 +1097,7 @@ package final class Presenter {
         // Create, frame or content ops: rows may have come or moved (`HeavyLeaves.batchApplied`).
         let moved = batch.ops.contains { [.create, .frame, .content].contains($0.op) }
         // What may now lie under a resting pointer: boxes made, moved, gone or transformed.
-        let relaid = batch.ops.contains { [.create, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
+        let relaid = batch.ops.contains { [.create, .renew, .frame, .children, .roots, .destroy, .present, .style, .props, .rank, .sticky, .fragments, .exit].contains($0.op) }
         defer {
             collections.endBatch()
             collections.observeKnobDrags()
@@ -1052,26 +1106,28 @@ package final class Presenter {
             if outermost {
                 applying = false
                 videoVisibility?.changed()
-                let geometry = pendingGeometry
-                pendingGeometry = nil
                 let q = waiting
                 waiting = []
-                geometry?()
+                settleGeometry()
                 for (id, f) in q where textHost(id) != nil { f() }
                 let later = afterBatchWork
                 afterBatchWork = []
                 later.forEach { $0() }
                 batchApplied()
                 if !boxFilters.isEmpty { boxFilters.render() }
+                refreshPixelatedImages()
                 ShadowStand.followAll()
                 leaves.batchApplied(moved: moved)
+                flushFragment()
             }
             // Only scheduled: the hit-test is the next display frame's.
             if relaid { followPointer() }
         }
+        // No view changed: no pass over the views. A correction may have scrolled a context preview's source.
+        if Self.onlySnapshots(batch) { tables.sync(batch); positionContexts(); return }
         if !batch.ops.isEmpty { textViewportIndex = nil }
         var reparented = Set<UInt32>()
-        let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .style].contains($0.op) }
+        let structureChanged = batch.ops.contains { [.children, .roots, .destroy, .create, .renew, .style].contains($0.op) }
         if structureChanged { selection.structureChanged() }
         // A button's face changes only in a batch that says so or one that touches it (`ControlHost.face`).
         if batch.controls { controls.facesChanged() }
@@ -1080,7 +1136,7 @@ package final class Presenter {
             let id = op.id
             switch kind {
             // `fieldContent` carries resolved padding the face holds (a percentage of a box that resized).
-            case .create, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent: controls.faceChanged(id)
+            case .create, .renew, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent: controls.faceChanged(id)
             default: break
             }
             if kind == .children { touched(id, children: true) } else if kind != .roots && kind != .create { touched(id, textChanged: kind == .props || kind == .style || kind == .destroy || kind == .fieldContent) }
@@ -1121,6 +1177,7 @@ package final class Presenter {
             case .paragraph:
                 applyParagraph(id, op.runs)
             case .props:
+                fragmentOffsetsWritten(op)
                 if let view = views[id] { anchorChanges.noteProps(op, on: view) }
                 views[id]?.applyProps(set: op.props, clear: op.clear)
                 elements.propsChanged(id)
@@ -1139,7 +1196,7 @@ package final class Presenter {
                 if v.style["text_color"] != color { session?.noteAppearance(v) }
             case .children:
                 guard let parent = views[id] else { continue }
-                let want = op.ids.compactMap { views[UInt32($0)] }
+                let want = regionPopoverChildren(op.ids, of: parent).compactMap { views[$0] }
                 let container = parent.container
                 dialogs.children(container, want)
                 menus.children(container, want)
@@ -1172,17 +1229,23 @@ package final class Presenter {
             case .flight: beginFlight(op)
             case .land: if let f = flights[id] { landFlight(f) }
             case .rank:
-                if let rank = op.payload["rank"] as? NSNumber { views[id]?.setRank(rank.int64Value) }
+                if let rank = op.rank { views[id]?.setRank(rank) }
+            case .layoutHits, .layoutHitsWithdrawn: break
             case .sticky: stickies.apply(id, op.payload)
             case .fragments: views[id]?.applyColumns(op.payload)
+            case .table: tableGrid.apply(id, op.payload)
             case .unknown: blocks.applied(op)
+            case .renew: renew(id)
             case .destroy:
                 elements.destroyed(id)
                 blocks.destroyed(id)
                 stickies.forget(id)
+                tableGrid.forget(id)
                 forgetFlight(id)
                 views[id]?.holdGone()
                 if endExit(id) { continue }
+                // A route that left with its exit to play stays for it (RouteTransitionMac.swift).
+                if navigation.transitions.keeps(id) { beginExit(id); continue }
                 release(id, forget: true)?.removeFromSuperview()
             case .roots:
                 dialogs.children(root, op.ids.compactMap { views[UInt32($0)] })
@@ -1198,7 +1261,7 @@ package final class Presenter {
                 guard let v = views[id] else { continue }
                 applyFrame(v, NSRect(x: op.x, y: op.y, width: op.w, height: op.h))
             case .fieldContent:
-                views[id]?.applyFieldContent(op.payload)
+                views[id]?.applyFieldContent(op)
             case .content:
                 if let v = views[id] {
                     v.content = CGSize(width: op.w, height: op.h)
@@ -1211,7 +1274,7 @@ package final class Presenter {
                 case "translate": v.translatePx = CGPoint(x: x, y: CGFloat(op.y)); v.translatePercent = CGPoint(x: CGFloat(op.w), y: CGFloat(op.h)); v.applyTransform()
                 case "layout": v.layoutOffset = CGPoint(x: x, y: CGFloat(op.y)); v.layoutResize = CGSize(width: CGFloat(op.w), height: CGFloat(op.h)); v.applyTransform(); v.applySurface()
                 case "scale": v.scale = x; v.applyTransform()
-                case "rotate": v.rotate = x; v.applyTransform()
+                case "rotate": v.rotate = x; v.rotationAxis = [op.y, op.w, op.h]; v.applyTransform()
                 case "opacity": v.presentedAlpha = x; v.alphaValue = v.disabledShown ? x * NodeView.disabledOpacity : x; v.refreshPressOpacity()
                 case "flight": presentFlight(id, x)
                 default: break
@@ -1219,7 +1282,8 @@ package final class Presenter {
             default: break
             }
         }
-        regridMoved()
+        regridMoved(); if !renewing.isEmpty { renewsApplied() }
+        NodeView.inkPlaced(reparented.compactMap { views[$0] })
         if !flights.isEmpty { flightsBatchApplied() }
         tables.sync(batch)
         navigation.sync(batch, reparented: reparented)
@@ -1230,25 +1294,31 @@ package final class Presenter {
         // shows beyond a document shorter than the viewport, as a browser
         // paints the root element's background over the whole canvas.
         // Unset, the platform's window background (LLP 1115 D2).
-        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
-        let color = (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
-        if viewport.backgroundColor != color { viewport.backgroundColor = color; navigation.groundChanged() }
+        paintCanvas(canvasColor())
+        insetScrollersFromChrome()
         let first = root.subviews.first as? NodeView
         let fit = first?.props["viewportFit"]
         if fit != viewportFit { viewportFit = fit; onViewportFit?() }
         session?.canvases.cancelMovedControls()
         PaintOrder.flush()
         session?.canvases.captureIfNeeded()
+        // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to (LLP 1070.000 §15).
+        let names = Set(session?.pendingElementScrolls ?? [])
+        let authored = (names.isEmpty ? [] : views.values.filter { $0.props["id"].map(names.contains) == true })
+            + scrollers.union(pendingScrolls).compactMap { views[$0] }.filter { $0.pendingScrollTop != nil || $0.pendingScrollLeft != nil }
         for id in scrollers.union(pendingScrolls) {
             guard let node = views[id] else { continue }
-            if !collections.owns(node.id) { node.restoreScrollPosition() }
+            if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
+            node.settleZoom() // the zoom, then the batch's offsets in its extent (LLP 1057.001.000 D2)
             node.applyPendingScroll()
+            node.resnap()
         }
         pendingScrolls.removeAll()
         segments.sync()
         controls.sync()
         dialogs.sync()
+        attachRegionPopovers()
         menus.sync()
         glassGroups.reconcile()
         positionContexts()
@@ -1260,6 +1330,7 @@ package final class Presenter {
             #endif
         }
         shortcuts.sync()
+        presentTips()
         statusItems.sync()
         if structureChanged { selection.structureChanged() }
         // The key-view loop is read only by a key event (Tab): it is marked
@@ -1281,38 +1352,6 @@ package final class Presenter {
         })
         syncAccessibility(changed: changed, disabledRoots: disabledRoots)
         _ = chrome.takeChangedNames()
-    }
-
-    func orderChildren(_ children: [NodeView], in container: NSView) {
-        // Detaching a retained child clears AppKit's first responder. Sort
-        // in place; a flight's slot stands for its lifted child (LLP 1013.000).
-        // Exit ghosts keep their slots among both live and flying children.
-        let wanted = Set(children.map(ObjectIdentifier.init))
-        let current = container.subviews
-        var ordered: [NSView] = children.compactMap { child in
-            if child.superview === container { return child }
-            guard let flight = flights[child.id], flight.view === child,
-                  let slot = flight.slot, slot.superview === container else { return nil }
-            return slot
-        }
-        let placed = Set(ordered.map(ObjectIdentifier.init))
-        let peers = current.filter { $0 is NodeView || $0 is FlightSlot }
-        for (index, child) in peers.enumerated() where !placed.contains(ObjectIdentifier(child)) &&
-            ((child as? NodeView)?.paintGhost == true || child is FlightSlot) {
-            ordered.insert(child, at: min(index, ordered.count))
-        }
-        let leaving = current.filter { ($0 as? NodeView).map { !$0.paintGhost } ?? false && !wanted.contains(ObjectIdentifier($0)) }
-        let native = current.filter { !($0 is NodeView) && !($0 is FlightSlot) }
-        ordered = native + ordered + leaving
-        guard !ordered.elementsEqual(current, by: { $0 === $1 }) else { return }
-        var ranks = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { (ObjectIdentifier($0.element), $0.offset) })
-        withUnsafeMutablePointer(to: &ranks) { context in
-            container.sortSubviews({ left, right, raw in
-                let order = raw!.assumingMemoryBound(to: [ObjectIdentifier: Int].self).pointee
-                let a = order[ObjectIdentifier(left)]!, b = order[ObjectIdentifier(right)]!
-                return a < b ? .orderedAscending : a > b ? .orderedDescending : .orderedSame
-            }, context: context)
-        }
     }
 
     private static let accessibilityOps: Set<BatchOp.Kind> = [.create, .props, .style, .children, .paragraph, .flow, .frame, .fieldContent]
@@ -1372,10 +1411,8 @@ package final class Presenter {
     var keyViewLoopStale = false
     var keyViewLoopMode: Bool?
     let keyViewBefore = NSMapTable<NSView, NSView>.weakToWeakObjects()
-    /// The control that lost the focus by becoming disabled, while nothing
-    /// has taken it since: HTML's sequential focus navigation starting
-    /// point, which its focus fixup rule leaves there, so Tab goes on from
-    /// the control's place (`tabFromStart`).
+    /// HTML's sequential focus navigation starting point: a fragment target
+    /// or a control that lost focus by becoming disabled (`tabFromStart`).
     weak var tabStart: NSView?
 
     /// An op touched a node (LLP 1014 D4 a): every canvas it is painted
@@ -1396,41 +1433,6 @@ package final class Presenter {
     }
 }
 
-/// A view's subtree as pixels (LLP 1014 D3).
-package enum Capture {
-    /// A capture is drawing: its draws are not repaints (D4 b).
-    nonisolated(unsafe) static var capturing = false
-    /// Guest pictures for this turn, by the node that draws each (two
-    /// sessions' ids can be the same); the remote platform views are hidden
-    /// while their owning nodes draw these (@ref LLP 1020 D4/D6, `withGuests`).
-    nonisolated(unsafe) static var web: [ObjectIdentifier: ExactWebImage] = [:]
-
-    /// The subtree painted at `scale`: premultiplied RGBA, rows top-down,
-    /// `pixelsWide * 4` bytes per row, transparent where nothing painted.
-    package static func bitmap(of view: NSView, scale: CGFloat, prepared: Bool = false) -> NSBitmapImageRep? {
-        if !prepared { prepareBackingLayers(of: view) }
-        // A subtree painted through its canvas composites at alpha 0; paint
-        // it opaque into the bitmap regardless.
-        let alpha = view.alphaValue
-        view.alphaValue = 1
-        // A canvas nested under this one that is painted through its own
-        // surface: its picture comes by readback (its draw), not from its
-        // overlay's views, so those are hidden for the duration.
-        var hidden: [NSView] = []
-        func hide(_ v: NSView) {
-            for s in v.subviews {
-                if let n = s as? NodeView, n.placement != nil, !n.isHidden { n.isHidden = true; hidden.append(n); continue }
-                if let n = s as? NodeView, let o = n.overlay, o.alphaValue == 0, !o.isHidden { o.isHidden = true; hidden.append(o); continue }
-                hide(s)
-            }
-        }
-        hide(view)
-        let rep = paintOrderBitmap(of: view, scale: scale, prepared: true)
-        for o in hidden { o.isHidden = false }
-        view.alphaValue = alpha
-        return rep
-    }
-}
 
 extension NSRect {
     /// The rect inside the given edges (never negative in size).

@@ -39,8 +39,14 @@ impl<D: DataSource> Runner<D> {
             .unwrap_or("")
     }
 
-    /// CSS direction of the resolved table, compiled from CLDR likely subtags.
+    /// The document's CSS direction: the platform's where the host told one
+    /// at launch (the Mac's process direction), else the resolved table's,
+    /// compiled from CLDR likely subtags. What the author leaves unsaid lays
+    /// out in it, and the host is told it beside `lang`.
     pub fn direction(&self) -> &'static str {
+        if let Some(direction) = self.host_direction {
+            return direction.name();
+        }
         if self
             .plan
             .locales
@@ -135,14 +141,14 @@ impl<D: DataSource> Runner<D> {
                 // The locale slot is part of this fact's commit (LLP 1060 D4):
                 // the table the app's choice resolves to, else the viewer's.
                 let written = r.write_locale();
-                if written.is_some() && readers.is_empty() {
+                if !written.is_empty() && readers.is_empty() {
                     readers = r
                         .resource_rows()
                         .enumerate()
                         .filter_map(|(i, row)| (r.plan.str(row.source) == SOURCE).then_some(i))
                         .collect();
                 }
-                let result = if readers.is_empty() && written.is_none() {
+                let result = if readers.is_empty() && written.is_empty() {
                     if r.live_times.is_empty() {
                         Ok(None)
                     } else {
@@ -152,7 +158,7 @@ impl<D: DataSource> Runner<D> {
                     r.commit_again(readers, "place").map(Some)
                 };
                 if result.is_err() {
-                    if let Some((i, old)) = written {
+                    for (i, old) in written {
                         r.slots[i] = old;
                     }
                 }
@@ -178,12 +184,41 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Write the table [`Runner::requested_locale`] resolves to into the
-    /// locale slot: the slot's index and old value when that changed it.
-    fn write_locale(&mut self) -> Option<(usize, Value)> {
-        let i = self.plan.locale?.0 as usize;
+    /// locale slot, and the format locale into the format slot: the index
+    /// and old value of each slot that changed.
+    fn write_locale(&mut self) -> Vec<(usize, Value)> {
+        let mut changed = Vec::new();
+        let Some(i) = self.plan.locale.map(|s| s.0 as usize) else {
+            return changed;
+        };
         let requested = self.requested_locale();
-        let value = Value::str(self.plan.resolve_locale(&requested)?);
-        (self.slots[i] != value).then(|| (i, std::mem::replace(&mut self.slots[i], value)))
+        let Some(table) = self.plan.resolve_locale(&requested) else {
+            return changed;
+        };
+        let value = Value::str(table);
+        if self.slots[i] != value {
+            changed.push((i, std::mem::replace(&mut self.slots[i], value)));
+        }
+        if let Some(f) = self.plan.format.map(|s| s.0 as usize) {
+            let value = Value::str(&self.format_locale_of(i));
+            if self.slots[f] != value {
+                changed.push((f, std::mem::replace(&mut self.slots[f], value)));
+            }
+        }
+        changed
+    }
+
+    /// The format locale (LLP 1054.000.003 D6): the table in the locale slot
+    /// `i`, with the hour cycle the viewer's regional format forces.
+    pub(super) fn format_locale_of(&self, i: usize) -> String {
+        let table = self.slots[i].as_str().unwrap_or_default();
+        let place = &self.place;
+        let format = if place.format_locale.is_empty() {
+            &place.locale
+        } else {
+            &place.format_locale
+        };
+        exact_plan::strings::format_tag(table, format)
     }
 
     /// The commit's `setLocale`s from `from` on, each applied and taken
@@ -224,7 +259,7 @@ impl<D: DataSource> Runner<D> {
                 crate::agent::quote(tag, &mut text);
                 self.store.keep(CHOSEN, text.into_bytes());
             }
-            if self.write_locale().is_some() {
+            if !self.write_locale().is_empty() {
                 let readers: Vec<usize> = self
                     .resource_rows()
                     .enumerate()
@@ -288,7 +323,7 @@ impl<D: DataSource> Runner<D> {
         self.dispose_dropped();
         let topics = std::mem::take(&mut *self.announced.lock().unwrap_or_else(|e| e.into_inner()));
         let mut receipts = Vec::new();
-        for topic in topics {
+        for topic in self.declaration_topics(topics) {
             // An event a bound implementation emitted, said through its
             // module's `changed` (LLP 1133.004 D6): raised, not a topic.
             if let Some(event) = topic.strip_prefix(super::modules::EMITTED) {

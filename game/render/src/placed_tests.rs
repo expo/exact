@@ -526,7 +526,7 @@ fn displayed_unresolved_follower_logs_once_and_falls_back() {
     let mut attachments = scene::Attachments::default();
     let before = w.journal();
     for _ in 0..3 {
-        attachments.feed(&w, false, false, false, false);
+        attachments.feed(&w, false, false, None, false);
     }
     assert_eq!(
         w.journal().len(),
@@ -569,7 +569,7 @@ fn displayed_unavailable_follower_logs_once_by_name() {
     );
     let mut a = scene::Attachments::default();
     for _ in 0..3 {
-        a.feed(w, false, false, false, false);
+        a.feed(w, false, false, None, false);
     }
     let errors: Vec<_> = a.diagnostics.borrow().values().cloned().collect();
     assert_eq!(errors.len(), 1);
@@ -593,17 +593,17 @@ fn attachment_diagnostics_are_shared_and_history_reset_keeps_them() {
     let mut a = scene::Attachments::default();
     let mut b = scene::Attachments::default();
     b.diagnostics = a.diagnostics.clone();
-    a.feed(&w, true, false, false, false);
+    a.feed(&w, true, false, None, false);
     assert!(
         b.diagnostics.borrow().contains_key(&(e, "socket")),
         "second feed must see the first warning"
     );
     a.reset();
     assert!(a.diagnostics.borrow().contains_key(&(e, "socket")));
-    b.feed(&w, true, false, false, false);
+    b.feed(&w, true, false, None, false);
     assert_eq!(a.diagnostics.borrow().len(), 1);
     w.despawn(e);
-    b.feed(&w, false, false, false, false);
+    b.feed(&w, false, false, None, false);
     assert!(
         a.diagnostics.borrow().is_empty(),
         "dead entity warnings are pruned for both feeds"
@@ -621,20 +621,20 @@ fn diagnostics_replace_changed_error_clear_on_fresh_world_and_survive_restore() 
         ),
     );
     let mut a = scene::Attachments::default();
-    a.feed(&w, true, false, false, false);
+    a.feed(&w, true, false, None, false);
     let first = a.diagnostics.borrow()[&(e, "socket")].clone();
     w.get_mut::<exact_game::SocketFollow>(e).unwrap().target = "missing-b".into();
-    a.feed(&w, false, true, false, false);
+    a.feed(&w, false, true, None, false);
     assert_ne!(a.diagnostics.borrow()[&(e, "socket")], first);
     let saved = w.save();
     w.load(&saved).unwrap();
     a.diagnostics.borrow_mut().restored(&w);
     a.reset();
-    a.feed(&w, true, false, false, false);
+    a.feed(&w, true, false, None, false);
     assert_eq!(a.diagnostics.borrow().len(), 1);
     let mut fresh = World::new(60, 0);
     fresh.spawn(Transform::default());
-    a.feed(&fresh, true, false, false, false);
+    a.feed(&fresh, true, false, None, false);
     assert!(a.diagnostics.borrow().is_empty());
 }
 
@@ -678,7 +678,7 @@ fn skipped_animation_display_uses_saved_joint_with_current_owner_and_offset() {
     );
     sim.run(17.);
     let mut a = scene::Attachments::default();
-    a.feed(sim.world(), true, false, false, false);
+    a.feed(sim.world(), true, false, None, false);
     a.frame(1.);
     sim.world_mut()
         .get_mut::<Transform>("owner")
@@ -691,7 +691,7 @@ fn skipped_animation_display_uses_saved_joint_with_current_owner_and_offset() {
         .offset
         .position
         .x = 5.;
-    a.feed(sim.world(), false, true, false, false);
+    a.feed(sim.world(), false, true, None, false);
     a.frame(1.);
     assert_eq!(a.output[0].matrix.w_axis.x, 17.);
     // Skipped ticks retain the local endpoint rather than replaying old bone interpolation.
@@ -700,7 +700,7 @@ fn skipped_animation_display_uses_saved_joint_with_current_owner_and_offset() {
     let save = sim.world().save();
     sim.world_mut().load(&save).unwrap();
     let mut fresh = scene::Attachments::default();
-    fresh.feed(sim.world(), true, false, false, false);
+    fresh.feed(sim.world(), true, false, None, false);
     fresh.frame(1.);
     a.frame(1.);
     assert_eq!(a.output[0].matrix, fresh.output[0].matrix);

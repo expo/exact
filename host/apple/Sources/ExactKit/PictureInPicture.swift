@@ -7,16 +7,17 @@
 // macOS instead (`Mac/PictureInPictureWindowMac.swift`), which needs no arm.
 import Foundation
 
-private typealias FloatCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+typealias FloatCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
 
 /// An image floating in a window. The process has one picture-in-picture window, as a document
 /// has one picture-in-picture element: AVKit's panel or Exact's browser window (`"window"`). A
 /// request for another image moves it there, and the first hears it leave. Panels (`"panel"`) are
 /// windows of their own, one per image, as a page opens a window per preview.
 final class PictureInPictureHost {
-    private typealias Create = @convention(c) (UnsafeMutableRawPointer?, FloatCallback?) -> UnsafeMutableRawPointer?
-    private typealias Frame = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
-    private typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    typealias Create = @convention(c) (UnsafeMutableRawPointer?, FloatCallback?) -> UnsafeMutableRawPointer?
+    typealias Frame = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+    typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    typealias Exports = (create: Create, frame: Frame, destroy: Destroy)
     /// The image in the one picture-in-picture window.
     private static var current: PictureInPictureHost?
     /// The images floating each in a panel of its own, in the order they were asked for.
@@ -56,8 +57,8 @@ final class PictureInPictureHost {
         all.compactMap { host in host.entered ? host.node.map { ($0, host) } : nil }
     }
 
-    /// The arm's three exports, from the video arm's library.
-    private static let exports: (create: Create, frame: Frame, destroy: Destroy)? = {
+    /// The arm's three exports, from the video arm's library. Settable, so a test runs as a build without them.
+    static var exports: Exports? = {
         guard let library = VideoArmLibrary.handle,
               let create = dlsym(library, "exact_pip_create"), let frame = dlsym(library, "exact_pip_frame"),
               let destroy = dlsym(library, "exact_pip_destroy") else { return nil }
@@ -67,10 +68,11 @@ final class PictureInPictureHost {
     static func request(_ node: NodeView, _ options: Options) {
         let floats = all.first { $0.node === node }
         if let floats, floats.options == options { floats.sendSource(); return }
-        // An image floats in one window: asked for another, it leaves the one it is in.
-        floats?.end(heard: true)
+        // A request that is refused leaves every float as it was: what floats ends only once the new host exists.
         if options.window {
             #if os(macOS)
+            // An image floats in one window: asked for another, it leaves the one it is in.
+            floats?.end(heard: true)
             let title = options.title ?? ExactEnv.appName
             let host = PictureInPictureHost(node, options)
             if options.panel {
@@ -96,7 +98,6 @@ final class PictureInPictureHost {
             #endif
             return
         }
-        current?.end(heard: true)
         guard let exports else { return refuse(node, "the video module is not in this build") }
         let host = PictureInPictureHost(node, options)
         let callback: FloatCallback = { context, bytes, count in
@@ -108,6 +109,8 @@ final class PictureInPictureHost {
         guard let handle = exports.create(Unmanaged.passUnretained(host).toOpaque(), callback) else {
             return refuse(node, "picture in picture is not available on this platform")
         }
+        floats?.end(heard: true)
+        current?.end(heard: true)
         host.handle = handle
         current = host
         host.sendSource()

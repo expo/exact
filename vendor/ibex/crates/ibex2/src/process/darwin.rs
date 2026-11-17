@@ -111,6 +111,12 @@ pub(super) fn spawn(
 }
 
 pub(super) fn start_time(pid: i32) -> Option<u64> {
+    info(pid)
+        .ok()
+        .map(|i| i.pbi_start_tvsec * 1_000_000 + i.pbi_start_tvusec)
+}
+
+fn info(pid: i32) -> io::Result<libc::proc_bsdinfo> {
     // SAFETY: a zeroed proc_bsdinfo is valid, and proc_pidinfo writes at
     // most its size.
     unsafe {
@@ -123,7 +129,11 @@ pub(super) fn start_time(pid: i32) -> Option<u64> {
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size,
         );
-        (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+        if n == size {
+            Ok(info)
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 }
 
@@ -154,17 +164,119 @@ pub(super) fn boot_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-pub(super) fn group_members(pgid: i32) -> Vec<i32> {
-    let mut pids = vec![0 as libc::pid_t; 4096];
-    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
-    // SAFETY: the buffer holds `bytes` bytes.
-    let n = unsafe { libc::proc_listpgrppids(pgid, pids.as_mut_ptr().cast(), bytes) };
-    if n <= 0 {
-        return Vec::new();
+pub(super) fn group_members(pgid: i32) -> io::Result<Vec<i32>> {
+    let members = group_members_with(|pids| {
+        let bytes = std::mem::size_of_val(pids) as libc::c_int;
+        let buffer = if pids.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            pids.as_mut_ptr().cast()
+        };
+        // SAFETY: the buffer holds `bytes` bytes, or is null for the count query.
+        unsafe { libc::proc_listpgrppids(pgid, buffer, bytes) }
+    })?;
+    Ok(members
+        .into_iter()
+        .filter(|pid| match info(*pid) {
+            Ok(i) => i.pbi_status != libc::SZOMB,
+            Err(e) => e.raw_os_error() != Some(libc::ESRCH),
+        })
+        .collect())
+}
+
+fn group_members_with(
+    mut list: impl FnMut(&mut [libc::pid_t]) -> libc::c_int,
+) -> io::Result<Vec<i32>> {
+    // libproc takes bytes but returns PID counts, including its null-buffer estimate.
+    let mut count = list(&mut []);
+    let max_pids = libc::c_int::MAX as usize / std::mem::size_of::<libc::pid_t>();
+    let mut pids = Vec::new();
+    loop {
+        if count <= 0 || count as usize > max_pids {
+            return Err(io::Error::other("could not list process group"));
+        }
+        pids.resize(count as usize, 0);
+        let n = list(&mut pids);
+        if n <= 0 {
+            return Err(io::Error::other("could not list process group"));
+        }
+        if (n as usize) < pids.len() {
+            pids.truncate(n as usize);
+            pids.retain(|p| *p > 0);
+            return Ok(pids);
+        }
+        // A full buffer may omit members that joined after the estimate.
+        count = count.saturating_mul(2);
     }
-    // Whether libproc counts bytes or pids, the list ends at the first zero.
-    if let Some(end) = pids.iter().position(|p| *p == 0) {
-        pids.truncate(end);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_members_exceeds_the_old_fixed_buffer() {
+        let expected: Vec<_> = (1..=5000).collect();
+        let actual = group_members_with(|pids| {
+            if pids.is_empty() {
+                return expected.len() as libc::c_int;
+            }
+            let n = pids.len().min(expected.len());
+            pids[..n].copy_from_slice(&expected[..n]);
+            n as libc::c_int
+        });
+        assert_eq!(actual.unwrap(), expected);
     }
-    pids.into_iter().filter(|p| *p > 0).collect()
+
+    #[test]
+    fn group_members_retries_growth_and_an_exact_fit() {
+        let expected = [11, 12, 13, 14];
+        let mut sizes = Vec::new();
+        let actual = group_members_with(|pids| {
+            sizes.push(pids.len());
+            if pids.is_empty() {
+                return 2;
+            }
+            let n = pids.len().min(expected.len());
+            pids[..n].copy_from_slice(&expected[..n]);
+            n as libc::c_int
+        });
+        assert_eq!(actual.unwrap(), expected);
+        assert_eq!(sizes, [0, 2, 4, 8]);
+    }
+
+    #[test]
+    fn group_members_uses_the_returned_count_instead_of_a_terminator() {
+        let actual = group_members_with(|pids| {
+            if pids.is_empty() {
+                return 5;
+            }
+            pids.copy_from_slice(&[11, 0, 13, 99, 100]);
+            3
+        });
+        assert_eq!(actual.unwrap(), [11, 13]);
+    }
+
+    #[test]
+    fn group_members_returns_no_partial_list_on_disappearance_or_failure() {
+        for replies in [
+            vec![(0, 0)],
+            vec![(0, -1)],
+            vec![(0, libc::c_int::MAX)],
+            vec![(0, 4), (4, 0)],
+            vec![(0, 4), (4, -1)],
+            vec![(0, 2), (2, 2), (4, 0)],
+            vec![(0, 2), (2, 2), (4, -1)],
+        ] {
+            let mut replies = replies.into_iter();
+            let actual = group_members_with(|pids| {
+                let (size, result) = replies.next().expect("an expected libproc call");
+                assert_eq!(pids.len(), size);
+                pids.fill(17);
+                result
+            });
+            assert!(actual.is_err());
+            assert_eq!(replies.next(), None);
+        }
+    }
 }

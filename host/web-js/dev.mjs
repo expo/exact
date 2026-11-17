@@ -17,24 +17,32 @@ import { createServer, request } from 'node:http';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, watch, writeFileSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 import { acceptsHTML, appDocumentPath, webRequestURL } from '../../scripts/origin.mjs';
-import { compilerWarnings, INPUT_TREE, OUTPUT, listenOn } from '../../scripts/agent-launch.mjs';
+import { appDigest, compilerError, compilerWarnings, INPUT_TREE, OUTPUT, listenOn, oneScheme } from '../../scripts/agent-launch.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
-import { alsoOnIPv6Loopback, appManifestDigest, buildFileCards, listenDelay, replaceBuild, saveTrace, sendStaticBody, watchLauncher, webContentType } from '../web/serve.mjs';
+import { alsoOnIPv6Loopback, appManifestDigest, appSources, buildFileCards, listenDelay, replaceBuild, saveTrace, sendStaticBody, watchLauncher, webContentType } from '../web/serve.mjs';
 import { generationFile, generationPath, servedFile } from '../web/generations.mjs';
 import { besidePattern } from '../web/beside.mjs';
+import { cargoContractReads, changedContractReads, contractReadReceipt } from '../../scripts/web-build.mjs';
+import { webSourceRoots } from '../web/build.mjs';
+import { shaderWatchRoots } from '../../scripts/app.mjs';
+import { within } from '../../scripts/paths.mjs';
 import { localInstaller } from '../web/local-install.mjs';
-import { designPath, frameOnlyByTool, tamberServer } from '../../scripts/tamber-server.mjs';
-import { pluginOnLoopback } from '../../scripts/tamber-remote.mjs';
-import { openRemoteCanvas } from '../../scripts/tamber-canvas.mjs';
-import { mapCard, pullMap } from '../../scripts/tamber-inspect.mjs';
-import { serveCommands, serveReport, streamFrame } from '../../scripts/tamber-builds.mjs';
-import { fresh, freshCompiler, webCompiler } from './module.mjs';
+import { designPath, frameOnlyByTool, formaServer } from '../../scripts/forma-server.mjs';
+import { pluginOnLoopback } from '../../scripts/forma-remote.mjs';
+import { openRemoteCanvas } from '../../scripts/forma-canvas.mjs';
+import { mapCard, pullMap } from '../../scripts/forma-inspect.mjs';
+import { serveCommands, serveReport, streamFrame } from '../../scripts/forma-builds.mjs';
+import { EXE, depInfoOf, fresh, freshCompiler, webCompiler } from './module.mjs';
+import { RustMissing, fromSets, launch, rustMissing, toolEnv } from '../../scripts/tools.mjs';
 import { hostModuleSources } from './glue.mjs';
+import { schemeHead } from '../web/look.mjs';
 import { INSPECT_EVENTS } from './inspect-dev.js';
 import { galleryLoop } from './dev-gallery.mjs';
 import { inlineWhy as inlineWhyOf } from './dev-inline.mjs';
 import { DEV_STATUS_TYPE, FAILED, PHASE, gist } from '../web/dev-phase.mjs';
+import { startupBuilds, stopBuildTree } from '../web/dev-startup.mjs';
 import { fileURLToPath } from 'node:url';
+import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 
 const CHECKPOINT_BYTES = 16 * 1024 * 1024, CHECKPOINTS = 8;
 
@@ -106,15 +114,19 @@ function mapDesignSource(app, dir) {
  * when it says so as the build ends (an input moved since it began, or it
  * was stopped for one), or a source it read moved since, leaves `dist` as
  * it was and resolves `{superseded}`: what it read is older than the files.
- * With none, it is published whatever moved. */
-function build(app, dist, keep = () => false, compiler = null, superseded = null) {
+ * With none, it is published whatever moved. `cancelled()` still sets it
+ * aside during shutdown, including the final startup attempt. */
+function build(app, dist, keep = () => false, compiler = null, superseded = null, cancelled = () => false) {
   // One stage per dist: two loops on one target/ (two apps outside a workspace, or one CARGO_TARGET_DIR) never
   // build into each other's.
   const stage = resolve(app.target, 'web-js-dev-stage', createHash('sha256').update(resolve(dist)).digest('hex').slice(0, 16));
   rmSync(stage, { recursive: true, force: true });
-  const began = Date.now();
+  // The app's `file:` packages as their directories hold them, before the build begins: installed during it, they
+  // would be sources moved since it began, and it would be set aside (#115).
+  try { installedFileDependencies(app.dir); } catch (error) { return Promise.resolve({ packages: devPackages(stage), error: error.message }); }
+  const began = Date.now(), sources = appSources(app.dir, resolve(dist)).digest;
   // The app's own inputs beside its Contract sources, and which were there.
-  const own = [designPath(app.dir) ?? resolve(app.dir, 'app.tamber'), resolve(app.dir, 'app.ts'), resolve(app.dir, 'app.json'), resolve(app.dir, '.exact/backend-origin'), resolve(app.dir, '.env.local'), resolve(app.dir, '.env')];
+  const own = [designPath(app.dir) ?? resolve(app.dir, 'app.forma'), resolve(app.dir, 'app.ts'), resolve(app.dir, 'app.json'), resolve(app.dir, '.exact/backend-origin'), resolve(app.dir, '.env.local'), resolve(app.dir, '.env')];
   const there = new Set(own.filter((path) => existsSync(path)));
   const known = new Set(lastSources.filter((path) => existsSync(path)));
   return new Promise((done) => {
@@ -148,26 +160,39 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       const newer = () => packages.sources.some((path) => { try { return since(path); } catch { return known.has(path); } })
         || own.some((path) => { try { lstatSync(path); } catch { return there.has(path); } return !there.has(path) || since(path); });
       const setAside = () => { rmSync(stage, { recursive: true, force: true }); done({ superseded: true, packages }); };
-      const moved = () => superseded && (superseded() || newer());
+      const moved = () => cancelled() || (superseded && (superseded() || newer()));
       // A failed one too: its errors may be of files since edited.
       if (moved()) return setAside();
       // The one line a build says when it rewrote the types app.ts imports, built or not (LLP 1116.001 D4.5).
       const types = /^app\.contract\.d\.ts: .*$/m.exec(log)?.[0];
       if (types) console.log(types);
-      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: log.split('\n').filter((l) => l.trim() && !/^\s*(Compiling|Finished|Running|warning)/.test(l) && !compilerWarnings(l).length).slice(-12).join('\n') || `build exited ${code}` }); }
+      // What it said: its last 12 lines, or from the compiler's first error when those leave it out.
+      const said = log.split('\n').filter((l) => l.trim() && !/^\s*(Compiling|Finished|Running|warning)/.test(l) && !compilerWarnings(l).length), first = said.findIndex(compilerError);
+      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, Math.max(0, said.length - 12)) : -12).join('\n') || `build exited ${code}` }); }
+      let cargo;
+      try { cargo = cargoContractReads(webSourceRoots(app, true), began); }
+      catch (error) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: error.message }); }
+      packages.sources = [...new Set([...packages.sources, ...Object.keys(cargo)])];
+      lastSources = packages.sources;
+      if (changedContractReads(cargo).length) return setAside();
       const logic = readFileSync(resolve(stage, '.exact-dev-logic.json'), 'utf8').trim();
       const design = devDesign(stage), designSource = mapDesignSource(app, stage);
       if (keep(design, logic)) {
         return setImmediate(() => {
-          if (moved()) return setAside();
+          if (moved() || changedContractReads(cargo).length) return setAside();
           rmSync(stage, { recursive: true, force: true }); done({ error: null, logic, packages, design, designSource, kept: true, warnings: compilerWarnings(log) });
         });
       }
-      writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
-        manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...builtSettings(stage) }) + '\n');
+      try {
+        // `sources` as host/web/build.mjs records it: null when a file came or went while it built.
+        const after = appSources(app.dir, resolve(dist)).digest;
+        writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
+          manifestSha256: appManifestDigest(app), files: buildFileCards(stage), sources: after === sources ? after : null,
+          reads: { contract: contractReadReceipt(resolve(stage, '.gen')), cargo }, ...builtSettings(stage) }) + '\n');
+      } catch (error) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: error.message }); }
       // Once more after the watchers' events queued meanwhile are taken.
       setImmediate(() => {
-        if (moved()) return setAside();
+        if (moved() || changedContractReads(cargo).length) return setAside();
         replaceBuild(stage, dist);
         done({ error: null, logic, packages, design, designSource, warnings: compilerWarnings(log) });
       });
@@ -184,19 +209,46 @@ const mtimeMs = (path) => { try { return statSync(path).mtimeMs; } catch { retur
 function copyCompiler(path, copy, built) {
   const temp = `${copy}.${process.pid}.tmp`, tempDep = `${temp}.d`;
   try {
-    const dep = mtimeMs(`${path}.d`);
+    const dep = mtimeMs(depInfoOf(path));
     if (mtimeMs(path) !== built || dep === null) throw new Error('built again');
     copyFileSync(path, temp);
     utimesSync(temp, new Date(built), new Date(built));
-    copyFileSync(`${path}.d`, tempDep);
-    if (mtimeMs(path) !== built || mtimeMs(`${path}.d`) !== dep || !readFileSync(tempDep, 'utf8').endsWith('\n')) throw new Error('built again');
-    renameSync(tempDep, `${copy}.d`);
+    copyFileSync(depInfoOf(path), tempDep);
+    if (mtimeMs(path) !== built || mtimeMs(depInfoOf(path)) !== dep || !readFileSync(tempDep, 'utf8').endsWith('\n')) throw new Error('built again');
+    renameSync(tempDep, depInfoOf(copy));
     renameSync(temp, copy);
   } catch { rmSync(temp, { force: true }); rmSync(tempDep, { force: true }); }
 }
+/** Where `app`'s builds take the loop's compiler copy (`copyCompiler`). */
+const compilerCopy = (app) => resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}${EXE}`);
 
 /** Build `app` on the JS target and serve it with reload, until the process ends. */
 export async function devJs({ app, dist, port, host, origins, gate, lan, allowHosts = [], remoteAsked = { remote: null, tunnel: null, plugin: false, hosts: [] }, residentPort = 0, pairTtlMs }) {
+  let stopping = false, shutdown = null;
+  // A design (`exact-web-js design`), read from the compiler with no build:
+  // a value-only edit's and a scrub's. Optimised (host-dev), built as the
+  // loop starts and again after any edit that is not a design's, so it is
+  // the compiler the builds use; until it is, the debug compiler answers.
+  // Where this build is not fresh, a tool set's compiler is the reader
+  // (`set`), and nothing is built (LLP 1174 D5).
+  const ownTool = resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), `host-dev/exact-web-js${EXE}`);
+  const tool = { path: ownTool, set: false, ready: false, built: null, child: null, reading: null, cleaner: null };
+  // Whether the reader is still what its sources make: its own build by its dep-info, or the set it was taken from.
+  const toolCurrent = () => (tool.set ? fromSets('exact-web-js')?.path === tool.path : fresh(tool.path, depInfoOf(tool.path)));
+  const patcher = { child: null, built: null, asks: new Map(), n: 0 };
+  const toolExits = new Set(), inspections = new Set();
+  const stopGroup = child => {
+    const exit = stopBuildTree(child);
+    toolExits.add(exit);
+    void exit.finally(() => toolExits.delete(exit));
+    return exit;
+  };
+  const stopCompilers = () => {
+    for (const child of [building, tool.child, tool.reading, tool.cleaner, patcher.child, ...inspections]) stopGroup(child);
+    return Promise.all(toolExits);
+  };
+  const startup = startupBuilds();
+  startup.handoff(() => shutdown ??= (async () => { stopping = true; await stopCompilers(); process.exit(0); })());
   const budget = /\|\s*Dev restart[^|]*\|\s*([^|\n]+)/.exec(readFileSync(resolve(root, 'rules/RULES.md'), 'utf8'))?.[1].trim() ?? '?';
   const t0 = Date.now();
   // A first build that fails (a refusal or a compile error) serves its
@@ -211,7 +263,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     const input = (name) => name && ((!skipped.test(String(name)) && String(name) !== 'app.contract.d.ts') || /^\.exact(?:[\\/]backend-origin)?$/.test(String(name)) || settingsFile(name));
     const begun = Date.now();
     const early = [watch(app.dir, { recursive: true }, (_, name) => { if (!moved && input(name) && movedSince(resolve(app.dir, String(name)), begun)) moved = true; }), watch(resolve(root, 'host/web-js'), { recursive: true }, (_, name) => { if (!moved && name && !skipped.test(String(name)) && movedSince(resolve(root, 'host/web-js', String(name)), begun)) moved = true; })];
-    try { built = await build(app, dist, () => false, null, tries < 3 ? () => moved : null); } finally { for (const w of early) w.close(); }
+    try { built = await build(app, dist, () => false, null, tries < 3 ? () => moved : null, () => stopping); } finally { for (const w of early) w.close(); }
+    if (stopping) await shutdown;
     startMoved = moved;
     if (!built.superseded) break;
     console.log('a source moved while the first build ran: building again');
@@ -243,7 +296,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   let warned = '';
   const warn = (warnings) => {
     if (!warnings || warnings.join('\n') === warned) return;
-    if (warnings.length) console.log(warnings.join('\n'));
+    if (warnings.length) console.log(oneScheme(warnings).join('\n'));
     else console.log('the compiler warns of nothing now');
     warned = warnings.join('\n');
   };
@@ -253,10 +306,10 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // Ready lines wait for the server to answer (and its doors), as a test or an agent connects on them.
   let listening = false; const held = [], sayReady = (line) => { if (listening) console.log(line); else held.push(line); };
   // The design server's wire, once made below (a rebuild may come first).
-  let tamber = null, doors = null;
+  let forma = null, doors = null;
   const clients = new Set();
-  // A batch to a page behind waits, then the latest design's notice goes instead (tamber-builds.mjs).
-  const push = (m) => { for (const res of clients) if (m.kind === 'tamber-batch') streamFrame(res, JSON.stringify(m), () => snapshot && notice(snapshot)); else res.write(`data: ${JSON.stringify(m)}\n\n`); };
+  // A batch to a page behind waits, then the latest design's notice goes instead (forma-builds.mjs).
+  const push = (m) => { for (const res of clients) if (m.kind === 'forma-batch') streamFrame(res, JSON.stringify(m), () => snapshot && notice(snapshot)); else res.write(`data: ${JSON.stringify(m)}\n\n`); };
   // The live table (LLP 1121 stage 4): the design the page in dist was built
   // with, and the one the pages run after value-only edits since.
   let design = built.design ?? null, snapshot = null;
@@ -264,7 +317,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // a scrub's frame must have been folded over to be patched on it.
   let designFrom = built.designSource ?? null;
   // A snapshot's notice keeps a scrub frame's mark (*1.11*).
-  const notice = (s) => ({ kind: 'tamber-batch', structure: s.structure, base: s.design, design: s.design, tokens: [], ...(s.scrub ? { scrub: s.scrub } : {}) });
+  const notice = (s) => ({ kind: 'forma-batch', structure: s.structure, base: s.design, design: s.design, tokens: [], ...(s.scrub ? { scrub: s.scrub } : {}) });
   // A batch larger than this, in UTF-8 bytes, goes as the snapshot's notice
   // instead, as the resident loop sends it (host/web/dev.mjs DESIGN_FRAME):
   // a native host's event frames are bounded (PlanURL.swift's 64 KiB).
@@ -280,13 +333,6 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // frames, *1.11*), so a late fetch of one of them never shows over it; the
   // scrub ends with it.
   const releasedMark = () => { const mark = released?.id ? released : undefined; scrubbed = null; aside = null; released = false; return mark; };
-  // A design (`exact-web-js design`), read from the compiler with no build:
-  // a value-only edit's and a scrub's. Optimised (host-dev), built as the
-  // loop starts and again after any edit that is not a design's, so it is
-  // the compiler the builds use; until it is, the debug compiler answers.
-  const tool = { path: resolve(process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(root, 'target'), 'host-dev/exact-web-js'), ready: false, built: null, child: null, reading: null, cleaner: null };
-  // Cargo and the compilers it runs, as a group (stopped together).
-  const stopGroup = (child) => { if (!child) return; try { process.kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } };
   // What a failed build said: each error with the lines that explain it (a
   // linker's `ld:` and `Undefined symbols` lines, its notes, the command line
   // cut short), then its last lines.
@@ -337,8 +383,20 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   };
   let cleaned = false, readerHolds = 0;
   const buildTool = () => {
+    if (stopping) return;
     tool.ready = false;
+    const waited = tool.child || tool.cleaner;
     stopGroup(tool.child);
+    if (!fresh(ownTool, depInfoOf(ownTool))) {
+      const set = fromSets('exact-web-js');
+      if (set || rustMissing()) {
+        Object.assign(tool, { path: set?.path ?? ownTool, set: !!set, ready: !!set, built: null, child: null });
+        console.log(set ? 'design reader ready (a tool set\'s)' : `the design reader did not build (design edits take the full build):\n${new RustMissing('exact-web-js').message}`);
+        if (waited) resumeAfterReader();
+        return;
+      }
+    }
+    Object.assign(tool, { path: ownTool, set: false });
     const started = new Date();
     const child = tool.child = spawn('cargo', ['build', '-q', '--profile', 'host-dev', '-p', 'exact-web-js'], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
     let err = '';
@@ -348,7 +406,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // (only the first: one built again because a cold build left its inputs newer is not held twice).
     const hold = readerHolds++ === 0 ? Number(process.env.EXACT_DEV_READER_HOLD_MS) || 0 : 0;
     child.on('exit', (code, signal) => setTimeout(() => {
-      if (tool.child !== child) return;
+      if (stopping || tool.child !== child) return;
       tool.child = null;
       tool.ready = code === 0 && existsSync(tool.path);
       // Dated to the build's start, as Cargo dates its fingerprints: a
@@ -381,13 +439,13 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // edit the loop does not watch, under contract/ or kernel/, rebuilds it).
   const toolFresh = () => {
     if (!tool.ready) return false;
-    if (fresh(tool.path, `${tool.path}.d`)) return true;
+    if (toolCurrent()) return true;
     buildTool();
     return false;
   };
   // The same, starting nothing: for what a request below write scope reaches
   // (`propose`'s class, stage 10 A1), which may not start a build.
-  const toolReady = () => tool.ready && fresh(tool.path, `${tool.path}.d`);
+  const toolReady = () => tool.ready && toolCurrent();
   buildTool();
   // The page's inspect table (LLP 1122 T2b, inspect.rs), made for dist's
   // plan when the page first asks (seconds for a large app, so no build
@@ -395,12 +453,16 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // and one made while dist moved on is not served.
   const tables = new Map();
   const inspectTable = (digest, plan = resolve(dist, 'app.plan')) => {
+    if (stopping) return Promise.resolve(null);
     if (!tables.has(digest)) {
       tables.set(digest, new Promise((done) => {
         // (this loop's own: another loop on one target/ may make the same plan's table, and removes its own)
         const out = resolve(app.target, `inspect-${digest}-${process.pid}.json`);
-        const compiler = toolFresh() ? { cmd: tool.path, pre: [], done() {} } : webCompiler();
-        const child = spawn(compiler.cmd, [...compiler.pre, 'inspect-table', plan, out], { cwd: root, stdio: ['ignore', 'ignore', 'pipe'] });
+        let compiler;
+        try { compiler = toolFresh() ? launch(tool.path) : webCompiler(); } catch (error) { tables.delete(digest); console.log(`inspect table: ${error.message}`); return done(null); }
+        const child = spawn(compiler.cmd, [...compiler.pre, 'inspect-table', plan, out], { cwd: root, env: compiler.env, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+        inspections.add(child);
+        child.once('close', () => inspections.delete(child));
         let err = '';
         child.stderr.on('data', (d) => { err += d; });
         child.on('exit', (code) => {
@@ -420,9 +482,10 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // only, as it is, never a build or the `cargo run` fallback.
   const designOf = (text, { readOnly = false } = {}) => new Promise((done) => {
     if (readOnly && !toolReady()) return done({ error: 'the design reader is not built' });
-    const compiler = readOnly ? { cmd: tool.path, pre: [] } : toolFresh() ? { cmd: tool.path, pre: [] } : webCompiler();
+    let compiler;
+    try { compiler = readOnly || toolFresh() ? launch(tool.path) : webCompiler(); } catch (error) { return done({ error: error.message }); }
     // A group: the debug fallback is a `cargo run`, stopped with its compilers.
-    const child = tool.reading = spawn(compiler.cmd, [...compiler.pre, 'design', resolve(app.dir, 'app.contract'), '-'], { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    const child = tool.reading = spawn(compiler.cmd, [...compiler.pre, 'design', resolve(app.dir, 'app.contract'), '-'], { cwd: root, env: compiler.env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     child.on('error', (e) => done({ error: e.message }));
     child.stdin.on('error', () => {});
     child.stdin.end(text);
@@ -444,7 +507,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // A fast batch is checked by the full build after it (its verifying build): the
   // design's module inputs and its compile; a value-only edit during that
   // build is sent at once and checked after it.
-  let designing = false, stopping = false;
+  let designing = false;
   // Input changes seen, counted: a build that began before the last one
   // read older files, and is set aside (`superseded`), never published.
   // An edit stops the build in flight, once in a burst and only while it
@@ -476,25 +539,25 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   let backendSeen = backendOf();
   const pending = new Map(); // seq -> the save it answers
   // The variant gallery (dev-gallery.mjs), started by its first page: told of each publication after it is out.
-  const gallery = galleryLoop({ app, root, appDist: dist, channel: () => tamber?.channel, design: () => design?.digest ?? null, idleMs: Number(process.env.EXACT_DEV_GALLERY_IDLE_MS) || undefined,
+  const gallery = galleryLoop({ app, root, appDist: dist, channel: () => forma?.channel, design: () => design?.digest ?? null, idleMs: Number(process.env.EXACT_DEV_GALLERY_IDLE_MS) || undefined,
     // (The reader's binary while it is fresh, asked without building it or the reader again; else no table yet.)
-    tableTool: () => (tool.ready && tool.path && fresh(tool.path, `${tool.path}.d`) ? { cmd: tool.path, pre: [] } : null),
-    compiler: () => { const copy = resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}`); return freshCompiler(copy) ? copy : null; },
+    tableTool: () => (tool.ready && tool.path && toolCurrent() ? launch(tool.path) : null),
+    compiler: () => { const copy = compilerCopy(app); return freshCompiler(copy) ? copy : null; },
     client: (n) => client(n, null, { base: '/__dev/gallery', stream: '/__dev/gallery/stream', page: 'gallery' }) });
   const rebuild = async () => {
     // A burst a build already took (its timer still armed) is no edit.
-    if (!edited.size) return;
+    if (stopping || !edited.size) return;
     const at = saved, t = Date.now();
     // A path that existed during the save and is gone by now (an editor's
     // or sed's temporary file) edited nothing; one already gone when its
     // event came (a deleted asset) is an edit.
-    const designs = [...edited].filter((path) => path.endsWith('.tamber'));
-    const designOnly = designs.length > 0 && [...edited].every((path) => path.endsWith('.tamber') || (!existsSync(path) && appeared.has(path)));
+    const designs = [...edited].filter((path) => path.endsWith('.forma'));
+    const designOnly = designs.length > 0 && [...edited].every((path) => path.endsWith('.forma') || (!existsSync(path) && appeared.has(path)));
     // A value-only design edit (LLP 1121 stage 4): its design from the
     // compiler, no build, sent as a batch; the page in dist stays, as a kept
     // build's does; the full build after it checks what the read cannot (the
     // modules' inputs, the whole compile). One that moves the design's shape
-    // (or fails) builds. Only the app's own design: another .tamber may be
+    // (or fails) builds. Only the app's own design: another .forma may be
     // any build's input.
     const file = designPath(app.dir);
     const fast = designOnly && design && designs.every((path) => path === file);
@@ -538,14 +601,14 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
         design = next;
         served = { digest: design.digest ?? null, source: designFrom = createHash('sha256').update(text).digest('hex') };
         const keep = scrubbed && released ? releasedMark() : undefined;
-        const committed = { kind: 'tamber-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens, scrub: keep };
+        const committed = { kind: 'forma-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens, scrub: keep };
         if (scrubbed) aside = committed; else { snapshot = committed; const kept = design.digest; setImmediate(() => gallery.designKept(kept)); } // (the gallery: a kept design, never a scrub's, once the batch below is out)
         const tokens = design.tokens.filter((tk, i) => !same(tk, from.tokens[i]));
         if (tokens.length && !scrubbed) {
           console.log(`edit → batch ready ${Date.now() - at} ms (design read in ${Date.now() - t} ms, no build) · ${tokens.length} token${tokens.length === 1 ? '' : 's'} to ${clients.size} page${clients.size === 1 ? '' : 's'}, no reload`);
-          const batch = framed({ kind: 'tamber-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: keep });
+          const batch = framed({ kind: 'forma-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: keep });
           push(batch);
-          tamber?.channel.broadcast(batch);
+          forma?.channel.broadcast(batch);
         }
         // A check already under way is set aside, and done again after it.
         if (building) { for (const p of pendingEdits) edited.add(p); for (const p of pendingAppeared) appeared.add(p); again = true; return; }
@@ -565,7 +628,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // kept while it is fresh, so a build while the reader builds again (as
     // it does below, after every edit) takes it as well.
     // The app's own (apps in the tree share a target/).
-    const copy = resolve(app.target, `web-js-dev-compiler-${app.name.replace(/[^\w.-]/g, '_')}`);
+    const copy = compilerCopy(app);
     // Only the binary this loop's own build left (another loop on this
     // target/ may have linked one since, not yet dated to its start).
     if (tool.ready && tool.built !== null && freshCompiler(tool.path)) copyCompiler(tool.path, copy, tool.built);
@@ -582,7 +645,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       && next.tokens.every((t, i) => t.name === design.tokens[i].name && String(t.accent) === String(design.tokens[i].accent) && (!t.inline || same(t, design.tokens[i])));
     buildBegan = Date.now();
     console.log(`edit → building${checking ? ' (checking the batch)' : ''}`);
-    built = await build(app, dist, keep, compiler, () => inputs !== began);
+    built = await build(app, dist, keep, compiler, () => inputs !== began, () => stopping);
+    if (stopping) return;
     if (built.superseded && ++asideRun === 3) console.log('edit → three builds in a row set aside: an input moves during every build (does one write its own input?)');
     if (!built.superseded) { stopped = false; lastBuildMs = Date.now() - buildBegan; asideRun = 0; }
     // An input moved while it built (a value-only edit's batch included):
@@ -616,23 +680,23 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       // While a scrub previews the pages stay on it: this changes only what
       // its end restores. A released scrub's build goes from it, and ends it.
       const keep = scrubbed && released ? releasedMark() : undefined;
-      const committed = { kind: 'tamber-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens, scrub: keep };
+      const committed = { kind: 'forma-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens, scrub: keep };
       if (scrubbed) aside = committed; else { snapshot = committed; const kept = design.digest; setImmediate(() => gallery.designKept(kept)); }
       // A batch sent before this build: it checked out, and stands.
       if (fast && !tokens.length) console.log(`edit → checked in ${Date.now() - t} ms · the batch stands`);
       if (tokens.length && !scrubbed) {
         console.log(`edit → batch ready ${Date.now() - at} ms (built in ${Date.now() - t} ms) · ${tokens.length} token${tokens.length === 1 ? '' : 's'} to ${clients.size} page${clients.size === 1 ? '' : 's'}, no reload`);
-        const batch = framed({ kind: 'tamber-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: keep });
+        const batch = framed({ kind: 'forma-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: keep });
         push(batch);
         // The one source of batches: the resident loop's devices and Linux
         // take them through the channel's polled streams.
-        tamber?.channel.broadcast(batch);
+        forma?.channel.broadcast(batch);
       }
     }
     else {
       // A reload ends a scrub's preview: the pages boot the committed design.
       // The scrub ends too: a frame folded on its sources would leave this edit out.
-      tamber?.compete();
+      forma?.compete();
       scrubbed = null; aside = null; released = false;
       const next = built.design ?? null;
       keepPageMap();
@@ -643,13 +707,13 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
       const shaped = from && next && from.shape === next.shape && from.tokens.length === next.tokens.length && next.tokens.every((tk, i) => tk.name === from.tokens[i].name);
       design = next;
       designFrom = built.designSource ?? null;
-      snapshot = shaped ? { kind: 'tamber-snapshot', structure: next.shape, base: null, design: next.digest, tokens: next.tokens } : null;
+      snapshot = shaped ? { kind: 'forma-snapshot', structure: next.shape, base: null, design: next.digest, tokens: next.tokens } : null;
       // A native build on the resident producer keeps its plan and takes
       // this design as a batch only when its shape held: then it is served,
       // from the bytes compiled; else no build runs it but on its own plan.
       served = shaped ? { digest: next.digest ?? null, source: built.designSource } : null;
       const changedTokens = shaped ? next.tokens.filter((tk, i) => !same(tk, from.tokens[i])) : [];
-      if (changedTokens.length) tamber?.channel.broadcast(framed({ kind: 'tamber-batch', structure: next.shape, base: from.digest, design: next.digest, tokens: changedTokens }));
+      if (changedTokens.length) forma?.channel.broadcast(framed({ kind: 'forma-batch', structure: next.shape, base: from.digest, design: next.digest, tokens: changedTokens }));
       logicRevision = built.logic;
       pending.set(++seq, at);
       sayReady(`edit → plan ready ${Date.now() - at} ms (rebuilt in ${Date.now() - t} ms) · ${clients.size} page${clients.size === 1 ? '' : 's'} reloading`);
@@ -658,19 +722,29 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     }
     if (again) { again = false; rebuild(); }
   };
-  // An editor's temporary name for a `.tamber` file beside it: the file's
+  // An editor's temporary name for a `.forma` file beside it: the file's
   // name with `.tmp` (and a hex or numeric suffix, a pid or a hash), `.swp`,
   // `.swx`, `~`, JetBrains' or Emacs's marks; anchored, so no other file
-  // named after it (`app.tamber.tmp.png`) is one.
-  const TEMPORARY = /^(?:\.?(.+\.tamber)(?:\.tmp(?:[.-][0-9a-f]+)?|\.sw[px]|~|___jb_(?:tmp|old)___)|#(.+\.tamber)#|\.#(.+\.tamber))$/;
+  // named after it (`app.forma.tmp.png`) is one.
+  const TEMPORARY = /^(?:\.?(.+\.forma)(?:\.tmp(?:[.-][0-9a-f]+)?|\.sw[px]|~|___jb_(?:tmp|old)___)|#(.+\.forma)#|\.#(.+\.forma))$/;
   const temporaryOfDesign = (path) => {
     const m = TEMPORARY.exec(basename(path));
     const design = m && (m[1] ?? m[2] ?? m[3]);
     return !!design && existsSync(resolve(dirname(path), design));
   };
+  const outputIsInput = (name) => {
+    const path = resolve(app.dir, name);
+    if (INPUT_TREE.test(name) || JSON.stringify(app.manifest ?? {}).includes(name)
+      || shaderWatchRoots(app).some(root => within(root, path))) return true;
+    for (let at = dirname(path); at !== app.dir && within(app.dir, at); at = dirname(at)) {
+      if (existsSync(resolve(at, 'Cargo.toml'))) return true;
+    }
+    return false;
+  };
   // A build reading a tree (the assets it copies) is reported too on macOS:
   // a path not modified since the last build started is no edit.
   const changed = (base, skip = skipped, fresh = true) => (_, name) => {
+    if (stopping) return;
     // A Contract source the compile read is an input even where the app's
     // watcher skips (a dot directory).
     if (name && skip.test(String(name)) && !contractInput(resolve(base, String(name)))
@@ -687,12 +761,11 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // The declarations a build writes beside app.ts, for an editor.
     if (base === app.dir && String(name) === 'app.contract.d.ts') return;
     // An editor's temporary for a design beside it (an atomic save writes
-    // `app.tamber.tmp` and renames it over `app.tamber`; its event can come
+    // `app.forma.tmp` and renames it over `app.forma`; its event can come
     // before or after the rename): never an input, whenever it comes.
     if (name && temporaryOfDesign(resolve(base, String(name)))) return;
-    // A screenshot, film, log or note written into the app folder, outside the input trees and not named by
-    // app.json, does not reload a page under a test (authoring bench).
-    if (base === app.dir && OUTPUT.test(String(name)) && !INPUT_TREE.test(String(name)) && !JSON.stringify(app.manifest ?? {}).includes(String(name))) return;
+    // Crates can include any extension; declared inputs and input trees also keep their output-looking files.
+    if (base === app.dir && OUTPUT.test(String(name)) && !outputIsInput(String(name))) return;
     // A package's events are all edits: a link replaced by one to an older
     // file is newer than nothing, and its target's time says nothing of it.
     if (fresh && name && !backendMoved && !movedSince(resolve(base, String(name)), since)) return;
@@ -722,7 +795,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
   // The app's sources, and the runtime and compiler it builds with.
   const watchers = [watch(app.dir, { recursive: true }, changed(app.dir)), watch(resolve(root, 'host/web-js'), { recursive: true }, changed(resolve(root, 'host/web-js')))];
   for (const file of new Set([...hostModuleSources(root, ['host/web/navigation.js']),
-    ...['index.html', 'neutral.css', 'look.mjs'].map(name => `host/web/${name}`)])) {
+    ...['index.html', 'neutral.css', 'look.mjs', 'scheme.js'].map(name => `host/web/${name}`)])) {
     const path = resolve(root, file);
     watchers.push(watch(path, changed(dirname(path))));
   }
@@ -780,22 +853,22 @@ let gate=null,held=(()=>{try{return sessionStorage.getItem('exact.dev.inspect${p
 const inspector=ready().then(()=>import('/__dev/inspect.js')).then(m=>{m.install({${page ? `key:'exact.dev.inspect:${page}',` : ''}fetch,report:rep,status:async()=>status(),facts:()=>({plan:null,design:globalThis.exact?.designDigest??null,revision:ch.revision}),nonce:()=>ch.nonce});gate=m.gate;return m}).catch(e=>{letGo(false);throw e});
 let due=false;const moved=()=>{if(due||!ch.nonce)return;due=true;setTimeout(()=>{due=false;const b=facts();if(JSON.stringify(b)!==ch.told){ch.told=JSON.stringify(b);rep(b)}},0)},seen=new MutationObserver(moved);if(cp)ready().then(()=>{globalThis.exact.onAsked=moved});seen.observe(document.documentElement,{attributes:true,attributeFilter:['style','data-x-modes']});seen.observe(document.head,{childList:true,subtree:true,characterData:true});for(const k of['pushState','replaceState']){const w=history[k];history[k]=function(...a){const o=w.apply(this,a);moved();return o}}addEventListener('popstate',moved);addEventListener('hashchange',moved);
 const nav=m=>{liveQ=liveQ.then(async()=>{await ready();const mine=()=>m.stream===ch.nonce;if(!mine())return;const x=globalThis.exact,u=new URL(m.location,location.origin),to=u.pathname+u.search,no=d=>{if(mine())rep({kind:'unsupported',what:'navigate',detail:String(d).slice(0,1024),revision:m.seq})};if(u.origin!==location.origin||u.pathname.startsWith('//'))return no("the location is no path on this page's origin");const there=()=>history.state?.url===to||location.pathname+location.search===to,before=history.state?.url;try{if(!there()){const why=typeof x?.goTo==='function'?x.goTo(to):'this page has no router';if(why)return no(why)}for(let i=0;i<100&&!there()&&history.state?.url===before;i++)await new Promise(ok=>setTimeout(ok,10));if(mine()&&there()&&u.hash!==location.hash)history.replaceState(history.state,'',location.origin+location.pathname+location.search+u.hash)}catch(e){return no(String(e))}moved()}).catch(e=>console.error('exact dev:',e))};
-const pin=m=>{liveQ=liveQ.then(async()=>{await ready();const r=document.documentElement.style,p=m.pin,x=globalThis.exact,was=x.held;let rm=0;x.held=cp&&p?Object.fromEntries([['scheme',!!p.scheme],['rootFontSize',!!p.rootFontSize],...Object.keys(p.mode??{}).map(a=>['mode:'+a,true])]):null;ch.before??={fontSize:r.fontSize,hostFont:r.getPropertyValue('--exact-host-font-size'),mode:x?.modes?.read?.()??{}};const sh=document.getElementById('exact-dev-pin')??document.head.appendChild(Object.assign(document.createElement('style'),{id:'exact-dev-pin'}));const fx=document.querySelector('meta[name="color-scheme"]')?.content,sc=p?.scheme&&(cp||!['light','dark'].includes(fx))?p.scheme:null;sh.textContent=sc?':root{color-scheme:'+sc+(cp?'!important':'')+'}':'';if((x.systemScheme??null)!==sc){x.systemScheme=sc;dispatchEvent(new Event('resize'))}r.removeProperty('font-size');if(cp&&p?.rootFontSize)r.setProperty('font-size',p.rootFontSize+'px','important');else r.fontSize=p?.rootFontSize?p.rootFontSize+'px':ch.before.fontSize;if(p?.rootFontSize)r.setProperty('--exact-host-font-size',r.fontSize);else if(ch.before.hostFont)r.setProperty('--exact-host-font-size',ch.before.hostFont);else r.removeProperty('--exact-host-font-size');const last=ch.pin?.mode??{},back=Object.fromEntries(Object.entries(ch.before.mode??{}).filter(([a])=>a in last&&!(a in(p?.mode??{}))&&!(cp&&x.asked?.['mode:'+a]))),mode=Object.entries(p?(cp?{...back,...(p.mode??{})}:{...ch.before.mode,...(p.mode??{})}):back);if(mode.length&&x?.modes?.set){const why=x.modes.set(mode);if(why){rm=1;rep({kind:'unsupported',what:'pin.mode',detail:why,revision:m.revision});if(!cp)x.modes.set(Object.entries(ch.before.mode));if(x.held){for(const k of Object.keys(x.held))if(k.startsWith('mode:'))delete x.held[k];for(const [k,on]of Object.entries(was??{}))if(on&&k.startsWith('mode:'))x.held[k]=true}}dispatchEvent(new Event('resize'))}if(p?.contrast)rep({kind:'unsupported',what:'pin.contrast',detail:"a web page cannot pin the browser's contrast",revision:m.revision});for(const [f,on]of Object.entries(was??{}))if(on&&!x.held?.[f])x.asked?.[f]?.apply();if(!p)ch.before=null;ch.pin=p?(cp&&rm?{...p,mode:last}:p):null;ch.revision=m.revision;status()}).catch(e=>console.error('exact dev:',e))};
-es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==='tamber-snapshot'){live(m);return}if(m.kind==='pin'){pin(m);return}if(m.kind==='navigate'){m.stream=ch.nonce;nav(m);return}if(m.kind==='inspect'||m.kind==='outline'||m.kind==='hold'){m.stream=ch.nonce;inspector.then(i=>i.frame(m)).catch(e=>rep({kind:'unsupported',what:m.kind,detail:String(e)}));return}if(m.nonce&&m.nonce!==ch.nonce){const n=ch.nonce=m.nonce;ch.registered=ready().then(async()=>{const id=await bid,got=await post(n,{kind:'register',id,host:'web-js',capabilities:${page ? `['pin','inspect','copies','hold'],page:'${page}'` : "['pin','inspect','copies','hold','navigate']"},plan:null,planDigest:globalThis.exact?.plan??null,design:globalThis.exact?.designDigest??null}),ok=got.ok;if(!ok)console.warn('exact dev: the dev loop refused the register of this page ('+got.status+'), so no tool sees it');if(ok&&window!==parent)parent.postMessage({type:'exact-build',id},'*');return ok}).catch(e=>{console.warn('exact dev: this page could not register with the dev loop, so no tool sees it: '+e);return false});status()}if(m.error!==undefined)show(m.error);if(m.reload>seq&&!reloading){reloading=true;if(!globalThis.exact){location.reload();return}ready().then(async()=>{const checkpoint=capture(m.revision!==logicRevision),id=crypto.getRandomValues(new Uint32Array(4)).join('-');console.info('exact dev reload: checkpoint',m.reload);const saved=await fetch('${base}/checkpoint?id='+id+'&seq='+m.reload+'&revision='+encodeURIComponent(m.revision??''),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(checkpoint)});if(saved.status===403){console.info('exact dev reload: no checkpoint at this scope; a fresh load');location.reload();return}if(!saved.ok)throw new Error('checkpoint handoff answered '+saved.status);const next=new URL(location.href);next.searchParams.set('__exactDev',id);if(admission)for(const [k,v]of admission)if(!next.searchParams.has(k))next.searchParams.set(k,v);location.replace(next.href)}).catch(e=>{reloading=false;console.error('exact dev reload: current page retained; checkpoint handoff failed',e)})}}})()</script>`;
+const pin=m=>{liveQ=liveQ.then(async()=>{await ready();const r=document.documentElement.style,p=m.pin,x=globalThis.exact,was=x.held;let rm=0;x.held=cp&&p?Object.fromEntries([['scheme',!!p.scheme],['rootFontSize',!!p.rootFontSize],...Object.keys(p.mode??{}).map(a=>['mode:'+a,true])]):null;ch.before??={fontSize:r.fontSize,hostFont:r.getPropertyValue('--exact-host-font-size'),mode:x?.modes?.read?.()??{}};const sh=document.getElementById('exact-dev-pin')??document.head.appendChild(Object.assign(document.createElement('style'),{id:'exact-dev-pin'}));const fx=document.querySelector('meta[name="color-scheme"]')?.content,sc=p?.scheme&&(cp||!['light','dark'].includes(fx))?p.scheme:null;sh.textContent=sc?':root{color-scheme:'+sc+(cp?'!important':'')+'}':'';if(cp)x.asked?.scheme?.apply();if((x.systemScheme??null)!==sc){x.systemScheme=sc;dispatchEvent(new Event('resize'))}r.removeProperty('font-size');if(cp&&p?.rootFontSize)r.setProperty('font-size',p.rootFontSize+'px','important');else r.fontSize=p?.rootFontSize?p.rootFontSize+'px':ch.before.fontSize;if(p?.rootFontSize)r.setProperty('--exact-host-font-size',r.fontSize);else if(ch.before.hostFont)r.setProperty('--exact-host-font-size',ch.before.hostFont);else r.removeProperty('--exact-host-font-size');const last=ch.pin?.mode??{},back=Object.fromEntries(Object.entries(ch.before.mode??{}).filter(([a])=>a in last&&!(a in(p?.mode??{}))&&!(cp&&x.asked?.['mode:'+a]))),mode=Object.entries(p?(cp?{...back,...(p.mode??{})}:{...ch.before.mode,...(p.mode??{})}):back);if(mode.length&&x?.modes?.set){const why=x.modes.set(mode);if(why){rm=1;rep({kind:'unsupported',what:'pin.mode',detail:why,revision:m.revision});if(!cp)x.modes.set(Object.entries(ch.before.mode));if(x.held){for(const k of Object.keys(x.held))if(k.startsWith('mode:'))delete x.held[k];for(const [k,on]of Object.entries(was??{}))if(on&&k.startsWith('mode:'))x.held[k]=true}}dispatchEvent(new Event('resize'))}if(p?.contrast)rep({kind:'unsupported',what:'pin.contrast',detail:"a web page cannot pin the browser's contrast",revision:m.revision});for(const [f,on]of Object.entries(was??{}))if(on&&!x.held?.[f])x.asked?.[f]?.apply();if(!p)ch.before=null;ch.pin=p?(cp&&rm?{...p,mode:last}:p):null;ch.revision=m.revision;status()}).catch(e=>console.error('exact dev:',e))};
+es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='forma-batch'||m.kind==='forma-snapshot'){live(m);return}if(m.kind==='pin'){pin(m);return}if(m.kind==='navigate'){m.stream=ch.nonce;nav(m);return}if(m.kind==='inspect'||m.kind==='outline'||m.kind==='hold'){m.stream=ch.nonce;inspector.then(i=>i.frame(m)).catch(e=>rep({kind:'unsupported',what:m.kind,detail:String(e)}));return}if(m.nonce&&m.nonce!==ch.nonce){const n=ch.nonce=m.nonce;ch.registered=ready().then(async()=>{const id=await bid,got=await post(n,{kind:'register',id,host:'web-js',capabilities:${page ? `['pin','inspect','copies','hold'],page:'${page}'` : "['pin','inspect','copies','hold','navigate']"},plan:null,planDigest:globalThis.exact?.plan??null,design:globalThis.exact?.designDigest??null}),ok=got.ok;if(!ok)console.warn('exact dev: the dev loop refused the register of this page ('+got.status+'), so no tool sees it');if(ok&&window!==parent)parent.postMessage({type:'exact-build',id},'*');return ok}).catch(e=>{console.warn('exact dev: this page could not register with the dev loop, so no tool sees it: '+e);return false});status()}if(m.error!==undefined)show(m.error);if(m.reload>seq&&!reloading){reloading=true;if(!globalThis.exact){location.reload();return}ready().then(async()=>{const checkpoint=capture(m.revision!==logicRevision),id=crypto.getRandomValues(new Uint32Array(4)).join('-');console.info('exact dev reload: checkpoint',m.reload);const saved=await fetch('${base}/checkpoint?id='+id+'&seq='+m.reload+'&revision='+encodeURIComponent(m.revision??''),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(checkpoint)});if(saved.status===403){console.info('exact dev reload: no checkpoint at this scope; a fresh load');location.reload();return}if(!saved.ok)throw new Error('checkpoint handoff answered '+saved.status);const next=new URL(location.href);next.searchParams.set('__exactDev',id);if(admission)for(const [k,v]of admission)if(!next.searchParams.has(k))next.searchParams.set(k,v);location.replace(next.href)}).catch(e=>{reloading=false;console.error('exact dev reload: current page retained; checkpoint handoff failed',e)})}}})()</script>`;
   const checkpoints = new Map();
   /** A scrub's design: the compiler's, with its text in place of the design file's; written nowhere. */
   const scrubDesign = designOf;
-  // A scrub's frames patched (tamber-scrub.mjs `patch`), by the optimised
+  // A scrub's frames patched (forma-scrub.mjs `patch`), by the optimised
   // reader resident (`exact-web-js design-serve`): the app compiled once per
   // committed design, each frame's folded rows set on that plan, compiling
   // nothing. Started at a scrub's first frame, again after the reader
   // builds again; a frame it cannot patch is compiled whole instead.
-  const patcher = { child: null, built: null, asks: new Map(), n: 0 };
   const patcherAsk = (request) => new Promise((done) => {
+    if (stopping) return done({ fallback: true });
     if (!toolFresh()) return done({ fallback: true });
     if (!patcher.child || patcher.built !== tool.built) {
       stopGroup(patcher.child);
-      const child = patcher.child = spawn(tool.path, ['design-serve', resolve(app.dir, 'app.contract')], { cwd: root, stdio: ['pipe', 'pipe', 'ignore'], detached: true });
+      const child = patcher.child = spawn(tool.path, ['design-serve', resolve(app.dir, 'app.contract')], { cwd: root, env: toolEnv(), stdio: ['pipe', 'pipe', 'ignore'], detached: true });
       patcher.built = tool.built;
       let buffered = '';
       child.stdin.on('error', () => {});
@@ -867,12 +940,12 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
     // A new preview is no released scrub's.
     scrubbed = next;
     released = false;
-    snapshot = { kind: 'tamber-snapshot', structure: next.shape, base: null, design: next.digest, tokens: next.tokens, scrub: frame };
+    snapshot = { kind: 'forma-snapshot', structure: next.shape, base: null, design: next.digest, tokens: next.tokens, scrub: frame };
     const tokens = next.tokens.filter((t, i) => !same(t, from.tokens[i]));
     if (tokens.length) {
-      const batch = framed({ kind: 'tamber-batch', structure: next.shape, base: from.digest, design: next.digest, tokens, scrub: frame });
+      const batch = framed({ kind: 'forma-batch', structure: next.shape, base: from.digest, design: next.digest, tokens, scrub: frame });
       push(batch);
-      tamber?.channel.broadcast(batch);
+      forma?.channel.broadcast(batch);
     }
     return {};
   }
@@ -888,13 +961,13 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
     const from = scrubbed;
     scrubbed = null;
     // The committed design's snapshot (a page fetching it applies nothing new).
-    snapshot = { ...(aside ?? { kind: 'tamber-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens }), scrub: frame };
+    snapshot = { ...(aside ?? { kind: 'forma-snapshot', structure: design.shape, base: null, design: design.digest, tokens: design.tokens }), scrub: frame };
     aside = null; const kept = design.digest; setImmediate(() => gallery.designKept(kept)); // an edit kept meanwhile reaches the gallery, after the restore's batch
     const tokens = design.tokens.filter((t, i) => !same(t, from.tokens[i]));
     if (!tokens.length) return;
-    const batch = framed({ kind: 'tamber-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: frame });
+    const batch = framed({ kind: 'forma-batch', structure: design.shape, base: from.digest, design: design.digest, tokens, scrub: frame });
     push(batch);
-    tamber?.channel.broadcast(batch);
+    forma?.channel.broadcast(batch);
   }
   // The install pages (LLP 1030.003 D6a) and, from a loopback page on a Mac,
   // the local iOS build (D6b): this server's, since only it sees the real
@@ -926,19 +999,21 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
       await new Promise((ok) => setTimeout(ok, 250));
     }
   };
-  tamber = designPath(app.dir) ? tamberServer({ appDir: app.dir, pairTtlMs, remote: () => doors?.list() ?? [], live: true, page: `http://127.0.0.1:${port}`, sourceMap: (digest) => (digest ? residentMaps.get(digest) ?? pageMaps.get(digest) ?? gallery.map(digest) : residentMaps.get(residentPlan)) ?? null, designServed: () => (scrubbed ? null : served), scrub: { patch: scrubPatch, verify: scrubVerify, preview: scrubPreview, restore: scrubRestore, released: (frame) => { released = scrubbed != null && (frame ?? true); }, inline: inlineWhy } }) : null;
+  try {
+    forma = designPath(app.dir) ? formaServer({ appDir: app.dir, pairTtlMs, remote: () => doors?.list() ?? [], live: true, page: `http://127.0.0.1:${port}`, sourceMap: (digest) => (digest ? residentMaps.get(digest) ?? pageMaps.get(digest) ?? gallery.map(digest) : residentMaps.get(residentPlan)) ?? null, designServed: () => (scrubbed ? null : served), scrub: { patch: scrubPatch, verify: scrubVerify, preview: scrubPreview, restore: scrubRestore, released: (frame) => { released = scrubbed != null && (frame ?? true); }, inline: inlineWhy } }) : null;
+  } catch (e) { console.error(e.message); process.exit(2); }
   // A polled stream (Linux, the resident loop's relay) is told the design to run.
-  tamber?.channel.greet(() => snapshot && notice(snapshot));
-  const server = createServer(async (req, res) => {
+  forma?.channel.greet(() => snapshot && notice(snapshot));
+  const server = createServer({ maxHeaderSize: 128 * 1024 }, async (req, res) => {
     // Every HTML answer is framed by the design tool only (LLP 1122 T2).
     frameOnlyByTool(res);
     // A sandboxed page's (a Figma plugin's) wire request, with --allow-plugin-origin (stage 10b): the wire's, before the gate.
-    if (remoteAsked.plugin && tamber && await pluginOnLoopback(tamber, req, res)) return;
+    if (remoteAsked.plugin && forma && await pluginOnLoopback(forma, req, res)) return;
     const access = gate.check(req);
     if (!access.allowed) { res.writeHead(421, { 'cache-control': 'no-store' }); res.end(); return; }
     const url = webRequestURL(req.url);
     if (!url) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
-    if (tamber && await tamber.handle(req, res, url, access)) return;
+    if (forma && await forma.handle(req, res, url, access)) return;
     if (await installer.handle(req, res, url, access)) return;
     // The build channel (LLP 1122 D4): the page's stream gives it a nonce;
     // reports come up by POST; a build with no stream here (the resident
@@ -964,25 +1039,26 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
       return res.end(bytes);
     }
     // Inspect mode's half in the page (LLP 1122 T2b, the JS target): the
-    // dev client loads it; it is in no build.
+    // dev client loads it; it is in no build. It may write inside the root,
+    // so every build reads it for what the sheet keeps (build.mjs `cutSheet`).
     if (url.pathname === '/__dev/inspect.js' && (req.method === 'GET' || req.method === 'HEAD')) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(root, 'host/web-js/inspect-dev.js')));
     }
     if (await gallery.handle(req, res, url)) return; // the variant gallery's page, files and stream (dev-gallery.mjs)
     if (url.pathname === '/__dev/report' && req.method === 'POST') {
-      if (!tamber) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
-      await serveReport(tamber.channel, req, res);
+      if (!forma) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
+      await serveReport(forma.channel, req, res);
       return;
     }
     if ((url.pathname === '/__dev/hello' || url.pathname === '/__dev/commands') && req.method === 'GET') {
-      if (!tamber) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
-      serveCommands(tamber.channel, url, res);
+      if (!forma) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
+      serveCommands(forma.channel, url, res);
       return;
     }
     if (url.pathname === '/__dev/page') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
-      const opened = tamber?.channel.open(frame => res.write(`data: ${JSON.stringify(frame)}\n\n`));
+      const opened = forma?.channel.open(frame => res.write(`data: ${JSON.stringify(frame)}\n\n`));
       // Ended once, by whichever close comes first: under Bun a request on a socket handed to the server
       // (emit('connection'): the TLS door's, an old [::1] door's) never fires req 'close'; its res 'close' does.
       let done = false;
@@ -1044,19 +1120,20 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
     // A miss is a 404, with the build's page for one where it has one (serve.mjs `buildTreeFile`).
     const found = served.body ? served : null;
     // No build yet (the first failed): a blank page that shows the errors and reloads when one lands.
-    if (!found && error && (url.pathname === '/' || appDocumentPath(url.pathname, acceptsHTML(req.headers.accept)))) { res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' }); res.end(`<!doctype html><meta charset="utf-8"><body>${client(seq, logicRevision)}`); return; }
+    if (!found && error && (url.pathname === '/' || appDocumentPath(url.pathname, acceptsHTML(req.headers.accept)))) { res.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-store' }); res.end(`<!doctype html><meta charset="utf-8">${schemeHead(`exact.state.@${appDigest(realpathSync(app.dir))}/#scheme`, { development: true })}<body>${client(seq, logicRevision)}`); return; }
     if (!found) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return; }
     let body = installer.page(found.route, found.body, access);
     if (found.route.endsWith('.html')) {
       body = body.toString();
       const id = url.searchParams.get('__exactDev'), carried = id && checkpoints.get(id);
       if (carried) {
-        checkpoints.delete(id);
+        // A HEAD or a failed document load must leave the handoff available to a retry. The bounded map evicts it.
+        let text = carried.text;
         if (carried.revision !== String(logicRevision ?? '')) {
-          const c = JSON.parse(carried.text);
-          if (c.carryAnswers || c.answers?.length) { c.carryAnswers = false; c.answers = []; carried.text = JSON.stringify(c); }
+          const c = JSON.parse(text);
+          if (c.carryAnswers || c.answers?.length) { c.carryAnswers = false; c.answers = []; text = JSON.stringify(c); }
         }
-        const checkpoint = `<script type="application/vnd.exact.dev-checkpoint" data-seq="${carried.seq}">${carried.text.replaceAll('<', '\\u003c')}</script><script>const u=new URL(location.href);u.searchParams.delete('__exactDev');history.replaceState(history.state,'',u.pathname+(u.search?'?'+u.searchParams:'')+u.hash)</script>`;
+        const checkpoint = `<script type="application/vnd.exact.dev-checkpoint" data-seq="${carried.seq}">${text.replaceAll('<', '\\u003c')}</script><script>const u=new URL(location.href);u.searchParams.delete('__exactDev');history.replaceState(history.state,'',u.pathname+(u.search?'?'+u.searchParams:'')+u.hash)</script>`;
         body = body.replace('<script type="module"', () => checkpoint + '<script type="module"');
       }
       body += client(seq, logicRevision);
@@ -1080,7 +1157,7 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
         mkdirSync(dirname(residentDist), { recursive: true });
         // (EXACT_DEV_RESIDENT_SCRIPT: a test's stand-in resident)
         residentChild = spawn(process.execPath, [process.env.EXACT_DEV_RESIDENT_SCRIPT || resolve(root, 'host/web/dev.mjs'), '--app', app.name, '--wasm', '--port', String(internal), '--serve-as', String(port), ...(lan ? ['--lan'] : []), ...allowHosts.flatMap((name) => ['--allow-host', name])],
-          { cwd: root, env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: residentDist, EXACT_LAUNCHER_PID: String(process.pid), EXACT_MAP_FD: '3' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+          { cwd: root, env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: residentDist, EXACT_BAKE_OUTPUT: `${residentDist}-bake`, EXACT_LAUNCHER_PID: String(process.pid), EXACT_MAP_FD: '3' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         // Its errors as before (piped, so a slow terminal holds it back), the
         // last of them kept: what a start that fails says to the client.
         let errors = '';
@@ -1149,26 +1226,26 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
       req.pipe(out);
     }, () => { starting.waiting.delete(fail); if (!gone) failedNow(res); });
   };
-  const stop = async () => {
+  const stop = () => shutdown ??= (async () => {
     stopping = true;
-    for (const w of watchers) w.close(); stopBuild('SIGKILL'); stopGroup(tool.child); stopGroup(tool.reading); stopGroup(tool.cleaner); stopGroup(patcher.child); residentChild?.kill('SIGTERM'); server.close(); server.closeAllConnections?.();
+    clearTimeout(timer); timer = null;
+    const buildExit = stopCompilers();
+    for (const w of watchers) w.close(); residentChild?.kill('SIGTERM'); server.close(); server.closeAllConnections?.();
     // The design server lets go of its lock before this exits.
-    await Promise.all([tamber?.close(), doors?.close(), gallery.stop()]);
+    await Promise.all([buildExit, forma?.close(), doors?.close(), gallery.stop()]);
     // A local iOS build in flight is stopped and waited for, as the resident loop does.
     const install = installer.child;
     if (install && install.exitCode === null && install.signalCode === null) { const exit = new Promise((ok) => install.once('exit', ok)); install.kill('SIGTERM'); await exit; }
     process.exit(process.exitCode ?? 0);
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-  process.on('SIGHUP', stop);
+  })();
+  startup.handoff(stop);
   watchLauncher(stop);
   await listenDelay();
   // (and on [::1], for a localhost URL: the design tool's canvas)
-  const six = await alsoOnIPv6Loopback(server, port).catch(async (e) => { console.error(`cannot listen on [::1]:${port}: ${e.code} (another server there would answer a localhost URL; --port <n> picks another)`); stopping = true; stopGroup(tool.child); stopGroup(tool.cleaner); await tamber?.close(); process.exit(1); });
+  const six = await alsoOnIPv6Loopback(server, port).catch(async (e) => { console.error(`cannot listen on [::1]:${port}: ${e.code} (another server there would answer a localhost URL; --port <n> picks another)`); stopping = true; stopGroup(tool.child); stopGroup(tool.cleaner); await forma?.close(); process.exit(1); });
   await new Promise((ok, fail) => { server.on('error', fail); server.listen(port, host, ok); })
-    .catch(async (e) => { console.error(`cannot listen on ${host}:${port}: ${e.code ?? e.message}${e.code === 'EADDRINUSE' ? ' (another dev loop? --port <n> picks another)' : ''}`); six?.close(); stopping = true; stopGroup(tool.child); stopGroup(tool.cleaner); await tamber?.close(); process.exit(1); });
-  doors = tamber ? await openRemoteCanvas(tamber, remoteAsked, `http://127.0.0.1:${port}`).catch(async (e) => { console.error(`cannot listen: ${e.message}`); process.exitCode = 1; await stop(); }) : null;
+    .catch(async (e) => { console.error(`cannot listen on ${host}:${port}: ${e.code ?? e.message}${e.code === 'EADDRINUSE' ? ' (another dev loop? --port <n> picks another)' : ''}`); six?.close(); stopping = true; stopGroup(tool.child); stopGroup(tool.cleaner); await forma?.close(); process.exit(1); });
+  doors = forma ? await openRemoteCanvas(forma, remoteAsked, `http://127.0.0.1:${port}`).catch(async (e) => { console.error(`cannot listen: ${e.message}`); process.exitCode = 1; await stop(); }) : null;
   const urls = origins.map((o) => `${o.origin}/`);
   console.log(urls.join('\n'));
   console.log(urls.map(url => `  Open in native: ${url}__dev/open`).join('\n'));

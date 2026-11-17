@@ -4,9 +4,29 @@
 
 use super::{parse_pixel_length, Color, ColorValue};
 
+#[cfg(target_arch = "wasm32")]
+type Parse = fn(&str) -> Result<(f32, Option<ColorValue>), &'static str>;
+#[cfg(target_arch = "wasm32")]
+static LINKED: std::sync::OnceLock<Parse> = std::sync::OnceLock::new();
+
+/// Link the text stroke grammar on wasm (LLP 1047 D2). Native hosts parse directly.
+pub fn link() {
+    #[cfg(target_arch = "wasm32")]
+    let _ = LINKED.set(grammar);
+}
+
 /// `<length> <color>?` in either order, the length in `px` (unitless zero);
 /// no colour is `currentcolor` (`None`).
 pub(crate) fn parse(text: &str) -> Result<(f32, Option<ColorValue>), &'static str> {
+    #[cfg(target_arch = "wasm32")]
+    return LINKED
+        .get()
+        .ok_or("`-webkit-text-stroke` is not linked into this artifact")?(text);
+    #[cfg(not(target_arch = "wasm32"))]
+    grammar(text)
+}
+
+fn grammar(text: &str) -> Result<(f32, Option<ColorValue>), &'static str> {
     let (mut width, mut color) = (None, None);
     let mut depth = 0usize;
     let mut words = Vec::new();

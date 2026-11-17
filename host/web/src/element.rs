@@ -10,11 +10,16 @@ mod button_css;
 mod semantic;
 #[path = "sized_css.rs"]
 mod sized;
+#[path = "element_svg.rs"]
+mod svg;
 #[path = "element_symbol.rs"]
 mod symbol;
 use exact_kernel::svg::Paint;
 use exact_kernel::SortedMap;
 use exact_kernel::{Kernel, NodeFacts, NodeRef, NodeType, ObjectFit, PropId, PropValue, StyleId};
+pub use semantic::{attributes_by_data, tags_by_data};
+pub(super) use svg::svg_props;
+pub use svg::{attribute_rows, svg_props_of};
 
 /// How a projection finds the element an SVG reference names: the kernel's
 /// `resolve_id`, or a tree's own (LLP 1055.000 D3).
@@ -70,20 +75,20 @@ pub fn folds(
 /// flex button becomes one only where its height is its content's: none of
 /// its own, nothing to grow into, and not stretched across a row by `outer`.
 fn content_tall(b: &NodeFacts<'_>, outer: Option<&NodeFacts<'_>>) -> bool {
-    use exact_kernel::{AlignItems, AlignSelf, Dimension, Display, FlexDirection, PositionType};
+    use exact_kernel::{AlignItems, AlignSelf, Display, FlexDirection, PositionType};
     let s = b.style;
     let Some(o) = outer.map(|o| o.style) else {
         return false;
     };
-    let sized = s.height != Dimension::Auto
-        || s.min_height != Dimension::Auto
+    let sized = !s.height.is_content_sized()
+        || !s.min_height.is_content_sized()
         || s.rare.aspect_ratio != Default::default()
         || s.position_type == PositionType::Absolute;
     !sized
         && match (o.display, o.flex_direction) {
             (Display::Block, _) => true,
             (Display::Flex, FlexDirection::Column | FlexDirection::ColumnReverse) => {
-                s.flex_grow == 0.0 && s.flex_basis == Dimension::Auto
+                s.flex_grow == 0.0 && s.flex_basis.is_content_sized()
             }
             (Display::Flex, _) => match s.align_self {
                 AlignSelf::Auto => {
@@ -272,7 +277,7 @@ pub fn host_css_of(
             && probe.mask.has(StyleId::MarginLeft)
         {
             css.push_str("--exact-symbol-lead:");
-            crate::css::dimension(&mut css, probe.margin_left);
+            crate::css::dimension(&mut css, probe.margin_left.clone());
             css.push(';');
         }
     }
@@ -419,6 +424,22 @@ pub(super) fn in_button(kernel: &Kernel, node: &NodeRef<'_>) -> bool {
         parent = p.parent;
     }
     false
+}
+
+/// A link's `rel`: the author's tokens, then each of `need` it lacks,
+/// compared ASCII case-insensitively as HTML's link types are (rt.js
+/// `linkRel` writes the same as a bound `href`, `target` or `rel` changes).
+pub(super) fn link_rel(authored: Option<&str>, need: &[&str]) -> String {
+    let mut tokens: Vec<&str> = authored
+        .unwrap_or_default()
+        .split_ascii_whitespace()
+        .collect();
+    for want in need {
+        if !tokens.iter().any(|t| t.eq_ignore_ascii_case(want)) {
+            tokens.push(want);
+        }
+    }
+    tokens.join(" ")
 }
 
 /// The element for a node wherever it is: its type, refined by `semanticTag`.
@@ -576,7 +597,18 @@ pub(super) fn css_style<'a>(
     node: &NodeRef<'a>,
 ) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
     let style = css_style_of(&|from, id| kernel.resolve_id(from, id), &node.facts());
-    with_style_rows(style, node)
+    with_style_rows(animation_style(kernel, node, style), node)
+}
+
+pub(super) fn animation_style<'a>(
+    kernel: &Kernel,
+    node: &NodeRef<'_>,
+    mut style: std::borrow::Cow<'a, exact_kernel::StyleProps>,
+) -> std::borrow::Cow<'a, exact_kernel::StyleProps> {
+    if !node.style.animation.0.is_empty() && kernel.awaits_view(node) {
+        style.to_mut().animation = kernel.animation_row(node).into();
+    }
+    style
 }
 
 /// `style` with the weight and leading a text style named on `node` gives it
@@ -666,17 +698,18 @@ pub fn css_style_of<'a>(
         style.rare.svg_mask = exact_kernel::svg::MarkerRef(Some(dom_id(target).into()));
     }
     // @ref LLP 1055.000 D9 — a marker by the id the page gives it.
+    let rows = &mut *style.ordinary;
     for marker in [
-        &mut style.marker_start,
-        &mut style.marker_mid,
-        &mut style.marker_end,
+        &mut rows.marker_start,
+        &mut rows.marker_mid,
+        &mut rows.marker_end,
     ] {
         if let Some(target) = marker.url().and_then(|id| resolve(node.id, id)) {
             *marker = exact_kernel::svg::MarkerRef(Some(dom_id(target).into()));
         }
     }
     // @ref LLP 1055.000 D3 — a paint server by the id the page gives it.
-    for paint in [&mut style.fill, &mut style.stroke] {
+    for paint in [&mut rows.fill, &mut rows.stroke] {
         if let Paint::Url(id, fallback) = paint {
             if let Some(target) = resolve(node.id, id) {
                 *paint = Paint::Url(dom_id(target).into(), *fallback);
@@ -690,83 +723,6 @@ pub fn css_style_of<'a>(
 /// instances of one component's `id="fade"` are forty ids (LLP 1055.000 D3).
 fn dom_id(view: exact_kernel::ViewId) -> String {
     format!("x{view}")
-}
-
-/// Rows an element takes as attributes: Chrome 154 lays out a nested `svg`
-/// and places a `use` from their attributes and ignores those CSS
-/// properties; a `mask`'s and a `pattern`'s region is attributes only, as
-/// is a radial gradient's `cx`, `cy` and `r` are attributes
-/// only (LLP 1055.000 D4, D7).
-pub fn attribute_rows(t: NodeType) -> &'static [(exact_kernel::StyleId, &'static str)] {
-    use exact_kernel::StyleId::*;
-    match t {
-        NodeType::SvgViewport
-        | NodeType::SvgUse
-        | NodeType::SvgMask
-        | NodeType::SvgPattern
-        | NodeType::SvgForeignObject
-        | NodeType::SvgFilter
-        | NodeType::SvgFe => &[(X, "x"), (Y, "y"), (Width, "width"), (Height, "height")],
-        NodeType::SvgRadialGradient => &[(Cx, "cx"), (Cy, "cy"), (R, "r")],
-        _ => &[],
-    }
-}
-
-/// An SVG element's references and attribute rows as the page takes them:
-/// its `id` rewritten to its DOM id, `href` to its target's, and the rows
-/// of [`attribute_rows`] as attributes.
-pub(super) fn svg_props(kernel: &Kernel, node: &NodeRef<'_>, out: &mut SortedMap<String, String>) {
-    svg_props_of(&|from, id| kernel.resolve_id(from, id), &node.facts(), out)
-}
-
-/// [`svg_props`], from a node's facts and its tree's references.
-pub fn svg_props_of(
-    resolve: Resolve<'_>,
-    node: &NodeFacts<'_>,
-    out: &mut SortedMap<String, String>,
-) {
-    if !node.node_type.is_svg_element() {
-        return;
-    }
-    if node.props.str(PropId::Id).is_some() {
-        out.insert("id".into(), dom_id(node.id));
-    }
-    if let Some(target) = node
-        .props
-        .str(PropId::Href)
-        .and_then(|h| h.strip_prefix('#'))
-        .and_then(|h| resolve(node.id, h))
-    {
-        out.insert("href".into(), format!("#{}", dom_id(target)));
-    }
-    for (row, name) in attribute_rows(node.node_type) {
-        if !node.style.mask.has(*row) {
-            continue;
-        }
-        let text = match node.style.get(*row) {
-            exact_kernel::RowValue::Dimension(exact_kernel::Dimension::Points(v)) => {
-                exact_num::Shortest(v as f64).to_string()
-            }
-            exact_kernel::RowValue::Dimension(exact_kernel::Dimension::Percent(p)) => {
-                format!("{}%", exact_num::Shortest(p as f64))
-            }
-            exact_kernel::RowValue::Dimension(
-                d @ exact_kernel::Dimension::Viewport(
-                    exact_kernel::ViewportUnit::Vw
-                    | exact_kernel::ViewportUnit::Vh
-                    | exact_kernel::ViewportUnit::Vmin
-                    | exact_kernel::ViewportUnit::Vmax,
-                    _,
-                ),
-            ) => {
-                let mut text = String::new();
-                crate::css::dimension(&mut text, d);
-                text
-            }
-            _ => continue,
-        };
-        out.insert((*name).into(), text);
-    }
 }
 
 pub(super) fn props_for(node: &NodeRef<'_>) -> SortedMap<String, String> {
@@ -903,6 +859,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::AccessibilityHint => "aria-description",
             PropId::AccessibilityOrientation => "aria-orientation",
             PropId::AccessibilityControls => "aria-controls",
+            PropId::AccessibilityActiveDescendant => "aria-activedescendant",
             PropId::AccessibilityHeadingLevel => "aria-level",
             PropId::AccessibilityPosInSet => "aria-posinset",
             PropId::AccessibilitySetSize => "aria-setsize",
@@ -922,6 +879,9 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::Value => "value",
             PropId::ScrollTop => "scrollTop",
             PropId::ScrollLeft => "scrollLeft",
+            // This host draws a zoomable scroller at zoom 1 and drops a
+            // write; it says so once (`Host::open`, LLP 1057.001.000 §5).
+            PropId::ScrollZoom => continue,
             PropId::ScrollFollowEnd => "scrollFollowEnd",
             PropId::ViewportFit => "viewportFit",
             PropId::InteractiveWidget => "interactiveWidget",
@@ -930,6 +890,10 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::NavigationPresentation => "navigationPresentation",
             PropId::NavigationSource => "navigationSource",
             PropId::NavigationSplit => "navigationSplit",
+            // @ref LLP 1141.002 D1 — HTML's `rel` on a link or form; a tab's
+            // button has none (a search tab is the platform's to present).
+            PropId::Rel if node.props.str(PropId::AccessibilityRole) == Some("tab") => continue,
+            PropId::Rel => "rel",
             PropId::EstimatedItemWidth => "data-exact-estimated-item-width",
             // LLP 1013.000 D7: the shared-element name the JS target's view
             // transitions pair by.
@@ -947,6 +911,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::GlassGroup => "glassGroup",
             // Interactive glass and a menu's order are UIKit's; a page has neither.
             PropId::GlassInteractive | PropId::MenuOrder => continue,
+            // A page has no tip system (LLP 1035.006.000 D4).
+            PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",
             // tvOS's focus guide; a browser's Tab order is sequential.
             PropId::FocusGuide => continue,
@@ -1007,6 +973,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::RequiresLinearPlayback => "requiresLinearPlayback",
             PropId::PreferredPeakBitRate => "preferredPeakBitRate",
             PropId::PreferredForwardBufferDuration => "preferredForwardBufferDuration",
+            PropId::PreferredMaximumResolution => "preferredMaximumResolution",
+            PropId::StartsOnFirstEligibleVariant => "startsOnFirstEligibleVariant",
             PropId::AutomaticallyWaitsToMinimizeStalling => "automaticallyWaitsToMinimizeStalling",
             PropId::PreventsDisplaySleepDuringVideoPlayback => {
                 "preventsDisplaySleepDuringVideoPlayback"
@@ -1346,10 +1314,6 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             }
             // How it is filled, and by which rule (element_symbol.rs).
             symbol::fill_marks(&mut out, role, symbol);
-            // Its author's `color` it draws in, untinted (LLP 1121 stage 9 B; glue.js).
-            if node.symbol_color {
-                out.insert("data-symbol-color".into(), String::new());
-            }
             // Decorative unless the author named it (`alt`, `aria-label`).
             if !out.contains_key("alt") {
                 out.insert("alt".into(), String::new());
@@ -1360,15 +1324,21 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
     // browser): a new browsing context, unless the author named a `target`
     // (chat F11, hn-reader F3). `external` marks the default, which the JS
     // target's runtime recomputes as a bound `href` changes (rt.js `P`).
+    // The tokens a new browsing context needs join the author's `rel`
+    // (`noreferrer`, say), which keeps its own (LLP 1141.002 D1).
     if element(node) == "a" {
-        match out.get("target").map(String::as_str) {
-            Some("_blank") => _ = out.insert("rel".into(), "noopener".into()),
-            Some(_) => {}
+        let need: &[&str] = match out.get("target").map(String::as_str) {
+            Some(t) if t.eq_ignore_ascii_case("_blank") => &["noopener"],
+            Some(_) => &[],
             None if out.get("href").is_some_and(|h| leaves_app(h)) => {
                 out.insert("target".into(), "_blank".into());
-                out.insert("rel".into(), "external noopener".into());
+                &["external", "noopener"]
             }
-            None => {}
+            None => &[],
+        };
+        if !need.is_empty() {
+            let rel = link_rel(out.get("rel").map(String::as_str), need);
+            out.insert("rel".into(), rel);
         }
     }
     // A role the element already has natively is left off (ARIA in HTML:
@@ -1385,6 +1355,34 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
 mod name_tests;
 
 impl<D: exact_runner::DataSource> super::Host<D> {
+    pub(super) fn reveal_animations(
+        &mut self,
+        receipt: &exact_kernel::CommitReceipt,
+        batch: &mut super::Batch,
+    ) {
+        let kernel = self.runner.kernel();
+        let mut pending: Vec<_> = receipt
+            .revealed
+            .iter()
+            .filter_map(|key| kernel.node_by_key(*key).map(|n| n.id))
+            .collect();
+        let mut changed = std::collections::BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            let Some(node) = kernel.node(id) else {
+                continue;
+            };
+            if !node.style.animation.0.is_empty()
+                && node.style.rare.animation_trigger == exact_kernel::AnimationTrigger::View
+            {
+                changed.insert(id);
+            }
+            pending.extend(node.children());
+        }
+        for id in changed {
+            self.update(id, batch);
+        }
+    }
+
     /// A view's CSS as the page has it: the rows, the host's additions, a
     /// folded text's (LLP 1007.001) and its paint isolation.
     pub(crate) fn view_css(&self, node: &exact_kernel::NodeRef<'_>) -> String {

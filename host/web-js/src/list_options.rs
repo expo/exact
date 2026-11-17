@@ -5,8 +5,67 @@ use crate::code::{self, Scope};
 use exact_kernel::{PropId, StyleId};
 use exact_plan::{BindingKind, NodesId};
 use exact_runner::instance::Input;
+use std::fmt::Write as _;
 
 impl Em<'_> {
+    pub(super) fn collection_children(
+        &mut self,
+        i: u32,
+        parent: &str,
+        scope: &Scope,
+        edges: &[String; 2],
+    ) -> Result<(), String> {
+        use super::sites::Site;
+        let children = self.sites.of_node(i);
+        let rows: Vec<_> = children
+            .iter()
+            .enumerate()
+            .filter_map(|(at, site)| match site {
+                Site::Region(r)
+                    if self.plan.regions[*r as usize].kind == exact_plan::RegionKind::Each =>
+                {
+                    Some((at, *r))
+                }
+                _ => None,
+            })
+            .collect();
+        let [(split, region)] = rows.as_slice() else {
+            return Err(format!("node {i}: a virtualized list needs one direct keyed `for`; wrap a second in an element"));
+        };
+        let (split, region) = (*split, *region);
+        let mut opts = self.list_options(i, scope, edges)?;
+        if children.len() > 1 {
+            let mut bodies = Vec::new();
+            for sites in [&children[..split], &children[split + 1..]] {
+                let saved = std::mem::take(&mut self.out);
+                self.children(sites, "p", scope)?;
+                bodies.push(std::mem::replace(&mut self.out, saved));
+            }
+            opts = format!(
+                "{{...{opts},fixed:[p=>{{{}}},p=>{{{}}}]}}",
+                bodies[0], bodies[1]
+            );
+        }
+        self.list = true;
+        self.each(region, parent, scope, Some(opts))
+    }
+
+    /// Node `i`'s `scrollFollowEnd` on an ordinary scroller, `constant` or
+    /// bound: follow.js's (LLP 1070.000 §15). A virtualized list's is list.js's.
+    pub(super) fn end_follow(&mut self, i: u32, e: &str, constant: Option<&String>) {
+        let bound = (self.plan.node(NodesId(i)).bindings.iter())
+            .map(|b| self.plan.binding(b))
+            .any(|b| b.kind == BindingKind::Prop && b.id == PropId::ScrollFollowEnd as u16);
+        if !bound && constant.is_none() {
+            return;
+        }
+        self.follow = true;
+        if let Some(v) = constant {
+            let p = self.uses.rt("P");
+            let v = serde_json::to_string(v).unwrap();
+            let _ = write!(self.out, "{p}({e},\"scrollFollowEnd\",()=>{v});");
+        }
+    }
     /// Read the same body inputs that invalidate native row measurements, outside the row.
     pub(super) fn row_inputs(&mut self, region: u32, scope: &Scope) -> Result<String, String> {
         let reads = self.answers.row_dependencies(region);
@@ -24,7 +83,14 @@ impl Em<'_> {
                 Input::Derive(i) => format!("d_{i}()"),
                 Input::Resource(i) => format!("r_{i}()"),
                 Input::PendingResource(i) => format!("r_{i}.p()"),
-                Input::PendingMutation(i) => format!("[m_{i}.p(),m_{i}.e()]"),
+                Input::PendingMutation(i) if self.plan.mutations[i].owner.is_none() => {
+                    format!("[m_{i}.p(),m_{i}.e()]")
+                }
+                // A child's, on the instance in force (LLP 1035.005.004 D6).
+                Input::PendingMutation(i) => match &scope.rows {
+                    Some(rows) => format!("[{rows}.m{i}.p(),{rows}.m{i}.e()]"),
+                    None => continue,
+                },
                 Input::FailedResource(i) => format!("r_{i}.e()"),
                 Input::Clock => format!("{}()", self.uses.rt("x_performanceNow")),
             };
@@ -49,9 +115,10 @@ impl Em<'_> {
 
     /// What the runner reads when a virtualized list is created
     /// (`Collection::create`), evaluated there: its axis, its literal sizes,
-    /// its row estimate, `scrollFollowEnd` (read again at each update),
+    /// `scrollFollowEnd` (read again at each update),
     /// `scroll-start`, `scroll-restoration`, `reach-margin`, `keep-mounted`
-    /// (read again at each update), its edges' handlers, and its plan site.
+    /// (read again at each update), its estimate and `column-gap` (both read
+    /// again as they change), its edges' handlers, and its plan site.
     pub(super) fn list_options(
         &mut self,
         i: u32,
@@ -70,12 +137,34 @@ impl Em<'_> {
         let mut at_end = "!1".to_string();
         let mut reach = "void 0".to_string();
         let mut keep = "void 0".to_string();
+        let mut gap = "void 0".to_string();
         let bindings = plan.node(NodesId(i)).bindings;
         for b in bindings.iter().map(|b| plan.binding(b)) {
             let value = match style::literal(plan, plan.code(b.expr)) {
                 Some(v) => value_js(&v),
-                None => code::expression(plan, plan.code(b.expr), scope, &mut self.uses)
-                    .map_err(|x| format!("node {i}: {x}"))?,
+                None => code::expression(
+                    plan,
+                    plan.code(b.expr),
+                    &code::evaluation(
+                        scope,
+                        format!(
+                            "site {i} list option {}",
+                            match b.kind {
+                                BindingKind::Prop => PropId::from_wire(b.id).map_or_else(
+                                    || format!("prop {}", b.id),
+                                    |p| p.name().to_string()
+                                ),
+                                BindingKind::Style => StyleId::from_bit(b.id as u32).map_or_else(
+                                    || format!("style {}", b.id),
+                                    |s| s.name().replace('_', "-")
+                                ),
+                            }
+                        ),
+                        true,
+                    ),
+                    &mut self.uses,
+                )
+                .map_err(|x| format!("node {i}: {x}"))?,
             };
             match b.kind {
                 BindingKind::Style
@@ -95,7 +184,10 @@ impl Em<'_> {
                     if b.id == PropId::EstimatedItemHeight as u16
                         || b.id == PropId::EstimatedItemWidth as u16 =>
                 {
-                    est = value
+                    est = format!("()=>{value}")
+                }
+                BindingKind::Style if b.id == StyleId::ColumnGap as u16 => {
+                    gap = format!("()=>{value}")
                 }
                 BindingKind::Prop if b.id == PropId::ScrollFollowEnd as u16 => {
                     follow = format!("()=>{value}")
@@ -117,11 +209,12 @@ impl Em<'_> {
             }
         }
         Ok(format!(
-            "{{x:{x},ph:[{}],pw:[{}],est:{est},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\"}}",
+            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\",animations:{}}}",
             ph.join(","),
             pw.join(","),
             edges[0],
-            edges[1]
+            edges[1],
+            !plan.keyframes.is_empty()
         ))
     }
 }

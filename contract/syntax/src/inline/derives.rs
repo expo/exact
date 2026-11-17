@@ -17,9 +17,9 @@ use crate::ast::{BinOp, Binding, Component, Expr, Node, Stmt, TemplatePart};
 use crate::parser::SyntaxError;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The derives of `c` that its view, states, or actions read, each with its
-/// resolved expression. A derive read only by other derives is resolved
-/// where they read it.
+/// The derives reachable from `c`'s view, states, or actions, each with
+/// its resolved expression. Dependencies also remain available to lowering
+/// as shared bodies when nothing outside another derive reads them.
 pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxError> {
     let mut indices = BTreeMap::new();
     for (i, derive) in c.derives.iter().enumerate() {
@@ -71,14 +71,57 @@ pub fn resolved_derives(c: &Component) -> Result<Vec<(&Binding, Expr)>, SyntaxEr
         bodies: &bodies,
         summaries: &summaries,
         rank: &rank,
+        resolve: true,
     };
     let read = read_outside_derives(c);
+    let mut reachable: Vec<bool> = c
+        .derives
+        .iter()
+        .map(|d| read.contains(d.name.as_str()))
+        .collect();
+    for &i in order.iter().rev() {
+        if reachable[i] {
+            for &dependency in &reads[i] {
+                reachable[dependency] = true;
+            }
+        }
+    }
     Ok(c.derives
         .iter()
         .enumerate()
-        .filter(|(_, d)| read.contains(d.name.as_str()))
+        .filter(|(i, _)| reachable[*i])
         .map(|(i, derive)| (derive, cx.place(&bodies[i], &mut Vec::new(), true)))
         .collect())
+}
+
+/// Bind repeated prop reads within one evaluation, preserving its lazy parts.
+/// Substitution supplies each let's value afterwards, in the caller's scope.
+pub(super) fn share_props(e: &Expr, names: &BTreeSet<String>) -> Expr {
+    if names.is_empty() {
+        return e.clone();
+    }
+    let indices: BTreeMap<_, _> = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.as_str(), i))
+        .collect();
+    let n = names.len();
+    let summaries = vec![Summary::new(n); n];
+    let e = freshen(e, &mut 0);
+    let bodies: Vec<_> = names
+        .iter()
+        .map(|name| Expr::Ident(name.clone(), e.span()))
+        .collect();
+    let rank: Vec<_> = (0..n).collect();
+    let cx = Cx {
+        indices: &indices,
+        names: names.iter().map(String::as_str).collect(),
+        bodies: &bodies,
+        summaries: &summaries,
+        rank: &rank,
+        resolve: false,
+    };
+    cx.place(&e, &mut Vec::new(), true)
 }
 
 /// Depth-first dependency order (dependencies first); a cycle is refused
@@ -176,7 +219,7 @@ fn summarize(e: &Expr, indices: &BTreeMap<&str, usize>, summaries: &[Summary]) -
         }
         // A callback runs once per item, perhaps never (LLP 1017.003).
         Expr::Arrow { body, .. } => out.add_sometimes(&part(body)),
-        _ => each_child(e, &mut |child| out.add(&part(child))),
+        _ => e.operands().for_each(|child| out.add(&part(child))),
     }
     out
 }
@@ -197,6 +240,7 @@ struct Cx<'a> {
     bodies: &'a [Expr],
     summaries: &'a [Summary],
     rank: &'a [usize],
+    resolve: bool,
 }
 
 impl Cx<'_> {
@@ -213,14 +257,20 @@ impl Cx<'_> {
                 .collect();
             shared.sort_by_key(|&d| self.rank[d]);
             for d in shared {
-                let value = self.place(&self.bodies[d], bound, true);
+                let value = if self.resolve {
+                    self.place(&self.bodies[d], bound, true)
+                } else {
+                    self.bodies[d].clone()
+                };
                 lets.push((d, value));
                 bound.push(d);
             }
         }
         let body = match e {
             Expr::Ident(name, _) => match self.indices.get(name.as_str()) {
-                Some(d) if !bound.contains(d) => self.place(&self.bodies[*d], bound, true),
+                Some(d) if self.resolve && !bound.contains(d) => {
+                    self.place(&self.bodies[*d], bound, true)
+                }
                 _ => e.clone(),
             },
             Expr::Binary(op @ (BinOp::And | BinOp::Or), a, b, span) => Expr::Binary(
@@ -323,7 +373,8 @@ fn dependencies(expr: &Expr, indices: &BTreeMap<&str, usize>, out: &mut BTreeSet
             out.insert(i);
         }
     }
-    each_child(expr, &mut |child| dependencies(child, indices, out));
+    expr.operands()
+        .for_each(|child| dependencies(child, indices, out));
 }
 
 /// Every name written in the component's view, states and actions: the
@@ -333,7 +384,7 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
         if let Expr::Ident(name, _) | Expr::Call(name, _, _) = e {
             out.insert(name);
         }
-        each_child(e, &mut |child| expr(child, out));
+        e.operands().for_each(|child| expr(child, out));
     }
     fn stmts<'a>(body: &'a [Stmt], out: &mut BTreeSet<&'a str>) {
         for st in body {
@@ -371,51 +422,8 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
         }
     }
     fn nodes<'a>(view: &'a [Node], out: &mut BTreeSet<&'a str>) {
-        for n in view {
-            match n {
-                Node::Element {
-                    positional,
-                    attrs,
-                    children,
-                    ..
-                } => {
-                    positional.iter().for_each(|e| expr(e, out));
-                    attrs.iter().for_each(|a| expr(&a.value, out));
-                    nodes(children, out);
-                }
-                Node::Use { args, children, .. } => {
-                    args.iter().for_each(|a| expr(&a.value, out));
-                    nodes(children, out);
-                }
-                Node::When {
-                    cond,
-                    then,
-                    otherwise,
-                    ..
-                } => {
-                    expr(cond, out);
-                    nodes(then, out);
-                    nodes(otherwise, out);
-                }
-                Node::Each {
-                    list, key, body, ..
-                } => {
-                    expr(list, out);
-                    expr(key, out);
-                    nodes(body, out);
-                }
-                Node::Match {
-                    subject,
-                    some,
-                    none,
-                    ..
-                } => {
-                    expr(subject, out);
-                    nodes(&some.1, out);
-                    nodes(none, out);
-                }
-                Node::Children { .. } => {}
-            }
+        for e in Node::walk(view).flat_map(Node::exprs) {
+            expr(e, out);
         }
     }
     let mut out = BTreeSet::new();
@@ -426,48 +434,11 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
     for a in &c.actions {
         stmts(&a.body, &mut out);
     }
-    out
-}
-
-fn each_child<'a>(e: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
-    match e {
-        Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _) => f(x),
-        Expr::Binary(_, a, b, _) => {
-            f(a);
-            f(b);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            f(a);
-            f(b);
-            f(c);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            f(subject);
-            f(some);
-            f(none);
-        }
-        Expr::Let { value, body, .. } => {
-            f(value);
-            f(body);
-        }
-        Expr::Arrow { body, .. } => f(body),
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().for_each(f),
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                f(x)
-            }
-        }),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) | Expr::Ident(..) => {}
+    // A child's own request reads its derives (LLP 1035.005.004 D1).
+    for r in &c.resources {
+        r.args.iter().chain(&r.gate).for_each(|e| expr(e, &mut out));
     }
+    out
 }
 
 fn map_children(e: &Expr, f: &mut dyn FnMut(&Expr) -> Expr) -> Expr {

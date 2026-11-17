@@ -1,0 +1,23 @@
+// LLP 1083.000 D4 (TabsIOSTests): a column beside the routes in the navigation root,
+// written before them, with the routes offset past it. The web draws it, so
+// the native container, whose box is the page's, must not cover it. Over
+// is a box the routes' box meets, which CSS paints under the routes. Low and
+// lower overlap beside the routes, ordered by their z-index.
+routes nav
+  home "/"
+
+component BesideRoutes
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      column position="absolute" top=0 bottom=0 left=0 width=290 background-color="-exact-system-orange" testId="sidebar"
+        text "Sidebar" padding=24
+      column position="absolute" top=0 left=200 width=200 height=40 background-color="-exact-system-blue" testId="over"
+      column position="absolute" top=100 left=20 width=60 height=60 z-index=-1 background-color="-exact-system-green" testId="low"
+      column position="absolute" top=120 left=40 width=60 height=60 z-index=-2 background-color="-exact-system-red" testId="lower"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="list" testId="route" position="absolute" top=0 bottom=0 right=0 left=290
+          header
+            text "Inbox" role="heading" aria-level=1
+          scroll id="list" flex=1 min-height=0
+            for i in range(30) key=i
+              text `Row ${i}` padding=12

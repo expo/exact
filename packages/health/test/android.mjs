@@ -14,13 +14,14 @@ import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, makeFixture, pkg, root, texts } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const { app } = makeFixture(), name = basename(app);
 
 const { check, failed } = checker();
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
-const out = resolve(root, 'host/android/app/build', name);
+const out = apkBuildDir(app);
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', '--write-locks'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the APK builds, compiling Health.kt, Pedometer.kt and Altimeter.kt', built.status === 0, (built.stdout + built.stderr).slice(-3000));

@@ -37,7 +37,7 @@ const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 const glue = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
 const children = glueCase(glue, 'children');
-const resize = glueDeclarations(glue, ['mediaChanged']);
+const resize = glueDeclarations(glue, ['resizeRunner', 'mediaChanged', 'pageChanged']);
 const page = `<style>
   body { margin:0 } #exact-root { position:relative; padding:20px }
   #card { width:100px; height:40px; background:red; --exact-layout-transition:1000 0 linear }
@@ -47,7 +47,8 @@ const page = `<style>
 <script type="module">
   import { presenceLoader, animationClock, settleValue } from './navigation.js';
   window.exact = {};
-  await import('./presence-glue.js');
+  const { shownClip } = await import('./presence-glue.js');
+  window.shownClip = shownClip;
   const root = document.getElementById('exact-root'), views = new Map();
   const presence = presenceLoader(async () => exact.presence, root, batch => applyBatch(batch), () => {});
   presence.hold({ ops:[{ op:'style', css:'--exact-layout-transition:1000 0 linear' }] });
@@ -80,11 +81,14 @@ const page = `<style>
   window.resizePresence = batch => { window.resizeBatch = batch; mediaChanged(); };
   window.surface = () => root.querySelector('[data-exiting] > div');
   window.readPresence = () => presence.live.observation();
+  window.tracking = () => presence.live.tracking();
   window.leave = css => presence.live.exit(document.getElementById('card'), css);
   window.ready = true;
 </script>`;
 
-let server, suite, evaluate;
+// Register the shared browser's cleanup in the file, outside the beforeAll hook.
+const suite = unavailable ? null : await cdpBrowser({ args: ['--window-size=500,500'] });
+let server, evaluate;
 beforeAll(async () => {
   if (unavailable) return;
   server = createServer((req, res) => {
@@ -99,7 +103,6 @@ beforeAll(async () => {
     res.end(req.url === '/' ? page : readFileSync(req.url.startsWith('/js/') && existsSync(js) ? js : resolve(WEB, path)));
   });
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
-  suite = await cdpBrowser({ args: ['--window-size=500,500'] });
   const { cdp } = suite, { sessionId } = await suite.page();
   const call = (method, params) => cdp.send(method, params, sessionId);
   evaluate = async expression => {
@@ -152,6 +155,36 @@ check('presence inspection reads the moving surface and the leaving ghost', asyn
   expect(leaving.opacity).toBeCloseTo(.6, 3);
 });
 
+// GitHub #747: the runner's batch for a commit that changes nothing holds only its clock stamp.
+check('a batch that changes no tree measures no view, and the next that resizes one plays it', async () => {
+  await fixture(`<div id="card" style="${card}"></div>`);
+  const grown = JSON.stringify(card.replace('40px', '140px'));
+  expect(await evaluate(`(() => {
+    let reads = 0;
+    const rect = Element.prototype.getBoundingClientRect, computed = window.getComputedStyle;
+    Element.prototype.getBoundingClientRect = function () { reads++; return rect.call(this); };
+    window.getComputedStyle = function (...args) { reads++; return computed.apply(this, args); };
+    try {
+      batch({ops:[{op:'at',ms:5}]});
+      const still = reads;
+      batch({ops:[{op:'at',ms:6},{op:'style',id:'card',css:${grown}}]});
+      return [still, reads > still, document.getAnimations().length > 0];
+    } finally { Element.prototype.getBoundingClientRect = rect; window.getComputedStyle = computed; }
+  })()`)).toEqual([0, true, true]);
+});
+
+// A removed row stays in the set of declaring views, with its subtree, until a batch drops it; the agent's clock
+// steps by that set (`tracking`).
+check('removed views are tracked no longer when the batches after them change no tree', async () => {
+  await fixture(`<div id="list"><div id="card" style="${card}"></div><div id="next" style="${card}"></div></div>`);
+  expect(await evaluate(`(() => {
+    const was = tracking();
+    batch({ops:[{op:'at',ms:7},{op:'children',id:'list',ids:[]}]});
+    batch({ops:[{op:'at',ms:8}]});
+    return [was, document.getElementById('card'), tracking()];
+  })()`)).toEqual([true, null, false]);
+});
+
 check('resize snaps an active move and takes new boxes without a move', async () => {
   await fixture(`<div id="card" style="${card}"></div>`);
   await style(card.replace('40px', '140px'));
@@ -195,6 +228,17 @@ check('a growing surface follows live paint, opacity and pressed transforms', as
   await style(card.replace('40px', '140px') + ';border:2px solid green;border-radius:12px');
   await evaluate('seek(500)');
   expect(await evaluate('getComputedStyle(surface()).borderTopWidth')).toBe('2px');
+});
+
+check('a resizing surface carries the box\'s backdrop filter, which the box drops while the surface draws', async () => {
+  const blurred = card + ';background:#0008;backdrop-filter:blur(20px)';
+  await fixture(`<div id="card" style="${blurred}"></div>`);
+  await style(blurred.replace('40px', '140px'));
+  await evaluate('seek(500)');
+  expect(await evaluate('getComputedStyle(surface()).backdropFilter')).toBe('blur(20px)');
+  expect(await evaluate('getComputedStyle(document.getElementById("card")).backdropFilter')).toBe('none');
+  await evaluate('document.getAnimations().forEach(a => a.finish()); Promise.resolve()');
+  expect(await evaluate('getComputedStyle(document.getElementById("card")).backdropFilter')).toBe('blur(20px)');
 });
 
 check('paint transitions retain their clocks and restore their paint when size motion ends', async () => {
@@ -440,5 +484,52 @@ check('JS commits keep ghost containment and restore the latest paint decision a
     expect(await evaluate('!!jsHolder.$ghostIsolation')).toBe(false);
     expect(await evaluate('jsHolder.style.isolation')).toBe(required ? 'isolate' : '');
     await evaluate('jsIsolation(false); jsShown(true)');
+  }
+});
+
+check('basic clips follow the shown size on the content and stand-in', async () => {
+  for (const clip of ['inset(25%)', 'inset(10% 20% round 30% / 20%)', 'polygon(0% 0%,100% 0%,50% 100%)',
+    'circle()', 'ellipse()', 'circle(40% at right bottom)', 'circle(40% at center)', 'circle(40% at top)',
+    'ellipse(30% 40% at bottom left)', 'ellipse(30% 40% at right)', 'circle(40% at 40% 60%)', 'ellipse(closest-side farthest-side at 30% 40%)', "path('M25 25H75V75H25Z')"]) {
+    for (const [grow, border] of [[true, 0], [false, 0], [true, 8], [false, 8]]) {
+      const overflow = border ? 'hidden' : 'visible';
+      const from = grow ? 100 : 200, to = grow ? 200 : 100;
+      const css = n => `width:${n}px;height:${n}px;background:red;box-sizing:border-box;overflow:${overflow};border:${border}px solid red;border-radius:20% / 30%;clip-path:${clip};--exact-layout-transition:1000 0 linear`;
+      await fixture(`<div id="card" style="${css(from)}"><div style="width:200px;height:200px"></div></div>`);
+      await style(css(to));
+      for (const time of [250, 500, 750]) {
+        await evaluate(`seek(${time})`);
+        const shown = from + (to-from)*time/1000;
+        const result = await evaluate(`(() => {
+          const el = document.getElementById('card'), sf = surface(), r = el.getBoundingClientRect();
+          const oracle = document.createElement('div');
+          oracle.style.cssText = 'position:absolute;left:250px;top:20px;width:${shown}px;height:${shown}px;clip-path:${clip.replaceAll("'", '\"')};background:red;box-sizing:border-box;overflow:${overflow};border:${border}px solid red;border-radius:20% / 30%';
+          const child = document.createElement('div');
+          child.style.cssText = 'width:200px;height:200px'; oracle.append(child);
+          document.body.append(oracle);
+          const points = [];
+          for (let y=7; y<200; y+=17) for (let x=7; x<200; x+=17) points.push([x,y]);
+          const expectedContent = points.map(([x,y]) => document.elementFromPoint(250+x,20+y) === child);
+          const content = points.map(([x,y]) => el.firstElementChild === document.elementFromPoint(r.left+x,r.top+y));
+          el.style.visibility = 'hidden';
+          sf.parentElement.inert = false; sf.parentElement.style.pointerEvents = 'auto'; sf.parentElement.style.zIndex = '1';
+          child.remove();
+          const expectedBackground = points.map(([x,y]) => document.elementFromPoint(250+x,20+y) === oracle);
+          const background = points.map(([x,y]) => document.elementFromPoint(r.left+x,r.top+y) === sf);
+          el.style.visibility = ''; sf.parentElement.inert = true; sf.parentElement.style.pointerEvents = 'none'; sf.parentElement.style.zIndex = '-1';
+          const raw = shownClip(${JSON.stringify(clip)}, ${shown}, ${shown});
+          const valid = CSS.supports('clip-path', raw);
+          oracle.style.clipPath = 'none';
+          oracle.style.clipPath = raw;
+          const resolved = points.map(([x,y]) => document.elementFromPoint(250+x,20+y) === oracle);
+          oracle.remove();
+          return { expectedBackground, expectedContent, content, background, resolved, valid };
+        })()`);
+        expect(result.content, `${clip} content ${grow} ${border} ${time}`).toEqual(result.expectedContent);
+        expect(result.background, `${clip} surface ${grow} ${time}`).toEqual(result.expectedBackground);
+        expect(result.valid, `${clip} resolves to valid CSS`).toBe(true);
+        expect(result.resolved, `${clip} raw position ${shown}`).toEqual(result.expectedBackground);
+      }
+    }
   }
 });

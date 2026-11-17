@@ -1,5 +1,5 @@
 // Where a token's value comes from (LLP 1121 stage 11, D11; the wire's
-// shape is theme2's 16:17Z ruling for tamber/1.14): Exact's base scale
+// shape is theme2's 16:17Z ruling for forma/1.14): Exact's base scale
 // (`space.*`, `radius.*`: describe's `base` rows, one value a platform
 // column, each with its source), a package's design (its rows carry
 // `package` and `file`; read-only, the app overrides it in its own file), or

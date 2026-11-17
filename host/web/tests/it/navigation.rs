@@ -64,14 +64,28 @@ fn sweep(js: bool) {
         js || dist.join("app.wasm").exists(),
         "build the web dist first"
     );
+    // A paired replacement must name its carrier's app.
+    let app_id = if js {
+        "com.exact.caltrain".to_owned()
+    } else {
+        let envelope: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dist.join("exact.json")).unwrap()).unwrap();
+        envelope["app"]["id"].as_str().unwrap().to_owned()
+    };
+    let encode = |mut plan: exact_plan::Plan| {
+        plan.app_id = app_id.clone();
+        plan.encode()
+    };
     // The history fixture retains the corpus's route value, actions and
-    // projection. Its data is constant so the Caltrain carrier needs no app
-    // sources; the Back counter and refusal are authored Contract state.
+    // projection. Its data is constant state, not resources: a paired reload
+    // refuses a plan that names a source the Caltrain carrier's module does
+    // not answer. The Back counter and refusal are authored Contract state.
     let source = include_str!("../../../../contract/corpus/routes.contract")
         .replace("  notfound", "  other \"/other\"\n  notfound")
-        .replace("params(nav, \"question\")", "")
-        .replace("params(nav, \"post\")", "")
-        .replace("params(nav, \"person\")", "")
+        .replace(
+            "  resource questions = loadQuestions(params(nav, \"question\")) as shape string[]\n  resource posts = loadPosts(params(nav, \"post\")) as shape Post[]\n  resource people = loadPeople(params(nav, \"person\")) as shape Person[]\n",
+            "  state questions: string[] = []\n  state posts: Post[] = []\n  state people: Person[] = []\n",
+        )
         .replace(
             "  state initialUrl",
             "  state blurPresses = 0\n  action editorBlur\n    blurPresses = blurPresses + 1\n  state initialUrl",
@@ -134,20 +148,23 @@ fn sweep(js: bool) {
         source.contains("textarea blur=editorBlur"),
         "the corpus Back anchor must install the focus fixture"
     );
+    assert!(
+        !source.contains("resource "),
+        "the corpus resources must become constant state"
+    );
     let plan = contract::bake(contract::compile(&source).unwrap(), Empty).unwrap();
-    let dir = std::env::temp_dir().join(format!(
-        "exact-router-browser-{}{}",
-        std::process::id(),
-        if js { "-js" } else { "" }
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.plan"), plan.encode()).unwrap();
+    let dir = crate::TestDir::new(if js {
+        "exact-router-browser-js"
+    } else {
+        "exact-router-browser"
+    });
+    std::fs::write(dir.join("app.plan"), encode(plan)).unwrap();
     let no_handler = contract::bake(
         contract::compile(&source.replace(" navigate=followLink", "")).unwrap(),
         Empty,
     )
     .unwrap();
-    std::fs::write(dir.join("no-navigate.plan"), no_handler.encode()).unwrap();
+    std::fs::write(dir.join("no-navigate.plan"), encode(no_handler)).unwrap();
     // No `notfound` route and a navigation root: the compiler writes the route and its screen, so a
     // location no route matches keeps its URL and says so (LLP 1116.009 D2).
     let no_notfound = contract::bake(
@@ -158,7 +175,7 @@ fn sweep(js: bool) {
         Empty,
     )
     .unwrap();
-    std::fs::write(dir.join("no-notfound.plan"), no_notfound.encode()).unwrap();
+    std::fs::write(dir.join("no-notfound.plan"), encode(no_notfound)).unwrap();
     // No navigation root either: no screen to draw "Page not found" in, so a launch no route matches opens
     // the first screen, journaled, on every target.
     let no_root = contract::bake(
@@ -167,7 +184,7 @@ fn sweep(js: bool) {
         Empty,
     )
     .unwrap();
-    std::fs::write(dir.join("no-root.plan"), no_root.encode()).unwrap();
+    std::fs::write(dir.join("no-root.plan"), encode(no_root)).unwrap();
     // A visit whose `#moves` and `#other` are far down its navigation root,
     // which scrolls, beside a picture the server is slow to send, and a bar
     // stuck at its top: links to its fragments, a `go` only computed, one
@@ -214,7 +231,7 @@ component App
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}`
           if e.name == "item"
-            image "/__test-slow.png" id="first" width=10 height=10 display="block"
+            image "/__test-slow.png" id="first" width=100 display="block"
 ROWS0            box id="moves" height=100
 ROWS20            box id="other" height=100
 ROWS40"##
@@ -222,16 +239,16 @@ ROWS40"##
         .replace("ROWS20", &rows(20))
         .replace("ROWS40", &rows(40));
     let fragment = contract::bake(contract::compile(&fragment).unwrap(), Empty).unwrap();
-    std::fs::write(dir.join("fragment.plan"), fragment.encode()).unwrap();
+    std::fs::write(dir.join("fragment.plan"), encode(fragment)).unwrap();
     let accessibility = contract::compile(include_str!(
         "../../../../contract/corpus/accessibility.contract"
     ))
     .unwrap();
-    std::fs::write(dir.join("accessibility.plan"), accessibility.encode()).unwrap();
+    std::fs::write(dir.join("accessibility.plan"), encode(accessibility)).unwrap();
     let output = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
         .arg("host/web/tests/navigation.mjs")
         .env("EXACT_ROUTER_DIST", dist)
-        .env("EXACT_ROUTER_TEST", &dir)
+        .env("EXACT_ROUTER_TEST", &*dir)
         .env("EXACT_ROUTER_TARGET", if js { "js" } else { "wasm" })
         .current_dir(root)
         .output()
@@ -243,5 +260,4 @@ ROWS40"##
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    std::fs::remove_dir_all(dir).unwrap();
 }

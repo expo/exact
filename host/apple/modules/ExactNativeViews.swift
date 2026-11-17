@@ -181,7 +181,7 @@ private func made(_ owner: UnsafeMutableRawPointer?, _ view: String?, _ tag: Uns
     do {
         let events = ExactNativeEvents(fn: event, ctx: ctx, nonce: nonce), given = try props(json, jsonLength)
         let instance = try factory.made.map { try $0(owner, view ?? "", given, events) } ?? factory.make(owner, given, events)
-        Tambers.made(instance.view, by: owner)
+        Formas.made(instance.view, by: owner)
         return Unmanaged.passRetained(Handle(instance, reply: reply, ctx: ctx, nonce: nonce)).toOpaque()
     } catch {
         write(String(describing: error), out, capacity)

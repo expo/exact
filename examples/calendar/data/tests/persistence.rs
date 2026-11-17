@@ -123,6 +123,7 @@ impl App {
 
 fn run(work: Work) -> Outcome {
     match work {
+        Work::HttpResponse(_) => panic!("HTTP fixtures require the HTTP executor"),
         Work::Now(work) => std::thread::spawn(work).join().unwrap(),
         Work::Later(hand) => {
             let (tx, rx) = std::sync::mpsc::channel();

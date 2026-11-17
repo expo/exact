@@ -59,7 +59,10 @@ class GeocodingModule(context: ExtensionContext) : ExactExtension(context) {
                        now: (Geocoder) -> List<Address>?) {
         if (!Geocoder.isPresent()) return answer(null, "NotSupportedError")
         val g = Geocoder(context.application, locale)
-        if (Build.VERSION.SDK_INT >= 33) return later(g, answer)
+        // The listener form throws for an argument out of range, as the synchronous form does on the worker.
+        if (Build.VERSION.SDK_INT >= 33) {
+            return try { later(g, answer) } catch (e: IllegalArgumentException) { answer(null, "TypeError") }
+        }
         worker.execute {
             try { answer(now(g).orEmpty(), null) } catch (e: java.io.IOException) { answer(null, "NetworkError") } catch (e: IllegalArgumentException) { answer(null, "TypeError") }
         }

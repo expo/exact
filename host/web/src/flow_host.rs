@@ -1,6 +1,6 @@
 //! @ref LLP 1043.000 §3 D1–D4, D7 — DOM geometry resolves in wasm, not Taffy.
 use super::*;
-use exact_kernel::{Dimension, Display, PositionType, WrapFlow};
+use exact_kernel::{Display, PositionType, WrapFlow};
 
 impl<D: DataSource> Host<D> {
     pub(super) fn track_exclusion(&mut self, id: ViewId) {
@@ -50,7 +50,7 @@ impl<D: DataSource> Host<D> {
                         json.push(',');
                     }
                     first = false;
-                    let definite = node.style.height != Dimension::Auto;
+                    let definite = !node.style.height.is_content_sized();
                     let _ = write!(json, "{{\"id\":{id},\"definite\":{definite},\"refusal\":");
                     // @ref LLP 1043.000 §8 — the kernel's admission rule, by structure.
                     let slot = kernel.arena().slot_of(id).expect("live child");

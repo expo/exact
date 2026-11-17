@@ -6,6 +6,26 @@ use exact_kernel::CommitReceipt;
 const UNCHANGED: &str = "{\"ops\":[],\"unchanged\":true}";
 
 impl<D: DataSource> Host<D> {
+    pub(crate) fn launch_store_pending(&self) -> bool {
+        self.store_refresh_pending
+            || self
+                .launch_store
+                .as_ref()
+                .is_some_and(|store| store.pending())
+    }
+
+    /// Take the mark a launch function's durable write left. The write reached the
+    /// store without a runner store write, so the batch that adopts it says
+    /// `stored`: the presenter relays that to whatever replicates the store.
+    pub(crate) fn take_launch_store_change(&mut self) -> bool {
+        let changed = self
+            .launch_store
+            .as_ref()
+            .is_some_and(|store| store.take_changed());
+        self.stored |= changed;
+        changed
+    }
+
     /// The common post-pixel activation order for committed sources.
     pub(crate) fn activate_source(source: &mut D) -> Result<(), exact_runner::DataError> {
         Self::configure_storage(source)?;
@@ -28,10 +48,29 @@ impl<D: DataSource> Host<D> {
             Some(Self::activate_source(self.runner.data()).map_err(|e| format!("{e:?}")));
     }
 
+    /// Whether `prepare_data` evaluates a TypeScript module on this thread,
+    /// so the presenter may post it from the first draw's own callback (LLP
+    /// 1027.008 D1, D3). A Rust source's activation runs no module, and a
+    /// worker-placed module's engine is made on its worker when it
+    /// activates: both take the path after the main thread's first turn. So
+    /// does a module that keeps documents (on a Mac): its engine opens its
+    /// storage session with the document owner when it loads, after the
+    /// kept documents are restored. A source with a native slot is one that
+    /// has a TypeScript module: only TypeScript calls `native`.
+    pub fn evaluates_from_draw(&self) -> bool {
+        let data = self.runner.data_ref();
+        data.native().is_some()
+            && data.placement() == exact_runner::Placement::Main
+            && !crate::documents::keeps(data.grants())
+    }
+
     /// Load deferred app logic only after the presenter reports first pixel.
     pub fn activate_data(&mut self) -> String {
+        if self.take_launch_store_change() {
+            self.store_refresh_pending = true;
+        }
         if self.data_activated {
-            return self.refresh_store_after(true);
+            return self.refresh_store_after(!self.store_refresh_pending);
         }
         match self.runner.data_ref().preload() {
             Ok(false) => {
@@ -118,21 +157,48 @@ impl<D: DataSource> Host<D> {
     fn read_shared_store(&self, retry_only: bool) -> Option<crate::store::StoreRead> {
         let store = self.secrets.as_ref()?;
         let previous = self.runner.store().snapshot();
-        Some(if retry_only && !self.store_retry_names.is_empty() {
+        let mut read = if retry_only && !self.store_retry_names.is_empty() {
             store.retry_snapshot(previous, &self.store_retry_names)
         } else {
             store.snapshot(previous)
-        })
+        };
+        // A name the disk still holds as it was when its write failed has no
+        // peer write to adopt: the session keeps the value it still owes.
+        for write in &self.pending_store_writes {
+            let held = read.values.iter().position(|(name, _)| name == &write.name);
+            let on_disk = held.map(|i| &read.values[i].1);
+            if self
+                .pending_store_bases
+                .get(&write.name)
+                .map(Option::as_ref)
+                != Some(on_disk)
+            {
+                continue;
+            }
+            match (held, &write.value) {
+                (Some(i), Some(value)) => read.values[i].1 = value.clone(),
+                (Some(i), None) => drop(read.values.remove(i)),
+                (None, Some(value)) => read.values.push((write.name.clone(), value.clone())),
+                (None, None) => {}
+            }
+        }
+        Some(read)
     }
 
     fn store_read_finished(&mut self, read: crate::store::StoreRead) {
         // An accepted peer value supersedes the local value still owed to disk.
         self.pending_store_writes.retain(|write| {
-            read.values
+            let retained = read
+                .values
                 .iter()
                 .find(|(name, _)| name == &write.name)
                 .map(|(_, value)| value.as_slice())
-                == write.value.as_deref()
+                == write.value.as_deref();
+            if !retained {
+                self.reported_store_failures.remove(&write.name);
+                self.pending_store_bases.remove(&write.name);
+            }
+            retained
         });
         self.store_refresh_pending = !read.complete || !read.omitted.is_empty();
         self.store_retry_names = if read.complete {
@@ -153,7 +219,13 @@ impl<D: DataSource> Host<D> {
         allow_unchanged: bool,
     ) -> String {
         if allow_unchanged && receipt.is_none() && error.is_none() {
-            return format!("{{\"ops\":[],\"unchanged\":true,\"storeReadPending\":{},\"storeActivationPending\":{}}}", self.store_refresh_pending, self.store_activation_pending);
+            // A store write this session does not read is still one to relay.
+            let stored = if std::mem::take(&mut self.stored) {
+                ",\"stored\":true"
+            } else {
+                ""
+            };
+            return format!("{{\"ops\":[],\"unchanged\":true{stored},\"storeReadPending\":{},\"storeActivationPending\":{}}}", self.store_refresh_pending, self.store_activation_pending);
         }
         let mut batch = Batch::new();
         batch.store_status = Some((self.store_refresh_pending, self.store_activation_pending));

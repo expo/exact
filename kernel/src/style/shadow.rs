@@ -9,6 +9,23 @@
 use super::{parse_pixel_length, Color, ColorValue, Vec2};
 use crate::gradient::ColorText;
 
+#[cfg(target_arch = "wasm32")]
+type Parsers = (
+    fn(&str) -> Option<BoxShadows>,
+    fn(&str) -> Option<TextShadow>,
+);
+#[cfg(target_arch = "wasm32")]
+static LINKED: std::sync::OnceLock<Parsers> = std::sync::OnceLock::new();
+
+/// Link the shadow grammars on wasm (LLP 1047 D2). Native hosts parse directly.
+pub fn link() {
+    #[cfg(target_arch = "wasm32")]
+    let _ = LINKED.set((
+        |css| BoxShadows::check(css).ok(),
+        |css| TextShadow::check(css).ok(),
+    ));
+}
+
 /// Most shadows one `box-shadow` takes: a bound on what crosses to a host.
 pub const MAX_SHADOWS: usize = 8;
 
@@ -35,6 +52,9 @@ pub struct BoxShadow {
 impl BoxShadows {
     /// The row's parse, as every codec's: `None` for anything not drawn.
     pub fn parse(css: &str) -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        return LINKED.get().and_then(|p| (p.0)(css));
+        #[cfg(not(target_arch = "wasm32"))]
         Self::check(css).ok()
     }
 
@@ -184,6 +204,9 @@ pub struct GlyphShadow {
 impl TextShadow {
     /// The row's parse, as every codec's: `None` for anything not drawn.
     pub fn parse(css: &str) -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        return LINKED.get().and_then(|p| (p.1)(css));
+        #[cfg(not(target_arch = "wasm32"))]
         Self::check(css).ok()
     }
 

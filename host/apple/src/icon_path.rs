@@ -49,11 +49,21 @@ pub(crate) fn commands(name: &str) -> Option<(String, &str, bool)> {
     (!out.is_empty()).then_some((out, path.view_box, path.even_odd))
 }
 
+/// A non-template icon's file, rasterized into the Apple asset catalog.
+/// An SF source and a template path retain precedence.
+pub(crate) fn asset(name: &str) -> Option<&str> {
+    exact_kernel::Icon::parse(name)?.apple_asset()
+}
+
 /// `,"symbolPath":…,"symbolViewBox":…` after a control face's symbol in
-/// its JSON (a button face, a grouped row) when `source` (after `symbol:`)
-/// is an icon Apple draws by its path (stage 9 A2): the face makes a
-/// template image of it its control tints as a symbol. Nothing otherwise.
+/// its JSON (a button face, a grouped row) for a template icon, or
+/// `symbolAsset` for a rasterized SVG. An SF source needs neither.
 pub(crate) fn push_json(source: Option<&str>, json: &mut String) {
+    if let Some(svg) = source.and_then(asset) {
+        json.push_str(",\"symbolAsset\":");
+        exact_runner::agent::quote(svg, json);
+        return;
+    }
     let Some((d, view_box, even_odd)) = source.and_then(commands) else {
         return;
     };
@@ -71,10 +81,9 @@ pub(crate) fn push_json(source: Option<&str>, json: &mut String) {
 /// source form `source` (after `symbol:`), from the plan's icons table,
 /// which keeps every icon a literal or a computed source names. The form
 /// carries no name (the compiler and the runner's bridge expand the name
-/// away), so two tokens with the same source (`icon.reply` and
-/// `icon.respond` on one SVG) are told apart by nothing the host gets: the
-/// first declared is the best known. Keeping the chosen name would move the
-/// source form or the plan (theme2's to rule). `None` for no icon or no row.
+/// away). Aliases share that form and report the first retained name;
+/// independent declarations with identical forms are refused at build.
+/// `None` for no icon or no row.
 pub(crate) fn icon_name<'a>(plan: &'a exact_plan::Plan, source: &str) -> Option<&'a str> {
     let icon = exact_kernel::Icon::parse(source)?;
     let s = |id| plan.strings.get(id as usize).unwrap_or("");
@@ -96,7 +105,18 @@ fn n(v: f32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{commands, icon_name, push_json};
+    use super::{asset, commands, icon_name, push_json};
+
+    #[test]
+    fn a_non_template_icon_names_its_catalog_source() {
+        let source = "icon||10 20 40 20||icons/two.svg";
+        assert_eq!(asset(source), Some("icons/two.svg"));
+        let mut json = String::new();
+        push_json(Some(source), &mut json);
+        assert_eq!(json, r#","symbolAsset":"icons/two.svg""#);
+        assert_eq!(asset("icon|heart|10 20 40 20||icons/two.svg"), None);
+        assert_eq!(asset("icon||0 0 24 24|M0 0h24v24Z|one.svg"), None);
+    }
 
     #[test]
     fn an_icons_name_is_the_plans_row_for_its_source_form() {

@@ -1,8 +1,10 @@
 // @ref LLP 1080.001 — the UIKit walks behind `layout <target> native` and
 // `layout agree` (the shared half is `AgentNative.swift`). Ownership is by
-// identity, never by class: a subview is accounted for when it is a live
-// node's view, a parked or leaving tree's, or one of the views the presenter
-// and its hosts are known to add (D3's closed list, `inspectionAccount`).
+// identity: a subview is accounted for when it is a live node's view, a
+// parked or leaving tree's, or one of the views the presenter and its hosts
+// are known to add (D3's closed list, `inspectionAccount`). Only the private
+// views UIKit hangs in a scroll view (its indicators, edge effect and large
+// title) are matched by class, and only where they hang.
 // Strays are judged only in a subview list Exact owns (`inspectionJudges`);
 // inside a platform view — a text view, a web view, a control, a
 // controller's view — what is not a node is counted `opaque`, and any node
@@ -11,9 +13,61 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
+/// Where a running scroll shows (LLP 1012 `layout`, ruled 2026-11-12). UIKit
+/// draws a scroller at its presentation layer's offset; its model offset,
+/// which `box` and `contentOffset` read, is where an animated scroll is
+/// headed. One per `layout` read, each scroller's shift found once.
+final class PresentedScrolls {
+    private let viewport: UIScrollView
+    private var shifts: [ObjectIdentifier: CGPoint] = [:]
+    init(_ viewport: UIScrollView) { self.viewport = viewport }
+
+    /// How far `v`'s box shows from its model box, in the viewport's space:
+    /// each enclosing scroller's model offset less its presented one, carried
+    /// through the scroller's transform.
+    func shift(of v: UIView) -> CGPoint {
+        var total = CGPoint.zero, above = v.superview
+        while let s = above {
+            if let sv = s as? UIScrollView {
+                let d = shift(sv)
+                total.x += d.x; total.y += d.y
+            }
+            if s === viewport { break }
+            above = s.superview
+        }
+        return total
+    }
+
+    private func shift(_ sv: UIScrollView) -> CGPoint {
+        if let known = shifts[ObjectIdentifier(sv)] { return known }
+        let model = sv.bounds.origin, presented = Agent.presentedOffset(sv)
+        var d = CGPoint.zero
+        if presented != model {
+            let a = sv.convert(model, to: viewport), b = sv.convert(presented, to: viewport)
+            d = CGPoint(x: a.x - b.x, y: a.y - b.y)
+        }
+        shifts[ObjectIdentifier(sv)] = d
+        return d
+    }
+}
+
+extension Agent {
+    /// The offset UIKit draws `sv` at: its presentation layer's, else its model's.
+    static func presentedOffset(_ sv: UIScrollView) -> CGPoint { sv.layer.presentation()?.bounds.origin ?? sv.bounds.origin }
+
+    /// A scroller's `sx`/`sy` (LLP 1012 `layout`): the presented offset, and
+    /// while a running scroll is headed elsewhere, that `target` too. `top`
+    /// is added on y (CSS scrollTop under a list's top inset).
+    static func offset(of sv: UIScrollView, top: CGFloat = 0) -> [String: Any] {
+        let shown = presentedOffset(sv), model = sv.bounds.origin
+        let sx = r2(shown.x), sy = r2(shown.y + top), tx = r2(model.x), ty = r2(model.y + top)
+        return sx == tx && sy == ty ? ["sx": sx, "sy": sy] : ["sx": sx, "sy": sy, "target": ["sx": tx, "sy": ty]]
+    }
+}
+
 extension Agent {
     func layout() -> [String: Any] {
-        let vp = presenter.viewport
+        let vp = presenter.viewport, shown = PresentedScrolls(vp)
         var nodes: [[String: Any]] = []
         for (id, v) in presenter.views.sorted(by: { $0.key < $1.key }) where v.window != nil {
             if presenter.menus.ownsConfirmationNode(v) {
@@ -26,7 +80,8 @@ extension Agent {
             let scope = (v as? NodeView).flatMap { presenter.navigation.barSegment($0) }.map { s in
                 s.control.convert(s.segment, to: vp).offsetBy(dx: -vp.pageOrigin.x, dy: -vp.pageOrigin.y)
             }
-            let r = nativeAction ? actionView.map { box($0) } ?? .zero : scope ?? box(v)
+            let shift = nativeAction || scope != nil ? .zero : shown.shift(of: v)
+            let r = (nativeAction ? actionView.map { box($0) } ?? .zero : scope ?? box(v)).offsetBy(dx: shift.x, dy: shift.y)
             var n: [String: Any] = ["id": Int(id), "x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)]
             if !nativeAction, scope == nil {
                 n["radii"] = v.effectiveCornerSizes(in: v.bounds).map { [Double($0.width), Double($0.height)] }
@@ -35,10 +90,14 @@ extension Agent {
             // A waiting scroll (a closed swipe row's) is at its start, with no range until it scrolls.
             if v.scrollDormant { n["sx"] = 0.0; n["sy"] = 0.0; n["rx"] = 0.0; n["ry"] = 0.0 }
             if let sv = v.scrollView {
-                n["sx"] = Agent.r2(sv.contentOffset.x)
-                n["sy"] = Agent.r2(sv.contentOffset.y + v.scrollTopInset(sv))
+                n.merge(Agent.offset(of: sv, top: v.scrollTopInset(sv))) { _, new in new }
                 n.merge(Agent.range(of: sv)) { _, new in new }
-                n["port"] = port(of: v, sv)
+                // A zoomable scroller's zoom and range (LLP 1057.001.000 §6).
+                if v.extras?.zoom != nil, let range = v.zoomRange {
+                    n["scrollZoom"] = Double(sv.zoomScale); n["minZoom"] = Double(range.lowerBound); n["maxZoom"] = Double(range.upperBound)
+                }
+                let p = port(of: v, sv)
+                n["port"] = [p[0] + Double(shift.x), p[1] + Double(shift.y), p[2], p[3]].map { Agent.r2(CGFloat($0)) }
                 // How far past its own ends it sits: a stretched bounce is a
                 // state a driver cannot read from the offset alone.
                 let past = { (value: CGFloat, start: CGFloat, end: CGFloat) -> CGFloat in
@@ -89,6 +148,7 @@ extension Agent {
         // D4's `screen` space) and the scene's interface orientation: what a
         // real touch's aim is checked against (LLP 1080.000 D4).
         if let w = vp.window, let container = vp.superview {
+            reply["safeArea"] = ["bottom": Agent.r2(w.safeAreaInsets.bottom)]
             let screen = w.screen
             let origin = container.convert(presenter.pageFrame.origin, to: screen.coordinateSpace) // the page's area (LLP 1130)
             reply["screen"] = ["w": Agent.r2(screen.bounds.width), "h": Agent.r2(screen.bounds.height), "scale": Agent.r2(screen.scale),
@@ -193,6 +253,8 @@ extension Presenter {
         if let o = owner {
             let id = o.id
             if sub === o.symbolView { return ("glyph", id) }
+            // A paragraph's painted words (`NodeView.makeTextBox`).
+            if sub === o.specs?.rasterView { return ("text", id) }
             if sub === o.materialView || sub === o.glassSlot || sub === o.glassGroupView || sub === o.vibrancyView { return ("material", id) }
             if sub === o.clipBox { return ("clip", id) }
             if sub === o.metal || sub === o.overlay { return ("canvas", id) }
@@ -230,6 +292,10 @@ extension Presenter {
             let kinds = sub.subviews.map { String(describing: Swift.type(of: $0)) }
             if String(describing: Swift.type(of: sub)) == "_UITouchPassthroughView",
                kinds.contains(where: { $0 == "ScrollEdgeEffectView" || $0 == "BackdropView" }) { return ("edge-effect", owner?.id) }
+            // A navigation bar's large title, which UIKit hangs in the
+            // scroller the bar follows at its top edge (iOS 26 and later).
+            if String(describing: Swift.type(of: sub)) == "_UINavigationBarLargeTitleView",
+               Agent.bar(following: scroll)?.navigationController != nil { return ("large-title", owner?.id) }
         }
         return nil
     }
@@ -322,7 +388,7 @@ extension Presenter {
         if !kernel.complete { report.incomplete("frames-cap") }
         if inFlight { report.incomplete("in-flight") }
         let kept = keptTrees()
-        let retiringRoots = modals.inspectionRetiring
+        let retiringRoots = modals.inspectionRetiring + (navigation.retiringRoots as [UIView])
         report.walked = roots.map(\.1)
         var seen: [UInt32: NodeView] = [:]
         var stack: [(UIView, NodeView?)] = roots.reversed().map { ($0.0, nil) }
@@ -361,7 +427,8 @@ extension Presenter {
                     }
                     if kept.parked.members.contains(ObjectIdentifier(n)) || kept.leaving.contains(ObjectIdentifier(n)) { continue }
                     // A retiring modal keeps its removed route on screen until
-                    // UIKit's dismissal ends (`ModalIOS.swift`): kept on purpose.
+                    // UIKit's dismissal ends, and a removed route its views until
+                    // UIKit's transition ends: kept on purpose.
                     if retiringRoots.contains(where: { n === $0 || n.isDescendant(of: $0) }) { continue }
                     // An unmapped node view is a leak wherever it hangs, an
                     // opaque controller interior included (D3: nodes there are matched).

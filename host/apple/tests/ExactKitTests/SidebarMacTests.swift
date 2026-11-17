@@ -433,7 +433,7 @@ final class SidebarMacTests: XCTestCase {
         // (NSToolbarItemViewer minSize) laying out one item in two toolbars.
         try press("tab-history")
         try press("open-history")
-        XCTAssertEqual(window.toolbar?.items.map(\.itemIdentifier).contains(WindowToolbarHost.backIdentifier), true)
+        XCTAssertEqual(window.toolbar?.items.map(\.itemIdentifier).contains(WindowToolbarHost.historyIdentifier), true)
         var backs: [NSToolbarItem] = []
         for (target, authored) in [("authored-day", true), ("plain-day", false), ("authored-day", true)] {
             let reply = Agent(session: session).tap(["id": Int(try node(target).id)])
@@ -447,7 +447,7 @@ final class SidebarMacTests: XCTestCase {
             XCTAssertTrue(view.window === window)
             XCTAssertFalse(try node("route-day").isHiddenOrHasHiddenAncestor)
             let toolbar = try XCTUnwrap(window.toolbar)
-            let back = try XCTUnwrap(toolbar.items.first { $0.itemIdentifier == WindowToolbarHost.backIdentifier })
+            let back = try XCTUnwrap(toolbar.items.first { $0.itemIdentifier == WindowToolbarHost.historyIdentifier })
             XCTAssertTrue(back.isEnabled)
             XCTAssertFalse(backs.contains { $0 === back }, "each toolbar has its own Back")
             backs.append(back)

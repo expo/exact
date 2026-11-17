@@ -1,7 +1,7 @@
 //! Compile and bake `app.contract` into `OUT_DIR/app.plan`, with the
 //! compatibility id beside it (as the Linux crate computes it: the Canvas
 //! host is that host's presenter) and what `contract::native::android_entry`
-//! writes, for `exact_linux::canvas_jni!` to embed.
+//! writes, for `exact_painted::canvas_jni!` to embed.
 
 use contract::DataSource;
 

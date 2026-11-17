@@ -135,11 +135,12 @@ class ForegroundServices internal constructor(private val application: Context, 
 
     /**
      * Claim a service of [kind] with [types] for a capability started by [origin]. The service starts with the first
-     * claim of its kind and promotes itself with the union of its claims' types. A start needs the reader resumed,
-     * unless [permit] names the platform event that allows it; a claim joining a running service needs nothing. A
-     * `mediaProjection` claim needs a [ForegroundPermit.Consent] whatever the reader's state. Null, with the reason in
-     * the log, when the lines do not declare the kind with every type or the platform refuses the start; [lost] hears a
-     * refusal that comes after (the service's `startForeground` threw). [promoted] runs on the main thread once the
+     * claim of its kind and promotes itself with the union of its claims' types. A start needs the reader's activity to
+     * show (resumed, or paused under a dialog), unless [permit] names the platform event that allows it; a claim joining
+     * a running service needs nothing. A `mediaProjection` claim needs a [ForegroundPermit.Consent] whatever the
+     * reader's state. Null, with the reason in the log, when the lines do not declare the kind with every type or the
+     * platform refuses the start; [lost] hears a refusal that comes after (the service's `startForeground` threw).
+     * [promoted] runs on the main thread once the
      * service has called `startForeground` with every one of [types] (at once when it joins a service promoted with
      * them), never inside this call: work the platform allows only in a promoted service, such as
      * `getMediaProjection`, starts there. [notification] sets the claimant's parts of the notification after the
@@ -169,7 +170,9 @@ class ForegroundServices internal constructor(private val application: Context, 
             return refuse("SecurityException: RECORD_AUDIO is not granted")
         }
         val running = Claims.held.any { it.kind == kind && !it.agent }
-        if (!running && !Extensions.resumedNow && permit == null) return refuse("ForegroundServiceStartNotAllowedException: the app is not in front")
+        // Android lets an app with a visible activity start one: paused under a dialog is visible (a permission's answer
+        // arrives before the resume), stopped is not.
+        if (!running && !Extensions.visibleNow && permit == null) return refuse("ForegroundServiceStartNotAllowedException: the app is not in front")
         Claims.held += claim
         if (running) {
             Claims.changed(claim)
@@ -192,6 +195,8 @@ class ForegroundServices internal constructor(private val application: Context, 
 internal object Claims {
     val held = ArrayList<ForegroundClaim>()
     private val services = HashMap<String, ForegroundService>()
+    private val activeServices = HashSet<String>()
+    internal val keepsExecution: Boolean get() = held.any { !it.agent && it.kind in activeServices }
     private val ids = mapOf("capture" to 0x45584301, "call" to 0x45584302)
 
     fun service(kind: String): Class<out ForegroundService> = if (kind == "call") ForegroundService.Call::class.java else ForegroundService.Capture::class.java
@@ -274,6 +279,8 @@ internal object Claims {
         try {
             val types = types(service.kind)
             service.startForeground(ids.getValue(service.kind), notification(service), types.fold(0) { mask, type -> mask or bit(type) })
+            activeServices += service.kind
+            Exact.executionChanged()
             promoted(held.filter { it.kind == service.kind && !it.agent }, types)
         } catch (e: Exception) {
             // A `SecurityException` for a type whose permission or runtime grant is missing, or Android 12's
@@ -282,8 +289,8 @@ internal object Claims {
             Log.i("exact", "foreground service ${service.kind}: refused: $why")
             val lost = held.filter { it.kind == service.kind && !it.agent }
             held.removeAll(lost.toSet())
-            lost.forEach { it.released = true; it.lost(why) }
             stop(service)
+            lost.forEach { it.released = true; it.lost(why) }
         }
     }
 
@@ -302,11 +309,17 @@ internal object Claims {
     }
 
     private fun stop(service: ForegroundService) {
+        activeServices -= service.kind
+        Exact.executionChanged()
         service.stopForeground(Service.STOP_FOREGROUND_REMOVE)
         service.stopSelf()
     }
 
     fun destroyed(service: ForegroundService) {
-        if (services[service.kind] === service) services.remove(service.kind)
+        if (services[service.kind] === service) {
+            services.remove(service.kind)
+            activeServices -= service.kind
+            Exact.executionChanged()
+        }
     }
 }

@@ -345,17 +345,19 @@ pub(crate) struct Poses {
 }
 impl Poses {
     pub fn track(&mut self, entities: &[Entity], world: &World) {
+        let poses = std::cell::LazyCell::new(|| crate::world::scene::PoseRows::new(world));
         self.entries.retain(|(e, _)| entities.contains(e));
         for &e in entities {
             if self.entries.iter().any(|(old, _)| *old == e) {
                 continue;
             }
-            if let Some(p) = crate::world::scene::pose(world, e) {
+            if let Some(p) = poses.pose(e) {
                 self.entries.push((e, [p; 2]));
             }
         }
     }
     pub fn sync(&mut self, world: &World) {
+        let poses = std::cell::LazyCell::new(|| crate::world::scene::PoseRows::new(world));
         let reset = self.generation != world.presentation_generation();
         self.generation = world.presentation_generation();
         let parent_revision = world.revision::<exact_game::Parent>();
@@ -364,14 +366,14 @@ impl Poses {
         let next = self.tick != Some(world.tick());
         self.tick = Some(world.tick());
         self.entries.retain_mut(|(e, pair)| {
-            let Some(pose) = crate::world::scene::pose(world, *e) else {
+            let Some(pose) = poses.pose(*e) else {
                 return false;
             };
             if next {
                 pair[0] = pair[1];
             }
             pair[1] = pose;
-            if reset || crate::world::scene::snap(world, *e, parent_changed) {
+            if reset || poses.snap(*e, parent_changed) {
                 pair[0] = pose;
             }
             true
@@ -385,6 +387,38 @@ impl Poses {
             pose.rotation,
             pose.position,
         ))
+    }
+}
+
+#[cfg(test)]
+mod pose_tests {
+    use super::*;
+    use crate::world::scene::resolution_count;
+
+    #[test]
+    fn hook_feeds_resolve_pose_columns_once() {
+        let mut world = World::new(60, 0);
+        let mut poses = Poses::default();
+        let before = resolution_count();
+        poses.track(&[], &world);
+        poses.sync(&world);
+        assert_eq!(resolution_count() - before, 0);
+        let entities: Vec<_> = (0..16)
+            .map(|i| world.spawn(Transform::at(i as f32, 0., 0.)))
+            .collect();
+        world.propagate();
+        let before = resolution_count();
+        poses.track(&entities, &world);
+        assert_eq!(resolution_count() - before, 1);
+        for _ in 0..2 {
+            let before = resolution_count();
+            poses.sync(&world);
+            assert_eq!(resolution_count() - before, 1);
+            assert_eq!(poses.entries.len(), entities.len());
+        }
+        for (i, &e) in entities.iter().enumerate() {
+            assert_eq!(poses.at(e, 0.5).unwrap().w_axis.x, i as f32);
+        }
     }
 }
 

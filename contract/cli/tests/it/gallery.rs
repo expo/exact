@@ -6,7 +6,8 @@
 //! gallery's; nothing of the app's own build or describe changes.
 #![cfg(unix)]
 
-use std::path::{Path, PathBuf};
+use crate::scratch::Scratch;
+use std::path::Path;
 
 const LIB: &str = r#"shape Info
   title: string
@@ -61,22 +62,24 @@ component App
 /// An app using a private library package's `Card` (an enum and a bool
 /// variant, a prop of every other kind, a slot) and `Needs` (an inject the
 /// gallery can't provide).
-fn fixture(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("exact2-gallery-{tag}-{}", std::process::id()));
+fn fixture(tag: &str) -> Scratch {
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-{tag}-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     let lib = dir.join("node_modules/@acme/lib");
     std::fs::create_dir_all(&lib).unwrap();
     std::fs::write(lib.join("package.json"), r#"{"name":"@acme/lib","version":"1.0.0","private":true,"exports":{".":"./index.contract"}}"#).unwrap();
     std::fs::write(
-        lib.join("lib.tamber"),
-        "tamber lib\n\ntheme\n  lib.pad = 4px\n",
+        lib.join("lib.forma"),
+        "forma lib\n\ntheme\n  lib.pad = 4px\n",
     )
     .unwrap();
     std::fs::write(lib.join("index.contract"), LIB).unwrap();
     std::fs::write(dir.join("app.contract"), APP).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber app\n\ntheme\n  lib.pad = 6px\n",
+        dir.join("app.forma"),
+        "forma app\n\ntheme\n  lib.pad = 6px\n",
     )
     .unwrap();
     std::fs::write(
@@ -98,7 +101,7 @@ fn the_gallery_places_each_cell_refuses_one_the_compiler_wont_take_and_leaves_th
     let dir = fixture("cells");
     let before = (
         plan(&dir),
-        contract::tamber_params::params_of(&dir.join("app.contract")).files,
+        contract::forma_params::params_of(&dir.join("app.contract")).files,
     );
     let out = dir.join("node_modules/.cache/exact-gallery");
     let g = contract::gallery::generate(&dir.join("app.contract"), &out).expect("the gallery");
@@ -135,13 +138,13 @@ fn the_gallery_places_each_cell_refuses_one_the_compiler_wont_take_and_leaves_th
     // The gallery's design is the app's own; the app's plan and describe's files are as they were.
     let manifest: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(out.join("app.json")).unwrap()).unwrap();
-    assert_eq!(manifest["tamber"], "../../../app.tamber");
+    assert_eq!(manifest["forma"], "../../../app.forma");
     // The app's own id: the gallery's plan runs in the app's build (its wasm checks the id).
     assert_eq!(manifest["app"]["id"], "com.acme.fx");
     assert_eq!(manifest["name"], "Fx gallery");
     let after = (
         plan(&dir),
-        contract::tamber_params::params_of(&dir.join("app.contract")).files,
+        contract::forma_params::params_of(&dir.join("app.contract")).files,
     );
     assert_eq!(before, after);
     assert!(
@@ -253,7 +256,7 @@ fn the_gallery_never_writes_over_the_apps_sources_nor_where_another_install_is_r
     let app = dir.join("app.contract");
     // The app's own directory, a directory among its sources, a file this didn't write.
     for (out, why) in [
-        (dir.clone(), "the app's own directory"),
+        (dir.to_path_buf(), "the app's own directory"),
         (dir.join("src"), "never among sources"),
     ] {
         let e = contract::gallery::generate(&app, &out).unwrap_err();
@@ -288,7 +291,9 @@ fn the_gallery_never_writes_over_the_apps_sources_nor_where_another_install_is_r
     );
     // Outside the app, a directory among sources (no node_modules or target in its path); and a cache no
     // node_modules of the app's reaches.
-    let away = std::env::temp_dir().join(format!("exact2-gallery-away-{}", std::process::id()));
+    let away = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-away-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&away);
     let e = contract::gallery::generate(&app, &away.join("docs")).unwrap_err();
     assert!(e.contains("never among sources"), "{e}");
@@ -300,7 +305,9 @@ fn the_gallery_never_writes_over_the_apps_sources_nor_where_another_install_is_r
 
 #[test]
 fn each_component_is_the_declaration_the_apps_use_reaches_spelled_as_the_app_spells_it() {
-    let dir = std::env::temp_dir().join(format!("exact2-gallery-names-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-names-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     let card = "component Card\n  props\n    tone: enum<\"plain\", \"quiet\">\n  parts\n    face: paint\n  view\n    text tone part=\"face\" opacity=(tone == \"quiet\" ? 0.5 : 1)\n";
     write(
@@ -308,16 +315,16 @@ fn each_component_is_the_declaration_the_apps_use_reaches_spelled_as_the_app_spe
         &[
             // A re-export's rename (`Fancy`), and a component an exports subpath reaches (`Pill`).
             ("node_modules/@acme/lib/package.json", &package("@acme/lib", r#"{".":"./index.contract","./pill":"./pill.contract"}"#)),
-            ("node_modules/@acme/lib/lib.tamber", "tamber lib\n\ntheme\n  lib.pad = 4px\n"),
+            ("node_modules/@acme/lib/lib.forma", "forma lib\n\ntheme\n  lib.pad = 4px\n"),
             ("node_modules/@acme/lib/card.contract", card),
             ("node_modules/@acme/lib/pill.contract", "component Pill\n  parts\n    face: paint\n  view\n    text \"p\" part=\"face\"\n"),
             ("node_modules/@acme/lib/index.contract", "use Card as Fancy from \"./card.contract\"\nuse Pill from \"./pill.contract\"\n"),
             // A second package with a `Card` and a `Gallery` of its own.
             ("node_modules/@other/kit/package.json", &package("@other/kit", r#"{".":"./index.contract"}"#)),
-            ("node_modules/@other/kit/kit.tamber", "tamber kit\n\ntheme\n  kit.pad = 2px\n"),
+            ("node_modules/@other/kit/kit.forma", "forma kit\n\ntheme\n  kit.pad = 2px\n"),
             ("node_modules/@other/kit/index.contract", "component Card\n  parts\n    face: paint\n  view\n    text \"k\" part=\"face\"\n\ncomponent Gallery\n  parts\n    face: paint\n  view\n    text \"g\" part=\"face\"\n"),
             ("app.contract", "use Fancy from \"@acme/lib\"\nuse Pill from \"@acme/lib/pill\"\nuse Card as KitCard, Gallery from \"@other/kit\"\n\ncomponent App\n  view\n    column\n      Fancy(tone=\"plain\")\n      Pill()\n      KitCard()\n      Gallery()\n"),
-            ("app.tamber", "tamber app\n\ntheme\n  lib.pad = 6px\n"),
+            ("app.forma", "forma app\n\ntheme\n  lib.pad = 6px\n"),
         ],
     );
     let out = dir.join("node_modules/.cache/exact-gallery");
@@ -426,7 +433,7 @@ fn the_design_reads_the_apps_assets_and_a_shape_is_brought_by_the_name_the_packa
         &dir,
         &[
             ("assets/icons/a.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24H0z\"/></svg>\n"),
-            ("app.tamber", "tamber app\n\ntheme\n  lib.pad = 6px\n\nicons\n  icon.a = icon(svg \"icons/a.svg\")\n"),
+            ("app.forma", "forma app\n\ntheme\n  lib.pad = 6px\n\nicons\n  icon.a = icon(svg \"icons/a.svg\")\n"),
         ],
     );
     let out = dir.join("node_modules/.cache/exact-gallery");
@@ -449,14 +456,16 @@ fn the_design_reads_the_apps_assets_and_a_shape_is_brought_by_the_name_the_packa
 /// package by its name: the app's own `use`s, by the loader's record.
 #[test]
 fn an_app_inside_its_library_package_is_the_apps_own_and_a_compiler_record_has_a_placeholder() {
-    let root = std::env::temp_dir().join(format!("exact2-gallery-holding-{}", std::process::id()));
+    let root = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-holding-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&root);
     let pkg = root.join("pkg");
     write(
         &pkg,
         &[
             ("package.json", &package("@x/pkg", r#"{".":"./index.contract"}"#)),
-            ("pkg.tamber", "tamber pkg\n\ntheme\n  pkg.pad = 4px\n"),
+            ("pkg.forma", "forma pkg\n\ntheme\n  pkg.pad = 4px\n"),
             ("index.contract", "component Note\n  props\n    marks: TextDecorations\n  parts\n    face: paint\n  view\n    text marks.value part=\"face\"\n"),
             ("example/app.contract", "use Note from \"@x/pkg\"\n\ncomponent App\n  view\n    column\n      Note(marks=TextDecorations(value=\"v\", spans=[]))\n"),
         ],
@@ -516,7 +525,9 @@ fn the_cli_reports_when_git_closes_its_input_pipe() {
 
 #[test]
 fn a_checkout_under_a_target_directory_and_a_cache_git_does_not_ignore_are_refused() {
-    let base = std::env::temp_dir().join(format!("exact2-gallery-git-{}", std::process::id()));
+    let base = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-git-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&base);
     // A repository whose checkout sits under a directory named `target`: its app's `src` is still sources.
     let repo = base.join("target/repo");
@@ -561,8 +572,8 @@ fn a_refused_cell_keeps_its_packages_design_and_a_chain_of_re_exports_names_the_
     std::fs::write(dir.join("app.contract"), "use Align from \"@acme/lib\"\n\ncomponent App\n  view\n    column\n      Align(align=\"left\")\n").unwrap();
     // The app's design names the package's token: the package's design must come with the gallery.
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber app\n\ntheme\n  app.pad = lib.pad\n",
+        dir.join("app.forma"),
+        "forma app\n\ntheme\n  app.pad = lib.pad\n",
     )
     .unwrap();
     let out = dir.join("node_modules/.cache/exact-gallery");
@@ -642,7 +653,9 @@ fn a_refused_probe_leaves_no_manifest_so_the_next_run_proceeds_and_git_must_igno
     let dir = fixture("retry");
     let app = dir.join("app.contract");
     // A cache no node_modules reaches: refused, and nothing of the gallery's left there.
-    let other = std::env::temp_dir().join(format!("exact2-gallery-other-{}", std::process::id()));
+    let other = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-gallery-other-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&other);
     let out = other.join("target/g");
     let e = contract::gallery::generate(&app, &out).unwrap_err();
@@ -1077,8 +1090,8 @@ fn a_string_written_as_a_style_row_gets_a_value_of_its_kind() {
     let lib = dir.join("node_modules/@acme/lib");
     std::fs::write(lib.join("index.contract"), STYLED).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber app\n\ntheme\n  lib.pad = 6px\n  glow: text-shadow = 0 1px 2px #000000\n",
+        dir.join("app.forma"),
+        "forma app\n\ntheme\n  lib.pad = 6px\n  glow: text-shadow = 0 1px 2px #000000\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), STYLED_APP).unwrap();

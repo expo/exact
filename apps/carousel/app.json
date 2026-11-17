@@ -38,5 +38,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "carousel-data", "type": "carousel_data::Cards", "source": "carousel_data::Cards" } }
 }

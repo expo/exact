@@ -6,6 +6,63 @@ use exact_kernel::{
 };
 
 #[test]
+fn auto_z_index_round_trips_separately_from_every_integer() {
+    use exact_kernel::{export, wire, Kernel, NodeType, Op};
+    let mut style = StyleProps::default();
+    assert_eq!(style.z_index, None);
+    for (value, expected) in [
+        (StyleValue::Auto, None),
+        (StyleValue::Number(0.0), Some(0)),
+        (StyleValue::Text("auto".into()), None),
+        (StyleValue::Number(f64::from(i32::MIN)), Some(i32::MIN)),
+        (StyleValue::Text(" AUTO ".into()), None),
+        (StyleValue::Number(f64::from(i32::MAX)), Some(i32::MAX)),
+        (StyleValue::Text("-2".into()), Some(-2)),
+    ] {
+        style.set_dynamic(StyleId::ZIndex, &value).unwrap();
+        assert_eq!(style.z_index, expected);
+        assert_eq!(
+            style.get(StyleId::ZIndex),
+            expected.map_or(RowValue::Enum("auto"), |n| RowValue::Number(f64::from(n)))
+        );
+        let ops = [
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 1,
+                patch: Box::new(style.clone()),
+            },
+            Op::AttachRoot { id: 1 },
+        ];
+        let bytes = wire::frame::encode(1, 0, &ops);
+        assert_eq!(wire::frame::decode(&bytes).unwrap().ops, ops);
+        let mut kernel = Kernel::with_monospace();
+        kernel.apply(0, 1, &ops).unwrap();
+        let snapshot = export::decode(&kernel.export(None).unwrap()).unwrap();
+        assert_eq!(snapshot.styles[0].z_index, expected);
+        assert!(snapshot.styles[0].mask.has(StyleId::ZIndex));
+    }
+    let before = style.clone();
+    for value in [
+        StyleValue::Number(0.5),
+        StyleValue::Number(f64::from(i32::MAX) + 1.0),
+        StyleValue::Number(f64::NAN),
+        StyleValue::Text("0.5".into()),
+        StyleValue::Text("none".into()),
+    ] {
+        assert!(style.set_dynamic(StyleId::ZIndex, &value).is_err());
+        assert_eq!(style, before);
+    }
+    let mut reader = wire::codec::Reader::new(&[2]);
+    assert_eq!(
+        reader.auto_i32(),
+        Err(exact_kernel::DecodeError::BadAutoI32(2))
+    );
+}
+
+#[test]
 fn scroll_padding_and_svg_radii_refuse_negative_literals_atomically() {
     for id in [
         StyleId::ScrollPaddingTop,
@@ -199,7 +256,8 @@ fn translate_text_is_a_narrow_css_pixel_subset_with_atomic_refusal() {
         "1px 2px 3",
         "10%% 0",
         "% 0",
-        "calc(1px + 2%) 0",
+        // A `calc()` the two rows cannot hold.
+        "calc(1rem + 2%) 0",
         "NaNpx 0",
         "infpx 0",
         "1e39px 0",
@@ -352,7 +410,7 @@ fn every_dynamic_codec_fills_its_row_and_marks_the_mask() {
     assert_eq!(s.height, Dimension::Auto);
     assert_eq!(s.flex_grow, 1.0);
     assert_eq!(s.font_weight, 700);
-    assert_eq!(s.z_index, -2);
+    assert_eq!(s.z_index, Some(-2));
     assert_eq!(
         s.background_color,
         Some(ColorValue::Fixed(Color::rgba(255, 0, 0, 128)))
@@ -556,7 +614,7 @@ fn enum_rows_resolve_names_and_others_do_not() {
         // A keyword row (a bit set named by CSS keywords) lists its words too.
         let keywords = matches!(
             id,
-            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures
+            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures | StyleId::SafeArea
         );
         assert_eq!(
             names.is_empty(),
@@ -896,6 +954,7 @@ fn every_row_writes_its_own_field_and_no_other() {
         StyleValue::Text("blur(12px) saturate(1.14)".into()),
         StyleValue::Text("flip-block, flip-inline".into()),
         StyleValue::Text("\"wght\" 650".into()),
+        StyleValue::Text("--gap: 8px".into()),
     ];
     let mut unwritten = Vec::new();
     let base = StyleProps::default();
@@ -941,4 +1000,36 @@ fn style_ids_round_trip_through_their_names() {
     for name in ["", "widt", "width ", "Width", "min_widthx"] {
         assert_eq!(StyleId::from_name(name), None, "{name:?}");
     }
+}
+
+#[test]
+fn translate_velocity_takes_a_finite_pair_and_refuses_atomically() {
+    let mut style = StyleProps::default();
+    let row = StyleId::TranslateVelocity;
+    style
+        .set_dynamic(row, &StyleValue::Text("800 -600".into()))
+        .unwrap();
+    assert_eq!(
+        style.translate_velocity,
+        exact_kernel::Vec2 { x: 800., y: -600. }
+    );
+    for text in [
+        "", "1", "1 2 3", "1px 2px", "1,2", "NaN 0", "inf 0", "1e39 0", "0x10 0",
+    ] {
+        let before = style.clone();
+        assert!(
+            style
+                .set_dynamic(row, &StyleValue::Text(text.into()))
+                .is_err(),
+            "{text}"
+        );
+        assert_eq!(style, before, "{text}");
+    }
+    style
+        .set_dynamic(row, &StyleValue::Text("0 0".into()))
+        .unwrap();
+    assert!(style.mask.has(row));
+    assert_eq!(style.translate_velocity, exact_kernel::Vec2::default());
+    style.clear(exact_kernel::StyleMask::of(row));
+    assert!(!style.mask.has(row));
 }

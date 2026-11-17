@@ -8,6 +8,14 @@ impl Backend for SecretBackend {
         self.0.get(name).map_err(|error| error.to_string())
     }
     fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        if crate::watch_sync::read_only(name) {
+            return Err("watch replica is phone-owned".into());
+        }
+        crate::launch_preloads::with_secret_write(name, || self.persist(name, value))
+    }
+}
+impl SecretBackend {
+    pub(super) fn persist(&self, name: &str, value: Option<&str>) -> Result<(), String> {
         match value {
             Some(value) => self.0.set(name, value),
             None => self.0.forget(name),
@@ -54,4 +62,64 @@ pub(super) fn secret_directory(app: &str) -> Option<std::path::PathBuf> {
         .then(|| crate::picker::agent_secret_root(app))
         .flatten()
         .map(|root| root.join("secrets"))
+}
+
+/// Read only plain secrets named by launch definitions, once each (LLP 1162.000 D2).
+pub(crate) fn launch_secrets(
+    grants: &str,
+    app: &str,
+    definitions: &[exact_runner::request::Preload],
+) -> std::collections::BTreeMap<String, String> {
+    let Ok(bindings) = super::endow_for(grants, app) else {
+        return Default::default();
+    };
+    read_launch_secrets(&bindings, grants, definitions)
+}
+
+pub(crate) fn read_launch_secrets(
+    bindings: &ibex2::host::Bindings,
+    grants: &str,
+    definitions: &[exact_runner::request::Preload],
+) -> std::collections::BTreeMap<String, String> {
+    let guarded: std::collections::BTreeSet<_> = crate::presence_secrets::lines(grants)
+        .into_iter()
+        .filter_map(|(name, policy)| policy.map(|_| name))
+        .collect();
+    let names: std::collections::BTreeSet<_> = definitions
+        .iter()
+        .flat_map(|d| d.secrets.iter().copied())
+        .collect();
+    let backend = SecretBackend(bindings.secrets.clone(), None);
+    names
+        .into_iter()
+        .filter(|name| !guarded.contains(*name))
+        .filter_map(|name| {
+            backend
+                .read(name)
+                .ok()
+                .flatten()
+                .map(|value| (name.into(), value))
+        })
+        .collect()
+}
+
+struct LaunchBackend(SecretBackend);
+impl Backend for LaunchBackend {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        self.0.read(name)
+    }
+    fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        self.0.persist(name, value)
+    }
+}
+pub(crate) fn launch_backend(grants: &str, app: &str) -> Result<impl Backend, String> {
+    let bindings = super::endow_for(grants, app)?;
+    Ok(launch_backend_in(bindings.secrets, secret_directory(app)))
+}
+
+pub(crate) fn launch_backend_in(
+    secrets: Secrets,
+    directory: Option<std::path::PathBuf>,
+) -> impl Backend {
+    LaunchBackend(SecretBackend(secrets, directory))
 }

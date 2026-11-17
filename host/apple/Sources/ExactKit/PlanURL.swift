@@ -5,13 +5,12 @@
 // the app for all-session acceptance, and subscribe to the server's events
 // so an edit re-fetches. Transactional: a candidate replaces the
 // running app only after its bytes hash clean and boot runs; every failure
-// keeps the last good app on screen. `{rebuilt}`, or a generation for
-// another program, takes no generation — the wasm-side program changed, so a
-// new plan against this binary's data crate would be a poisoned boot — but
-// the host stays connected and registered, reconnects across restarts, and
-// takes the next generation for its own program; rebuilding the host, or the
-// menu's Reload, starts over. One connection per app (LLP 1031 D11), never
-// per session.
+// keeps the last good app on screen. A rebuild or generation naming changed
+// inputs for this binary's native cohort takes no generation: a new plan
+// against another native program could boot incorrectly. The host stays
+// connected and registered across restarts and takes the next generation for
+// its own program. Web-only rebuilds keep the native program and carried state.
+// One connection per app (LLP 1031 D11), never per session.
 import CryptoKit
 import Foundation
 
@@ -129,6 +128,29 @@ public struct ExactDevelopmentPlan {
         } catch {
             return "local generation refused: \(error.localizedDescription)"
         }
+    }
+
+    /// The dev loop's file form (LLP 1007 §6): every 100 ms, a changed
+    /// revision is applied to `app`. A module pair starts unseen, so the
+    /// first tick applies it. Keep the timer for as long as the watch runs.
+    public func watch(_ app: ExactApp) -> DispatchSourceTimer {
+        var last = hasModule ? [] : revision
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 0.1, repeating: 0.1)
+        t.setEventHandler {
+            last = Self.seen(revision, last: last, apply: { apply(to: app) }, pending: { app.generationPending })
+        }
+        t.resume()
+        return t
+    }
+
+    /// The revision seen after a tick. A candidate refused while a
+    /// generation is pending (a module still preparing, a request in
+    /// flight) stays unseen, so the next tick asks again, as the URL form
+    /// does; one applied, or refused otherwise, waits for its files to change.
+    static func seen(_ revision: [Double], last: [Double], apply: () -> Bool, pending: () -> Bool) -> [Double] {
+        guard revision != last else { return last }
+        return apply() || !pending() ? revision : last
     }
 }
 
@@ -323,9 +345,11 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
     static let devStatusType = "application/vnd.exact.dev-status+json"
     static let pageLimit = 64 * 1024
     static let envelopeLimit = 64 * 1024
+    /// The asset index the envelope names (update/src/lib.rs `MAX_ASSET_INDEX_BYTES`).
+    static let assetIndexLimit = 4 * 1024 * 1024
     static let planLimit = 64 * 1024 * 1024
     static let assetLimit = 64 * 1024 * 1024
-    /// One event frame: 1 MiB, the design server's own line limit, since a large plan's copies (tamber/1.17 `inspect`)
+    /// One event frame: 1 MiB, the design server's own line limit, since a large plan's copies (forma/1.17 `inspect`)
     /// pass 64 KiB (a generated 20,000-copy map: 85 KB).
     static let eventLimit = 1024 * 1024
     static let generationLimit = 256 * 1024 * 1024
@@ -585,19 +609,28 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
               let count = PlanURL.count(row["bytes"]), count <= (name.isEmpty ? PlanURL.planLimit : PlanURL.assetLimit) else { return nil }
         return FileCard(name: name, url: url, sha: sha, count: count)
     }
+    private static func nativeProgram(_ row: [String: Any]) -> String? {
+        let compat = BakedCompatibility.json
+        guard let cohort = compat["id"] as? String, let target = compat["target"] as? String,
+              let programs = row["nativePrograms"] as? [String: Any] else { return nil }
+        return digest(programs[target + "/" + cohort])
+    }
     private static func revision(_ row: [String: Any]) -> Revision? {
         guard let epoch = row["epoch"] as? String, !epoch.isEmpty, epoch.utf8.count <= 128,
               let seq = count(row["seq"]), let identity = digest(row["generation"]) else { return nil }
-        return Revision(epoch: epoch, seq: seq, identity: identity, program: digest(row["program"]))
+        return Revision(epoch: epoch, seq: seq, identity: identity, program: nativeProgram(row))
     }
 
     /// A new epoch resets ordering; an already retired epoch cannot return.
     /// All fetch completions also carry a local resolution, so a response
     /// started before a newer announcement cannot commit afterward.
     private func observe(_ revision: Revision) -> Bool {
-        // Its program, once known, is the only one it takes; until then the
-        // session pins the first (`acceptProgram`), except while it waits,
-        // when an unknown program cannot be checked and is not pinned.
+        // A revision naming no program for this host's cohort and target is
+        // refused. A known program is the only one the host takes; until one
+        // is known the session pins the first (`acceptProgram`), except while
+        // it waits: it cannot tell its own program returning from a rebuilt
+        // one, so it pins nothing until Reload or a relaunch.
+        guard revision.program != nil else { waitForProgram(); return false }
         if let known = adopted {
             guard revision.program == known else { waitForProgram(); return false }
         } else if terminal != nil || !acceptProgram(revision.program) {
@@ -621,28 +654,27 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
         return true
     }
 
+    /// An envelope's cards, read before its asset index arrives.
+    private struct Head {
+        let json: [String: Any]
+        let base: URL
+        let plan: FileCard
+        let module: [String: FileCard]
+        let moduleCanonical: String
+        let rust: [String: FileCard]
+        let rustCanonical: String
+        let total: Int
+    }
+
     private func takeEnvelope(_ data: Data, base: URL, subscribe shouldSubscribe: Bool, generation: UInt64, expected: Revision?) {
         loopDone()
         guard data.count <= PlanURL.envelopeLimit, PlanURL.sameOrigin(base, page),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], PlanURL.count(json["exact"]) == 1,
-              let planRow = json["plan"] as? [String: Any], let plan = card(planRow, name: "", base: base),
-              let assetRows = json["assets"] as? [[String: Any]] else {
+              let planRow = json["plan"] as? [String: Any], let plan = card(planRow, name: "", base: base) else {
             failed("invalid or unsupported envelope at \(base)", generation: generation)
             return
         }
-        var assets: [FileCard] = []
-        var names = Set<String>()
         var total = plan.count
-        for row in assetRows {
-            guard let name = row["name"] as? String, PlanURL.safeName(name), names.insert(name).inserted,
-                  let asset = card(row, name: name, base: base), asset.count <= PlanURL.generationLimit - total else {
-                failed("invalid, duplicate, or oversized asset manifest at \(base)", generation: generation)
-                return
-            }
-            total += asset.count
-            assets.append(asset)
-        }
-        assets.sort { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         var module: [String: FileCard] = [:]
         if let row = json["module"] {
             guard let rows = row as? [String: Any], Set(rows.keys) == Set(["native", "receipt", "web"]) else {
@@ -695,15 +727,63 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
             }
             rustCanonical = ",\"rust\":{" + canonicalVariants.joined(separator: ",") + "}"
         }
-        let canonical = "{\"assets\":[" + assets.map(\.canonical).joined(separator: ",") + "]" + moduleCanonical + ",\"plan\":" + plan.canonical + rustCanonical + "}"
+        let head = Head(json: json, base: base, plan: plan, module: module, moduleCanonical: moduleCanonical, rust: rustModule, rustCanonical: rustCanonical, total: total)
+        // The asset cards are in the index the envelope names, and resolve
+        // against the URL it names the index by, not a redirect's target, as
+        // the update store and the web clients resolve them
+        // (update/src/envelope.rs). No index, no assets.
+        guard let indexRow = json["assets"] else {
+            takeRoster([], base: base, head: head, subscribe: shouldSubscribe, generation: generation, expected: expected)
+            return
+        }
+        guard let row = indexRow as? [String: Any], let index = card(row, name: "assets.json", base: base),
+              let count = PlanURL.count(row["count"]), index.count <= PlanURL.assetIndexLimit else {
+            failed("invalid or oversized asset index card at \(base)", generation: generation)
+            return
+        }
+        var request = URLRequest(url: index.url)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        fetch(request, limit: index.count, generation: generation) { [weak self] result in
+            guard let self else { return }
+            guard case let .success((body, response)) = result, response.statusCode == 200,
+                  body.count == index.count, PlanURL.hash(body) == index.sha,
+                  let list = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["assets"] as? [[String: Any]],
+                  list.count == count else {
+                self.failed("cannot verify the asset index \(index.url)", generation: generation)
+                return
+            }
+            self.takeRoster(list, base: index.url, head: head, subscribe: shouldSubscribe, generation: generation, expected: expected)
+        }
+    }
+
+    private func takeRoster(_ rows: [[String: Any]], base: URL, head: Head, subscribe shouldSubscribe: Bool, generation: UInt64, expected: Revision?) {
+        guard PlanURL.sameOrigin(base, page) else {
+            failed("the asset index at \(base) is not on \(page)", generation: generation)
+            return
+        }
+        var assets: [FileCard] = []
+        var names = Set<String>()
+        var total = head.total
+        for row in rows {
+            guard let name = row["name"] as? String, PlanURL.safeName(name), names.insert(name).inserted,
+                  let asset = card(row, name: name, base: base), asset.count <= PlanURL.generationLimit - total else {
+                failed("invalid, duplicate, or oversized asset manifest at \(base)", generation: generation)
+                return
+            }
+            total += asset.count
+            assets.append(asset)
+        }
+        assets.sort { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+        let json = head.json, plan = head.plan
+        let canonical = "{\"assets\":[" + assets.map(\.canonical).joined(separator: ",") + "]" + head.moduleCanonical + ",\"plan\":" + plan.canonical + head.rustCanonical + "}"
         let identity = PlanURL.hash(Data(canonical.utf8))
         if let dev = json["dev"] as? [String: Any] {
             // A valid envelope first, so a refused one pins no program.
             guard let revision = PlanURL.revision(dev), revision.identity == identity,
                   expected == nil || revision == expected,
-                  let path = dev["events"] as? String, let events = URL(string: path, relativeTo: base)?.absoluteURL,
+                  let path = dev["events"] as? String, let events = URL(string: path, relativeTo: head.base)?.absoluteURL,
                   PlanURL.sameOrigin(events, page) else {
-                failed("invalid or obsolete dev generation at \(base)", generation: generation)
+                failed("invalid or obsolete dev generation at \(head.base)", generation: generation)
                 return
             }
             guard observe(revision) else {
@@ -711,19 +791,19 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
                 // stream, so the build stays registered and takes the next
                 // one for its own.
                 if terminal != nil { if shouldSubscribe { subscribe(events) }; return }
-                failed("invalid or obsolete dev generation at \(base)", generation: generation)
+                failed("invalid or obsolete dev generation at \(head.base)", generation: generation)
                 return
             }
             pending = revision
             if shouldSubscribe { subscribe(events) }
         } else if json["dev"] != nil || expected != nil {
-            failed("missing dev generation identity at \(base)", generation: generation)
+            failed("missing dev generation identity at \(head.base)", generation: generation)
             return
         }
         // Subscribe before payloads finish: hello repairs an edit between
         // discovery and the stream opening, including an asset-only edit.
         guard currentGeneration() != identity else { refused = nil; pending = nil; return }
-        fetchGeneration(plan: plan, assets: assets, module: module, rust: rustModule, identity: identity, generation: generation)
+        fetchGeneration(plan: plan, assets: assets, module: head.module, rust: head.rust, identity: identity, generation: generation)
     }
 
     /// At most four payloads are in flight. Every card still has its own byte
@@ -892,14 +972,14 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
         failed("events disconnected; resolving the current generation", generation: resolution)
     }
 
-    /// The dev server's native code is no longer this host's (it rebuilt it,
-    /// or a generation names another program). The last good plan keeps
+    /// The dev server has no unchanged build receipt for this native cohort,
+    /// or names another native program. The last good plan keeps
     /// running and no generation is fetched, but the host stays connected and
     /// registered and keeps reconnecting across the server's restarts, so the
     /// generation for its own code, when the server has it again, is taken.
     private func waitForProgram() {
         if terminal == nil {
-            terminal = "the dev server rebuilt the app's native code — rebuild and relaunch this host (the last good plan is still running)"
+            terminal = "this host's native program is unavailable or changed — rebuild and relaunch this host (the last good plan is still running)"
             status(terminal!)
         }
         settle()
@@ -966,7 +1046,8 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
     private func handle(_ frame: [String: Any]) {
         retrySeconds = 1
         if frame["rebuilt"] != nil {
-            waitForProgram()
+            if let known = adopted, PlanURL.nativeProgram(frame) == known { settle() }
+            else { waitForProgram() }
             return
         }
         if let error = frame["error"] as? String {
@@ -974,7 +1055,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
             status("dev: \(error)")
             return
         }
-        if let kind = frame["kind"] as? String, kind == "tamber-batch" || kind == "tamber-snapshot" {
+        if let kind = frame["kind"] as? String, kind == "forma-batch" || kind == "forma-snapshot" {
             design(frame)
             return
         }

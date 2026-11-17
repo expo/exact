@@ -3,11 +3,15 @@
 // that gains the curve in the commit that moves it slides from where it was, as presence-glue.js plays a style op that
 // gains the row. Build exact-web-js once before running this test (docs/testing.md).
 import { test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 const SOURCE = `component App
   state calm = false
@@ -29,6 +33,221 @@ const SOURCE = `component App
       text "Second" testId="second" height=40 -exact-layout-transition=(calm ? "none" : "2000ms linear")
 `;
 
+test.each(['layout', 'exit', 'both'])('empty presence bindings skip probes on an unrelated action (%s)', async mode => {
+  const rows = Array.from({ length: 1000 }, (_, i) => i).join(', ');
+  const layout = mode !== 'exit' ? '-exact-layout-transition=(flag ? "200ms ease" : "")' : '';
+  const exit = mode !== 'layout' ? '-exact-exit-animation=(flag ? "leave 200ms linear both" : "")' : '';
+  const app = await exitApp('chromium', `keyframes leave
+  to opacity=0
+
+component App
+  state flag = false
+  state shown = true
+  state count = 0
+  action tick
+    count = count + 1
+  action enable
+    flag = true
+  action clear
+    flag = false
+  action mount
+    shown = not shown
+  view
+    column
+      button "Tick" press=tick testId="tick"
+      button "Enable" press=enable testId="enable"
+      button "Clear" press=clear testId="clear"
+      button "Mount" press=mount testId="mount"
+      text \`\${count}\` testId="count"
+      if shown
+        for row in [${rows}] key=row
+          box width=1 height=1 ${layout} ${exit}
+`, undefined, true);
+  try {
+    const observed = await app.page.evaluate(() => {
+      let reads = 0;
+      const get = CSSStyleDeclaration.prototype.getPropertyValue;
+      CSSStyleDeclaration.prototype.getPropertyValue = function (prop) {
+        if (prop === '--exact-layout-transition' || prop === '--exact-exit-animation') reads++;
+        return get.call(this, prop);
+      };
+      const press = id => document.querySelector(`[data-testid="${id}"]`).click();
+      const quiet = () => {
+        globalThis.probeReads = reads = 0;
+        press('tick');
+        return [globalThis.probeReads, reads];
+      };
+      try {
+        const first = quiet();
+        press('enable');
+        const styles = [...document.querySelectorAll('div')].filter(e => e.style.getPropertyValue('--exact-layout-transition') || e.style.getPropertyValue('--exact-exit-animation')).length;
+        press('clear');
+        const cleared = quiet();
+        press('mount');
+        const disposed = quiet();
+        press('mount');
+        const remounted = quiet();
+        return { first, cleared, disposed, remounted, styles, count: document.querySelector('[data-testid="count"]').textContent };
+      } finally { CSSStyleDeclaration.prototype.getPropertyValue = get; }
+    });
+    console.log(mode, 'quiet presence operations:', JSON.stringify(observed));
+    expect(observed).toEqual({ first: [0, 0], cleared: [0, 0], disposed: [0, 0], remounted: [0, 0], styles: 1000, count: '4' });
+  } finally { await app.close(); }
+}, 30000);
+
+// GitHub #747: presence places a view by its computed style and bounding rect. A commit that updates no tree reads
+// neither (a write of the value a slot holds, and one that leaves the derive a binding reads as it was), and the next
+// one that moves the rows, through a derive that changes, plays them from where they were.
+test('a commit that updates no tree measures no layout transition', async () => {
+  const rows = Array.from({ length: 20 }, (_, i) => i + 1).join(', ');
+  const app = await exitApp('chromium', `component App
+  state n = 0
+  state shown = true
+  derive label = n >= 0 ? "yes" : "no"
+  derive first = shown and n >= 0
+  action same
+    n = n
+  action more
+    n = n + 1
+  action drop
+    shown = not shown
+  view
+    column
+      button "Same" press=same testId="same"
+      button "More" press=more testId="more"
+      button "Drop" press=drop testId="drop"
+      text label testId="label"
+      if first
+        text "First" height=40
+      for i in [${rows}] key=i
+        view height=20 -exact-layout-transition="2000ms linear"
+          text \`\${i}\`
+`);
+  try {
+    const observed = await app.page.evaluate(() => {
+      const reads = { rect: 0, style: 0 };
+      const rect = Element.prototype.getBoundingClientRect, style = globalThis.getComputedStyle;
+      Element.prototype.getBoundingClientRect = function () { reads.rect++; return rect.call(this); };
+      globalThis.getComputedStyle = function (...args) { reads.style++; return style.apply(this, args); };
+      const press = id => {
+        reads.rect = reads.style = 0;
+        document.querySelector(`[data-testid="${id}"]`).click();
+        return { ...reads };
+      };
+      try {
+        const rows = [...document.querySelectorAll('[style*="--exact-layout-transition"]')];
+        const tops = () => rows.map(row => rect.call(row).top);
+        const still = press('same'), derived = press('more'), before = tops(), moved = press('drop');
+        const animations = rows.flatMap(row => row.getAnimations());
+        for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
+        const start = tops();
+        for (const animation of animations) animation.finish();
+        const end = tops();
+        return { still, derived, moved, rows: rows.length, animations: animations.length,
+          held: start.every((top, i) => Math.abs(top - before[i]) < 0.1), slid: end.every((top, i) => Math.abs(before[i] - top - 40) < 0.1) };
+      } finally { Element.prototype.getBoundingClientRect = rect; globalThis.getComputedStyle = style; }
+    });
+    console.log('layout reads around a commit:', JSON.stringify({ still: observed.still, derived: observed.derived, moved: observed.moved }));
+    expect(observed).toMatchObject({ still: { rect: 0, style: 0 }, derived: { rect: 0, style: 0 }, rows: 20, animations: 20, held: true, slid: true });
+    expect(observed.moved.rect).toBeGreaterThan(0);
+  } finally { await app.close(); }
+}, 30000);
+
+test.each(['item', 'index', 'match'].flatMap(region => [[region, false], [region, true]]))('a moving %s binding gains its curve from the new region value (computed: %s)', async (region, computed) => {
+  const each = region !== 'match';
+  const value = region === 'item' ? 'row.active' : region === 'index' ? 'index > 0' : 'active';
+  const branch = each ? 'for row, index in rows key=row.id' : 'match first([active])\n        case some(active)';
+  const indent = each ? '        ' : '          ';
+  const app = await exitApp('chromium', `shape Row
+  id: number
+  active: bool
+
+component App
+  state rows = [Row(id=1, active=false), Row(id=2, active=false)]
+  state active = false
+  state ms = 2000
+  state shown = true
+  action move
+    rows = [Row(id=2, active=false), Row(id=1, active=true)]
+    active = true
+    shown = ${each ? 'true' : 'false'}
+  view
+    column
+      button "Move" press=move testId="move"
+      if shown
+        text "Before" height=40
+      ${branch}
+${indent}text "Earlier probe" height=1 -exact-layout-transition=(${value} ? "2000ms linear" : "none")
+${indent}text "Row" testId=${each ? '`row-${row.id}`' : '"row-1"'} height=40 -exact-layout-transition=(${value} ? ${computed ? '`\${ms}ms  linear`' : '"2000ms linear"'} : "none")
+${each ? '' : '        case none\n          text "Absent"'}
+`);
+  try {
+    const result = await app.page.evaluate(async () => {
+      const row = document.querySelector('[data-testid="row-1"]');
+      const before = row.getBoundingClientRect().top;
+      document.querySelector('[data-testid="move"]').click();
+      const animations = row.getAnimations();
+      for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
+      const start = row.getBoundingClientRect().top;
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return { same: row === document.querySelector('[data-testid="row-1"]'), css: row.style.getPropertyValue('--exact-layout-transition'), animations: animations.length, start, before, end: row.getBoundingClientRect().top };
+    });
+    expect(result.same).toBe(true);
+    expect(result.css).toBe('2000 0 linear');
+    expect(result.animations).toBeGreaterThan(0);
+    expect(result.start).toBeCloseTo(result.before, 1);
+    expect(Math.abs(result.end - result.before)).toBeGreaterThan(1);
+  } finally { await app.close(); }
+}, 30000);
+
+test('motion-held and reference-resolving presence bindings keep probing and dispose their probes', async () => {
+  const app = await exitApp('chromium', SOURCE.replace('state calm = false', 'state calm = true'), undefined, true);
+  try {
+    const observed = await app.page.evaluate(async () => {
+      const rt = await import('/rt.js'), bindings = await import('/presence-bindings.js');
+      const root = document.getElementById('exact-root'), nodes = [];
+      const value = rt.sig('');
+      let calls = 0;
+      const binding = () => { calls++; return value(); };
+      const own = rt.scope(() => {
+        for (const style of [rt.Sm, rt.Sr]) {
+          const node = document.createElement('div'); root.append(node); nodes.push(node);
+          rt.px(node); style(node, '--exact-exit-animation', '', binding);
+          // Layout registration follows its write, as the compiler emits it.
+          style(node, '--exact-layout-transition', '', binding);
+          rt.lt(node, v => v ? { css: v } : null, binding);
+        }
+      });
+      calls = globalThis.probeReads = 0;
+      bindings.captureExits(); bindings.gains(); bindings.restyled();
+      const quiet = [calls, globalThis.probeReads];
+      rt.end(own); nodes.forEach(node => node.remove());
+      calls = globalThis.probeReads = 0;
+      bindings.captureExits(); bindings.gains(); bindings.restyled();
+      return { quiet, disposed: [calls, globalThis.probeReads], listeners: value.n.obs.size };
+    });
+    expect(observed).toEqual({ quiet: [4, 4], disposed: [0, 0], listeners: 0 });
+  } finally { await app.close(); }
+}, 30000);
+
+test('constructed layout curves and whitespace variants animate', async () => {
+  const source = SOURCE.replace('state calm = false', 'state calm = false\n  state ms = 2000')
+    .replace('"2000ms linear"', '`\${ms}ms  linear`');
+  const app = await exitApp('chromium', source);
+  try {
+    const result = await app.page.evaluate(async () => {
+      const row = document.querySelector('[data-testid="second"]');
+      document.querySelector('[data-testid="drop"]').click();
+      const animations = row.getAnimations();
+      const css = row.style.getPropertyValue('--exact-layout-transition');
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return { css, animations: animations.length };
+    });
+    expect(result.css).toBe('2000 0 linear');
+    expect(result.animations).toBeGreaterThan(0);
+  } finally { await app.close(); }
+}, 30000);
+
 test('a bound layout transition slides while it holds a curve, jumps at none, and slides from where it was when gained', async () => {
   const root = resolve(import.meta.dir, '../..');
   const target = resolve(root, 'target');
@@ -38,7 +257,7 @@ test('a bound layout transition slides while it holds a curve, jumps at none, an
   let server, browser;
   try {
     writeFileSync(resolve(dir, 'app.contract'), SOURCE);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
       const path = new URL(request.url).pathname.slice(1);
@@ -131,7 +350,7 @@ test('removed motion views leave the registry after their exit and keep identity
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
 
-test.each(['chromium', 'webkit'])('computed exit animations follow reduced motion beside fixed and computed press scales on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`computed exit animations follow reduced motion beside fixed and computed press scales on ${engine}`, async () => {
   const app = await exitApp(engine, `shape Media
   prefersReducedMotion: bool
 
@@ -169,7 +388,7 @@ component App
 }, 60000);
 
 // The runner ends an arm without updating its bindings, so a removed node plays the exit it had when the commit began
-test.each(['chromium', 'webkit'])('a removal plays the exit its commit began with, whichever write comes first, on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`a removal plays the exit its commit began with, whichever write comes first, on ${engine}`, async () => {
   const app = await exitApp(engine, `keyframes leave
   to opacity=0
 
@@ -371,7 +590,7 @@ test('presence binding probes read the committed clock and release their depende
       const signal = rt.sig(0), value = () => { signal(); return rt.x_performanceNow() < 1000 ? 'none' : 'curve'; };
       const own = rt.scope(() => {
         rt.px(exit); rt.S(exit, '--exact-exit-animation', '', value);
-        rt.lt(layout, ['curve'], value);
+        rt.lt(layout, v => ({ css: v === 'curve' ? '20 0 linear' : null }), value);
       });
       const listeners = signal.n.obs.size;
       // Moving the clock alone does not publish a new committed time.
@@ -382,6 +601,91 @@ test('presence binding probes read the committed clock and release their depende
       return result;
     });
     expect(observed).toEqual({ exit: 'none', gains: 0, listeners: 0 });
+  } finally { await app.close(); }
+}, 30000);
+
+test('a kept match arm preserves its latest value across unrelated commits', async () => {
+  const app = await exitApp('chromium', `component App
+  state n = 0
+  state count = 0
+  action next
+    n = n + 1
+  action tick
+    count = count + 1
+  view
+    column
+      button "Next" press=next testId="next"
+      button "Tick" press=tick testId="tick"
+      text \`\${n} / \${count}\` testId="state"
+      match first([n])
+        case some(value)
+          text \`\${value}\` testId="value" -exact-layout-transition=(value > 0 ? "200ms linear" : "")
+        case none
+          text "Absent"
+`);
+  try {
+    const observed = await app.page.evaluate(() => {
+      const value = document.querySelector('[data-testid="value"]');
+      const press = id => document.querySelector(`[data-testid="${id}"]`).click();
+      const values = [value.textContent];
+      for (const id of ['next', 'next', 'tick', 'tick']) {
+        press(id);
+        values.push(value.textContent);
+      }
+      return { values, state: document.querySelector('[data-testid="state"]').textContent,
+        same: value === document.querySelector('[data-testid="value"]') };
+    });
+    expect(observed).toEqual({ values: ['0', '1', '2', '2', '2'], state: '2 / 2', same: true });
+  } finally { await app.close(); }
+}, 30000);
+
+test('an exit-only match arm releases its subject after same-arm updates and removal', async () => {
+  const app = await exitApp('chromium', SOURCE);
+  try {
+    const observed = await app.page.evaluate(async () => {
+      const rt = await import('/rt.js');
+      const root = document.createElement('div');
+      document.getElementById('exact-root').append(root);
+      const subject = rt.sig(0);
+      const own = rt.scope(() => rt.match(root, subject, (p, value) => {
+        const node = document.createElement('div'); p.append(node);
+        rt.px(node);
+        rt.S(node, '--exact-exit-animation', '', () => value() == null ? '' : 'leave');
+      }));
+      for (const value of [1, 2, 3]) rt.commit(() => rt.W(subject, value));
+      rt.commit(() => rt.W(subject, null));
+      const afterRemoval = subject.n.obs.size;
+      rt.end(own); root.remove();
+      return { afterRemoval, afterDisposal: subject.n.obs.size };
+    });
+    // Only the region effect reads the absent subject; ending it releases the last observer.
+    expect(observed).toEqual({ afterRemoval: 1, afterDisposal: 0 });
+  } finally { await app.close(); }
+}, 30000);
+
+test('presence arm subjects inspect the committed clock and release their dependencies', async () => {
+  const app = await exitApp('chromium', SOURCE);
+  try {
+    const observed = await app.page.evaluate(async () => {
+      const rt = await import('/rt.js'), bindings = await import('/presence-bindings.js');
+      rt.clock.agent = true; rt.clock.now = 0; rt.commit(() => {});
+      const root = document.getElementById('exact-root'), node = document.createElement('div');
+      root.append(node);
+      const signal = rt.sig(true);
+      const own = rt.scope(() => {
+        const arm = bindings.presenceArm(() => {
+          rt.px(node); rt.S(node, '--exact-exit-animation', '', () => 'leave');
+        }, () => signal() && rt.x_performanceNow() < 1000, 0);
+        rt.scope(arm);
+      });
+      node.$exit = 'not captured';
+      rt.clock.now = 2000;
+      bindings.captureExits();
+      const exit = rt.exitOf(node);
+      rt.end(own); node.remove();
+      return { exit, listeners: signal.n.obs.size };
+    });
+    expect(observed).toEqual({ exit: 'leave', listeners: 0 });
   } finally { await app.close(); }
 }, 30000);
 
@@ -547,7 +851,7 @@ test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s
 
 /** `source` compiled to the JS target and opened in `engine` with presence loaded. `drop(button)` presses `button`,
  * reports the exit animations that start, then finishes them; `close()` removes the page, server and app. */
-async function exitApp(engine, source, pageOptions) {
+async function exitApp(engine, source, pageOptions, countProbes = false) {
   const root = resolve(import.meta.dir, '../..'), target = resolve(root, 'target');
   const dir = mkdtempSync(resolve(target, 'exit-animation-'));
   const style = withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];
@@ -555,11 +859,14 @@ async function exitApp(engine, source, pageOptions) {
   const close = async () => { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); };
   try {
     writeFileSync(resolve(dir, 'app.contract'), source);
-    const compiled = spawnSync(resolve(target, 'debug/exact-web-js'), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(target, `debug/exact-web-js${EXE}`), ['js', resolve(dir, 'app.contract'), '-o', dir], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
       const path = new URL(request.url).pathname.slice(1);
       if (!path) { return new Response(`<style>${style}</style><link rel="stylesheet" href="/app.css"><div id="exact-root"></div><script type="module">import app from '/app.js';app();</script>`, { headers: { 'content-type': 'text/html' } }); }
+      if (countProbes && path === 'presence-bindings.js') return new Response(
+        readFileSync(resolve(import.meta.dir, path), 'utf8').replace('function read(f) {', 'function read(f) { globalThis.probeReads = (globalThis.probeReads ?? 0) + 1;'),
+        { headers: { 'content-type': 'text/javascript' } });
       const bases = path.startsWith('web/') ? [resolve(root, 'host')] : [dir, import.meta.dir, resolve(root, 'host/web')];
       const file = bases.map(base => resolve(base, path)).find(existsSync);
       return file ? new Response(Bun.file(file)) : new Response(null, { status: 404 });

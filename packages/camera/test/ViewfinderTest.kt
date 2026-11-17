@@ -37,6 +37,7 @@ class ViewfinderTest {
         lateinit var preview: Preview
         var attachments = 0
         override fun add(useCase: Any) { preview = useCase as Preview; attachments++ }
+        override fun attach(useCase: Any): Boolean { add(useCase); return true }
         override fun remove(useCase: Any) {}
         override fun <T : Any> shared(key: String, make: () -> T): T = make()
         override fun apply(constraints: JSONObject) {}

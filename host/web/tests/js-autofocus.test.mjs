@@ -15,7 +15,8 @@ const field = (name, { shown = true, disabled = false, inert = false } = {}) => 
 });
 const body = { name: 'body' };
 let mounted = [];
-const root = { querySelectorAll: () => mounted };
+let scans = 0;
+const root = { querySelectorAll: () => (scans++, mounted) };
 const had = { document: Object.getOwnPropertyDescriptor(globalThis, 'document'), style: Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle') };
 const listeners = {};
 globalThis.document = { body, activeElement: body, addEventListener: (kind, f) => { (listeners[kind] ??= []).push(f); } };
@@ -28,16 +29,18 @@ afterAll(() => {
   }
 });
 globalThis.queueMicrotask ??= (f) => Promise.resolve().then(f);
-const { autofocus, press, hold, within, offerAll } = await import('../../web-js/focus.js');
+const { autofocus, press, hold, within, offerAll, mayFocus } = await import('../../web-js/focus.js');
+// A commit that builds fields: tree.js `h` and `P` tell focus.js one may be waiting.
+const mount = (...fields) => { mounted = fields; mayFocus(); };
 
 test('a field mounted by the press takes the focus from the pressed button, once', () => {
   const start = field('start');
-  mounted = [];
+  mount();
   autofocus(root); // boot: nothing to focus
   start.focus(); // the tap focused its button
   const done = press(start);
   const name = field('name');
-  mounted = [name];
+  mount(name);
   autofocus(root); // the commit the press ran
   done();
   expect(name.focused).toBe(1);
@@ -53,7 +56,7 @@ test('a field a view transition mounts after the press returns still takes the f
   const held = hold(); // shared.js deferred the tree update to startViewTransition's callback
   done(); // the click handler returned
   const name = field('deferred');
-  within(held, () => { mounted = [name]; autofocus(root); }); // the transition's callback runs the update
+  within(held, () => { mount(name); autofocus(root); }); // the transition's callback runs the update
   expect(document.activeElement).toBe(name);
 });
 
@@ -63,7 +66,7 @@ test('a commit after the press has run does not take the focus from the pressed 
   press(start)(); // the press and its own commits are done
   expect(hold()).toBe(null); // an unrelated commit deferring its update holds no press
   const late = field('late-answer'); // say a mutation's answer mounts it later
-  mounted = [late];
+  mount(late);
   autofocus(root);
   expect(late.focused).toBe(0);
   expect(document.activeElement).toBe(start);
@@ -77,7 +80,7 @@ test('a key pressed while a press is held supersedes it', () => {
   done();
   fire('keydown', start); // the person tabs or types before the transition's update runs
   const name = field('after-key');
-  within(held, () => { mounted = [name]; autofocus(root); });
+  within(held, () => { mount(name); autofocus(root); });
   expect(name.focused).toBe(0);
   expect(document.activeElement).toBe(start);
 });
@@ -92,7 +95,7 @@ test('a held update runs with its own press: another control pressed meanwhile i
   b.focus();
   press(b)(); // its press ran and mounted nothing
   const late = field('a-tail');
-  within(heldA, () => { mounted = [late]; autofocus(root); }); // A's transition update runs now
+  within(heldA, () => { mount(late); autofocus(root); }); // A's transition update runs now
   expect(late.focused).toBe(0);
   expect(document.activeElement).toBe(b);
 });
@@ -105,7 +108,7 @@ test('pressing the same control again keeps the held press', () => {
   done();
   fire('pointerdown', start);
   const kept = field('kept');
-  within(held, () => { mounted = [kept]; autofocus(root); });
+  within(held, () => { mount(kept); autofocus(root); });
   expect(document.activeElement).toBe(kept);
 });
 
@@ -118,7 +121,7 @@ test('a key supersedes every live press, not only the newest', () => {
   press(start)(); // the same control pressed again
   fire('keydown', start);
   const name = field('after-two-presses');
-  within(held, () => { mounted = [name]; autofocus(root); });
+  within(held, () => { mount(name); autofocus(root); });
   expect(name.focused).toBe(0);
   expect(document.activeElement).toBe(start);
 });
@@ -131,7 +134,7 @@ test('a held update that throws still lets its press go', () => {
   done();
   expect(() => within(held, () => { throw new Error('tail'); })).toThrow('tail');
   const after = field('after-throw');
-  mounted = [after];
+  mount(after);
   autofocus(root); // no press is running: nothing may take the focus
   expect(after.focused).toBe(0);
 });
@@ -140,7 +143,7 @@ test('a mounted field never takes the focus from another field', () => {
   const typing = field('typing');
   typing.focus();
   const late = field('late');
-  mounted = [late];
+  mount(late);
   autofocus(root);
   expect(late.focused).toBe(0);
   expect(document.activeElement).toBe(typing);
@@ -149,7 +152,7 @@ test('a mounted field never takes the focus from another field', () => {
 test('a hidden, disabled or inert field waits, and takes the focus once it is shown', () => {
   document.activeElement = body;
   const hidden = field('hidden', { shown: false }), off = field('off', { disabled: true }), inert = field('inert', { inert: true }), shown = field('shown');
-  mounted = [hidden, off, inert, shown];
+  mount(hidden, off, inert, shown);
   autofocus(root);
   expect(shown.focused).toBe(1);
   expect(hidden.focused + off.focused + inert.focused).toBe(0);
@@ -167,9 +170,28 @@ test('a hidden, disabled or inert field waits, and takes the focus once it is sh
 test('a carried restart offers every rebuilt field: none takes the focus later', () => {
   document.activeElement = body;
   const a = field('a', { shown: false }), b = field('b');
-  mounted = [a, b];
+  mount(a, b);
   offerAll(root);
   a.shown = true;
   autofocus(root);
   expect(a.focused + b.focused).toBe(0);
+});
+
+test('a commit that builds no field does not look, until a field waits again', () => {
+  document.activeElement = body;
+  const shown = field('looked');
+  mount(shown);
+  autofocus(root);
+  expect(shown.focused).toBe(1);
+  const was = scans;
+  autofocus(root); // looks once more: every field is offered
+  autofocus(root);
+  expect(scans - was).toBe(1);
+  document.activeElement = body;
+  const hidden = field('waits', { shown: false });
+  mount(shown, hidden);
+  autofocus(root);
+  hidden.shown = true;
+  autofocus(root); // the hidden field kept the commits looking
+  expect(hidden.focused).toBe(1);
 });

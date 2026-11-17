@@ -121,6 +121,30 @@ fn headings_paragraphs_and_emphasis() {
     assert!(runs.iter().any(|r| r.text == "code" && r.code));
 }
 
+/// CommonMark 0.31.2 §4.2: the optional closing sequence of `#` is removed
+/// only when a space or tab precedes it and only spaces or tabs follow it.
+#[test]
+fn an_atx_heading_keeps_hashes_that_are_not_a_closing_sequence() {
+    for (source, text) in [
+        ("# C#\n", "C#"),
+        // Examples 72 and 73: a closing sequence, of any length, then spaces.
+        ("# foo ##################################\n", "foo"),
+        ("### foo ###     \n", "foo"),
+        // Example 74: a closing sequence followed by text is text.
+        ("### foo ### b\n", "foo ### b"),
+        // Example 75: no space before it.
+        ("# foo#\n", "foo#"),
+        // Example 76: an escaped `#` is not one.
+        ("### foo \\###\n", "foo ###"),
+        // Example 79: a heading of only a closing sequence is empty.
+        ("### ###\n", ""),
+    ] {
+        let doc = here(source);
+        assert_eq!(doc.blocks[0].kind, Kind::Heading, "{source:?}");
+        assert_eq!(plain(&doc.blocks[0].runs), text, "{source:?}");
+    }
+}
+
 fn assert_inline_runs(source: &str, expected: &[(&str, bool, bool, bool)]) {
     let doc = here(source);
     assert_eq!(doc.blocks.len(), 1, "{source:?}");
@@ -520,6 +544,42 @@ fn fenced_code_keeps_its_text_and_never_parses_it() {
     );
 }
 
+/// CommonMark 0.31.2 §4.5: a closing fence "may be followed only by spaces or
+/// tabs, which are ignored".
+#[test]
+fn a_closing_fence_may_end_in_spaces_or_tabs() {
+    for source in ["```\ncode\n``` \nnext\n", "~~~~\ncode\n~~~~~\t \nnext\n"] {
+        let doc = here(source);
+        assert_eq!(doc.blocks.len(), 2, "{source:?}");
+        assert_eq!(doc.blocks[0].kind, Kind::Code, "{source:?}");
+        assert_eq!(doc.blocks[0].text, "code", "{source:?}");
+        assert_eq!(plain(&doc.blocks[1].runs), "next", "{source:?}");
+    }
+    // Anything else after the marker leaves the line inside the block.
+    let doc = here("```\ncode\n``` x\n```\n");
+    assert_eq!(doc.blocks.len(), 1);
+    assert_eq!(doc.blocks[0].text, "code\n``` x");
+}
+
+/// A fence's indentation is spaces and tabs, removed from each line up to
+/// its width; leading Unicode spaces are the code's own.
+#[test]
+fn an_indented_fence_keeps_leading_unicode_spaces_as_code() {
+    for (source, code) in [
+        (" ```\n\u{2003}em\n x\n ```\n", "\u{2003}em\nx"),
+        (
+            "  ```\n\u{2003}em\n \u{a0}nbsp\n    four\n  ```\n",
+            "\u{2003}em\n\u{a0}nbsp\n  four",
+        ),
+        ("```\n\u{a0}nbsp\n```\n", "\u{a0}nbsp"),
+    ] {
+        let doc = here(source);
+        assert_eq!(doc.blocks.len(), 1, "{source:?}");
+        assert_eq!(doc.blocks[0].kind, Kind::Code);
+        assert_eq!(doc.blocks[0].text, code, "{source:?}");
+    }
+}
+
 #[test]
 fn lists_carry_their_marker_and_their_depth() {
     let doc = here("- one\n- two\n  - nested\n\n1. first\n2. second\n");
@@ -589,7 +649,20 @@ fn the_readers_blocks_make_each_table_one_block_of_the_headers_columns() {
     let doc = here(
         "Before.\n\n| A | B | C |\n| - | - | - |\n| 1 |\n| 2 | 3 | 4 | 5 |\n\n| x | y | z |\n| - | - | - |\n| p | q | r |\n\nAfter.\n",
     );
+    let groups: Vec<_> = markdown_parse::value::block_groups(&doc).collect();
+    assert_eq!(
+        groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+        [1, 3, 2, 1]
+    );
+    let paged = Value::list(
+        groups
+            .iter()
+            .enumerate()
+            .map(|(i, group)| markdown_parse::value::block_group(i, group))
+            .collect(),
+    );
     let value = markdown_parse::value::into_blocks_with_tables(doc);
+    assert_eq!(paged, value, "paging preserves whole tables and block ids");
     let blocks = fields(&value);
     let kinds: Vec<_> = blocks
         .iter()
@@ -749,4 +822,74 @@ fn this_repositorys_own_documents_parse_into_blocks() {
     assert!(files > 20, "expected the corpus, found {files} documents");
     assert!(headings > 200, "expected headings, found {headings}");
     assert!(tables > 20, "expected tables, found {tables}");
+}
+
+#[test]
+fn grouped_table_cells_retain_separator_alignment() {
+    use exact_plan::Value;
+    let Value::List(blocks) = markdown_parse::value::into_blocks_with_tables(here(
+        "| Left | Right | Center |\n| :--- | ---: | :---: |\n| a | b | c |\n",
+    )) else {
+        panic!("blocks")
+    };
+    let Value::Record(table) = &blocks[0] else {
+        panic!("table")
+    };
+    let Value::List(cells) = &table[8] else {
+        panic!("cells")
+    };
+    for (cell, align) in cells.iter().zip(["left", "right", "center"].iter().cycle()) {
+        let Value::Record(fields) = cell else {
+            panic!("cell")
+        };
+        assert_eq!(fields.get(2), Some(&Value::str(align)));
+    }
+}
+
+#[test]
+fn a_long_tables_sizers_refer_to_its_cells_by_index() {
+    use exact_plan::Value;
+    fn fields(value: &Value) -> &[Value] {
+        match value {
+            Value::Record(values) | Value::List(values) => values,
+            _ => panic!("expected fields or items"),
+        }
+    }
+    fn refs(line: &Value) -> Vec<usize> {
+        fields(&fields(line)[1])
+            .iter()
+            .map(|at| at.as_number().unwrap() as usize)
+            .collect()
+    }
+    // Past 8,192 rows a table has several grids, and so sizers.
+    let mut source = String::from("| A | B |\n| - | - |\n");
+    for row in 0..9_000 {
+        source.push_str(&format!("| r{row} | **x** y |\n"));
+    }
+    source.push_str("| r0 | `z` |\n");
+    let blocks = markdown_parse::value::into_blocks_with_tables(here(&source));
+    let table = fields(&fields(&blocks)[0]);
+    let sizers = fields(&table[14]);
+    assert_eq!(sizers.len(), 2);
+
+    // Single-run cells join by style; a repeated cell is referred to once.
+    let a = fields(&fields(&sizers[0])[1]);
+    assert_eq!(a.len(), 2);
+    assert_eq!(refs(&a[0]), [0]);
+    assert_eq!(fields(&a[0])[3], Value::Number(700.));
+    assert_eq!(
+        refs(&a[1]),
+        (1..=9_000).map(|row| row * 2).collect::<Vec<_>>()
+    );
+    assert_eq!(fields(&a[1])[2], Value::Number(-1.));
+    assert_eq!(fields(&a[1])[3], Value::Number(400.));
+
+    // A cell of several runs is its own line, by `cell`.
+    let b = fields(&fields(&sizers[1])[1]);
+    assert_eq!(b.len(), 3);
+    assert_eq!(refs(&b[0]), [1]);
+    assert!(refs(&b[1]).is_empty());
+    assert_eq!(fields(&b[1])[2], Value::Number(3.));
+    assert_eq!(refs(&b[2]), [9_001 * 2 + 1]);
+    assert_eq!(fields(&b[2])[5], Value::Bool(true));
 }

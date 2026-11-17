@@ -8,12 +8,14 @@ mod background;
 mod body_from;
 mod body_to;
 mod caltrain;
+mod canvas_capture;
 mod castle;
 mod compress;
 mod context;
 mod doc_copy;
 mod ecdsa;
 mod entropy;
+mod error_events;
 mod forget;
 mod heap;
 mod inputs;
@@ -21,11 +23,13 @@ mod interrupt;
 mod kept_json;
 mod listen;
 mod mapper;
+mod native_init;
 mod native_later;
 mod native_storage;
 mod network;
 mod no_store;
 mod nul_byte;
+mod oom;
 mod outlive;
 mod overlay;
 mod overrun;
@@ -36,13 +40,16 @@ mod process;
 mod pure;
 mod render;
 mod request_sets;
+mod secret_storage_order;
 mod secrets;
 mod shim;
 mod snapshot;
 mod socket;
 mod storage;
+mod storage_documents;
 mod superseded;
 mod timers;
+mod topics;
 mod turn_budget;
 mod upload;
 mod waiters;
@@ -56,7 +63,7 @@ mod wrappers;
 /// with, as a harness standing in for a host's executor needs. These
 /// harnesses test the module, not admission: a re-ask's place in a native
 /// executor is tested through the real one (`admission.rs`, and the core's
-/// `executor_again_tests.rs`).
+/// `host/executor/src/again_tests.rs`).
 pub fn runnable(dispatch: exact_runner::Dispatch) -> exact_runner::Dispatch {
     use exact_runner::{Dispatch, Work};
     match dispatch {

@@ -75,6 +75,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         val publication: Long,
         val ops: IntBuffer?, val move: Boolean, val seq: Int, val feed: Int, val scrollers: IntArray?, val fields: IntArray?,
         val bars: IntArray?, val access: IntArray?,
+        /** The picture's token for its present ([Presents]), 0 for none. */
+        val picture: Long = 0L,
     )
 
     /** At the main thread's own priority, not above it ([priority]): its work is ahead of the frame the main thread
@@ -91,7 +93,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     val made = java.util.concurrent.ConcurrentHashMap<Int, android.graphics.Bitmap>()
     /** Called on the main thread with what exact2 asks of the platform ([Native.requests], LLP 1115.001 D5): the
      * view's activity that reads this owner now acts on them ([Requests]). */
-    @Volatile var asked: (IntArray) -> Unit = {}
+    @Volatile var asked: ((IntArray) -> Unit)? = null
 
     // The exact thread's own state.
     private val timerReports = TimerReports()
@@ -118,11 +120,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             Native.timerObservation(false, false, true, false)
         }
     }
-    fun timerReport(view: Any, scrolling: Boolean, sampling: Boolean, applied: Long) {
+    /** The reader's report: what it is doing, the last publication it ingested ([applied]) and, when it ingested any
+     * since its last report, when it began and ended ([began], [ended]; 0 otherwise), which finishes the turns that
+     * published them in `perf frames` (LLP 1079.000 §6.2). */
+    fun timerReport(view: Any, scrolling: Boolean, sampling: Boolean, applied: Long, began: Long, ended: Long) {
         handler.post {
+            if (ended != 0L && timing) try { Native.frameLanded(applied, began, ended) } catch (e: UnsatisfiedLinkError) { timing = false }
             if (!timerReports.report(view, scrolling, sampling, applied)) return@post
             if (Native.timerObservation(scrolling, sampling, timerReports.applying, false)) produce() else schedule()
         }
+    }
+
+    /** The reader drew picture [token] and it reached the screen at [at] (`System.nanoTime`, [Presents]). */
+    fun presented(token: Long, at: Long) {
+        handler.post { if (Native.picturePresented(token, at)) produce() else schedule() }
     }
 
     private var seq = 0
@@ -131,6 +142,38 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     /** The last turn took longer than a display frame: the next one is run at once, not at the next one. */
     private var late = false
     private var choreographer: Choreographer? = null
+    /** Each turn is told to exact2 for `perf frames` (a host library without the calls, an older exact2, is not). */
+    private var timing = true
+    /** The window's frame metrics, drained on this thread, while a driver's launch shows an activity
+     * ([ExactActivity]). */
+    val windowFrames = WindowFrames { handler.post { drainWindow() } }
+    private val windowWords = LongArray(WindowFrames.RING * WindowFrames.WORDS)
+    private val windowLost = LongArray(1)
+    private var displayPeriod: DisplayPeriod? = null
+
+    /** The display's refresh period, told to exact2 now and whenever its mode changes: once for the process. */
+    fun displays(context: android.content.Context) {
+        if (displayPeriod != null) return
+        displayPeriod = DisplayPeriod(context.applicationContext, handler) { period ->
+            if (timing) try { Native.framePeriod(period) } catch (e: UnsatisfiedLinkError) { timing = false }
+        }
+    }
+
+    /** No turn is asked for: the run of turns ends. */
+    private fun idle() { if (timing) try { Native.frameIdle() } catch (e: UnsatisfiedLinkError) { timing = false } }
+
+    /** The window's frames drained now: before a driver's request reads or changes what they are counted in. */
+    fun drainWindow() {
+        if (!timing) return
+        windowLost[0] = 0
+        val n = windowFrames.drain(windowWords, windowLost)
+        if (n > 0 || windowLost[0] > 0) try { Native.frameWindow(windowWords, n, windowLost[0]) } catch (e: UnsatisfiedLinkError) { timing = false }
+    }
+
+    /** Called on the main thread with the frame rates exact2's GPU canvases ask for, as they change ([Natives]). */
+    @Volatile var rates: (IntArray) -> Unit = {}
+    /** Those rates as last told: the main thread's. */
+    val frameRates = FrameRates()
     private val prefetch = true
 
     // Scrolls the main thread sent that the exact thread has not taken: summed, so a busy thread catches up at once.
@@ -186,14 +229,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** Boot at the size the view is expected to have; [done] on the main thread with whether it booted. An activity
      * made again in this process (LLP 1115.001 D15.1) calls this for its own view: [Native.start] then adopts the host
-     * that runs on this thread, which paints everything again for the new reader, and starts no second one. */
-    fun boot(width: Int, height: Int, scale: Float, dir: String, live: Boolean, done: (Boolean) -> Unit) {
+     * that runs on this thread, which paints everything again for the new reader, and starts no second one.
+     * [started] runs on this thread once the host has booted, before its first turn and before its data module can
+     * activate ([active]). */
+    fun boot(width: Int, height: Int, scale: Float, dir: String, store: String, live: Boolean, started: () -> Unit = {},
+             done: (Boolean) -> Unit) {
         handler.post {
             android.os.Trace.beginSection("exact boot")
             try { Native.hardwarePictures(hwbuf) } catch (e: UnsatisfiedLinkError) { }
-            val ok = Native.start(width, height, scale, dir, live)
+            val ok = Native.start(width, height, scale, dir, store, live)
             android.os.Trace.endSection()
             if (ok) {
+                booted = true
+                started()
                 // What was published or scrolled for the reader before this one is not this one's.
                 queue.clear(); made.clear(); seq = 0
                 accessAgain = true
@@ -212,6 +260,37 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         }
     }
 
+    /** Whether a [boot] has given this thread a host. */
+    @Volatile var booted = false
+        private set
+
+    /** Who waits to hear that the host's data module is active ([active]): the exact thread's own. */
+    private val activating = ArrayList<(Boolean) -> Unit>()
+
+    /**
+     * [done] hears, on the main thread, whether the host's data module is active, once it is or has failed to be;
+     * false at once where no boot gave this thread a host. A host no reader takes a frame from (no activity, or a
+     * stopped one) has no first pixel to wait for, so its module activates now (LLP 1133.017 D7); one a reader draws
+     * activates it after its first pixel, as it does with nobody waiting. A module whose image is still loading is
+     * asked again at each turn its wakes bring ([schedule]).
+     */
+    fun active(done: (Boolean) -> Unit) {
+        handler.post {
+            if (!booted) { postMain { done(false) }; return@post }
+            activating += done
+            schedule()
+        }
+    }
+
+    private fun activated() {
+        if (activating.isEmpty()) return
+        val state = Native.dataActive(!running)
+        if (state == 0) return
+        val waiting = activating.toList()
+        activating.clear()
+        postMain { waiting.forEach { it(state > 0) } }
+    }
+
     /** The device's settings ([Device]): told before [boot] so the host boots with them (the library loads here, not on
      * the main thread), and whenever they change, when the host takes them and publishes what they changed. */
     fun configure(device: Device) {
@@ -228,7 +307,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * acts on it. After every turn, and when exact2 wakes this thread for a request no frame follows (a haptic
      * changes no pixel); also while the activity is stopped, when no stream is made. */
     private fun requests() {
-        Native.requests()?.let { r -> postMain { asked(r) } }
+        Native.requests()?.let { r -> postMain { asked?.invoke(r) ?: Requests.detached(r) } }
     }
 
     /** The window ([Native.window]): told before [boot] so the host is laid out in it from its first frame, and
@@ -241,9 +320,8 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * changed: asked after each stream, so it is drawn with the frame it belongs to. */
     @Volatile var chrome: (IntArray) -> Unit = {}
 
-    /** Whether the activity is started. While it is stopped the host does no frame work (LLP 1115.001 D15.2): no
-     * turn at a vsync, no timer, no stream. Replies are still drained as they arrive ([Native.poll]), so what they
-     * change is in the frame drawn when the activity starts again. */
+    /** Whether the activity is started. Stopped, it runs tasks and drains replies without recording frames
+     * (LLP 1115.001 D15.2, LLP 1147 D2). Android still decides whether the process gets to execute. */
     private var running = true
 
     /** The activity stopped ([on] false) or started again. */
@@ -252,9 +330,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             if (on == running) return@post
             running = on
             if (on) { produce(); return@post }
-            choreographer?.removeFrameCallback(turn); turnPosted = false
+            choreographer?.let { turns.remove(it) }; turnPosted = false
+            idle()
             handler.removeCallbacks(again)
             handler.removeCallbacks(timer); handler.removeCallbacks(refiner); handler.removeCallbacks(settle)
+            schedule()
         }
     }
 
@@ -298,6 +378,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * so the reader knows where each is before it decides anything. */
     fun under(x: Float, y: Float, done: (IntArray) -> Unit) {
         handler.post { val u = Native.under(x, y); produce(); postMain { done(u) } }
+    }
+
+    /** [Native.snapsAround], on the exact thread; [done] on the main thread with the answer. */
+    fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float, done: (IntArray) -> Unit) {
+        handler.post { val w = Native.snapsAround(id, vertical, release, projected); postMain { done(w) } }
     }
 
     private val step = Runnable {
@@ -378,9 +463,41 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
     private val waitPin = intent("waitpin") != "0"
 
+    /** Run [f] on the exact thread, publishing nothing: before the host boots too. */
+    fun tell(f: () -> Unit) {
+        handler.post(f)
+    }
+
     /** Run [f] on the exact thread, then publish what it changed. */
     fun call(f: () -> Unit) {
         handler.post { f(); produce() }
+    }
+
+    private val replies = OwnerReplies(::call) { h ->
+        when (h) {
+            is OwnerReplies.Handed.Answer -> Native.answer(h.id, h.value)
+            is OwnerReplies.Handed.Changed -> Native.changed(h.topic)
+            is OwnerReplies.Handed.Picture -> Native.pictureChanged(h.source, h.revoked)
+            is OwnerReplies.Handed.Journal -> Native.journal(h.line)
+        }
+    }
+
+    fun hand(handed: OwnerReplies.Handed) = replies.hand(handed)
+
+    /** Called from Native.agent on this thread. Return data, never re-enter the borrowed Rust host: in the order they
+     * arrived, each answer as `[id, answer]`, each topic as itself, each picture as `{"picture", "revoked"}` and each
+     * journal line as `{"journal"}` (`presenter::Handed`). */
+    fun agentTurn(requests: IntArray?): String {
+        check(Looper.myLooper() == thread.looper)
+        if (requests != null) postMain { asked?.invoke(requests) ?: Requests.detached(requests) }
+        return org.json.JSONArray().apply {
+            for (h in replies.take()) put(when (h) {
+                is OwnerReplies.Handed.Answer -> org.json.JSONArray().put(h.id).put(h.value ?: org.json.JSONObject.NULL)
+                is OwnerReplies.Handed.Changed -> h.topic
+                is OwnerReplies.Handed.Picture -> org.json.JSONObject().put("picture", h.source).put("revoked", h.revoked)
+                is OwnerReplies.Handed.Journal -> org.json.JSONObject().put("journal", h.line)
+            })
+        }.toString()
     }
 
     /** The store's writes on disk ([Native.storeDrain]), behind what was sent to the exact thread before it: at most
@@ -401,7 +518,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     }
 
     /** Run [f] on the exact thread and wait for it, publishing nothing: a question that changes nothing
-     * ([ExactTamber]). */
+     * ([ExactForma]). */
     fun <T> ask(f: () -> T): T {
         if (Looper.myLooper() == thread.looper) return f()
         val task = FutureTask<T> { f() }
@@ -413,10 +530,12 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private fun produce() {
         // This frame does what a queued `again` was for.
         handler.removeCallbacks(again)
-        if (!running) { requests(); return }
+        if (!running) { schedule(); return }
+        drainWindow()
         android.os.Trace.beginSection("exact native frame")
         val started = System.nanoTime()
         val fresh = Native.frame()
+        val picture = Native.presentToken()
         late = System.nanoTime() - started > frameNanos
         android.os.Trace.endSection()
         val told = Native.scrollers()
@@ -426,7 +545,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         val access = if (accessible) try { Native.access(accessAgain).also { accessAgain = false } } catch (e: UnsatisfiedLinkError) { accessible = false; null } else null
         // The bindings ask again first, so a frame's colours read the new answers; every turn, as a token only
         // native code reads moves no paint (one inputs call per binding).
-        Tambers.turned()
+        Formas.turned()
         if (fresh == null && (told != null || fields != null || bars != null || access != null)) {
             queue.add(Pub(timerReports.publish(), null, true, seq, 0, told, fields, bars, access))
             Native.timerObservation(readerScrolling, readerSampling, true, false)
@@ -444,7 +563,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
                 for (k in pics.indices step 3) if (!made.containsKey(pics[k])) made[pics[k]] = makePicture(pics[k], pics[k + 1], pics[k + 2], hwbuf)
                 android.os.Trace.endSection()
             }
-            queue.add(Pub(timerReports.publish(), ints, ints.limit() > 0 && ints.get(0) == 22, seq, Native.feed(), told, fields, bars, access))
+            queue.add(Pub(timerReports.publish(), ints, ints.limit() > 0 && ints.get(0) == 22, seq, Native.feed(), told, fields, bars, access, picture))
             Native.timerObservation(readerScrolling, readerSampling, true, false)
             if (!notifying.getAndSet(true)) postMain { notifying.set(false); published() }
         }
@@ -453,7 +572,10 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         schedule()
     }
 
-    private val turn: Choreographer.FrameCallback = Choreographer.FrameCallback { t ->
+    /** A turn at vsync [t]: the frame's [deadline] and its vsyncs' [period] where Choreographer gives them ([Turns]),
+     * else 0. Told to exact2 with when it ran and the publication it made, if any, whose ingest finishes its work. */
+    private fun turned(t: Long, deadline: Long, period: Long) {
+        val arrival = System.nanoTime()
         // The display's frame: the shortest gap between consecutive vsyncs seen.
         if (vsync > 0 && t - vsync > 2_000_000) frameNanos = minOf(frameNanos, t - vsync)
         vsync = t
@@ -461,9 +583,19 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         // The next vsync is asked for while this one is current. Android 10's SurfaceFlinger turns the app's vsync
         // off between requests, and a request made within a few milliseconds of the next vsync waits for the one
         // after: asked for after the frame, a Note 9 frame that ended 2.8 ms before the vsync lost it.
-        if (running && Native.animating()) { turnPosted = true; choreographer?.postFrameCallback(turn) }
+        if (running && Native.animating()) { turnPosted = true; choreographer?.let { turns.post(it) } }
+        val before = timerReports.publication
         Native.displayFrame(); produce()
+        if (!timing) return
+        val published = if (timerReports.publication != before) timerReports.publication else 0L
+        try {
+            Native.frameTurn(arrival, t, deadline, period, System.nanoTime(), published)
+            // No turn asked for: the run ends, so the idle time to the next is no frame time.
+            if (!turnPosted) Native.frameIdle()
+            Native.frameRates()?.let { r -> main.post { frameRates.told(r); rates(r) } }
+        } catch (e: UnsatisfiedLinkError) { timing = false }
     }
+    private val turns = Turns(::turned)
     private var vsync = 0L
     private var frameNanos = 1_000_000_000L / 60
     /** A frame that overran its display frame (a GPU canvas whose world ran two ticks in it, 256,000 cubes on a
@@ -473,13 +605,20 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
     private val again = Runnable { produce() }
     /** Timers, and the paint a scroll owes once it pauses (only then the collection pass it left behind). */
     private val timer = Runnable {
-        if (prefetch && Native.owed() && Native.refine(-1, if (led) velocity else 0f) and 2 != 0) handler.post(refiner)
+        if (running && prefetch && Native.owed() && Native.refine(-1, if (led) velocity else 0f) and 2 != 0) handler.post(refiner)
         produce()
     }
 
     private fun schedule() {
-        if (!running) return
+        activated()
         wakes?.sync()
+        if (!running) {
+            val due = Native.background(timerReports.applying)
+            requests()
+            handler.removeCallbacks(timer)
+            if (due >= 0) handler.postDelayed(timer, kotlin.math.ceil(due).toLong())
+            return
+        }
         // One producer at a time. A turn asked for when an overrunning turn began is for the vsync that passed
         // during it, and runs as soon as this returns: that is the retry, and `again` only stands in where no turn
         // is asked for. With nothing animating, none is left asked for.
@@ -498,8 +637,11 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         if (animating && late) {
             late = false
             if (!turnPosted) { handler.removeCallbacks(again); handler.post(again) }
-        } else if (animating && !turnPosted) { turnPosted = true; choreographer?.postFrameCallback(turn) }
-        else if (!animating && turnPosted) { choreographer?.removeFrameCallback(turn); turnPosted = false }
+        } else if (animating && !turnPosted) { turnPosted = true; choreographer?.let { turns.post(it) } }
+        else if (!animating && turnPosted) {
+            choreographer?.let { turns.remove(it) }; turnPosted = false
+            idle()
+        }
         var due = Native.nextDue()
         // A moved paint is owed a paint once scrolling pauses: each step pushes this back.
         if (Native.owed() && (due < 0 || due > 16)) due = 16.0
@@ -522,8 +664,12 @@ private const val AHEAD_US = 1500
 internal object Exact {
     /** The process's owner, from the first activity that made one on: an activity made again takes it. */
     var owner: Owner? = null
-    /** Whether an activity has set this process up for a host (its environment is written, its host may run). */
+    /** Whether an activity or [Headless] has set this process up for a host (its environment is written, its host
+     * may run). */
     var live = false
+    /** Whether [Headless] set the process up and no activity has been made in it since: the first one's launching
+     * intent is the launch's ([launch], [launchShare]). */
+    var unshown = false
     /** The activity whose view reads the host now. */
     var reader: java.lang.ref.WeakReference<ExactActivity>? = null
 
@@ -535,16 +681,16 @@ internal object Exact {
         if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.key(code, backspace) }) answered() } else Native.key(code, backspace)
     }
 
-    /** A gamepad's whole state ([Pads]): 17 buttons, then 4 axes. */
-    fun pad(index: Int, connected: Boolean, values: FloatArray) {
+    /** A gamepad's whole state ([Pads]): 17 buttons, then 4 axes. `at` is the event's `eventTime`, 0 for none. */
+    fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long) {
         val o = owner
-        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.pad(index, connected, values) }) answered() } else Native.pad(index, connected, values)
+        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.pad(index, connected, values, at) }) answered() } else Native.pad(index, connected, values, at)
     }
 
-    fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean) {
+    fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean, shift: Boolean) {
         val o = owner
-        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.namedKey(code, key, down, repeat) }) answered() }
-        else Native.namedKey(code, key, down, repeat)
+        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.namedKey(code, key, down, repeat, shift) }) answered() }
+        else Native.namedKey(code, key, down, repeat, shift)
     }
 
     /** How long a press or release waits for exact2's answer before the frame goes without it: what is left of a
@@ -554,22 +700,35 @@ internal object Exact {
     const val KEY_WAIT_MS = 2L
 
     fun back(): Boolean = owner?.sync { Native.back() } ?: Native.back()
+    /** Predictive Back's start (0), progress (1) or cancel (2): drawn in the frame it arrives for, as a key is. */
+    fun backProgress(phase: Int, progress: Float, edge: Int) {
+        val o = owner
+        if (o != null) { o.input(); if (o.answer(WAIT_MS) { Native.backProgress(phase, progress, edge) }) answered() }
+        else Native.backProgress(phase, progress, edge)
+    }
     /** A URL given to the running app ([Native.open], LLP 1133.023 D15 item 3): on exact2's thread, in order. */
     fun open(href: String) { val o = owner; if (o != null) { o.input(); o.call { Native.open(href) } } else Native.open(href) }
     fun share(request: String) { val o = owner; if (o != null) { o.input(); o.call { Native.share(request) } } else Native.share(request) }
+    /** The launch location of the first activity over a host [Headless] booted ([Native.launch], [Native.launchShare]):
+     * on exact2's thread, behind that boot and ahead of the first frame the activity's reader takes. */
+    fun launch(href: String) { owner?.call { Native.launch(href) } }
+    fun launchShare(request: String) { owner?.call { Native.launchShare(request) } }
 
     /** A driver's request ([Native.agent], [AgentDrive]): answered on exact2's thread, which then publishes what it
      * painted; waited for, since the driver's next request follows its answer. Carried only where exact2 has a
      * thread of its own (not with owner=0, the benchmark's compare switch). */
     fun agent(line: String): String {
         val o = owner ?: return "{\"error\":\"the reader carries a driver only with exact2 on its own thread (owner=0 is set)\"}"
-        return o.sync { String(Native.agent(line.toByteArray(Charsets.UTF_8)), Charsets.UTF_8) }
+        return o.sync { o.drainWindow(); String(Native.agent(line.toByteArray(Charsets.UTF_8)), Charsets.UTF_8) }
     }
 
-    /** What an [ExactTamber] asks ([Native.tamber], LLP 1121 D12): on exact2's thread, waited for, publishing
+    /** The waiting agent's request/answer turn, called by JNI on the exact thread. */
+    @JvmStatic fun agentTurn(requests: IntArray?): String = checkNotNull(owner).agentTurn(requests)
+
+    /** What an [ExactForma] asks ([Native.forma], LLP 1121 D12): on exact2's thread, waited for, publishing
      * nothing. An error's JSON where no host runs or the library predates the call. */
-    fun tamber(request: String): String {
-        val f = { try { Native.tamber(request) } catch (e: UnsatisfiedLinkError) { "{\"error\":\"no tamber in this library\"}" } }
+    fun forma(request: String): String {
+        val f = { try { Native.forma(request) } catch (e: UnsatisfiedLinkError) { "{\"error\":\"no forma in this library\"}" } }
         val o = owner
         return if (o != null) o.ask(f) else if (live) f() else "{\"error\":\"no host\"}"
     }
@@ -584,8 +743,13 @@ internal object Exact {
         if (o != null) { o.input(); o.call(f) } else { f(); turned() }
     }
 
-    fun moduleEvent(id: Int, slot: Int, generation: Int, kind: String, payload: String) =
-        field { Native.moduleEvent(id, slot, generation, kind, payload) }
+    fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) =
+        field { Native.moduleEvent(id, slot, generation, session, kind, payload) }
+
+    /** A media element's event (by HTML's name, [payload] its value) or, with no [event], its observed [state]
+     * (LLP 1042.001 D7), checked against the allocation and session its painted element carries. */
+    fun media(id: Int, slot: Int, generation: Int, session: Long, event: String, payload: String, state: String) =
+        field { Native.media(id, slot, generation, session, event, payload, state) }
 
     fun fieldFocused(id: Int, generation: Int, focused: Boolean) = field { Native.fieldFocused(id, generation, focused) }
     fun fieldEdited(id: Int, generation: Int, seq: Int, value: String, start: Int, end: Int) =
@@ -594,7 +758,7 @@ internal object Exact {
         field { Native.fieldComposing(id, generation, composing, value) }
     fun fieldSelected(id: Int, generation: Int, start: Int, end: Int) = field { Native.fieldSelected(id, generation, start, end) }
     fun fieldAction(id: Int, generation: Int, action: Int) = field { Native.fieldAction(id, generation, action) }
-    fun fieldInput(id: Int, generation: Int) = field { Native.fieldInput(id, generation) }
+    fun fieldInput(id: Int, generation: Int, kind: Int) = field { Native.fieldInput(id, generation, kind) }
 
     /** What happened in the window of surface [serial] of the top layer ([Surfaces], [Native.surface], LLP 1115.001
      * D10): told on exact2's thread, in order. exact2 answers with the surface painted again or closed (a request,
@@ -635,7 +799,7 @@ internal object Exact {
     /** The answer to a request exact2 made ([Native.answer]), or its cancellation (null): on exact2's thread. */
     fun answer(id: Int, answer: String?) {
         val o = owner
-        if (o != null) o.call { Native.answer(id, answer) } else Native.answer(id, answer)
+        if (o != null) o.hand(OwnerReplies.Handed.Answer(id, answer)) else Native.answer(id, answer)
     }
 
     /** A package calls an app handler on the host's thread and publishes what it changed. */
@@ -644,11 +808,39 @@ internal object Exact {
     } ?: Native.invoke(body).also { turned() }
 
     /** What the extensions tell exact2 ([Native.changed], [Native.bindExtensions]): on exact2's thread, in order. */
-    fun changed(topic: String) { val o = owner; if (o != null) o.call { Native.changed(topic) } else Native.changed(topic) }
+    fun changed(topic: String) { val o = owner; if (o != null) o.hand(OwnerReplies.Handed.Changed(topic)) else Native.changed(topic) }
+    /** A person's act on what an extension posted ([Activations]): its event raised with a person's origin, as an
+     * input, on exact2's thread; [action] is the declared action's record a notification's action carries. */
+    fun activate(extension: String, event: String, args: String, action: String?) {
+        val o = owner
+        if (o != null) { o.input(); o.call { Native.activate(extension, event, args, action) } } else Native.activate(extension, event, args, action)
+    }
+    /** A line for the session's journal, on exact2's thread, in order with what the extensions tell ([changed]). */
+    fun journal(line: String) { val o = owner; if (o != null) o.hand(OwnerReplies.Handed.Journal(line)) else Native.journal(line) }
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */
     fun wake() { owner?.call {} }
     fun presence(answer: String) { val o = owner; if (o != null) o.call { Native.presence(answer) } else Native.presence(answer) }
-    fun hidden(hidden: Boolean) { val o = owner; if (o != null) o.call { Native.hidden(hidden) } else Native.hidden(hidden) }
+    private var pageHidden = false
+    /** Execution sources: a started Activity, or a successfully promoted microphone, call or screen-capture
+     * foreground service with a live claim. Agent claims grant no device execution. */
+    internal fun executionEligible(): Boolean = !pageHidden || Claims.keepsExecution
+    /** The page freeze drops gated streams before returning; socket close handshakes finish asynchronously. */
+    fun hidden(hidden: Boolean) { pageHidden = hidden; publishExecution() }
+    /** The page of a host [Headless] boots is hidden from the start. What tells the host so, for its thread to run as
+     * the host boots ([Owner.boot]): told later, the first turn and the data module's activation would run in a
+     * visible page. What an activity or a claim says afterwards reaches that thread behind the boot. */
+    fun hiddenAtBoot(): () -> Unit {
+        pageHidden = true
+        val eligible = executionEligible()
+        return { Native.hidden(true, eligible) }
+    }
+    internal fun executionChanged() { if (pageHidden) publishExecution() }
+    private fun publishExecution() {
+        val hidden = pageHidden
+        val eligible = executionEligible()
+        val o = owner
+        if (o != null) o.sync { Native.hidden(hidden, eligible) } else { Native.hidden(hidden, eligible); turned() }
+    }
     /** The store's writes on disk before the activity goes to the background, so a kill after its stop loses none
      * committed before (exact2 writes them on a thread of its own): at most [ms]. Whether every commit was written
      * ([Native.storeDrain]). */
@@ -666,9 +858,11 @@ internal object Exact {
         val o = owner
         if (o != null) o.call { Native.picture(id, bitmap, error) } else Native.picture(id, bitmap, error)
     }
+    /** Picture [source] changed or was revoked ([Native.pictureChanged]): on exact2's thread, in order with what the
+     * extensions tell ([changed]). */
     fun pictureChanged(source: String, revoked: Boolean) {
         val o = owner
-        if (o != null) o.call { Native.pictureChanged(source, revoked) } else Native.pictureChanged(source, revoked)
+        if (o != null) o.hand(OwnerReplies.Handed.Picture(source, revoked)) else Native.pictureChanged(source, revoked)
     }
 
     /** Give a GPU canvas its window: on the exact thread, without waiting for it; [done] there with the handle. */

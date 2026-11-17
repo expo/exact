@@ -428,11 +428,18 @@ impl Engine {
         // (LLP 1003.001 D6).
         let fling = velocity != Value::ZERO;
         let at = now_s.max(self.shown);
-        let pend = (self.start_on_frame && !fling).then_some(at);
+        let pend = (self.start_on_frame && !self.unpresentable && !fling).then_some(at);
         let mut running = declaration.map(|declaration| {
             let start = if pend.is_some() { at } else { now_s };
-            let mut curve =
-                Running::start(declaration, from, slot.target, velocity, start, from, 1.0);
+            let mut curve = Running::start(
+                declaration,
+                token.property,
+                (from, slot.target),
+                velocity,
+                start,
+                from,
+                1.0,
+            );
             curve.pending = pend;
             curve
         });
@@ -466,7 +473,7 @@ fn allocate_serial(counter: &AtomicU64) -> Result<u64, EngineError> {
 
 fn allocate_serials(counter: &AtomicU64, count: u64) -> Result<u64, EngineError> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |serial| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |serial| {
             serial.checked_add(count)
         })
         .map_err(|_| EngineError::HoldSerialExhausted)

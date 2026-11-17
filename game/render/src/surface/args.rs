@@ -1,6 +1,6 @@
 //! Rust argument defaults and atomic timed binding for world surfaces, and
 //! the quality ladder's rung the first binding resolves (LLP 1139.003 D3).
-use super::{observer, Clock, Executor, Game, Perf, Sim, SurfaceError, Value, WorldSurface};
+use super::{observer, Clock, Executor, Game, Sim, SurfaceError, Value, WorldSurface};
 use exact_game::Args;
 
 impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
@@ -116,13 +116,19 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 if let Some((_, feed)) = &mut self.render {
                     feed.reset();
                 }
-                self.perf = Perf::default();
+                self.perf.restart();
                 self.gpu_timing = None;
             }
         } else {
             let mut sim = Sim::from_values(values).map_err(SurfaceError)?;
             sim.development_edits(self.development_edits);
             sim.defer_assets(ASSETS && self.device);
+            // A size the host gave (`Surface::size`) frames the new world
+            // before a stamped bind can tick it (`Game::first_frame`).
+            let (width, height) = self.look.points;
+            if width > 0. && height > 0. {
+                sim.viewport(width, height);
+            }
             if let Some(at) = at_ms {
                 sim.advance(at, Clock::Seekable);
             }

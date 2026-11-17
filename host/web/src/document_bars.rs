@@ -27,9 +27,10 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
             .handlers
             .get(&id)
             .is_some_and(|kinds| kinds.contains(&EventKind::Press));
-        // A button that shows or toggles a popover: `Invocation::opens_popover`
-        // restated over the source's names, since `Invocation::of` resolves a
-        // name through a kernel and a render's tree (`DocTree`) has none.
+        // A button that shows or toggles a popover, or shows a dialog
+        // modally: `Invocation::opens` restated over the source's names,
+        // since `Invocation::of` resolves a name through a kernel and a
+        // render's tree (`DocTree`) has none.
         let named = |prop| {
             let name = props.str(prop).filter(|name| !name.is_empty())?;
             self.src.facts(self.src.resolve(id, name)?)
@@ -42,11 +43,13 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
                 .str(prop)
                 .is_some_and(|w| words.iter().any(|v| w.eq_ignore_ascii_case(v)))
         };
-        let menu = button
+        let opens = button
             && match named(PropId::Commandfor) {
                 Some(commanded) => {
-                    commanded.props.get(PropId::Popover).is_some()
-                        && is(PropId::Command, &["show-popover", "toggle-popover"])
+                    (commanded.props.get(PropId::Popover).is_some()
+                        && is(PropId::Command, &["show-popover", "toggle-popover"]))
+                        || (commanded.props.str(PropId::SemanticTag) == Some("dialog")
+                            && is(PropId::Command, &["show-modal"]))
                 }
                 None => {
                     named(PropId::Popovertarget)
@@ -54,7 +57,7 @@ impl<S: Source> exact_kernel::bars::Tree for BarTree<'_, S> {
                         && !is(PropId::Popovertargetaction, &["hide"])
                 }
             };
-        exact_kernel::bars::fact::of(&node, press, menu, None)
+        exact_kernel::bars::fact::of(&node, press, opens, None)
     }
     fn children(&self, id: ViewId) -> Vec<ViewId> {
         self.src.children(id).into_owned()
@@ -79,24 +82,13 @@ pub(super) fn bar_header<S: Source>(
 /// The shell draws it as written, with no app bar (`data-exact-site`), as
 /// navigation.js `siteHeader` decides on a live page.
 pub(super) fn site_header<S: Source>(src: &S, header: ViewId) -> bool {
-    fn holds<S: Source>(src: &S, id: ViewId, menu: bool, links: &mut u32) -> bool {
-        src.children(id).iter().any(|&child| {
-            let Some(node) = src.facts(child) else {
-                return false;
-            };
-            let props = node.props;
-            let tag = props.str(PropId::SemanticTag);
-            let menu = menu || props.get(PropId::Popover).is_some() || tag == Some("dialog");
-            // A link: a node with an `href` (an `a`), or whose role is `link`.
-            let link = props.str(PropId::Href).is_some()
-                || props.str(PropId::AccessibilityRole) == Some("link");
-            if link && !menu {
-                *links += 1;
-            }
-            tag == Some("nav") || *links > 1 || holds(src, child, menu, links)
-        })
-    }
-    holds(src, header, false, &mut 0)
+    exact_kernel::bars::site_header(
+        &BarTree {
+            src,
+            handlers: &SortedMap::new(),
+        },
+        header,
+    )
 }
 
 /// Mark the headers of `node` that are a site's ([`site_header`]) when it

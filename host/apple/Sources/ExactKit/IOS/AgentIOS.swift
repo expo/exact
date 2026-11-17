@@ -101,29 +101,41 @@ extension Agent {
 
     var presenter: Presenter { session.presenter }
 
-    /// An input that started or met a sheet's presentation or dismissal
-    /// returns once UIKit has finished it, bounded at two seconds (LLP
-    /// 1035.003 D5, frozen timing). Unanimated, UIKit still takes a few
-    /// frames of the wall to end one, and a sheet over a sheet is presented
-    /// only once the one under it has finished presenting: a drive's next
-    /// `tap`, a few milliseconds later, found the second sheet's route in
+    /// An input that started or met a sheet's presentation or dismissal, or a
+    /// stack's push or pop, returns once UIKit has finished it and Exact has
+    /// followed it, bounded at two seconds (LLP 1035.003 D5, frozen timing), as
+    /// far as the hosts track it (`hostsInTransition`). Unanimated, UIKit still
+    /// takes a few frames of the wall to end one, and a sheet over a sheet is
+    /// presented only once the one under it has finished presenting: a drive's
+    /// next `tap`, a few milliseconds later, found the second sheet's route in
     /// the tree and not on screen (the Bluesky clone's prompt over its muted
-    /// words sheet). An alert or action sheet is waited for too: a press on
-    /// one of its buttons is dispatched only once UIKit has dismissed it
-    /// (`dismissConfirmation`), and a `clock data` straight after the tap
-    /// found no press. Platform timing leaves this to `clock settle`.
-    /// Answers whether the hosts left their transitions.
-    @discardableResult func awaitModalTransitions(bound: TimeInterval = 2) -> Bool {
-        let modals = presenter.modals, navigation = presenter.navigation, menus = presenter.menus
-        guard modals.inTransition || menus.inTransition else { return true }
+    /// words sheet). A pop can also end after the call that asked for it
+    /// returns, as More's pop to its list does (LLP 1075.003 §9.16). More's pop
+    /// from a plain tab is not tracked: the plain tab's route stays in it, so
+    /// the navigation reads at rest while More still pops. An alert or action
+    /// sheet is waited for too: a press on one of its buttons is dispatched
+    /// only once UIKit has dismissed it (`dismissConfirmation`), and a
+    /// `clock data` straight after the tap found no press. Platform timing
+    /// leaves this to `clock settle`. Answers whether every host finished.
+    @discardableResult func awaitTransitions(bound: TimeInterval = 2) -> Bool {
         let deadline = Date(timeIntervalSinceNow: bound)
-        // The navigation host's pending sync is the next sheet waiting on
-        // the one now presenting or leaving.
-        while modals.inTransition || navigation.inTransition || menus.inTransition {
+        while hostsInTransition {
             if Date() >= deadline { return false }
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
         return true
+    }
+
+    /// Whether the navigation, modal or menu host is in a transition, or a
+    /// sync that a move of UIKit's owes in the next turn (`syncNextTurn`) has
+    /// not run, so Exact has not followed the move: what an input waits for
+    /// under frozen timing, and part of what `clock settle` waits for. The
+    /// owed sync counts here and not in `NavigationHost.inTransition`, which a
+    /// confirmation waiting to show also reads (`resumeAfterRouteDismissal`)
+    /// and that sync does not retry.
+    var hostsInTransition: Bool {
+        let navigation = presenter.navigation
+        return navigation.inTransition || navigation.resyncOwed || presenter.modals.inTransition || presenter.menus.inTransition
     }
 
     /// Under platform timing UIKit animates an alert's dismissal, and a
@@ -142,7 +154,7 @@ extension Agent {
     /// Native transitions, keyboard work and an agent-issued caret reveal
     /// must finish before `clock settle` returns (LLP 1035.003 D5).
     func nativeInFlight() -> Bool {
-        if presenter.navigation.inTransition || presenter.modals.inTransition || presenter.menus.inTransition || nativeGeometryInFlight() { return true }
+        if hostsInTransition || nativeGeometryInFlight() { return true }
         // A smooth correction (a list following its end, a smooth
         // `scrollIntoView`) and an element reveal are UIKit's scroll
         // animation under platform timing (LLP 1070.000 §11, §14): the fixed
@@ -316,6 +328,7 @@ extension Agent {
         guard let d = session.agent("{\"op\":\"node\",\"id\":\(id),\"plan\":\(includePlan)}").data(using: .utf8),
               var node = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] else { return ["error": "node #\(id): unreadable"] }
         if let e = node["error"] { return ["error": e] }
+        if let flat = flatLayout(node) { reply["node"] = flat; return reply }
         MainActor.assumeIsolated { if let held = HeldState.rows(for: UInt32(id), in: presenter) { node["held"] = held } } // what is held on it (LLP 1122 D8)
         if let leaf, let parent = presenter.flats.host(of: leaf.id), let frame = presenter.flats.frameInHost(leaf.id) {
             let b = box(parent, region: frame)
@@ -379,7 +392,8 @@ extension Agent {
         let vp = presenter.viewport
         let rect = { (r: CGRect) -> [String: Any] in ["x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)] }
         let local = presenter.inlineText(UInt32(id)).map { host.inlineBounds($0) ?? .zero } ?? host.bounds
-        let b = presenter.inlineFrame(UInt32(id)) ?? box(host, region: local)
+        let shift = PresentedScrolls(vp).shift(of: host) // a running scroll shows it there (LLP 1012 `layout`)
+        let b = (presenter.inlineFrame(UInt32(id)) ?? box(host, region: local)).offsetBy(dx: shift.x, dy: shift.y)
         var space: [String: Any] = ["viewport": rect(b), "local": ["w": Agent.r2(local.width), "h": Agent.r2(local.height)],
                                     "capture": ["scale": Agent.r2(vp.window?.screen.scale ?? vp.traitCollection.displayScale)]]
         if let w = host.window {
@@ -390,64 +404,11 @@ extension Agent {
         node["geometry"] = geometry(host, region: local)
         if let scroll = host.scroll { node["scrollGeometry"] = Self.scrollGeometry(scroll) }
         node["space"] = space
-        // Who hides or inerts it is named: a reader must not guess which
-        // ancestor did.
-        let describe = { (view: UIView) -> String in (view as? NodeView).map { "#\($0.id)" } ?? String(describing: Swift.type(of: view)) }
-        var hiddenBy: String? = host.isHidden || (host.alpha == 0 && host.placement == nil) ? describe(host) : nil
-        var inertBy: String? = host.isUserInteractionEnabled ? nil : describe(host)
-        var clipped = b.isEmpty
-        var chain: [[String: Any]] = []
-        var clippers: [(UIView, UInt32, String)] = []
-        var canvas: NodeView? = nil
-        var above = host.superview
-        while let s = above {
-            // A canvas child's overlay is transparent on purpose: the child
-            // is painted through the canvas's capture (LLP 1014 D5) and only
-            // hit here. That is not hidden; it is named.
-            if let o = s as? PlainView, let c = o.superview as? NodeView, c.overlay === o {
-                canvas = c
-                above = s.superview
-                continue
-            }
-            if hiddenBy == nil, s.isHidden || (s.alpha == 0 && (s as? NodeView)?.placement == nil) { hiddenBy = describe(s) }
-            if inertBy == nil, !s.isUserInteractionEnabled { inertBy = describe(s) }
-            if let sv = s as? ScrollView, let route = sv.superview?.next as? RouteController, route.contentViewport === sv {
-                let port = box(sv, region: sv.bounds.inset(by: sv.adjustedContentInset))
-                chain.append(["route": Int(route.node.id), "sx": Agent.r2(sv.contentOffset.x), "sy": Agent.r2(sv.contentOffset.y),
-                              "port": [port.minX, port.minY, port.width, port.height].map(Agent.r2)].merging(Agent.range(of: sv)) { a, _ in a })
-                clippers.append((sv, route.node.id, "viewport"))
-            }
-            if let n = s as? NodeView {
-                if let sv = n.scrollView { chain.append(["id": Int(n.id), "sx": Agent.r2(sv.contentOffset.x), "sy": Agent.r2(sv.contentOffset.y + n.scrollTopInset(sv)), "port": port(of: n, sv)].merging(Agent.range(of: sv)) { a, _ in a }) } // CSS scrollTop, as `tree` reads it
-                else if n.scrollDormant { chain.append(["id": Int(n.id), "sx": 0.0, "sy": 0.0, "rx": 0.0, "ry": 0.0]) }
-                if n.clipsToBounds || n.clipBox != nil { clippers.append((n, n.id, "overflow")) }
-                if n.clipPath != nil { clippers.append((n, n.id, "clip-path")) }
-            }
-            above = s.superview
-        }
-        // The viewport's scrolling, or none: a presentation's mount does not scroll (LLP 1123 D2)
-        let popoverLayer = PopoverLayer.containing(host)
-        let inViewport = popoverLayer.map { presenter.inDocument($0) } ?? (presenter.port(of: host) === vp)
-        var scroll: [[String: Any]] = [inViewport ? ["viewport": true, "sx": Agent.r2(vp.contentOffset.x), "sy": Agent.r2(vp.contentOffset.y)].merging(Agent.range(of: vp)) { a, _ in a }
-                                                  : ["presentation": true, "sx": 0.0, "sy": 0.0, "rx": 0.0, "ry": 0.0]]
-        scroll.append(contentsOf: chain.reversed())
-        var clip: [[String: Any]] = []
-        for (n, id, kind) in clippers.reversed() {
-            clip.append(["id": Int(id), "kind": kind])
-            if let w = host.window, !host.convert(host.bounds, to: w).intersects(n.convert(n.bounds, to: w)) { clipped = true }
-        }
-        node["scroll"] = scroll
-        node["clip"] = clip
-        // CSS `visibility: hidden` with nothing of it showing, or a hidden run (e28279b3b keeps the view).
-        if hiddenBy == nil, !host.accessibilityExposed || presenter.inlineText(UInt32(id))?.hidden == true { hiddenBy = "visibility" }
-        let reach = popoverLayer.map { box($0) } ?? presenter.reach(of: host)
-        var visible: [String: Any] = ["hidden": hiddenBy != nil, "inert": inertBy != nil, "inViewport": b.intersects(reach), "clipped": clipped]
-        if let hiddenBy { visible["hiddenBy"] = hiddenBy }
-        if let inertBy { visible["inertBy"] = inertBy }
-        node["visible"] = visible
+        let visibility = visibility(of: host, region: host.bounds, box: b, hidden: presenter.inlineText(UInt32(id))?.hidden == true)
+        node.merge(visibility.facts) { _, new in new }
         var native: [String: Any] = ["view": String(describing: Swift.type(of: v)), "sheet": presenter.modals.active]
         if presenter.inlineText(UInt32(id)) != nil { native["inline"] = true }
-        if let canvas { native["canvas"] = "#\(canvas.id)" }
+        if let canvas = visibility.canvas { native["canvas"] = "#\(canvas.id)" }
         if let f = host.field { native["editor"] = String(describing: Swift.type(of: f)); native["firstResponder"] = f.isFirstResponder }
         #if os(iOS)
         if let stepper = host.stepperObservation { native["stepper"] = stepper }
@@ -548,7 +509,10 @@ extension Agent {
             guard let point = tapPoint(req, node: node, drawn: drawn) else {
                 return ["error": "tap #\(req["id"] ?? node.id): no visible text fragment; scroll it into view first"]
             }
-            if !presenter.reach(of: node).contains(point) {
+            // To a hundredth of a point, as replies give it: under the agent's `size` the scaled viewport's
+            // conversion leaves a box on its edge a hair outside it (#390). A root tab UIKit's tab bar stands
+            // for has no box of its own: its item's press is `activateChrome`'s.
+            if !presenter.reach(of: node).insetBy(dx: -0.01, dy: -0.01).contains(point), !presenter.navigation.tabBarStands(for: node) {
                 return ["error": "tap #\(node.id): its middle is outside the viewport; scroll it into view first"]
             }
         }
@@ -573,10 +537,15 @@ extension Agent {
             if let reply = recognizedPan(phase, req) { return reply }
             return ["phase": phase, "delivery": "unsupported", "reason": "no held contact across requests on iOS (LLP 1080.000 P3)"]
         }
+        let dismissFlat = flatBoxForRequest(req)
         // Light-dismiss before resolving the tap's press.
-        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
+        if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)] ?? dismissFlat?.host,
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil {
-            presenter.menus.agentTap(node, landing: tapLanding(req, node: node))
+            let landing = dismissFlat.flatMap { flat in
+                tapPoint(req, node: node, drawn: box(flat.host.container, region: flat.rect))
+                    .flatMap { node.window?.hitTest(windowPoint($0), with: nil) }
+            } ?? tapLanding(req, node: node)
+            presenter.menus.agentTap(node, landing: landing)
         }
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil,
@@ -645,8 +614,10 @@ extension Agent {
             Agent.scroll(from: list, dx: CGFloat(wheel[0]), dy: CGFloat(wheel[1]))
             return ["tapped": id, "wheel": wheel]
         }
-        guard let v = view(req), let win = v.window else { return miss(req) }
-        var b = v.tapBox(box(v))
+        let flat = flatBoxForRequest(req)
+        guard let v = view(req) ?? flat?.host, let win = v.window else { return miss(req) }
+        var b = flat.map { box($0.host.container, region: $0.rect) } ?? v.tapBox(box(v))
+        let flatBounds = flat == nil ? nil : b
         // A run is touched on a fragment it paints (the web's driver taps
         // the span's), not at its paragraph's middle.
         if ["at", "x", "y"].allSatisfy({ req[$0] == nil }), (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) != nil }) == true,
@@ -660,8 +631,8 @@ extension Agent {
             if req["at"] != nil {
                 guard let at = req["at"] as? [Double], at.count == 2, at.allSatisfy(\.isFinite) else { return ["error": "tap at needs two finite numbers"] }
             }
-            guard let point = tapPoint(req, node: v), point.x.isFinite, point.y.isFinite else { return ["error": "tap needs finite coordinates"] }
-            let whole = box(v)
+            guard let point = tapPoint(req, node: v, drawn: flatBounds), point.x.isFinite, point.y.isFinite else { return ["error": "tap needs finite coordinates"] }
+            let whole = flatBounds ?? box(v)
             guard whole.contains(point) else { return ["error": "tap #\(v.id) at: (\(Agent.r2(point.x - whole.minX)), \(Agent.r2(point.y - whole.minY))) is outside its \(Agent.r2(whole.width))×\(Agent.r2(whole.height)) box"] }
             b = CGRect(x: point.x, y: point.y, width: 0, height: 0)
         }
@@ -682,13 +653,15 @@ extension Agent {
             return ["error": "tap #\(v.id): \(why)"]
         }
         var hit = seen ?? v
-        if req["wheel"] == nil, req["hover"] == nil, let why = obscured(v, at: p, hit: hit) {
+        if req["wheel"] == nil, req["hover"] == nil,
+           let why = obscured(v, at: p, hit: hit) ?? flat.flatMap({ flatObscured($0, at: p, hit: hit) }) {
             return ["error": "tap #\(v.id) at (\(at[0]), \(at[1])): \(why)"]
         }
         // Named, it presses what it names: its own press, never a control
         // inside it that its middle happens to reach.
         var avoided: PressReach?
-        if plain, req["at"] == nil, (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) == nil }) == true {
+        if let flat, plain, req["at"] == nil, let refusal = flatAddressed(flat, at: p, in: win) { return refusal }
+        if flat == nil, plain, req["at"] == nil, (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) == nil }) == true {
             switch addressedPoint(v, box: b, in: win) {
             case .refused(let refusal): return refusal.reply
             case .at(let q, let middle):
@@ -717,6 +690,10 @@ extension Agent {
                     MainActor.assumeIsolated { HeldState.input(at: hit) }
                     return ["tapped": Int(run.id), "event": event, "injected": true, "at": at]
                 }
+            }
+            // A finger's double tap (`dblclick touch`) on a zoomable scroller zooms where no authored `dblclick` takes it.
+            if event == "dblclick", req["touch"] as? Bool == true, let zoomed = NodeView.zoomDoubleTap(hit, at: p) {
+                return ["tapped": Int(zoomed.id), "dblclick": "touch", "delivery": "recognized", "scrollZoom": Double(zoomed.scroll?.zoomScale ?? 1), "at": at]
             }
             selection = presenter.agentSelect(hit, at: p, event: event)
             #endif
@@ -748,7 +725,11 @@ extension Agent {
         if let scale = req["pinch"] as? Double {
             // UIKit synthesizes no pinch: the recognized scale (LLP 1057.001 §5).
             var next: UIView? = v
-            while let view = next, !((view as? NodeView).map { presenter.transformBindings[$0.id]?.target != nil } ?? false) { next = view.superview }
+            while let view = next, !((view as? NodeView).map { presenter.transformBindings[$0.id]?.target != nil || $0.extras?.zoom != nil } ?? false) { next = view.superview }
+            if let port = next as? NodeView, port.extras?.zoom != nil {
+                let focal = (req["at"] as? [Double]).flatMap { $0.count == 2 ? v.convert(CGPoint(x: $0[0], y: $0[1]), to: nil) : nil } ?? p
+                return delivered(port.recognizedZoomPinch(scale, focal: focal).merging(["at": at]) { a, _ in a }, hit)
+            }
             guard let handle = next as? NodeView, let clipID = presenter.transformBindings[handle.id]?.clip, let clip = presenter.views[clipID] else {
                 return ["error": "no photo binding (transformDragFor) at view \(v.id)"]
             }
@@ -804,7 +785,8 @@ extension Agent {
         fingerPointer(.down, fingers, at: p, held: held)
         reach.rearm(presenter)
         fingerPointer(.up, fingers, at: p, held: held)
-        var reply: [String: Any] = ["tapped": Int(v.id), "at": at].merging(lift(reach, at: p, held: held)) { a, _ in a }
+        let tapped = flat == nil ? Int(v.id) : req["id"] as? Int ?? Int(v.id)
+        var reply: [String: Any] = ["tapped": tapped, "at": at].merging(lift(reach, at: p, held: held)) { a, _ in a }
         // Its middle reaches a control inside it: the tap landed beside it.
         if let avoided { reply["avoided"] = ["middle": [Agent.r2(b.midX), Agent.r2(b.midY)], "pressing": avoided.pressing ?? NSNull(), "what": avoided.described] as [String: Any] }
         if let why = unreached { reply["unreached"] = "Contract's pointer listeners heard it, but it \(why)" }
@@ -1066,6 +1048,17 @@ extension Agent {
             return ["typed":v.id, "key":key, "delivery":"recognized"]
         }
         if req["key"] == nil, let reply = presenter.controls.type(v, req["text"] as? String ?? "") { return reply }
+        #if os(iOS)
+        if let key = req["key"] as? String, let reply = presenter.controls.rangeKey(v, key, phase: req["phase"] as? String, repeats: req["repeat"] as? Bool == true) {
+            if req["phase"] as? String == "down", let token = req["releaseKey"] as? String {
+                keyReleases[token] = { [weak presenter, weak v] in
+                    if let v { _ = presenter?.controls.rangeKey(v, key, phase: "up") }
+                    return ["phase": "up", "delivery": "host-activation"]
+                }
+            }
+            return reply
+        }
+        #endif
         if v.props["editable"] == "false", req["key"] == nil || ["Enter", "Backspace"].contains(req["key"] as? String ?? "") { return ["error": "view \(v.id) is readonly"] }
         // @ref LLP 1038 D11 — type on the root delivers a location.
         if v.props["navigationBack"] != nil, req["key"] == nil {
@@ -1176,7 +1169,7 @@ extension Agent {
                     else if Agent.caretKey(name, in: f) {} else if types { f.insertText(name) }
                     (f as? TextField)?.heard = nil
                     (f.delegate as? PromptField)?.heard = nil
-                } else if presenter.controls.radioKey(focus, name, held: held) { // x2apps survey #2
+                } else if presenter.controls.roleKey(focus, name, held: held) || presenter.controls.radioKey(focus, name, held: held) { // LLP 1166.000; x2apps survey #2
                 } else {
                     #if os(iOS)
                     _ = focus.activateKey(name)
@@ -1225,140 +1218,6 @@ extension Agent {
         let to = range.isEmpty ? field.position(from: edge, offset: left ? -1 : 1) ?? edge : edge
         field.selectedTextRange = field.textRange(from: to, to: to)
         return true
-    }
-
-    func screenshot(_ req: [String: Any]) -> [String: Any] {
-        // The simulator driver's check, after it read the display, that the display was still this app's.
-        if req["probe"] as? Bool == true { return ["front": displayFront()] }
-        let loading = settleForPicture()
-        // UIKit's own motion lands first, unless the picture is a film's frame (LLP 1116.003 D8).
-        let moving = req["film"] as? Bool != true && !settleMotion()
-        // A canvas painting its children through its surface (LLP 1014)
-        // shows its last capture: what is pending is captured and rendered
-        // at the agent's clock first, as `clock` leaves it.
-        if let now = session.clock, session.canvases.waitUntilReady() { session.canvases.settle(now: now) }
-        presenter.canvas2d.waitForReplays()
-        SvgFilterLive.waitForDraws()
-        guard let path = req["path"] as? String else { return ["malformed": true, "error": "screenshot needs a path"] }
-        let vp = presenter.viewport
-        let scale = vp.window?.screen.scale ?? vp.traitCollection.displayScale
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
-        format.opaque = true
-        // 8-bit sRGB: on a wide-color screen the renderer would write a
-        // 16-bit PNG, which nothing downstream (scripts/png.mjs) reads.
-        format.preferredRange = .standard
-        // What UIKit presents over the app (an alert, an action sheet, a popover, a presented route's sheet) is a view of
-        // the window beside the viewport, never in the viewport's picture: with one up, the capture is the window's, as
-        // `window` draws it, and says so (LLP 1116.012 D3; grocery-list's first two captures missed its clear alert).
-        // A film's frames keep one size.
-        let presented = req["film"] as? Bool == true ? nil : presentedOverApp()
-        let wholeWindow = req["window"] as? Bool == true || presented != nil
-        let page = presenter.documentHost
-        let captureView: UIView = wholeWindow ? (vp.window ?? page) : page
-        // The page's picture is its area, whose top-left is a box's (0, 0), not the bands it is drawn past (LLP 1130).
-        let margins = wholeWindow ? .zero : presenter.pageMargins
-        let size = captureView.bounds.inset(by: margins).size
-        #if targetEnvironment(simulator)
-        // The simulator needs both paths: takeSnapshot alone omits guest
-        // text, and drawHierarchy alone rasterizes a blank remote layer —
-        // unless a takeSnapshot just flushed it. So the snapshot is taken
-        // (the flush), composed as the underlay, and the live view stays
-        // visible on top with the real pixels (measured 2026-08-30; the
-        // 0-guest-pixel failure returns if either half is dropped).
-        Capture.web = session.webviews.snapshots().merging(session.natives.snapshots()) { web, _ in web }
-        #else
-        // A device capture has the macOS shape: hide every live WKWebView
-        // and compose only the arm's takeSnapshot at the owning node.
-        Capture.web = session.webviews.snapshots().merging(session.natives.snapshots()) { web, _ in web }
-        let hidden = (presenter.views.values.compactMap(\.web) + session.natives.snapshotViews).map { ($0, $0.isHidden) }
-        hidden.forEach { $0.0.isHidden = true }
-        #endif
-        Capture.capturing = true
-        // drawHierarchy can reuse a clean backing layer without calling draw.
-        // Materialize this turn's web/GPU pictures before composing the hierarchy.
-        let captured = presenter.views.values.filter { Capture.web[$0.id] != nil || $0.kind == "canvas" }
-        for node in captured { node.setNeedsDisplay(); node.layer.displayIfNeeded() }
-        session.natives.redrawForCapture()
-        // Header nodes the app's navigation bar leaves out, as the agent's
-        // chrome paints them: struck through in red (LLP 1116 D2).
-        let unshown = presenter.navigation.unshownByBar().keys.sorted().compactMap { presenter.views[$0] }.filter {
-            $0.window != nil && !$0.isHidden && $0.bounds.width > 0 && $0.bounds.height > 0
-        }
-        let png = UIGraphicsImageRenderer(size: size, format: format).pngData { _ in
-            captureView.drawHierarchy(in: CGRect(origin: CGPoint(x: -margins.left, y: -margins.top), size: captureView.bounds.size), afterScreenUpdates: true)
-            UIColor.systemRed.setStroke()
-            for node in unshown {
-                let r = node.convert(node.bounds, to: captureView).insetBy(dx: -1, dy: -1).offsetBy(dx: -captureView.bounds.minX - margins.left, dy: -captureView.bounds.minY - margins.top)
-                let outline = UIBezierPath(rect: r)
-                outline.lineWidth = 2
-                outline.setLineDash([4, 3], count: 2, phase: 0)
-                outline.stroke()
-                let strike = UIBezierPath()
-                strike.move(to: CGPoint(x: r.minX, y: r.maxY))
-                strike.addLine(to: CGPoint(x: r.maxX, y: r.minY))
-                strike.lineWidth = 1.5
-                strike.stroke()
-            }
-        }
-        Capture.capturing = false
-        #if !targetEnvironment(simulator)
-        hidden.forEach { $0.0.isHidden = $0.1 }
-        #endif
-        Capture.web = [:]
-        // Snapshot pixels belong to this capture, not the live backing layers.
-        for node in captured { node.setNeedsDisplay() }
-        do { try png.write(to: URL(fileURLWithPath: path)) } catch { return ["error": "write \(path): \(error)"] }
-        var r: [String: Any] = ["screenshot": path, "w": Agent.r2(size.width), "h": Agent.r2(size.height), "scale": Agent.r2(scale)]
-        if wholeWindow { r["window"] = true }
-        // Whether the simulator driver may take the display's pixels for this picture (devices.mjs `withDisplay`).
-        if wholeWindow { r["front"] = displayFront() }
-        if wholeWindow, let window = vp.window { r["opaque"] = displayOwnPoints(window) }
-        // Glass or a blur in the page's picture is drawHierarchy's approximation: the picture's area in window
-        // points, for the simulator driver to put the display's pixels there (devices.mjs `withMaterials`).
-        if !wholeWindow, req["film"] as? Bool != true, let window = vp.window {
-            let area = captureView.convert(captureView.bounds.inset(by: margins), to: window)
-            if backdropRects(window).contains(where: { $0.insetBy(dx: 12, dy: 12).intersects(area) }) {
-                r["materials"] = [Agent.r2(area.minX), Agent.r2(area.minY), Agent.r2(area.width), Agent.r2(area.height)]
-            }
-        }
-        if moving { r["moving"] = true }
-        #if os(iOS)
-        // The status bar is SpringBoard's, never in the window's picture: its height, for the simulator driver to put it in (devices.mjs `withDisplay`).
-        if wholeWindow, let bar = vp.window?.windowScene?.statusBarManager?.statusBarFrame.height, bar > 0, !(vp.window?.windowScene?.statusBarManager?.isStatusBarHidden ?? true) { r["statusBar"] = Agent.r2(bar) }
-        // The window's own safe area, whatever the page's `viewport-fit`: the rows `compare` leaves out (the home indicator's too).
-        if wholeWindow, let window = vp.window { r["safeArea"] = ["top": Agent.r2(window.safeAreaInsets.top), "bottom": Agent.r2(window.safeAreaInsets.bottom)] }
-        #endif
-        if let presented { r["presented"] = presented }
-        if loading > 0 { r["imagesPending"] = loading }
-        if !unshown.isEmpty {
-            r["unshown"] = unshown.map { n -> [String: Any] in ["id": Int(n.id), "testId": n.props["testId"] ?? NSNull()] }
-            r["unshownNote"] = "struck through in red: \(NavigationHost.unshownReason)"
-        }
-        // What the picture shows in the page that the app presents as UIKit's
-        // own, said where the image cannot (euxy port, FRICTION §2).
-        // Under native presentation what is still painted is what a person sees painted too (a content popover).
-        let painted = presenter.menus.presented.filter { $0.window != nil && !$0.isHidden }
-        if !painted.isEmpty, ExactEnv.agentPaints {
-            r["painted"] = painted.map { n -> [String: Any] in ["id": Int(n.id), "testId": n.props["testId"] ?? NSNull()] }
-            r["paintedNote"] = "the agent, not the app, painted the open popover in this picture, in the page (LLP 1021 D4); the app shows it as UIKit's (a menu at its button), which a screenshot shows under --touch platform"
-        }
-        let bars = presenter.navigation.paintedForBars()
-        if !bars.isEmpty {
-            r["chrome"] = bars.map { n -> [String: Any] in ["id": Int(n.id), "testId": n.props["testId"] ?? NSNull()] }
-            r["chromeNote"] = "--chrome agent paints the authored header and tablist: the app shows UIKit's navigation bar and tab bar for them, which --chrome platform (exact.mjs's default) shows and `screenshot <png> window` draws"
-        }
-        // The software keyboard is not in the capture, which UIKit draws in a process of its own, and the app may
-        // stand above it (LLP 1102 §3.17): say so, where the image alone reads as a shortened screen. The simulator
-        // driver puts the keyboard's pixels in a window capture (`windowTop`, LLP 1116.008 D8; devices.mjs).
-        let container = session.presenter.keyboardContainer
-        if let top = container.flatMap({ session.presenter.keyboardGuideTop(in: $0) }) {
-            var keyboard: [String: Any] = ["visible": true, "top": Agent.r2(top)]
-            if let window = keyboardTopForCheck() { keyboard["windowTop"] = Agent.r2(window) }
-            r["keyboard"] = keyboard
-            r["note"] = "the software keyboard is up: it is not in the capture, and the app above it may be shortened (state shows keyboard.top)"
-        }
-        return r
     }
 
     func displayFront() -> Any { Agent.frontRefusal(presenter.viewport.window) ?? true }

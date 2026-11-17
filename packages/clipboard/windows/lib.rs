@@ -1,7 +1,7 @@
 // @exact/clipboard's Windows path form (LLP 1133.006 D1, D2, D5, D7).
 // Calls run to completion on the window thread, in the host's dispatch order.
 // PNG sanitization finishes before opening or emptying the clipboard.
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 use exact_windows::clipboard::{Image, Item};
 use std::io::Read;
 
@@ -107,8 +107,8 @@ fn prepare(
 fn open(path: &str) -> Result<std::fs::File, Refusal> {
     // Admission has checked the caller's fs.read grant. The host's opener
     // keeps the read below the app root, refusing symlinks and reparse points.
-    exact_linux::picker::open(path).ok_or_else(|| {
-        let missing = exact_linux::picker::resolve(path).is_some_and(|p| {
+    exact_painted::picker::open(path).ok_or_else(|| {
+        let missing = exact_painted::picker::resolve(path).is_some_and(|p| {
             std::fs::symlink_metadata(p).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
         });
         refused(

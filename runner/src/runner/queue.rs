@@ -8,7 +8,7 @@
 //! `next_due` is not: like `then_due` it is cleared before its commit, and
 //! armed only by the scan ([`Runner::arm_next`]) after a commit concludes.
 
-use super::modules::CallOrigin;
+use super::modules::{CallOrigin, Causes};
 use super::*;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -30,6 +30,8 @@ pub(super) struct Waiting {
     origin: CallOrigin,
     /// The invocation that commit was part of (LLP 1133.023 D7); 0 for none.
     id: u64,
+    /// That commit's causes (LLP 1133.035 D16 item 6).
+    causes: Causes,
 }
 
 /// The state a refused `next` saw. A standing commit that changes a slot,
@@ -103,6 +105,25 @@ impl Queues {
         self.concluded = s.concluded;
     }
 
+    /// Room for `n` mutation rows (LLP 1035.005.004 D6: a child's sends
+    /// have rows after the declared ones).
+    pub(super) fn grow(&mut self, n: usize) {
+        self.waiting
+            .resize(n.max(self.waiting.len()), VecDeque::new());
+        self.next_due
+            .resize(n.max(self.next_due.len()), f64::INFINITY);
+        self.stalled.resize(n.max(self.stalled.len()), None);
+        self.concluded.resize(n.max(self.concluded.len()), 0);
+    }
+
+    /// Row `m` as a new instance's first send finds it: nothing waits.
+    pub(super) fn reset(&mut self, m: usize) {
+        self.waiting[m].clear();
+        self.next_due[m] = f64::INFINITY;
+        self.stalled[m] = None;
+        self.concluded[m] = 0;
+    }
+
     /// Whether a send of `m` waits.
     pub(super) fn waits(&self, m: usize) -> bool {
         self.waiting.get(m).is_some_and(|w| !w.is_empty())
@@ -137,16 +158,18 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<(), RunnerError> {
         if self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
-                mutation: self.plan.str(self.plan.mutations[m].name).to_string(),
+                mutation: self.mutation_name(m).to_string(),
             });
         }
         let (origin, id) = (self.call_origin(), self.invocation_id());
+        let causes = self.commit_causes();
         self.queues.waiting[m].push_back(Waiting {
             source: source.to_string(),
             args: args.to_vec(),
             write,
             origin,
             id,
+            causes,
         });
         self.pending_mut[m] = true;
         Ok(())
@@ -168,9 +191,9 @@ impl<D: DataSource> Runner<D> {
             // A head made before the source could answer waits for it, as
             // an unqueued send does (`unsent`); `data_ready` scans again.
             let ready = self.data.ready()
-                || self.queues.waiting[m]
-                    .front()
-                    .is_some_and(|w| exact_plan::runner_owned_source(&w.source));
+                || self.queues.waiting[m].front().is_some_and(|w| {
+                    exact_plan::runner_owned_source(&w.source) || self.source_ready(&w.source)
+                });
             if self.queues.waits(m) && self.idle(m) && ready {
                 self.queues.next_due[m] = self.armed_at();
             }
@@ -223,19 +246,23 @@ impl<D: DataSource> Runner<D> {
     /// and stalls `m` until a standing commit changes the state.
     pub(super) fn run_next(&mut self, m: usize) -> Result<CommitReceipt, RunnerError> {
         self.queues.next_due[m] = f64::INFINITY;
-        let name = self.plan.str(self.plan.mutations[m].name).to_string();
+        let name = self.mutation_name(m).to_string();
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
-        let (origin, id) = self.queues.waiting[m]
+        let (origin, id, causes) = self.queues.waiting[m]
             .front()
-            .map_or((CallOrigin::App, 0), |w| (w.origin, w.id));
-        let next = self.as_invocation(origin, id, |r| r.next_inner(m, &name));
+            .map_or((CallOrigin::App, 0, Causes::default()), |w| {
+                (w.origin, w.id, w.causes)
+            });
+        let next = self.as_invocation_caused(origin, id, causes, |r| r.next_inner(m, &name));
         let (result, refusal) = match next {
             Ok(receipt) => (Ok(receipt), None),
             Err((e, why)) => (Err(e), Some(why)),
         };
         self.conclude(checkpoint, &result, was_poisoned);
-        self.arm_then(result.is_ok());
+        // Its `then`, and the commit a refused ask makes, are the queued
+        // send's: armed and made under its origin, invocation and causes.
+        self.as_invocation_caused(origin, id, causes, |r| r.arm_then(result.is_ok()));
         // The commit that tells the view `pending` ended is the host's to
         // apply, its refusal the host's to hear, as a failed reply's is (b6
         // review A4).
@@ -253,7 +280,9 @@ impl<D: DataSource> Runner<D> {
                 // view hears `pending` end, as after a failed reply; and
                 // the resources its write showed in drop it.
                 if (was && !self.pending_mut[m]) || shown {
-                    ended = Some(self.commit_again(Vec::new(), "a refused queued send"));
+                    ended = Some(self.as_invocation_caused(origin, id, causes, |r| {
+                        r.commit_again(Vec::new(), "a refused queued send")
+                    }));
                 }
             } else {
                 self.queues.stalled[m] = Some(Rc::new(Basis {
@@ -286,7 +315,7 @@ impl<D: DataSource> Runner<D> {
         self.failed_mut[m] = None;
         let later = match self.ask_send(Target::Mutation(m), &head.source, &head.args, head.write) {
             Ok(Asked::Now(slot, value)) => {
-                self.slots[slot] = value;
+                self.land_send(m, slot, value);
                 self.landed.push(m);
                 None
             }
@@ -362,12 +391,28 @@ impl<D: DataSource> Runner<D> {
             self.queues.waiting[m] = kept;
             if n > 0 {
                 dropped = true;
-                let name = self.plan.str(self.plan.mutations[m].name).to_string();
+                let name = self.mutation_name(m).to_string();
                 self.log(super::lines::forgot_waiting(n, &name));
             }
         }
         self.sync_pending_flags();
         dropped
+    }
+
+    /// Drop `m`'s waiting sends and their writes: its instance is gone
+    /// (LLP 1035.005.004 D4).
+    pub(super) fn drop_waiting(&mut self, m: usize) {
+        let waiting = std::mem::take(&mut self.queues.waiting[m]);
+        let n = waiting.len();
+        for send in waiting {
+            self.end_waiting(m, send);
+        }
+        self.queues.next_due[m] = f64::INFINITY;
+        self.queues.stalled[m] = None;
+        if n > 0 {
+            let name = self.mutation_name(m).to_string();
+            self.log(super::lines::forgot_waiting(n, &name));
+        }
     }
 
     /// Drop every waiting send — poison, or a reload that does not carry
@@ -383,7 +428,7 @@ impl<D: DataSource> Runner<D> {
             self.queues.next_due[m] = f64::INFINITY;
             self.queues.stalled[m] = None;
             if n > 0 {
-                let name = self.plan.str(self.plan.mutations[m].name).to_string();
+                let name = self.mutation_name(m).to_string();
                 self.log(super::lines::forgot_waiting(n, &name));
             }
         }
@@ -397,12 +442,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(_, w)| !w.is_empty())
-            .map(|(m, w)| {
-                (
-                    self.plan.str(self.plan.mutations[m].name).to_string(),
-                    w.len(),
-                )
-            })
+            .map(|(m, w)| (self.mutation_name(m).to_string(), w.len()))
             .collect()
     }
 }
@@ -431,8 +471,9 @@ impl<D: DataSource> Runner<D> {
         let m = target
             .mutation()
             .expect("a send's target names its mutation");
-        let ty = self.plan.mutations[m].ty;
-        let name = |plan: &Plan| plan.str(plan.mutations[m].name).to_string();
+        let ty = self.mutation_row(m).ty;
+        let name = self.mutation_name(m).to_string();
+        let name = |_: &Plan| name.clone();
         self.check_send_arguments(m, args)?;
         self.snapshot_sockets();
         self.store.set_clock_ms(self.now_ms);
@@ -442,6 +483,9 @@ impl<D: DataSource> Runner<D> {
         } else if self.plan.module_named(source).is_some() {
             // A native module's send (LLP 1133.002 D13): the runner's substitute.
             self.module_send(target, source, args)
+        } else if self.plan.fetch_named(source).is_some() {
+            // A source declared in Contract (LLP 1162.001 D6).
+            self.fetch_answer(source, args)
         } else {
             let answer = self.answer_mutation(target, source, args);
             let answer = self.single_answer(target, answer);
@@ -454,10 +498,7 @@ impl<D: DataSource> Runner<D> {
         let staged = self.store.take_sockets();
         // A mutation's console lines, including a refusal, reach the agent's
         // logs whether the answer comes now or the send waited its turn.
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         if let Err(DataError::Failed(code, why, reason)) = &answer {
             if self.conclude_send(target) {
                 self.failed_mut[m] = Some(crate::failure::Failure {

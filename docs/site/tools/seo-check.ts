@@ -76,6 +76,8 @@ for (const p of pages) {
 
 const robots = existsSync(join(DIST, 'robots.txt')) ? readFileSync(join(DIST, 'robots.txt'), 'utf8') : '';
 if (!/^User-agent: \*$/m.test(robots)) fail('robots.txt', 'missing, or no "User-agent: *"');
+for (const group of robots.split(/\n(?=User-agent: )/).filter(g => g.startsWith('User-agent: ')))
+  if (!/^Content-Signal: search=(yes|no), ai-input=(yes|no), ai-train=(yes|no)$/m.test(group)) fail('robots.txt', `no content signal for "${group.split('\n')[0]}"`);
 const sitemapPath = join(DIST, 'sitemap.xml');
 if (ORIGIN) {
   if (!robots.includes(`Sitemap: ${ORIGIN}/sitemap.xml`)) fail('robots.txt', 'does not name the sitemap');

@@ -252,7 +252,7 @@ impl<D: DataSource> Host<D> {
         if !Self::is_scroller(&n) {
             return;
         }
-        let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env());
+        let [bt, _, bb, _] = n.style.border_widths_in(&kernel.env_of(n.id));
         let reach = (n.content.1 - (n.frame.height - bt - bb)).max(0.0);
         self.scroll_by(id, reach, (y / ROW).round() as i32);
     }

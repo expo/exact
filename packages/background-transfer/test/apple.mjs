@@ -17,7 +17,7 @@
 // - A URL no `net.fetch` line grants, or one with a user name and
 //   password: refused before anything is sent.
 // - A download held by the server and aborted: `backgroundfetchabort`,
-//   `aborted`.
+//   `aborted`; one aborted over a file in `saveTo` names no file.
 // - Nothing the journal shows carries the credential.
 //
 // usage: bun packages/background-transfer/test/apple.mjs [macos] [ios --sim <udid>]
@@ -137,6 +137,14 @@ for (const host of hosts.length ? hosts : ['macos']) {
       const aborted = await until(s, 'aborted', (t) => t !== 'none', 20_000);
       const h1 = await until(s, 'noted', (t) => t.startsWith('h1'), 60_000);
       check(where, 'an aborted transfer ends backgroundfetchabort, aborted', aborted === 'true' && h1.startsWith('h1 abort failure aborted'), `${aborted} ${h1}`);
+
+      await s.tap('keep-k1');
+      await until(s, 'started', (t) => t === 'started', 20_000);
+      for (const end = Date.now() + 20_000; !sent.k1 && Date.now() < end;) await wait(250);
+      await s.tap('abort-k1');
+      const k1 = await until(s, 'noted', (t) => t.startsWith('k1'), 60_000);
+      check(where, 'an abort before any body names no file, though one is in saveTo', k1.startsWith('k1 abort failure aborted') && heard.k1?.path === '' && heard.k1?.body === '',
+        `${k1} ${JSON.stringify(heard.k1)}`);
 
       const journal = (await s.logs({ all: true })).lines;
       check(where, 'the journal never shows the credential', !journal.some((l) => l.includes('secret')), journal.filter((l) => l.includes('secret')).join('\n'));

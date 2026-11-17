@@ -1,0 +1,112 @@
+//! A prefetch starts the executor's own preload; its caller stays a read (LLP 1162.000 D5).
+use super::*;
+
+impl Core {
+    pub(in super::super) fn prefetch(
+        &self,
+        state: &mut State,
+        owned: &mut Option<Preloads>,
+        r: &Job,
+    ) {
+        if !r.request.prefetch || !eligible(&r.request, r.class, r.forced, reads::opaque(&r.work)) {
+            return;
+        }
+        if let Some(cache) = state.cache.as_mut() {
+            expire(cache);
+        }
+        // Only an unconditional read ready for the network can start a preload (LLP 1162.000 D5).
+        if !reads::unblocked(state, r)
+            || waiting(state, r)
+            || !reads::room_to_start(state, r)
+            || !cache::unconditional(state, r)
+            || state
+                .cache
+                .as_ref()
+                .is_some_and(|cache| refresh_underway(state, cache.preload_names, &r.request, ""))
+        {
+            return;
+        }
+        let Some(cache) = state.cache.as_mut() else {
+            return;
+        };
+        if !cache.preloads_open {
+            return;
+        }
+        if find(cache, &r.request).is_some()
+            || !valid_request(&r.request)
+            || cache::granted(&self.grants, &r.request).is_err()
+        {
+            return;
+        }
+        let slot = cache
+            .preloads
+            .iter()
+            .position(|p| p.prefetch && matches!(p.reply, ReplyState::Gone));
+        let count = cache.preloads.iter().filter(|p| p.prefetch).count();
+        let slot = slot.or_else(|| {
+            if count < MAX_PRELOADS {
+                return None;
+            }
+            cache
+                .preloads
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    if let ReplyState::Ready(ready) = &p.reply {
+                        p.prefetch.then_some((i, ready.completed, p.generation))
+                    } else {
+                        None
+                    }
+                })
+                .min_by_key(|(_, completed, generation)| (*completed, *generation))
+                .map(|(i, _, _)| i)
+        });
+        if count >= MAX_PRELOADS && slot.is_none() {
+            return;
+        }
+        if owned.is_none() {
+            let mut set = Preloads::start_clock(
+                Vec::new(),
+                &self.grants,
+                self.stream_host.clone(),
+                cache.clock.clone(),
+            );
+            Arc::get_mut(&mut set.destination)
+                .expect("unstarted preload set")
+                .journal_pending = cache.journal_pending.clone();
+            *set.destination.state.lock().unwrap() = Destination::Adopted(
+                Arc::downgrade(&self.shared),
+                self.machine.as_ref().map(|m| Arc::downgrade(&m.timer)),
+            );
+            *owned = Some(set);
+        }
+        let generation = cache.touch();
+        let mut held = Held::new(
+            Definition {
+                name: String::new(),
+                request: r.request.clone(),
+                deadline_ms: None,
+                secrets: Vec::new(),
+            },
+            (cache.clock)(),
+            None,
+            generation,
+        );
+        held.prefetch = true;
+        held.fixture = match &r.work {
+            Some(OwnedWork::HttpResponse(work)) => Some(work.clone()),
+            _ => None,
+        };
+        let index = if let Some(i) = slot {
+            drop_held(cache, i, Event::NeverTaken);
+            cache.preloads[i] = held;
+            i
+        } else {
+            cache.preloads.push(held);
+            cache.preloads.len() - 1
+        };
+        let set = owned.as_ref().expect("preload owner");
+        set.control()
+            .start(cache, vec![(index, generation)], &self.grants);
+    }
+}

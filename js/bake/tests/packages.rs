@@ -955,7 +955,7 @@ fn a_module_that_may_check_foreign_keys_needs_the_runtime_that_honours_it() {
 }
 
 #[test]
-fn a_fetch_cache_option_needs_runtime_eleven_and_an_ordinary_fetch_does_not() {
+fn fetch_options_need_their_runtime_and_an_ordinary_fetch_does_not() {
     if !exact_js::ENGINE_LINKED {
         return;
     }
@@ -963,6 +963,8 @@ fn a_fetch_cache_option_needs_runtime_eleven_and_an_ordinary_fetch_does_not() {
         ("", 0),
         (", { cache: 'no-store' }", 11),
         (", { cache: 'default' }", 11),
+        (", { exactPreload: 'feed' }", 13),
+        (", { exactPrefetch: true }", 13),
     ] {
         let app = App::new(&format!("fetch-cache-{needs}"));
         app.put("app.ts", &format!("import type {{ Answer }} from './app.contract.d.ts';\nexport const appId = 'test.exact.logic';\nexport const grants = 'net.fetch https://example.test';\nexport const answer: Answer = () => fetch('https://example.test'{options}).then(r => r.text());\n"));

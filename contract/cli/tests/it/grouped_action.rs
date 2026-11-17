@@ -291,3 +291,46 @@ fn a_leading_symbols_slot_and_the_title_after_it_follow_the_text_size() {
         );
     }
 }
+
+/// LLP 1116.019 D6: a link that ends in a disclosure chevron is a row that
+/// pushes, in the label's colour, when an `if` shows the chevron too.
+#[test]
+fn a_link_ending_in_a_chevron_an_if_shows_is_the_labels_colour() {
+    let r = boot(
+        r#"component App
+  state canOpen = true
+  view
+    column testId="root" width=402 height=874
+      list appearance="auto" testId="list" flex=1
+        section
+          row gap=8
+            link href="/x" flex=1 display="flex"
+              text "Direct" flex=1 testId="direct-title"
+              image "symbol:chevron.right"
+          row gap=8
+            link href="/x" flex=1 display="flex"
+              text "Optional" flex=1 testId="optional-title"
+              if canOpen
+                image "symbol:chevron.right" testId="optional-chevron"
+          row gap=8
+            link href="/x" flex=1 display="flex"
+              text "Plain" flex=1 testId="plain-title"
+"#,
+    );
+    let role = |name: &str| ColorValue::Role(exact_kernel::style::roles::role(name).unwrap());
+    assert_eq!(colour(&r, "direct-title"), role("-exact-label"));
+    assert_eq!(
+        colour(&r, "optional-title"),
+        role("-exact-label"),
+        "an `if` that shows the chevron"
+    );
+    assert_eq!(
+        colour(&r, "optional-chevron"),
+        role("-exact-tertiary-label")
+    );
+    assert_ne!(
+        colour(&r, "plain-title"),
+        role("-exact-label"),
+        "a link with no chevron keeps the link's colour"
+    );
+}

@@ -42,7 +42,9 @@ impl Hull {
         );
         let values: Vec<f32> = o
             .normals
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .zip(&o.reach)
             .enumerate()
             .flat_map(|(i, (n, r))| {
@@ -51,7 +53,9 @@ impl Hull {
             })
             .collect();
         let reach = values
-            .chunks_exact(6)
+            .as_chunks::<6>()
+            .0
+            .iter()
             .map(|v| glam::Vec3::from_slice(&v[3..]).length())
             .fold(0., f32::max);
         let data = d.create_buffer(&wgpu::BufferDescriptor {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's outline: the system's widget radius (LLP 1126.003 D3), which clips its content. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="@dimen/exact_widget_radius" />
+    <solid android:color="@color/exact_widget_role_3" />
+</shape>

@@ -54,7 +54,15 @@ final class CanvasPadsMacTests: XCTestCase {
         canvas.addSubview(control); p.views[101] = control
         let editor = NSTextField(frame: NSRect(x: 220, y: 10, width: 120, height: 24))
         p.viewport.addSubview(editor)
-        canvas.canvasInput = CanvasInputHost(view: canvas)
+        let input = CanvasInputHost(view: canvas)
+        canvas.canvasInput = input
+        // The pads open only once the world reads them (issue #129).
+        m.wantsPads = { _ in 0 }
+        s.surfaceHost.messages(e)
+        XCTAssertFalse(input.padsOpened)
+        m.wantsPads = { _ in 1 }
+        s.surfaceHost.messages(e)
+        XCTAssertTrue(input.padsOpened)
         XCTAssertTrue(control.isSurfaceControl)
         XCTAssertTrue(window.makeFirstResponder(control))
         settle()

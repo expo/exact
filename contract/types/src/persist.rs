@@ -1,15 +1,16 @@
 //! `state … persist` (LLP 1116 D5): which states a launch may keep.
 //!
 //! A persisted state is a small setting the host keeps across launches —
-//! a number, string or bool, or an option or list of those — and only the
-//! root's: a child's state lives as long as its instance. Everything else
-//! is refused here, each refusal naming its repair.
+//! a number, string (an enum's included) or bool, or an option or list of
+//! those — and only the root's: a child's state lives as long as its
+//! instance. Everything else is refused here, each refusal naming its
+//! repair.
 
 use crate::{Sink, Ty, TypeError, Types};
 use contract_syntax::{Expanded, File, Owner};
 
 fn scalar(t: &Ty) -> bool {
-    matches!(t, Ty::Number | Ty::String | Ty::Bool)
+    matches!(t, Ty::Number | Ty::String | Ty::Enum(_) | Ty::Bool)
 }
 
 const KEEPS: &str =

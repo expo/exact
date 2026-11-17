@@ -69,7 +69,7 @@ final class FieldDecorationsTests: XCTestCase {
             let line = try XCTUnwrap(fragment.textLineFragments.first { NSLocationInRange(local, $0.characterRange) || local == NSMaxRange($0.characterRange) } ?? fragment.textLineFragments.last)
             let baseline = fragment.layoutFragmentFrame.minY + line.typographicBounds.minY + line.glyphOrigin.y
             let origin = field.textContainerOrigin
-            return Agent.box(CGRect(x: 0, y: baseline - ascent + origin.y, width: 1, height: 1), of: field, viewport: p.viewport).minY
+            return InspectionGeometry.box(CGRect(x: 0, y: baseline - ascent + origin.y, width: 1, height: 1), of: field, viewport: p.viewport).minY
         }
         for tall in [false, true] {
             if tall {

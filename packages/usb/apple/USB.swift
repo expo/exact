@@ -84,7 +84,7 @@ public final class USBModule: ExactPackage {
                 "deviceClass": number(s, "bDeviceClass") ?? 0, "deviceSubclass": number(s, "bDeviceSubClass") ?? 0, "deviceProtocol": number(s, "bDeviceProtocol") ?? 0,
                 "deviceVersionMajor": bcd >> 8, "deviceVersionMinor": (bcd >> 4) & 0xF, "deviceVersionSubminor": bcd & 0xF,
                 "manufacturerName": string(s, "USB Vendor Name") ?? "", "productName": string(s, "USB Product Name") ?? "",
-                "serialNumber": string(s, "USB Serial Number") ?? NSNull(), "configuration": number(s, "bConfigurationValue") ?? NSNull(), "configurations": configurations(s),
+                "serialNumber": string(s, "USB Serial Number") ?? NSNull(), "configuration": Self.configuration(s), "configurations": configurations(s),
                 "connected": true, "granted": true,
             ]
             out.append(Found(id: id, record: record, service: s))
@@ -93,7 +93,7 @@ public final class USBModule: ExactPackage {
     }
 
     /// The configurations, read from the IORegistry's interfaces of the current configuration: each interface's
-    /// alternates and endpoints as IOKit published them.
+    /// alternates as IOKit published them, with the endpoints the configuration descriptor lists for it.
     private func configurations(_ device: io_service_t) -> [[String: Any]] {
         var interfaces: [Int: [[String: Any]]] = [:]
         var iterator: io_iterator_t = 0
@@ -107,12 +107,81 @@ public final class USBModule: ExactPackage {
             let alternate: [String: Any] = [
                 "alternateSetting": number(s, "bAlternateSetting") ?? 0, "interfaceClass": number(s, "bInterfaceClass") ?? 0,
                 "interfaceSubclass": number(s, "bInterfaceSubClass") ?? 0, "interfaceProtocol": number(s, "bInterfaceProtocol") ?? 0,
-                "interfaceName": string(s, "USB Interface Name") ?? NSNull(), "endpoints": [],
+                "interfaceName": string(s, "USB Interface Name") ?? NSNull(),
             ]
             interfaces[n, default: []].append(alternate)
         }
-        let list = interfaces.keys.sorted().map { ["interfaceNumber": $0, "alternates": interfaces[$0]!] as [String: Any] }
-        return list.isEmpty ? [] : [["configurationValue": value, "configurationName": NSNull(), "interfaces": list]]
+        guard !interfaces.isEmpty else { return [] }
+        let endpoints = Self.endpoints(device, configuration: value)
+        let list = interfaces.keys.sorted().map { n in
+            let alternates = interfaces[n]!.map { a in
+                a.merging(["endpoints": endpoints[[n, a["alternateSetting"] as? Int ?? 0]] ?? []]) { $1 }
+            }
+            return ["interfaceNumber": n, "alternates": alternates] as [String: Any]
+        }
+        return [["configurationValue": value, "configurationName": NSNull(), "interfaces": list]]
+    }
+
+    /// The endpoints of each alternate of configuration `value`, by `[interfaceNumber, alternateSetting]`, read from
+    /// its configuration descriptor: the IORegistry publishes none, and IOUSBLib's device interface reads the
+    /// descriptor without opening the device (IOUSBLib.h, `GetConfigurationDescriptorPtr`).
+    private static func endpoints(_ device: io_service_t, configuration value: Int) -> [[Int]: [[String: Any]]] {
+        // IOUSBLib.h's `kIOUSBDeviceUserClientTypeID` and `kIOUSBDeviceInterfaceID100` and IOCFPlugIn.h's
+        // `kIOCFPlugInInterfaceID`, C macros Swift does not import.
+        let deviceType = CFUUIDGetConstantUUIDWithBytes(nil, 0x9D, 0xC7, 0xB7, 0x80, 0x9E, 0xC0, 0x11, 0xD4, 0xA5, 0x4F, 0x00, 0x0A, 0x27, 0x05, 0x28, 0x61)
+        let deviceInterface = CFUUIDGetConstantUUIDWithBytes(nil, 0x5C, 0x81, 0x87, 0xD0, 0x9E, 0xF3, 0x11, 0xD4, 0x8B, 0x45, 0x00, 0x0A, 0x27, 0x05, 0x28, 0x61)
+        let plugInInterface = CFUUIDGetConstantUUIDWithBytes(nil, 0xC2, 0x44, 0xE8, 0x58, 0x10, 0x9C, 0x11, 0xD4, 0x91, 0xD4, 0x00, 0x50, 0xE4, 0xC6, 0x42, 0x6F)
+        var plugIn: UnsafeMutablePointer<UnsafeMutablePointer<IOCFPlugInInterface>?>?
+        var score: Int32 = 0
+        guard IOCreatePlugInInterfaceForService(device, deviceType, plugInInterface, &plugIn, &score) == KERN_SUCCESS,
+              let plugIn, let plugInTable = plugIn.pointee?.pointee else { return [:] }
+        defer { _ = plugInTable.Release(plugIn) }
+        var raw: LPVOID?
+        guard plugInTable.QueryInterface(plugIn, CFUUIDGetUUIDBytes(deviceInterface), &raw) == S_OK, let raw else { return [:] }
+        let usb = raw.assumingMemoryBound(to: UnsafeMutablePointer<IOUSBDeviceInterface>.self)
+        let table = usb.pointee.pointee
+        defer { _ = table.Release(usb) }
+        var count: UInt8 = 0
+        guard table.GetNumberOfConfigurations(usb, &count) == kIOReturnSuccess else { return [:] }
+        for index in 0..<count {
+            var descriptor: IOUSBConfigurationDescriptorPtr?
+            guard table.GetConfigurationDescriptorPtr(usb, index, &descriptor) == kIOReturnSuccess, let descriptor,
+                  Int(descriptor.pointee.bConfigurationValue) == value else { continue }
+            return endpoints(in: UnsafeRawBufferPointer(start: descriptor, count: Int(UInt16(littleEndian: descriptor.pointee.wTotalLength))))
+        }
+        return [:]
+    }
+
+    /// The endpoint descriptors of a configuration descriptor, each under the interface descriptor before it (USB
+    /// 2.0 §9.6.3, §9.6.5, §9.6.6), in the record's form, as Linux's and the web's records list them.
+    static func endpoints(in bytes: UnsafeRawBufferPointer) -> [[Int]: [[String: Any]]] {
+        var out: [[Int]: [[String: Any]]] = [:]
+        var at = 0, current: [Int]?
+        while at + 2 <= bytes.count {
+            let length = Int(bytes[at]), type = bytes[at + 1]
+            guard length >= 2, at + length <= bytes.count else { break }
+            if type == 4, length >= 9 {
+                let key = [Int(bytes[at + 2]), Int(bytes[at + 3])]
+                current = key
+                out[key] = out[key] ?? []
+            } else if type == 5, length >= 7, let key = current, bytes[at + 3] & 3 != 0 {
+                let address = bytes[at + 2]
+                out[key]!.append([
+                    "endpointNumber": Int(address & 0x0F), "direction": address & 0x80 != 0 ? "in" : "out",
+                    "type": ["isochronous", "bulk", "interrupt"][Int(bytes[at + 3] & 3) - 1],
+                    "packetSize": Int(bytes[at + 4]) | Int(bytes[at + 5]) << 8,
+                ])
+            }
+            at += length
+        }
+        return out
+    }
+
+    /// The device's active configuration, or null while it is unconfigured. A device publishes it as
+    /// `kUSBCurrentConfiguration` (its interfaces, not the device, publish `bConfigurationValue`).
+    private static func configuration(_ s: io_service_t) -> Any {
+        let value = IORegistryEntryCreateCFProperty(s, kUSBHostDevicePropertyCurrentConfiguration as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() as? Int
+        return value.flatMap { $0 > 0 ? $0 : nil } ?? NSNull()
     }
 
     /// A remembered device not plugged in: its id, every other field empty, `connected` false.
@@ -177,8 +246,9 @@ public final class USBModule: ExactPackage {
             context.changed("usb.getDevices")
             return ["connection": handle, "device": f.record]
         case "usbConnection":
-            guard let c = connections[args["connection"] as? String ?? ""] else { return ["open": false, "connected": false, "claimed": []] }
-            return ["open": c.open, "connected": all.contains { $0.id == c.device }, "claimed": Array(c.claimed).sorted()]
+            guard let c = connections[args["connection"] as? String ?? ""] else { return ["open": false, "connected": false, "configuration": NSNull(), "claimed": []] }
+            let device = all.first { $0.id == c.device }
+            return ["open": c.open, "connected": device != nil, "configuration": device?.record["configuration"] ?? NSNull(), "claimed": Array(c.claimed).sorted()]
         case "forget":
             let id = args["device"] as? String ?? ""
             remembered.removeAll { $0 == id }

@@ -12,7 +12,7 @@ toolTurns();
 
 test('T2b: inspect from the tool selects a view in the canvas frame, shows its source and rows, and opens its token on the branch that won', async () => {
   // This checkout's apps/theme-fixture (the wasm loop builds the app's crate, so no copy will do), in turn with another
-  // run here: its design server takes the app's .exact/tamber.lock, which refuses a second writer.
+  // run here: its design server takes the app's .exact/forma.lock, which refuses a second writer.
   const giveFixture = await takePort(1000 + checkoutPort(resolve(ROOT, 'apps/theme-fixture')), { label: `T2b on ${ROOT}/apps/theme-fixture` });
   onTestFinished(giveFixture);
   const listener = (await import('node:http')).createServer();
@@ -33,8 +33,8 @@ test('T2b: inspect from the tool selects a view in the canvas frame, shows its s
     const base = `http://127.0.0.1:${port}`;
     const devSaid = lines(dev);
     await devSaid.until(l => l.includes('plan ready'), 600_000);
-    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', resolve(ROOT, 'apps/theme-fixture'), '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000);
+    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', resolve(ROOT, 'apps/theme-fixture'), '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000);
     const page = await browser.newPage({ viewport: { width: 1400, height: 1200 } });
     await page.goto(url);
     await page.locator('[data-testid="name"]').fill('Ada');

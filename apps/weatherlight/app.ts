@@ -167,26 +167,44 @@ async function readJson<T>(storage: Parameters<Answer>[3], path: string, empty: 
 async function writeJson(storage: Parameters<Answer>[3], path: string, value: unknown): Promise<void> {
   await storage.fs.atomicWriteFile(path, new TextEncoder().encode(JSON.stringify(value)));
 }
+// One delivery runs at a time: two would each write the count from their own
+// read, and the later write would drop a tip only the earlier one counted. A
+// delivery asked for while one runs only reads the count, and the running one
+// reads the queue again before it finishes. It does not await the running
+// one: a native call continued from another answer's promise is refused.
+let delivering = false, askedAgain = false;
 async function deliverPurchases(storage: Parameters<Answer>[3]): Promise<Result<'tips'>> {
-  const kept = await readJson<Tips>(storage, TIPS, { tips: 0, tokens: [] });
-  for (const p of await unfinishedPurchases()) {
-    if (p.purchaseState !== 'purchased') continue;
-    try {
-      if (p.itemId === 'tip.small') {
-        if (!kept.tokens.includes(p.purchaseToken)) {
-          kept.tips += 1;
-          kept.tokens.push(p.purchaseToken);
-          await writeJson(storage, TIPS, kept);
-        }
-        await consume({ purchaseToken: p.purchaseToken });
-      } else {
-        await acknowledge({ purchaseToken: p.purchaseToken });
-      }
-    } catch {
-      // Not finished: the store keeps it in the queue.
-    }
+  if (delivering) {
+    askedAgain = true;
+    return { tips: (await readJson<Tips>(storage, TIPS, { tips: 0, tokens: [] })).tips };
   }
-  return { tips: kept.tips };
+  delivering = true;
+  try {
+    const kept = await readJson<Tips>(storage, TIPS, { tips: 0, tokens: [] });
+    do {
+      askedAgain = false;
+      for (const p of await unfinishedPurchases()) {
+        if (p.purchaseState !== 'purchased') continue;
+        try {
+          if (p.itemId === 'tip.small') {
+            if (!kept.tokens.includes(p.purchaseToken)) {
+              kept.tips += 1;
+              kept.tokens.push(p.purchaseToken);
+              await writeJson(storage, TIPS, kept);
+            }
+            await consume({ purchaseToken: p.purchaseToken });
+          } else {
+            await acknowledge({ purchaseToken: p.purchaseToken });
+          }
+        } catch {
+          // Not finished: the store keeps it in the queue.
+        }
+      }
+    } while (askedAgain);
+    return { tips: kept.tips };
+  } finally {
+    delivering = false;
+  }
 }
 // The days the person opened Weatherlight, by the date at launch, for the
 // rating prompt: asked on the fifth, once per version.

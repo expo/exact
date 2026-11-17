@@ -35,8 +35,8 @@ export function trackAnswer(ticket) {
 }
 // Every ticket that waits on an answer's call is in `Waiting`. Whether it counts reads its call (I/O, timers), which
 // recounts it on each change (ts-fetch.js), and what no call holds, a fetch tied to no answer (`loose`), each start
-// and end of which recounts every ticket in `Waiting`. A ticket with no call (a stream, a Rust request) counts while it
-// waits.
+// and end of which recounts every ticket in `Waiting`. A ticket with no call (a stream, a Rust request in a render)
+// counts while it waits; a Rust request's call is rust-data.js's, its `held` the request's mark.
 const Waiting = new Set();
 /** The tickets `inflight` counts now: a wake owns those that were not counted at its delivery (wakes.js). */
 export const Counting = new Set();

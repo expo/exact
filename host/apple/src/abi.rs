@@ -6,7 +6,7 @@
 //! address; each call returns the output length, read via `exact_out()`.
 //! Measurement, line boxes and the font catalog call host functions ([`crate::measure`]).
 //!
-//! Every export takes a runtime handle (LLP 1031 D2): `exact_create` returns
+//! Session exports take a runtime handle (LLP 1031 D2): `exact_create` returns
 //! a never-reused `u32` from the thread-local [`Registry`], never a pointer.
 //! Invalid/destroyed handles are refused; `exact_destroy` frees the session.
 //! Calls stay on their runtime's creating thread: ExactKit's owner thread on Apple (LLP 1072 T1).
@@ -81,6 +81,8 @@ pub struct Bridge<D: DataSource> {
     live_clock: Option<LiveClockFn>,
     wait_kinds: u8,
     native_timers: bool,
+    /// Whether retiring list rows are rebound to new items, for every boot (`set_row_reuse`).
+    row_reuse: bool,
     input: Vec<u8>,
     output: Vec<u8>,
 }
@@ -130,6 +132,7 @@ impl<D: DataSource> Bridge<D> {
             live_clock: None,
             wait_kinds: 0,
             native_timers: false,
+            row_reuse: false,
             input: Vec::new(),
             output: Vec::new(),
         }
@@ -269,7 +272,7 @@ impl<D: DataSource> Bridge<D> {
             }
             // An app's aborted fetches first (any method), then what the runner let go.
             x.cancel(&h.runner_mut().take_explicit_aborts());
-            x.forget(&|ticket| h.runner().holds(ticket));
+            x.forget(&|ticket| h.runner().holds(ticket), h.runner().page().frozen);
             // Of the uploads it let go, which had begun to go out (LLP 1016.000 D10).
             let started = x.let_go_started(&|ticket| h.runner().holds(ticket));
             h.runner_mut().uploads_started(&started);
@@ -308,7 +311,7 @@ impl<D: DataSource> Bridge<D> {
                     let refusal = oversized
                         .then(|| "surface restore exceeds 16 MiB".to_string())
                         .or_else(|| r.request.check_surface_grant(&admitted).err());
-                    presenter.surface_work(&r, refusal.as_deref());
+                    h.surface_work(&mut presenter, &r, refusal.as_deref());
                     continue;
                 }
                 let dispatch = match r.request.continuation {
@@ -325,6 +328,10 @@ impl<D: DataSource> Bridge<D> {
                     Self::run_dispatch(h, x, parked, r, dispatch);
                 }
             }
+            // A request the runner let go (newer arguments, a refresh, a
+            // target answered now) is never released; one it keeps for its
+            // effects is.
+            parked.retain(|_, r| h.runner().holds(r.ticket));
             // An abort made in this batch's turns is answered at the next pump: wake it.
             if h.runner_mut().collected_aborts() {
                 x.notify();
@@ -372,6 +379,13 @@ impl<D: DataSource> Bridge<D> {
         })
     }
 
+    /// The presenter owns this capture's pixels, before asynchronous encoding.
+    pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
+        self.host
+            .as_mut()
+            .is_some_and(|host| host.canvas_snapshotted(ticket))
+    }
+
     /// A surface operation completed on the presenter thread.
     pub fn fulfill_surface(&mut self, ticket: u64, kind: u32, len: usize, now_ms: f64) -> u32 {
         let body = self.input[..len.min(self.input.len())].to_vec();
@@ -380,6 +394,11 @@ impl<D: DataSource> Bridge<D> {
                 Outcome::Surface(SurfaceOutcome::Captured(body))
             }
             7 if body.is_empty() => Outcome::Surface(SurfaceOutcome::Restored),
+            8 if self.host.is_some() => self
+                .host
+                .as_mut()
+                .expect("booted")
+                .canvas_captured(ticket, &body),
             2..=4 => Outcome::Failed {
                 kind: match kind {
                     2 => FailureKind::Refused,
@@ -403,6 +422,9 @@ impl<D: DataSource> Bridge<D> {
     /// the monospace reference measurer when none is given) under a
     /// viewport; the output is the first batch.
     pub fn boot(&mut self, plan: &[u8], data: D, hooks: Hooks, width: f32, height: f32) -> u32 {
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.boot_bytes(PlanBytes::Copied(plan), data, hooks, width, height)
     }
 
@@ -445,6 +467,9 @@ impl<D: DataSource> Bridge<D> {
         };
         let selected = (delivery.selected_plan)();
         if let Some((entry, bytes)) = selected {
+            if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+                preloads.select_update();
+            }
             // Selection already verified the stored bytes. Count this attempt
             // even when decoding or booting that verified plan refuses it.
             (delivery.boot_started)();
@@ -463,117 +488,6 @@ impl<D: DataSource> Bridge<D> {
             }
         }
         self.boot_bytes(PlanBytes::Static(embedded), data(), hooks, width, height)
-    }
-
-    fn boot_fresh(
-        &mut self,
-        plan: PlanBytes<'_>,
-        mut data: D,
-        hooks: Hooks,
-        width: f32,
-        height: f32,
-    ) -> Result<String, String> {
-        data.set_document_owner(self.document_owner);
-        if let Some(compat) = self.compat {
-            exact_runner::delivery::refuse_analysis(compat).map_err(str::to_string)?;
-        }
-        let measurer: Box<dyn TextMeasurer> = match hooks.measure {
-            Some(f) => Box::new(
-                CallbackMeasurer::of(f, &hooks)
-                    .with_field_chrome(self.field_chrome)
-                    .with_button_measure(self.button_measure)
-                    .with_measure_revision(
-                        self.measure_revision
-                            .get_or_insert_with(|| Rc::new(std::cell::Cell::new(0)))
-                            .clone(),
-                    ),
-            ),
-            None => Box::new(MonospaceMeasurer::default()),
-        };
-        // The app's bindings, once (LLP 1016 D6; LLP 1018 D6): the secrets it
-        // kept are read into a snapshot before the runner boots, so the first
-        // frame is a returning user's; the executor thread takes the same
-        // bindings for its requests. Build beside any running host: the dev
-        // menu may use this fresh-state path to reload the baked plan.
-        // A fresh named drive empties leftover secrets before that read.
-        // An archive that links no I/O binds nothing (LLP 1047.001).
-        let crate::store::Endowed {
-            bindings,
-            snapshot,
-            secrets,
-            unbound,
-            presence,
-        } = match self.links.io {
-            Some(io) => (io.endow)(data.grants(), data.app_id(), true),
-            None => crate::store::Endowed::none(),
-        };
-        let fonts = self.fonts;
-        let fonts_ctx = self.fonts_ctx;
-        let control_text = self.control_text;
-        let native_timers = self.native_timers;
-        let wall = self.live_clock;
-        let ctx = hooks.ctx;
-        let launch = self.launch();
-        match exact_runner::time::launching_with(launch, || {
-            Host::boot_stored_after_decode(
-                plan,
-                data,
-                measurer,
-                self.launch_layout,
-                self.boot_viewport(width, height),
-                None,
-                snapshot,
-                secrets,
-                self.compat,
-                self.delivery,
-                None,
-                self.launch.as_deref().unwrap_or("/"),
-                self.start_on_frame,
-                self.region,
-                self.links.clone(),
-                fonts.map(|callback| (callback, fonts_ctx)),
-                move |runner| {
-                    if native_timers {
-                        runner.use_native_timers(true);
-                        runner.set_live_clock(wall.map(preferences::sampler));
-                    }
-                    if let Some(callback) = fonts {
-                        let stacks = runner.runtime_font_stacks();
-                        install_fonts(runner.plan(), &stacks, callback, fonts_ctx);
-                    }
-                    control_text::prepare(runner, control_text, ctx)
-                },
-            )
-        }) {
-            Ok((mut host, batch)) => {
-                if let Some(why) = unbound {
-                    host.log(&format!("{why}; every request is refused"));
-                }
-                if let Some((backend, keystore)) = presence {
-                    host.runner_mut().install_presence(backend, keystore);
-                }
-                host.commit_boot();
-                let executor = self.links.io.map(|io| {
-                    (io.start)(
-                        bindings,
-                        &host.grants(),
-                        hooks.wake.map(|w| (w, hooks.wake_ctx)),
-                    )
-                });
-                if let Some(executor) = &executor {
-                    if let Some(roots) = host.app_roots() {
-                        executor.set_app_roots(roots);
-                    }
-                    host.listen_io(&**executor, self.document_owner);
-                }
-                self.presenter_hooks(&mut host, &hooks);
-                self.executor = executor;
-                let batch = Host::ending(self.host.replace(host), batch);
-                self.parked.clear();
-                Ok(batch)
-            }
-            Err(e) => Err(format!("{e:?}")),
-        }
     }
 
     /// What the update store has to say, into this runtime's runner (LLP
@@ -612,6 +526,15 @@ impl<D: DataSource> Bridge<D> {
             if topic.starts_with("app:/") {
                 host.runner_mut().data().note_storage_changed();
             }
+            host.native_slot().changed(topic);
+        }
+    }
+
+    /// Another session of the app announced `topic` after a durable write
+    /// (LLP 1030.004 D2): this session's watching answers are asked again.
+    /// The write was not this session's, so it reports no storage change.
+    pub fn peer_changed(&mut self, topic: &str) {
+        if let Some(host) = &mut self.host {
             host.native_slot().changed(topic);
         }
     }
@@ -682,6 +605,9 @@ impl<D: DataSource> Bridge<D> {
     ) -> u32 {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
+        }
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
         }
         self.discard_plan();
         if !let_go && self.host.as_ref().is_some_and(|h| h.runner().has_pending()) {
@@ -810,6 +736,10 @@ impl<D: DataSource> Bridge<D> {
         if let Some(refusal) = self.refuse_analysis() {
             return refusal;
         }
+        // A candidate can change the request a binary preload's name denotes (LLP 1162.000 D2).
+        if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+            preloads.select_update();
+        }
         self.prepared = None;
         data.set_document_owner(self.document_owner);
         let plan = self.input[..len.min(self.input.len())].to_vec();
@@ -832,9 +762,18 @@ impl<D: DataSource> Bridge<D> {
         // A reload carries the running store (`Carried::store`). A fresh
         // session takes the granted platform snapshot before its first query,
         // just like boot_fresh; neither path releases effects until commit.
+        if let Err(reason) = crate::watch_sync::startup(data.grants(), data.app_id()) {
+            return self.refuse(&reason);
+        }
+        let launch_store = self.links.io.and_then(|io| (io.preloads)()).map(|launch| {
+            launch.watch_store(&|| {
+                carried.is_some() && self.host.as_ref().is_some_and(Host::launch_store_pending)
+            })
+        });
         let crate::store::Endowed {
             bindings,
             snapshot,
+            unread_kept,
             secrets,
             unbound,
             presence,
@@ -881,9 +820,11 @@ impl<D: DataSource> Bridge<D> {
             )
         }) {
             Ok((mut host, batch)) => {
+                host.launch_store = launch_store;
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }
+                host.runner_mut().forget_unread_kept(&unread_kept);
                 if let Some((backend, keystore)) = presence {
                     host.runner_mut().install_presence(backend, keystore);
                 }
@@ -934,10 +875,16 @@ impl<D: DataSource> Bridge<D> {
             return self.prepare_error("no prepared plan");
         };
         candidate.host.commit_boot();
+        if let Some(live) = &self.host {
+            candidate
+                .host
+                .runner_mut()
+                .share_faults(live.runner().faults());
+        }
         // The old executor lets go of everything, then says which uploads had
         // begun to go out; the rest never left (LLP 1016.000 D10).
         if let Some(old) = self.executor.as_deref() {
-            old.forget(&|_| false);
+            old.forget(&|_| false, false);
             let started = old.let_go_started(&|_| false);
             candidate.host.runner_mut().uploads_started(&started);
         }
@@ -949,6 +896,9 @@ impl<D: DataSource> Bridge<D> {
             )
         });
         if let Some(executor) = &executor {
+            if let Some(preloads) = &candidate.host.preloads {
+                preloads.adopt(&**executor);
+            }
             if let Some(roots) = candidate.host.app_roots() {
                 executor.set_app_roots(roots);
             }
@@ -957,6 +907,7 @@ impl<D: DataSource> Bridge<D> {
         self.presenter_hooks(&mut candidate.host, &candidate.hooks);
         self.executor = executor;
         let batch = Host::ending(self.host.replace(candidate.host), candidate.batch);
+        self.launch_layout.insets = None;
         self.adopt_app_module();
         self.rebind();
         self.parked.clear();
@@ -980,15 +931,16 @@ impl<D: DataSource> Bridge<D> {
     /// 8 = load, 9 = message (the payload — a change's text, a key's chord
     /// (`Event::key`), or a guest message — is the input buffer's first `len`
     /// bytes, UTF-8).
-    /// Kinds 43/44 are `keyup`/`keycapture`; 46/47 are `focusin`/`focusout` (#283).
-    /// Kind 14 is navigate: one UTF-8 location at the navigation root (LLP 1038 D8).
-    /// Kind 23 is a text field's `input`; 24 and 25 a checkbox's `change`
-    /// and `input`, the payload `true` or `false` (LLP 1069.001 D4); 40 and
-    /// 41 a text field's `input` and `change` with its selection, 42 its
-    /// `select` (`start,end,direction,text`; x2apps codeedit #2).
+    /// Event kinds and payloads are declared in `include/exact.h`.
     pub fn dispatch(&mut self, view: u32, kind: u32, len: usize, now_ms: f64) -> u32 {
         let payload =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+        if kind == 64 {
+            let out = self.host.as_mut().map_or_else(not_booted, |h| {
+                h.look_motion(view, payload.parse::<u8>().unwrap_or(0) & 3, now_ms)
+            });
+            return self.emit(out);
+        }
         let event = match kind {
             // A press, with the modifiers held as a chord prefix (gallery F20).
             0 => {
@@ -1250,21 +1202,6 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// A name alone clears a surface; name NUL JSON publishes it, even if empty.
-    pub fn surface_record(&mut self, len: usize) -> u32 {
-        let Ok(text) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {
-            return self.refuse("surface record: invalid UTF-8");
-        };
-        let (name, json) = text
-            .split_once('\0')
-            .map_or((text, None), |(name, json)| (name, Some(json)));
-        let out = self
-            .host
-            .as_mut()
-            .map_or_else(not_booted, |host| host.surface_record(name, json));
-        self.emit(out)
-    }
-
     /// The viewport changed.
     pub fn resize(&mut self, width: f32, height: f32) -> u32 {
         let observed = self.live_clock.map(|clock| clock());
@@ -1296,6 +1233,20 @@ impl<D: DataSource> Bridge<D> {
             .host
             .as_mut()
             .map_or_else(not_booted, |h| h.set_page(page));
+        self.emit(out)
+    }
+
+    /// `prefer presented`: 0 false, 1 true, else the host's own.
+    pub fn prefer_presented(&mut self, value: u32) -> u32 {
+        let preferred = match value {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+        let out = self
+            .host
+            .as_mut()
+            .map_or_else(not_booted, |h| h.prefer_presented(preferred));
         self.emit(out)
     }
 
@@ -1355,7 +1306,9 @@ impl<D: DataSource> Bridge<D> {
             self.refusal("intrinsics: truncated record")
         } else {
             let sizes: Vec<_> = bytes
-                .chunks_exact(12)
+                .as_chunks::<12>()
+                .0
+                .iter()
                 .map(|r| {
                     let word = |i: usize| [r[i], r[i + 1], r[i + 2], r[i + 3]];
                     let (w, h) = (f32::from_le_bytes(word(4)), f32::from_le_bytes(word(8)));
@@ -1370,12 +1323,16 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// The display for Canvas 2D (LLP 1056 D4): its scale and memory, for
-    /// every session; a booted host redraws its canvases at the new scale.
+    /// The display for Canvas 2D (LLP 1056 D4): this session's scale, which
+    /// its later boots keep, and the device's memory, for every session; a
+    /// booted host redraws its canvases at the new scale.
     pub fn canvas_display(&mut self, scale: f64, memory: f64) -> u32 {
-        crate::host::canvas2d::set_display(scale, memory);
+        crate::host::canvas2d::set_memory(memory);
+        if let Some(scale) = crate::host::canvas2d::usable_scale(scale) {
+            self.launch_layout.canvas_scale = Some(scale);
+        }
         let out = match self.host.as_mut() {
-            Some(h) => h.canvas_display(),
+            Some(h) => h.canvas_display(scale),
             None => "{\"ops\":[],\"timers\":false,\"motion\":false}".to_string(),
         };
         self.emit(out)
@@ -1430,11 +1387,20 @@ impl<D: DataSource> Bridge<D> {
     /// An agent request (the input buffer's first `len` bytes, JSON); the
     /// output is the reply, not a batch.
     pub fn agent(&mut self, len: usize) -> u32 {
+        if let Some(host) = self.host.as_mut() {
+            host.runner_mut().take_fault_logs();
+        }
         let request =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
         // `tap @t` / `type @t` answer a held device request (LLP 1069.007
         // D4) before any view is looked up.
         let out = match self.host.as_mut() {
+            Some(h)
+                if exact_runner::agent::field_str(&request, "op").as_deref() == Some("actions")
+                    && exact_runner::agent::field_bool(&request, "drain") =>
+            {
+                h.take_ended_actions()
+            }
             Some(h) => h.answer_hold(&request).unwrap_or_else(|| h.agent(&request)),
             None => exact_runner::agent::error("not booted"),
         };
@@ -1460,6 +1426,7 @@ fn escape(s: &str) -> String {
 pub type Cell<D> = RefCell<Bridge<D>>;
 
 mod boot;
+mod canvas_performance;
 use boot::PreparedHost;
 mod colors;
 mod preparation;
@@ -1480,6 +1447,9 @@ mod preferences;
 pub(crate) mod segments;
 
 #[cfg(test)]
+mod page_tests;
+
+#[cfg(test)]
 #[path = "abi_tests.rs"]
 mod tests;
 
@@ -1490,6 +1460,14 @@ mod executor_order_tests;
 #[cfg(test)]
 #[path = "collection_tests.rs"]
 mod collection_tests;
+
+#[cfg(test)]
+#[path = "abi/canvas_scale_tests.rs"]
+mod canvas_scale_tests;
+
+#[cfg(test)]
+#[path = "abi/launch_layout_tests.rs"]
+mod launch_layout_tests;
 
 #[path = "abi_collections.rs"]
 mod collections;

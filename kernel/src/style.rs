@@ -5,13 +5,12 @@
 use std::borrow::Cow;
 use taffy::prelude::{auto, length, percent};
 
-use crate::arena::NodeArena;
-use crate::error::StyleValueError;
 use crate::generated::{
     AlignContent, AlignItems, AlignSelf, BoxSizing, Direction, Display, FlexDirection, FlexWrap,
     GridAutoFlow, JustifyContent, JustifyItems, NodeType, Overflow, PositionType, StyleId,
     StyleMask, StyleProps,
 };
+use crate::{arena::NodeArena, error::StyleValueError};
 
 mod backdrop;
 pub use backdrop::{link as link_backdrop_filter, BackdropFilter, BackdropOp};
@@ -21,19 +20,28 @@ mod engine;
 pub use crate::gradient::link as link_gradients;
 pub use effects::link as link_effects;
 mod grid;
+pub use crate::corner::link as link_corners;
 pub use grid::link as link_grid;
 pub use grid::{
     GridFitContent, GridLine, GridPlacement, GridRepeat, GridRepeatCount, GridTrack,
     GridTrackComponent, GridTrackMax, GridTrackMin, GridTracks,
 };
+pub use shadow::link as link_shadows;
+pub use space::link as link_rotate;
+pub use stroke::link as link_text_stroke;
+pub use symbols::link as link_symbol_palette;
 pub mod calc;
 mod floor;
+mod keyword;
+pub use keyword::SizeKeyword;
 mod handles;
 mod intern;
+pub mod safe_area_properties;
 pub use calc::Comparison;
 use handles::calc_handle;
 pub(crate) use handles::{calc_handle_in, resolve_calc, tree_handle, LayoutEnv};
 pub mod env;
+pub mod targets;
 pub use env::link as link_segments;
 pub use env::{uses_env, Edge, Env, EnvRefusal, Rect, Region, SegmentVar, TitleBarVar};
 /// Link the wide colour forms (`lab()`, `lch()`, `oklab()`, `oklch()`,
@@ -100,13 +108,16 @@ pub enum Dimension {
     /// handle; resolved as `env()` is, or at layout against its basis when
     /// it holds a percentage ([`calc`]).
     Compare(Comparison),
+    /// A size keyword, on the rows that take it
+    /// (`StyleId::admits_size_keyword`).
+    Keyword(SizeKeyword),
 }
 
 impl Dimension {
     /// Whether the value is a finite number (or `Auto`).
     pub fn is_finite(&self) -> bool {
         match self {
-            Dimension::Auto | Dimension::Compare(_) => true,
+            Dimension::Auto | Dimension::Compare(_) | Dimension::Keyword(_) => true,
             Dimension::Points(v)
             | Dimension::Percent(v)
             | Dimension::Viewport(_, v)
@@ -158,10 +169,14 @@ impl Dimension {
             Dimension::Segment(var, x, y, plus) => env::resolve(var, x, y, plus, env),
             Dimension::Compare(c) if c.undefined(env) => Dimension::Auto,
             Dimension::Compare(c) => match c.substituted(env) {
-                // A tree needs a basis only where it reads a percentage
-                Some(Dimension::Compare(t)) if t == c => c
-                    .value(env, None)
-                    .map_or(Dimension::Compare(c), Dimension::Points),
+                // A tree needs a basis only where it reads a percentage,
+                // and goes to layout with its local insets in it
+                Some(Dimension::Compare(t)) if t == c => match c.value(env, None) {
+                    Some(v) => Dimension::Points(v),
+                    None => c
+                        .localized(env)
+                        .map_or(Dimension::Compare(c), |d| d.resolve(env)),
+                },
                 // A text substituted is the row's value it reads as
                 Some(d) => d.resolve(env),
                 None => Dimension::Auto,
@@ -347,6 +362,8 @@ impl StyleValue<'_> {
         let t = metrics::text(t).unwrap_or(t).trim();
         t.is_empty()
             || t.eq_ignore_ascii_case("unset")
+            || (t.eq_ignore_ascii_case("none")
+                && matches!(style, StyleId::PressTranslate | StyleId::PressTranslatePercent))
             || (t.eq_ignore_ascii_case("inherit") && StyleMask::INHERITED.has(style))
             || (t.eq_ignore_ascii_case("currentcolor") && style == StyleId::TextColor)
             // @ref LLP 1034 §8: a bound `normal` follows the surrounding
@@ -396,8 +413,8 @@ impl StyleValue<'_> {
                 style, expected: "nonnegative finite length in points/px (percentage shape-margin is not implemented in exact2 v1)",
             });
         }
-        // @ref LLP 1053 G3 — CSS refuses a negative flex factor, gap or
-        // border width.
+        // @ref LLP 1053 G3 — a row CSS gives no negative value refuses a
+        // negative number, as it refuses a negative length written as text.
         if calc::nonnegative_row(style) {
             return match self {
                 StyleValue::Number(n) if (*n as f32).is_finite() && *n >= 0.0 => Ok(*n as f32),
@@ -432,6 +449,25 @@ impl StyleValue<'_> {
         }
     }
 
+    pub(crate) fn auto_i32(&self, style: StyleId) -> Result<Option<i32>, StyleValueError> {
+        match self {
+            StyleValue::Auto => Ok(None),
+            StyleValue::Text(t) if t.trim().eq_ignore_ascii_case("auto") => Ok(None),
+            StyleValue::Text(t) => {
+                t.trim()
+                    .parse()
+                    .map(Some)
+                    .map_err(|_| StyleValueError::WrongKind {
+                        style,
+                        expected: "integer or auto",
+                    })
+            }
+            _ => self
+                .int(style, i32::MIN as f64, i32::MAX as f64)
+                .map(|n| Some(n as i32)),
+        }
+    }
+
     /// A CSS-valued row's text: text as given, a number (`aspect-ratio: 2`),
     /// a percentage (`transform-origin: 25%`) or `auto` as CSS spells it.
     pub(crate) fn css_text(&self, style: StyleId) -> Result<Cow<'_, str>, StyleValueError> {
@@ -463,6 +499,12 @@ impl StyleValue<'_> {
             StyleValue::Percent(p) if (*p as f32).is_finite() => Ok(Dimension::Percent(*p as f32)),
             StyleValue::Auto if admits_auto => Ok(Dimension::Auto),
             StyleValue::Auto => Err(StyleValueError::AutoNotAdmitted { style }),
+            StyleValue::Text(t) if SizeKeyword::parse(t).is_some() => {
+                return match SizeKeyword::parse(t) {
+                    Some(k) if style.admits_size_keyword(k) => Ok(Dimension::Keyword(k)),
+                    _ => Err(StyleValueError::KeywordNotAdmitted { style }),
+                };
+            }
             // CSS's initial maximum, the unbounded one `auto` already names here (LLP 1102 §3.11).
             StyleValue::Text(t)
                 if matches!(style, StyleId::MaxWidth | StyleId::MaxHeight)
@@ -577,42 +619,11 @@ impl StyleValue<'_> {
             }),
         }
     }
-
-    pub(crate) fn vec2(&self, style: StyleId) -> Result<Vec2, StyleValueError> {
-        match self {
-            StyleValue::Vec2(x, y) if x.is_finite() && y.is_finite() => Ok(Vec2 { x: *x, y: *y }),
-            // @ref LLP 1077 D8 — the one `translate` text sets its lengths,
-            // its percentages (chess diary #4) and its z, each row its part.
-            StyleValue::Text(t)
-                if style == StyleId::Translate || style == StyleId::TranslatePercent =>
-            {
-                space::translate(t)
-                    .map(|(px, pct)| if style == StyleId::Translate { px } else { pct })
-                    .ok_or(StyleValueError::WrongKind {
-                        style,
-                        expected: "one or two lengths in px or percentages of the box (unitless zero allowed)",
-                    })
-            }
-            // `translate: -50%`: one percentage, the x's, which the
-            // compiler and the runner pass as a percentage.
-            StyleValue::Percent(p)
-                if p.is_finite()
-                    && (style == StyleId::Translate || style == StyleId::TranslatePercent) =>
-            {
-                let x = if style == StyleId::Translate { 0.0 } else { *p as f32 };
-                Ok(Vec2 { x, y: 0.0 })
-            }
-            _ => Err(StyleValueError::WrongKind {
-                style,
-                expected: "vec2",
-            }),
-        }
-    }
 }
 
 /// Whether `set_dynamic` reads any text on row `style` besides the CSS-wide
 /// keywords [`StyleValue::unsets`] clears a row with. A number row with no
-/// text arm (`opacity`, `flex-grow`, `z-index`, `font-weight`) refuses every
+/// text arm (`opacity`, `flex-grow`, `font-weight`) refuses every
 /// computed string, where a browser applies one (`opacity: 0.5`), so the
 /// compiler refuses a string-typed binding of such a row as it refuses the
 /// literal (LLP 1017 P1a). The rows listed are those whose conversion has a
@@ -635,6 +646,8 @@ pub fn takes_text(style: StyleId) -> bool {
                         | TextStrokeWidth
                         | ShapeMargin
                         | FontStretch
+                        | MinZoom
+                        | MaxZoom
                 )
         }
         StyleCodec::U16 | StyleCodec::U32 | StyleCodec::I32 => false,
@@ -664,7 +677,7 @@ fn absolute_length(token: &str) -> Option<Dimension> {
     number(n).map(|v| Dimension::Points(v * scale))
 }
 
-fn parse_pixel_length(token: &str) -> Option<f32> {
+pub(crate) fn parse_pixel_length(token: &str) -> Option<f32> {
     let pixels = token
         .get(token.len().saturating_sub(2)..)
         .is_some_and(|unit| unit.eq_ignore_ascii_case("px"));
@@ -684,7 +697,7 @@ fn parse_pixel_length(token: &str) -> Option<f32> {
 }
 
 /// A finite CSS number token, before a property's unit conversion and range check.
-fn parse_css_number(number: &str) -> Option<f64> {
+pub(crate) fn parse_css_number(number: &str) -> Option<f64> {
     // Rust floats accept spellings outside CSS number tokens. Check the
     // decimal/exponent grammar before the range-preserving conversion.
     let unsigned = number.strip_prefix(['+', '-']).unwrap_or(number);
@@ -889,6 +902,12 @@ pub enum RowValue<'a> {
     AnimationRange(&'a crate::timeline::AnimationRange),
     /// CSS `timeline-scope` (LLP 1057.003 D4).
     TimelineScope(&'a crate::timeline::TimelineScope),
+    /// A node's runtime custom properties (LLP 1123 D5).
+    SafeAreaProperties(&'a crate::style::safe_area_properties::SafeAreaProperties),
+    /// CSS `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
+    TimelineName(&'a crate::timeline::TimelineName),
+    /// CSS `view-timeline-inset` (LLP 1057.003 D5).
+    ViewTimelineInset(&'a crate::timeline::ViewTimelineInset),
     /// SVG paint (LLP 1055 D2).
     Paint(&'a crate::svg::Paint),
     /// SVG `stroke-dasharray` (LLP 1055 D2).
@@ -942,50 +961,6 @@ pub enum RowValue<'a> {
     Transitions(&'a Transitions),
     /// The `animation` row (LLP 1055 D5).
     Animations(&'a Animations),
-}
-
-impl RowValue<'_> {
-    /// Whether every number the row carries is finite. Rows without floats
-    /// (and the CSS values, which parse to finite numbers) are.
-    pub(crate) fn is_finite(&self) -> bool {
-        match self {
-            RowValue::LineHeight(v) => v.is_finite(),
-            RowValue::BackdropFilter(v) => v.is_finite(),
-            RowValue::Dimension(v) => v.is_finite(),
-            RowValue::Number(v) => v.is_finite(),
-            RowValue::Vec2(v) => v.x.is_finite() && v.y.is_finite(),
-            RowValue::Tracks(v) => v.is_finite(),
-            RowValue::Transitions(v) => v.is_finite(),
-            RowValue::Animations(v) => v.is_finite(),
-            RowValue::DashArray(v) => v.0.iter().all(|n| n.is_finite()),
-            RowValue::Transform(v) => v.is_finite(),
-            RowValue::TransformOrigin(v) => v.is_finite(),
-            RowValue::AnimationRange(v) => v.0.is_none_or(|[a, b]| a.is_finite() && b.is_finite()),
-            RowValue::Paint(_)
-            | RowValue::PaintOrder(_)
-            | RowValue::Marker(_)
-            | RowValue::Filter(_)
-            | RowValue::ClipPath(_)
-            | RowValue::ShapeOutside(_)
-            | RowValue::AspectRatio(_)
-            | RowValue::PositionTryFallbacks(_)
-            | RowValue::DragTimeline(_)
-            | RowValue::AnimationTimeline(_)
-            | RowValue::TimelineScope(_)
-            | RowValue::BackgroundImage(_)
-            | RowValue::TextShadow(_)
-            | RowValue::FontVariations(_)
-            | RowValue::FontFeatures(_)
-            | RowValue::BoxShadow(_)
-            | RowValue::MaskImage(_)
-            | RowValue::CornerShape(_)
-            | RowValue::RotateAxis(_)
-            | RowValue::SymbolPalette(_)
-            | RowValue::ColorValue(_)
-            | RowValue::Enum(_)
-            | RowValue::Placement(_) => true,
-        }
-    }
 }
 
 /// Two floats.
@@ -1052,7 +1027,7 @@ fn align_items(v: AlignItems) -> Option<taffy::style::AlignItems> {
     })
 }
 
-fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::AlignItems> {
+fn justify_items(v: JustifyItems) -> Option<taffy::style::AlignItems> {
     use taffy::style::AlignItems as T;
     Some(match v {
         JustifyItems::Normal => return None,
@@ -1065,14 +1040,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SelfEnd | JustifyItems::UnsafeSelfEnd => T::SELF_END,
         JustifyItems::FlexStart | JustifyItems::UnsafeFlexStart => T::FLEX_START,
         JustifyItems::FlexEnd | JustifyItems::UnsafeFlexEnd => T::FLEX_END,
-        JustifyItems::Left | JustifyItems::UnsafeLeft => match direction {
-            Direction::Ltr => T::START,
-            Direction::Rtl => T::END,
-        },
-        JustifyItems::Right | JustifyItems::UnsafeRight => match direction {
-            Direction::Ltr => T::END,
-            Direction::Rtl => T::START,
-        },
+        JustifyItems::Left | JustifyItems::UnsafeLeft => T::LEFT,
+        JustifyItems::Right | JustifyItems::UnsafeRight => T::RIGHT,
         JustifyItems::SafeCenter => T::SAFE_CENTER,
         JustifyItems::SafeStart => T::SAFE_START,
         JustifyItems::SafeEnd => T::SAFE_END,
@@ -1080,14 +1049,8 @@ fn justify_items(v: JustifyItems, direction: Direction) -> Option<taffy::style::
         JustifyItems::SafeSelfEnd => T::SAFE_SELF_END,
         JustifyItems::SafeFlexStart => T::SAFE_FLEX_START,
         JustifyItems::SafeFlexEnd => T::SAFE_FLEX_END,
-        JustifyItems::SafeLeft => match direction {
-            Direction::Ltr => T::SAFE_START,
-            Direction::Rtl => T::SAFE_END,
-        },
-        JustifyItems::SafeRight => match direction {
-            Direction::Ltr => T::SAFE_END,
-            Direction::Rtl => T::SAFE_START,
-        },
+        JustifyItems::SafeLeft => T::SAFE_LEFT,
+        JustifyItems::SafeRight => T::SAFE_RIGHT,
     })
 }
 
@@ -1295,12 +1258,12 @@ impl StyleProps {
             height: self.height.floor_taffy(env),
         };
         s.min_size = taffy::geometry::Size {
-            width: self.min_width.floor_lpa(env),
-            height: self.min_height.floor_lpa(env),
+            width: self.min_width.floor_taffy(env),
+            height: self.min_height.floor_taffy(env),
         };
         s.max_size = taffy::geometry::Size {
-            width: self.max_width.floor_lpa(env),
-            height: self.max_height.floor_lpa(env),
+            width: self.max_width.floor_taffy(env),
+            height: self.max_height.floor_taffy(env),
         };
         s.aspect_ratio = self.rare.aspect_ratio.preferred();
         s.aspect_ratio_content_box = self.rare.aspect_ratio.content_box();
@@ -1352,7 +1315,7 @@ impl StyleProps {
         s.align_items = align_items(self.align_items);
         s.align_self = align_self(self.align_self);
         s.align_content = align_content(self.align_content);
-        s.justify_items = justify_items(self.justify_items, self.direction);
+        s.justify_items = justify_items(self.justify_items);
         s.gap = taffy::geometry::Size {
             width: length(cells::gap(env, self.column_gap, across)),
             height: length(cells::gap(env, self.row_gap, down)),
@@ -1368,10 +1331,11 @@ impl StyleProps {
 /// the arena's environment.
 pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     let lowering = handles::Lowering::new();
-    let mut s = arena
-        .effective_style(slot)
-        .to_taffy(arena.node_type(slot), arena.env());
+    let style = arena.effective_style(slot);
+    let env = crate::kernel::owner::env_for(arena, slot, &style);
+    let mut s = style.to_taffy(arena.node_type(slot), &env);
     arena.alert_layout(slot, &mut s);
+    arena.bar_symbol_layout(slot, &mut s);
     // HTML's button layout, which Exact's reset of a `<button>` keeps: its
     // automatic inline size is shrink-to-fit, and a block button's content
     // sits in an anonymous flow-root box centred safely in the block axis,
@@ -1427,7 +1391,6 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
         Direction::Ltr => taffy::style::Direction::Ltr,
         Direction::Rtl => taffy::style::Direction::Rtl,
     };
-    s.justify_items = justify_items(arena.style(slot).justify_items, direction);
     if let Some(multicol) = crate::fragment::taffy_multicol(arena, slot) {
         s.rare.multicol = Some(multicol);
         // The flow thread starts at the content top: `align-content` moves
@@ -1485,15 +1448,16 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     s
 }
 
+mod decoration;
+// Whether a row's numbers are finite.
+mod finite;
 #[cfg(test)]
 mod finite_tests;
+pub mod snap;
 #[cfg(test)]
 mod tests;
 pub(crate) mod top_layer;
 // A `touch-action` value's pinch and pan parts.
-mod decoration;
-#[cfg(test)]
-mod decoration_tests;
 mod touch_action;
 #[cfg(test)]
 mod touch_action_tests;

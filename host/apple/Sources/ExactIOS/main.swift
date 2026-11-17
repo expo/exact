@@ -7,7 +7,9 @@
 // EXACT_SMOKE=1 prints the boot time and the startup phases after the first
 // frames and exits. EXACT_AGENT=1 with EXACT_AGENT_SOCKET=<path> is the agent
 // API (LLP 1012, `Agent.swift`, `AgentIOS.swift`): the driver owns the clock
-// and drives the app over a Unix socket. `xcrun simctl launch` passes the
+// and drives the app over a Unix socket; EXACT_AGENT=live (`--live`) is the
+// same carrier on an ordinary launch, the wall clock and normal scheduling,
+// input and reads but no clock. `xcrun simctl launch` passes the
 // environment through as SIMCTL_CHILD_*; `bun host/apple/build.mjs --ios`
 // builds, bundles, installs, and launches.
 import ExactKit
@@ -17,6 +19,8 @@ import UIKit
 #if !os(tvOS)
 import UserNotifications
 #endif
+
+AgentLink.install()
 
 // The process's own start (exec), from the kernel: what happened before
 // `main` — dyld, the Swift runtime, the static library's initializers.
@@ -39,7 +43,11 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 let exact = ExactComposition.app
 final class Adapter: ExactSessionDelegate {
-    weak var window: UIWindow?
+    private let scheme = ExactWindowScheme()
+    var window: UIWindow? {
+        get { scheme.window }
+        set { scheme.window = newValue }
+    }
     var announced = false
     /// The capabilities: `setScheme` is the window's interface style —
     /// `light`, `dark`, or `system`, as the web's `color-scheme`, where
@@ -48,19 +56,15 @@ final class Adapter: ExactSessionDelegate {
     func exactSession(_ session: ExactSession, command name: String, args: [Any]) {
         switch name {
         case "setScheme":
-            switch args.first as? String {
-            case "dark": window?.overrideUserInterfaceStyle = .dark
-            case "light": window?.overrideUserInterfaceStyle = .light
-            default: window?.overrideUserInterfaceStyle = .unspecified
-            }
+            scheme.set(args.first as? String)
         // The app's page in Settings (LLP 1133.002 D11); under the agent, journaled only.
-        // `change` at the second argument's id hears whether it opened (OpenURL.swift `answerOpenURL`).
+        // `change` at the second argument's id hears whether it opened (OpenURL.swift `openURLAnswer`).
         case "openURL" where args.first as? String == UIApplication.openSettingsURLString:
-            let answer = { (opened: Bool) in session.answerOpenURL(args, opened: opened) }
+            let answer = session.openURLAnswer(args)
             session.log("openURL app-settings: opens the app's page in Settings\(agentMode ? " (not under the agent)" : "")")
             if agentMode { answer(true) } else if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url, options: [:], completionHandler: answer) }
         case "openURL":
-            let answer = { (opened: Bool) in session.answerOpenURL(args, opened: opened) }
+            let answer = session.openURLAnswer(args)
             // A scheme the app declares (OpenURL.swift), else the web's, mail's and the phone's.
             if let value = args.first as? String, let url = URL(string: value),
                session.openDeclaredScheme(url, open: { url, done in UIApplication.shared.open(url, options: [:], completionHandler: done) }, answer: answer) { return }
@@ -79,6 +83,8 @@ final class Adapter: ExactSessionDelegate {
         case "focus": session.log("focus window: unsupported: an iOS app is in front or not running")
         // A scene's full screen and opacity are the system's (LLP 1069.010).
         case "exitFullscreen", "setWindowOpacity": session.log("\(name): unsupported: iOS has no window an app fades or takes out of full screen")
+        // An app cannot put its own scene away and keep running (LLP 1133.025 D4).
+        case "hideWindow": session.log("hideWindow: unsupported: iOS has no window an app hides")
         default: FileHandle.standardError.write(Data("exact: unknown command \(name)\n".utf8))
         }
     }
@@ -88,7 +94,7 @@ final class Adapter: ExactSessionDelegate {
         guard !announced, state != .created, state != .destroyed else { return }
         announced = true
         DispatchQueue.main.async {
-            if agentMode { agentReady() }
+            if ExactEnv.agentCarried { agentReady() }
             if smoke { printSmoke() }
         }
     }
@@ -114,18 +120,7 @@ func watchPlan() {
         return
     }
     devPlanPath = planPath
-    let candidate = ExactDevelopmentPlan(planPath)
-    var last = candidate.hasModule ? [] : candidate.revision
-    let t = DispatchSource.makeTimerSource(queue: .main)
-    t.schedule(deadline: .now() + 0.1, repeating: 0.1)
-    t.setEventHandler {
-        let revision = candidate.revision
-        guard revision != last else { return }
-        last = revision
-        candidate.apply(to: exact)
-    }
-    t.resume()
-    planWatch = t
+    planWatch = ExactDevelopmentPlan(planPath).watch(exact)
 }
 
 /// Announce `ready` after the driver connects and the first frame is applied.
@@ -136,14 +131,14 @@ nonisolated(unsafe) var readySent = false
 /// plan, which clears the session's error, but the driver asked for this one.
 nonisolated(unsafe) var planRefusal: String?
 func agentReady() {
-    guard agentMode, !readySent, session.booted || session.bootError != nil else { return }
+    guard ExactEnv.agentCarried, !readySent, session.booted || session.bootError != nil else { return }
     readySent = true
-    Agent.startSocket(ready: ["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? NSNull(), "pid": Int(getpid())], sessions: [("main", session)])
+    AgentLink.startSocket(ready: ["ready": true, "boot": session.bootMs, "views": session.viewCount, "error": planRefusal ?? session.bootError ?? session.nativeArtifactFailure ?? NSNull(), "pid": Int(getpid())], sessions: [("main", session)])
 }
 
 /// The one screen: the view fills the controller's view; the plan boots at
 /// the view's first layout (`ExactView.fit`).
-/// The build's launch colour (the manifest's `launch`); unset, the
+/// The build's launch colour (the manifest's `background_color`); unset, the
 /// platform's background, as the system's own launch screen then is and
 /// the view under it (`ExactView`): never a fixed white (LLP 1115 D2).
 let launchColor = launchScreenColor ?? .platformBackground(in: nil)
@@ -210,8 +205,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             planRefusal = ExactDevelopmentPlan(path).installInitial(on: exact)
         }
         session = exact.makeSession(delegate: adapter, label: "main")
+        // Before any scene connects: the delegate methods of the host events this build takes (LLP 1133.001.000 D2).
+        exact.installHostEvents(applicationDelegate: nil, sceneDelegate: SceneDelegate.self)
         #if !os(tvOS)
-        exact.installNotificationClicks()
+        // A notification's background action that launched the app with no scene boots it with none (LLP 1133.004 stage 2).
+        exact.installNotificationClicks(boot: { $0.bootForWake() }, activate: nil)
         // A wake that launched the app with no scene boots it with none (LLP 1133.017 D7).
         exact.installWakes { session.bootForWake() }
         // A tool call that launched the app with no scene boots it the same way (LLP 1133.023 D7).
@@ -268,6 +266,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    func sceneWillEnterForeground(_ scene: UIScene) { ExactLaunch.shared.opened() }
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
         ExactEnv.stamp("scene")
@@ -276,6 +275,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #if !os(tvOS)
         let notificationResponse = connectionOptions.notificationResponse
         if let notificationResponse { exact.openNotification(notificationResponse) }
+        // A taken host event that launched the app (an accepted iCloud share); the URLs below route as ever.
+        exact.hostEvents(connectionOptions: connectionOptions)
         #endif
         let contexts = connectionOptions.urlContexts.map(\.url).sorted { $0.absoluteString < $1.absoluteString }
         let activities = connectionOptions.userActivities.filter { $0.activityType == NSUserActivityTypeBrowsingWeb }

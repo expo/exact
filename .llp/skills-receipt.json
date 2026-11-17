@@ -13,7 +13,12 @@
     ".claude/skills/llp-create/SKILL.md": "8711aa16bd90597b66410771de8a90c6e66f1fdf9e15eec169b07cdbddb7a71d",
     ".claude/skills/llp-maintain/SKILL.md": "e956c3fefb0f345293b3054c7fb9af3edb31ffbd92c328510371f3074956a3ac",
     ".claude/skills/llp-orient/SKILL.md": "6a421cd027e06676e2fe2ecc104ea8a7f6ab6ba4f7013fbbbbc42c52df532a90",
-    ".claude/skills/llp-review/SKILL.md": "b79df36f677dd1150b45f9ab518bb96985ee01599153a441aad3ab81abc94e5c",
-    ".claude/skills/llp-super-refine/SKILL.md": "2673e8caa575c909eea16ce8835e870f0cfd2b488318775ce3ed13d4ef80ba2e"
+    ".claude/skills/llp-review/SKILL.md": "b79df36f677dd1150b45f9ab518bb96985ee01599153a441aad3ab81abc94e5c"
+  },
+  "detached": {
+    ".claude/skills/llp-super-refine/SKILL.md": {
+      "release": "2673e8caa575c909eea16ce8835e870f0cfd2b488318775ce3ed13d4ef80ba2e",
+      "reason": "Edited in exact2 to name the default models in use here (Claude Fable 5.1; codex gpt-6.1-sol; grok-4.7) and the codex command line. User-owned: an update notes upstream changes to it and applies none."
+    }
   }
 }

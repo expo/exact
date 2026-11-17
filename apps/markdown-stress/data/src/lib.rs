@@ -21,6 +21,8 @@ struct Parsed {
     /// The generated source, for the one-node mode.
     text: String,
     document: Document,
+    groups: Vec<std::ops::Range<usize>>,
+    table_rows: usize,
     largest_block: usize,
     #[cfg(test)]
     drop_witness: Option<DropWitness>,
@@ -98,25 +100,44 @@ impl Parsed {
     fn build(key: (Profile, usize, usize)) -> Result<Self, DataError> {
         let text = generate(key.0, key.1).map_err(|e| DataError::BadArguments(e.into()))?;
         let document = markdown_parse::parse(&text, &str::to_owned);
-        let largest_block = document
-            .blocks
+        let mut at = 0;
+        let groups: Vec<_> = markdown_parse::value::block_groups(&document)
+            .map(|group| {
+                let start = at;
+                at += group.len();
+                start..at
+            })
+            .collect();
+        let largest_block = groups
             .iter()
-            .map(|b| {
-                b.text.len()
-                    + b.runs.iter().map(|r| r.text.len()).sum::<usize>()
-                    + b.cells
-                        .iter()
-                        .flatten()
-                        .map(|r| r.text.len())
-                        .sum::<usize>()
+            .map(|range| {
+                document.blocks[range.clone()]
+                    .iter()
+                    .map(|b| {
+                        b.text.len()
+                            + b.runs.iter().map(|r| r.text.len()).sum::<usize>()
+                            + b.cells
+                                .iter()
+                                .flatten()
+                                .map(|r| r.text.len())
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
             })
             .max()
             .unwrap_or(0);
+        let table_rows = document
+            .blocks
+            .iter()
+            .filter(|b| b.kind == Kind::TableRow)
+            .count();
         Ok(Self {
             key,
             bytes: text.len(),
             text,
             document,
+            groups,
+            table_rows,
             largest_block,
             #[cfg(test)]
             drop_witness: None,
@@ -124,21 +145,25 @@ impl Parsed {
     }
 
     fn value(&self, args: DocumentArgs) -> Value {
-        let total = self.document.blocks.len();
-        let first = if args.eager {
+        let total = self.groups.len();
+        let first = if args.single || args.eager {
             0
         } else {
             args.page.min((total - 1) / PAGE_BLOCKS) * PAGE_BLOCKS
         };
-        let end = if args.eager {
+        let end = if args.single {
+            0
+        } else if args.eager {
             total
         } else {
             (first + PAGE_BLOCKS).min(total)
         };
-        let blocks = self.document.blocks[first..end]
+        let blocks = self.groups[first..end]
             .iter()
             .enumerate()
-            .map(|(i, block)| markdown_parse::value::block(first + i, block))
+            .map(|(i, range)| {
+                markdown_parse::value::block_group(first + i, &self.document.blocks[range.clone()])
+            })
             .collect();
         Value::record(vec![
             Value::str(&self.document.title),
@@ -149,13 +174,7 @@ impl Parsed {
             Value::Number(end as f64),
             Value::Number(args.key.2 as f64),
             Value::Number(self.largest_block as f64),
-            Value::Number(
-                self.document
-                    .blocks
-                    .iter()
-                    .filter(|b| b.kind == Kind::TableRow)
-                    .count() as f64,
-            ),
+            Value::Number(self.table_rows as f64),
             Value::list(blocks),
             Value::str(if args.single { &self.text } else { "" }),
         ])

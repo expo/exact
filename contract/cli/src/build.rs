@@ -2,7 +2,7 @@
 
 use std::{io::Write, path::Path, process::ExitCode};
 
-pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)]";
+pub(crate) const USAGE: &str = "usage: contract build <file.contract> [--stdin | --stdin-as <used.contract>] [-o <file.plan>] [--json] [--errors-only] [--map (requires -o)] [--entry <kind> (requires -o; no --map or --stdin)] [--surface terminal (no --entry)]";
 
 struct Options<'a> {
     input: &'a str,
@@ -13,14 +13,22 @@ struct Options<'a> {
     /// The file's text is stdin's, read as if saved at `input` (an editor's
     /// unsaved buffer): its `use` lines and diagnostics name that path.
     stdin: bool,
+    /// `--stdin-as`: stdin's text is instead read as if saved at this file,
+    /// one the input uses (the unsaved buffer of a file built with its app).
+    stdin_as: Option<&'a str>,
     /// A widget entry's kind (LLP 1126 D2): its plan instead of the app's,
     /// compiled as the bake compiles it from `app.json` beside the input.
     entry: Option<&'a str>,
+    /// `--surface terminal`: the terminal's lowering of a GUI source, for
+    /// measuring it on the terminal host (LLP 1121 stage 11 C), which runs
+    /// only a terminal plan (LLP 1101.003 D9).
+    profile: contract_lower::Profile,
 }
 
 fn options(args: &[String]) -> Option<Options<'_>> {
     let (mut input, mut output, mut json, mut map, mut entry) = (None, None, false, false, None);
-    let (mut errors_only, mut stdin) = (false, false);
+    let (mut errors_only, mut stdin, mut profile) = (false, false, None);
+    let mut stdin_as = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -28,6 +36,13 @@ fn options(args: &[String]) -> Option<Options<'_>> {
             "--errors-only" if !errors_only => errors_only = true,
             "--map" if !map => map = true,
             "--stdin" if !stdin => stdin = true,
+            "--stdin-as" if !stdin => {
+                stdin = true;
+                stdin_as = Some(args.next()?.as_str());
+                if stdin_as?.starts_with('-') {
+                    return None;
+                }
+            }
             "-o" if output.is_none() => {
                 output = Some(args.next()?.as_str());
                 if output?.starts_with('-') {
@@ -40,12 +55,21 @@ fn options(args: &[String]) -> Option<Options<'_>> {
                     return None;
                 }
             }
+            "--surface" if profile.is_none() => {
+                profile = Some(match args.next()?.as_str() {
+                    "gui" => contract_lower::Profile::Web,
+                    "terminal" => contract_lower::Profile::Terminal,
+                    _ => return None,
+                });
+            }
             name if !name.starts_with('-') && input.is_none() => input = Some(name),
             _ => return None,
         }
     }
     // An entry plan has no source map yet: `--map` with `--entry` is refused.
-    if (map || entry.is_some()) && output.is_none() || (map || stdin) && entry.is_some() {
+    if (map || entry.is_some()) && output.is_none()
+        || (map || stdin || profile.is_some()) && entry.is_some()
+    {
         return None;
     }
     Some(Options {
@@ -55,7 +79,9 @@ fn options(args: &[String]) -> Option<Options<'_>> {
         errors_only,
         map,
         stdin,
+        stdin_as,
         entry,
+        profile: profile.unwrap_or_default(),
     })
 }
 
@@ -142,10 +168,33 @@ fn report_all(
 
 /// The warnings as text, in their rank's order (`contract::warning_rank`),
 /// with the SF Symbols only the web draws blank in one line
-/// (`contract::web_only_line`).
+/// (`contract::web_only_line`), and the literal colours that stay one in
+/// dark mode in one line past one (`warning_rank::one_scheme_line`).
 fn print_warnings(warnings: &[contract::CompileError]) {
+    use contract_lower::warning_rank::{one_scheme_close, one_scheme_line, one_scheme_site};
     let (web, rest): (Vec<_>, Vec<_>) = warnings.iter().partition(|w| contract::web_only(w));
+    let sites: Vec<String> = rest
+        .iter()
+        .filter(|w| one_scheme_site(&w.id, &w.message))
+        .map(|w| w.to_string())
+        .collect();
+    let close = rest.iter().find(|w| one_scheme_close(&w.id, &w.message));
+    let one = match close {
+        Some(close) if sites.len() > 1 => Some(one_scheme_line(&close.to_string(), &sites)),
+        _ => None,
+    };
+    let mut said = false;
     for warning in rest {
+        if let Some(line) = one.as_ref().filter(|_| {
+            one_scheme_site(&warning.id, &warning.message)
+                || one_scheme_close(&warning.id, &warning.message)
+        }) {
+            if !said {
+                eprintln!("{line}{}", contract::excerpt(warning));
+                said = true;
+            }
+            continue;
+        }
         eprintln!("{warning}{}", contract::excerpt(warning));
     }
     if let Some(first) = web.first() {
@@ -180,7 +229,8 @@ pub(super) fn run(args: &[String]) -> ExitCode {
             1,
         );
     }
-    contract::with_contract_texts(vec![(options.input.into(), text)], || build(&options))
+    let held = options.stdin_as.unwrap_or(options.input);
+    contract::with_contract_texts(vec![(held.into(), text)], || build(&options))
 }
 
 fn build(options: &Options) -> ExitCode {
@@ -191,6 +241,7 @@ fn build(options: &Options) -> ExitCode {
         errors_only,
         map,
         stdin,
+        profile,
         ..
     } = options;
     // The map is always built: it prices each component for the summary.
@@ -202,7 +253,7 @@ fn build(options: &Options) -> ExitCode {
         compiled: (compiled, mut warnings),
         surfaces,
         clocks,
-    } = contract::compile_path_advised(Path::new(input), true);
+    } = contract::compile_path_advised(Path::new(input), true, profile);
     let mut refused = match &surfaces {
         Ok(s) if s.newer.is_none() => s.findings.clone(),
         Ok(_) => Vec::new(),
@@ -216,7 +267,7 @@ fn build(options: &Options) -> ExitCode {
     refused.extend(crate::ambient::check(Path::new(input)));
     if !json && !errors_only {
         for finding in &clocks {
-            eprintln!("warning: {finding}");
+            eprintln!("{}", crate::warning(finding.clone()));
         }
     }
     // Warnings never fail the build; they follow its refusals (LLP 1116 D6).
@@ -263,7 +314,7 @@ fn build(options: &Options) -> ExitCode {
     let declaration = format!("{input}.d.ts");
     if !stdin && Path::new(&declaration).is_file() {
         let exports = contract::design_exports(Path::new(&input));
-        let types = match contract::typescript_exporting(&plan, exports.as_deref()) {
+        let types = match contract::typescript_exporting(&plan, exports.as_deref(), &[]) {
             Ok(types) => types,
             Err(message) => return report(&error("contract-types", message, Some(input)), json, 1),
         };
@@ -309,6 +360,21 @@ fn build(options: &Options) -> ExitCode {
         );
         // Every use is inlined: name what the plan's size is made of.
         if let Some(map) = &map {
+            let code = map.component_code_costs(&plan);
+            let top: Vec<_> = code
+                .iter()
+                .take(5)
+                .map(|(name, instances, bytes)| {
+                    format!(
+                        "{name}: {bytes} B ({instances} instance{})",
+                        if *instances == 1 { "" } else { "s" }
+                    )
+                })
+                .collect();
+            println!(
+                "  own plan code by component (shared bodies counted per use): {}",
+                top.join(", ")
+            );
             let costs = map.component_costs();
             if !costs.is_empty() {
                 let top: Vec<String> = costs

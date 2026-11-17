@@ -26,17 +26,25 @@ import org.robolectric.util.ReflectionHelpers
 class PadsTest {
     @Implements(Exact::class, isInAndroidSdk = false)
     class Host {
-        @Implementation fun pad(index: Int, connected: Boolean, values: FloatArray) {
+        @Implementation fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long) {
             reports += Report(index, connected, values.toList())
+            times += at
         }
-        @Implementation fun hidden(hidden: Boolean) {}
+        @Implementation fun hidden(hidden: Boolean) { hiddens += hidden }
         @Implementation fun drainStore(ms: Long) = true
         data class Report(val index: Int, val connected: Boolean, val values: List<Float>)
-        companion object { val reports = ArrayList<Report>() }
+        companion object {
+            val reports = ArrayList<Report>()
+            val times = ArrayList<Long>()
+            /** The page's visibility as each activity's start and stop told the host. */
+            val hiddens = ArrayList<Boolean>()
+        }
     }
 
     @Before fun connect() {
         Host.reports.clear()
+        Host.times.clear()
+        Host.hiddens.clear()
         val context = RuntimeEnvironment.getApplication()
         val manager = context.getSystemService(Context.INPUT_SERVICE) as InputManager
         val device = ShadowInputDevice.makeInputDeviceNamed("Controller")
@@ -53,8 +61,8 @@ class PadsTest {
         Pads.onInputDeviceRemoved(7)
     }
 
-    private fun key(code: Int, action: Int = KeyEvent.ACTION_DOWN, repeat: Int = 0, flags: Int = 0) =
-        KeyEvent(0, 0, action, code, repeat, 0, 7, 0, flags, InputDevice.SOURCE_GAMEPAD)
+    private fun key(code: Int, action: Int = KeyEvent.ACTION_DOWN, repeat: Int = 0, flags: Int = 0, at: Long = 0) =
+        KeyEvent(0, at, action, code, repeat, 0, 7, 0, flags, InputDevice.SOURCE_GAMEPAD)
 
     private fun motion(): MotionEvent {
         val coordinates = MotionEvent.PointerCoords().apply {
@@ -116,6 +124,28 @@ class PadsTest {
             assertFalse(Pads.key(event, true))
         }
         assertTrue(Host.reports.isEmpty())
+    }
+
+    /** A press and release delivered late together keep the times the events carried (LLP 1127.003's final
+     * review): a 150 ms press's sends are 150 ms apart, a 210 ms one's 210, however long they waited. */
+    @Test fun aDeliveredPressKeepsItsEventTimes() {
+        for (span in listOf(150L, 210L)) {
+            val first = Host.times.size
+            Pads.key(key(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.ACTION_DOWN, at = 5000), false)
+            Pads.key(key(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.ACTION_UP, at = 5000 + span), false)
+            assertEquals(span, Host.times.last() - Host.times[first])
+        }
+    }
+
+    @Test fun motionCarriesItsEventTime() {
+        val coordinates = MotionEvent.PointerCoords().apply { setAxisValue(MotionEvent.AXIS_X, 0.5f) }
+        val event = MotionEvent.obtain(0, 7000, MotionEvent.ACTION_MOVE, 1,
+            arrayOf(MotionEvent.PointerProperties().apply { id = 0 }), arrayOf(coordinates),
+            0, 0, 1f, 1f, 7, 0, InputDevice.SOURCE_JOYSTICK, 0)
+        try {
+            Pads.motion(event, false)
+            assertEquals(7000L, Host.times.last())
+        } finally { event.recycle() }
     }
 
     @Test fun joystickMotionRemainsUnhandledWithoutACanvas() {
@@ -188,7 +218,7 @@ class PadsTest {
         assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
     }
 
-    @Test fun aReplacedActivityCannotReleaseTheActiveReadersPads() {
+    @Test fun aReplacedActivitysStopLeavesTheActiveReadersPadsAndPage() {
         val replaced = activity()
         val reader = activity()
         Exact.reader = WeakReference(reader)
@@ -199,7 +229,26 @@ class PadsTest {
         ReflectionHelpers.callInstanceMethod<Unit>(replaced, "onStop")
         assertEquals(count, Host.reports.size)
         assertEquals(held, Pads.values(0)!!.toList())
+        assertEquals("the replaced activity's stop leaves its successor's page shown", emptyList<Boolean>(), Host.hiddens)
         reader.onWindowFocusChanged(false)
         assertEquals(Host.Report(0, true, List(21) { 0f }), Host.reports.last())
+        ReflectionHelpers.callInstanceMethod<Unit>(reader, "onStop")
+        assertEquals("the reader's own stop hides the page once", listOf(true), Host.hiddens)
+    }
+
+    /** Back to an earlier activity: its start after a stop takes the host before it makes its reader, so the one that
+     * finished stops and is destroyed telling the host nothing, and leaves the callbacks the earlier one installs. */
+    @Test fun anEarlierActivityStartedAgainTakesTheHostFromTheOneThatFinished() {
+        val earlier = activity()
+        val finishing = activity()
+        Exact.reader = WeakReference(finishing)
+        ReflectionHelpers.callInstanceMethod<Unit>(earlier, "take")
+        val installed = {}
+        Exact.answered = installed
+        ReflectionHelpers.callInstanceMethod<Unit>(finishing, "onStop")
+        ReflectionHelpers.callInstanceMethod<Unit>(finishing, "release")
+        assertSame(earlier, Exact.reader?.get())
+        assertSame("the finished activity's destroy leaves the reader's callbacks", installed, Exact.answered)
+        assertEquals("the finished activity's stop leaves the page shown", emptyList<Boolean>(), Host.hiddens)
     }
 }

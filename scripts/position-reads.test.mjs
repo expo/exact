@@ -67,7 +67,7 @@ const BARE = /(?<!::\s*)\bPositionType\b(?!\s*::)/g;
 const SCOPES = [
   { dir: 'kernel/src', ext: '.rs', read: RUST },
   { dir: 'host/apple/src', ext: '.rs', read: RUST },
-  { dir: 'host/linux/src', ext: '.rs', read: RUST },
+  { dir: 'host/painted/src', ext: '.rs', read: RUST },
   { dir: 'host/apple/Sources', ext: '.swift', read: /"position_type"|"{3}\s*position_type\s*"{3}/g },
 ];
 
@@ -81,7 +81,7 @@ export const ALLOWED = [
   { file: 'kernel/src/style.rs', text: 's.inset = if self.position_type == PositionType::Sticky', why: "the engine mapping of the rows (to_taffy): a sticky row's insets aren't offsets; top_layer::apply makes a top-layer box's offsets again" },
   { file: 'kernel/src/arena/defaults.rs', text: '(StyleId::PositionType, "-exact-header-position")', why: "the neutral route header's platform start: a row it sets, not a read" },
   { file: 'kernel/src/kernel/cover.rs', text: 'StyleId::PositionType,', why: "a row list, not a value: a change of the row moves a box on the bottom edge's chain (style_changed); a popover's prop change does too (top_layer::prop_changed)" },
-  { file: 'host/linux/src/scroll_anchor.rs', text: 'StyleId::PositionType,', why: 'a row list, not a value: a change of the row is a layout change' },
+  { file: 'host/painted/src/scroll_anchor.rs', text: 'StyleId::PositionType,', why: 'a row list, not a value: a change of the row is a layout change' },
   { file: 'host/apple/Sources/ExactKit/LayoutPosition.swift', text: 'let authored = style["position_type"]', why: 'the accessor itself' },
   { file: 'host/apple/Sources/ExactKit/LayoutPosition.swift', text: '.contains(.string("position_type"))', why: 'the accessor itself: whether the author wrote the sticky' },
   { file: 'host/apple/Sources/ExactKit/ScrollAnchoring.swift', text: '"inset", "position_type",', why: 'a key list, not a value: a change of the row is a layout change' },
@@ -313,7 +313,7 @@ test('the scan finds a new read in any form, and skips comments, strings and tes
     writeFileSync(join(root, 'kernel/src/fnmod.rs'), ['fn layout(s: &Row) {', '    mod rows {', '        use crate::StyleId::*;', '        pub fn read(s: &Row) { let _ = s.get(self::PositionType); }', '    }', '}'].join('\n'));
     // A grouped glob alone in its file, in a function's body.
     writeFileSync(join(root, 'kernel/src/grouped.rs'), ['fn local(s: &Row) {', '    use crate::StyleId::{self, *};', '    let _ = s.get(PositionType);', '}'].join('\n'));
-    writeFileSync(join(root, 'host/linux/src/scan_tests.rs'), 'fn t(s: &StyleProps) { s.position_type; }');
+    writeFileSync(join(root, 'host/painted/src/scan_tests.rs'), 'fn t(s: &StyleProps) { s.position_type; }');
     writeFileSync(join(root, 'host/apple/Sources/New.swift'), [
       'let p = view.style["position_type"]?.string',
       '// view.style["position_type"] in a comment',

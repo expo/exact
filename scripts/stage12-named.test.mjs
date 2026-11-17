@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decodePng, encodePng } from './png.mjs';
-import { WASM_IMAGE_NOISE, bindingShape, bindingsCheck, componentIR, identityOf, imageBoxes, irShape, namedCrops, namedOf, namedReport, pixelDiff, sameImageBoxes, unionNamed } from './stage12-named.mjs';
+import { bindingShape, bindingsCheck, componentIR, identityOf, irShape, namedCrops, namedOf, namedReport, pixelDiff, unionNamed } from './stage12-named.mjs';
 import { BINDINGS, NAMED, RETIRED, SCREENS, STAGES, comparePixels, useStage } from './stage12-gate.mjs';
 import { ISLAND, islandAllow } from './stage12-island.mjs';
 
@@ -209,54 +209,15 @@ test("iOS's Dynamic Island is allowed only where no library component's box meet
   expect(islandAllow('ios', '{"op":"tap"}\n')).toEqual([]);
 });
 
-test("web-wasm's image-raster rule: at most 4 levels inside an Image box laid out alike on both sides (theme2 22:01)", () => {
-  const a = img(8, 8, black);
-  const by = d => [d, d, d, 255];
-  // Inside the box [2, 2, 4, 4]: 4 levels at (2, 3) and (4, 5), 5 levels at (5, 2); outside it, 3 levels at (7, 7).
-  const b = img(8, 8, (x, y) => ((x === 2 && y === 3) || (x === 4 && y === 5) ? by(4) : x === 5 && y === 2 ? by(5) : x === 7 && y === 7 ? by(3) : black()));
-  const d = pixelDiff(a, b, [], null, [], [[2, 2, 4, 4]]);
-  expect(d.differ).toBe(2);
-  expect(d.images).toEqual([{ rect: [2, 2, 4, 4], count: 2, max: 4 }]);
-  expect(pixelDiff(a, b).differ).toBe(4);
-  expect(WASM_IMAGE_NOISE).toBe(4);
-  // The boxes from a drive's layout, and only those both sides lay out at the same rect
-  const out = nodes => `${JSON.stringify({ viewport: { w: 420, h: 900 }, nodes })}\n`;
-  const avatar = { type: 'Image', x: 32, y: 248.4, w: 42, h: 42 }, moved = { ...avatar, y: 250 };
-  expect(imageBoxes(out([avatar, { type: 'View', x: 0, y: 0, w: 10, h: 10 }, { ...avatar, w: 0 }]))).toEqual([{ at: '32.00,248.40,42.00,42.00', rect: [32, 248, 42, 43] }]);
-  expect(sameImageBoxes(imageBoxes(out([avatar])), imageBoxes(out([avatar])))).toEqual([[32, 248, 42, 43]]);
-  expect(sameImageBoxes(imageBoxes(out([avatar])), imageBoxes(out([moved])))).toEqual([]);
-  expect(imageBoxes('{"op":"tap"}\n')).toEqual([]);
-  // A box partly off the screen is clipped to it; one wholly off is none
-  expect(imageBoxes(out([{ type: 'Image', x: -5, y: 880, w: 20, h: 40 }])).map(i => i.rect)).toEqual([[0, 880, 15, 20]]);
-  expect(imageBoxes(out([{ type: 'Image', x: 0, y: 950, w: 20, h: 40 }]))).toEqual([]);
-  // A hundredth of a point apart is not alike; a box listed twice counts once
-  expect(sameImageBoxes(imageBoxes(out([avatar])), imageBoxes(out([{ ...avatar, x: 32.01 }])))).toEqual([]);
-  expect(sameImageBoxes(imageBoxes(out([avatar, avatar])), imageBoxes(out([avatar])))).toEqual([[32, 248, 42, 43]]);
-  // The order of the rules: the allowlist first, then a named box takes every pixel in it, then the image rule,
-  // then the web's edge floor
-  const both = img(8, 8, (x, y) => (y === 3 && x >= 2 && x <= 5 ? by(3) : black()));
-  const ordered = pixelDiff(a, both, [[2, 3, 1, 1]], { floor: 2, edge: 32 }, [{ target: 'n', change: '', rect: [3, 3, 1, 1] }], [[2, 2, 4, 4]]);
-  expect([ordered.differ, ordered.names[0].differ, ordered.images[0].count]).toEqual([0, 1, 2]);
-  // An edge pixel inside an image box, within the web's floor, is the image rule's (counted, cropped), not the floor's
-  const edgy = img(8, 8, x => (x < 4 ? [0, 0, 0, 255] : [200, 200, 200, 255]));
-  const nudged = img(8, 8, (x, y) => (x === 3 && y === 4 ? [2, 2, 2, 255] : x < 4 ? [0, 0, 0, 255] : [200, 200, 200, 255]));
-  const atEdge = pixelDiff(edgy, nudged, [], { floor: 2, edge: 32 }, [], [[2, 2, 4, 4]]);
-  expect([atEdge.differ, atEdge.images[0].count, atEdge.images[0].max]).toEqual([0, 1, 2]);
-  expect(pixelDiff(edgy, nudged, [], { floor: 2, edge: 32 }).differ).toBe(0);
-});
-
-test('only web-wasm shots take the image rule, through comparePixels, and its crops are written', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'stage12-image-noise-'));
+test('a small difference inside an Image box laid out alike on both sides differs on web and web-wasm', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stage12-image-difference-'));
   try {
     const write = (name, f) => { const path = join(dir, name); writeFileSync(path, img(8, 8, f)); return path; };
     const a = write('a.png', black), b = write('b.png', (x, y) => (x === 3 && y === 3 ? [3, 3, 3, 255] : black()));
-    const box = [{ at: '2.00,2.00,4.00,4.00', rect: [2, 2, 4, 4] }];
-    const shot = (host, png) => ({ host, scheme: 'light', screen: 'chat', png, ok: true, allow: [], named: [], images: box });
+    // Each shot carries the Image box around (3, 3), so a rule that excused image pixels would catch it.
+    const images = [{ at: '2.00,2.00,4.00,4.00', rect: [2, 2, 4, 4] }];
+    const shot = (host, png) => ({ host, scheme: 'light', screen: 'chat', png, ok: true, allow: [], named: [], images });
     const r = comparePixels({ shots: [shot('web-wasm', a), shot('web', a)] }, { shots: [shot('web-wasm', b), shot('web', b)] });
-    expect(r[0]).toMatchObject({ ok: true, differ: 0, imageNoise: [{ rect: [2, 2, 4, 4], count: 1, max: 3 }] });
-    expect(r[1]).toMatchObject({ ok: false, differ: 1 });
-    expect(r[1].imageNoise).toBeUndefined();
-    const crops = namedCrops(r[0].png[0], r[0].png[1], r[0].imageNoise.map(i => ({ target: `image-noise-${i.rect.join('-')}`, rect: i.rect })), join(dir, 'crops'), r[0].shot);
-    expect(crops.map(f => f.split('/').pop())).toEqual(['web-wasm-light-chat-image-noise-2-2-4-4-before.png', 'web-wasm-light-chat-image-noise-2-2-4-4-after.png']);
+    expect(r.map(shot => ({ ok: shot.ok, differ: shot.differ }))).toEqual([{ ok: false, differ: 1 }, { ok: false, differ: 1 }]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

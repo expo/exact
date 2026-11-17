@@ -77,6 +77,13 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn app_id(&self) -> &str {
         self.0.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.0.launch()
+    }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.0.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.0.grants()
     }
@@ -107,6 +114,9 @@ impl exact_runner::DataSourceWrapper for Composed {
     }
     fn set_document_owner(&mut self, owner: u64) {
         self.0.set_document_owner(owner)
+    }
+    fn render_web(&mut self) {
+        self.0.render_web()
     }
     fn configure_storage(
         &mut self,
@@ -185,12 +195,32 @@ impl exact_runner::DataSourceWrapper for Composed {
     ) -> Result<(), DataError> {
         self.0.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.0.take_reports()
+    }
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         self.0.background_state()
     }
     fn take_logs(&mut self) -> Vec<String> {
         self.0.take_logs()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.0
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.0.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.0.take_aborted()
     }

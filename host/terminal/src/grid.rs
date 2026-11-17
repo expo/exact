@@ -173,8 +173,9 @@ impl Grid {
         }
     }
 
-    /// Paint a background over a rectangle, within a clip.
-    pub fn fill(&mut self, rect: CellRect, clip: CellRect, bg: Rgb) {
+    /// Blank a rectangle, within a clip, in `bg` or the terminal's default
+    /// background.
+    pub fn fill(&mut self, rect: CellRect, clip: CellRect, bg: Option<Rgb>) {
         let r = rect.intersect(clip);
         for y in r.y..r.y + r.h {
             for x in r.x..r.x + r.w {
@@ -182,7 +183,7 @@ impl Grid {
                 if let Some(c) = self.cell_mut(x, y) {
                     c.text = " ".into();
                     c.style = Style {
-                        bg: Some(bg),
+                        bg,
                         ..Style::default()
                     };
                 }
@@ -774,7 +775,7 @@ mod tests {
                 w: width,
                 h: 1,
             };
-            grid.fill(grid.bounds(), clip, Rgb(40, 50, 60));
+            grid.fill(grid.bounds(), clip, Some(Rgb(40, 50, 60)));
             assert_wide_overlap(&grid, &before, expected);
             for x in 0..5 {
                 let bg = if clip.contains(x, 0) {

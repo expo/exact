@@ -96,8 +96,10 @@ fn exactly(full: &TextureData, encoded: &TextureData, channels: Channels) -> boo
     (0..full.mips.len()).all(|level| {
         let decoded = decode(encoded, level);
         full.mips[level]
-            .chunks_exact(4)
-            .zip(decoded.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(decoded.as_chunks::<4>().0)
             .all(|(a, b)| channels.compared().iter().all(|&c| a[c] == b[c]))
     })
 }
@@ -119,7 +121,7 @@ pub fn encode(
             // Coverage-preserving mips leave alpha beside the cut; move each
             // texel a margin away on its own side, so block error cannot flip it.
             // @ref llp/1046.003-game-engine-as-built.explainer.md#compressed-textures-2026-09-23
-            for texel in padded.chunks_exact_mut(4) {
+            for texel in padded.as_chunks_mut::<4>().0 {
                 texel[3] = if texel[3] >= cut {
                     texel[3].max(cut.saturating_add(MASK_MARGIN))
                 } else {
@@ -137,7 +139,9 @@ pub fn encode(
                 padded.clone()
             } else {
                 padded
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|p| p[..texel].to_vec())
                     .collect()
             },
@@ -402,7 +406,7 @@ pub fn decode(texture: &TextureData, level: usize) -> Vec<u8> {
 /// Peak signal-to-noise ratio in dB over the listed channels; infinite when equal.
 pub fn psnr(a: &[u8], b: &[u8], channels: &[usize]) -> f64 {
     let (mut error, mut count) = (0f64, 0f64);
-    for (x, y) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+    for (x, y) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
         for &c in channels {
             let d = f64::from(x[c]) - f64::from(y[c]);
             error += d * d;

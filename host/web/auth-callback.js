@@ -1,13 +1,20 @@
 // The auth callback page's script (LLP 1069.006 D4), served at
 // /.exact/auth/callback.js: hand this page's URL (the code, state and iss)
-// back to the app on a same-origin BroadcastChannel — the channel that
-// survives a provider's Cross-Origin-Opener-Policy — and to window.opener
-// with the app's own origin as the target when it is still there; then
-// drop the code from the address and close. It never prints the URL.
+// back to window.opener first, when it remains, and then on a same-origin
+// BroadcastChannel — the channel that survives a provider's
+// Cross-Origin-Opener-Policy. A popup-local logout identity is read and
+// removed before either send. Then the page drops the code from the address
+// and closes. It never prints the URL or identity.
 (() => {
-  const message = { type: 'exact-auth', url: location.href };
+  let identity = null;
+  try {
+    const stored = sessionStorage.getItem('exact.auth.return');
+    sessionStorage.removeItem('exact.auth.return');
+    if (typeof stored === 'string' && stored) identity = stored;
+  } catch {}
+  const message = { type: 'exact-auth', url: location.href, ...(identity ? { identity } : {}) };
+  try { window.opener?.postMessage(message, location.origin); } catch {}
   try { const channel = new BroadcastChannel('exact-auth'); channel.postMessage(message); channel.close(); } catch {}
-  try { if (window.opener) window.opener.postMessage(message, location.origin); } catch {}
   history.replaceState(null, '', location.pathname);
   window.close();
 })();

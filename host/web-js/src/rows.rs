@@ -1,18 +1,14 @@
-//! A node's dynamic style rows as the compiler writes them (rt.js `S`,
-//! `Sm`), where a node's static rows must be inline too, and its bound
-//! `data-*` words.
+//! Dynamic style rows (rt.js `S`, `Sm`), their inline static rows, and bound `data-*` words.
 
 use super::Em;
 use crate::style;
-use exact_kernel::PropId;
-use exact_kernel::{NodeType, StyleId};
+use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::{BindingKind, BindingsRow, NodesId};
 use exact_web::host::template::Parts;
 use std::fmt::Write as _;
 
 #[path = "text_style.rs"]
 mod text_style;
-
 impl Em<'_> {
     /// Clock ticks format cached instants without evaluating app code.
     pub(super) fn live_time(
@@ -125,7 +121,9 @@ impl Em<'_> {
         if !self.paint || kind.is_svg_element() || kind.is_metadata() {
             return;
         }
-        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b) {
+        if let Some((name, value)) = crate::paint::binding(self.plan, kind, b, || {
+            self.uses.share('t', crate::paint::transitions())
+        }) {
             let f = if b.kind == BindingKind::Style && b.id == StyleId::BackdropFilter as u16 {
                 format!("()=>{}(({f})(),false)", self.uses.rt("backdropValue"))
             } else {
@@ -151,7 +149,6 @@ impl Em<'_> {
         format!("p{i}_{k}")
     }
 
-    /// One dynamic style binding `b` of node `i` (element `e`, value `f`).
     pub(super) fn style_row(
         &mut self,
         i: u32,
@@ -164,6 +161,7 @@ impl Em<'_> {
         let plan = self.plan;
         let row = &plan.node(NodesId(i));
         let press = parts.css.contains("--exact-press:");
+        let shift = parts.css.contains("--exact-translate-composes:1");
         let binding = |id: StyleId| {
             row.bindings
                 .iter()
@@ -177,6 +175,8 @@ impl Em<'_> {
             .is_some_and(|t| style::can_be(plan, plan.code(t.expr), &|s| !clock(s)));
         let id = StyleId::from_bit(b.id as u32).ok_or("unknown style row")?;
         let kind = NodeType::from_wire(row.node_type).ok_or("unknown node type")?;
+        let checked_animation = self.svg_animation(i, id, e, f, scope)?;
+        let f = checked_animation.as_deref().unwrap_or(f);
         // @ref LLP 1115.002 D6 — a metric the binding may name is its value
         // in the web's column before the row's own map sees it.
         let metric = style::metric_map(plan, plan.code(b.expr))
@@ -314,14 +314,17 @@ impl Em<'_> {
                     ("user-select".into(), String::new(), unsaid()),
                 ]
             }
-            // @ref LLP 1077 D8 — the `rotate` and `translate` attributes bind
-            // these with the same value: the angle's and xy's declaration
-            // writes the author's whole text.
-            StyleId::RotateAxis | StyleId::TranslateZ | StyleId::TranslatePercent => {
-                let pair = if id == StyleId::RotateAxis { StyleId::Rotate } else { StyleId::Translate };
-                if binding(pair).is_some_and(|o| plan.code(o.expr) == plan.code(b.expr)) {
-                    return Ok(());
-                }
+            StyleId::PressTranslate => {
+                let press = self.uses.rt("pressFeedback");
+                let _ = write!(self.out, "{press}();");
+                style::press_translation_writes()
+            }
+            // @ref LLP 1077 D8 — rotation keeps its axis beside the angle;
+            // each translation's parts share the author's whole text.
+            StyleId::RotateAxis => one("--exact-rotate-axis", Some("v=>{const w=String(v??'').trim().split(/\\s+/);if(w.length===2)return w.find(x=>/^[xyz]$/i.test(x))||'z';return w.length===4?w.slice(0,3).join(' '):'z'}".into())),
+            StyleId::TranslateZ | StyleId::TranslatePercent | StyleId::PressTranslatePercent => {
+                let pair = if id == StyleId::PressTranslatePercent { StyleId::PressTranslate } else { StyleId::Translate };
+                if binding(pair).is_some_and(|o| plan.code(o.expr) == plan.code(b.expr)) { return Ok(()); }
                 return refuse("a dynamic 3D part without its `rotate` or `translate`");
             }
             // @ref LLP 1077 D7 — the shorthand binds both rows with the
@@ -363,6 +366,7 @@ impl Em<'_> {
             StyleId::LineClamp if parts.props.contains_key("data-button-style") => vec![
                 ("--exact-button-clamp".into(), String::new(), Some("v=>v>0?v:null".into())),
                 ("--exact-button-title-display".into(), String::new(), Some("v=>v>0?\"-webkit-box\":null".into())),
+                ("--exact-button-title-overflow".into(), String::new(), Some("v=>v>0?\"hidden\":null".into())),
             ],
             StyleId::LineClamp => {
                 let display = parts.css.split(';').find_map(|d| d.strip_prefix("display:"));
@@ -385,6 +389,7 @@ impl Em<'_> {
                     ("overflow".into(), String::new(), when("\"hidden\"")),
                     ("--exact-button-clamp".into(), String::new(), Some("v=>v==null?null:v>0?v:0".into())),
                     ("--exact-button-title-display".into(), String::new(), Some("v=>v==null?null:v>0?\"-webkit-box\":\"block\"".into())),
+                    ("--exact-button-title-overflow".into(), String::new(), Some("v=>v==null?null:v>0?\"hidden\":\"clip\"".into())),
                 ]
             }
             // @ref LLP 1077 D14 — host-owned, as `-exact-press-scale`: the custom
@@ -464,7 +469,13 @@ impl Em<'_> {
             // On a pressed node an animation of `scale` plays its rule's
             // `-exact-press` copy, and `scale` transitions as `--exact-scale`
             // (css.rs `keyframes_name`, `css_text`).
-            StyleId::Animation if press => {
+            StyleId::Translate if shift => ["x", "y", "z"].iter().enumerate().map(|(i, axis)| (
+                format!("--exact-translate-{axis}"), String::new(), Some(format!(
+                    r#"v=>{{const text=String(v??'').trim();if(!CSS.supports('translate',text))return '0px';const p=text.match(/calc\([^)]*\)|[^\s]+/g)??[];return !p.length||/^(none|unset|initial)$/i.test(p[0])?'0px':p[{i}]??'0px'}}"#
+                ))
+            )).chain(one("translate", None)).chain(one("--exact-base-translated", Some("v=>CSS.supports('translate',String(v))&&!/^(none|unset|initial|revert|revert-layer)$/i.test(String(v).trim())?'1':null".into()))).collect(),
+            StyleId::Scale if press => one("--exact-scale", None),
+            StyleId::Animation if press || shift => {
                 let names: Vec<String> = self.press_keyframes.clone();
                 let names = serde_json::to_string(&names).unwrap();
                 let mut w = vec![(
@@ -477,19 +488,27 @@ impl Em<'_> {
                 }
                 w
             }
-            StyleId::Transition if press => one(
+            StyleId::Transition if press || shift => one(
                 "transition",
-                Some(pressed_transition_map()),
+                Some(style::composed_transition_map(press, shift)),
             ),
-            // Presence maps source literals through the kernel; other values clear the row.
-            StyleId::LayoutTransition | StyleId::ExitAnimation => {
-                let (property, name, values) = if id == StyleId::LayoutTransition {
-                    ("--exact-layout-transition", "layout-transition", crate::presence::layout_transitions(plan, plan.code(b.expr)))
-                } else {
-                    ("--exact-exit-animation", "exit-animation", crate::presence::exit_animations(plan, plan.code(b.expr), press))
-                };
+            StyleId::LayoutTransition => {
+                let parser = self.uses.share('t', crate::paint::transitions());
                 let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
-                one(property, Some(crate::presence::declaration_map(&values, &format!("{view}({e})"), &say, name)))
+                one("--exact-layout-transition", Some(crate::presence::layout_transition_map(&parser, &format!("{view}({e})"), &say)))
+            }
+            StyleId::ExitAnimation => {
+                let values = crate::presence::exit_animations(plan, plan.code(b.expr), press || shift);
+                let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
+                one("--exact-exit-animation", Some(crate::presence::declaration_map(&values, &format!("{view}({e})"), &say, "exit-animation")))
+            }
+            // @ref LLP 1013.001 D1 — a route's entrance and exit, read by
+            // shared.js from the route's own style as the change happens.
+            StyleId::ViewTransitionNew | StyleId::ViewTransitionOld => {
+                let values = crate::presence::route_parts(plan, plan.code(b.expr), id);
+                let (say, view) = (self.uses.rt("say"), self.uses.rt("viewId"));
+                let name = crate::presence::route_part_property(id);
+                one(name, Some(crate::presence::declaration_map(&values, &format!("{view}({e})"), &say, &name[2..])))
             }
             // A side is the author's when they wrote it or the other of its
             // pair (css.rs `unsaid_side`): only a side the sheet alone sets mirrors.
@@ -529,18 +548,26 @@ impl Em<'_> {
         if !sized.is_empty() {
             self.uses.rt("normal");
         }
-        // An animation shorthand resets play state, so read its live timeline again.
+        let play_state = crate::timelines::play_state(self.drag_timelines);
+        if id == StyleId::AnimationTimeline && !self.drag_timelines {
+            crate::timelines::css_writes(&mut writes);
+        }
+        // An animation shorthand resets the play state, the timeline and the
+        // range, so read them live again after it.
         if id == StyleId::Animation && timeline {
             let getter = self.bound(i, e, &binding(StyleId::AnimationTimeline).unwrap(), scope)?;
             for (name, _, map) in &mut writes {
                 if name == "animation-play-state" {
                     let inner = map.take().unwrap();
                     *map = Some(format!(
-                        "v=>({inner})(v)==null?null:({})(({getter})())",
-                        style::TIMELINE_PLAY_STATE
+                        "v=>({inner})(v)==null?null:({play_state})(({getter})())"
                     ));
                 }
             }
+            let range = (binding(StyleId::AnimationRange))
+                .map(|r| self.bound(i, e, &r, scope))
+                .transpose()?;
+            crate::timelines::after_shorthand(&mut writes, self.drag_timelines, &getter, range);
         }
         writes.extend(sized);
         if matches!(id, StyleId::FontWeight | StyleId::LineHeight) {
@@ -609,13 +636,6 @@ impl Em<'_> {
         // so its `--exact-accent` naming one that names the accent would name
         // itself: that token's colour stands by tuple (`data-x-accent`), as
         // css.rs leaves a self-reference out; a clear there writes nothing.
-        // A bound `color` that decides a symbol's ink (style.rs
-        // `symbol_marks`) keeps whether its binding has a value now, a clear
-        // included, whatever its map writes: symbols.js `inked` reads it.
-        let inked = (id == StyleId::TextColor
-            && parts.props.get("data-exact-ink").is_some_and(|w| w != "b"))
-        .then(|| format!("()=>{{const v=({f})();{e}.$ink=v!=null;return v}}"));
-        let f = inked.as_deref().unwrap_or(f);
         // A blank text row clears its start; `none` leaves that start exposed.
         let clear = matches!(id, StyleId::FontWeight | StyleId::LineHeight).then(|| {
             format!("()=>{{const v=({f})();return typeof v===\"string\"&&!v.trim()?\"unset\":v}}")
@@ -668,21 +688,11 @@ impl Em<'_> {
                 }
             }
         }
-        // Presence asks which values declare the row before each tree update (rt.js `lt`).
+        // Probe the new region value while presence can still measure the old box.
         if id == StyleId::LayoutTransition {
-            let values = crate::presence::layout_transitions(plan, plan.code(b.expr));
-            let declaring: Vec<&String> = values
-                .held
-                .iter()
-                .filter(|(_, css)| css.is_some())
-                .map(|(v, _)| v)
-                .collect();
+            let parser = self.uses.share('t', crate::paint::transitions());
             let lt = self.uses.rt("lt");
-            let _ = write!(
-                self.out,
-                "{lt}({e},{},{f});",
-                serde_json::to_string(&declaring).unwrap()
-            );
+            let _ = write!(self.out, "{lt}({e},{parser},{f});");
         }
         Ok(())
     }
@@ -813,7 +823,7 @@ pub(super) fn press_keyframes(plan: &exact_plan::Plan) -> Vec<String> {
         .iter()
         .filter(|k| {
             exact_motion::Keyframes::parse(plan.str(k.css))
-                .is_ok_and(|f| f.css().contains("scale:"))
+                .is_ok_and(|f| f.css().contains("scale:") || f.css().contains("translate:"))
         })
         .map(|k| plan.str(k.name).to_string())
         .collect()
@@ -836,31 +846,38 @@ pub(super) fn presence_decls(css: &mut String) -> String {
     for decl in css.split_inclusive(';') {
         // The drag timelines' too (LLP 1057.003 D2, D4): motion-glue.js
         // reads each from the element's own declaration.
-        if [
-            "--exact-layout-transition:",
-            "--exact-exit-animation:",
-            "--exact-drag-timeline:",
-            "--exact-animation-timeline:",
-            // A synced animation's clock (LLP 1055.002), read the same way.
-            "--exact-animation-clock:",
-            "--exact-animation-range:",
-            "--exact-timeline-scope:",
-            // The press feedback's factor (LLP 1061) and haptic (LLP 1077
-            // D14), which input-glue.js reads from the element's own style.
-            "--exact-press:",
-            "--exact-press-haptic:",
-            // The pressed paint (LLP 1061 D7), read the same way.
-            "--exact-press-opacity:",
-            "--exact-press-opacity-to:",
-            "--exact-press-background-color:",
-            "--exact-press-color:",
-            // A fitted text's (LLP 1116.001 D1.4), which navigation.js finds by it.
-            "--exact-fit:",
-            // A hit slop's sides, which index.html's `[style*=…]` finds.
-            "--exact-hit-slop-",
-        ]
-        .iter()
-        .any(|p| decl.starts_with(p))
+        if super::motion::PRESENCE_ROWS
+            .iter()
+            .chain(&[
+                "--exact-drag-timeline:",
+                "--exact-animation-timeline:",
+                // A synced animation's clock (LLP 1055.002), read the same way.
+                "--exact-animation-clock:",
+                "--exact-animation-range:",
+                "--exact-timeline-scope:",
+                "--exact-scroll-timeline:",
+                // A browser timeline's consumer, which index.html's `[style*=…]` finds.
+                "--exact-css-timeline:",
+                "--exact-view-timeline:",
+                // The press feedback's factor (LLP 1061) and haptic (LLP 1077
+                // D14), which input-glue.js reads from the element's own style.
+                "--exact-press:",
+                "--exact-press-haptic:",
+                // The pressed paint (LLP 1061 D7), read the same way.
+                "--exact-press-translate:",
+                "--exact-press-x:",
+                "--exact-press-y:",
+                "--exact-base-translated:",
+                "--exact-press-opacity:",
+                "--exact-press-opacity-to:",
+                "--exact-press-background-color:",
+                "--exact-press-color:",
+                // A fitted text's (LLP 1116.001 D1.4), which navigation.js finds by it.
+                "--exact-fit:",
+                // A hit slop's sides, which index.html's `[style*=…]` finds.
+                "--exact-hit-slop-",
+            ])
+            .any(|p| decl.starts_with(p))
         {
             taken.push_str(decl);
         } else {
@@ -872,12 +889,8 @@ pub(super) fn presence_decls(css: &mut String) -> String {
 }
 
 impl Em<'_> {
-    /// What an element needs once made: a canvas's surface, a native
-    /// module's mount (LLP 1024 D3), a hatched node's page-module hatch (LLP
-    /// 1075.003.000, `data-hatch` among its static attributes), and the
-    /// constant values settled once its tree is in place, as bound ones are
-    /// (rt.js `drain`): a select's, which its options carry (calendar diary
-    /// F6), and a scroller's offsets (F8).
+    /// Mount surfaces and extensions (LLP 1024, 1075.003.000), then settle
+    /// constant values after mounting, as rt.js `drain` does for bindings.
     pub(crate) fn element_extras(
         &mut self,
         tag: &str,
@@ -1069,15 +1082,6 @@ fn sandboxed_source<'a>(
     })
 }
 
-/// A pressed node's computed `transition`: an author's entries
-/// ([`crate::style::TRANSITION_ENTRIES`]), with `scale` moved to the
-/// `--exact-scale` the press composes with.
-pub(crate) fn pressed_transition_map() -> String {
-    format!(
-                    "v=>{{if(v==null)return v;{}const o=p.map(t=>t.replace(/^scale(?=\\s)/,\"--exact-scale\")),m=p.filter(t=>/^(scale|all)(\\s|$)/.test(t)).pop();if(m)o.push(\"scale 0s\",m.replace(/^(scale|all)/,\"--exact-scale\"));return o.join(\",\")||\"none\"}}",
-                    crate::style::TRANSITION_ENTRIES.as_str()
-                )
-}
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1179,7 +1183,7 @@ mod tests {
         // `--exact-scale`.
         assert_eq!(
             crate::style::tests::run(
-                &super::pressed_transition_map(),
+                &crate::style::composed_transition_map(true, false),
                 &[
                     "-exact-tint-color 1s",
                     "tint-color 1s, opacity 1s",
@@ -1198,7 +1202,10 @@ mod tests {
                 "none"
             ])
         );
-        crate::style::tests::assert_spring_transitions(&super::pressed_transition_map());
+        crate::style::tests::assert_spring_transitions(
+            &crate::style::composed_transition_map(true, false),
+            true,
+        );
     }
 
     use crate::style::{

@@ -9,10 +9,13 @@
 //! (`document.hasFocus()`, #114), how the browser loaded the page
 //! (Navigation Timing's `type`), and whether the page is put away in, and
 //! how often it came back from, the back/forward cache (`pagehide` and
-//! `pageshow` with `persisted`). The host observes them; the app reads them
+//! `pageshow` with `persisted`), and the window's name (`window.name`,
+//! fixed at launch: [`crate::time::Launch`]), and whether a picture of the page has
+//! been presented (`presented`, kept apart from the wire's bits, which are all
+//! taken). The host observes them; the app reads them
 //! by field name from one reserved source. The word also carries the
 //! device's GPU tier, which an app reads as `exactViewport().gpuTier`.
-//! @ref LLP 1069.000 D2; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
+//! @ref LLP 1069.000 D2, D6; LLP 1003.001 D9; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
 
 use exact_plan::Value;
 
@@ -21,6 +24,7 @@ pub const SOURCE: &str = "exactPage";
 /// Fields an app may declare, filled by name.
 pub const FIELDS: &[&str] = &[
     "visibilityState",
+    "frozen",
     "onLine",
     "canShare",
     "canShareFiles",
@@ -31,7 +35,48 @@ pub const FIELDS: &[&str] = &[
     "persisted",
     "restores",
     "iframePartition",
+    "name",
+    "presented",
 ];
+
+std::thread_local! {
+    static AWAITS_PRESENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the runners this thread makes from now on are a host's that
+/// presents pictures: their page's `presented` is false until the host hears
+/// the present of its first picture ([`crate::Runner::page_presented`]). Not
+/// (the default: the agent's clock, headless Linux, the render host, a
+/// test), nothing will ever present, and it is true from the first commit.
+/// Returns what it was, for a host that sets it around one boot.
+pub fn set_awaits_present(on: bool) -> bool {
+    AWAITS_PRESENT.with(|a| a.replace(on))
+}
+
+/// `exactPage().presented`: whether the host heard the present of the
+/// page's first picture, and what `prefer presented` holds it at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Presented {
+    /// The latch: set once a world, never cleared within it.
+    pub seen: bool,
+    /// `prefer presented` (LLP 1069.000 D6): stands in for the latch.
+    pub preferred: Option<bool>,
+}
+
+impl Presented {
+    /// A new runner's: false where its host presents, else true.
+    pub(crate) fn at_boot() -> Self {
+        Self {
+            seen: !AWAITS_PRESENT.with(std::cell::Cell::get),
+            preferred: None,
+        }
+    }
+
+    /// What the app reads.
+    pub fn value(self) -> bool {
+        self.preferred.unwrap_or(self.seen)
+    }
+}
 
 /// `navigationType`'s words, by their wire code (bits 5–6): the web's
 /// `PerformanceNavigationTiming.type`, or none where the app is no page a
@@ -83,10 +128,10 @@ pub struct Page {
     /// How the browser loaded the page, for its whole life, as an index
     /// into [`NAVIGATION_TYPES`] (0 where no browser loaded it).
     pub navigation: u8,
-    /// The host is about to suspend the app (iOS and tvOS in the
-    /// background, unless a `playback` session keeps it running): a
-    /// sequence stops (LLP 1125 D4). No `exactPage` field reads it.
-    pub suspended: bool,
+    /// The host has backgrounded the app and will stop its ordinary work,
+    /// until execution resumes. Gated resources and sequences stop in the
+    /// transition commit (LLP 1069.000 D2; LLP 1125 D4).
+    pub frozen: bool,
     /// The page is put away, kept whole, as the back/forward cache keeps
     /// one: from its `pagehide` with `persisted` true until its `pageshow`.
     /// A Mac window hidden by its close (LLP 1069.010 D8); a minimized or
@@ -115,7 +160,7 @@ impl Default for Page {
             iframe_partition: false,
             has_focus: true,
             navigation: 0,
-            suspended: false,
+            frozen: false,
             persisted: false,
             restores: 0,
             gpu_tier: 0,
@@ -126,7 +171,7 @@ impl Default for Page {
 impl Page {
     /// The hosts' wire form: bit 0 hidden, bit 1 offline, bit 2 can share,
     /// bit 3 can open files, bit 4 without focus, bits 5–6 the navigation
-    /// type, bit 7 about to be suspended, bit 8 shares files, bit 9 shares
+    /// type, bit 7 frozen, bit 8 shares files, bit 9 shares
     /// an element's picture, bit 10 put away (`persisted`), bits 11–12 the
     /// GPU tier (0 high, 1 mid, 2 low), bit 13 an `iframe`'s `partition`
     /// honoured, bit 14 the host tells `background` and bit 15 its value,
@@ -142,7 +187,7 @@ impl Page {
             can_open_files: bits & 8 != 0,
             has_focus: bits & 16 == 0,
             navigation: ((bits >> 5) & 3) as u8,
-            suspended: bits & 128 != 0,
+            frozen: bits & 128 != 0,
             can_share_files: bits & 256 != 0,
             can_share_pictures: bits & 512 != 0,
             persisted: bits & 1024 != 0,
@@ -160,7 +205,7 @@ impl Page {
             | (u32::from(self.can_open_files) << 3)
             | (u32::from(!self.has_focus) << 4)
             | (u32::from(self.navigation & 3) << 5)
-            | (u32::from(self.suspended) << 7)
+            | (u32::from(self.frozen) << 7)
             | (u32::from(self.can_share_files) << 8)
             | (u32::from(self.can_share_pictures) << 9)
             | (u32::from(self.persisted) << 10)
@@ -202,6 +247,7 @@ impl Page {
     pub fn field(self, name: &str) -> Option<Value> {
         match name {
             "visibilityState" => Some(Value::str(self.visibility_state())),
+            "frozen" => Some(Value::Bool(self.frozen)),
             "onLine" => Some(Value::Bool(self.on_line)),
             "canShare" => Some(Value::Bool(self.can_share)),
             "canShareFiles" => Some(Value::Bool(self.can_share_files)),
@@ -233,6 +279,14 @@ mod tests {
         assert!(Page::from_bits(1 << 14 | 1 << 15).in_background());
         assert!(!Page::from_bits(1 << 14 | 1 << 15).hidden);
         // Put away, then back once: bit 10 and the count above bit 16.
+        assert_eq!(
+            Page::default().field("frozen"),
+            Some(exact_plan::Value::Bool(false))
+        );
+        assert_eq!(
+            Page::from_bits(128).field("frozen"),
+            Some(exact_plan::Value::Bool(true))
+        );
         let away = Page::from_bits(1024);
         assert!(away.persisted && away.restores == 0);
         assert_eq!(

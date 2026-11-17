@@ -81,6 +81,7 @@ leaves!(
     u32,
     usize,
     BinOp,
+    StateComparison,
     UnOp,
     TaskKind,
     MutationMode,
@@ -106,7 +107,7 @@ macro_rules! structs {
 }
 structs! {
     NameSpans { names, sources }
-    File { names, routes, uses, fonts, sounds, shapes, styles, decorations, decoration_scopes, atoms, atom_scopes, keyframes, timelines, color_profiles, theme, design, package_designs, library, library_packages, fns, modules, tests, properties, launch, components, members, deferred }
+    File { names, routes, uses, fonts, sounds, shapes, styles, decorations, decoration_scopes, atoms, atom_scopes, keyframes, timelines, color_profiles, theme, design, package_designs, library, library_packages, fns, sources, modules, tests, properties, launch, components, members, deferred }
     KeyframesDecl { name, frames, span }
     TimelineDecl { name, span }
     ColorProfileDecl { name, attrs, span }
@@ -122,6 +123,8 @@ structs! {
     PropertyDecl { span, kind, name, lines }
     PropertyLine { span, form }
     FnDecl { name, params, ret, body, span }
+    SourceDecl { name, params, shape, lines, span }
+    SourceLine { key, words, span }
     ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, view_only, substitute, span }
     PlatformWords { platform, package, words }
     UseDecl { names, path, span }
@@ -146,7 +149,7 @@ structs! {
     Sequence { name, gate, key, tracks, options, ended, span }
     Persist { name, span }
     Binding { name, expr, span }
-    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, gate, span }
+    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, keep, gate, span }
     ResourceEach { item, list, key, span }
     Placeholder { source, args, span }
     MutationDecl { name, shape, mode, refreshes, then, span }
@@ -169,12 +172,12 @@ macro_rules! record_variants {
 }
 record_variants! {
     Step {
-        Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, press, over, hold, during, span },
+        Tap { target, form, modifiers, span }, Drag { target, dx, dy, to, from, mouse, into, press, over, hold, during, span },
         Size { width, height, span }, At { location, span }, Epoch { value, span }, TimeZone { zone, span },
-        Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
+        Locale { tag, span }, Prefer { name, value, span }, Seed { seed, span }, Fresh { seed, span }, BeforeData { span }, FailFetch { prefix, times, span }, AnswerFetch { prefix, response, span }, PassFetch { prefix, span }, Request { method, path, body, persona, status, span }, Type { target, text, append, span }, Key { target, key, phase, duration, span },
         Pick { target, paths, span }, Authorize { cancel, span }, Clipboard { target, edit, text, span },
-        Clock { arg, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span },
-        ExpectText { target, value, span }, ExpectState { name, value, span },
+        Clock { arg, span }, Reload { span }, Close { span }, Back { span }, Resize { width, height, span }, Screenshot { path, span }, ExpectRefusal { target, span }, ExpectTree { target, present, span }, ExpectDisabled { target, disabled, span }, ExpectFocused { target, span }, ExpectLayout { target, dimension, comparison, value, span },
+        ExpectText { target, value, span }, ExpectState { name, comparison, value, span },
         ExpectSound { src, present, at, gain, ends, playback_rate, pan, by, span },
         ExpectMediaSession { field, value, span }, ExpectMediaSessionAction { action, present, span },
         Midi { step, span }, ExpectWakelock { held, span },
@@ -309,6 +312,7 @@ impl Step {
             | Step::Fresh { span, .. }
             | Step::BeforeData { span }
             | Step::FailFetch { span, .. }
+            | Step::AnswerFetch { span, .. }
             | Step::PassFetch { span, .. }
             | Step::Request { span, .. }
             | Step::Type { span, .. }
@@ -325,6 +329,8 @@ impl Step {
             | Step::ExpectRefusal { span, .. }
             | Step::ExpectTree { span, .. }
             | Step::ExpectDisabled { span, .. }
+            | Step::ExpectFocused { span, .. }
+            | Step::ExpectLayout { span, .. }
             | Step::ExpectText { span, .. }
             | Step::ExpectState { span, .. }
             | Step::ExpectWakelock { span, .. }

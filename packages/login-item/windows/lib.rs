@@ -1,11 +1,11 @@
 //! @exact/login-item on Windows (LLP 1133.025 D2): the host's login item
-//! (`exact_linux::desktop`), a `Run` value whose command line carries
+//! (`exact_painted::desktop`), a `Run` value whose command line carries
 //! `--login`, and `hidden` with it. Settings › Apps › Startup turning it off
 //! reads `requires-approval`. Under the agent the runner's substitute
 //! answers, unless the drive binds it.
 
-use exact_linux::desktop::{Login, Services};
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::desktop::{Login, Services};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 
 pub struct LoginItem {
     context: Context,

@@ -115,6 +115,17 @@ fn a_one_axis_clip_cuts_that_axis_only() {
 }
 
 #[test]
+fn a_scroll_element_clips_its_children_at_its_scrollport() {
+    // `scroll` scrolls on y with no overflow rows, so its child is not hit
+    // below its box, as `elementFromPoint` misses it on the web.
+    let r = boot(
+        "      scroll id=\"scroller\" width=100 height=100\n        box id=\"child\" width=100 height=300 flex-shrink=0\n",
+    );
+    assert_eq!(hit(&r, 50.0, 50.0), at("child"));
+    assert_eq!(hit(&r, 50.0, 150.0), at("page"));
+}
+
+#[test]
 fn a_negative_or_percentage_slop_is_refused() {
     for value in ["-4px", "10%", "4px -2px"] {
         let source = format!(
@@ -122,4 +133,18 @@ fn a_negative_or_percentage_slop_is_refused() {
         );
         assert!(contract::compile(&source).is_err(), "`{value}` compiled");
     }
+}
+
+/// LLP 1123 D9: a slop that reads the safe area where the box is reaches as
+/// far as its owner's inset, not the document's 0.
+#[test]
+fn a_slop_reads_the_boxes_own_inset() {
+    let mut r = boot(
+        "      box id=\"small\" position=\"absolute\" left=40 top=40 width=20 height=20 -exact-hit-slop-top=\"var(--exact-safe-area-inset-top)\"\n",
+    );
+    let page = r.roots()[0];
+    let local = Some([12.0, 0.0, 0.0, 0.0]);
+    r.kernel_mut().set_local_insets(page, local).unwrap();
+    assert_eq!(hit(&r, 50.0, 30.0), at("small"), "12 above it");
+    assert_eq!(hit(&r, 50.0, 27.0), at("page"), "and no further");
 }

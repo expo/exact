@@ -9,8 +9,8 @@
 // capture's picture. (The macOS host's `wantsUpdateLayer` split.) An image's
 // pixels are a sublayer's contents where its clip is no radius, or one radius
 // over a content box that is the whole box: no bitmap of the view's size is painted
-// on the main thread, and the decoded pixels are the only copy; an image
-// clipped otherwise draws as before.
+// on the main thread for auto or crisp-edges. Pixelated images keep integer
+// enlarged tiles for the final composited scale (`PixelatedImage.swift`).
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -139,7 +139,9 @@ extension NodeView {
     /// canvas's capture (`render(in:)`) drops masks and would show the tint's
     /// whole rectangle, so the template is `draw(_:)`'s, from the same pixels.
     func applyImageLayer() {
-        guard !cssVisibilityHidden, kind == "image", symbolView == nil, style["tint_color"] == nil, let bitmap = raster?.image ?? flightLook?.stand?.image else {
+        if applyPixelatedImageLayer() { return }
+        if imageLayer is PixelatedImageLayer { imageLayer?.removeFromSuperlayer(); imageLayer = nil }
+        guard !cssVisibilityHidden, style["image_rendering"]?.string != "pixelated", kind == "image", symbolView == nil, style["tint_color"] == nil, let bitmap = raster?.image ?? flightLook?.stand?.image else {
             imageLayer?.removeFromSuperlayer(); imageLayer = nil; return
         }
         if let look = flightLook {
@@ -155,6 +157,7 @@ extension NodeView {
             l.contentsGravity = .resize
             let frame = AnimatedRasters.shared.frame(for: self) ?? bitmap.image
             if (l.contents as AnyObject?) !== frame { l.contents = frame }
+            RasterGeometry.filter(l, rendering: style["image_rendering"]?.string)
             l.applyDynamicRange(hdr: bitmap.isHDR, headroom: bitmap.headroom, limit: style["dynamic_range_limit"]?.string)
             l.cornerRadius = 0
             l.masksToBounds = false
@@ -213,6 +216,7 @@ extension NodeView {
         l.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
         whole.contentsGravity = .resize
         if (whole.contents as AnyObject?) !== pixels { whole.contents = pixels }
+        RasterGeometry.filter(whole, rendering: style["image_rendering"]?.string)
         whole.applyDynamicRange(hdr: bitmap.isHDR, headroom: bitmap.headroom, limit: style["dynamic_range_limit"]?.string)
         if l.cornerRadius != radius { l.cornerRadius = radius }
         if l.cornerCurve != layer.cornerCurve { l.cornerCurve = layer.cornerCurve }
@@ -226,10 +230,11 @@ extension NodeView {
     /// `draw(_:)` paints the gradient there instead, in the same place —
     /// unless it is `background-attachment: fixed` (`gradientLayered`).
     func applyGradientLayer() {
+        applyGradientPattern()
         let fixed = gradientLayered
-        guard !cssVisibilityHidden, !drawsPaint || fixed, surface == nil, let gradient = Gradient(style["background_image"]), !gradient.needsDrawing else {
+        guard !cssVisibilityHidden, !drawsPaint || fixed, surface == nil, let gradient = Gradient(style["background_image"], tint: gradientTint), !gradient.needsDrawing else {
             boxGradient?.removeFromSuperlayer(); boxGradient = nil
-            presenter?.fixedGradients.remove(self)
+            presenter?.noteFixedGradient(self, fixed: false)
             return
         }
         CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -255,7 +260,41 @@ extension NodeView {
         }
         gradient.apply(g, bounds: layer.bounds, box: gradientBox, dark: drawsDark, limit: style["dynamic_range_limit"]?.string)
         aimedGradient = nil
-        if fixed { presenter?.fixedGradients.add(self) } else { presenter?.fixedGradients.remove(self) }
+        presenter?.noteFixedGradient(self, fixed: fixed)
+    }
+
+    /// Repeating linear gradients as patterns Core Animation tiles
+    /// (`GradientPatternLayer`, #661), where the gradient layer goes and
+    /// clipped as it is. When `draw(_:)` paints the box, it paints them
+    /// instead.
+    func applyGradientPattern() {
+        let layers = Gradient.layers(style["background_image"], tint: gradientTint)
+        guard !cssVisibilityHidden, !drawsPaint, surface == nil, gradientPatterned(layers) else {
+            boxPattern?.removeFromSuperlayer(); boxPattern = nil
+            return
+        }
+        let p = boxPattern ?? GradientPatternLayer()
+        let mounted = p.superlayer === layer
+        CATransaction.begin()
+        CATransaction.setDisableActions(!mounted || CATransaction.disableActions())
+        defer { CATransaction.commit() }
+        if !mounted { boxPattern = p; insertBoxSublayer(p) }
+        if layer.cornerRadius == 0 && cornerRadii(in: bounds).contains(where: { $0 > 0 }) {
+            let outline = (p.mask as? CAShapeLayer) ?? CAShapeLayer()
+            let path = roundedPath(in: bounds).cgPath
+            if outline.path != path { outline.path = path }
+            if p.mask !== outline { p.mask = outline }
+            if p.cornerRadius != 0 { p.cornerRadius = 0 }
+            if p.masksToBounds { p.masksToBounds = false }
+        } else {
+            if p.mask != nil { p.mask = nil }
+            if p.cornerRadius != layer.cornerRadius { p.cornerRadius = layer.cornerRadius }
+            if p.maskedCorners != layer.maskedCorners { p.maskedCorners = layer.maskedCorners }
+            if p.cornerCurve != layer.cornerCurve { p.cornerCurve = layer.cornerCurve }
+            // Each gradient's layer is turned and overhangs the box.
+            if !p.masksToBounds { p.masksToBounds = true }
+        }
+        p.show(layers, bounds: layer.bounds, box: gradientBox, dark: drawsDark, scale: window?.screen.scale ?? contentScaleFactor)
     }
 
     /// `background-attachment: fixed` (LLP 1066 D7) on iOS is always the
@@ -283,14 +322,15 @@ extension NodeView {
     func reaimFixedGradient() {
         guard let g = boxGradient, let source = style["background_image"] else { return }
         let bounds = layer.bounds, box = gradientBox, dark = drawsDark
-        let last = aimedGradient.flatMap { $0.layer === g && $0.source == source && $0.dark == dark ? $0 : nil }
+        let tint = source.namesTint ? gradientTint : nil
+        let last = aimedGradient.flatMap { $0.layer === g && $0.source == source && $0.dark == dark && $0.tint == tint ? $0 : nil }
         if let last, last.bounds == bounds, last.box == box { return }
-        guard let gradient = last?.gradient ?? Gradient(source) else { return }
+        guard let gradient = last?.gradient ?? Gradient(source, tint: gradientTint) else { return }
         let stops = last?.stops ?? gradient.stops(dark: dark, dense: true)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         gradient.apply(g, bounds: bounds, box: box, dark: dark, limit: style["dynamic_range_limit"]?.string, stops: stops)
         CATransaction.commit()
-        aimedGradient = AimedGradient(layer: g, source: source, dark: dark, bounds: bounds, box: box, gradient: gradient, stops: stops)
+        aimedGradient = AimedGradient(layer: g, source: source, dark: dark, bounds: bounds, box: box, tint: tint, gradient: gradient, stops: stops)
     }
 
     /// CSS paints a positive border in whole device pixels, at least one.
@@ -434,7 +474,7 @@ extension NodeView {
     /// shadow, gradient, inset shadow, image, border, text — whichever of
     /// them joins first (as `Mac/BoxLayerMac.swift`).
     func insertBoxSublayer(_ l: CALayer) {
-        let order: [CALayer?] = [shadowCaster, boxFill, boxGradient, insetCaster, imageLayer, boxBorder, textBoxLayer]
+        let order: [CALayer?] = [shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder, textBoxLayer]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }
         if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
             layer.insertSublayer(l, above: below)

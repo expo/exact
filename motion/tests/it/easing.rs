@@ -288,3 +288,27 @@ fn invalid_easings_are_refused_by_name() {
         Err(EasingError::StopOutOfRange)
     );
 }
+
+/// `steps()` takes a count and at most one position (CSS Easing 1 §3.1):
+/// a third argument or a trailing comma is refused wherever an easing is
+/// read, not taken as the two before it.
+#[test]
+fn steps_takes_at_most_two_arguments() {
+    use exact_motion::{Animations, Keyframes};
+    for steps in ["steps(4)", "steps(4, end)"] {
+        assert!(Transitions::parse(&format!("opacity 1s {steps}")).is_ok());
+        assert!(Animations::parse(&format!("fade 1s {steps}")).is_ok());
+    }
+    for steps in ["steps(4, end, extra)", "steps(4, end,)", "steps(4,)"] {
+        assert!(
+            Transitions::parse(&format!("opacity 1s {steps}")).is_err(),
+            "transition {steps}"
+        );
+        assert!(
+            Animations::parse(&format!("fade 1s {steps}")).is_err(),
+            "animation {steps}"
+        );
+        let frames = format!("from{{opacity:0;animation-timing-function:{steps}}}to{{opacity:1}}");
+        assert!(Keyframes::parse(&frames).is_err(), "keyframe {steps}");
+    }
+}

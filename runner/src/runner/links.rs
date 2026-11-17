@@ -36,8 +36,9 @@ pub struct RunnerLinks {
 }
 
 /// How the VM reaches the `format` capability's entries, when linked: the
-/// entry and its arguments to its value, `None` when they don't fit.
-pub type FormatLink = Option<fn(exact_plan::Stdlib, &[Value]) -> Option<Value>>;
+/// entry, its arguments and the plan (whose tables hold each locale's format
+/// data) to its value, `None` when they don't fit.
+pub type FormatLink = Option<fn(exact_plan::Stdlib, &[Value], &Plan) -> Option<Value>>;
 
 /// How the runner answers geometry reads, when linked (LLP 1051.000 D2).
 pub type GeometryLink = Option<&'static crate::geometry::GeometryLinks>;

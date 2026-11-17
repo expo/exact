@@ -28,5 +28,11 @@
         "minHeight": 420
       }
     }
-  }
+  },
+  "deploy": {
+    "store": {
+      "ios": "0"
+    }
+  },
+  "rust": { "data": { "crate": "select-walk-fixture-data", "type": "select_walk_fixture_data::Fixture", "source": "select_walk_fixture_data::Fixture" } }
 }

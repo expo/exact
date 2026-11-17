@@ -112,13 +112,15 @@ test('exact adapts only the frame layout, preserving both clocks and all precisi
   expect(adapters.exact.transport).toBe('web');
   expect(adapters.exact.page).not.toContain('agent');
   const { raw, plan } = fixture();
-  const exact = { stride: 14, missing: false, frames: [] };
-  for (let i = 0; i < raw.frames.length; i += 8) exact.frames.push(...raw.frames.slice(i, i + 8), .123456789, 1, 10, .2, .3, .4);
-  expect(normalize(exact)).toEqual(raw.frames);
-  expect(analyze({ ...raw, frames: normalize(exact) }, plan)).toEqual(analyze(raw, plan));
-  expect(() => normalize({ ...exact, missing: true })).toThrow('Invalid');
-  expect(() => normalize({ ...exact, stride: 8 })).toThrow('Invalid');
-  expect(() => normalize({ ...exact, frames: [1] })).toThrow('Invalid');
+  for (const stride of [14, 32, 37]) {
+    const exact = { stride, missing: false, frames: [] };
+    for (let i = 0; i < raw.frames.length; i += 8) exact.frames.push(...raw.frames.slice(i, i + 8), .123456789, 1, 10, .2, .3, .4, ...Array(stride - 14).fill(0));
+    expect(normalize(exact)).toEqual(raw.frames);
+    expect(analyze({ ...raw, frames: normalize(exact) }, plan)).toEqual(analyze(raw, plan));
+    expect(() => normalize({ ...exact, missing: true })).toThrow('Invalid');
+    expect(() => normalize({ ...exact, stride: 8 })).toThrow('Invalid');
+    expect(() => normalize({ ...exact, frames: [1] })).toThrow('Invalid');
+  }
 });
 
 function deliver(target, item, repeat = false) {

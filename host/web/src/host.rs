@@ -15,21 +15,24 @@ use exact_kernel::{CommitReceipt, Kernel, NodeKey, NodeType, PropId, ViewId};
 use exact_motion::{EngineError, HoldEnd, HoldStart, Property, Value as MotionValue};
 use exact_plan::{EventKind, Plan};
 use exact_runner::{
-    Carried, DataSource, Dispatch, Event, FailureKind, Outcome, RequestOut, Response, Runner,
-    RunnerError, SurfaceOutcome, Timed, Work,
+    Carried, DataSource, Event, FailureKind, Outcome, RequestOut, Runner, RunnerError, Timed,
 };
 use mode::mirror::Mirror;
 
 #[path = "auth.rs"]
 mod auth;
+mod boot;
 #[path = "canvas2d.rs"]
 mod canvas2d;
 mod complete;
 pub mod fonts;
 mod mode;
+mod outcome;
+pub use outcome::outcome_from;
 mod scale;
 pub(crate) use fonts::{decode_plan, plan_font_catalog};
 use fonts::{font_catalog, font_faces, font_names, font_names_for_runner};
+pub use scale::PageGeometry;
 #[path = "document.rs"]
 pub mod document;
 #[path = "element.rs"]
@@ -53,67 +56,6 @@ mod own;
 mod reorder_drag;
 #[path = "transform_drag.rs"]
 mod transform_drag;
-/// A reply as the ABI carries it, as the runner's `Outcome`. Kind 8 is one
-/// message of a stream: `event`, `id` and `coalesced` as header lines, the
-/// data as the body (LLP 1016.000).
-pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Outcome {
-    match kind {
-        8 => {
-            let field = |name: &str| {
-                headers
-                    .lines()
-                    .find_map(|l| l.strip_prefix(name)?.strip_prefix(": "))
-                    .unwrap_or("")
-                    .to_string()
-            };
-            Outcome::Message(exact_runner::Message {
-                event: field("event"),
-                protocol: field("protocol").into(),
-                id: field("id"),
-                coalesced: field("coalesced").parse().unwrap_or(0),
-                data: String::from_utf8_lossy(&body).into_owned(),
-                binary: None,
-            })
-        }
-        5 => Outcome::Storage(body),
-        6 if body.len() <= exact_runner::MAX_HOST_WORK_BYTES => {
-            Outcome::Surface(SurfaceOutcome::Captured(body))
-        }
-        6 => Outcome::Failed {
-            kind: FailureKind::Refused,
-            message: "surface capture exceeds 16 MiB".into(),
-        },
-        7 => Outcome::Surface(SurfaceOutcome::Restored),
-        0 => Outcome::Response(Response {
-            status: status as u16,
-            // A line that starts with a colon is a pseudo-header the page
-            // names (`:exact-body-to`, exactBodyTo's size): no browser header
-            // name has a colon, so it keeps its leading one.
-            headers: headers
-                .lines()
-                .filter_map(|l| {
-                    let (pseudo, l) = l.strip_prefix(':').map_or((false, l), |l| (true, l));
-                    l.split_once(':').map(|(k, v)| {
-                        let k = k.trim();
-                        let k = if pseudo { format!(":{k}") } else { k.into() };
-                        (k, v.trim().to_string())
-                    })
-                })
-                .collect(),
-            body,
-        }),
-        k => Outcome::Failed {
-            kind: match k {
-                2 => FailureKind::Refused,
-                3 => FailureKind::Unsupported,
-                4 => FailureKind::Aborted,
-                10 => FailureKind::Timeout,
-                _ => FailureKind::Network,
-            },
-            message: String::from_utf8_lossy(&body).into_owned(),
-        },
-    }
-}
 use exact_kernel::id::IdMap;
 use exact_kernel::{SortedMap, SortedSet};
 use std::fmt::Write as _;
@@ -320,9 +262,12 @@ pub struct Host<D: DataSource> {
     collections: String,
     /// Head nodes (LLP 1048.003 D1): the page's `<head>`, never an element.
     heads: SortedSet<ViewId>,
+    /// The boundaries that do not set their own colour (LLP 1121 D7, D8).
+    boundaries: SortedSet<ViewId>,
     /// The head the page was last told, and whether a commit may move it.
     head: exact_runner::Head,
     language: Option<String>,
+    large_title_size: Option<f32>,
     head_dirty: bool,
     /// While the first batch is made: what a page's projection computed for
     /// each view (LLP 1048.000 D6), taken instead of computing it again.
@@ -336,117 +281,11 @@ pub struct Host<D: DataSource> {
 }
 
 impl<D: DataSource> Host<D> {
-    /// Boot from plan bytes: decode (a validation pass), boot the runner, and
-    /// produce the first batch, which creates the whole tree.
-    pub fn boot(
-        plan_bytes: &[u8],
-        data: D,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, Vec::new(), None, viewport, launch)
-    }
-
     /// Whether `location` names a pattern the plan's route table declares —
     /// never only its notfound fallback. The page follows a same-origin link
     /// to one in place (LLP 1038 §7) instead of loading a document.
     pub fn route_matches(&self, location: &str) -> bool {
         self.runner.route_matches(location)
-    }
-
-    /// Boot with the page's snapshot of the app's kept secrets (LLP 1018
-    /// D6): what `localStorage` holds under `exact.secret.<name>`, read by
-    /// the glue before boot; the runner keeps the granted names.
-    pub fn boot_stored(
-        plan_bytes: &[u8],
-        data: D,
-        snapshot: Vec<(String, Vec<u8>)>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(plan_bytes, data, None, snapshot, None, viewport, launch)
-    }
-
-    /// Boot carrying an earlier host's state (the dev loop's reload, LLP
-    /// 1007 §6): slots by name where their types still fit, settled
-    /// resources where their arguments still match, the clock. Carried state
-    /// is never why a boot fails — what no longer fits starts fresh.
-    pub fn boot_with(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_delivered(
-            plan_bytes,
-            data,
-            carried,
-            Vec::new(),
-            None,
-            viewport,
-            launch,
-        )
-    }
-
-    /// Boot knowing what this wasm was built as (LLP 1030 D7): `compat` is
-    /// the archive's `compat.json`, which the `delivery` resource answers
-    /// from. The other three boots are this one with nothing to say.
-    pub fn boot_delivered(
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        Host::boot_linked(
-            HostLinks::ALL,
-            plan_bytes,
-            data,
-            carried,
-            snapshot,
-            compat,
-            viewport,
-            launch,
-        )
-    }
-
-    /// [`Host::boot_delivered`], with what the artifact links (LLP 1047 D3).
-    #[allow(clippy::too_many_arguments)]
-    pub fn boot_linked(
-        links: HostLinks<D>,
-        plan_bytes: &[u8],
-        data: D,
-        carried: Option<&Carried>,
-        snapshot: Vec<(String, Vec<u8>)>,
-        compat: Option<&str>,
-        viewport: exact_runner::Viewport,
-        launch: &str,
-    ) -> Result<(Host<D>, String), HostError> {
-        let plan = decode_plan(plan_bytes).map_err(HostError::Plan)?;
-        crate::link::admit(&plan)?;
-        let kernel = browser_kernel();
-        // @ref LLP 1039 D3 — both host facts precede the first settlement.
-        let delivery = compat.map_or_else(Default::default, |json| {
-            exact_runner::Delivery::default().with_compat(json)
-        });
-        let mut runner = Runner::boot_with_delivery_linked(
-            crate::link::runner_links(),
-            plan,
-            data,
-            kernel,
-            carried,
-            snapshot,
-            delivery,
-            viewport,
-            launch,
-        )
-        .map_err(HostError::Runner)?;
-        runner.measure_unless_production(compat, false); // LLP 1079 D1: the browser lays out
-        runner.admit_live(compat);
-        Host::open(links, runner, launch, Batch::new(), Default::default())
     }
 
     /// The host over a booted runner, and its first batch — `batch`'s ops,
@@ -491,14 +330,20 @@ impl<D: DataSource> Host<D> {
             exclusions: Default::default(),
             textflow: String::new(),
             heads: Default::default(),
+            boundaries: Default::default(),
             head: Default::default(),
             language: None,
+            large_title_size: None,
             head_dirty: false,
             computed,
             keyframes: Default::default(),
             canvas2d: Default::default(),
             layers: Default::default(),
         };
+        // LLP 1057.001.000 §5: the JS target zooms; this host does not.
+        if exact_runner::uses::zooms(host.runner.plan()) {
+            host.runner.log("this host has no zoomable scroller: each draws at zoom 1, reports 1 and drops a `scrollZoom` write (LLP 1057.001.000 §5)");
+        }
         // Everything live is new to the page.
         let roots = host.runner.roots();
         let mut stack: Vec<ViewId> = roots.iter().rev().copied().collect();
@@ -548,7 +393,8 @@ impl<D: DataSource> Host<D> {
         for w in host.runner.take_store_writes() {
             batch.store(&w);
         }
-        batch.grants(host.runner.data().grants());
+        // The origins its declared sources carry too (LLP 1162.001 D3).
+        batch.grants(&host.runner.grants());
         host.emit_textflow(&mut batch);
         let batch = host.complete(batch, None);
         Ok((host, batch))
@@ -734,14 +580,41 @@ impl<D: DataSource> Host<D> {
     /// The size, the display preferences and the fold, in one batch.
     /// @ref LLP 1039 D2; LLP 1061 D4; LLP 1078 D6
     pub fn resize(&mut self, viewport: exact_runner::Viewport, now_ms: f64) -> String {
+        self.resize_with(viewport, now_ms, None)
+    }
+
+    /// [`Host::resize`] with the page's geometry, answered in the size's
+    /// commit (LLP 1039 D9).
+    pub fn resize_with(
+        &mut self,
+        viewport: exact_runner::Viewport,
+        now_ms: f64,
+        geometry: Option<PageGeometry>,
+    ) -> String {
         let a = self.runner.advance_timed(now_ms);
         self.now_ms = a.now_ms.max(self.now_ms);
         let mut receipts = a.receipts;
         let mut error = a.error.map(|e| format!("{e:?}"));
+        let size = Some((viewport.width, viewport.height));
+        // The geometry is checked whole before anything of the report
+        // changes: a refused part refuses it all (LLP 1039 D9).
+        let checked = match geometry.map(|g| (self.checked_view(size, &g, viewport.fold), g.2)) {
+            Some((Err(refused), _)) => {
+                let error = error.map_or(refused.clone(), |e| format!("{e}; {refused}"));
+                return self.batch_for(&receipts, Some(&error));
+            }
+            Some((Ok(env), keyboard)) => Some((env, keyboard)),
+            None => None,
+        };
+        let viewport_error = |e| format!("viewport: {e:?}");
         let answers = [
-            self.runner.set_viewport(viewport.width, viewport.height),
-            self.runner.set_preferences(viewport.preferences),
-            self.runner.set_fold(viewport.fold), // the fold rides the same report (LLP 1078 D6)
+            match checked {
+                Some((env, keyboard)) => self.put_view(env, size, keyboard),
+                None => self.runner.set_view(size, None).map_err(viewport_error),
+            },
+            (self.runner.set_preferences(viewport.preferences)).map_err(viewport_error),
+            // the fold rides the same report (LLP 1078 D6)
+            (self.runner.set_fold(viewport.fold)).map_err(viewport_error),
         ];
         for answer in answers {
             match answer {
@@ -750,8 +623,7 @@ impl<D: DataSource> Host<D> {
                     receipt,
                 }),
                 Ok(None) => {}
-                Err(e) => {
-                    let viewport_error = format!("viewport: {e:?}");
+                Err(viewport_error) => {
                     error = Some(match error {
                         Some(timer_error) => format!("{timer_error}; {viewport_error}"),
                         None => viewport_error,
@@ -771,8 +643,64 @@ impl<D: DataSource> Host<D> {
     /// The page's visibility, connectivity or share sheet (LLP 1069.000 D2):
     /// the `exactPage()` readers, in one batch.
     pub fn set_page(&mut self, page: exact_runner::Page) -> String {
+        let freeze = page.frozen && !self.runner.page().frozen;
         let answer = self.runner.set_page(page);
-        self.told(answer, "page")
+        let freeze = freeze && self.runner.page().frozen;
+        let mut batch = Batch::new().freeze(freeze);
+        // A hidden or frozen page presents nothing: what waits for the
+        // browser's ready time starts at its commit (LLP 1003.001 D9).
+        let now = self.runner.page();
+        self.springs.set_presentable(!now.hidden && !now.frozen);
+        self.emit_springs(&mut batch, &[], self.now_ms / 1000.0);
+        self.told_in(batch, answer, "page")
+    }
+
+    /// The present of the page's first picture since this runner booted
+    /// (LLP 1069.000 D2 r7): `exactPage().presented` is true from here.
+    pub fn page_presented(&mut self) -> String {
+        let answer = self.runner.page_presented();
+        self.told(answer, "presented")
+    }
+
+    /// `prefer presented` (LLP 1069.000 D6): the fact held at a value, or
+    /// given back to the page.
+    pub fn prefer_presented(&mut self, preferred: Option<bool>) -> String {
+        let answer = self.runner.prefer_presented(preferred);
+        self.told(answer, "presented")
+    }
+
+    /// The browser made a held spring's animation ready at `at_ms` (LLP
+    /// 1003.001 D9, "The web"): the engine's curve starts there, and the
+    /// batch re-emits it pinned at that instant. `None` when it was not held.
+    pub fn present_curve(
+        &mut self,
+        view: ViewId,
+        property: exact_motion::Property,
+        at_ms: f64,
+        now_ms: f64,
+    ) -> Option<String> {
+        let kernel = self.runner.kernel();
+        if !self
+            .springs
+            .present_curve(kernel, view, property, at_ms / 1000.0)
+        {
+            return None;
+        }
+        Some(self.hold_batch(now_ms.max(self.now_ms)))
+    }
+
+    /// What waited [`exact_motion::HOLD_DEADLINE`] by `now_ms` for a ready
+    /// time starts at its commit (LLP 1003.001 D9, "The bound").
+    pub fn release_overdue(&mut self, now_ms: f64) -> String {
+        let now_ms = now_ms.max(self.now_ms);
+        self.springs.release_overdue(now_ms / 1000.0);
+        self.hold_batch(now_ms)
+    }
+
+    /// The first-frame rule on (the page's clock owns time) or off (the
+    /// agent's), for this host's engine (LLP 1003.001 D7, D9).
+    pub fn set_start_on_frame(&mut self, on: bool) {
+        self.springs.set_start_on_frame(on);
     }
 
     /// The root font size `rem` follows (LLP 1069.000 D3): a relayout in one
@@ -806,6 +734,15 @@ impl<D: DataSource> Host<D> {
     /// A told fact's answer as one batch: its commit, nothing when the
     /// fact is unchanged, or the refusal named by `what`.
     fn told(&mut self, answer: Result<Option<CommitReceipt>, RunnerError>, what: &str) -> String {
+        self.told_in(Batch::new(), answer, what)
+    }
+
+    fn told_in(
+        &mut self,
+        batch: Batch,
+        answer: Result<Option<CommitReceipt>, RunnerError>,
+        what: &str,
+    ) -> String {
         let (receipts, error) = match answer {
             Ok(Some(receipt)) => (
                 vec![Timed {
@@ -817,7 +754,7 @@ impl<D: DataSource> Host<D> {
             Ok(None) => (vec![], None),
             Err(e) => (vec![], Some(format!("{what}: {e:?}"))),
         };
-        self.batch_for(&receipts, error.as_deref())
+        self.batch_from(batch, &receipts, error.as_deref())
     }
 
     /// Actual nested scrollport and mounted row geometry, in the shared LE wire
@@ -908,7 +845,7 @@ impl<D: DataSource> Host<D> {
                         .runner
                         .kernel()
                         .node(*id)
-                        .is_some_and(|n| crate::css::press_composes(n.style));
+                        .is_some_and(|n| crate::css::press_animations(n.style));
                     batch.exit(*id, &(link.list)(&exit.animations, press));
                 }
             }
@@ -918,9 +855,7 @@ impl<D: DataSource> Host<D> {
                         self.head_dirty = true;
                         continue;
                     }
-                    if self.mirror.remove(&id).is_some_and(|m| !m.looks.is_empty()) {
-                        batch.looks(id, "");
-                    }
+                    self.forget_looks(id, batch);
                     self.layers.forget(id);
                     self.exclusions.remove(&id);
                     if let Some(drag) = self.drag {
@@ -948,6 +883,7 @@ impl<D: DataSource> Host<D> {
                     self.update(id, batch);
                 }
             }
+            self.reveal_animations(r, batch);
             // This commit's springs, at its own time: the style (the target)
             // is in the page before the frames that approach it start playing.
             // Adopt this receipt's time/targets/transitions while the hold is
@@ -988,9 +924,9 @@ impl<D: DataSource> Host<D> {
         }
         if !receipts.is_empty() {
             self.emit_textflow(batch);
+            self.emit_boundaries(batch);
         }
-        // A canvas's inputs (LLP 1009 D2): the runner's side-output, only
-        // from commits that applied.
+        // Canvas inputs come only from applied commits (LLP 1009 D2).
         for s in self.runner.take_surface_updates() {
             batch.surface(&s);
         }
@@ -1007,64 +943,6 @@ impl<D: DataSource> Host<D> {
         // What the commit kept or forgot (LLP 1018 D1), for the page to persist.
         for w in self.runner.take_store_writes() {
             batch.store(&w);
-        }
-    }
-
-    fn emit_request(
-        &mut self,
-        r: RequestOut,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        if let Some(message) = crate::batch::request_refusal(&r.request) {
-            batch.refuse(r.ticket, message);
-            return;
-        }
-        if r.request.is_auth() {
-            return self.emit_auth(r, batch);
-        }
-        let Some(token) = r.request.continuation else {
-            batch.request(&r);
-            return;
-        };
-        let dispatch = self.runner.dispatch_work(token);
-        self.emit_dispatch(r, dispatch, batch, immediate);
-    }
-
-    fn emit_dispatch(
-        &mut self,
-        mut r: RequestOut,
-        dispatch: Dispatch,
-        batch: &mut Batch,
-        immediate: &mut Vec<(u64, Outcome)>,
-    ) {
-        match dispatch {
-            Dispatch::Host(registry) => {
-                r.request.continuation = Some(registry);
-                batch.request(&r);
-            }
-            Dispatch::Run(Work::Now(work)) => immediate.push((r.ticket, work())),
-            // A re-ask settles at once, as the no-op it replaces did.
-            Dispatch::Again => immediate.push((r.ticket, Dispatch::again_outcome())),
-            Dispatch::Run(Work::Later(_)) => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "an owner thread is unavailable on this host".into(),
-                },
-            )),
-            Dispatch::Held => {
-                if let Some(token) = r.request.continuation {
-                    self.parked.insert(token, r);
-                }
-            }
-            Dispatch::Missing => immediate.push((
-                r.ticket,
-                Outcome::Failed {
-                    kind: FailureKind::Unsupported,
-                    message: "missing or consumed browser continuation".into(),
-                },
-            )),
         }
     }
 
@@ -1269,6 +1147,24 @@ impl<D: DataSource> Host<D> {
                         &pairs,
                     );
                 }
+                Lowered::Held {
+                    view,
+                    property,
+                    delay,
+                    duration,
+                    values,
+                    due,
+                } => {
+                    let pairs: Vec<[f64; 4]> =
+                        values.iter().map(|v| [v.x, v.y, v.z, v.w]).collect();
+                    batch.held_spring(
+                        view,
+                        property.name(),
+                        (delay * 1000.0, duration * 1000.0),
+                        &pairs,
+                        due * 1000.0,
+                    );
+                }
                 Lowered::Cancel { view, property } => {
                     batch.animate(view, property.name(), 0.0, 0.0, &[], false);
                 }
@@ -1342,10 +1238,9 @@ impl<D: DataSource> Host<D> {
             Mirror {
                 props,
                 css,
-                children: Vec::new(),
                 in_button,
                 handled: !kinds.is_empty(),
-                looks: String::new(),
+                ..Default::default()
             },
         );
         self.emit_looks(id, batch);

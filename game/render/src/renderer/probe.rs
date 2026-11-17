@@ -220,10 +220,13 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         self.probe = Some(Probe::new(pixels));
         self.look_levels = Some(self.levels.saved());
     }
-    /// After a look frame is submitted: the live frames' levels of detail
-    /// again, which the next frame writes to the cull and skinning (after the
-    /// look frame's own writes, which its submission has taken).
+    /// After a look frame is submitted: restore the live attachments and levels
+    /// of detail. The next frame writes those levels to the cull and skinning,
+    /// after the look frame's own writes, which its submission has taken.
     pub(crate) fn end_look(&mut self) {
+        if let Some(live) = self.live_hdr.take() {
+            self.look_hdr = Some(std::mem::replace(&mut self.targets, live));
+        }
         if let Some(saved) = self.look_levels.take() {
             self.levels.restore(&saved);
         }

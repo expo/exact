@@ -3,7 +3,7 @@
 // text's base direction (`unicode-bidi: normal`, no `dir="auto"`, so no first strong character picks it),
 // and an unsaid `text-align` is `start`, the right under `rtl`; one said stands. The app is compiled from
 // Contract and built for the JS target, as `exact` builds one.
-import { expect } from 'bun:test';
+import { afterAll, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -17,6 +17,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -33,7 +37,7 @@ ${FIELDS.map(([id, kind, dir, align, bare]) => `      ${kind} value="Hi" directi
 `;
 
 check('a plain field takes CSS direction as its base, and an unsaid text-align is start (the right under rtl)', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-field-direction-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-field-direction-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, APP);
   const compile = spawnSync(compiler, ['build', contract, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (compile.status !== 0) throw new Error(compile.stderr);

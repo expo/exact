@@ -76,7 +76,7 @@ component App
     refresh details
 
   view
-    view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+    view navigationKey=`${top(nav).id}` navigate=follow testId="app" width="100%" height="100%"
       // What a link preview and a search engine read; a route's own `head` wins.
       head description="The planets of the Solar System, and what each is like."
       for e in stack(nav) key=e.id
@@ -88,9 +88,9 @@ component App
               main display="flex" flex-direction="column" gap=16 padding=16 max-width="48rem" margin-left="auto"
                 margin-right="auto"
                 text "Planets" role="heading" aria-level=1
-                row gap=8 align-items="center"
+                row gap=8 align-items="center" flex-wrap="wrap"
                   text "Kind" id="kind-label"
-                  select value=kind change=pickKind aria-labelledby="kind-label" testId="kind"
+                  select value=kind change=pickKind aria-labelledby="kind-label" testId="kind" min-width=0
                     option "All kinds" value=""
                     for k in ["Rocky", "Gas giant", "Ice giant"] key=k
                       option k value=k

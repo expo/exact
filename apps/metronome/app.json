@@ -41,5 +41,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "metronome-data", "type": "metronome_data::Metronome", "source": "metronome_data::Metronome" } }
 }

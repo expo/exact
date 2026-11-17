@@ -16,13 +16,20 @@ test.skipIf(process.platform === 'win32')('the native forecast fixture uses the 
     mkdirSync(resolve(dir, 'host-dev'));
     writeFileSync(bin, `#!${process.execPath}\nawait Bun.write(process.env.PURCHASES_BAKE_CALL, JSON.stringify(process.argv.slice(2)));\n`);
     chmodSync(bin, 0o755);
+    // The drive asks Cargo to bring the baker up to date first; this cargo records the request and builds nothing.
+    const cargo = resolve(dir, 'bin/cargo'), built = resolve(dir, 'cargo.json');
+    mkdirSync(resolve(dir, 'bin'));
+    writeFileSync(cargo, `#!${process.execPath}\nawait Bun.write(${JSON.stringify(built)}, JSON.stringify(process.argv.slice(2)));\n`);
+    chmodSync(cargo, 0o755);
     for (const cargoTarget of [dir, relative(root, dir)]) {
       // With no drive selected, setup bakes the fixture without launching an app.
       const result = spawnSync(process.execPath, ['packages/purchases/test/drives.mjs', 'macos', '--only', '0'], {
         cwd: root, encoding: 'utf8',
-        env: { ...process.env, CARGO_TARGET_DIR: cargoTarget, PURCHASES_BAKE_CALL: called },
+        env: { ...process.env, PATH: `${resolve(dir, 'bin')}:${process.env.PATH}`, CARGO_TARGET_DIR: cargoTarget, PURCHASES_BAKE_CALL: called },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(built, 'utf8')).slice(-2), ['-p', 'exact-js-bake'], 'the drive did not build the baker');
+      rmSync(built);
       assert.ok(existsSync(called), 'the forecast fixture did not use the private baker');
       const args = JSON.parse(readFileSync(called, 'utf8'));
       assert.equal(args[1], '--out');

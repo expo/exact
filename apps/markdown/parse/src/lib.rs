@@ -89,6 +89,8 @@ pub struct Block {
     pub runs: Vec<Run>,
     /// A table row's cells.
     pub cells: Vec<Vec<Run>>,
+    /// Each table column's separator alignment, or empty for the reader's default.
+    pub cell_align: Vec<String>,
     /// Whether a table row is the header row.
     pub header: bool,
     /// The source an image shows in a dark appearance instead of `href`, or
@@ -480,15 +482,22 @@ fn code_block(
         }
         let line = lines[i];
         let trimmed = line.trim_start();
-        if trimmed.chars().take_while(|&c| c == marker).count() >= width
-            && trimmed.trim_end_matches(marker).is_empty()
-        {
+        // The marker at least as long as the opener's, then only spaces or
+        // tabs (CommonMark 0.31.2 §4.5).
+        let run = trimmed.chars().take_while(|&c| c == marker).count();
+        if run >= width && trimmed[run..].trim_matches([' ', '\t']).is_empty() {
             i += 1;
             break;
         }
-        // The fence's own indentation is the block's left edge, not content.
-        let cut = line.len() - line.trim_start().len();
-        text.push_str(&line[cut.min(indent)..]);
+        // The fence's own indentation is the block's left edge, not content:
+        // up to its width of spaces and tabs. Other leading whitespace (an
+        // em space, a no-break space) is code.
+        let cut = line
+            .bytes()
+            .take(indent)
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .count();
+        text.push_str(&line[cut..]);
         text.push('\n');
         i += 1;
     }
@@ -526,7 +535,15 @@ fn heading_of(line: &str) -> Option<(u32, &str)> {
     if !rest.starts_with(' ') && !rest.is_empty() {
         return None;
     }
-    Some((hashes as u32, rest.trim().trim_end_matches('#').trim_end()))
+    // A closing run of `#` goes only when a space or tab comes before it
+    // (CommonMark 0.31.2 §4.2): `# C#` is the heading `C#`.
+    let text = rest.trim();
+    let open = text.trim_end_matches('#');
+    let text = match open.trim_end_matches([' ', '\t']) {
+        shorter if shorter.len() < open.len() || open.is_empty() => shorter,
+        _ => text,
+    };
+    Some((hashes as u32, text))
 }
 
 /// GitHub's heading anchor: lowercased, punctuation dropped, spaces to dashes.
@@ -678,6 +695,21 @@ fn table(
     context: &Context<'_>,
     doc: &mut Document,
 ) -> usize {
+    let align: Vec<String> = lines[at + 1]
+        .trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|rule| {
+            let rule = rule.trim();
+            match (rule.starts_with(':'), rule.ends_with(':')) {
+                (true, true) => "center",
+                (false, true) => "right",
+                (true, false) => "left",
+                _ => "",
+            }
+            .to_owned()
+        })
+        .collect();
     for (offset, line) in lines[at..at + rows].iter().enumerate() {
         if context.scan.cancelled() {
             return lines.len();
@@ -689,6 +721,7 @@ fn table(
             kind: Kind::TableRow,
             header: offset == 0,
             cells: cells_of(line, context),
+            cell_align: align.clone(),
             ..Block::default()
         });
     }

@@ -194,20 +194,16 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         cascades: Option<&Cascades>,
         frame: &FrameInput<'_>,
         custom: &[CustomMaterial],
-    ) {
-        // A look frame leaves the cache as the live frames left it: it draws
-        // every caster itself (`encode_shadows`).
-        if self.probe.is_some() {
-            return;
-        }
+    ) -> bool {
+        let probing = self.probe.is_some();
         let enabled = self.shadows.as_ref().is_some_and(|s| s.cache_enabled)
             && self.model_poses_current
             && custom.is_empty();
         if !enabled {
-            if let Some(shadows) = &mut self.shadows {
+            if let Some(shadows) = self.shadows.as_mut().filter(|_| !probing) {
                 shadows.cached = None;
             }
-            return;
+            return false;
         }
         let cascades = cascades.unwrap();
         let (mut signature, mut groups) = self
@@ -216,6 +212,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             .unwrap()
             .cached
             .as_mut()
+            .filter(|_| !probing)
             .map(|c| {
                 (
                     std::mem::take(&mut c.scratch),
@@ -291,9 +288,17 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             true
         }));
         let shadows = self.shadows.as_mut().unwrap();
+        // A look may read submitted depth only for the same sun and casters.
+        // Other views draw independently without changing the live cache.
+        if probing {
+            return shadows
+                .cached
+                .as_ref()
+                .is_some_and(|c| c.valid && c.signature == signature && c.groups == groups);
+        }
         if !groups.iter().any(|&b| b) {
             shadows.cached = None;
-            return;
+            return false;
         }
         let cache = shadows.cached.get_or_insert_with(|| {
             self.texture_creations += 1;
@@ -313,6 +318,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         cache.encoded.set(false);
         cache.scratch = std::mem::replace(&mut cache.signature, signature);
         cache.groups = groups;
+        true
     }
 }
 

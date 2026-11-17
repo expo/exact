@@ -13,7 +13,7 @@ js/windows-intl.json -text
 apps/variable-type/assets/LICENSE-RobotoFlex.txt -text
 game/games/garden/assets/fonts/LICENSE-Sniglet.txt -text
 host/apple/tests/fonts/Inter-LICENSE -text
-host/linux/tests/fonts/Inter-LICENSE -text
-host/linux/tests/fonts/RobotoFlex-LICENSE -text
+host/painted/tests/fonts/Inter-LICENSE -text
+host/painted/tests/fonts/RobotoFlex-LICENSE -text
 host/windows/reference/packages.lock.json -text
 vendor/wgpu-hal/src/vulkan/descriptor.rs -text

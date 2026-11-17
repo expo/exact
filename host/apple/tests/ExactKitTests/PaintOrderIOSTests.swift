@@ -152,6 +152,32 @@ final class PaintOrderIOSTests: XCTestCase {
         container.setPaintForeground(false)
         XCTAssertEqual(container.layer.zPosition, 0)
     }
+
+    /// A long-pressed row's context menu: UIKit hides the row and adds its
+    /// highlight to the route's mount (`LiftTarget.container`) after the route,
+    /// at depth 0, under the positioned route's ½. It goes to the route's depth,
+    /// where its later place paints it over the route and takes the touch first,
+    /// and follows the route through a later ranking. A view UIKit puts behind
+    /// the route stays there.
+    func testUIKitViewsAddedToAMountPaintOverItsRankedRoute() throws {
+        let p = fixture()
+        p.apply(wireBatch([["op": "rank", "id": 3, "rank": 1]]))
+        let route = try XCTUnwrap(p.views[3]), other = try XCTUnwrap(p.views[4])
+        let mount = PresentationMount()
+        mount.addSubview(route)
+        XCTAssertGreaterThan(route.paintZPosition, 0, "the positioned route paints above the origin")
+        let highlight = UIView(), behind = UIView()
+        mount.addSubview(highlight)
+        mount.insertSubview(behind, at: 0)
+        XCTAssertEqual(highlight.layer.zPosition, route.paintZPosition, accuracy: 1e-9)
+        XCTAssertTrue(NodeView.hitOrder(mount.subviews).first === highlight)
+        XCTAssertEqual(behind.layer.zPosition, 0, "a view behind the route stays behind it")
+        mount.insertSubview(other, belowSubview: highlight)
+        p.apply(wireBatch([["op": "rank", "id": 4, "rank": 1], ["op": "rank", "id": 3, "rank": 2]]))
+        XCTAssertGreaterThan(route.paintZPosition, other.paintZPosition)
+        XCTAssertEqual(highlight.layer.zPosition, route.paintZPosition, accuracy: 1e-9, "it follows a later ranking")
+        XCTAssertTrue(NodeView.hitOrder(mount.subviews).first === highlight)
+    }
     #endif
 
     func testHitsUseRankAndLaterFirstAmongEqualsAcrossHolders() throws {

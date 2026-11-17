@@ -2,18 +2,12 @@
 
 use super::*;
 
-pub(super) fn declare(file: &File, shapes: &mut Shapes) -> Result<(), TypeError> {
-    let Some(routes) = &file.routes else {
-        return Ok(());
-    };
-    if file.components.is_empty() {
-        return err(
-            "analyze-routes-not-root",
-            "`routes` belongs to the app's root file",
-            routes.span,
-        );
-    }
-    let mut table = exact_route::Table {
+/// The router's table of the routes the author declared, unchecked: what a
+/// location is matched against at run time (`Table::matches`), so what a
+/// location written elsewhere (the manifest's `share_target.action`) is
+/// checked against too.
+pub fn table(routes: &contract_syntax::RoutesDecl) -> exact_route::Table {
+    exact_route::Table {
         routes: routes
             .rows
             .iter()
@@ -25,7 +19,65 @@ pub(super) fn declare(file: &File, shapes: &mut Shapes) -> Result<(), TypeError>
                 notfound: r.notfound,
             })
             .collect(),
+    }
+}
+
+/// Why a pattern's escapes are not the one spelling of its URL, or None. The
+/// URL Standard keeps an escape as written and the router compares paths as
+/// serialized, while a host decodes every escape to find a file: an escape of
+/// a character a path carries as itself (`%41`) or in lower case (`%c3`)
+/// would be another route than the URL a browser sends for the same page.
+/// Escapes of what a literal cannot hold raw (`%2F`, `%25`, `%3A`, …) stay.
+fn escape_spelling(pattern: &str) -> Option<String> {
+    // What a path carries as itself: printable ASCII that `canonical` leaves
+    // raw and a literal admits, but `%` and `/`, which an escape alone means.
+    let raw = |b: u8| (0x21..=0x7e).contains(&b) && !br#"%/\:?#*(){}+"<>^`|"#.contains(&b);
+    let bytes = pattern.as_bytes();
+    let (mut spelled, mut said, mut i) = (String::new(), None, 0);
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit));
+        let (Some(hex), b'%') = (hex, bytes[i]) else {
+            let len = pattern[i..].chars().next().map_or(1, char::len_utf8);
+            spelled.push_str(&pattern[i..i + len]);
+            i += len;
+            continue;
+        };
+        let escape = &pattern[i..i + 3];
+        let byte = u8::from_str_radix(&escape[1..], 16).ok()?;
+        if raw(byte) {
+            said.get_or_insert(format!(
+                "`{escape}` escapes `{}`, which a URL carries as itself",
+                byte as char
+            ));
+            spelled.push(byte as char);
+        } else {
+            if hex.iter().any(u8::is_ascii_lowercase) {
+                said.get_or_insert(format!(
+                    "a browser writes `{escape}` as `{}`",
+                    escape.to_ascii_uppercase()
+                ));
+            }
+            spelled.push_str(&escape.to_ascii_uppercase());
+        }
+        i += 3;
+    }
+    said.map(|said| format!("{said}; the router matches a path only as written, while a host serves both spellings alike: write `{spelled}`"))
+}
+
+pub(super) fn declare(file: &File, shapes: &mut Shapes) -> Result<(), TypeError> {
+    let Some(routes) = &file.routes else {
+        return Ok(());
     };
+    if file.components.is_empty() {
+        return err(
+            "analyze-routes-not-root",
+            "`routes` belongs to the app's root file",
+            routes.span,
+        );
+    }
+    let mut table = table(routes);
     if let Err(e) = table.check() {
         let id = match e.code.as_str() {
             "route-duplicate" => "route-duplicate",
@@ -39,6 +91,15 @@ pub(super) fn declare(file: &File, shapes: &mut Shapes) -> Result<(), TypeError>
             e.message,
             routes.rows.get(e.route).map_or(routes.span, |r| r.span),
         );
+    }
+    for row in &routes.rows {
+        if let Some(message) = escape_spelling(&row.pattern) {
+            return err(
+                "route-pattern",
+                format!("route {}: {message}", row.name),
+                row.span,
+            );
+        }
     }
     // @ref LLP 1116.009 D2 — the `notfound` the compiler writes, beside the
     // table the author wrote and checked: the check above is of that table,

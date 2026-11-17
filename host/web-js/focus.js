@@ -1,12 +1,33 @@
 // `autofocus` at mount on the JS target (LLP 1035.000 D9; LLP 1102 §3.19), as the wasm host's
-// focusController (host/web/navigation.js): after each commit, the first `[autofocus]` not yet
+// focusController (host/web/navigation.js): after each commit, the first autofocus field not yet
 // offered that is shown, enabled and not inert is offered once, and takes the focus when the focus
 // is on the body or on the control just pressed (an `if` that mounts a field after a tap).
 // A carried restart (checkpoint.js, which holds `focus` while it rebuilds) marks every field it
 // rebuilt offered (`offerAll`), so none takes the focus later; a fresh boot's hidden or disabled
-// field may still take it when it is shown.
+// field may still take it when it is shown. A commit looks only while a field may be waiting: one
+// was built or bound since the last look, or that look passed one not yet offered.
 import { inertAncestor } from './navigation.js';
 const offered = new WeakSet();
+let restarting = false, looking = true;
+const candidates = '[autofocus], [data-autofocus="true"]';
+
+/** A carried boot must not enqueue the browser's own autofocus candidates. */
+export function restartAutofocus() { restarting = true; }
+
+/** A field built or bound since the last look may be waiting: the next commit looks. */
+export const mayFocus = () => {
+  looking = true;
+};
+
+/** Keep the authored prop while a carried boot suppresses its DOM behavior. */
+export function autofocusProp(el, on) {
+  mayFocus();
+  el.toggleAttribute('autofocus', on && !restarting);
+  if (on && !restarting) el.removeAttribute('data-autofocus');
+  else el.setAttribute('data-autofocus', String(on));
+}
+/** A Markdown editor's element replaces its textarea and copies its attributes: it keeps the field's offer. */
+export const replaced = (from, to) => offered.has(from) && offered.add(to);
 
 /** The press a pointer is dispatching (a click with `detail` > 0: a key's activation keeps the
  * focus where it is, as the wasm host's): its own work may hand the pressed control's focus to a
@@ -54,9 +75,12 @@ const rootOf = () => globalThis.document?.getElementById?.('exact-root');
 
 export function autofocus(root = rootOf()) {
   const token = running ?? dispatching, by = token && !token.dead ? token.el : null;
-  if (!root?.querySelectorAll) return;
-  for (const el of root.querySelectorAll('[autofocus]')) {
-    if (offered.has(el) || !el.getClientRects().length || inertAncestor(el) || el.matches(':disabled') || getComputedStyle(el).visibility !== 'visible') continue;
+  if (restarting || !looking || !root?.querySelectorAll) return;
+  looking = false;
+  for (const el of root.querySelectorAll(candidates)) {
+    if (offered.has(el)) continue;
+    looking = true;
+    if (!el.getClientRects().length || inertAncestor(el) || el.matches(':disabled') || getComputedStyle(el).visibility !== 'visible') continue;
     offered.add(el);
     const active = document.activeElement;
     if (!active || active === document.body || active === by) el.focus({ preventScroll: true });
@@ -66,5 +90,6 @@ export function autofocus(root = rootOf()) {
 
 /** A carried restart's rebuilt fields: none takes the focus later. */
 export function offerAll(root = rootOf()) {
-  if (root?.querySelectorAll) for (const el of root.querySelectorAll('[autofocus]')) offered.add(el);
+  if (root?.querySelectorAll) for (const el of root.querySelectorAll(candidates)) offered.add(el);
+  restarting = false;
 }

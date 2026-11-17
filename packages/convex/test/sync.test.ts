@@ -4,7 +4,8 @@
 // 1.49.0's protocol; the rest follow `convex@1.49.0`'s
 // `src/browser/sync/protocol.ts`.
 import { expect, test } from 'bun:test';
-import { canonicalPath, ProtocolError, Sync, tsAtOrBefore, type Outcome } from '../sync.ts';
+import { convex } from '../index.ts';
+import { canonicalPath, ConvexFailure, ProtocolError, Sync, tsAtOrBefore, type Outcome } from '../sync.ts';
 
 // The frames here carry JSON alone, which Convex's encoding leaves as it is.
 const JSON_ONLY = { convexToJson: (value: unknown) => value, jsonToConvex: (json: unknown) => json };
@@ -129,7 +130,7 @@ test('the socket closing ends what waits, and the next connection starts from ve
   sync.closed('the socket closed (1006)');
   await pending.wait;
   expect(pending.read()).toBeUndefined();
-  expect(await unanswered.outcome).toEqual({ ok: false, message: 'The connection to Convex closed before it answered (the socket closed (1006)); the mutation may have run.' });
+  expect(await unanswered.outcome).toEqual({ ok: false, message: 'The connection to Convex closed before it answered (the socket closed (1006)); the mutation may have run.', again: 0 });
   expect(await acknowledged.outcome).toEqual({ ok: true, value: 3 });
   expect([sync.status, sync.error]).toEqual(['closed', 'the socket closed (1006)']);
   // What the socket had delivered is still answered.
@@ -146,11 +147,42 @@ test('the socket closing ends what waits, and the next connection starts from ve
   expect([sync.status, sync.rev]).toEqual(['ready', 2]);
 });
 
+// The client's `live()` refreshed starts a connection whose mapper ignores every later event of the last one, its
+// close included, so connecting again ends what the last one had not answered, as its close would have.
+test('connecting again ends what the last connection had not answered, and sends none of it again', async () => {
+  const mappers: ((event: object, socket?: object) => unknown)[] = [];
+  const fetched = globalThis.fetch;
+  globalThis.fetch = ((_: string, init: { exactStream: (typeof mappers)[number] }) => { mappers.push(init.exactStream); return new Promise(() => {}); }) as never;
+  try {
+    const client = convex('https://example.convex.cloud', { getFunctionName: (name: unknown) => name as string, ...JSON_ONLY });
+    const closed: number[] = [];
+    const open = (n: number) => {
+      const sent: string[] = [];
+      mappers[n]({ type: 'open', data: '' }, { send: (data: string) => sent.push(JSON.parse(data).type), close() { closed.push(n); } });
+      return sent;
+    };
+    client.live();
+    open(0);
+    mappers[0]({ type: 'message', data: transition(version(0, 0, T0), version(1, 0, T1)) });
+    const action = client.action('billing:charge' as never, {}), mutation = client.mutation('messages:send' as never, {});
+    const acknowledged = client.mutation('messages:send' as never, {});
+    mappers[0]({ type: 'message', data: JSON.stringify({ type: 'MutationResponse', requestId: 2, success: true, result: 3, ts: T2, logLines: [] }) });
+    client.live();
+    expect(closed).toEqual([0]);
+    const ended = (p: Promise<unknown>) => settled(p.then(value => ({ ok: true, value }), (e: ConvexFailure) => ({ ok: false, message: e.message, again: e.again })));
+    const replaced = 'The connection to Convex closed before it answered (a new connection replaced it)';
+    expect(await ended(action)).toEqual({ ok: false, message: `${replaced}; the action may have run.`, again: undefined });
+    expect(await ended(mutation)).toEqual({ ok: false, message: `${replaced}; the mutation may have run.`, again: 1 });
+    expect(await ended(acknowledged)).toEqual({ ok: true, value: 3 });
+    expect(client.inspect().requests).toBe(0);
+    expect(open(1)).toEqual(['Connect', 'ModifyQuerySet']);
+  } finally { globalThis.fetch = fetched; }
+});
+
 test('a new token withholds answers until Convex confirms it, and keeps the ones it does not name', async () => {
   const { sync } = opened();
   sync.frame(transition(version(0, 0, T0), version(1, 0, T1), [updated(0, [HELLO])]));
   expect(sync.setAuth('jwt')).toEqual([{ type: 'Authenticate', tokenType: 'User', value: 'jwt', baseVersion: 0 }]);
-  expect(sync.setAuth('jwt')).toEqual([]);
   const asked = sync.ask(1, 'messages:list', { channel: 'general' });
   expect(asked.read()).toBeUndefined();
   // The Transition at the new identity names no query: its result is the same for this person (recorded: Convex
@@ -158,6 +190,8 @@ test('a new token withholds answers until Convex confirms it, and keeps the ones
   sync.frame(transition(version(1, 0, T1), version(1, 1, T2)));
   await asked.wait;
   expect(sync.ask(2, 'messages:list', { channel: 'general' }).read()).toEqual({ ok: true, value: [HELLO] });
+  // The token Convex has, asked for again, sends nothing.
+  expect(sync.setAuth('jwt')).toEqual([]);
   // Signed out: the same, with no token.
   expect(sync.setAuth(undefined)).toEqual([{ type: 'Authenticate', tokenType: 'None', baseVersion: 1 }]);
   expect(sync.ask(2, 'messages:list', { channel: 'general' }).read()).toBeUndefined();
@@ -182,6 +216,25 @@ test('a connection opened with a token authenticates before its query set, and a
   sync.closed('the socket closed (1005)');
   sync.connecting('s');
   expect(sync.opened().map(f => f.type)).toEqual(['Connect', 'ModifyQuerySet']);
+});
+
+test('a connection Convex has pinged twice and sent no results is ended, to connect again', () => {
+  const sync = new Sync(JSON_ONLY);
+  sync.connecting('session-1');
+  sync.ask(0, 'messages:list', {});
+  sync.opened();
+  expect(sync.frame(JSON.stringify({ type: 'Ping' }))).toEqual([]);
+  let thrown: unknown;
+  try { sync.frame(JSON.stringify({ type: 'Ping' })); } catch (e) { thrown = e; }
+  expect(thrown).toBeInstanceOf(ProtocolError);
+  expect([(thrown as ProtocolError).message, (thrown as ProtocolError).fatal]).toEqual(['Convex sent no results on this connection; connecting again', false]);
+  // A connection Convex has answered may stay quiet as long as it likes, and each connection counts its own.
+  sync.closed((thrown as Error).message);
+  sync.connecting('session-1');
+  sync.opened();
+  sync.frame(JSON.stringify({ type: 'Ping' }));
+  sync.frame(transition(version(0, 0, T0), version(1, 0, T1), [updated(0, [])]));
+  for (let i = 0; i < 3; i++) expect(sync.frame(JSON.stringify({ type: 'Ping' }))).toEqual([]);
 });
 
 test('a chunked Transition is applied once whole', () => {

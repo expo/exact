@@ -22,6 +22,11 @@ impl SizeIndex {
         if self.len() == 0 {
             return Ok(None);
         }
+        if (self.fixed[0] > 0.0 && y < self.fixed[0])
+            || (self.fixed[1] > 0.0 && y > self.fixed[0] + self.data_extent())
+        {
+            return Ok(None);
+        }
         let y = y.max(0.0).min(self.total_height());
         let raw = match self.row_at(y)? {
             Some(i) => {
@@ -46,7 +51,7 @@ impl SizeIndex {
         // First positive row ending at top; any following zero rows must also
         // have current measurements. No row scan, including a 25k zero run.
         let mut left = if top > 0. {
-            self.tree.find(top, true).unwrap_or(0)
+            self.tree.find(top - self.fixed[0], true).unwrap_or(0)
         } else {
             0
         };
@@ -62,7 +67,7 @@ impl SizeIndex {
             if left == source {
                 let before = self.prefix(source).unwrap();
                 left = if before > 0.0 {
-                    self.tree.find(before, true).unwrap_or(0)
+                    self.tree.find(before - self.fixed[0], true).unwrap_or(0)
                 } else {
                     0
                 };

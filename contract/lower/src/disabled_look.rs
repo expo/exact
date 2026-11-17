@@ -15,7 +15,7 @@
 //!
 //! A literal `disabled` reads nothing, so only an `opacity` marks it.
 
-use contract_syntax::{Attr, Expr, TemplatePart};
+use contract_syntax::{Attr, Expr};
 
 /// The paint a disabled look is drawn in.
 const PAINT: &[&str] = &[
@@ -61,61 +61,15 @@ pub(crate) fn styled(attrs: &[Attr]) -> bool {
 /// parameters, a `match` arm's binding or a `let`'s name in its own scope
 /// (`bound`); a call reads its arguments, not its name.
 pub(crate) fn free_reads(e: &Expr, bound: &mut Vec<String>, out: &mut Vec<String>) {
-    fn under(names: &[&str], body: &Expr, bound: &mut Vec<String>, out: &mut Vec<String>) {
-        let depth = bound.len();
-        bound.extend(names.iter().map(|n| n.to_string()));
-        free_reads(body, bound, out);
-        bound.truncate(depth);
+    if let Expr::Ident(n, _) = e {
+        if !bound.contains(n) {
+            out.push(n.clone());
+        }
     }
-    match e {
-        Expr::Ident(n, _) => {
-            if !bound.contains(n) {
-                out.push(n.clone());
-            }
-        }
-        Expr::Call(_, args, _) | Expr::List(args, _) => {
-            args.iter().for_each(|a| free_reads(a, bound, out))
-        }
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _) => free_reads(x, bound, out),
-        Expr::Arrow { params, body, .. } => {
-            let names: Vec<&str> = params.iter().map(String::as_str).collect();
-            under(&names, body, bound, out);
-        }
-        Expr::Binary(_, a, b, _) => {
-            free_reads(a, bound, out);
-            free_reads(b, bound, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            free_reads(a, bound, out);
-            free_reads(b, bound, out);
-            free_reads(c, bound, out);
-        }
-        Expr::Match {
-            subject,
-            var,
-            some,
-            none,
-            ..
-        } => {
-            free_reads(subject, bound, out);
-            under(&[var.as_str()], some, bound, out);
-            free_reads(none, bound, out);
-        }
-        Expr::Let {
-            name, value, body, ..
-        } => {
-            free_reads(value, bound, out);
-            under(&[name.as_str()], body, bound, out);
-        }
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                free_reads(x, bound, out);
-            }
-        }),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
+    for (x, binds) in e.scoped_operands() {
+        let depth = bound.len();
+        bound.extend(binds.iter().map(String::from));
+        free_reads(x, bound, out);
+        bound.truncate(depth);
     }
 }

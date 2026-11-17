@@ -1,5 +1,5 @@
 ```prompt Add a native module in Swift
-Give the Exact app in this folder a native module in Swift for a platform API that has no view. Use https://github.com/expo/exact/blob/main/docs/recipes/native-module.md as the source for each step. The exact2 checkout has the same page at docs/recipes/native-module.md.
+Give the Exact app in this folder a native module in Swift for a platform API that has no view. Use https://github.com/expo/exact/blob/main/docs/recipes/native-module.md as the source for each step. The Exact checkout has the same page at docs/recipes/native-module.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which platform API the module calls, ask me before you write code. If it is sound, MIDI or a transport, stop and tell me: they are built in (`bun exact.mjs docs sound midi and media`), and the app needs no module. If it needs a view (a map, the camera), use the native-views recipe instead.

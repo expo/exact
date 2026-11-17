@@ -15,6 +15,8 @@
 //   order, a commit each.
 import { journal, clock, Sounds, Mutations, Resources, R, data, commit, time } from './rt.js';
 import { plain } from './format.js';
+import { grantWords } from './admission.js';
+import { watchPage } from './facts.js';
 
 const HOLD = 50, QUEUED = 1024, RECORD = 1024, SHOWN = 64, SENT = 128;
 const say = line => journal.push(`t=${clock.now} ${line}`);
@@ -53,6 +55,7 @@ function messages(data) {
   return split(data);
 }
 const noteOff = d => d.length === 3 && ((d[0] & 0xF0) === 0x80 || (d[0] & 0xF0) === 0x90 && d[2] === 0);
+const starts = d => d[0] === 0xFA || d[0] === 0xFB || d[0] === 0xF8 || (d[0] & 0xF0) === 0x90 && d[2] > 0;
 const noteKey = d => d.length === 3 && ((d[0] & 0xF0) === 0x80 || (d[0] & 0xF0) === 0x90) ? `${d[0] & 0x0F},${d[1]}` : null;
 const waits = (s, t) => s.by == null && s.at - HOLD > t, handed = (s, t) => s.by == null && s.at - HOLD <= t;
 const exempt = s => s.tick != null || noteOff(s.data) || s.data.length === 1 && s.data[0] === 0xFC;
@@ -65,7 +68,8 @@ const order = (a, b) => a.at - b.at || a.id - b.id;
 const nextSent = t => ReadsSent ? [...Queue.filter(s => listed(s) && s.by == null), ...Out].reduce((m, s) => s.at > t ? Math.min(m, s.at) : m, Infinity) : Infinity;
 const stateOf = (s, t) => s.by != null ? 'retracted' : s.at - HOLD > t ? 'waiting' : 'handed';
 
-let Ports = { access: 'prompt', inputs: [], outputs: [] }, Granted = false, Uses = false;
+// `Unheard`: the last port report before the grant was known, applied when it is.
+let Ports = { access: 'prompt', inputs: [], outputs: [] }, Granted = false, Uses = false, Unheard = null;
 let Queue = [], Out = [], Next = 0, Received = [], Heard = 0, Ops = [], Open = [], OpenClock = [], Clock = null, Ticks = 0, Played = null, ClockFloor = -Infinity;
 let Preferred = { access: 'granted', inputs: [], outputs: [] }, Readers = {}, ReadsSent = false, Glue = null, Output = null, Boot = true;
 const Listening = () => Sounds.midi ?? []; // [element, handler] pairs from rt.js `onMIDI`, registered as the view is built
@@ -83,7 +87,7 @@ const connectedInput = id => Ports.access === 'granted' && Ports.inputs.some(p =
 // `""`, no output, goes to no host but `sent` lists it as any other (LLP 1125 D6; midi.rs `can_send`).
 const canSend = id => id === '' || connectedOutput(id);
 function setPorts(reported) {
-  if (!Granted) return false;
+  if (!Granted) { Unheard = reported; return false; }
   const ports = merged(reported);
   if (portsEqual(ports, Ports)) return false;
   const count = l => l.filter(p => p.connected).length;
@@ -356,6 +360,7 @@ function load() {
     .catch(err => say(`midi: unavailable: ${err.message}`));
 }
 function flush() {
+  if (Sounds.settling) Ops = Ops.filter(op => op.op !== 'send' || !starts(op.data));
   const open = inputsHeard(), clockIn = Sounds.clockInput?.(), forward = clockIn != null ? [clockIn] : [];
   if (open.join('\n') !== Open.join('\n') || open.length !== Open.length || forward.join('\n') !== OpenClock.join('\n')) { Ops.push({ op: 'open', inputs: open, clock: forward }); Open = open; OpenClock = forward; }
   if (clock.agent) Ops = [];
@@ -373,12 +378,17 @@ function apply(commands) {
 }
 /** `readers`: resource name → [its fields, {a port list's field: its port fields}]; `uses`: the plan uses MIDI (`uses::uses_midi`). */
 export function midi(readers, uses) {
+  watchPage(true);
   Readers = readers; Uses = uses; ReadsSent = Object.values(readers).some(([fields]) => fields.includes('sent'));
   // The grants are the data module's, which may load after the first frame: then the readers are asked again.
-  const granted = () => /^\s*device\.midi\s/m.test(data.grants ?? '');
+  const granted = () => (data.grants ?? '').split('\n').some(line => grantWords(line)[0] === 'device.midi');
   Granted = granted();
   Ports = { access: Granted ? 'prompt' : 'denied', inputs: [], outputs: [] };
-  if (data.grants == null) data.ready(() => { if (!Granted && granted()) { Granted = true; Ports = { access: 'prompt', inputs: [], outputs: [] }; again('midi'); } });
+  // The host reports its ports once (midi-glue.js), which may be before then: that report applies now.
+  if (data.grants == null) data.ready(() => {
+    if (!Granted && granted()) { Granted = true; Ports = { access: 'prompt', inputs: [], outputs: [] }; if (Unheard) setPorts(Unheard); again('midi'); }
+    Unheard = null;
+  });
   Sounds.midiApply = apply; Sounds.midiAnswer = Answer;
   (data.reserved ??= {}).exactMIDI = (_, a, name) => {
     const [fields, ports] = Readers[name];

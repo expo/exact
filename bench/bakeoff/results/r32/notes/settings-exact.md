@@ -1,6 +1,6 @@
 # Paperback Settings: notes
 
-Built with Exact (`app.contract`, `app.tamber`, `app.test.contract`). Bundle id
+Built with Exact (`app.contract`, `app.forma`, `app.test.contract`). Bundle id
 `dev.bakeoff.settings.bfbbc5f`, name "Settings". It is installed on simulator
 `CEDFB9C9-…`. 9 tests pass on web and iOS. `verify ios` is clean: light, dark,
 largest text size and scrolling. `verify` (web) leaves one finding, described below.

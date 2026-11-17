@@ -42,6 +42,8 @@ fn emit_file(
         out: String::new(),
         checked: &checked,
         root: checked.expanded.root.clone(),
+        format_used: Default::default(),
+        records: Default::default(),
     };
     e.components(name)
 }
@@ -80,7 +82,8 @@ impl Emitter<'_> {
         let _ = writeln!(o, "  routes := {},", self.routes_list());
         let _ = writeln!(o, "  router := {},", self.router());
         let _ = writeln!(o, "  strings := {},", self.strings_list());
-        let _ = writeln!(o, "  locale := {}", self.locale());
+        let _ = writeln!(o, "  locale := {},", self.locale());
+        let _ = writeln!(o, "  format := {}", self.format());
         o.push_str("}\n");
         let head = format!(
             "def {name} : Contract.Components.CProgram := {{\n  shapes := {},\n",
@@ -133,11 +136,12 @@ impl Emitter<'_> {
         }
         let mut ids = 0usize;
         let view = self.cnodes(&c.view, &mut ids)?;
-        let resources = self.resources_list(c, ct)?;
-        let (mutations, tasks) = if k == 0 {
-            (self.mutations_list(c, ct), self.tasks_list(c)?)
+        let resources = self.resources_list(c, ct, &[])?;
+        let mutations = self.mutations_list(c, ct, &[], &[])?;
+        let tasks = if k == 0 {
+            self.tasks_list(c)?
         } else {
-            ("[]".into(), "[]".into())
+            "[]".into()
         };
         Ok(format!(
             "{{\n      name := {}, props := [{}], injects := [{}], provides := [{}], slot := {},\n      \

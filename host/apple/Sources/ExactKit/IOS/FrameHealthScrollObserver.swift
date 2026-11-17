@@ -59,10 +59,13 @@ final class FrameHealthScrollObserver {
             return
         }
         let finished = CACurrentMediaTime()
+        owner?.expireCapture(at: began)
+        health.expireCapture(at: began)
         // UIUpdateInfo gives a completion deadline, not a complete VRR schedule. Keep period unknown.
         health.record(arrival: began, target: deadline, period: 0, finished: finished,
             flags: owner?.frameFlags(session.frames, session: session) ?? 0)
         began = 0
+        health.maintain(at: finished)
     }
 
     func end(_ scrollView: UIScrollView) { if self.scrollView === scrollView { stop() } }

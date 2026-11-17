@@ -138,7 +138,12 @@ internal class ContactStore(private val context: ExtensionContext, private val s
         ContactsModule.pickIntentHatch?.invoke(intent)
         picking = true
         say("picker shown (${properties.joinToString(",")}${if (multiple) ", multiple" else ""}${if (system) "" else ", one ${type?.first ?: "contact"}"})")
-        context.startActivityForResult(intent) { code, data ->
+        context.startActivityForResult(intent, { refusal ->
+            // Nothing started: no contacts app (`NotFoundError`), the app left first, or the platform refused.
+            picking = false
+            say("picker not shown: $refusal")
+            reply(ContactsModule.error(refusal))
+        }) { code, data ->
             picking = false
             val uri = data?.data
             if (code != Activity.RESULT_OK || uri == null) {

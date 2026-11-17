@@ -2,14 +2,16 @@
 //! request for each element, keyed as a `for` row is. An element that joins
 //! starts its request; one that leaves lets only its own request go; the
 //! others go on. The resource reads its answers in the list's order, pending
-//! or failed when any element's request is.
+//! or failed when any element's request is. A rendered page's checkpoint holds
+//! each element's answer, and an element that a boot from the page makes takes
+//! the answer at its arguments (LLP 1048.000 D6).
 use exact_kernel::Kernel;
-use exact_plan::Value;
+use exact_plan::{Plan, Value};
 use exact_runner::{
-    Answer, DataError, DataSource, InFlight, Message, Outcome, Overlaid, Request, Response, Runner,
-    Store, Write,
+    Answer, Checkpoint, DataError, DataSource, InFlight, Message, Outcome, Overlaid, Request,
+    Response, Runner, Store, Write,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[test]
@@ -44,20 +46,41 @@ component App
 "##;
 
 /// `receive(u, what)` waits for a GET of `https://example.test/<u>`, and its
-/// reply's body is the phase; a 500 fails it. What the runner let go is
-/// heard as the requests still in flight.
-#[derive(Default)]
+/// reply's body is the phase; a 500 fails it. `b`'s reads the store's
+/// `token` as it asks, and `c`'s draws randomness, which reads nothing the
+/// store holds (LLP 1069.005 D2). `stamp()` writes `token` and answers at once. What the
+/// runner let go is heard as the requests still in flight.
+#[derive(Default, Clone)]
 struct Receiver {
     asked: Rc<RefCell<Vec<String>>>,
     in_flight: Rc<RefCell<Vec<String>>>,
+    not_ready: Rc<Cell<bool>>,
 }
 
 impl DataSource for Receiver {
+    fn ready(&self) -> bool {
+        !self.not_ready.get()
+    }
+
+    fn grants(&self) -> &str {
+        "secret.keep token\n"
+    }
+
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
     }
 
-    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+    fn answer(
+        &mut self,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
+        if source == "stamp" {
+            self.asked.borrow_mut().push(source.into());
+            store.set("token", "ada").unwrap();
+            return Ok(Answer::Now(Value::str("stamped")));
+        }
         assert_eq!(source, "receive");
         assert_eq!(
             args[1],
@@ -65,6 +88,11 @@ impl DataSource for Receiver {
             "the other arguments as written"
         );
         let u = args[0].as_str().unwrap().to_string();
+        if u == "b" {
+            let _ = store.get("token");
+        } else if u == "c" {
+            store.observe_entropy();
+        }
         self.asked.borrow_mut().push(u.clone());
         Ok(Answer::Later(Request::get(&format!(
             "https://example.test/{u}"
@@ -235,11 +263,11 @@ impl DataSource for Listener {
     }
 }
 
-/// A rendered page's checkpoint lists a list as open when any of its
-/// elements' streams is open (LLP 1048.000 D6): an element's answer is never
-/// listed.
+/// A rendered page's checkpoint holds each answered element's answer under
+/// its list's name, and lists as open each one whose stream is (LLP 1048.000
+/// D6).
 #[test]
-fn a_list_whose_elements_streams_are_open_is_listed_open() {
+fn a_render_s_checkpoint_holds_each_answered_element_and_lists_its_open_streams() {
     let plan = contract::compile(
         "component App\n  state urls: string[] = [\"a\", \"b\"]\n  resource heard = listen(u) for u in urls as shape string\n  view\n    text heard.join(\",\")\n",
     )
@@ -254,16 +282,258 @@ fn a_list_whose_elements_streams_are_open_is_listed_open() {
     .unwrap();
     let tickets: Vec<u64> = r.take_requests().iter().map(|o| o.ticket).collect();
     assert_eq!(tickets.len(), 2);
-    for ticket in tickets {
-        let message = Message {
-            data: "first".into(),
+    let message = |data: &str| {
+        Outcome::Message(Message {
+            data: data.into(),
             ..Message::default()
-        };
-        r.fulfill(ticket, Outcome::Message(message)).unwrap();
+        })
+    };
+    let held = |r: &Runner<Listener>| {
+        let checkpoint = r.document_checkpoint("/");
+        let answers: Vec<(String, String)> = (checkpoint.answers.iter())
+            .map(|(name, _, args, value)| {
+                assert_eq!(
+                    (name.as_str(), args.len()),
+                    ("heard", 1),
+                    "an element's answer, never the list's own"
+                );
+                (
+                    args[0].as_str().unwrap().into(),
+                    value.as_str().unwrap().into(),
+                )
+            })
+            .collect();
+        (answers, checkpoint.pending, checkpoint.open)
+    };
+    r.fulfill(tickets[1], message("second")).unwrap();
+    assert_eq!(
+        held(&r),
+        (
+            vec![("b".into(), "second".into())],
+            vec!["heard".into()],
+            vec![0]
+        )
+    );
+    r.fulfill(tickets[0], message("first")).unwrap();
+    assert_eq!(
+        held(&r),
+        (
+            vec![("a".into(), "first".into()), ("b".into(), "second".into())],
+            vec![],
+            vec![0, 1]
+        )
+    );
+}
+
+/// The checkpoint of a page whose elements answered, each `phase-<u>`.
+fn rendered(plan: &Plan) -> Checkpoint {
+    let mut r = Runner::boot(
+        plan.clone(),
+        Receiver::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    for (u, ticket) in asked(&mut r) {
+        r.fulfill(ticket, reply(200, &format!("phase-{u}")))
+            .unwrap();
     }
+    r.document_checkpoint("/")
+}
+
+/// A boot from `checkpoint` on a device whose store holds `store`.
+fn boot(
+    plan: &Plan,
+    source: Receiver,
+    checkpoint: &Checkpoint,
+    store: &[(&str, &str)],
+) -> Runner<Receiver> {
+    Runner::boot_checkpoint(
+        plan.clone(),
+        source,
+        Kernel::with_monospace(),
+        checkpoint,
+        (store.iter())
+            .map(|(k, v)| (k.to_string(), v.as_bytes().to_vec()))
+            .collect(),
+        Default::default(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
+}
+
+/// A boot from a rendered page gives each element it makes the page's answer
+/// at its arguments, an answer it already has (LLP 1048.000 D6): the list
+/// shows as the page did, and nothing is asked. An element that joins later
+/// asks, as any joining element does, even one the page had an answer for.
+#[test]
+fn a_list_s_elements_take_the_page_s_answers_and_ask_nothing() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let mut checkpoint = rendered(&plan);
+    let elements: Vec<&str> = (checkpoint.answers.iter())
+        .map(|(name, _, args, _)| {
+            assert_eq!(
+                (name.as_str(), args.len()),
+                ("got", 2),
+                "an element's answer, never the list's own"
+            );
+            args[0].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(elements, ["a", "b", "c"]);
+    assert_eq!(
+        checkpoint.readers,
+        [1],
+        "`b`'s answer read the store, `c`'s drew"
+    );
+    let mut d = checkpoint.answers[0].clone();
+    d.2[0] = Value::str("d");
+    checkpoint.answers.push(d);
+    let source = Receiver::default();
+    let mut r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert!(asked(&mut r).is_empty(), "{:?}", source.asked.borrow());
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+    assert_eq!(text(&r, "waiting"), "false");
+    assert!(r
+        .journal()
+        .any(|l| l.contains("checkpoint: 3 of 4 answers taken")));
+    r.act("add", vec![Value::str("d")]).unwrap();
+    assert_eq!(*source.asked.borrow(), ["d"]);
+}
+
+/// An element finds its answer wherever the page wrote it, and one with no
+/// answer that still fits, or none under its source, asks.
+#[test]
+fn an_element_without_a_fitting_answer_asks_and_the_others_find_theirs() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let mut checkpoint = rendered(&plan);
+    checkpoint.answers.swap(0, 2);
+    checkpoint.answers[1].3 = Value::str("not a Got");
+    let source = Receiver::default();
+    let r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert_eq!(*source.asked.borrow(), ["b"]);
+    assert_eq!(text(&r, "phases"), "phase-a,,phase-c");
+
+    let mut checkpoint = rendered(&plan);
+    checkpoint.answers[2].1 = "other".into(); // `c`'s
+    let source = Receiver::default();
+    let r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert_eq!(*source.asked.borrow(), ["c"]);
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,");
+}
+
+/// Only an element whose stream was open is asked again, its answer showing
+/// meanwhile: now when its source can answer, as the launch's own ask, not a
+/// refresh (LLP 1162.000 D1), else at `data_ready`.
+#[test]
+fn only_an_element_whose_stream_was_open_is_asked_again() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let checkpoint = Checkpoint {
+        open: vec![1], // `b`'s answer
+        ..rendered(&plan)
+    };
+    let source = Receiver::default();
+    source.not_ready.set(true);
+    let mut r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert!(source.asked.borrow().is_empty());
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+    source.not_ready.set(false);
+    r.data_ready().unwrap();
+    assert_eq!(*source.asked.borrow(), ["b"]);
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+
+    let source = Receiver::default();
+    let mut r = boot(&plan, source.clone(), &checkpoint, &[]);
+    let requests = r.take_requests();
+    assert_eq!(*source.asked.borrow(), ["b"]);
+    assert!(!requests[0].forced, "the launch's own ask");
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+    assert_eq!(text(&r, "waiting"), "true");
+    r.fulfill(requests[0].ticket, reply(200, "fresh")).unwrap();
+    assert_eq!(text(&r, "phases"), "phase-a,fresh,phase-c");
+}
+
+/// An answer that read the store is a store reader's: a device whose store
+/// holds the app's own entries, which the render never had, asks it again at
+/// boot, showing it meanwhile, and a later store write asks it again.
+#[test]
+fn an_element_that_read_the_store_is_asked_again_on_a_device_with_its_store_and_after_a_write() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let checkpoint = rendered(&plan);
+    let source = Receiver::default();
+    let r = boot(&plan, source.clone(), &checkpoint, &[("token", "ada")]);
+    assert_eq!(*source.asked.borrow(), ["b"]);
+    assert_eq!(text(&r, "phases"), "phase-a,phase-b,phase-c");
+
+    let source = Receiver::default();
+    let mut r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert!(asked(&mut r).is_empty());
+    r.store_changed(vec![("token".into(), b"ada".to_vec())])
+        .unwrap();
+    assert_eq!(*source.asked.borrow(), ["b"]);
+
+    // A persisted state is the runner's own, which no source reads: the
+    // device's store holds no entry the render lacked
+    let source = Receiver::default();
+    let _r = boot(
+        &plan,
+        source.clone(),
+        &checkpoint,
+        &[("exact.state.theme", "dark")],
+    );
+    assert!(source.asked.borrow().is_empty());
+}
+
+/// A store write in the boot's own settlement asks again an element whose page
+/// answer read the store, as it asks a declared resource's: the page's answers
+/// stand for the store as the boot found it.
+#[test]
+fn a_store_write_in_the_boot_asks_again_an_element_that_read_the_store() {
+    let plan = contract::compile(&SOURCE.replace(
+        "  resource got",
+        "  resource stamp = stamp() as shape string\n  resource got",
+    ))
+    .unwrap();
+    let mut checkpoint = rendered(&plan);
+    // `stamp`'s answer no longer fits: the boot asks it, and it writes the store
+    checkpoint.answers[0].3 = Value::Number(7.0);
+    let source = Receiver::default();
+    let _r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert_eq!(*source.asked.borrow(), ["stamp", "b"]);
+}
+
+/// Elements with equal arguments make the same request, so each takes an
+/// answer at those arguments: here the render answered one of them and left
+/// the other pending, and the boot asks neither.
+#[test]
+fn elements_with_equal_arguments_take_the_same_answer() {
+    let plan = contract::compile(
+        "shape Got\n  phase: string\ncomponent App\n  state ids: number[] = [1, 2]\n  resource got = receive(\"a\", \"callback\") for i in ids as shape Got\n  derive phases = got.map(g => g.phase).join(\",\")\n  view\n    text phases\n",
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan.clone(),
+        Receiver::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let tickets = asked(&mut r);
+    assert_eq!(tickets.len(), 2);
+    r.fulfill(tickets[0].1, reply(200, "phase-a")).unwrap();
     let checkpoint = r.document_checkpoint("/");
-    assert_eq!(checkpoint.open, ["heard"]);
-    assert!(checkpoint.pending.is_empty(), "{:?}", checkpoint.pending);
+    assert_eq!(checkpoint.answers.len(), 1);
+    assert_eq!(checkpoint.pending, ["got"]);
+    let source = Receiver::default();
+    let mut r = boot(&plan, source.clone(), &checkpoint, &[]);
+    assert!(asked(&mut r).is_empty(), "{:?}", source.asked.borrow());
+    assert_eq!(text(&r, "phases"), "phase-a,phase-a");
+    assert!(r
+        .journal()
+        .any(|l| l.contains("checkpoint: 1 of 1 answers taken")));
 }
 
 /// A row a returning element takes asks anew: the reply to the request its
@@ -399,6 +669,17 @@ fn change(r: &mut Runner<Writer>, urls: &[&str]) {
     .unwrap();
 }
 
+/// The page's answers as "name argument answer", sorted: a list's are its
+/// elements', and none is an overlay.
+fn page_answers(r: &Runner<Writer>) -> Vec<String> {
+    let text = |v: &Value| v.as_str().unwrap().to_string();
+    let mut answers: Vec<_> = (r.document_checkpoint("/").answers.iter())
+        .map(|(name, _, args, value)| format!("{name} {} {}", text(&args[0]), text(value)))
+        .collect();
+    answers.sort();
+    answers
+}
+
 #[test]
 fn writes_overlay_each_member_and_retire_after_refresh() {
     let mut r = writer();
@@ -416,18 +697,8 @@ fn writes_overlay_each_member_and_retire_after_refresh() {
         assert_eq!(r.shown_resource("one"), Some(&Value::str("writing")));
         assert_eq!(r.resource("got"), Some(&answer));
         assert_eq!(r.resource("one"), Some(&Value::str("server")));
-        assert_eq!(
-            r.document_checkpoint("/").answers,
-            [
-                ("got".into(), "look".into(), vec![], answer.clone()),
-                (
-                    "one".into(),
-                    "look".into(),
-                    vec![Value::str("z")],
-                    Value::str("server")
-                )
-            ]
-        );
+        let server = ["got a server", "got b server", "one z server"];
+        assert_eq!(page_answers(&r), server);
         assert!(r.carry().resources.is_empty());
         let mut overlaid = r.data().overlaid.clone();
         overlaid.sort();
@@ -440,7 +711,7 @@ fn writes_overlay_each_member_and_retire_after_refresh() {
         );
         assert!(r.writes().is_empty(), "all refreshed members answered");
         assert_eq!(r.resource("got"), Some(&answer));
-        assert_eq!(r.document_checkpoint("/").answers[0].3, answer);
+        assert_eq!(page_answers(&r), server);
         assert_eq!(r.carry().resources[0].3, answer);
     }
 }
@@ -473,7 +744,15 @@ fn a_landed_write_waits_for_each_member_until_answered_or_removed() {
             .to_vec(),
     );
     assert_eq!(r.resource("got"), Some(&answer));
-    assert_eq!(r.document_checkpoint("/").answers[0].3, answer);
+    assert_eq!(
+        page_answers(&r),
+        [
+            "got a server",
+            "got b server",
+            "got c fresh",
+            "one z server"
+        ]
+    );
     r.fulfill(send, reply(200, "")).unwrap();
     let requests = r.take_requests();
     assert_eq!(requests.len(), 4);

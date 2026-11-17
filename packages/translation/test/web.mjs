@@ -65,7 +65,7 @@ for (const engine of engines) {
       } else {
         // An engine with the API answers its own state; no create is pressed, since one would start a download.
         const a = await until(page, 'pair', t => /^(unavailable|downloadable|downloading|available) /.test(t), 5000);
-        console.log(`NOTE ${engine} has Translator; ja to en reads ${JSON.stringify(a)} (Chromium headless never answers `availability()` without the model component; the page shows the reader's empty value meanwhile)`);
+        console.log(`NOTE ${engine} has Translator; ja to en reads ${JSON.stringify(a)} (Chromium headless never answers availability() without the model component; the page shows the reader's empty value meanwhile)`);
       }
       check(engine, 'no page errors', !errors.length, errors.join('; '));
       await context.close();

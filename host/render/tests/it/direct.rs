@@ -54,6 +54,7 @@ fn the_fixture_s_pages_are_the_same_without_a_kernel() {
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         };
@@ -84,6 +85,7 @@ fn direct_documents_keep_text_row_presence_and_clears() {
             Ids::Any,
             projection,
             1_700_000_000_000.0,
+            &Default::default(),
         )
         .unwrap()
     };
@@ -146,6 +148,7 @@ fn every_corpus_and_conformance_plan_is_the_same_without_a_kernel() {
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
         };
         let what = file.display().to_string();
@@ -177,6 +180,34 @@ fn every_corpus_and_conformance_plan_is_the_same_without_a_kernel() {
     );
 }
 
+/// The hero's preload makes its `<img>`'s request: the same URL as written,
+/// `crossorigin` and priority. document.rs writes each of these with a value
+/// and escapes `"` in values, so ` name="` starts an attribute, never a word in
+/// another's value.
+pub(super) fn assert_preload_makes_the_heros_request(page: &str) {
+    fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+        let rest = tag.split(&format!(" {name}=\"")).nth(1)?;
+        Some(&rest[..rest.find('"')?])
+    }
+    let tag = |open: &str| {
+        let at = page
+            .find(open)
+            .unwrap_or_else(|| panic!("no {open} in {page}"));
+        &page[at..at + page[at..].find('>').unwrap()]
+    };
+    let (link, img) = (
+        tag("<link rel=\"preload\" as=\"image\""),
+        tag("<img fetchpriority"),
+    );
+    for (on_link, on_img) in [
+        ("href", "src"),
+        ("crossorigin", "crossorigin"),
+        ("fetchpriority", "fetchpriority"),
+    ] {
+        assert_eq!(attr(link, on_link), attr(img, on_img), "{on_link}: {page}");
+    }
+}
+
 #[test]
 fn a_javascript_page_preloads_the_hero_from_a_default_render() {
     let plan = contract::compile(
@@ -186,7 +217,7 @@ component Hero
     column
       column inert=true
         image "assets/hero.png?one=1&two=2" alt="Covered"
-      image "assets/hero.png?one=1&two=2" alt="Hero"
+      image "assets/hero.png?one=1&two=2" alt="Hero" crossorigin="anonymous"
 "#,
     )
     .unwrap();
@@ -203,7 +234,7 @@ component Hero
     let page = exact_render::page(super::serve::JS_SHELL, &rendered).unwrap();
     assert!(
         page.contains(
-            "<link rel=\"preload\" as=\"image\" href=\"assets/hero.png?one=1&amp;two=2\">"
+            "<link rel=\"preload\" as=\"image\" href=\"assets/hero.png?one=1&amp;two=2\" crossorigin=\"anonymous\" fetchpriority=\"high\">"
         ),
         "{page}"
     );
@@ -211,11 +242,12 @@ component Hero
         page.contains("<img fetchpriority=\"high\" alt=\"Hero\""),
         "{page}"
     );
-    assert_eq!(page.matches("fetchpriority=\"high\"").count(), 1);
+    assert_eq!(page.matches("<img fetchpriority=\"high\"").count(), 1);
+    assert_preload_makes_the_heros_request(&page);
 }
 
 #[test]
-fn streamed_and_buffered_pages_preload_the_same_hero_image() {
+fn streamed_and_buffered_pages_keep_the_route_title_and_hero_image() {
     use super::serve::{dist, get, header, serving, JS_SHELL};
     use exact_render::{Serve, Server};
 
@@ -230,23 +262,25 @@ routes nav
   notfound render=build
 component Hero
   view
-    column
-      head title="Hero"
-      image "data:image/png;base64,AA==" alt="Inline"
-      image "symbol:circle" alt="Symbol"
-      column inert=true
-        image "assets/inert.png" alt="Inert"
-      column visibility="hidden"
-        image "assets/hidden.png" alt="Hidden"
-      image "assets/hero.png?one=1&two=2" alt="Hero"
-      image "assets/second.png" alt="Second"
+    main navigationKey="home" navigationBack="back"
+      column navigationKey="home"
+        header
+          text "**Hero** route" markup="markdown" role="heading" aria-level=1
+        image "data:image/png;base64,AA==" alt="Inline"
+        image "symbol:circle" alt="Symbol"
+        column inert=true
+          image "assets/inert.png" alt="Inert"
+        column visibility="hidden"
+          image "assets/hidden.png" alt="Hidden"
+        image "assets/hero.png?one=1&two=2" alt="Hero" crossorigin="anonymous"
+        image "assets/second.png" alt="Second"
 "#,
     )
     .unwrap();
     let served = serving(
         Server::bind(
             Serve {
-                dist: dir,
+                dist: dir.to_path_buf(),
                 port: 0,
                 name: "Hero".into(),
                 origin: None,
@@ -264,15 +298,17 @@ component Hero
         || Nowhere,
     );
     let check = |page: &str| {
-        let link = "<link rel=\"preload\" as=\"image\" href=\"assets/hero.png?one=1&amp;two=2\">";
+        assert!(page.contains("<title>Hero route</title>"), "{page}");
+        let link = "<link rel=\"preload\" as=\"image\" href=\"assets/hero.png?one=1&amp;two=2\" crossorigin=\"anonymous\" fetchpriority=\"high\">";
         let at = page.find(link).expect("the hero preload");
         assert!(at < page.find("<div id=\"exact-root\">").unwrap());
         assert!(
             page.contains("<img fetchpriority=\"high\" alt=\"Hero\""),
             "{page}"
         );
-        assert_eq!(page.matches("fetchpriority=\"high\"").count(), 1);
+        assert_eq!(page.matches("<img fetchpriority=\"high\"").count(), 1);
         assert_eq!(page.matches("as=\"image\"").count(), 1);
+        assert_preload_makes_the_heros_request(page);
     };
     let (status, _, buffered) = get(served.addr, "/");
     assert_eq!(status, 200);
@@ -321,6 +357,7 @@ component Pages
                 Ids::Any,
                 projection,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         };
@@ -339,13 +376,16 @@ component Pages
             );
             let page = exact_render::page(super::serve::JS_SHELL, &rendered).unwrap();
             assert_eq!(
-                page.matches("fetchpriority=\"high\"").count(),
+                page.matches("<img fetchpriority=\"high\"").count(),
                 usize::from(expected.is_some())
             );
             assert_eq!(
                 page.matches("as=\"image\"").count(),
                 usize::from(expected.is_some())
             );
+            if expected.is_some() {
+                assert_preload_makes_the_heros_request(&page);
+            }
         }
     }
 }

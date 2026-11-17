@@ -22,7 +22,7 @@ final class MenuHost {
     /// Native buttons that are pull-downs (`nativeMenu`), by node.
     var nativeMenus: [UInt32: NativeButtonIOS] = [:]
     #endif
-    private var confirmation: Confirmation?
+    private(set) var confirmation: Confirmation?
     /// A press another invoker activates (`activating`): it invokes nothing.
     var invocationOwner: NodeView?
     /// A press whose caller presents what its command opens (a pull-down, a
@@ -45,7 +45,40 @@ final class MenuHost {
     /// (LLP 1021 D4), by `id`: each in the top layer while open, as macOS's
     /// and the web's are, out of its parent and back at its index after.
     private var agentOpen: [String: Lifted] = [:]
+    private var checking = false
+    func beginCheck() {
+        checking = true
+        #if os(iOS)
+        let menus = Set(platformMenus.map { ObjectIdentifier($0.popover) })
+        for entry in agentOpen.values {
+            guard let pop = entry.popover, !pop.isHidden, menus.contains(ObjectIdentifier(pop)) else { continue }
+            entry.checkHidden = true
+            pop.isHidden = true
+        }
+        #endif
+    }
+    func endCheck() {
+        checking = false
+        // Only entries still in the open stack may be restored. A closed opening
+        // never unhides its node, even if that same node has since reopened.
+        for entry in agentOpen.values where entry.checkHidden {
+            entry.checkHidden = false
+            if let pop = entry.popover, live(pop), pop.incarnation == entry.incarnation { pop.isHidden = false }
+        }
+    }
     var presented: [NodeView] { agentOpen.values.sorted { $0.order < $1.order }.compactMap(\.popover) }
+    #if os(iOS)
+    /// The open painted popovers a person sees as UIKit's menu instead, and
+    /// whether each is a context menu rather than an invoker's menu
+    /// (`platformMenu`). The agent paints them to drive them; `check` does
+    /// not judge them as the page.
+    var platformMenus: [(popover: NodeView, context: Bool)] {
+        agentOpen.values.sorted { $0.order < $1.order }.compactMap { entry in
+            guard entry.substitutesMenu, let pop = entry.popover else { return nil }
+            return (pop, entry.context)
+        }
+    }
+    #endif
     /// The layers lifted over a dialog's sheet: outside the viewport and the route mounts.
     var sheetLayers: [UIView] { agentOpen.values.sorted { $0.order < $1.order }.map(\.layer).filter { $0.sheet != nil && $0.superview != nil } }
     func logicalParent(of view: UIView) -> UIView? {
@@ -75,6 +108,8 @@ final class MenuHost {
         var block: HostBlock?
         /// Anchored to its opener at least once.
         var placed = false
+        var checkHidden = false
+        let incarnation: UInt64
         let source: UInt32?
         weak var popover: NodeView?
         weak var parent: UIView?
@@ -85,12 +120,18 @@ final class MenuHost {
         /// one), which hiding hides it with (LLP 1021 §5, "Submenus").
         let order: Int
         let ancestor: String?
+        /// Opened as a context menu (`agentContext`), not by an invoker.
+        let context: Bool
+        /// This opening stands in for UIKit's menu; `source` only positions it.
+        let substitutesMenu: Bool
         let layer: PopoverLayer
         #if os(iOS)
         var relay: MountRelay?
         #endif
-        init(source: UInt32?, popover: NodeView, order: Int, ancestor: String?, presenter: Presenter) {
-            self.source = source; self.popover = popover; self.order = order; self.ancestor = ancestor
+        init(source: UInt32?, popover: NodeView, order: Int, ancestor: String?, context: Bool, substitutesMenu: Bool, presenter: Presenter) {
+            self.source = source; self.popover = popover; self.order = order; self.ancestor = ancestor; self.context = context
+            self.substitutesMenu = substitutesMenu
+            incarnation = popover.incarnation
             layer = PopoverLayer(presenter: presenter, order: order, popover: popover)
             parent = popover.superview
             index = parent?.subviews.firstIndex(of: popover) ?? 0
@@ -337,7 +378,7 @@ final class MenuHost {
         } else {
             let open = agentOpen[name] != nil
             if action == .hide || action == .toggle && open { drop(name) }
-            else if !open { agentShow(pop, named: name, from: source.id) }
+            else if !open { agentShow(pop, named: name, from: source.id, invoked: true) }
         }
     }
 
@@ -411,12 +452,16 @@ final class MenuHost {
     /// about 10 pt lower. A bar item's pull-down is a hand-built bar item's
     /// `UIMenu(title:)`, taller header and all (LLP 1021, amended 2026-10-16).
     func pullDown(of v: NodeView, titled heading: String, inBar: Bool = false) -> UIMenu {
-        let rows = rows(of: v, inBar: inBar)
+        let rows = rows(of: v, inBar: inBar, heading: heading)
         if heading.isEmpty { return UIMenu(children: [rows]) }
         return inBar ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
     }
-    private func rows(of v: NodeView, inBar: Bool) -> UIDeferredMenuElement {
-        UIDeferredMenuElement.uncached { [weak self, weak v, token = v.incarnation] completion in
+    /// A `heading` outside a bar is an inline section's, whose title UIKit
+    /// draws only over rows of its own: the first untitled section's rows
+    /// are its rows, and the other sections follow it.
+    private func rows(of v: NodeView, inBar: Bool, heading: String = "") -> UIDeferredMenuElement {
+        let headed = !heading.isEmpty && !inBar
+        return UIDeferredMenuElement.uncached { [weak self, weak v, token = v.incarnation] completion in
             func current() -> NodeView? {
                 guard let v, v.incarnation == token, self?.presenter?.views[v.id] === v, self?.eligible(v, inBar: inBar) == true else { return nil }
                 return v
@@ -433,7 +478,10 @@ final class MenuHost {
                 }
                 return
             }
-            completion(self.items(of: invocation.target, opener: invoker))
+            let items = self.items(of: invocation.target, opener: invoker)
+            if self.recordsGiven, !heading.isEmpty { self.givenHeaders[invocation.target.id, default: []].insert(heading) }
+            guard headed, let first = items.first as? UIMenu, first.options.contains(.displayInline), first.title.isEmpty else { return completion(items) }
+            completion(first.children + items.dropFirst())
         }
     }
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
@@ -514,21 +562,24 @@ final class MenuHost {
             button.isEnabled = entry.enabled
         }
     }
-    func cancelled(_ owner: Confirmation) {
+    /// UIKit dismissed it: a tap outside or a swipe (`closeRequest`), or its presenter went.
+    func cancelled(_ owner: Confirmation, closeRequest: Bool) {
         // UIKit also delivers this after a selected action's handler. That
         // notification must not cancel the action awaiting the next turn.
         guard confirmation === owner, !owner.finishing else { return }
         owner.finishing = true
         owner.fields.forEach { $0.end() }
         confirmation = nil
+        if closeRequest, owner.modal { owner.popover?.queueDialogCancel() }
         owner.popover?.queueDialogClose()
         if let pop = owner.popover { presenter?.popoverEvents.changed(pop, open: false) }
         DispatchQueue.main.async { [weak self] in self?.resumeAfterRouteDismissal() }
     }
     /// `chosen` is the selected action, nil for the cancel.
-    private func finish(_ owner: Confirmation, chosen: NodeView?) {
+    private func finish(_ owner: Confirmation, chosen: NodeView?, closeRequest: Bool = false) {
         guard confirmation === owner, !owner.finishing else { return }
         owner.finishing = true
+        owner.closeRequest = closeRequest && chosen == nil
         // A field's `change` before the action's press, as a blur's before a click.
         owner.fields.forEach { $0.end() }
         owner.chosen = chosen
@@ -553,6 +604,7 @@ final class MenuHost {
                 self.resumeAfterRouteDismissal()
                 if let action { self.presenter?.press(action.id) }
             }
+            if owner.closeRequest, owner.modal { owner.popover?.queueDialogCancel() }
             owner.popover?.queueDialogClose()
         }
     }
@@ -761,6 +813,7 @@ final class MenuHost {
     }
     /// Revisit only the hosts captured at opening, including after UIKit detaches one.
     func rehostPopovers() {
+        guard !agentOpen.isEmpty else { return }
         for entry in agentOpen.values.sorted(by: { $0.order < $1.order }) { lift(entry) }
     }
     func replacePopoverHost(_ old: UIViewController, with controller: UIViewController) {
@@ -774,7 +827,10 @@ final class MenuHost {
         #endif
         entry.layer.mount(in: presenter)
         if pop.superview !== entry.layer { entry.layer.addSubview(pop) }
-        if pop.isHidden { pop.isHidden = false }
+        #if os(iOS)
+        if checking, entry.substitutesMenu { entry.checkHidden = true }
+        #endif
+        if pop.isHidden != entry.checkHidden { pop.isHidden = entry.checkHidden }
         var placement = entry.layer.bounds
         if let top = presenter.keyboardTop {
             let end = entry.layer.convert(CGPoint(x: 0, y: top), from: nil).y
@@ -894,16 +950,23 @@ final class MenuHost {
         }
         #endif
     }
-    func agentShow(_ pop: NodeView, named name: String, from row: UInt32?) {
+    func agentShow(_ pop: NodeView, named name: String, from row: UInt32?, context: Bool = false, invoked: Bool = false) {
         layOut(pop)
         guard let presenter, live(pop) else { return }
         // A row of an open menu opens a popover that is no menu as the menu's own invoker would (LLP 1021's menu rule).
         let holder = { (id: UInt32?) in self.agentOpen.values.first { m in
-            m.popover?.props["accessibilityRole"] == "menu" && id.flatMap { presenter.views[$0] }.map { $0.isDescendant(of: m.popover!) } == true } }
+            guard m.substitutesMenu, let menu = m.popover else { return false }
+            return id.flatMap { presenter.views[$0] }.map { $0.isDescendant(of: menu) } == true } }
         var source = row, seen = Set<ObjectIdentifier>() // past any submenu, to what opened the outermost menu
         while pop.props["accessibilityRole"] != "menu", let m = holder(source), seen.insert(ObjectIdentifier(m)).inserted { source = m.source }
         // Nested in the latest open popover holding its opener or itself.
         let opener = source.flatMap { presenter.views[$0] }
+        #if os(iOS)
+        let substitutesMenu = context ? pop.props["accessibilityRole"] == "menu" || pop.menuShaped
+            : invoked && opener.map { platformMenu(pop, from: $0) } == true
+        #else
+        let substitutesMenu = pop.props["accessibilityRole"] == "menu"
+        #endif
         let ancestor = agentOpen.filter { _, open in
             guard let outer = open.popover, outer !== pop else { return false }
             return opener.map { $0.isDescendant(of: outer) } == true || pop.isDescendant(of: outer)
@@ -914,7 +977,7 @@ final class MenuHost {
             for (other, entry) in agentOpen where entry.popover?.props["popover"] != "manual" && !keep.contains(other) { drop(other) }
         }
         opened += 1
-        let entry = Lifted(source: source, popover: pop, order: opened, ancestor: ancestor, presenter: presenter)
+        let entry = Lifted(source: source, popover: pop, order: opened, ancestor: ancestor, context: context, substitutesMenu: substitutesMenu, presenter: presenter)
         entry.layer.rehost = { [weak self] in self?.rehostPopovers() }
         agentOpen[name] = entry
         presenter.popoverEvents.changed(pop, open: true)
@@ -941,7 +1004,7 @@ final class MenuHost {
             presenter.session?.log("context menu \(name) refused: no popover has that id")
             return false
         }
-        agentShow(pop, named: name, from: node.id)
+        agentShow(pop, named: name, from: node.id, context: true)
         return true
     }
     /// Whether a tap on `node` goes through the agent's painted popovers —
@@ -974,7 +1037,15 @@ final class MenuHost {
         guard let pop = holding.first(where: { inner in !holding.contains { $0 !== inner && $0.isDescendant(of: inner) } }) else { return nil }
         var at: UIView = node
         while let up = at.superview, up !== pop.container { at = up }
-        guard let row = at as? NodeView, row.superview === pop.container, row.props["popover"] == nil else { return nil }
+        guard var row = at as? NodeView, row.superview === pop.container, row.props["popover"] == nil else { return nil }
+        if row.isMenuSection {
+            // A row of a section (D3): the section's own child.
+            let section = row
+            at = node
+            while let up = at.superview, up !== section.container { at = up }
+            guard let inner = at as? NodeView, inner.superview === section.container else { return nil }
+            row = inner
+        }
         return (pop, row)
     }
     /// For `node`, a row (an action or the cancel) of the confirmation UIKit
@@ -1002,6 +1073,14 @@ final class MenuHost {
     /// shows (`Agent.shownRow`). UIKit puts no identifier of an action on
     /// the element it shows, so a row is its place among these.
     var given: [UInt32: [GivenRow]] = [:]
+    /// Whether menus record what they give UIKit (`given`, `givenHeaders`,
+    /// `presentedMenu`): under the agent, which aims at what UIKit shows.
+    var recordsGiven = ExactEnv.agentMode
+    /// Under the agent, the titles each popover's menu was last given as
+    /// headers (its sections', and the heading of a pull-down's rows):
+    /// UIKit shows each as a labelled element among the rows, which
+    /// `Agent.runs` passes over.
+    var givenHeaders: [UInt32: Set<String>] = [:]
     /// Under the agent, the popovers (by id, with their incarnations) of
     /// the menu UIKit was last given to present: the one a menu opened
     /// with, and its submenus. A row of any other popover is not in the menu
@@ -1018,6 +1097,9 @@ final class MenuHost {
     }
     func unmounted() { focus.reset(); resetConfirmation(); sheets.reset() }
     var inTransition: Bool {
+        #if os(iOS)
+        if context.inTransition { return true }
+        #endif
         if sheets.inTransition || confirmation == nil && !pendingConfirmations.isEmpty || waitingShows > 0 { return true }
         guard let owner = confirmation else { return false }
         return owner.finishing || owner.alert.isBeingPresented || owner.alert.isBeingDismissed
@@ -1076,13 +1158,16 @@ final class MenuHost {
         }) else { return nil }
         // The close button of a dialog in its sheet takes the ordinary tap.
         if sheets.owns(pop), !opens(node, pop) { return nil }
+        // A bar item's button, hidden in the page while the bar shows it: pressed as its item is (`activateChrome`).
+        if !eligible(node), eligible(node, inBar: true) { return nil }
         guard opens(node, pop) else { return false }
         return openConfirmation(from: node, popover: pop, modal: showsModal(node))
     }
     /// A sheet action's handler: the action at `index` as presented, nil
     /// for the cancel. Its own entry, never a successor's at that index.
+    /// UIKit runs the cancel's handler for its button, a hardware Escape and a popover's tap outside: only the last is a close request.
     private func select(_ owner: Confirmation, _ index: Int?) {
-        guard let index else { finish(owner, chosen: nil); return }
+        guard let index else { finish(owner, chosen: nil, closeRequest: owner.style == .popover); return }
         guard owner.actions.indices.contains(index), let node = owner.actions[index].node else {
             finish(owner, chosen: nil); return
         }
@@ -1138,7 +1223,7 @@ final class MenuHost {
         if dismissPopover() { return true }
         guard let owner = confirmation else { return nil }
         guard !inTransition, valid(owner) else { return false }
-        finish(owner, chosen: nil)
+        finish(owner, chosen: nil, closeRequest: true)
         return true
     }
 
@@ -1207,7 +1292,7 @@ final class MenuHost {
     /// LLP 1115.000 D11.5: a `dialog` that is not a confirmation by its rows
     /// is a sheet, its content laid out by the kernel (DialogSheetIOS.swift).
     func isSheet(_ node: NodeView) -> Bool {
-        isDialog(node) && node.props["popover"] == nil && (sheets.owns(node) || unconfirmable(node, modal: true) != nil)
+        isDialog(node) && node.props["popover"] == nil && (sheets.owns(node) || DialogSheets.paintsOwnSurface(node) || unconfirmable(node, modal: true) != nil)
     }
     private func busy(_ controller: UIViewController) -> Bool {
         controller.presentedViewController != nil || controller.isBeingDismissed || controller.isBeingPresented
@@ -1267,7 +1352,9 @@ final class MenuHost {
         // The split by shape (LLP 1115 D6, LLP 1115.000 D11.5): a `dialog`
         // that is not a confirmation is a sheet; a popover that is not one
         // has no other presentation here.
-        if let why = unconfirmable(pop, modal: modal) {
+        // A dialog its author painted is the author's box in the top layer,
+        // whatever its rows (LLP 1035.001 D11).
+        if let why = DialogSheets.paintsOwnSurface(pop) && isDialog(pop) ? "" : unconfirmable(pop, modal: modal) {
             guard isDialog(pop), pop.props["popover"] == nil else { return refuse(why) }
             guard let controller = controller(for: source ?? pop), !busy(controller) else { return false }
             return sheets.show(pop, from: source, over: controller)
@@ -1391,7 +1478,8 @@ final class MenuHost {
     /// LLP 1021 §5: the sheet's side of its invoker, from its popover's
     /// `position-area`; `none` keeps UIKit's defaults. UIKit places a popover
     /// by the arrow directions it permits — `.down` puts it above its source,
-    /// `.up` below, `.left` to its right (`right span-bottom`) — centred on
+    /// `.up` below, `.left` to its right (`right span-bottom`), `.right` to
+    /// its left (`left`) — centred on
     /// the source where it fits. `center` (the invoker's own cell) permits
     /// no arrow and may cover it: UIKit centres it across the invoker and
     /// picks its vertical position.
@@ -1401,7 +1489,7 @@ final class MenuHost {
             presentation.permittedArrowDirections = []
             presentation.canOverlapSourceViewRect = true
         } else {
-            presentation.permittedArrowDirections = area.hasPrefix("top") ? .down : area.hasPrefix("right") ? .left : .up
+            presentation.permittedArrowDirections = area.hasPrefix("top") ? .down : area.hasPrefix("right") ? .left : area.hasPrefix("left") ? .right : .up
             presentation.canOverlapSourceViewRect = false
         }
     }

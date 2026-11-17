@@ -10,10 +10,10 @@
 //! call at a time on a handle opened without it, so a write the device does not take would stop the reads.
 //!
 //! WinRT's `SerialDevice` needs a package capability the unpackaged host cannot declare (D14), so this is Win32's,
-//! declared here: the package names only `exact_linux` and `std`. Not built yet: the plug notifications; the list
+//! declared here: the package names only `exact_painted` and `std`. Not built yet: the plug notifications; the list
 //! is read again at each ask. `requestPort` (the `DevicePicker`) fails `NotSupportedError`.
 
-use exact_linux::package::{json, Context, Json, Notifier, Package, Reply};
+use exact_painted::package::{json, Context, Json, Notifier, Package, Reply};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};

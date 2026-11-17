@@ -104,7 +104,10 @@ async function walk(b, x, z) {
 }
 async function prefix(b) {
   assert(`${b.label}: title and accessible Play button`, await b.eval('!document.getElementById("title").hidden && document.getElementById("play").textContent === "Play" && document.activeElement.id === "play"'));
-  await click(b, 'play'); await key(b, 'KeyW', true);
+  // Space, the key the card names, presses the focused Play button.
+  await key(b, 'Space', true); await key(b, 'Space', false);
+  assert(`${b.label}: Space on the focused Play button starts the game`, await b.eval('beacons.state().mode === "playing" && document.activeElement.id === "game"'));
+  await key(b, 'KeyW', true);
   const first = await advance(b, 180); await key(b, 'KeyW', false);
   // Independent closed-form sum of the specified exponential velocity recurrence.
   const q = Math.exp(-10 / 120), expected = -4 / 120 * (180 - q * (1 - q ** 180) / (1 - q));

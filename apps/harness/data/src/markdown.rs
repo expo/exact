@@ -5,7 +5,7 @@
 
 use crate::highlight::highlight;
 use crate::state::{Block, Line, Run};
-use markdown_parse::{parse, Kind};
+use markdown_parse::{parse_with, Html, Kind};
 
 /// Inline code's colour.
 pub const CODE: &str = "#e5c07b";
@@ -47,7 +47,11 @@ pub(super) fn streaming_blocks(source: &str) -> Vec<Block> {
 }
 
 fn blocks_with(source: &str, compact_code: bool) -> Vec<Block> {
-    let doc = parse(source, &|href| href.to_string());
+    // Raw HTML as written: a terminal draws no image, and image markup is
+    // read across lines and blocks, which a reply settled block by block
+    // (`settle`) cannot follow.
+    let doc =
+        parse_with(source, &|href| href.to_string(), &|| false, Html::LITERAL).unwrap_or_default();
     // The parsed block vector can have spare capacity for much larger rows.
     // Move its contents into exactly the number of transcript blocks needed.
     let mut out = Vec::with_capacity(doc.blocks.len());
@@ -144,6 +148,36 @@ mod tests {
         assert_eq!(b[6].depth, 0.0);
         assert_eq!(b[8].lang, "rust");
         assert_eq!(b[8].lines.len(), 1);
+    }
+
+    #[test]
+    fn adjacent_links_keep_their_own_destinations() {
+        let links = |md: &str| -> Vec<(String, String)> {
+            blocks(md)[0]
+                .runs
+                .iter()
+                .map(|r| (r.text.clone(), r.href.clone()))
+                .collect()
+        };
+        let pair = |text: &str, href: &str| (text.to_string(), href.to_string());
+        assert_eq!(
+            links("[first](https://first.example/)[second](https://second.example/)"),
+            [
+                pair("first", "https://first.example/"),
+                pair("second", "https://second.example/")
+            ]
+        );
+        assert_eq!(
+            links("**[first](https://first.example/)[second](https://second.example/)**"),
+            [
+                pair("first", "https://first.example/"),
+                pair("second", "https://second.example/")
+            ]
+        );
+        assert_eq!(
+            links("[one](https://same.example/)[two](https://same.example/)"),
+            [pair("onetwo", "https://same.example/")]
+        );
     }
 
     #[test]

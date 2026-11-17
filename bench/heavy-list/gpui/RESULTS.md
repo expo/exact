@@ -549,7 +549,7 @@ checks are unchanged.
 - `cargo test -p exact-linux --lib --tests --no-fail-fast`
 
 The first root test run failed four existing wall-clock limits in
-`exact-svg-file` and `exact-tamber` while compilation was running. The full
+`exact-svg-file` and `exact-forma` while compilation was running. The full
 warm rerun passed without changes to those sources. Caps reported
 “29 crates and 1 binary” checked for wasm32 with zero errors and
 “All budgets within cap. 10 categories inspected.”

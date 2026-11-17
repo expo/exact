@@ -166,5 +166,46 @@ final class ScrollAnchoringIOSTests: XCTestCase {
         XCTAssertEqual(sv.contentOffset.y, 200)
     }
 
+    /// A list's `scrollTop` written outside its mounted rows reports from
+    /// its scroll callback, and the session applies the batch that answers
+    /// at once, inside this batch's restore. Here the first authored scroll
+    /// applies that batch; the follow-end scrollers the restore reaches in
+    /// any order among the authored ones keep where their readers left them.
+    func testABatchAppliedFromAnAuthoredScrollKeepsTheOtherScrollersPlaces() {
+        let p = Presenter()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        let authored = Array(2..<7), followers = Array(10..<16)
+        var ops: [[String: Any]] = [["op": "create", "id": 1, "kind": "view"]]
+        for id in authored + followers {
+            ops.append(["op": "create", "id": id, "kind": "view", "style": ["overflow_y": "scroll"],
+                        "props": ["scrollFollowEnd": String(followers.contains(id))]])
+        }
+        ops += [
+            ["op": "children", "id": 1, "ids": authored + followers],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+        ]
+        for id in authored + followers {
+            ops.append(["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 400.0, "h": 100.0])
+            ops.append(["op": "content", "id": id, "w": 400.0, "h": 1000.0])
+        }
+        p.apply(wireBatch(ops))
+        defer { p.onScrolled = nil; p.reset() }
+        for id in followers { p.views[UInt32(id)]!.scroll!.contentOffset.y = 200 }
+        var nested = false
+        p.onScrolled = { id, _, top in
+            guard let id, authored.contains(Int(id)), abs(top - 500) < 0.5, !nested else { return }
+            nested = true
+            XCTAssertTrue(p.applying)
+            p.apply(wireBatch([["op": "props", "id": 1, "set": ["id": "root"]]]))
+        }
+        p.apply(wireBatch(authored.map { ["op": "props", "id": $0, "set": ["scrollTop": "500"]] }))
+        XCTAssertTrue(nested)
+        for id in authored { XCTAssertEqual(p.views[UInt32(id)]!.scroll!.contentOffset.y, 500, "authored \(id)") }
+        for id in followers { XCTAssertEqual(p.views[UInt32(id)]!.scroll!.contentOffset.y, 200, "follower \(id)") }
+    }
 }
 #endif

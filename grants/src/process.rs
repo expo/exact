@@ -97,6 +97,22 @@ pub fn validate(line: &str) -> Result<(), String> {
     }
 }
 
+/// Why the Mac App Store sandbox refuses one of these lines, if it does (LLP
+/// 1030.005 D2): a program outside the app's bundle, and the login shell
+/// `env.read login:` runs. A bundled helper (`bundle:/…`) and `secret.hold`
+/// are admitted.
+pub fn sandbox_refusal(line: &str) -> Option<&'static str> {
+    let mut words = line.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(SPAWN), Some(target)) if target.starts_with("bundle:/") => None,
+        (Some(SPAWN), _) => Some("the Mac App Store sandbox runs no program outside the app's bundle"),
+        (Some("env.read"), Some(target)) if target.starts_with(LOGIN) => Some(
+            "`env.read login:` runs the login shell, a program outside the app's bundle, which the Mac App Store sandbox does not run",
+        ),
+        _ => None,
+    }
+}
+
 /// A POSIX environment variable's portable name.
 fn is_variable(name: &str) -> bool {
     let mut chars = name.chars();

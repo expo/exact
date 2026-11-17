@@ -41,7 +41,7 @@ final class LaunchURLMacTests: XCTestCase {
         guard Bundle.main.bundleURL.pathExtension != "app" else { return }
         let presenter = NotificationPresenter.shared
         defer { presenter.app = nil; presenter.activate = nil }
-        presenter.install(on: ExactApp.shared, activate: nil)
+        presenter.install(on: ExactApp.shared, activate: nil, boot: nil)
         XCTAssertTrue(presenter.app === ExactApp.shared)
     }
 
@@ -402,12 +402,13 @@ final class LaunchURLMacTests: XCTestCase {
         XCTAssertEqual(activations, 0)
     }
 
-    func testNotificationClickSelectsItsOwnerWhenDefaultLabelsRepeat() {
+    func testNotificationClickSelectsItsOwnerWhenLabelsRepeat() {
         let app = ExactApp.shared
-        let a = app.makeSession()
-        let b = app.makeSession()
-        a.destroy()
-        let c = app.makeSession()
+        // Default labels no longer repeat (4e0758cd5, "A package's context names the session's directories and a label
+        // the same at every launch": each is the first free session-N), so the collision is two sessions given one label.
+        let label = "repeat-\(UUID().uuidString)"
+        let b = app.makeSession(label: label)
+        let c = app.makeSession(label: label)
         defer { b.destroy(); c.destroy(); NotificationPresenter.shared.app = nil; NotificationPresenter.shared.activate = nil }
         XCTAssertEqual(b.label, c.label, "the label collision this click must survive")
         let presenter = NotificationPresenter.shared

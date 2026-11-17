@@ -1,4 +1,5 @@
 import { beforeAll, afterAll, test, expect } from 'bun:test';
+import { EXE } from '../../scripts/paths.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -18,7 +19,7 @@ beforeAll(async () => {
     if (fixture === 'list-modals') writeFileSync(source, readFileSync(resolve(import.meta.dir, 'conformance/list-routes.contract'), 'utf8').replace('state depth = 1', 'state depth = 3'));
     const plan = resolve(directory, `${fixture}.plan`);
     plans.set(fixture, plan);
-    const compiled = spawnSync(resolve(root, 'target/debug/contract'), ['build', source, '-o', plan], { encoding: 'utf8' });
+    const compiled = spawnSync(resolve(root, `target/debug/contract${EXE}`), ['build', source, '-o', plan], { encoding: 'utf8' });
     expect(compiled.status, compiled.stderr).toBe(0);
     for (const renderer of ['js', 'rust', 'none']) {
       const dist = resolve(directory, `${fixture}-${renderer}`);

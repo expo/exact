@@ -1,9 +1,5 @@
-# What a push or pull request waits for: fmt, caps, boot, the workspace check and
-# clippy on Linux, and the workspace check on macOS, where host/apple's Rust
-# only builds. No test runs here. rules/RULES.md blocks on nothing slower than
-# 60 seconds, and a hosted runner takes over an hour for the tests, so they are
-# tests.yml's. Apple app builds, XCTests, simulator drives, Android and Windows
-# builds are not part of CI.
+# The only blocking command is scripts/gate.mjs; only failed parts fail CI.
+# Cold compilation may exceed its 30 s warm budget. Full verification runs hourly.
 name: ci
 
 on:
@@ -11,15 +7,17 @@ on:
     branches: [main]
   pull_request:
 
-# Every push to main gets its own result. A pull request's newer push replaces
-# the run of the one before it.
+# A run on main is never stopped by a newer push. While one runs, the newest
+# push waits and takes the place of any push that was waiting before it, so
+# pushes do not pile up. A pull request's newer push replaces the run of the
+# one before it.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
+  CARGO_INCREMENTAL: "1"
 
 jobs:
   linux:
@@ -57,27 +55,17 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Cargo dependencies
-        # caps's wasm check lists and checks the web crates offline, so the registry
-        # must already hold every crate, and nothing before this step fetches them.
+        # caps inspects workspace metadata offline.
+        id: deps
         run: cargo fetch --locked
 
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: caps
-        run: bun scripts/caps.mjs
-
-      - name: boot
-        run: bun scripts/boot.mjs
-
-      - name: workspace check
-        run: cargo check --workspace --all-targets --keep-going
-
-      - name: clippy
-        run: cargo clippy --all-targets --keep-going -- -D warnings
+      - name: gate
+        run: bun scripts/gate.mjs
 
   macos:
-    runs-on: macos-26
+    # A Blacksmith runner, as in expo/expo: GitHub's hosted macOS runners are
+    # shared by every repository in the org.
+    runs-on: blacksmith-6vcpu-macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -99,5 +87,8 @@ jobs:
       - name: Bun dependencies
         run: bun install --frozen-lockfile
 
-      - name: workspace check
-        run: cargo check --workspace --all-targets --keep-going
+      - name: Cargo dependencies
+        run: cargo fetch --locked
+
+      - name: gate
+        run: bun scripts/gate.mjs

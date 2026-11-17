@@ -126,6 +126,93 @@ fn configured_entry_passes_the_shared_secret_backend_and_configuration_errors() 
     ));
 }
 
+/// A source that names no app id takes the manifest's, which the host keys
+/// its storage roots by; one that names its own keeps it, and a replacement
+/// keeps the id the binary admitted.
+#[test]
+fn a_source_without_an_id_takes_the_manifests() {
+    #[derive(Default)]
+    struct Unnamed;
+    impl DataSource for Unnamed {
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::Number(1.))
+        }
+    }
+    crate::configured!(Entry, Unnamed, || Swappable::off(Unnamed)
+        .named("com.example.unnamed"));
+    assert_eq!(Entry::default().app_id(), "com.example.unnamed");
+    assert_eq!(Swappable::off(Unnamed).app_id(), "");
+    assert_eq!(
+        Swappable::wasm(Fixture).named("com.example.other").app_id(),
+        "test.logic"
+    );
+    let native = Swappable::wasm(Unnamed)
+        .with_native("abc", || Unnamed)
+        .named("com.example.unnamed");
+    let mut plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    plan.app_id = "com.example.unnamed".into();
+    let plan = plan.encode();
+    let module = wasm("");
+    let mut meta: serde_json::Value = serde_json::from_str(&receipt(&plan, &module)).unwrap();
+    meta["appId"] = json!("com.example.unnamed");
+    meta["grants"] = json!("");
+    meta["source"] = json!("abc");
+    let replaced = native
+        .replacement(&plan, &meta.to_string(), module)
+        .unwrap();
+    assert!(replaced.embedded.is_some());
+    assert_eq!(replaced.app_id(), "com.example.unnamed");
+}
+
+/// Under a variant (LLP 1030.008 D2) a source naming none or naming the base
+/// app takes the variant's id, one naming another keeps its own (the runner's
+/// gate refuses it), and a replacement keeps the variant's id.
+#[test]
+fn a_variant_names_a_source_that_names_the_base_app() {
+    let variant = |source: Swappable<Fixture>| source.named_variant("test.logic.dev", "test.logic");
+    assert_eq!(variant(Swappable::wasm(Fixture)).app_id(), "test.logic.dev");
+    assert_eq!(
+        Swappable::wasm(Fixture)
+            .named_variant("com.other.dev", "com.other")
+            .app_id(),
+        "test.logic"
+    );
+    let native = variant(Swappable::wasm(Fixture).with_native("abc", || Fixture));
+    let mut plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    plan.app_id = "test.logic.dev".into();
+    let plan = plan.encode();
+    let module = wasm("");
+    let mut meta: serde_json::Value = serde_json::from_str(&receipt(&plan, &module)).unwrap();
+    meta["appId"] = json!("test.logic.dev");
+    meta["grants"] = json!(Fixture.grants());
+    meta["source"] = json!("abc");
+    let replaced = native
+        .replacement(&plan, &meta.to_string(), module.clone())
+        .unwrap();
+    assert_eq!(replaced.app_id(), "test.logic.dev");
+    // A module's own crate names the base: its receipt and its metadata are
+    // admitted under the variant, and a third id is not.
+    meta["source"] = json!("def");
+    for (id, admitted) in [
+        ("test.logic", true),
+        ("test.logic.dev", true),
+        ("another", false),
+    ] {
+        meta["appId"] = json!(id);
+        let candidate =
+            variant(Swappable::wasm(Fixture)).replacement(&plan, &meta.to_string(), module.clone());
+        assert_eq!(candidate.is_ok(), admitted, "{id}");
+        if let Ok(mut candidate) = candidate {
+            candidate.activate_for_validation().unwrap();
+            assert_eq!(candidate.app_id(), "test.logic.dev");
+        }
+    }
+}
+
 fn encoded(op: u8, f: impl FnOnce(&mut Writer)) -> Vec<u8> {
     let mut w = Writer::default();
     w.u32(abi::ABI);
@@ -147,6 +234,9 @@ pub(crate) fn wasm_with_contract(call: &str, stateless: bool) -> Vec<u8> {
     });
     let answer = encoded(2, |w| {
         w.u8(1);
+        // No topic, no draw of randomness.
+        w.u32(0);
+        w.u32(0);
         w.u32(1);
         w.string("token");
         w.u8(1);
@@ -342,7 +432,9 @@ fn wasm_fuel_memory_imports_and_export_bounds_are_enforced() {
 #[test]
 fn a_call_after_a_trap_runs_in_a_fresh_instance() {
     let store = Store::new("secret.keep token", []);
-    let good = abi::call_request(&store, "x", &[], None).unwrap().len();
+    let good = abi::call_request(None, &store, "x", &[], None)
+        .unwrap()
+        .len();
     let used = "i32.const 1024 i32.load";
     let reach = |pages: u32| {
         format!(
@@ -368,6 +460,37 @@ fn a_call_after_a_trap_runs_in_a_fresh_instance() {
         assert!(
             matches!(&trapped, DataError::Interface(e) if e.contains("unreachable")),
             "{trapped:?}"
+        );
+        assert_eq!(candidate.query("x", &[]).unwrap(), Value::Number(42.));
+    }
+}
+
+// A call refused after the module ran, as a reply over the seam's bound is
+// (`exact_logic_call` answers 1), may have changed the module's own state:
+// "leaky" marks the session at 2048 and is refused, and a marked session
+// refuses every call. The next call runs in a fresh instance.
+#[test]
+fn a_call_after_a_refused_one_runs_in_a_fresh_instance() {
+    let store = Store::new("secret.keep token", []);
+    let good = abi::call_request(None, &store, "x", &[], None)
+        .unwrap()
+        .len();
+    let module = wasm(&format!(
+        "i32.const 2048 i32.load if i32.const 1 return end
+        local.get 2 i32.const {good} i32.gt_u
+        if i32.const 2048 i32.const 1 i32.store i32.const 1 return end"
+    ));
+    let plan = plan();
+    let mut candidate = Swappable::wasm(Fixture)
+        .replacement(&plan, &receipt(&plan, &module), module)
+        .unwrap();
+    candidate.activate().unwrap();
+    for _ in 0..3 {
+        assert_eq!(candidate.query("x", &[]).unwrap(), Value::Number(42.));
+        let refused = candidate.query("leaky", &[]).unwrap_err();
+        assert!(
+            matches!(&refused, DataError::Interface(e) if e.contains("refused")),
+            "{refused:?}"
         );
         assert_eq!(candidate.query("x", &[]).unwrap(), Value::Number(42.));
     }

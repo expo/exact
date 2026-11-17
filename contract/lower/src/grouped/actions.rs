@@ -91,7 +91,12 @@ pub(super) fn disclosure(node: &Node) -> Node {
         let inked = attrs.iter().any(|a| a.name == format!("{MARK}color"));
         let sheet = if chevron(el) && !inked {
             vec![s("color", TERTIARY, *span)]
-        } else if tag == "link" && children.iter().rfind(|c| !hidden(c)).is_some_and(chevron) {
+        } else if tag == "link"
+            && children
+                .iter()
+                .rfind(|c| !hidden(c))
+                .is_some_and(|c| ends_in(c, &chevron))
+        {
             vec![s("color", LABEL, *span)]
         } else {
             Vec::new()
@@ -103,4 +108,28 @@ pub(super) fn disclosure(node: &Node) -> Node {
         Ok(out)
     });
     result.unwrap_or_else(|_| node.clone())
+}
+
+/// Whether a row's last shown child is the chevron: the symbol itself, or
+/// an `if` whose every branch shows that symbol or nothing, and one shows it.
+fn ends_in(node: &Node, chevron: &impl Fn(&Node) -> bool) -> bool {
+    match node {
+        Node::When {
+            then, otherwise, ..
+        } => {
+            let shown = |branch: &Vec<Node>| -> Option<bool> {
+                let shown: Vec<&Node> = branch.iter().filter(|c| !hidden(c)).collect();
+                match shown.as_slice() {
+                    [] => Some(false),
+                    [one] if ends_in(one, chevron) => Some(true),
+                    _ => None,
+                }
+            };
+            matches!(
+                (shown(then), shown(otherwise)),
+                (Some(a), Some(b)) if a || b
+            )
+        }
+        _ => chevron(node),
+    }
 }

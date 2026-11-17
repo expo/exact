@@ -67,7 +67,7 @@ export function eq(a, b) {
   for (let i = 0; i < a.length; i++) if (!eq(a[i], b[i])) return false;
   return true;
 }
-/** `failure(x)`'s code for what a source let through (LLP 1109 D3), as js/src/prelude.js `failureCode` and
+/** `failure(x)`'s code for what a source let through (LLP 1109 D3), as js/src/reply.js `failureCode` and
  * runner/src/failure.rs read it: a fetch's rejection by its kind, a coded storage refusal, an answer ts-data.js
  * found outside its shape (`Shaped`), else the source's own error. */
 export const Shaped = Symbol("shape");
@@ -79,7 +79,7 @@ export function failureCode(e) {
   return e.kind === "Unavailable" && typeof e.code === "string" ? "storage" : "error";
 }
 /** `failure(x).reason`: a string the thrown value carries as `reason` (the snapback4 driver's refusal code, `SLOT_FULL`),
- * else empty; as js/src/prelude.js `fail` reads it (the author's ruling of 2026-10-12). */
+ * else empty; as js/src/reply.js `fail` reads it (the author's ruling of 2026-10-12). */
 export const failureReason = e => e && typeof e === "object" && typeof e.reason === "string" ? e.reason : "";
 
 /** `atomFaces`' `AtomFace` records as the named JSON the runner's bridge writes (LLP 1045.000 D2), each face's colours

@@ -39,6 +39,11 @@ const sources: Sources = {
         await storage.fs.mkdir('app:/data/saved').catch((e: { code?: string }) => { if (e?.code !== 'EEXIST') throw e; });
         await storage.fs.atomicWriteFile(`app:/data/saved/${id}.txt`, text('old'));
         await backgroundFetch({ id: String(id), requests: [request({ url: at('/file'), saveTo: `app:/data/saved/${id}.txt` })] });
+      } else if (kind === 'keep') {
+        // Aborted before a body comes: the file in `saveTo` is not the response.
+        await storage.fs.mkdir('app:/data/saved').catch((e: { code?: string }) => { if (e?.code !== 'EEXIST') throw e; });
+        await storage.fs.atomicWriteFile(`app:/data/saved/${id}.txt`, text('old'));
+        await backgroundFetch({ id: String(id), requests: [request({ url: at('/file?hold=1'), saveTo: `app:/data/saved/${id}.txt` })] });
       } else if (kind === 'userinfo') {
         await backgroundFetch({ id: String(id), requests: [request({ url: at('/file').replace('://', '://alice:secret@') })] });
       } else if (kind === 'hold') {

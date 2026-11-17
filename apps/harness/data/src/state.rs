@@ -9,7 +9,7 @@ use exact_runner::Native;
 
 // The seam's records are the generated ones (LLP 1101.002 P9); the
 // helpers below are this crate's own.
-pub use crate::shapes::{Approval, Block, Entry, Line, ModelChoice, Run};
+pub use crate::shapes::{Approval, Block, Line, LogEntry as Entry, ModelChoice, Run};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
@@ -40,9 +40,10 @@ impl Run {
         }
     }
 
-    /// The same style, other text.
-    pub fn same_style(&self, other: &Run) -> bool {
-        self.fg == other.fg
+    /// Whether `other` can join this run: the same style and the same link.
+    pub fn joins(&self, other: &Run) -> bool {
+        self.href == other.href
+            && self.fg == other.fg
             && self.bg == other.bg
             && self.bold == other.bold
             && self.italic == other.italic
@@ -60,13 +61,13 @@ impl Line {
         }
     }
 
-    /// Append a run, merging it into the last when the styles match.
+    /// Append a run, merging it into the last when it [joins](Run::joins) it.
     pub fn push(&mut self, run: Run) {
         if run.text.is_empty() {
             return;
         }
         if let Some(last) = self.runs.last_mut() {
-            if last.same_style(&run) {
+            if last.joins(&run) {
                 last.text.push_str(&run.text);
                 return;
             }
@@ -230,6 +231,13 @@ pub struct State {
     /// Which transcript this is: `/clear` starts a new one, and the screen
     /// keys its log by it, so an inline terminal clears too.
     pub epoch: f64,
+    /// An error entry was added since the last turn started; the screen
+    /// declares the failure as its head's `status` (LLP 1101.003 D8).
+    pub failed: bool,
+    /// The host's output cannot change once written (`exactViewport().update`
+    /// is `none`, a run from the command line): nobody can answer an
+    /// approval or press a key (LLP 1101.003 D8).
+    pub unattended: bool,
 }
 
 impl State {
@@ -369,8 +377,10 @@ impl State {
         })
     }
 
-    /// Add an error entry (settled).
+    /// Add an error entry (settled). The session has failed until the next
+    /// turn starts.
     pub fn error(&mut self, message: &str) -> String {
+        self.failed = true;
         self.push(Entry {
             kind: "error".into(),
             blocks: vec![Block::p(vec![Run::plain(message)])],

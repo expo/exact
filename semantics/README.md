@@ -10,14 +10,15 @@ tested against it, differentially and at random.
 | `Contract/Trig.lean` | `sin` and `cos`: libm 0.2.16's kernels and argument reduction, including large arguments, over the exact F64 operations. No hardware floats or external oracle. |
 | `Contract/Binary64Facts.lean` | That model proved: correct rounding, overflow, monotonicity, exactness (below). |
 | `Contract/Number.lean` | `max`/`min` as JavaScript's `Math.max`/`Math.min` (NaN and signed zero included), and JavaScript's `Number#toString` over exact rationals. |
-| `Contract/Value.lean` | Values, structural equality as the runner's `compare::equal`, and the roster's string functions. |
+| `Contract/Value.lean` | Structural equality as the runner's `compare::equal`, and the roster's string functions. |
 | `Contract/Format.lean` | The roster's formats (`formatTime`, `formatDate`, `formatDay`, `formatNumber`) and `t(...)`'s strings tables, as the runner computes them. |
 | `Contract/Route.lean` | The router (LLP 1038): canonical locations, the route table's matching, `path`, launch, the six verbs and the reads. |
 | `Contract/Sort.lean` | `sortBy`'s order (LLP 1116.016 §5): a key per item (a number with NaN as +0, or a string's UTF-16 code units), core's `List.mergeSort` on the items decorated with their keys, ascending or descending. |
 | `Contract/SortFacts.lean` | That order proved: a strict total order on keys, and the sort's answer a permutation, sorted by key, stable (below). Kept apart from `Sort.lean`, which the VM model imports and the extracted VM builds at another Lean. |
 | `Contract/Eval.lean` | Operational semantics of expressions: the interpreter `eval`. |
 | `Contract/Tabs.lean` | Navigation tab eligibility and selection, shared by the flat and component interpreters. |
-| `Contract/Runtime.lean` | Operational semantics of programs: statements, actions as transactions, settlement of derives and resources, rendering with keyed rows, timers (gated by `when` and `key=`), queued sends, events. |
+| `Contract/Settle.lean` | Run-time value checks (`conforms`, `typed`), the data seam (`Oracle`), and settlement of derives and resources. |
+| `Contract/Runtime.lean` | Operational semantics of programs: statements, actions as transactions, rendering with keyed rows, a child's requests and sends, timers (gated by `when` and `key=`), queued sends, events. |
 | `Contract/Big.lean` | The same semantics as inductive big-step relations, with proofs that the interpreter is sound and complete for them and that they are deterministic. |
 | `Contract/Axiomatic.lean` | An axiomatic semantics: a Hoare logic for action bodies, proved sound against the operational semantics, plus the transaction laws (a refused action changes nothing, reads see the pre-state, the last write wins). |
 | `Contract/Invariant.lean` | Invariants of runs: the configurations a program reaches from boot by any events (`Reachable`), and the rules that prove a property of all of them (`Reachable.invariant`, `Reachable.slotIn`). |
@@ -25,6 +26,7 @@ tested against it, differentially and at random.
 | `Contract/Vm.lean` | A model of the expression VM (`runner/src/vm.rs`) for the opcodes expressions and action bodies use, over instructions with symbolic operands, and a decoder from the plan's bytes (`plan/tables/format.json`, `opcodes`). |
 | `Contract/Lower.lean` | A compiler from the semantics' expressions and statements to VM code, mirroring `contract/lower` (`expr.rs`, `stmts.rs`) instruction for instruction. |
 | `Contract/VmFacts.lean`, `Lower{Types,Sim,Spec,Proof,Lists,Calls,Correct,Stmt}.lean` | Its correctness proof (below). |
+| `Contract/VmRows.lean` | Executable derive calls over the VM: fresh callee machines, owner-frame, owned-slot and owned-resource scope, production resource accounting, and caller restoration. |
 | `Contract/LowerCheck.lean` | The Lean half of `difftest lowering`. |
 | `vm-extract/` | The shipped VM machine (`runner/src/machine.rs`) extracted to Lean by Charon and Aeneas, and proved to refine `Contract/Vm.lean` step by step and run by run (`vm-extract/README.md`). |
 | `Contract/ValTy.lean` | Types as sets of values (`ValTy`, `conforms` without finiteness), the order and join the checker's `?` induces (`Ty.le`, `Ty.unify`), and that `conforms` at a complete type gives `ValTy`. |
@@ -78,7 +80,15 @@ in one generated Lean module whose `main` prints `Contract.Observe.run` for
 each. The two texts must match line for line. Data sources are a seeded oracle
 that answers any call with a value of the declared shape. The runner's
 transcript of that oracle becomes the Lean side's oracle, so if the semantics
-makes a call the runner didn't, that is a divergence.
+makes a call the runner didn't, that is a divergence. What the runner answers
+itself never reaches the oracle: its own sources (`exactViewport`, `exactPage`,
+…) and a native module's (LLP 1133.002 D13), which it answers from the module's
+substitute. Each such resource that answered at boot holds that answer as a
+host fact (`fact` in the oracle's text), and each module's source is named
+(`module`). Neither does a source the program declares (LLP 1162.001), whose
+HTTP request the runner makes itself: each is named (`fetch`), and a call to one
+is outside the semantics. A live `time`'s text (LLP 1126 D6) is the runner's
+presentation too, and the observation leaves it out.
 
 The observation starts with `== <step>` and `outcome ok|refused|poisoned`.
 Before the configuration, each attempted commit prints
@@ -174,9 +184,15 @@ replay the landing; a disagreement still fails verification. The `.events` file
 records its `clock until` origin and bound in a comment. The bound has no effect
 in this world. The usual mutation clock runs after a met step.
 
-The observation matcher reads only top-level values. A field or index path such
-as `session.phase` or `rows.0` stops at `clock until (field path)` before landing.
-The receipt counts met waits, not-met stops and field-path stops separately.
+State expectations and waits resolve record fields and zero-based list indices
+through the compiled plan's shapes on either evaluator's observation. Paths such
+as `session.phase` and `rows.0.name` read the same positional values. Present
+options unwrap during traversal and at the resolved leaf. An existing `none`
+can match `none`; a missing root, field or index, or a path through `none` or
+a scalar, has no value and cannot match even `none`. Traversal
+and value scanning are bounded by the runner's value-depth limit. A wait on a
+missing path lands once, then stops as not met. The receipt counts met waits and
+not-met stops separately.
 A leading `size WxH` is consumed as a launch fact with no event: the harness has
 no layout. The test parser refuses a `size` after an input; a `resize` still
 stops the block.
@@ -553,8 +569,12 @@ source as it is.
 3. **Prove.** A reachability invariant of one slot is
    `Reachable.slotIn`: the values the slot starts with (`SlotOrigin`:
    unfold the program's `states`), and for every action a handler of the
-   view or a task names, the body keeps it (`BodyKeeps`). An action body
-   is unfolded by `wp` (`BodyKeeps.of_wp`); `simp` with the `EvalR` rules
+   view, a task or a mutation's `then` names, the body keeps it (`BodyKeeps`).
+   Queue mutation slots use the same rule: `Reachable.slotInvariant` also
+   carries the waiting sends' answer property (`QueuedIn`) through drains.
+   [Queued sends](#queued-sends-and-gated-tasks-llp-1092) describes the
+   corresponding event and advance rules. An action body is unfolded by
+   `wp` (`BodyKeeps.of_wp`); `simp` with the `EvalR` rules
    (`EvalR.str_iff`, `EvalR.var_local`, …) turns it into a statement about
    values. A body that never touches the slot is dismissed by `decide`
    (`Stmt.noAssigns`, `BodyKeeps.untouched`); a body that calls an action
@@ -568,37 +588,27 @@ source as it is.
    `decide +kernel` for given operands. `native_decide` is not used (it
    adds an axiom).
 
-Worked example: Type Tour's `screen` is a string and
-`go(target: string)` writes any string it is given, yet the phone is only
-ever on one of its five screens, because every handler that names `go`
-passes a literal screen.
+Type Tour declares routes for its six screens. Its generated embedding also
+contains the not-found route. The proof checks the names and the parent chains
+used by direct Display and conversation links:
 
 ```lean
-def screens : List String := ["lock", "home", "settings", "display", "messages"]
-def ScreenOK (v : Value) : Prop := ∃ s ∈ screens, v = .str s
+def screens : List String := ["lock", "home", "messages", "thread", "settings", "display", "notfound"]
 
-theorem screen_always : ∀ c, Reachable typeTour c → SlotIn "screen" ScreenOK c.slots := by
-  refine Reachable.slotIn screen_boot ?_
-    (fun _ a ha => by simp [typeTour, clockActions, thenActions] at ha)
-  intro c ev a args env ls vs payload rows _ hh hvs
-  refine BodyKeeps.of_wp fun ad had hname => ?_
-  subst hname
-  simp only [typeTour, List.mem_cons, List.mem_nil_iff, or_false] at had
-  rcases had with rfl | rfl | … <;> simp only [wp, assignPre] <;>
-    simp [Keeps, Effects.write, Effects.rowWrite, Effects.command, ScreenOK, screens]
-  -- left: `go`, whose argument `go_handler` (checked over the view by
-  -- `decide`) says is a literal screen
-  …
+theorem route_names : ∀ r ∈ typeTour.routes, r.name ∈ screens := by decide
+
+theorem display_parents :
+    (Route.chain typeTour.routes "/settings/display").map (·.name) =
+      ["lock", "home", "settings", "display"] := by decide +kernel
 ```
 
-`screen_boot` unfolds `typeTour.states` to see `screen` starts as
-`"lock"`; tasks are none; every action but `go` is dismissed by `simp`
-over its `wp`. The whole proof is `Apps/Proofs/TypeTour.lean`. What is
+The proofs are in `Apps/Proofs/TypeTour.lean`. What is
 proved, by app:
 
 | App | Theorem | Says |
 |---|---|---|
-| Type Tour | `TypeTour.screen_always` | `screen` is always one of the five screens. |
+| Type Tour | `TypeTour.route_names` | Every declared route names one of the seven screens, including not-found. |
+| Type Tour | `TypeTour.display_parents`, `TypeTour.thread_parents` | Direct Display and conversation links include Settings and Messages respectively. |
 | Update Lab | `UpdateLab.advance_keeps_user_state` | Moving the clock (the 250 ms probe) never changes `counter`, `note` or `live`. |
 | Update Lab | `UpdateLab.results_shape` | The three result slots always hold `none` or `some` answer. |
 | Update Lab | `UpdateLab.increment_adds_one` | A committed `increment` leaves `counter` at its old value plus one. |
@@ -671,6 +681,9 @@ arguments, inside a row instance), and compares the result with `eval`'s (or
 instruction for instruction. A divergence or an undecodable body fails the
 run and keeps the program under `target/difftest/failures/`; a structural
 difference or a body `Contract.Lower` refuses is reported by category.
+Before either lowering sweep, it also runs the 69 fixed executable-row
+accounting cases described below. A resource outcome or a returned counter
+that differs fails the command.
 
 ```
 cargo run -p contract-difftest -- lowering --seed 7 --count 500
@@ -712,7 +725,9 @@ own slots, settlement, actions and timers are `Contract.Runtime`'s
 (`rootProgram`). Each child's `exactViewport()` and `exactPage()` resources
 live in that root environment under `name@Component`, shared by all its
 instances. Reads, status queries and refreshes in the child's frame resolve
-to those resources.
+to those resources. A child's other resources are its instance's own
+requests (`csettleOwned`, as the flat `settleOwned` below), held in the
+instance's store beside its states.
 
 **The expander** (`Contract.Expand`) transcribes inline.rs and its
 submodules step for step, numbering and spelling included: capture-avoiding
@@ -724,6 +739,9 @@ each `children` node under that node's region arms, props and injects captured a
 parameters `@capture:n:i`, tail calls resolved (`p@ck`, `x@bk`, `p@tailk`; the
 `@check:` statement the flat embedding drops is not emitted). Device resources
 are hoisted once per declaration, including unused components, in file order.
+A child's other resources are lifted per use as `x#n`, their arguments and
+gate substituted after its derives, with the use's owner, after the root's
+and the device resources.
 Their value reads and refresh targets are renamed; same-named function calls
 keep their heads. Style names, surface names and positional syntax words stay
 unchanged; only a conditional `class`'s condition and a surface's arguments
@@ -749,8 +767,8 @@ component-level semantics of the unexpanded file against the flat
 semantics of Rust's expansion over the case's script, the oracle the
 runner's transcript. It compares outcomes and configurations, omitting commit
 traces (`ran …`), which the component-level semantics does not emit, and the
-slots the expansion lifts out of children (`slot name#n …`), which it keeps
-per instance. A disagreement is kept under
+slots and resources the expansion lifts out of children (`slot name#n …`,
+`resource name#n …`), which it keeps per instance. A disagreement is kept under
 `target/difftest/expansion/`, its script shrunk.
 
 **What is proved** (no `sorry`, no axioms beyond Lean's own):
@@ -787,7 +805,7 @@ per instance. A disagreement is kept under
 - `ExpandMap.use_prop`, `use_state`: the same of the expander's own
   substitution for a use (`Expand.baseMap`, `withDerives`, which
   `inlineNode` builds it with), for a component whose props, injects,
-  states, actions, derives and device resources have distinct names: a
+  states, actions, derives and resources have distinct names: a
   prop's replacement is its argument substituted at the use site (`map_prop`),
   a state's its lifted name (`map_state`).
 
@@ -888,6 +906,17 @@ All without `sorry` or axioms beyond Lean's own (`propext`,
   or traps correspondingly. The trusted base (the translation, a few standard
   functions, the runner's `Val` and `Host` instances against the model's) is
   in `vm-extract/README.md`.
+- `VmRows.extent_nodes_at_bound`, `extent_bytes_at_bound`,
+  `extent_depth_at_bound` and their one-past counterparts prove where
+  `Extent.check` refuses an extent record, at each bound and one past it;
+  `take_steps_exact` proves that an admitted or refused list charge retains the
+  saturated counter; and
+  `unwind_trap_counters`/`unwind_trap_depth` prove that a nested refusal
+  returns the shared counters to a caller with no active row call. The
+  executable-row wrapper charges these bounds around the unchanged `Vm.step`.
+  The walks measuring a value's extent and a roster result's size are
+  `partial def`s that Lean's kernel cannot unfold. No theorem describes what
+  they compute; the 69 accounting cases compare them with the runner.
 - `EnvGood.envOK` (`EnvSound.lean`): an environment whose root slots are
   present and of their types, whose row slots in force are of theirs and
   whose settled derives and resources are declared ones of theirs
@@ -938,7 +967,9 @@ All without `sorry` or axioms beyond Lean's own (`propext`,
   event from a reachable configuration, whatever the oracle answers,
   commit or fail for a `Legitimate` reason — never a type error, an
   unbound name or a `pending` read — and every reachable configuration is
-  well typed.**
+  well typed.** The checks at a derive, a slot written and a slot
+  initialized report a value of another type as a type error (`unfit`),
+  so the theorem says they refuse only a number that is not finite.
 - Numbers (`Binary64Facts.lean`). A finite double `y` is the integer
   `y.scaled` times `2^-1074`, and an operation's exact result `±a / (d *
   2^1074)`, so distances are compared in integers. `round_nearest`: the
@@ -984,7 +1015,7 @@ is armed, due at the commit's time, by every commit that stood in which a
 send into the mutation was answered (here every answer is synchronous,
 `armThens`; arming again moves the due time); it runs as its own commit
 at the next advance or `land`, before any timer due at or after its time, ties by
-the mutations' order. A frame task is the runner's virtual display while
+the mutations' order, then an instance's (below, "A child's sends"). A frame task is the runner's virtual display while
 the host presents no frames (the harness never does): due at
 `virtualFrame 0 k = k·1000/60` for k = 1, 2, …; presented frames
 (`Runner::frame`) are not modelled. One advance makes at most 4096 fires,
@@ -995,10 +1026,13 @@ the host presents no frames (the harness never does): due at
 ## Formatting and localized text
 
 `formatTime`, `formatDate`, `formatDay` and `formatNumber` (`Contract/Format.lean`) are
-the runner's (`runner/src/stdlib.rs`, `runner/src/format.rs`) transcribed:
+the runner's (`runner/src/stdlib.rs`, `runner/src/format/`) transcribed:
 `en-US` at the fixed UTC offset the call names, the wall time truncated
 then shifted and held to years 1–9999 (else `""`), the calendar by
-Hinnant's `civil_from_days` over integers, compact numbers from the
+Hinnant's `civil_from_days` over integers. `formatDate` also takes a strict
+ASCII `YYYY-MM-DD` Gregorian day key in years 0001–9999, validated by
+`Str.isoDate` and formatted without shifting its day; invalid keys or offsets
+print `""`. Compact numbers come from the
 shortest digits Rust's `{}` prints (of two equally near shortest forms the
 upper, where `toString` takes the even). `t(...)` reads the strings tables
 (`strings/<locale>.json` beside the source), which the embedding carries
@@ -1011,6 +1045,22 @@ locale slot, the key, then each name and its value through `toString`;
 `{$name}`/`{name}` and the `\{`, `\}`, `\\` escapes. The host's `place`
 event (a viewer locale other than the base) is not delivered by the
 harness, so only the base table is read there.
+
+Each takes the format locale last (LLP 1054.000.003 D6), as the embedding
+writes the call: `""` in a program whose tables all format as `en` does,
+which is the `en-US` above, else the format slot (`#format`, initialized to
+the base table's name after the locale slot and left out of the
+observation, as the runner's and the JS target's are). Its table's record
+(`contract/lower/src/formats.rs`) rides in that table's (key, text) pairs
+under `Format.formatKey`, a key no table can hold, and `Format.recordOf`,
+`styledIn`, `compactIn`, `dateIn`, `timeIn` and `dayIn` are
+`runner/src/format/locale.rs` transcribed over it. The corpus's
+`localized-formats` reads a German base, and `localized-formats-at` a base named
+with an extension (`de-AT-u-nu-latn`) whose money has its own symbols.
+Outside the semantics: a localized
+formatter in a `fn`, whose body the compiler expands where it is called and
+so reads the format slot there, while the semantics evaluates a `fn` closed
+over its parameters (as it does `t` there, which reads the locale slot).
 
 ## Queued sends and gated tasks (LLP 1092)
 
@@ -1039,6 +1089,19 @@ queue mutation, on both sides. The corpus has `mutations/queue-*` (`queue-then`:
 queue with a `then` beside a timer) and `timers/gated-*` (`gated-frame`), and the generator writes queue mutations (sent more than
 once on a path) and gated tasks over the states alone.
 
+The one-slot invariants include queue mutation slots. `SlotInvariant x V c`
+combines `SlotIn x V c.slots` with `QueuedIn x V c.queued`:
+`∀ q ∈ c.queued, q.1 = x → ∀ v, V (.some v)`. Boot has no waiting sends;
+`BodyKeeps` supplies the answer property for new sends, and a drain either
+lands such an answer, removes a refused send, or keeps it stalled. Poisoning
+clears the waiting sends. `Reachable.slotIn` projects the slot property;
+`Reachable.slotInvariant`, `Event.step_slotInvariant` and
+`Reachable.advance_slotInvariant` carry both. `Contract/Invariant.lean` has
+a checked example with two sends to one queue, a drain, refusal and poisoning.
+The equality rule `Reachable.advance_untouched` and the slot-only event rule
+`Event.step_slotIn` still require a slot no drain writes: waiting answers
+can change a queue mutation's slot even when no clock action touches it.
+
 What it does not carry, as restrictions:
 
 - `pending(m)` is false for a queue mutation whose send waits (the oracle
@@ -1047,9 +1110,6 @@ What it does not carry, as restrictions:
 - A send behind one in flight (every answer here is synchronous) is the
   runner's and the conformance plans' tests (`contract/cli/tests/it/queue.rs`,
   `host/web-js/conformance/queue.contract`).
-- The one-slot invariants (`Reachable.slotIn`, `Event.step_slotIn`,
-  `Reachable.advance_untouched`) are proved of slots that are not a queue
-  mutation's, whose answers an advance lands (`QUEUE.md`).
 - The component-level semantics (`Contract.CompSem`) refuses both, so
   `difftest expansion` writes and reads programs without them.
 
@@ -1060,26 +1120,103 @@ when cond`). `settle` reads it before the arguments (`gateOpen`; a value
 other than `true` closes it, as the runner reads it). Closed, the resource
 is idle: its arguments are not read, nothing is asked even when the commit
 refreshes it, it keeps its previous value (`idleValue`; before any value,
-its type's zero, `zeroOf`), it has no `Settled.args` entry, and its name is
-in `Settled.idle`. With no arguments kept, the settlement that opens the
+its placeholder, `placeholderValue`), it has no `Settled.args` entry, and its
+name is in `Settled.idle`. With no arguments kept, the settlement that opens the
 gate asks again, at the same arguments or new ones. `current(r)` reads
 `Env.idle`: every settled answer here answers its arguments, so it is true
 unless `r` is idle; the VM reads the runner's flag (`Vm.Env.currentResources`,
 `CurrentResource`), and the lowering proof takes the two to agree (`RefOk`).
-The corpus has `resources/current` and `resources/gate`.
+The embedding carries the materialized placeholder in `ResourceDecl.placeholder`:
+the type's zero with any `else empty(field=value, …)` overrides, including an
+enum's first member even though the embedding types enums as strings. It uses
+the compiler's `contract_types::placeholder::materialize`, as plan lowering does.
+The corpus has `resources/current`, `resources/gate`, `resources/idle-placeholder`
+and `resources/idle-enum`.
 
 What it does not carry:
 
-- A placeholder: a resource idle before its first answer holds its type's
-  zero, where the runner shows its `else`. A program that gates a resource
-  with an `else` placeholder disagrees until the first answer, and a string
-  enum's zero here is `""` (the embedding types an enum `string`) where the
-  runner's is its first member.
+- A source-backed placeholder (`else source(values…)`): the embedding emits
+  its source as a separate resource but does not use its answer as the idle value.
 - A request in flight when the gate closes, an upload's or a stream's, and
   the window between waking and the forced ask's answer, when the runner's
   `current` is false: answers here are synchronous. The runner's tests
   (`contract/cli/tests/it/when.rs`, `current.rs`) and the conformance plan
   (`host/web-js/conformance/gate.contract`) check these.
+
+## A child's requests (LLP 1035.005.004)
+
+A child component's resource other than a device fact is a request each
+instance owns. The expansion lifts it per use as `x#n`
+(`ResourceDecl.owner`: the region arm whose instances own it; `late` for
+a use outside every region). Root settlement holds an owned one idle at
+its placeholder and never reads it. Each arm instance settles its own in
+the render that makes or updates it (`Runtime.settleOwned`), after its
+states, its gate and arguments read with the instance's slots and locals:
+kept while its arguments are those its value answers, asked of the oracle
+otherwise, idle with its previous value (its placeholder before any answer)
+and no arguments while its gate is closed.
+Passes repeat while one changes, so a request whose arguments read
+another's answer asks on that answer, in the same render. The value and
+its arguments (`x@args`) are the instance's row slots; in the instance's
+rows `Env.withOwned` shows the value as a resource, current while it has
+arguments. A refresh in an action forgets the arguments of the request in
+the action's own instance, so the next render asks again
+(`refreshOwned`). A `late` resource is a root resource whose settlement
+waits for the late slots: boot settles once more after `lateSlots` when
+there is one (`settle`'s `lateReady`). Neither side prints a `resource`
+line for an arm-owned row, which has a value per instance.
+
+Rendering stays safe (`render_good`) without typing a request's arguments
+in its arm's scope: `settleOwned` keeps its slots only where each conforms
+to its slot type and refuses the render on an evaluation error. The corpus
+has `resources/owned` and `resources/idle-values`.
+
+What it does not carry:
+
+- An answer in flight: every owned answer here is synchronous, so the
+  runner's later render of an immediate answer is this render's next pass.
+- An owned request with a source-backed placeholder row (`x#n#else`):
+  the semantics does not use that row's answer as the idle value.
+
+## A child's sends (LLP 1035.005.004 D6)
+
+Each instance of a component that declares a mutation sends it on its own.
+The expansion lifts the mutation per use as `x#n` (`MutationDecl.owner`:
+the region arm whose instances send it; `late` for a use outside every
+region, a root mutation), with its `then`'s arguments (`thenArgs`: the props
+the lifted action captures, read where the use stands). An arm-owned
+mutation's answer is a slot of the instance's row, `none` until it sends
+(`armSlots`); its root slot stays `none`, and neither side prints a `slot`
+line for it. A send from an action lands in the innermost row in force that
+the owner's region made (`sendInstance`, as `applyRowWrites` finds a row
+slot), before the action's writes, as the root's answers do. A send outside
+that row refuses the commit.
+
+The configuration keeps the runner's rows for these sends (`SendRow`): made
+at an instance's first send of a mutation, after the declared mutations'
+rows, in the order made, reusing a row a destroyed instance let go. A commit
+that stood arms each such send's `then` on its row, and the rows of
+instances its render destroyed are let go, their `then`s unarmed
+(`landSends`, `letGo`). An armed row's `then` runs at the next advance or
+`land` (`ownedThen`): in the instance's rows, its arguments read with the
+locals its elements were rendered with. `then`s due at the same time run
+in the order their mutations are declared, the root's before those lifted
+from children, and one mutation's by row (`sendOrder`). A late mutation's `then` reads its
+arguments at the root (`thenCommit`). The corpus has `mutations/owned`.
+
+What it does not carry:
+
+- A send in flight, and leaving before an answer: every answer here is
+  synchronous, so it lands in the sending commit. The runner's
+  (`runner/tests/it/owned_sends.rs`) and the JS target's tests check these.
+- A child's `queue` mutation: its send is outside the semantics (an
+  `unsupported` refusal).
+- A child mutation's `refreshes`: a refreshed request asks again with the
+  same arguments, which the oracle answers as before, as for a root
+  mutation's.
+- The component-level semantics (`Contract.CompSem`) refuses a child's
+  mutations, so `difftest expansion` compares such a file's expansion
+  (`Contract.Expand` lifts them as inline.rs does) but not its meaning.
 
 ## Persisted state (LLP 1116 D5)
 
@@ -1116,7 +1253,14 @@ Geometry reads (`frame(id)`, `measure(id)`: where layout put a node) are
 refused as unsupported rather than given a meaning: layout is out of
 scope. So are resources reading `exactTransport` and `exactMIDI` (LLP
 1125), which the runner answers from its transport and its MIDI ports and
-answers again as they play; the semantics models neither. `sendMIDI` and
+answers again as they play; the semantics models neither. A native
+module's state (a permission, a preferred value, what a send to it answered)
+is the runner's: the semantics holds a module read's boot answer, a call it
+has no fact for (a send, one per element, or a read with no answer at boot:
+closed, held or failed, whose placeholder is no answer) is unsupported, and a
+step where a read no longer holds its boot answer carries `# outside: a
+module's answer moved`, from which a first difference is `OUTSIDE`, a poll
+the trace leaves out included. `sendMIDI` and
 `requestMIDIAccess` are in, as commands. `toLowerCase` and `toUpperCase`
 (LLP 1088 D2) are typed but left out: their mappings are Unicode's case
 tables, which the semantics does not carry, and the generator writes
@@ -1156,17 +1300,208 @@ An attribute whose expression is refused (other than for fuel) has no
 value and the render goes on (`unsetRefused`), as the runner unsets a prop
 or style binding that traps (LLP 1017.003 D3); a refused subject, key or
 row initializer still fails the render. Only a `text`'s text and an
-element's `testId` are observed, and nothing inside a virtualized `list`:
-the runner builds only the rows its window lays out, which is layout, so
-both sides leave a virtualized list's descendants out of the observation
-(the list's own line stays). The runner's evaluation bounds (list steps,
-string length, value size and depth) are a refinement the semantics
-doesn't model (LLP 1090 D8): a step the runner refuses for one
-(`IterationLimit`, `StringTooLong` as a trap or an argument's or write's
-refusal, `ValueTooLarge`, `ValueTooDeep`) is `UNSUPPORTED`, outside the
+element's `testId` are observed. Inside a virtualized `list`, both sides
+omit the direct data `for`'s rows, whose membership is layout, and observe
+the always-mounted lead and trail children. The semantics puts the data
+region in a synthetic observation group; it does not change row scopes or
+lifetime. `Contract.Eval`, `Contract.Runtime` and the bare `Contract.Vm`
+remain unbounded (LLP 1090 D8). A step the runner refuses for one of their
+bounds (`IterationLimit`, `CallLimit`, `CallDepth`, `StringTooLong` as a trap or an
+argument's or write's refusal, `ValueTooLarge`, `ValueTooDeep`) is `UNSUPPORTED`, outside the
 semantics, not a divergence, and so is a step after the runner unset a
 binding for one (its journal line is a `#` note in the runner's
 observation). The web's JS target refuses the same steps
 (`host/web-js/conform.mjs`). The checker's two type refusals that bound a value
 (`type-option-option`, `type-too-deep`) are in `Contract.check` too
 (`checkBounds`, and where `infer` grows a type: `some`, `map`, the roster).
+`Contract.VmRows` is the narrower exception: it accounts for the production
+bounds while an executable row and its caller run.
+
+Executable instance expressions share plan rows during lowering. Source
+expansion and `instance_iff` still use substitution. `VmRows` runs these
+calls over `Vm.step`: a fresh callee machine, empty parameters and writable
+slots, frames cut to the owner, and the caller restored with the returned
+value. Its accounting matches `runner/src/vm.rs` and the generic machine at
+these points:
+
+| Resource | Production charge and refusal | After success or refusal |
+|---|---|---|
+| Machine instructions | The runner has no instruction-fuel counter. Lean's `runFrom` fuel makes the partial interpreter executable and is not transferred to production. | No production state exists to transfer. |
+| Executable-row calls | `LoadDerive` increments `calls` before the 65,536-call check, the 64-level depth check and owner-frame selection. Thus `CallLimit`, `CallDepth` and `BadScope` retain the attempted call. | The callee starts with the incremented count. Its final count is copied to the caller on return and before a trap propagates. |
+| Active row depth | The callee receives `outer.depth + 1`; an attempt from depth 64 refuses before entering. | Depth belongs to the nested `Run`, not a consumable counter. Returning or propagating a trap restores the outer depth; a completed top-level evaluation reports zero. |
+| `Map`/`Filter` list work | `begin` charges one step before binding every callback item, including the first. At body end, `Filter` validates its boolean before keeping a value or charging the next item; `Map` and a true filter measure the kept value before that next charge. A refused step leaves the saturating-add `u32` total above 65,536. | Every admitted or refused charge is copied back through all executable-row callers. A callback's own trap precedes the next item's charge. |
+| Roster list work | `join` charges its input length once the first argument is a list, before validating its separator. `range`, `split`, `concat`, `slice` and `sum` charge output/input items as implemented; `flat` charges outer plus retained inner items; `includes`/`indexOf` charge through the match or the full list. `sortBy` adds no roster charge because its key `Map` already charged each item. Other type/domain checks that precede a charge consume none; failures after a charge retain it. The wrapper derives `split`'s count and `flat`'s length without building their results, and checks every list result's extent from its arguments before evaluating the unbounded roster. | The same shared `steps` counter is returned on success and on every later trap. |
+| Built strings | `Concat`, `join`, localization, replacement/case conversion and URI encoders refuse an output past 67,108,864 UTF-8 bytes. `join` checks after each printable item, before inspecting the next; a one-string list returns the already-admitted string. `VmRows` counts concatenation, interpolation, replacement and URI encoding before it evaluates the unbounded roster, stopping a refused `replaceAll` without constructing its expansion. Unicode case conversion and `NativeProps` have production bounds but remain outside `Contract.Vm`, which reports them as unsupported. | String length is a per-result bound, not a budget. It changes no counter; list work performed before a refused `join` remains charged. |
+| Value nodes, bytes and depth | `Some`, `FailureResource` and `FailureMutation` measure the value they wrap; `List` and `Record` add children left to right; callback results and roster-built lists use the same check. `Extents::of` walks a supplied value in preorder, checking depth before a deeper value can pass the node or byte bound. At most 16,777,216 nodes, 67,108,864 string bytes and depth 64 are admitted. A refusal occurs before the value is kept. | Extent is a bound, not a consumable total. The allocation-keyed extent memo moves into the callee and back even when it traps; it only avoids a repeated walk. `VmRows` uses structural keys, which are equivalent because equal values have equal extents. |
+| Owned resource scope | Production finds an owned request through the retained frame for its owning plan arm. `VmRows` receives that region and arm and refuses `BadScope` when the cut removed the frame or the retained frame belongs to another arm, for value, pending, failed, failure and currentness reads. | A refused read retains the call count already charged at `LoadDerive`; it changes no other counter. Returning restores the caller's full environment. |
+| Sharing margin | Lowering's chain margin is 48, not a runtime refusal. The 48- and 49-call cases both return with those call counts; runtime depth first refuses an attempted 65th nested call. | No special transfer occurs at 48 or 49. |
+
+The nested runner moves its extent memo into the callee and initializes the
+callee with the caller's list and call counters. After `machine::run`, it
+copies the list counter, call counter and memo back before inspecting the
+result, so an ordinary trap and a resource refusal transfer identically.
+`eval_accounted` exposes those already-existing values to the differential
+test. The interpreter's shared generic finish captures `()` for ordinary
+`eval`, so that instantiation neither constructs an accounting receipt nor
+reads the counters; only the accounted entry captures them.
+
+The 69 accounting cases compare one explicit correspondence for every runner
+and model trap. A pending read, type mismatch, bad scope or malformed machine
+therefore cannot agree with another refusal that happens to keep the same
+counters. Model-only `unsupported`, call and fuel failures have distinct names,
+so an unrecognised trap is a disagreement.
+
+`owner_frames_cut` proves selection of the nearest owner;
+`frame_read_rebase` relates item, index and bound reads
+across the cut. Its checked examples exercise owner
+selection, local isolation, depth, sibling calls and caller-spent callback work.
+Instance frames carry their selected arm and owned-slot stores. A call
+reselects slots from the retained frames, taking only the nearest instance of
+each owning region. An owned-resource read likewise requires the retained
+frame for its owning arm.
+Return restores the caller's slots, resources and frames. Checked examples
+cover a retained owner, an inaccessible inner slot, a root call and a missing
+slot in the nearest instance.
+
+Stage 4 is not complete. `LowerSharing.AdmissionAt` formalizes the lowerer's
+admission predicate after source-span candidate and owner-scope selection.
+Those selections are inputs because semantic `Expr` values do not retain
+spans and `Candidate` already carries its owner scope. Every matcher refusal
+after selection is represented:
+
+| Rust matcher | Lean clause | Correspondence |
+|---|---|---|
+| `sharing.rs:33-34` | `depthAvailable`, `inactive` | Fewer than 48 shared bodies are active, and the candidate is not one of them. |
+| `sharing.rs:36-41` | `instanceOnChain`, `sameExpression` | The candidate is on the reader instance's parent chain and is the same expanded source term. |
+| `sharing.rs:45`; `plan/src/unsettled.rs:74-87` | `ownerReachable` | `frame_cut` can reach the candidate's owner by walking outward from the reader. Its numeric frame distance is not the lexical rebase cut. Root and instance owners arrive as `none`; an arm owner arrives with its selected scope. |
+| `sharing.rs:46-58` | `scopeCut`, `sameFreeReads` | The reader has at least the owner's region depth. That independent depth difference is the lexical rebase cut, and every free value read rebases to the same reference. A `for` key has already pushed its item scope before its row arm exists, so its scope and arm cuts can differ. |
+| `sharing.rs:248-304` | `rebaseRef`, `sameReads`; `ExpandSubst.fv` | `Item`, `Index` and `Bound` lose the cut; an expression local cannot escape. `let`, arrow and `match` binders are removed from `fv`; call heads, record shapes and inferred types are not value reads. |
+| `sharing.rs:59-60`, `190-214` | `cachedDepthFits`, `admission_transitive_margin` | A cached row is refused when its recorded call-chain depth plus the active depth exceeds 48. A newly compiled row passes `cachedDepth = none`; lowering records its depth after recursively compiling its body but does not check that sum on this path. |
+
+Rust's `admitted_cut` is the conjunction used by `shared_expression` for both
+new and cached rows. Its focused test admits a nested owner at active depth 1
+with cached depth 47, then independently refuses an off-chain or active
+candidate, a different expression, a scope-depth underflow, different free
+reads, cached depth 48, active depth 48 and a sibling owner that `frame_cut`
+cannot reach. Matching Rust and Lean cases admit slot-only reads when the arm
+and scope cuts differ in either direction. A lowering regression checks a
+child derive read in text, two template keys and a key-only site: every key
+loads the emitted row and contains no copy of its `join` body. The cases beside
+`same_reads` and the closed Lean examples additionally cover hidden `let`
+names, depth underflow and inferred-type differences.
+
+`FvWeakening.wkFv_iff` proves that an expression's value depends only on its
+free value reads. `LowerSharing.admitted_site_value_iff` applies it to an
+admitted reader and owner in the same source environment. The theorem takes
+`LocalsRespectCut`; `localsRespectCut_of_ctx` derives that property from valid
+reader and owner `Lower.Ctx` values, resolvable free names and `FrameCutCtx`,
+the actual suffix relation between their selected VM frames.
+`LowerSharing.admitted_expr_correct` transports `Lower.expr_correct` to the
+read site. `VmRowsProof.Runs` records a whole successful bounded execution;
+`shared_load_runs_iff` proves that a `LoadDerive` has exactly its fresh
+callee's outcomes. `shared_load_returns_iff` stops at the exact resumed-caller
+state, before its continuation. `LowerSharing.admitted_shared_load_value_iff`
+composes the source theorem with that local operational rule, but takes the
+callee correspondence as a premise. `successful_shared_load_has_inlined_run`
+takes the same premise. Neither theorem discharges it for an emitted row graph.
+`VmRowsProof.LiteralGraph.returns` does discharge every callee premise by
+smaller-index induction for a finite load-only graph ending in one string
+literal. It covers nested and transitive loads in that fragment only.
+
+Resource outcomes remain separate. `runReportFrom_ok_runs` gives a call-tree
+witness only for a value outcome. `refused_report_has_no_value` states that a
+refusal has no value conclusion. An inlined bare-VM body can succeed while a
+shared evaluation refuses either the call counter or active depth. Three
+unnamed `native_decide` examples at the end of `VmRowsProof.lean` run those
+cases; they are runs, not theorems. One refuses a shared call at the call
+limit where the inlined body succeeds. One uses a finite acyclic graph whose
+fully inlined body is `[unit, ret]`: 64 shared calls return and the attempted
+65th refuses `CallDepth`. One runs the lowering-margin chains, which return
+charged as 48 and 49 calls. For the proved local rule,
+`admitted_expr_correct` supplies sufficiently large bare-VM fuel after the
+callee-correspondence premise establishes the source value.
+
+The missing general theorem is a simulation for every row graph emitted by
+the Rust sharing transformation, with no semantic callee premise. It needs a
+syntactic relation between Rust's recursive `shared_expression` interception
+and `Lower.compile`, followed by a resource-aware trace proof that replaces
+each successful `VmRows` call with its ordinary inlined derive read. The
+forward direction must assume explicit room for the graph's call count and
+depth; the successful-shared-to-source direction needs no budget premise, and
+a resource refusal makes no value claim. This obligation remains open.
+
+Stage 5 still owes the production refinement: move the shipped row-call path
+into extractable code and prove that code refines `VmRows`. It requires Charon
+and Aeneas and does not start until stage 4 is complete.
+
+`LowerCheck` receives row bytecode, owner regions and arms, and the checked
+substituted expressions that lowering shares. Lowering records the source tag
+at the same point that it emits each plan region. The exporter checks the
+complete region identity before joining each source owner tag and arm to its
+plan region and arm. A source region removed by lowering has no plan entry. A
+changed or reordered roster is a divergence, not an abort; owner projections
+use checked indices and offsets only after that roster matches. For every reached
+configuration, the checker enumerates the live row store. An instance's row
+identity records its source tag, chosen arm or key, and duplicate ordinal;
+render-owned marker rows record its item, position and match binding. The
+checker recovers binder names from the source region and rebuilds plan frames
+without evaluating a condition, match subject, list, key or navigation
+property. A closed panel has no recorded instances; a prerendered panel has
+the instances its render built. The item, key and arm are therefore the
+render's even when an idle clock advance retains the view and store. The
+executable row and its checked substituted expression are both evaluated at
+the reached configuration's current clock. An instance-owned request is read
+from the recorded instance on both sides, including its currentness. The plan
+export also records its owner region and arm, so a row call whose cut removes
+that frame, or retains the same region's other arm, refuses the read as
+production does. The checker runs the row from every live descendant reader
+context and evaluates the substituted expression in the
+corresponding owner context. It checks the row call and every item, position
+and match binding as separate VM runs, so validation adds no aggregate value
+for production to charge. This exercises root and arm owners, transitive row
+calls and recreation after events. The focused mutation test changes an
+arm-owned row's sibling arm, makes its binder depth
+return a different enclosing value, changes its body, returns a root idle
+placeholder in place of a live owned answer, moves that request's plan owner
+into a descendant the row cut removes, and moves it to the unselected sibling
+arm of its retained region; each change produces a divergence. Its unmodified
+case includes nested keyed and conditional owners,
+a stateful child, shadowing and a derive reached only through other derives.
+Focused mutations also cover an opened panel, a prerendered panel inside a
+virtualized row and a reordered first-region owner. Idle-clock cases retain a
+row whose key would become nonfinite if
+reevaluated, and detect a wrong body in a retained row whose finite key would
+change. The accounting corpus holds 69 cases. Compact runner and Lean programs
+run at and one past the list-step, string-byte, value-node, value-byte,
+value-depth, call-count and active-call-depth bounds. The exponential node pair
+runs through `runReport`; no fabricated extent stands in for the model. A
+simultaneous call-count/depth refusal checks `CallLimit` precedence, the
+consumed attempt and depth after unwind. Further pairs cover `join` before an
+invalid separator and before a later invalid item, a non-boolean `Filter`
+result, both failure-reading instructions at the byte bound and one past it, a
+pending failure read, and a supplied value that is both too deep and too large.
+The 48- and 49-call cases
+remain because that sharing margin is not a runtime bound. Every case compares
+the outcome, calls, list steps and final call depth. Two cases compare owned
+value and currentness reads after their owner is cut away; five compare every
+owned read when the retained frame belongs to the wrong arm. A final case calls
+a row, discards its result and compares the caller's returned inner item in the
+same run. The seeded 500-case run and the current 642-case lowering corpus
+report no divergence and no instance-environment refusal.
+
+The checker's limit is deliberate. For a request an instance owns, focused
+mutations detect a wrong executable body, a wrong owner frame, an owner cut out
+of the retained frames and an owner moved to the wrong arm. They do not
+establish arbitrary plan mutations beyond those four, operations outside
+`Contract.Vm` such as `NativeProps` and linked Unicode case conversion, or the
+general correspondence between every admitted shared load and substitution.
+The existing lowering theorems cover `Vm` without this sharing transformation;
+stage 4 must extend them with the matcher's scope and binder conditions and
+state resource-limit outcomes separately. Validation also cannot see an
+instance that production creates under an owned request's placeholder and
+destroys after its synchronous answer within the same commit: the semantics
+settles that request before traversing the child, so its final row store has no
+such identity. That gap and any further undetected plan mutation are owed work,
+not fixes on this branch. Stage 5 must move the shipped row-call path into
+extractable production code and prove that it refines `VmRows`; it waits for
+the other owner-model lanes.

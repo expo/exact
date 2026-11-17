@@ -19,6 +19,22 @@ mod minimum;
 #[path = "browser_replaced_constraints.rs"]
 mod constraints;
 
+/// Chrome 154.0.8037.92: automatic inline insets use the block parent's
+/// justification; an authored inset determines that edge instead.
+#[test]
+fn absolute_canvases_follow_block_justify_items() {
+    let mut failures = Vec::new();
+    for (inset, x) in [("", 40.0), (";left:7px", 7.0), (";right:9px", 71.0)] {
+        let root = props(&rows(
+            "position:relative;width:100px;height:20px;justify-items:center",
+        ));
+        let child = rows(&format!("position:absolute;width:20px;height:10px{inset}"));
+        let k = lay_out_as(root, vec![(2, 1, child)], &[], &[], NodeType::Canvas);
+        failures.extend(mismatches(inset, &k, &[(2, [x, 0.0, 20.0, 10.0])]));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// (name, root rows, element rows, element count, Chrome's frames for
 /// canvas, iframe, video, svg).
 const CASES: &[(&str, &str, &str, u32, [Frames; 4])] = &[

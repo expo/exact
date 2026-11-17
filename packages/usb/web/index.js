@@ -55,6 +55,27 @@ export function implementation({ changed }) {
     if (error) return error;
     try { return (await run(c)) ?? null; } catch (e) { return failure(e); }
   };
+  // Claims, releases and closes on one device run one at a time, each checking ownership when its turn comes, so a
+  // competing claim or a close cannot pass between a check and the browser call it guards.
+  const turns = new Map();
+  const inTurn = (d, run) => {
+    const done = (turns.get(d) ?? Promise.resolve()).then(run);
+    turns.set(d, done.catch(() => {}));
+    return done;
+  };
+  // The connections share one `USBDevice`, whose browser claim admits any of them, so a transfer is checked against the
+  // calling connection's claims before it reaches the device (WebUSB's InvalidStateError for an unclaimed interface).
+  const unclaimed = { error: 'InvalidStateError', message: 'the interface is not claimed by this connection' };
+  const owning = (c, number, direction) => {
+    const i = c.device.configuration?.interfaces.find(i => i.alternate?.endpoints.some(e => e.endpointNumber === number && e.direction === direction));
+    if (!i) return { error: 'NotFoundError', message: `no ${direction} endpoint ${number}` };
+    return c.claimed.has(i.interfaceNumber) ? null : unclaimed;
+  };
+  const refusedSetup = (c, setup) => {
+    if (setup?.recipient === 'interface') return c.claimed.has(setup.index & 0xff) ? null : unclaimed;
+    if (setup?.recipient === 'endpoint') return owning(c, setup.index & 0x0f, setup.index & 0x80 ? 'in' : 'out');
+    return null;
+  };
   const result = r => ({ status: r.status, ...(r.data ? { data: b64(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength)) } : {}), ...(r.bytesWritten != null ? { bytesWritten: r.bytesWritten } : {}) });
 
   return {
@@ -86,35 +107,38 @@ export function implementation({ changed }) {
       return c ? { open: c.open, connected: !c.unplugged, configuration: c.device.configuration?.configurationValue ?? null, claimed: [...c.claimed] } : { open: false, connected: false, configuration: null, claimed: [] };
     },
     selectConfiguration: args => call(args, c => c.device.selectConfiguration(args.configurationValue)),
-    claimInterface: args => call(args, async c => {
+    claimInterface: args => call(args, c => inTurn(c.device, async () => {
+      if (!c.open) return { error: 'InvalidStateError' };
       if (claimedElsewhere(c, args.interfaceNumber)) return { error: 'NetworkError', message: 'claimed by another connection' };
       if (!c.device.configuration?.interfaces.find(i => i.interfaceNumber === args.interfaceNumber)?.claimed) await c.device.claimInterface(args.interfaceNumber);
       c.claimed.add(args.interfaceNumber);
       announce();
-    }),
-    releaseInterface: args => call(args, async c => {
-      if (!c.claimed.has(args.interfaceNumber)) return { error: 'InvalidStateError' };
+    })),
+    releaseInterface: args => call(args, c => inTurn(c.device, async () => {
+      if (!c.open || !c.claimed.has(args.interfaceNumber)) return { error: 'InvalidStateError' };
       await c.device.releaseInterface(args.interfaceNumber);
       c.claimed.delete(args.interfaceNumber);
       announce();
-    }),
+    })),
     selectAlternateInterface: args => call(args, c => c.claimed.has(args.interfaceNumber) ? c.device.selectAlternateInterface(args.interfaceNumber, args.alternateSetting) : { error: 'InvalidStateError' }),
-    controlTransferIn: args => call(args, async c => result(await c.device.controlTransferIn(args.setup, args.length))),
-    controlTransferOut: args => call(args, async c => result(await c.device.controlTransferOut(args.setup, unb64(args.data)))),
-    transferIn: args => call(args, async c => result(await c.device.transferIn(args.endpointNumber, args.length))),
-    transferOut: args => call(args, async c => result(await c.device.transferOut(args.endpointNumber, unb64(args.data)))),
-    clearHalt: args => call(args, c => c.device.clearHalt(args.direction, args.endpointNumber)),
+    controlTransferIn: args => call(args, async c => refusedSetup(c, args.setup) ?? result(await c.device.controlTransferIn(args.setup, args.length))),
+    controlTransferOut: args => call(args, async c => refusedSetup(c, args.setup) ?? result(await c.device.controlTransferOut(args.setup, unb64(args.data)))),
+    transferIn: args => call(args, async c => owning(c, args.endpointNumber, 'in') ?? result(await c.device.transferIn(args.endpointNumber, args.length))),
+    transferOut: args => call(args, async c => owning(c, args.endpointNumber, 'out') ?? result(await c.device.transferOut(args.endpointNumber, unb64(args.data)))),
+    clearHalt: args => call(args, c => owning(c, args.endpointNumber, args.direction) ?? c.device.clearHalt(args.direction, args.endpointNumber)),
     reset: args => call(args, c => c.device.reset()),
     async close(args) {
       const c = connections.get(args?.connection);
       if (!c || !c.open) return { error: 'InvalidStateError' };
       c.open = false;
-      for (const n of c.claimed) await c.device.releaseInterface(n).catch(() => {});
-      c.claimed.clear();
-      const left = (leases.get(c.device) ?? 1) - 1;
-      leases.set(c.device, left);
-      // The device closes with its last lease (D5).
-      if (left === 0) { leases.delete(c.device); await c.device.close().catch(() => {}); }
+      await inTurn(c.device, async () => {
+        for (const n of c.claimed) await c.device.releaseInterface(n).catch(() => {});
+        c.claimed.clear();
+        const left = (leases.get(c.device) ?? 1) - 1;
+        leases.set(c.device, left);
+        // The device closes with its last lease (D5).
+        if (left === 0) { leases.delete(c.device); await c.device.close().catch(() => {}); }
+      });
       announce();
       return null;
     },

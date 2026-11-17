@@ -1,4 +1,3 @@
-use crate::presenter::SubmittedFrame;
 use drm::control::{crtc, Event};
 use tiny_skia::Pixmap;
 
@@ -8,14 +7,15 @@ mod tests;
 
 // The two buffers and the one submitted owner transition together, only after
 // successful syscalls. A failed copy/ioctl cannot change front or claim a flip.
-pub(super) struct FlipState {
+// `F` is the frame's owner: the presenter's submitted frame, a bare picture in tests.
+pub(super) struct FlipState<F> {
     front: usize,
     first: bool,
-    pending: Option<(usize, SubmittedFrame)>,
+    pending: Option<(usize, F)>,
     pub(super) sequence: Option<u32>,
     pub(super) at: Option<std::time::Duration>,
 }
-impl Default for FlipState {
+impl<F> Default for FlipState<F> {
     fn default() -> Self {
         Self {
             front: 0,
@@ -26,20 +26,20 @@ impl Default for FlipState {
         }
     }
 }
-impl FlipState {
+impl<F: AsRef<Pixmap>> FlipState<F> {
     pub(super) fn pending(&self) -> bool {
         self.pending.is_some()
     }
     pub(super) fn submit(
         &mut self,
-        frame: SubmittedFrame,
+        frame: F,
         send: impl FnOnce(usize, bool, &Pixmap) -> Result<(), String>,
-    ) -> Result<Option<SubmittedFrame>, String> {
+    ) -> Result<Option<F>, String> {
         if self.pending() {
             return Err("display already has a pending flip".into());
         }
         let back = 1 - self.front;
-        send(back, self.first, &frame.pixels)?;
+        send(back, self.first, frame.as_ref())?;
         if self.first {
             self.first = false;
             self.front = back;
@@ -53,7 +53,7 @@ impl FlipState {
         &mut self,
         crtc: crtc::Handle,
         read: impl FnOnce() -> std::io::Result<Vec<Event>>,
-    ) -> std::io::Result<Option<SubmittedFrame>> {
+    ) -> std::io::Result<Option<F>> {
         let Some((sequence, at)) = receive_flip(crtc, read)? else {
             return Ok(None);
         };

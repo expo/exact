@@ -37,8 +37,12 @@ struct ChipFace: Equatable {
     /// Each part's share of the tint where its colour is the tint (`AccentColor` 1, `Highlight` 0.2),
     /// nil otherwise, and its node's accent (`ownAccent`): a readout's part view takes the accent as
     /// its own tint and draws the share in UIKit's tint, which dims; an image is baked by `carriedTint`.
+    /// Unwritten bar-button ink is the tint before iOS 26; a readout's is always the label colour.
     let shares: [Double?], accents: [UIColor?]
     let gap: CGFloat
+    /// The button's left and right padding, room the face keeps inside the
+    /// item's glass beside its parts, as a button in the page keeps it.
+    let insetLeft: CGFloat, insetRight: CGFloat
     /// The scheme it is drawn in. A bar item sized from one variant of a
     /// light/dark image asset kept that size for the other (a dark capsule
     /// three times the face's width, iOS 27), so the face is drawn for the
@@ -62,6 +66,9 @@ struct ChipFace: Equatable {
         guard !button.isNativeButton, let engine = engine ?? button.text else { return nil }
         let traits = traits ?? button.traitCollection
         let bold = traits.legibilityWeight == .bold
+        let unwrittenShare: Double?
+        if #available(iOS 26.0, tvOS 26.0, *) { unwrittenShare = nil }
+        else { unwrittenShare = readout ? nil : 1 }
         var parts: [Part] = [], opacities: [CGFloat] = [], lineHeights: [CGFloat?] = [], shares: [Double?] = [], accents: [UIColor?] = [], dotted = false, typed = false, gap: CGFloat?
         func pair(_ node: NodeView, _ key: String) -> [[Double]] {
             [node.carriedChannels(key, dark: false) ?? [0, 0, 0, 1], node.carriedChannels(key, dark: true) ?? [1, 1, 1, 1]]
@@ -127,13 +134,13 @@ struct ChipFace: Equatable {
                 parts.append(.text(text, font, inked ? pair(child, "text_color") : nil))
                 opacities.append(alpha)
                 lineHeights.append(child.wrote("line_height") ? child.usedLineHeight : nil)
-                shares.append(inked ? child.style["text_color"]?.tintAlpha : nil)
+                shares.append(inked ? child.style["text_color"]?.tintAlpha : unwrittenShare)
                 accents.append(child.ownAccent)
             } else if child.kind == "image", let name = child.faceSymbol {
                 parts.append(.symbol(name, child.number("font_size", PageFacts.defaultRootFontSize), inked ? pair(child, "text_color") : nil))
                 opacities.append(alpha)
                 lineHeights.append(nil)
-                shares.append(inked ? child.style["text_color"]?.tintAlpha : nil)
+                shares.append(inked ? child.style["text_color"]?.tintAlpha : unwrittenShare)
                 accents.append(child.ownAccent)
             } else if (child.presenter?.flats.children(of: child.id) ?? child.container.subviews.compactMap { ($0 as? NodeView)?.id }).isEmpty,
                       child.style["background_color"] != nil {
@@ -153,6 +160,8 @@ struct ChipFace: Equatable {
         self.shares = shares
         self.accents = accents
         self.gap = gap ?? 0
+        insetLeft = readout ? 0 : max(0, button.number("padding_left"))
+        insetRight = readout ? 0 : max(0, button.number("padding_right"))
         dark = button.drawsDark
         self.bold = bold
     }
@@ -165,20 +174,24 @@ struct ChipFace: Equatable {
             case .symbol(let name, let points, let tint): return "s\(name)\(points)\(tint)"
             case .text(let text, let font, let color): return "t\(text)\(font.fontName)\(font.pointSize)\(color)"
             }
-        }.joined(separator: "|") + "|\(opacities)|\(lineHeights)|\(shares)|\(gap)|\(dark)|\(bold)"
+        }.joined(separator: "|") + "|\(opacities)|\(lineHeights)|\(shares)|\(gap)|\(insetLeft),\(insetRight)|\(dark)|\(bold)"
     }
 
     /// The face drawn, its unwritten ink the bar's (`tint`, what a plain
     /// item's title is drawn in before iOS 26; the label colour after).
-    func image(tint: UIColor) -> UIImage {
+    func image(tint: UIColor, dimmed: Bool = false) -> UIImage {
         var bar = tint
         if #available(iOS 26.0, tvOS 26.0, *) { bar = .label }
-        return draw(bar: bar.resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light))).withRenderingMode(.alwaysOriginal)
+        return draw(bar: bar.resolvedColor(with: UITraitCollection(userInterfaceStyle: dark ? .dark : .light)), dimmed: dimmed).withRenderingMode(.alwaysOriginal)
     }
 
-    private func draw(bar: UIColor) -> UIImage {
-        let ink = { (c: [[Double]]?) in c.map { TextEngine.color($0[dark ? 1 : 0]) } ?? bar }
-        let drawn: [(CGSize, (CGRect) -> Void)] = parts.map { part in
+    private func draw(bar: UIColor, dimmed: Bool) -> UIImage {
+        let drawn: [(CGSize, (CGRect) -> Void)] = parts.enumerated().map { index, part in
+            let ink = { (c: [[Double]]?) -> UIColor in
+                let color = c.map { TextEngine.color($0[dark ? 1 : 0]) } ?? bar
+                guard dimmed, let share = shares[index] else { return color }
+                return color.dimmedTint(share: share)
+            }
             switch part {
             case .dot(let size, let fill, let corners):
                 return (size, { rect in
@@ -186,7 +199,8 @@ struct ChipFace: Equatable {
                     UIBezierPath(cgPath: BorderPaint.roundedRect(rect, corners, shape: nil)).fill()
                 })
             case .symbol(let name, let points, let tint):
-                let glyph = FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points))?.withTintColor(ink(tint), renderingMode: .alwaysOriginal)
+                let source = FaceSymbol.image(name, points: points, configuration: UIImage.SymbolConfiguration(pointSize: points))
+                let glyph = FaceSymbol.isOriginal(name) ? source : source?.withTintColor(ink(tint), renderingMode: .alwaysOriginal)
                 return (glyph?.size ?? .zero, { rect in glyph?.draw(in: rect) })
             case .text(let text, let font, let color):
                 let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink(color)]
@@ -195,9 +209,9 @@ struct ChipFace: Equatable {
             }
         }
         let height = drawn.map(\.0.height).max() ?? 0
-        let width = drawn.map(\.0.width).reduce(0, +) + gap * CGFloat(max(0, drawn.count - 1))
+        let width = insetLeft + drawn.map(\.0.width).reduce(0, +) + gap * CGFloat(max(0, drawn.count - 1)) + insetRight
         return UIGraphicsImageRenderer(size: CGSize(width: max(1, width), height: max(1, height))).image { context in
-            var x: CGFloat = 0
+            var x: CGFloat = insetLeft
             for ((size, paint), alpha) in zip(drawn, opacities) {
                 context.cgContext.saveGState()
                 context.cgContext.setAlpha(alpha)
@@ -208,7 +222,27 @@ struct ChipFace: Equatable {
         }
     }
 }
+
+/// UIKit keeps a bar item's original bitmap unchanged when its tint dims. This view hears the
+/// bar's effective tint changes so only faces containing tint ink are baked again.
+final class BarFaceTintView: UIView {
+    var changed: (() -> Void)?
+    override func tintColorDidChange() { super.tintColorDidChange(); changed?() }
+}
+
 extension NavigationHost {
+    func retintBarFaces(in nav: UINavigationController) {
+        let bar = nav.navigationBar, dimmed = bar.tintAdjustmentMode == .dimmed
+        for route in nav.viewControllers.compactMap({ $0 as? RouteController }) {
+            for made in route.barItemsMade.values {
+                if let face = made.item.badge, face.shares.contains(where: { $0 != nil }) {
+                    made.bar.image = face.image(dimmed: dimmed)
+                } else if let face = made.item.chip, face.shares.contains(where: { $0 != nil }) {
+                    made.bar.image = face.image(tint: presenter.views[made.item.id]?.carriedTint ?? bar.tintColor, dimmed: dimmed)
+                }
+            }
+        }
+    }
     /// Whether two item lists are the same items, in order.
     static func same(_ a: [UIBarButtonItem]?, _ b: [UIBarButtonItem]?) -> Bool {
         (a ?? []).elementsEqual(b ?? []) { $0 === $1 }

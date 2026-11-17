@@ -68,7 +68,7 @@ impl Module {
     fn reattach_layers(&mut self) -> Result<(), String> {
         let gpu = self.gpu.as_ref().ok_or("no device")?;
         for inst in self.instances.values_mut() {
-            let (Some(layer), Some(config)) = (inst.layer, inst.config.as_ref()) else {
+            let (Some(layer), Some(config)) = (inst.layer, inst.config.as_mut()) else {
                 continue;
             };
             // SAFETY: native::create retains the caller's live-layer contract until destroy.
@@ -79,8 +79,13 @@ impl Module {
                     ))
             }
             .map_err(|e| e.to_string())?;
+            let caps = target.get_capabilities(&gpu.adapter);
+            inst.hdr = crate::target::configure(&*inst.surface, &gpu.adapter, &caps, config);
+            inst.alpha_modes = caps.alpha_modes;
             target.configure(&gpu.device, config);
             inst.surface.device_ready(gpu.device.features());
+            inst.surface
+                .color_space_granted(crate::target::granted(Some(config)));
             inst.surface
                 .prepare_assets(&gpu.device, &gpu.queue, crate::view_format(config));
             inst.presentation = Some(std::sync::Arc::new(target));

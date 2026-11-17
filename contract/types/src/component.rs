@@ -10,7 +10,7 @@ mod derives;
 
 use crate::calls::CAPTURE;
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Binding, Component, Expr, Node, Owner, Param, Span, Stmt, TemplatePart};
+use contract_syntax::{Binding, Component, Expr, Node, Owner, Param, Span, Stmt};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[cfg(test)]
@@ -31,7 +31,7 @@ fn action_checks_reuse_declarations_and_observe_prior_writes() {
     let c = &file.components[0];
     let mut sink = Sink::default();
     SCOPE_BUILDS.with(|count| count.set(0));
-    let ct = check_component(c, &Types::default(), None, &mut sink);
+    let ct = check_component(c, &Types::default(), None, &[], &mut sink);
     assert!(sink.errors.is_empty(), "{:?}", sink.errors);
     assert_eq!(ct.slots, vec![Ty::Option(Box::new(Ty::Number)); 2]);
     // Call-parameter refinement still has one scope per action; body checks
@@ -77,6 +77,7 @@ pub(crate) fn check_component(
     c: &Component,
     types: &Types,
     owners: Option<&[Owner]>,
+    resource_owners: &[Owner],
     sink: &mut Sink,
 ) -> ComponentTypes {
     let shapes = &types.shapes;
@@ -225,10 +226,17 @@ pub(crate) fn check_component(
     let scope = types.component_scope(c, &ct);
     let after_derives = sink.errors.len();
     let mut resource_args = Vec::with_capacity(c.resources.len());
-    for r in &c.resources {
-        let (each, errors) = crate::each::args_scope(r, &scope, shapes);
+    // A child's request reads its instance's frame (LLP 1035.005.004 D1): its
+    // use site's scope, as its state's initializer does.
+    let arms = super::checks::owned_scopes(c, &ct, types, resource_owners);
+    for (i, r) in c.resources.iter().enumerate() {
+        let Some(scope) = resource_scope(resource_owners, &arms, i, &scope) else {
+            resource_args.push(vec![Ty::Unknown; r.args.len()]);
+            continue;
+        };
+        let (each, errors) = crate::each::args_scope(r, scope, shapes);
         errors.into_iter().for_each(|e| sink.push(e));
-        let scope = each.as_ref().unwrap_or(&scope);
+        let scope = each.as_ref().unwrap_or(scope);
         let args: Vec<Ty> = r
             .args
             .iter()
@@ -306,9 +314,13 @@ pub(crate) fn check_component(
     // checked). One source, one signature.
     {
         let scope = types.component_scope(c, &ct);
+        let arms = super::checks::owned_scopes(c, &ct, types, resource_owners);
         for (i, r) in c.resources.iter().enumerate() {
-            let each = crate::each::args_scope(r, &scope, shapes).0;
-            let scope = each.as_ref().unwrap_or(&scope);
+            let Some(scope) = resource_scope(resource_owners, &arms, i, &scope) else {
+                continue;
+            };
+            let each = crate::each::args_scope(r, scope, shapes).0;
+            let scope = each.as_ref().unwrap_or(scope);
             sink.keep_unit(crate::each::gate(r, scope, shapes));
             // An argument that failed above is reported there, once.
             let params: Vec<Ty> = r
@@ -504,6 +516,21 @@ fn hides_fn(c: &Component, p: &Param, ty: &Ty, kind: &str, shapes: &Shapes) -> O
     })
 }
 
+/// Resource `i`'s scope: `root` for the root's own and for a use outside
+/// every region, its arm's for a child's lifted request (`arms`); `None`
+/// when that region was not checked, which the view check says why.
+fn resource_scope<'s>(
+    owners: &[Owner],
+    arms: &'s std::collections::BTreeMap<(u32, u8), crate::Scope>,
+    i: usize,
+    root: &'s crate::Scope,
+) -> Option<&'s crate::Scope> {
+    match owners.get(i).copied().unwrap_or(Owner::Root) {
+        Owner::Root | Owner::Instance => Some(root),
+        Owner::Arm { tag, arm } => arms.get(&(tag, arm)),
+    }
+}
+
 /// The first call of `name` in the component's derives, states, provides or
 /// view that is not a handler's own (`press=name(…)`): a handler's arguments count,
 /// as does a use's argument. Expression binders protect call heads from
@@ -514,13 +541,9 @@ fn expression_call(c: &Component, name: &str) -> Option<Span> {
         first_free(e, &|n| n == name, &mut |_| false).map(|(_, span)| span)
     }
     fn in_nodes(nodes: &[Node], name: &str) -> Option<Span> {
-        nodes.iter().find_map(|n| match n {
-            Node::Children { .. } => None,
+        Node::walk(nodes).find_map(|n| match n {
             Node::Element {
-                positional,
-                attrs,
-                children,
-                ..
+                positional, attrs, ..
             } => positional
                 .iter()
                 .find_map(|e| in_expr(e, name))
@@ -531,33 +554,8 @@ fn expression_call(c: &Component, name: &str) -> Option<Span> {
                         }
                         value => in_expr(value, name),
                     })
-                })
-                .or_else(|| in_nodes(children, name)),
-            Node::Use { args, children, .. } => args
-                .iter()
-                .find_map(|a| in_expr(&a.value, name))
-                .or_else(|| in_nodes(children, name)),
-            Node::When {
-                cond,
-                then,
-                otherwise,
-                ..
-            } => in_expr(cond, name)
-                .or_else(|| in_nodes(then, name))
-                .or_else(|| in_nodes(otherwise, name)),
-            Node::Each {
-                list, key, body, ..
-            } => in_expr(list, name)
-                .or_else(|| in_expr(key, name))
-                .or_else(|| in_nodes(body, name)),
-            Node::Match {
-                subject,
-                some,
-                none,
-                ..
-            } => in_expr(subject, name)
-                .or_else(|| in_nodes(&some.1, name))
-                .or_else(|| in_nodes(none, name)),
+                }),
+            n => n.exprs().find_map(|e| in_expr(e, name)),
         })
     }
     c.derives
@@ -712,84 +710,80 @@ fn refine_params_from_view(
     shapes: &Shapes,
     miscounted: &mut Vec<(usize, TypeError)>,
 ) -> Result<(), TypeError> {
-    for n in nodes {
-        match n {
-            Node::Children { .. } => {}
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                // A checkbox's `change` and `input` carry whether it is
-                // checked (LLP 1069.001 D4); a text field's, its text.
-                let control = contract_syntax::input_control(tag, attrs);
-                let checkbox = control == Some("checkbox");
-                // A text field's `select` is HTML's, its selection the
-                // `InputEvent` (x2apps codeedit #2); the Markdown editor's
-                // carries its formats.
-                let payload_control = contract_syntax::payload_control(tag, attrs);
-                let field = payload_control == Some("field");
-                // A file input's `change` carries the picked files (LLP
-                // 1069.002 D3); its `cancel`, nothing.
-                let file = control == Some("file");
-                // A range's carry its number (LLP 1069.001 D4).
-                let range = control == Some("range");
-                // A bound `type` that could name a control is lowering's
-                // refusal (`lower-input-type`), not a payload guessed here;
-                // a choice between text fields' types carries text.
-                let bound_type = tag == "input"
-                    && attrs.iter().any(|a| {
-                        a.name == "type"
-                            && !matches!(a.value, Expr::Str(..))
-                            && !contract_syntax::text_input_type(&a.value)
-                    });
-                for a in attrs {
-                    if handler_attr(&a.name) {
-                        let (name, args): (&str, &[Expr]) = match &a.value {
-                            Expr::Ident(n, _) => (n, &[]),
-                            Expr::Call(n, args, _) => (n, args),
-                            _ => continue,
-                        };
-                        if let Some(ai) = names.actions.get(name).copied() {
-                            for (i, arg) in args.iter().enumerate() {
-                                if i < ct.actions[ai].len() {
-                                    let t = infer(arg, scope, shapes)?;
-                                    if ct.actions[ai][i].contains_enum()
-                                        && !checks::accepts_expr(
-                                            &ct.actions[ai][i],
-                                            arg,
-                                            &t,
-                                            scope,
-                                            shapes,
-                                        )
-                                    {
-                                        return err(
-                                            "type-argument",
-                                            format!(
-                                                "`{name}` expects `{}`, given `{t}`",
-                                                ct.actions[ai][i]
-                                            ),
-                                            arg.span(),
-                                        );
-                                    }
-                                    if ct.actions[ai][i].contains_enum() {
-                                        continue;
-                                    }
-                                    if let Some(u) = ct.actions[ai][i].unify(&t) {
-                                        ct.actions[ai][i] = u;
-                                    }
+    for (n, scope) in Node::walk_with(nodes, std::sync::Arc::new(scope.clone()), |node, scope| {
+        crate::view_frames(node, scope, shapes)
+    }) {
+        let scope = &scope;
+        if let Node::Element { tag, attrs, .. } = n {
+            // A checkbox's `change` and `input` carry whether it is
+            // checked (LLP 1069.001 D4); a text field's, its text.
+            let control = contract_syntax::input_control(tag, attrs);
+            let checkbox = control == Some("checkbox");
+            // A text field's `select` is HTML's, its selection the
+            // `InputEvent` (x2apps codeedit #2); the Markdown editor's
+            // carries its formats.
+            let payload_control = contract_syntax::payload_control(tag, attrs);
+            let field = payload_control == Some("field");
+            // A file input's `change` carries the picked files (LLP
+            // 1069.002 D3); its `cancel`, nothing.
+            let file = control == Some("file");
+            // A range's carry its number (LLP 1069.001 D4).
+            let range = control == Some("range");
+            // A bound `type` that could name a control is lowering's
+            // refusal (`lower-input-type`), not a payload guessed here;
+            // a choice between text fields' types carries text.
+            let bound_type = tag == "input"
+                && attrs.iter().any(|a| {
+                    a.name == "type"
+                        && !matches!(a.value, Expr::Str(..))
+                        && !contract_syntax::text_input_type(&a.value)
+                });
+            for a in attrs {
+                if handler_attr(&a.name) {
+                    let (name, args): (&str, &[Expr]) = match &a.value {
+                        Expr::Ident(n, _) => (n, &[]),
+                        Expr::Call(n, args, _) => (n, args),
+                        _ => continue,
+                    };
+                    if let Some(ai) = names.actions.get(name).copied() {
+                        for (i, arg) in args.iter().enumerate() {
+                            if i < ct.actions[ai].len() {
+                                let t = infer(arg, scope, shapes)?;
+                                if ct.actions[ai][i].contains_enum()
+                                    && !checks::accepts_expr(
+                                        &ct.actions[ai][i],
+                                        arg,
+                                        &t,
+                                        scope,
+                                        shapes,
+                                    )
+                                {
+                                    return err(
+                                        "type-argument",
+                                        format!(
+                                            "`{name}` expects `{}`, given `{t}`",
+                                            ct.actions[ai][i]
+                                        ),
+                                        arg.span(),
+                                    );
+                                }
+                                if ct.actions[ai][i].contains_enum() {
+                                    continue;
+                                }
+                                if let Some(u) = ct.actions[ai][i].unify(&t) {
+                                    ct.actions[ai][i] = u;
                                 }
                             }
-                            // A parameter left to this handler to type has
-                            // nothing to type it: said here, at the `type`,
-                            // not as a parameter nothing calls.
-                            if bound_type
-                                && matches!(a.name.as_str(), "change" | "input")
-                                && args.len() < ct.actions[ai].len()
-                                && ct.actions[ai].last().is_some_and(|t| !t.is_complete())
-                            {
-                                return err(
+                        }
+                        // A parameter left to this handler to type has
+                        // nothing to type it: said here, at the `type`,
+                        // not as a parameter nothing calls.
+                        if bound_type
+                            && matches!(a.name.as_str(), "change" | "input")
+                            && args.len() < ct.actions[ai].len()
+                            && ct.actions[ai].last().is_some_and(|t| !t.is_complete())
+                        {
+                            return err(
                                     "type-cannot-infer",
                                     format!(
                                         "cannot infer what `{}=` carries to `{name}`: this `input`'s `type` is neither a literal nor a choice between text fields' (`shown ? \"text\" : \"password\"`)",
@@ -800,112 +794,110 @@ fn refine_params_from_view(
                                         .find(|t| t.name == "type")
                                         .map_or(a.span, |t| t.span),
                                 );
+                        }
+                        // Event payloads: change/input/key/message are
+                        // strings (a checkbox's are bools); hover is
+                        // whether the pointer is over.
+                        let event = contract_syntax::typed_event(&a.name, payload_control);
+                        let mut payload = match a.name.as_str() {
+                            "navigate" if event == "framenavigate" => vec![],
+                            "change" | "input" if bound_type => vec![],
+                            "change" | "input" if checkbox => vec![Ty::Bool],
+                            "change" | "input" if range => vec![Ty::Number],
+                            "change" | "input" if file => {
+                                vec![Ty::List(Box::new(Ty::Record("Picked".into())))]
                             }
-                            // Event payloads: change/input/key/message are
-                            // strings (a checkbox's are bools); hover is
-                            // whether the pointer is over.
-                            let event = contract_syntax::typed_event(&a.name, payload_control);
-                            let mut payload = match a.name.as_str() {
-                                "navigate" if event == "framenavigate" => vec![],
-                                "change" | "input" if bound_type => vec![],
-                                "change" | "input" if checkbox => vec![Ty::Bool],
-                                "change" | "input" if range => vec![Ty::Number],
-                                "change" | "input" if file => {
-                                    vec![Ty::List(Box::new(Ty::Record("Picked".into())))]
-                                }
-                                "change"
-                                | "input"
-                                | "key"
-                                | "keycapture"
-                                | "keyup"
-                                | "message"
-                                | "navigate"
-                                | "error"
-                                | "pictureinpictureerror" => {
-                                    vec![Ty::String]
-                                }
-                                "timeupdate" | "durationchange" => vec![Ty::Number],
-                                "hover" | "fullscreenchange" => vec![Ty::Bool],
-                                "select" if field => vec![Ty::Record("InputEvent".into())],
-                                "select" => vec![Ty::Record("MarkdownSelection".into())],
-                                // A drag's numbers and a drop's keys, as
-                                // analysis's `handler_arity` counts them
-                                // (LLP 1057 §1.1).
-                                "scroll" | "pan" | "panrelease" | "heightrelease" | "resize" => {
-                                    vec![Ty::Number, Ty::Number]
-                                }
-                                "transformgeometry" => vec![Ty::Number; 4],
-                                "transformrelease" => vec![Ty::Number; 6],
-                                "reorderdrop" => vec![Ty::String, Ty::Option(Box::new(Ty::String))],
-                                _ => vec![],
-                            };
-                            // Then the event's record, when the action
-                            // declares one more parameter (`event_record`)
-                            // of its type or none: another type there is an
-                            // argument left unbound, analysis's arity
-                            // refusal (`handler_accepts`).
-                            if let Some(record) = crate::event_record(event) {
-                                let n = args.len() + payload.len() + 1;
-                                let fits = ct.actions[ai].len() == n
-                                    && match &ct.actions[ai][n - 1] {
-                                        Ty::Unknown => true,
-                                        Ty::Record(r) => r == record,
-                                        _ => false,
-                                    };
-                                if fits {
-                                    payload.push(Ty::Record(record.into()));
-                                }
+                            "change"
+                            | "input"
+                            | "key"
+                            | "keycapture"
+                            | "keyup"
+                            | "message"
+                            | "navigate"
+                            | "error"
+                            | "pictureinpictureerror" => {
+                                vec![Ty::String]
                             }
-                            // The payload types the last parameters. When
-                            // their count is off, it may land on the wrong
-                            // ones (a `reorderdrop` action's third, not a
-                            // `ReorderEvent`): a clash there is no type
-                            // mistake but analysis's arity refusal, which
-                            // spells what fits. This stage says it for an
-                            // action the miscount leaves untyped
-                            // (`check_component`), as analysis never runs
-                            // then. A bound `type` leaves the payload
-                            // unknown, its count too.
-                            let counted = args.len() + payload.len() == ct.actions[ai].len();
-                            let unknown = payload.is_empty()
-                                && bound_type
-                                && matches!(a.name.as_str(), "change" | "input");
-                            if !counted && !unknown && !miscounted.iter().any(|(i, _)| *i == ai) {
-                                let params: Vec<(String, Ty)> = (c.actions[ai].params.iter())
-                                    .map(|p| p.name.clone())
-                                    .zip(ct.actions[ai].iter().cloned())
-                                    .collect();
-                                let arg_types: Vec<Option<Ty>> =
-                                    args.iter().map(|x| infer(x, scope, shapes).ok()).collect();
-                                let message = crate::handler_arity_message(
-                                    &a.name,
-                                    payload_control,
-                                    name,
-                                    args,
-                                    &params,
-                                    &arg_types,
-                                );
-                                let (id, span) = ("analyze-handler-arity", a.span);
-                                miscounted.push((ai, TypeError { id, message, span }));
+                            "timeupdate" | "durationchange" => vec![Ty::Number],
+                            "hover" | "fullscreenchange" => vec![Ty::Bool],
+                            "select" if field => vec![Ty::Record("InputEvent".into())],
+                            "select" => vec![Ty::Record("MarkdownSelection".into())],
+                            // A drag's numbers and a drop's keys, as
+                            // analysis's `handler_arity` counts them
+                            // (LLP 1057 §1.1).
+                            "scroll" | "pan" | "panrelease" | "heightrelease" | "resize" => {
+                                vec![Ty::Number, Ty::Number]
                             }
-                            let start = ct.actions[ai].len().saturating_sub(payload.len());
-                            for (offset, ty) in payload.into_iter().enumerate() {
-                                let last = start + offset;
-                                if args.len() < ct.actions[ai].len() && last < ct.actions[ai].len()
-                                {
-                                    let declared = ct.actions[ai][last].clone();
-                                    let Some(unified) = declared.unify(&ty).filter(|_| {
-                                        !declared.contains_enum()
-                                            || checks::can_unify(&declared, &ty)
-                                    }) else {
-                                        if !counted {
-                                            continue;
-                                        }
-                                        // LLP 1116.018: a repair that only
-                                        // retyped the parameter dropped the
-                                        // guard on a radio's deselection.
-                                        let param = &c.actions[ai].params[last].name;
-                                        let keep = match (&ty, &declared) {
+                            "transformgeometry" => vec![Ty::Number; 4],
+                            "transformrelease" => vec![Ty::Number; 6],
+                            "reorderdrop" => vec![Ty::String, Ty::Option(Box::new(Ty::String))],
+                            _ => vec![],
+                        };
+                        // Then the event's record, when the action
+                        // declares one more parameter (`event_record`)
+                        // of its type or none: another type there is an
+                        // argument left unbound, analysis's arity
+                        // refusal (`handler_accepts`).
+                        if let Some(record) = crate::event_record(event) {
+                            let n = args.len() + payload.len() + 1;
+                            let fits = ct.actions[ai].len() == n
+                                && match &ct.actions[ai][n - 1] {
+                                    Ty::Unknown => true,
+                                    Ty::Record(r) => r == record,
+                                    _ => false,
+                                };
+                            if fits {
+                                payload.push(Ty::Record(record.into()));
+                            }
+                        }
+                        // The payload types the last parameters. When
+                        // their count is off, it may land on the wrong
+                        // ones (a `reorderdrop` action's third, not a
+                        // `ReorderEvent`): a clash there is no type
+                        // mistake but analysis's arity refusal, which
+                        // spells what fits. This stage says it for an
+                        // action the miscount leaves untyped
+                        // (`check_component`), as analysis never runs
+                        // then. A bound `type` leaves the payload
+                        // unknown, its count too.
+                        let counted = args.len() + payload.len() == ct.actions[ai].len();
+                        let unknown = payload.is_empty()
+                            && bound_type
+                            && matches!(a.name.as_str(), "change" | "input");
+                        if !counted && !unknown && !miscounted.iter().any(|(i, _)| *i == ai) {
+                            let params: Vec<(String, Ty)> = (c.actions[ai].params.iter())
+                                .map(|p| p.name.clone())
+                                .zip(ct.actions[ai].iter().cloned())
+                                .collect();
+                            let arg_types: Vec<Option<Ty>> =
+                                args.iter().map(|x| infer(x, scope, shapes).ok()).collect();
+                            let message = crate::handler_arity_message(
+                                &a.name,
+                                payload_control,
+                                name,
+                                args,
+                                &params,
+                                &arg_types,
+                            );
+                            let (id, span) = ("analyze-handler-arity", a.span);
+                            miscounted.push((ai, TypeError { id, message, span }));
+                        }
+                        let start = ct.actions[ai].len().saturating_sub(payload.len());
+                        for (offset, ty) in payload.into_iter().enumerate() {
+                            let last = start + offset;
+                            if args.len() < ct.actions[ai].len() && last < ct.actions[ai].len() {
+                                let declared = ct.actions[ai][last].clone();
+                                let Some(unified) = declared.unify(&ty).filter(|_| {
+                                    !declared.contains_enum() || checks::can_unify(&declared, &ty)
+                                }) else {
+                                    if !counted {
+                                        continue;
+                                    }
+                                    // LLP 1116.018: a repair that only
+                                    // retyped the parameter dropped the
+                                    // guard on a radio's deselection.
+                                    let param = &c.actions[ai].params[last].name;
+                                    let keep = match (&ty, &declared) {
                                             (Ty::String, Ty::Number) => format!(
                                                 ", and read the number with `match parseNumber({param})`"
                                             ),
@@ -920,7 +912,7 @@ fn refine_params_from_view(
                                             ),
                                             _ => String::new(),
                                         };
-                                        return err(
+                                    return err(
                                             "type-handler-payload",
                                             format!(
                                                 "declare `{param}: {ty}` in `{}`{keep}: `{}=` passes its captured arguments, then its payload, a `{ty}`, which lands on `{param}`, declared `{declared}`",
@@ -928,54 +920,12 @@ fn refine_params_from_view(
                                             ),
                                             a.span,
                                         );
-                                    };
-                                    ct.actions[ai][last] = unified;
-                                }
+                                };
+                                ct.actions[ai][last] = unified;
                             }
                         }
                     }
                 }
-                refine_params_from_view(children, scope, c, names, ct, shapes, miscounted)?;
-            }
-            Node::Use { args, children, .. } => {
-                refine_params_from_view(children, scope, c, names, ct, shapes, miscounted)?;
-                for a in args {
-                    let _ = a;
-                }
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                refine_params_from_view(then, scope, c, names, ct, shapes, miscounted)?;
-                refine_params_from_view(otherwise, scope, c, names, ct, shapes, miscounted)?;
-            }
-            Node::Each {
-                var,
-                index,
-                list,
-                body,
-                ..
-            } => {
-                if let Ok(Ty::List(item)) = infer(list, scope, shapes) {
-                    let mut inner = scope.clone();
-                    inner.push_each(var, index.as_deref(), *item);
-                    refine_params_from_view(body, &inner, c, names, ct, shapes, miscounted)?;
-                }
-            }
-            Node::Match {
-                subject,
-                some,
-                none,
-                ..
-            } => {
-                if let Ok(Ty::Option(item)) = infer(subject, scope, shapes) {
-                    let mut inner = scope.clone();
-                    inner.push_region(Some((some.0.clone(), Ref::Bound(0), *item)));
-                    refine_params_from_view(&some.1, &inner, c, names, ct, shapes, miscounted)?;
-                }
-                let mut none_scope = scope.clone();
-                none_scope.push_region(None);
-                refine_params_from_view(none, &none_scope, c, names, ct, shapes, miscounted)?;
             }
         }
     }
@@ -1145,60 +1095,15 @@ fn member_path(e: &Expr, name: &str) -> Option<String> {
         }
     }
     let mut best: Option<String> = None;
-    let mut visit = |x: &Expr| {
+    for x in e.walk() {
         if let Some(c) = chain(x).filter(|_| matches!(x, Expr::Member(..)) && root(x) == Some(name))
         {
             if best.as_ref().is_none_or(|b| c.len() > b.len()) {
                 best = Some(c);
             }
         }
-    };
-    walk_exprs(e, &mut visit);
-    best
-}
-
-/// Visit `e` and every expression inside it.
-fn walk_exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
-    f(e);
-    match e {
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) | Expr::Ident(..) => {}
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                walk_exprs(x, f)
-            }
-        }),
-        Expr::List(items, _) => items.iter().for_each(|a| walk_exprs(a, f)),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => walk_exprs(x, f),
-        Expr::Call(_, args, _) => args.iter().for_each(|a| walk_exprs(a, f)),
-        Expr::Binary(_, a, b, _) => {
-            walk_exprs(a, f);
-            walk_exprs(b, f);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            walk_exprs(a, f);
-            walk_exprs(b, f);
-            walk_exprs(c, f);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            walk_exprs(subject, f);
-            walk_exprs(some, f);
-            walk_exprs(none, f);
-        }
-        Expr::Let { value, body, .. } => {
-            walk_exprs(value, f);
-            walk_exprs(body, f);
-        }
-        Expr::Arrow { body, .. } => walk_exprs(body, f),
     }
+    best
 }
 
 /// The first free name in `e` (not bound by a `let`, a `match` or an arrow
@@ -1215,59 +1120,22 @@ fn first_free(
         hit: &mut dyn FnMut(&str) -> bool,
         bound: &mut Vec<String>,
     ) -> Option<(String, Span)> {
-        let within =
-            |name: &str, x: &Expr, bound: &mut Vec<String>, hit: &mut dyn FnMut(&str) -> bool| {
-                bound.push(name.to_string());
-                let found = walk(x, calls, hit, bound);
-                bound.pop();
-                found
-            };
         match e {
             Expr::Ident(name, span) => {
-                (!bound.contains(name) && hit(name)).then(|| (name.clone(), *span))
+                return (!bound.contains(name) && hit(name)).then(|| (name.clone(), *span));
             }
-            Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) => None,
-            Expr::List(items, _) => items.iter().find_map(|a| walk(a, calls, hit, bound)),
-            Expr::Template(parts, _) => parts.iter().find_map(|p| match p {
-                TemplatePart::Expr(x) => walk(x, calls, hit, bound),
-                _ => None,
-            }),
-            Expr::Some(x, _)
-            | Expr::Member(x, _, _)
-            | Expr::NamedArg(_, x, _)
-            | Expr::Typed(x, _, _)
-            | Expr::Unary(_, x, _) => walk(x, calls, hit, bound),
-            Expr::Call(name, args, span) => {
-                if !bound.contains(name) && calls(name) {
-                    return Some((name.clone(), *span));
-                }
-                args.iter().find_map(|a| walk(a, calls, hit, bound))
+            Expr::Call(name, _, span) if !bound.contains(name) && calls(name) => {
+                return Some((name.clone(), *span));
             }
-            Expr::Binary(_, a, b, _) => {
-                walk(a, calls, hit, bound).or_else(|| walk(b, calls, hit, bound))
-            }
-            Expr::Ternary(a, b, c, _) => walk(a, calls, hit, bound)
-                .or_else(|| walk(b, calls, hit, bound))
-                .or_else(|| walk(c, calls, hit, bound)),
-            Expr::Match {
-                subject,
-                var,
-                some,
-                none,
-                ..
-            } => walk(subject, calls, hit, bound)
-                .or_else(|| within(var, some, bound, hit))
-                .or_else(|| walk(none, calls, hit, bound)),
-            Expr::Let {
-                name, value, body, ..
-            } => walk(value, calls, hit, bound).or_else(|| within(name, body, bound, hit)),
-            Expr::Arrow { params, body, .. } => {
-                bound.extend(params.iter().cloned());
-                let found = walk(body, calls, hit, bound);
-                bound.truncate(bound.len() - params.len());
-                found
-            }
+            _ => {}
         }
+        e.scoped_operands().find_map(|(x, binds)| {
+            let depth = bound.len();
+            bound.extend(binds.iter().map(String::from));
+            let found = walk(x, calls, hit, bound);
+            bound.truncate(depth);
+            found
+        })
     }
     walk(e, calls, hit, &mut Vec::new())
 }

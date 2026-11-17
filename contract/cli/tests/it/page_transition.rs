@@ -157,3 +157,19 @@ fn a_return_from_being_put_away_runs_its_task_once_and_a_minimize_none() {
     assert_eq!(count(&r, "drafts"), Value::Number(2.0));
     assert_eq!(count(&r, "shelved"), Value::Number(2.0));
 }
+
+#[test]
+fn frozen_bakes_false_and_unknown_page_fields_refuse() {
+    let source = "shape Page\n  frozen: bool\ncomponent App\n  resource page = exactPage() as shape Page\n  view\n    text `${page.frozen}`\n";
+    let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    assert_eq!(
+        Value::from_bytes(plan.bytes(plan.resources[0].initial)).unwrap(),
+        Value::record(vec![Value::Bool(false)])
+    );
+    let error = contract::bake(
+        contract::compile(&source.replace("frozen", "freezing")).unwrap(),
+        NoData,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("bake-page-field"), "{error}");
+}

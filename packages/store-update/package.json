@@ -1,0 +1,11 @@
+{
+  "name": "@exact/store-update",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A newer binary from the App Store or Google Play: whether the store lists or offers one, its page, and Play's in-app update flows (LLP 1133.038). Not Exact's own signed updates.",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./android": "./android/exact.json"
+  }
+}

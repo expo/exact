@@ -393,6 +393,7 @@ void ibex2_darwin_lane_destroy(void *handle) {
 void *ibex2_darwin_task_start(void *handle, const char *method, const char *url,
                               const char *header_block, const unsigned char *body,
                               size_t body_length, void *body_ctx, double timeout_seconds,
+                              int speculative,
                               const char *refusal, void *ctx) {
   @autoreleasepool {
     Ibex2Lane *lane = (__bridge Ibex2Lane *)handle;
@@ -420,6 +421,7 @@ void *ibex2_darwin_task_start(void *handle, const char *method, const char *url,
     }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:nsurl];
     request.HTTPMethod = [NSString stringWithUTF8String:method];
+    if (speculative) request.allowsConstrainedNetworkAccess = NO;
     if (header_block != nullptr) {
       NSString *block = [NSString stringWithUTF8String:header_block];
       for (NSString *line in [block componentsSeparatedByString:@"\n"]) {

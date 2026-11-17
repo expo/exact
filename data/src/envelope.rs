@@ -49,7 +49,7 @@ pub fn encode_optional(
             ])
         })
         .collect();
-    let mut body = json!({"turn": 1, "reads": local.reads(), "topics": local.take_topics(), "writes": writes, "logs": logs});
+    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "topics": local.take_topics(), "announced": local.take_announced(), "writes": writes, "logs": logs});
     match result {
         Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
@@ -57,6 +57,17 @@ pub fn encode_optional(
         Ok(Some(Answer::Later(request))) if request.long_poll_refusal().is_some() => {
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
+        }
+        // A listener's connections are handles a worker's turn cannot hold,
+        // as a socket's are (LLP 1133.005); the envelope carries no listener.
+        Ok(Some(Answer::Later(request)))
+            if std::iter::once(&request)
+                .chain(&more)
+                .any(|r| r.listen.is_some()) =>
+        {
+            body["error"] = error_json(&unavailable(
+                "exactListen is unavailable in a worker-placed source; place it on main",
+            ));
         }
         Ok(Some(Answer::Later(request))) => {
             body["request"] = request_json(&request);
@@ -124,7 +135,17 @@ pub fn apply_optional(
     for topic in &topics {
         store.observe_topic(topic);
     }
-    for _ in topics.len() as u64..json["reads"].as_u64().unwrap_or(0) {
+    for topic in json["announced"].as_array().into_iter().flatten() {
+        if let Some(topic) = topic.as_str() {
+            store.announce_topic(topic);
+        }
+    }
+    // Draws of randomness cross as draws (LLP 1069.005 D2), each a read too
+    let draws = json["draws"].as_u64().unwrap_or(0);
+    for _ in 0..draws {
+        store.observe_entropy();
+    }
+    for _ in topics.len() as u64 + draws..json["reads"].as_u64().unwrap_or(0) {
         store.observe_external_read();
     }
     for write in json["writes"].as_array().into_iter().flatten() {
@@ -169,7 +190,9 @@ fn error_json(error: &DataError) -> Json {
     let (kind, message) = match error {
         DataError::UnknownSource(m) => ("UnknownSource", m),
         DataError::BadArguments(m) => ("BadArguments", m),
-        DataError::DeferredAtBake(m) => ("DeferredAtBake", m),
+        DataError::DeferredAtBake { message, warning } => {
+            return json!({"kind": "DeferredAtBake", "message": message, "warning": warning});
+        }
         DataError::Unavailable(m) | DataError::Interface(m) => ("Unavailable", m),
         // Transient: a peer that predates it reads it as `Unavailable` (`error_from`'s catch-all).
         DataError::Overrun(m) => ("Overrun", m),
@@ -186,7 +209,10 @@ fn error_from(error: &Json) -> DataError {
     match error["kind"].as_str() {
         Some("UnknownSource") => DataError::UnknownSource(message),
         Some("BadArguments") => DataError::BadArguments(message),
-        Some("DeferredAtBake") => DataError::DeferredAtBake(message),
+        Some("DeferredAtBake") => DataError::DeferredAtBake {
+            message,
+            warning: error["warning"] == Json::Bool(true),
+        },
         Some("Overrun") => DataError::Overrun(message),
         Some("Failed") => match error["code"].as_str().and_then(FailureCode::from_name) {
             Some(code) => {
@@ -224,6 +250,8 @@ fn request_json(request: &Request) -> Json {
         "body_to": request.body_to,
         "redirect": (request.redirect != Redirect::Follow).then(|| request.redirect.name()),
         "cache": (request.cache != CacheMode::Unspecified).then(|| request.cache.name()),
+        "preload": request.preload,
+        "prefetch": request.prefetch,
         "held": request.held.then_some(true),
         "due_ms": request.due_ms,
         "wake_ms": request.wake_ms,
@@ -252,14 +280,8 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         })
         .transpose()?
         .unwrap_or_default();
-    // A listener's connections are handles a worker's turn cannot hold, as
-    // a socket's are (LLP 1133.005).
-    if !json["listen"].is_null() {
-        return Err(unavailable(
-            "exactListen is unavailable in a worker-placed source; place it on main",
-        ));
-    }
     let request = Request {
+        module: None,
         surface: None,
         // The runner stamps who asked when the request goes out.
         reach: Default::default(),
@@ -345,12 +367,25 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
             .map_err(|_| unavailable("turn reply: an invalid redirect mode"))?,
         cache: CacheMode::parse(json["cache"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
+        preload: match &json["preload"] {
+            Json::Null => None,
+            Json::String(name) => Some(name.as_str().into()),
+            _ => return Err(unavailable("exactPreload must match ^[a-z][a-z0-9-]*$")),
+        },
+        prefetch: match &json["prefetch"] {
+            Json::Null => false,
+            Json::Bool(value) => *value,
+            _ => return Err(unavailable("exactPrefetch is true or false")),
+        },
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
         fetch: json["fetch"].as_u64(),
     };
     request.check_protocols().map_err(unavailable)?;
+    if let Some(why) = request.prefetch_refusal().or(request.preload_refusal()) {
+        return Err(unavailable(why));
+    }
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
     match request
         .long_poll_refusal()
@@ -374,6 +409,69 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_and_prefetch_types_are_checked_at_the_envelope() {
+        let request = Request::get("https://example.test");
+        for (key, why) in [
+            ("preload", "exactPreload must match ^[a-z][a-z0-9-]*$"),
+            ("prefetch", "exactPrefetch is true or false"),
+        ] {
+            for value in [json!(7), json!([]), json!({}), json!(true), json!("true")] {
+                if (key == "prefetch" && value.is_boolean())
+                    || (key == "preload" && value.is_string())
+                {
+                    continue;
+                }
+                let mut wire = request_json(&request);
+                wire[key] = value;
+                assert_eq!(request_from(&wire).unwrap_err(), unavailable(why));
+            }
+            for value in [None, Some(Json::Null)] {
+                let mut wire = request_json(&request);
+                wire.as_object_mut().unwrap().remove(key);
+                if let Some(value) = value {
+                    wire[key] = value;
+                }
+                assert_eq!(request_from(&wire).unwrap(), request);
+            }
+        }
+        let mut wire = request_json(&request);
+        wire["prefetch"] = json!(false);
+        wire["preload"] = json!("feed-2");
+        assert_eq!(
+            request_from(&wire).unwrap(),
+            request.preload("feed-2").unwrap()
+        );
+    }
+
+    #[test]
+    fn preload_names_cross_a_module_turn_and_invalid_names_are_refused() {
+        let request = Request::get("https://example.test")
+            .preload("feed-2")
+            .unwrap();
+        let mut wire = request_json(&request);
+        assert_eq!(wire["preload"], "feed-2");
+        assert_eq!(request_from(&wire).unwrap(), request);
+        wire["preload"] = Json::String("Bad".into());
+        assert!(request_from(&wire)
+            .unwrap_err()
+            .to_string()
+            .contains("exactPreload"));
+    }
+
+    #[test]
+    fn prefetch_crosses_a_module_turn_and_non_http_is_refused() {
+        let request = Request::get("https://example.test").prefetch();
+        let mut wire = request_json(&request);
+        assert_eq!(wire["prefetch"], true);
+        assert_eq!(request_from(&wire).unwrap(), request);
+        wire["stream"] = Json::Bool(true);
+        assert!(request_from(&wire)
+            .unwrap_err()
+            .to_string()
+            .contains("exactPrefetch"));
+    }
 
     #[test]
     fn every_cache_mode_crosses_a_module_turn() {
@@ -417,6 +515,14 @@ mod tests {
         }
         assert_eq!(live.get("a"), Some("2"));
         assert_eq!(live.reads(), 2);
+        // A draw crosses as a draw, beside a read of what the store holds
+        let mut drawing = Store::default();
+        drawing.observe_external_read();
+        drawing.observe_entropy();
+        let outcome = encode(Ok(Answer::Now(value.clone())), &mut drawing, vec![]);
+        let mut fresh = Store::default();
+        apply(outcome, &mut fresh, &mut logs).unwrap();
+        assert_eq!((fresh.reads(), fresh.entropy_draws()), (2, 1));
         assert_eq!(logs, vec!["hi".to_string()]);
 
         let mut request = Request::post_json("https://x.test", "{}").independent_http(4096);
@@ -487,6 +593,17 @@ mod tests {
     }
 
     #[test]
+    fn a_bake_deferral_keeps_its_warning_class_across_the_envelope() {
+        for warning in [false, true] {
+            let error = DataError::DeferredAtBake {
+                message: "deferred call".into(),
+                warning,
+            };
+            assert_eq!(error_from(&error_json(&error)), error);
+        }
+    }
+
+    #[test]
     fn a_worker_stream_is_neither_a_socket_nor_a_byte_stream() {
         let request = Request {
             stream: true,
@@ -543,6 +660,36 @@ mod tests {
             format!("{refused:?}").contains("exactLongPoll"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_listener_is_refused_by_name_before_it_crosses() {
+        let listener = || {
+            let request = Request::listen("unix:/tmp/a.sock", Default::default());
+            Request {
+                stream: true,
+                ..request
+            }
+        };
+        let fetch = Request::get("https://x.test/a");
+        for (request, more) in [
+            (listener(), vec![]),
+            (fetch.clone(), vec![fetch.clone(), listener()]),
+        ] {
+            let outcome = encode_optional(
+                Ok(Some(Answer::Later(request))),
+                more,
+                &mut Store::default(),
+                vec![],
+            );
+            let refused = apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap_err();
+            assert_eq!(
+                refused,
+                unavailable(
+                    "exactListen is unavailable in a worker-placed source; place it on main"
+                )
+            );
+        }
     }
 
     #[test]

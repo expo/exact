@@ -154,7 +154,8 @@ impl Kernel {
         }
         let port = content(scroller)?;
         let (w, h) = (port[2] - port[0], port[3] - port[1]);
-        let env = arena.env();
+        // An inset may read the safe area where the box is (LLP 1123 D9)
+        let env = &*super::owner::env_for(arena, slot, &style);
         Some(StickyConstraint {
             scroller: arena.local_id(scroller),
             natural: at(slot),

@@ -70,8 +70,9 @@ pub struct Fragment {
     /// The paragraph's line boxes in this fragment, `start..end`; empty for
     /// a box that is not a paragraph.
     pub lines: (u32, u32),
-    /// What to add to a point of the unfragmented box (its own border-box
-    /// space, as one column laid it out) to place it in this fragment.
+    /// Translation from the unfragmented box into this fragment. For text,
+    /// it includes the anonymous item's placement: add it directly to the
+    /// paragraph's content positions.
     pub dx: f32,
     /// See [`Fragment::dx`].
     pub dy: f32,
@@ -200,7 +201,7 @@ pub(crate) fn taffy_multicol(arena: &NodeArena, slot: u32) -> Option<taffy::Mult
         // "Used values will be clamped to a minimum of 1px" (CSS Multi-column
         // Layout 1 §3.1): a width of zero beside a zero gap made the count
         // u32::MAX, and the cut ran that many times.
-        width: match s.rare.column_width.resolve(arena.env()) {
+        width: match s.rare.column_width.resolve(&arena.env_of(slot)) {
             Dimension::Points(w) => Some(w.max(1.0)),
             _ => None,
         },
@@ -254,11 +255,10 @@ fn decorated(s: &StyleProps) -> bool {
 pub(crate) fn kind(arena: &NodeArena, slot: u32) -> Kind {
     let effective = arena.effective_style(slot);
     let s = &*effective;
-    let sized = |d: Dimension| !matches!(d, Dimension::Auto);
+    let sized = |d: Dimension| !d.is_content_sized();
     // A negative calculated minimum lays out as zero.
-    let floor = |d: Dimension| {
-        !matches!(d, Dimension::Auto) && !matches!(d, Dimension::Points(v) if v <= 0.0)
-    };
+    let floor =
+        |d: Dimension| !d.is_content_sized() && !matches!(d, Dimension::Points(v) if v <= 0.0);
     let sized =
         sized(s.height.clone()) || floor(s.min_height.clone()) || sized(s.max_height.clone());
     match arena.node_type(slot) {

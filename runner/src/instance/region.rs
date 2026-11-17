@@ -31,7 +31,7 @@ impl RegionInst {
         fresh: bool,
     ) -> Result<bool, InstanceError> {
         let plan = u.env.plan;
-        let deps = &u.sites.deps;
+        let deps = &u.sites.data.deps;
         let index = self.region.0 as usize;
         let row = plan.region(self.region);
         let subject_stale = fresh || u.stale(&deps.subjects[index]);
@@ -40,7 +40,16 @@ impl RegionInst {
                 let want = if !subject_stale {
                     *arm
                 } else {
-                    match u.eval(row.subject, frames)? {
+                    match u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })? {
                         Value::Bool(true) => Some(0),
                         Value::Bool(false) => Some(1),
                         _ => {
@@ -65,7 +74,16 @@ impl RegionInst {
                 let (want, new_frame) = if !subject_stale {
                     (*arm, frame.clone())
                 } else {
-                    match u.eval(row.subject, frames)? {
+                    match u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })? {
                         Value::Option(Some(v)) => (
                             Some(0),
                             ArmFrame {
@@ -87,7 +105,16 @@ impl RegionInst {
                 let body = &deps.bodies[index];
                 let keys_stale = fresh || u.stale_outside(&deps.keys[index], 1);
                 let subject = if subject_stale || keys_stale {
-                    Some(u.eval(row.subject, frames)?)
+                    Some(u.eval_named(row.subject, frames, || {
+                        format!(
+                            "{} subject",
+                            match row.kind {
+                                RegionKind::When => "when",
+                                RegionKind::Match => "match",
+                                RegionKind::Each => "each",
+                            }
+                        )
+                    })?)
                 } else {
                     None
                 };
@@ -179,7 +206,7 @@ impl RegionInst {
                         ..Default::default()
                     };
                     *inner.last_mut().unwrap() = frame.clone();
-                    let key = u.eval(row.key, &inner)?;
+                    let key = u.eval_named(row.key, &inner, || "each key".into())?;
                     // Equal scalar keys have the same canonical spelling,
                     // including +0/-0. An old key is already validated. Delay
                     // spelling and sorting until the key sequence changes.
@@ -353,9 +380,10 @@ impl RegionInst {
         *arm = want;
         *frame = new_frame;
         if let Some(i) = want {
+            frame.region = Some(region.0);
             let arm_id = plan.region(region).arms.iter().nth(i);
             if let Some(id) = arm_id.filter(|id| owns_slots(plan, *id)) {
-                let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));
+                let slots: RowSlots = crate::vm::Owned::shared();
                 frame.region = Some(region.0);
                 frame.row = Some(slots.clone());
                 init_owned(u, id, &slots, &with_frame(frames, frame.scope()))?;
@@ -407,12 +435,53 @@ fn new_row_slots(
     let needed = *needed.get_or_insert_with(|| {
         body.opaque || body.row_slots || arm.is_some_and(|arm| owns_slots(plan, arm))
     });
-    needed.then(|| Rc::new(RefCell::new(BTreeMap::new())))
+    needed.then(crate::vm::Owned::shared)
 }
 
-/// Whether arm `arm`'s instance owns any slot.
-fn owns_slots(plan: &exact_plan::Plan, arm: ArmsId) -> bool {
+/// Whether arm `arm`'s instance owns any slot or request.
+pub(super) fn owns_slots(plan: &exact_plan::Plan, arm: ArmsId) -> bool {
     plan.slots.iter().any(|s| s.owner == Some(arm))
+        || plan.resources.iter().any(|r| r.owner == Some(arm))
+}
+
+/// Give arm `arm`'s new instance a request for each resource the arm owns,
+/// showing its placeholder (LLP 1035.005.004 D2): its gate and arguments
+/// are read, and its asks go out, once this render is over (`owned.rs`).
+pub(super) fn init_requests(u: &Update<'_>, arm: ArmsId, slots: &RowSlots) {
+    let plan = u.env.plan;
+    let mut storage = slots.borrow_mut();
+    for (i, r) in plan.resources.iter().enumerate() {
+        if r.owner != Some(arm) {
+            continue;
+        }
+        storage.requests.push(vm::OwnedRequest {
+            resource: i as u32,
+            row: None,
+            value: crate::held::Held::new(placeholder(u.env, r)),
+            pending: false,
+            current: false,
+            failed: None,
+        });
+    }
+}
+
+/// What an owned resource shows before anything is asked: its declared
+/// `else`, a placeholder row's settled value or `empty(…)`, or its type's
+/// zero (LLP 1054.000.002).
+pub(crate) fn placeholder(env: Env<'_>, r: &exact_plan::ResourcesRow) -> Value {
+    let plan = env.plan;
+    match r.placeholder {
+        Some(p) => env
+            .resources
+            .get(p.0 as usize)
+            .and_then(Option::as_ref)
+            .map(|h| h.read(plan)),
+        None if r.placeholder_value.len > 0 => {
+            Value::from_bytes(plan.bytes(r.placeholder_value)).ok()
+        }
+        None => crate::runner::zero(plan, r.ty),
+    }
+    .unwrap_or(Value::Unit)
 }
 
 /// Start the slots arm `arm`'s new instance owns from their initializers,
@@ -428,12 +497,15 @@ pub(super) fn init_owned(
     let plan = u.env.plan;
     for (i, s) in plan.slots.iter().enumerate() {
         if s.owner == Some(arm) {
-            let v = u.eval(s.init, frames)?;
+            let v = u.eval_named(s.init, frames, || {
+                format!("state {:?} initializer", plan.str(s.name))
+            })?;
             if !v.conforms(plan, s.ty) {
                 return Err(InstanceError::slot_type(plan, &v, s.ty, plan.str(s.name)));
             }
-            slots.borrow_mut().insert(i as u32, v);
+            slots.borrow_mut().slots.insert(i as u32, v);
         }
     }
+    init_requests(u, arm, slots);
     Ok(())
 }

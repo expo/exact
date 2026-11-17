@@ -1,0 +1,20 @@
+// The format slot names a table whole, extension and all (LLP 1054.000.003
+// D6): the base is `de-AT-u-nu-latn` (app.json), beside French, so every
+// formatter reads that table's data. Austrian German sets money's symbols
+// apart from a number's: `1 234,5` but `€ 1.234,50`.
+component App
+  state k = 1
+  derive numbers = `${formatNumber(1234.5 * k, "decimal")} | ${formatNumber(1234.5 * k, "currency", "EUR")} | ${formatNumber(-1234.5 * k, "currency", "USD")} | ${formatNumber(12.345 * k, "percent")} | ${formatNumber(1234.5 * k, "compact")}`
+  action grow
+    k = k * 1000
+  view
+    column
+      text t("title") testId="title"
+      text numbers testId="numbers"
+      button "grow" press=grow testId="grow"
+
+test "Austrian money"
+  expect text "title" == "Formate"
+  expect text "numbers" == "1 234,5 | € 1.234,50 | -$ 1.234,50 | 1 235 % | 1234"
+  tap "grow"
+  expect text "numbers" == "1 234 500 | € 1.234.500,00 | -$ 1.234.500,00 | 1 234 500 % | 1,2 Mio."

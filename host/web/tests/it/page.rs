@@ -1,7 +1,7 @@
 //! The page around a document (LLP 1048.000 D3, D6, D7): its head, its
 //! checkpoint, and the locations a build renders.
 
-use exact_runner::{DataError, DataSource, Value};
+use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use exact_web::document::{build_locations, checkpoint, digest, read_checkpoint, route_at, Site};
 use exact_web::Host;
 
@@ -59,7 +59,91 @@ component A
 }
 
 #[test]
-fn without_a_head_the_title_is_the_apps_and_nothing_else_is_claimed() {
+fn a_rendered_title_uses_the_selected_route_before_the_app_name() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let src = r#"routes nav
+  home "/"
+    item "/item"
+    explicit "/explicit"
+    empty "/empty"
+    bare "/bare"
+    formatted "/formatted"
+
+component A
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}`
+          if e.name != "bare"
+            header
+              if e.name == "formatted"
+                text "**Inbox** & [Archive](/archive)" markup="markdown" role="heading" aria-level=1
+              else
+                text (e.name == "home" ? "Home" : "Item & <Detail>") role="heading" aria-level=1
+          if e.name == "explicit"
+            head title="Authored"
+          if e.name == "empty"
+            head title=""
+"#;
+    for (location, title) in [
+        ("/", "Home"),
+        ("/item", "Item &amp; &lt;Detail&gt;"),
+        ("/explicit", "Authored"),
+        ("/empty", ""),
+        ("/bare", "Site &amp; Co"),
+        ("/formatted", "Inbox &amp; Archive"),
+    ] {
+        let host = host(src, Says(""), location);
+        let head = host
+            .document()
+            .unwrap()
+            .page_head(host.runner().plan(), &SITE, location)
+            .unwrap();
+        for want in [
+            format!("<title>{title}</title>"),
+            format!("<meta property=\"og:title\" content=\"{title}\">"),
+            format!("<meta name=\"twitter:title\" content=\"{title}\">"),
+        ] {
+            assert!(head.contains(&want), "{location}: {want}\n{head}");
+        }
+    }
+}
+
+#[test]
+fn a_route_title_uses_the_panel_named_by_the_roots_tabs() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let host = host(
+        r#"component App
+  view
+    main navigationBack="back" navigationKey="selected"
+      row role="tablist"
+        button role="tab" aria-controls="first"
+          text "First"
+        button role="tab" aria-controls="second"
+          text "Second"
+      column role="tabpanel" id="first"
+        column navigationKey="other"
+          header
+            text "Covered" role="heading" aria-level=1
+      column role="tabpanel" id="second"
+        column navigationKey="selected"
+          header
+            column
+              text "  Selected  " role="heading" aria-level=1
+"#,
+        Says(""),
+        "/",
+    );
+    let head = host
+        .document()
+        .unwrap()
+        .page_head(host.runner().plan(), &SITE, "/")
+        .unwrap();
+    assert!(head.starts_with("<title>Selected</title>"), "{head}");
+}
+
+#[test]
+fn without_a_head_or_route_heading_the_title_is_the_apps() {
     let plain = host(
         "component A\n  view\n    column viewport-fit=\"cover\" interactive-widget=\"resizes-content\"\n      text \"a\"\n",
         Says(""),
@@ -104,7 +188,7 @@ fn the_checkpoint_never_closes_its_script_or_opens_a_comment() {
     assert_eq!(
         json,
         format!(
-            "{{\"location\":\"/x{lt}/script{gt}{lt}!--]]{gt}{amp}\",\"time\":0,\"logic\":null,\"answers\":[],\"pending\":[]}}"
+            "{{\"location\":\"/x{lt}/script{gt}{lt}!--]]{gt}{amp}\",\"time\":0,\"logic\":null,\"answers\":[],\"urls\":[],\"pending\":[]}}"
         )
     );
     for bad in ["<", ">", "&"] {
@@ -125,8 +209,11 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
         !json.contains('<') && !json.contains('>') && !json.contains('&'),
         "{json}"
     );
-    // No stream is open, so no `open` is written
-    assert!(!json.contains("\"open\""), "{json}");
+    // No stream is open and no answer read the store, so neither field is written
+    assert!(
+        !json.contains("\"open\"") && !json.contains("\"readers\""),
+        "{json}"
+    );
     let read = read_checkpoint(&json).unwrap();
     assert_eq!(read, host.runner().document_checkpoint("/said?q=1"));
     assert_eq!(read.answers[0].3, Value::str("</script><!-- & \u{1F4AC}"));
@@ -141,11 +228,47 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
     }
 }
 
+/// `viewer()` answers the store's `token`.
+struct Viewer;
+
+impl DataSource for Viewer {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::str(
+            store.get("token").unwrap_or("anonymous"),
+        )))
+    }
+
+    fn grants(&self) -> &str {
+        "secret.keep token\n"
+    }
+}
+
+#[test]
+fn a_checkpoint_lists_the_answers_that_read_the_store() {
+    let plan = contract::compile(
+        "component A\n  resource viewer = viewer() as shape string\n  view\n    text viewer\n",
+    )
+    .unwrap();
+    let host = Host::boot(&plan.encode(), Viewer, Default::default(), "/")
+        .unwrap()
+        .0;
+    let json = checkpoint(host.runner(), "/");
+    assert!(json.ends_with(",\"readers\":[0]}"), "{json}");
+    assert_eq!(
+        read_checkpoint(&json).unwrap(),
+        host.runner().document_checkpoint("/")
+    );
+}
+
 #[test]
 fn checkpoint_values_are_json_that_reads_back_exactly() {
     // Every kind of plan value, as `push_value` spells it: text a page's
     // compression matches against the document's own strings.
-    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":["a"]}"#;
+    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":[0],"readers":[0]}"#;
     let read = read_checkpoint(text).unwrap();
     let (name, source, args, value) = &read.answers[0];
     assert_eq!((name.as_str(), source.as_str()), ("a", "src"));
@@ -167,8 +290,13 @@ fn checkpoint_values_are_json_that_reads_back_exactly() {
     );
     assert_eq!(fields[8], Value::Number(f64::NEG_INFINITY));
     assert_eq!(read.pending, ["b"]);
-    assert_eq!(read.open, ["a"]);
+    assert_eq!((read.open, read.readers), (vec![0], vec![0]));
     assert!(read_checkpoint(&text.replace("{\"s\"", "{\"z\"")).is_err());
+    // Refuse an `open` or `readers` index past the answers
+    for field in ["open", "readers"] {
+        let past = text.replace(&format!("\"{field}\":[0]"), &format!("\"{field}\":[1]"));
+        assert!(read_checkpoint(&past).is_err(), "{past}");
+    }
 }
 
 #[test]
@@ -206,15 +334,7 @@ fn a_runtime_adopts_the_document_it_would_have_rendered() {
         .runner()
         .journal()
         .any(|l| l.contains("checkpoint: 7 of 7 answers taken")));
-    // A query the route table doesn't read, or another spelling of the
-    // same path, is the same page: the runtime boots at the page's path,
-    // keeping the browser's query, and adopts.
-    let (host, batch) = open("//?utm=x", &page, &written);
-    assert!(adopted(&batch));
-    assert!(batch.contains("\"url\":\"/?utm=x\""), "{batch}");
-    assert_eq!(host.location(), "/?utm=x");
-    // Another path isn't this page's (a static host's 404.html, its
-    // fallback to `/`), even where the tree would match: render fresh.
+    // A document rendered at `/` does not belong to another path: render fresh.
     let (host, batch) = open("/elsewhere?utm=x", &page, &written);
     assert!(!batch.contains("\"op\":\"adopt\""));
     assert!(host
@@ -237,6 +357,93 @@ fn a_runtime_adopts_the_document_it_would_have_rendered() {
         .runner()
         .journal()
         .any(|l| l.contains("document: the checkpoint doesn't read")));
+}
+
+#[test]
+fn a_page_whose_view_ignores_the_query_adopts_its_canonical_path() {
+    let plan = contract::bake(
+        contract::compile(
+            r#"routes nav
+  home "/" render=build
+component App
+  resource greeting = say() as shape string
+  view
+    text greeting
+"#,
+        )
+        .unwrap(),
+        Says("Hello"),
+    )
+    .unwrap()
+    .encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    let rendered = Host::boot(&plan, Says("Hello"), Default::default(), "/")
+        .unwrap()
+        .0;
+    let page = checkpoint(rendered.runner(), "/");
+    let root = rendered.document().unwrap().root;
+    let written = digest(&rendered.runner().plan().encode(), "/", &page, &root);
+    let (host, batch) = Host::boot_checkpoint(
+        &plan,
+        Says("Hello"),
+        &page,
+        &written,
+        Vec::new(),
+        None,
+        Default::default(),
+        "//?utm=x",
+    )
+    .unwrap();
+    assert!(batch.contains("{\"op\":\"adopt\",\"adopted\":true}"));
+    assert!(batch.contains("\"url\":\"/?utm=x\""), "{batch}");
+    assert_eq!(host.location(), "/?utm=x");
+}
+
+/// A view keyed by its visit, as Caltrain's is: a query on the root location
+/// spends no visit id at launch, so the document rendered with one (the agent's
+/// `?agent=1`, which the runtime's launch leaves out) is the one rendered
+/// without, and the other way round.
+#[test]
+fn a_view_keyed_by_its_visit_adopts_a_document_rendered_with_another_query() {
+    let plan = contract::bake(
+        contract::compile(
+            "routes nav\n  home \"/\" render=build\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}`\n      text `visit ${top(nav).id}`\n",
+        )
+        .unwrap(),
+        Says(""),
+    )
+    .unwrap()
+    .encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    for (rendered_at, launch) in [("/?agent=1", "/"), ("/", "/?utm=x")] {
+        let rendered = Host::boot(&plan, Says(""), Default::default(), rendered_at)
+            .unwrap()
+            .0;
+        let page = checkpoint(rendered.runner(), rendered_at);
+        let root = rendered.document().unwrap().root;
+        assert!(root.contains("visit 0"), "{rendered_at}: {root}");
+        let written = digest(
+            &rendered.runner().plan().encode(),
+            rendered_at,
+            &page,
+            &root,
+        );
+        let (_, batch) = Host::boot_checkpoint(
+            &plan,
+            Says(""),
+            &page,
+            &written,
+            Vec::new(),
+            None,
+            Default::default(),
+            launch,
+        )
+        .unwrap();
+        assert!(
+            batch.contains("{\"op\":\"adopt\",\"adopted\":true}"),
+            "rendered at {rendered_at}, launched at {launch}"
+        );
+    }
 }
 
 #[test]
@@ -321,12 +528,16 @@ fn a_location_resolves_to_its_route_or_the_not_found_route() {
 fn resolved_language_is_published_at_boot_and_after_switching() {
     let mut plan = contract::compile("component App\n  state language = \"en\"\n  view\n    column width=300\n      text \"123\" testId=\"text\"\n").unwrap();
     plan.locale = Some(exact_plan::SlotsId(0));
+    // No format data: the formatters print en-US (LLP 1054.000.003 D6).
+    let format = exact_plan::StrId(plan.strings.len() as u32);
+    plan.strings.push("");
     for rtl in [false, true] {
         let name = exact_plan::StrId(plan.strings.len() as u32);
         plan.strings.push(if rtl { "ar" } else { "en" });
         plan.locales.push(exact_plan::LocalesRow {
             name,
             rtl,
+            format,
             texts: Default::default(),
         });
     }
@@ -355,12 +566,16 @@ fn resolved_language_is_published_at_boot_and_after_switching() {
 fn the_launch_place_and_date_are_the_first_batchs() {
     let mut plan = contract::compile("shape Time\n  utcOffset: number\n  locale: string\ncomponent App\n  state language = \"en\"\n  state seen = language\n  resource time = exactTime() as shape Time\n  view\n    text `${time.locale}/${time.utcOffset}/${seen}` testId=\"text\"\n").unwrap();
     plan.locale = Some(exact_plan::SlotsId(0));
+    // No format data: the formatters print en-US (LLP 1054.000.003 D6).
+    let format = exact_plan::StrId(plan.strings.len() as u32);
+    plan.strings.push("");
     for rtl in [false, true] {
         let name = exact_plan::StrId(plan.strings.len() as u32);
         plan.strings.push(if rtl { "ar" } else { "en" });
         plan.locales.push(exact_plan::LocalesRow {
             name,
             rtl,
+            format,
             texts: Default::default(),
         });
     }
@@ -380,4 +595,197 @@ fn the_launch_place_and_date_are_the_first_batchs() {
     );
     // A root initializer reading the locale slot reads the launch's.
     assert!(batch.contains("ar-EG/120/ar"), "{batch}");
+}
+
+#[test]
+fn a_direct_stored_boot_knows_the_launch_facts_before_settlement() {
+    use exact_runner::time::{Launch, Place, WallTime};
+    use std::{cell::RefCell, rc::Rc};
+
+    struct Observed(Rc<RefCell<Vec<Vec<Value>>>>);
+    impl DataSource for Observed {
+        fn query(&mut self, _: &str, args: &[Value]) -> Result<Value, DataError> {
+            self.0.borrow_mut().push(args.to_vec());
+            Ok(Value::str("observed"))
+        }
+    }
+    let mut plan = contract::compile(
+        r#"shape Time
+  epochAtZero: number
+  utcOffset: number
+  locale: string
+  formatLocale: string
+  timeZone: string
+  seed: number
+component App
+  state language = "en"
+  state seen = language
+  resource time = exactTime() as shape Time
+  state started = performanceNow()
+  resource observed = observe(time, seen, started) as shape string
+  view
+    text observed
+"#,
+    )
+    .unwrap();
+    plan.locale = Some(exact_plan::SlotsId(0));
+    let format = exact_plan::StrId(plan.strings.len() as u32);
+    plan.strings.push("");
+    for language in ["en", "ar"] {
+        let name = exact_plan::StrId(plan.strings.len() as u32);
+        plan.strings.push(language);
+        plan.locales.push(exact_plan::LocalesRow {
+            name,
+            rtl: language == "ar",
+            format,
+            texts: Default::default(),
+        });
+    }
+    let plan = plan.encode();
+    let mut facts = Launch {
+        time: Some(WallTime {
+            epoch_at_zero: 1_790_000_000_000.,
+            utc_offset: 120.,
+        }),
+        place: Some(Place {
+            locale: "ar-EG".into(),
+            format_locale: "en-KR-u-hc-h23".into(),
+            time_zone: "Europe/Berlin".into(),
+            seed: 42.,
+        }),
+        clock: Some(250.),
+        ..Launch::NONE
+    };
+    let expected = |facts: &Launch| {
+        let time = facts.time.unwrap();
+        let place = facts.place.as_ref().unwrap();
+        Value::Record(
+            vec![
+                Value::Number(time.epoch_at_zero),
+                Value::Number(time.utc_offset),
+                Value::str(&place.locale),
+                Value::str(&place.format_locale),
+                Value::str(&place.time_zone),
+                Value::Number(place.seed),
+            ]
+            .into(),
+        )
+    };
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let (mut host, first) = Host::boot_stored(
+        &plan,
+        Observed(calls.clone()),
+        Vec::new(),
+        Default::default(),
+        "/",
+        facts.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        *calls.borrow(),
+        vec![vec![
+            expected(&facts),
+            Value::str("ar"),
+            Value::Number(250.)
+        ]]
+    );
+    assert_eq!(host.runner().slot("seen"), Some(&Value::str("ar")));
+    assert_eq!(host.runner().now_ms(), 250.);
+    assert!(first.contains("observed"), "{first}");
+
+    host.advance(1250.);
+    let carried = host.carry();
+    facts.time.as_mut().unwrap().epoch_at_zero += 1000.;
+    facts.clock = Some(9000.);
+    let current = expected(&facts);
+    calls.borrow_mut().clear();
+    let (host, _) = exact_runner::time::launching_with(facts, || {
+        Host::boot_with(
+            &plan,
+            Observed(calls.clone()),
+            Some(&carried),
+            Default::default(),
+            "/",
+        )
+    })
+    .unwrap();
+    assert_eq!(host.runner().now_ms(), 1250.);
+    assert_eq!(
+        *calls.borrow(),
+        vec![vec![current, Value::str("ar"), Value::Number(250.)]]
+    );
+}
+
+#[test]
+fn driven_checkpoint_revalidates_only_the_answers_named_by_fixtures() {
+    let source = "component App\n  resource greeting = say() as shape string\n  resource other = other() as shape string\n  view\n    column\n      text greeting\n      text other\n";
+    let plan = contract::compile(source).unwrap().encode();
+    exact_web::link(exact_web_capabilities::ALL);
+    let rendered = Host::boot(&plan, Says("Live greeting"), Default::default(), "/")
+        .unwrap()
+        .0;
+    let page = checkpoint(rendered.runner(), "/");
+    let root = rendered.document().unwrap().root;
+    let written = digest(&plan, "/", &page, &root);
+    for _reload in 0..2 {
+        let (host, _) = Host::boot_checkpoint(
+            &plan,
+            Says("Stubbed greeting"),
+            &page,
+            &format!("{written} driven:0"),
+            vec![],
+            None,
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let root = host.document().unwrap().root;
+        assert!(root.contains("Stubbed greeting"), "{root}");
+        assert!(
+            root.contains("Live greeting"),
+            "unrelated answer was reasked: {root}"
+        );
+    }
+}
+
+#[test]
+fn production_checkpoints_omit_backend_request_urls() {
+    use exact_runner::{delivery::Delivery, Outcome, Response, Runner};
+    let url = "https://backend.test/download?signature=private-credential";
+    let plan = contract::compile(&format!(
+        "source summary() as shape string\n  url \"{url}\"\ncomponent App\n  resource summary = summary() as shape string\n  view\n    text summary\n"
+    )).unwrap();
+    for production in [false, true] {
+        let mut runner = Runner::boot_at(
+            &plan,
+            Says(""),
+            exact_web::host::template::kernel(),
+            Default::default(),
+            "/",
+            0.,
+            Delivery {
+                production,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let requests = runner.take_requests();
+        assert_eq!(requests.len(), 1);
+        runner.record_render_request(&requests[0]);
+        runner
+            .fulfill_measured(
+                requests[0].ticket,
+                Outcome::Response(Response {
+                    status: 200,
+                    headers: vec![],
+                    body: br#""Summary only""#.to_vec(),
+                }),
+                None,
+            )
+            .unwrap();
+        let page = checkpoint(&runner, "/");
+        assert!(page.contains("Summary only"), "{page}");
+        assert_eq!(page.contains("private-credential"), !production, "{page}");
+        assert_eq!(page.contains("\"urls\""), !production, "{page}");
+    }
 }

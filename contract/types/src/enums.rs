@@ -48,6 +48,19 @@ pub(super) fn accepts_expr(
             inner_scope.push(vec![(var.clone(), Ref::Local(0), *inner)]);
             child(want, some, &inner_scope) && child(want, none, scope)
         }
+        (
+            _,
+            Expr::Let {
+                name, value, body, ..
+            },
+        ) if contains(want) => {
+            let Ok(t) = infer(value, scope, shapes) else {
+                return false;
+            };
+            let mut inner_scope = scope.clone();
+            inner_scope.push(vec![(name.clone(), Ref::Local(0), t)]);
+            child(want, body, &inner_scope)
+        }
         _ => checks::can_unify(want, have),
     }
 }
@@ -82,6 +95,7 @@ fn rejected<'a>(want: &Ty, expr: &'a Expr) -> Option<&'a str> {
         (_, Expr::Match { some, none, .. }) => {
             rejected(want, some).or_else(|| rejected(want, none))
         }
+        (_, Expr::Let { body, .. }) => rejected(want, body),
         _ => None,
     }
 }

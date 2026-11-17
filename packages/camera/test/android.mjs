@@ -11,6 +11,7 @@ import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'no
 import { basename, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { checker, makeFixture, root } from './fixture.mjs';
+import { apkBuildDir } from '../../../scripts/agent-android.mjs';
 
 const { app } = makeFixture(), name = basename(app);
 // A date control: the plan uses `dates`, so the APK links Compose Material 3 beside CameraX.
@@ -35,11 +36,11 @@ try {
   check('android', 'the checksums cover the graph', /<component group="androidx\.camera" name="camera-view" version="1\.6\.2">/.test(sums) && /sha256/.test(sums), sums.slice(0, 400) || `no ${checksums}`);
   check('android', "the reader's gradle/ keeps no verification file after the build", !existsSync(resolve(root, 'host/android/gradle/verification-metadata.xml')));
 
-  const generated = resolve(root, 'host/android/app/build', name, 'extensions/exact/app/ExactExtensions.kt');
+  const out = apkBuildDir(app), generated = resolve(out, 'extensions/exact/app/ExactExtensions.kt');
   const roster = existsSync(generated) ? readFileSync(generated, 'utf8') : '';
   check('android', 'the roster names both extensions and the viewfinder', roster.includes('"exact-camera" to "camera"') && roster.includes('exact.mediacapture.MediaCaptureModule') && roster.includes('exact.camera.CameraModule'), roster || `no ${generated}`);
-  const merged = readdirSync(resolve(root, 'host/android/app/build', name), { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
-  const manifest = merged ? readFileSync(resolve(root, 'host/android/app/build', name, merged), 'utf8') : '';
+  const merged = readdirSync(out, { recursive: true }).find((f) => String(f).includes('merged_manifests/release/') && String(f).endsWith('AndroidManifest.xml'));
+  const manifest = merged ? readFileSync(resolve(out, merged), 'utf8') : '';
   check('android', 'the manifest asks CAMERA and requires no camera feature', manifest.includes('android.permission.CAMERA') && /android.hardware.camera.any"\s+android:required="false"/.test(manifest), merged ?? 'no merged manifest');
 
   const strict = build();

@@ -92,6 +92,7 @@ fn cases(fixture: &str) -> Vec<Case<'_>> {
                     let (id, size) = part.split_once(':').unwrap();
                     let (width, height) = size.split_once('x').unwrap();
                     let block = HostBlock {
+                        tactic: Default::default(),
                         width: axis(width),
                         height: axis(height),
                     };
@@ -234,6 +235,7 @@ fn route_fit_keeps_authored_sizes_and_css_constraints() {
         k.set_host_block(
             2,
             Some(HostBlock {
+                tactic: Default::default(),
                 width: BlockAxis::Fit(400.0),
                 height: BlockAxis::Fit(200.0),
             }),

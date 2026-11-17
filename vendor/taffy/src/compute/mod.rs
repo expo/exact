@@ -86,6 +86,7 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
             common::absolute::AbsolutePass {
                 area_size: Size { width, height },
                 area_offset: Point::ZERO,
+                clearance: crate::geometry::Rect::ZERO,
                 direction,
                 sizing_mode: SizingMode::InherentSize,
                 #[cfg(feature = "content_size")]
@@ -117,10 +118,10 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
     );
     // An automatic width fills, within the limits the ratio transferred; the ratio then gives the
     // height from it.
-    // HTML form controls with an automatic inline size shrink to fit even
-    // when they are the document's one root child. Exact carries that
-    // distinction on Taffy's existing table marker (patch 21), as block
-    // child layout does below the root.
+    // EXACT PATCH 21: HTML form controls with an automatic inline size shrink
+    // to fit even when they are the document's one root child. Exact carries
+    // that distinction on Taffy's existing table marker, as block child layout
+    // does below the root.
     let fills = in_flow
         && !style.is_table_item()
         && style_size.width.is_none()
@@ -163,6 +164,36 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
             .maybe_max(padding_border_size)
     } else {
         Size::NONE
+    };
+
+    // EXACT PATCH 77: a keyword width resolves as a block child's does, against the offer
+    // less the margins, then within its bounds.
+    let known_dimensions = match (in_flow && known_dimensions.width.is_none())
+        .then(|| {
+            let stretch = parent_size.width.maybe_sub(non_auto_margin.horizontal_axis_sum());
+            let style = tree.get_core_container_style(root);
+            common::sizing_keyword::resolve_sizing_keyword(style.size().width, stretch, parent_size.width)
+        })
+        .flatten()
+    {
+        Some(resolution) => Size {
+            width: Some(
+                common::sizing_keyword::measure_keyword_width(
+                    tree,
+                    root,
+                    resolution,
+                    Size::NONE,
+                    parent_size,
+                    AvailableSpace::MaxContent,
+                    SizingMode::InherentSize,
+                    Line::FALSE,
+                )
+                .maybe_clamp(min_size.width, max_size.width)
+                .max(padding_border_size.width),
+            ),
+            height: known_dimensions.height,
+        },
+        None => known_dimensions,
     };
 
     let ratio_min = crate::compute::ratio::minimum_ratio_width(tree, root, parent_size, None);

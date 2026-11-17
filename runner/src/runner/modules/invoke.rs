@@ -71,6 +71,10 @@ pub(super) enum To {
 
 /// A handler awaiting a request of its own.
 struct Running {
+    completion: Option<crate::CompletionReply>,
+    module: Option<crate::ModuleInstance>,
+    fetch: Option<u64>,
+    continuation: Option<u64>,
     at: String,
     source: String,
     args: Value,
@@ -126,6 +130,7 @@ impl<D: DataSource> Runner<D> {
             Some("device") => CallOrigin::Device,
             Some("wake") => CallOrigin::Wake,
             Some("tool") => CallOrigin::Tool,
+            Some("action") => CallOrigin::Action,
             _ => CallOrigin::App,
         };
         let extension = self.plan.str(row.extension).to_owned();
@@ -247,6 +252,13 @@ impl<D: DataSource> Runner<D> {
         final_of: Option<u64>,
     ) {
         let run = Running {
+            completion: None,
+            module: self
+                .data
+                .module_identity(&format!("tool:{handler}"))
+                .map(|m| m.instance()),
+            fetch: None,
+            continuation: None,
             at,
             source: format!("tool:{handler}"),
             args: Value::from(args.to_string()),
@@ -346,13 +358,20 @@ impl<D: DataSource> Runner<D> {
                 let ticket = self.next_ticket;
                 self.next_ticket += 1;
                 request.reach = self.reach_of(run.origin);
+                if request.module.is_some() {
+                    run.module = request.module.clone();
+                }
+                run.completion = None;
                 run.effects = request.has_effects();
+                run.fetch = request.fetch;
+                run.continuation = request.continuation;
                 // A program starts only from the app's origin (LLP 1133.007
                 // D13): a handler's is refused before it reaches the host,
                 // so no ordered work waits on it.
                 match self.process_refusal(&request) {
                     Some(why) => self.refuse_tool(ticket, why, false),
                     None => self.requests.push(RequestOut {
+                        completion: None,
                         class: crate::RequestClass::Ordered,
                         ticket,
                         target: NAME.into(),
@@ -396,6 +415,49 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    pub(in crate::runner) fn failed_tool_tickets(&self) -> Vec<(u64, String)> {
+        self.extensions
+            .invocations
+            .running
+            .iter()
+            .filter_map(|(ticket, run)| Some((*ticket, run.module.as_ref()?.failure()?.to_owned())))
+            .collect()
+    }
+
+    pub(in crate::runner) fn discard_failed_tools(&mut self) {
+        let tokens: Vec<_> = self
+            .extensions
+            .invocations
+            .running
+            .values()
+            .filter(|run| run.module.as_ref().and_then(|m| m.failure()).is_some())
+            .filter_map(|run| run.continuation)
+            .collect();
+        for token in tokens {
+            self.data.discard(token);
+        }
+    }
+
+    pub(in crate::runner) fn fail_tool(&mut self, ticket: u64, message: &str) {
+        if let Some(run) = self.extensions.invocations.running.remove(&ticket) {
+            self.tool_step(run, Err(DataError::Unavailable(message.into())));
+        }
+    }
+
+    pub(in crate::runner) fn tool_completion(
+        &mut self,
+        ticket: u64,
+    ) -> Option<&mut Option<crate::CompletionReply>> {
+        Some(
+            &mut self
+                .extensions
+                .invocations
+                .running
+                .get_mut(&ticket)?
+                .completion,
+        )
+    }
+
     /// Whether `ticket` is a handler's request.
     pub(in crate::runner) fn is_tool(&self, ticket: u64) -> bool {
         self.extensions.invocations.running.contains_key(&ticket)
@@ -431,7 +493,14 @@ impl<D: DataSource> Runner<D> {
         let answer = self.as_invocation(run.origin, 0, |r| {
             let args = std::slice::from_ref(&run.args);
             r.store.set_clock_ms(r.now_ms);
-            (r.data).parse(&mut r.store, &run.source, args, outcome)
+            (r.data).parse_tool(
+                run.fetch,
+                run.continuation,
+                &mut r.store,
+                &run.source,
+                args,
+                outcome,
+            )
         });
         self.tool_step(run, answer);
     }
@@ -537,6 +606,10 @@ mod tests {
     /// Handler `h`'s run, answering `to`.
     fn running(to: Option<To>) -> Running {
         Running {
+            completion: None,
+            module: None,
+            fetch: None,
+            continuation: None,
             at: "test: h".into(),
             source: "tool:h".into(),
             args: Value::str("{}"),
@@ -563,6 +636,56 @@ mod tests {
         let reply: Box<dyn FnOnce(String) + Send> =
             Box::new(move |answer| said.lock().unwrap().push((ticket, answer)));
         (r.extensions.invocations.running).insert(ticket, running(Some(To::Implementation(reply))));
+    }
+
+    #[test]
+    fn handler_authority_is_issued_at_handoff_and_spent_once_by_either_entry() {
+        for typed in [false, true] {
+            let mut r = boot();
+            let said = Arc::new(Mutex::new(Vec::new()));
+            let received = said.clone();
+            let reply = To::Implementation(Box::new(move |answer| {
+                received.lock().unwrap().push(answer)
+            }));
+            r.tool_step(
+                running(Some(reply)),
+                Ok(Answer::Later(Request::get("https://example.test/tool"))),
+            );
+            let ticket = r.tool_tickets()[0].1;
+            assert!(r.tool_completion(ticket).unwrap().is_none());
+            assert!(r.completion_identity.get().is_none());
+            let out = r.take_requests().pop().unwrap();
+            let slot = out.completion.as_ref().unwrap();
+            let outcome = Outcome::Failed {
+                kind: crate::FailureKind::Network,
+                message: "offline".into(),
+            };
+            assert!(matches!(
+                slot.completion(outcome.clone(), None),
+                crate::Completion::DurableOperation { .. }
+            ));
+            if typed {
+                let cap = slot.take().unwrap();
+                assert!(out.clone().completion.unwrap().take().is_none());
+                assert!(r
+                    .deliver(
+                        cap,
+                        crate::Completion::DurableOperation {
+                            outcome,
+                            timing: None
+                        }
+                    )
+                    .unwrap()
+                    .is_none());
+            } else {
+                r.fulfill(ticket, outcome).unwrap();
+                assert!(slot.take().is_none());
+            }
+            assert!(!r.holds(ticket));
+            assert_eq!(said.lock().unwrap().len(), 1);
+            r.fulfill(ticket, Outcome::Storage(vec![])).unwrap();
+            assert_eq!(said.lock().unwrap().len(), 1);
+        }
     }
 
     /// Two handlers' requests refused together each settle once, the second

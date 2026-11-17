@@ -336,3 +336,19 @@ fn a_swap_inside_a_route_is_named_and_the_routes_are_not() {
     // Screens that are routes: quiet.
     assert_eq!(warned(&stack(LIST)), []);
 }
+
+#[test]
+fn one_slot_wrapped_two_ways_by_state_is_one_screen() {
+    // Caltrain's sky: the same content inside an aurora canvas or a plain
+    // scroll, its toggle inside the content. Routed, so the wrapper's `if`
+    // is walked inside the route.
+    let frame = |plain: &str| {
+        format!(
+            "routes nav\n  home \"/\"\ncomponent App\n  state sky = true\n  state query = \"\"\n  action toggle\n    sky = not sky\n  action edit(v: string)\n    query = v\n  view\n    main\n      for e in stack(nav) key=e.id\n        if e.name == \"home\"\n          Frame(on=sky)\n            column\n              text \"Departures\" role=\"heading\" aria-level=1\n              input value=query input=edit aria-label=\"Search\"\n              button press=toggle testId=\"sky\"\n                text \"Sky\"\ncomponent Frame\n  props\n    on: bool\n  slot\n  view\n    if on\n      column testId=\"sky\" height=\"100%\"\n        scroll height=\"100%\"\n          children\n    else\n      scroll height=\"100%\"\n{plain}        children\n"
+        )
+    };
+    assert_eq!(warned(&frame("")), []);
+    // An arm with a screen of its own besides the slot is still a swap.
+    let own = frame("        text \"Plain\" role=\"heading\" aria-level=1\n");
+    assert_eq!(warned(&own), [(SCREEN.to_string(), line_of(&own, "if on"))]);
+}

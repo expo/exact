@@ -5,8 +5,8 @@
 
 use super::role_named;
 use contract_syntax::{Attr, Component, Expr, File, Node, Span, Stmt, TemplatePart};
+use exact_forma::Design;
 use exact_kernel::{StyleCodec, StyleId};
-use exact_tamber::Design;
 use std::collections::BTreeSet;
 
 /// CSS's colour functions: an expression over a token is one of them.
@@ -83,18 +83,27 @@ pub(crate) struct Said {
     /// somewhere: any length or number token may be named (LLP 1121 D7).
     pub computed_measure: bool,
     /// Every word the literals write, a token's name or not: what D7's
-    /// retention reads (`tamber::Retention`), for this design or an edit of it.
+    /// retention reads (`forma::Retention`), for this design or an edit of it.
     pub words: BTreeSet<String>,
     /// Every word a colour keyframe writes: a token one names is folded into
     /// the keyframes, so its value is the plan's structure.
     pub folded: BTreeSet<String>,
-    /// Each element's style row whose value is literal (strings or numbers,
-    /// or a `?:` or `match` whose arms all are; never a `let`), an SVG
-    /// element's as lowering renames and coerces it: what the design server checks
-    /// again, the compiler's way, when a write reaches a token it names
-    /// ([`super::rows::check`]); a font row with its node's fonts; and each
-    /// whose value is computed, with its type where it is known.
+}
+
+/// The expansion's design-independent token uses, bound to the proposed
+/// design's names by `bind`. A raw literal is kept once per strictness,
+/// preserving the first source location at which an expression must fold.
+#[derive(Clone)]
+pub(crate) struct Read {
+    literals: Vec<(String, Span, bool)>,
+    computed: bool,
+    computed_measure: bool,
+    folded: BTreeSet<String>,
+    /// Literal and typed rows, with their fonts, for the server's trigger
+    /// (`rows::check`). SVG rows are renamed and coerced as lowering does.
     pub rows: Vec<super::rows::Said>,
+    /// What those rows leave to the build (`rows::Left`).
+    pub left: super::rows::Left,
 }
 
 /// What a node of the walk sits in: whether an `svg` encloses it, its
@@ -152,25 +161,10 @@ fn grouped_list(file: &File, tag: &str, attrs: &[Attr]) -> bool {
 /// lowers them (depth first, in order): a style's row is keyed by the element
 /// applying it, and refused once for its first, as the build refuses it.
 fn order(nodes: &[Node], out: &mut std::collections::HashMap<usize, usize>) {
-    for node in nodes {
+    for node in Node::walk(nodes) {
         if matches!(node, Node::Element { .. }) {
             let next = out.len() + 1;
             out.insert(node as *const Node as usize, next);
-        }
-        match node {
-            Node::Element { children, .. } | Node::Use { children, .. } => order(children, out),
-            Node::When {
-                then, otherwise, ..
-            } => {
-                order(then, out);
-                order(otherwise, out);
-            }
-            Node::Each { body, .. } => order(body, out),
-            Node::Match { some, none, .. } => {
-                order(&some.1, out);
-                order(none, out);
-            }
-            Node::Children { .. } => {}
         }
     }
 }
@@ -212,19 +206,7 @@ fn grouped_refused(file: &File, tag: &str, attrs: &[Attr]) -> bool {
 
 /// The address of `node` and of every node inside it, into `out`.
 fn addresses(node: &Node, out: &mut std::collections::HashSet<usize>) {
-    out.insert(node as *const Node as usize);
-    let inner: Vec<&Node> = match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => children.iter().collect(),
-        Node::When {
-            then, otherwise, ..
-        } => then.iter().chain(otherwise).collect(),
-        Node::Each { body, .. } => body.iter().collect(),
-        Node::Match { some, none, .. } => some.1.iter().chain(none).collect(),
-        Node::Children { .. } => Vec::new(),
-    };
-    for n in inner {
-        addresses(n, out);
-    }
+    out.extend(Node::walk(std::slice::from_ref(node)).map(|n| n as *const Node as usize));
 }
 
 /// Whether `attrs`' class gives the element a `font-family`.
@@ -295,9 +277,9 @@ fn prepared(
     crate::svg::check_svg_with(tag, in_svg, parent, expanded, span, &refused).is_ok()
 }
 
-impl Said {
+impl Read {
     /// What `file`'s styles, `root`'s view and the `fn`s, states, derives and
-    /// actions they read say of `design`'s tokens.
+    /// actions they read say about token uses.
     /// `declared`: the app's fonts, which a font row is judged with;
     /// `typing`: the root's scope and the file's shapes, which type and
     /// judge a computed row as lowering does; a `for` or `match` arm's
@@ -305,14 +287,18 @@ impl Said {
     pub(crate) fn of(
         file: &File,
         root: &Component,
-        design: &Design,
         declared: &std::sync::Arc<super::rows::Declared>,
         typing: &super::rows::Typing,
-    ) -> Said {
+    ) -> Read {
         let mut literals: Vec<(String, Span, bool)> = Vec::new();
         let mut computed = false;
         let mut computed_measure = false;
         let mut rows: Vec<super::rows::Said> = Vec::new();
+        let mut uses_left = super::rows::Left::default();
+        // A style row judged where an element applies it, and one some
+        // element applying it leaves.
+        let mut style_judged: std::collections::HashSet<Span> = Default::default();
+        let mut style_left: std::collections::HashSet<Span> = Default::default();
         let mut attrs = |attrs: &[Attr]| {
             for a in attrs {
                 let colour = colour_attr(&a.name);
@@ -327,7 +313,9 @@ impl Said {
                 if colour {
                     values(&a.value, &mut literals);
                 }
-                exprs(&a.value, &mut |e| strings(e, false, &mut literals));
+                a.value
+                    .walk()
+                    .for_each(|e| strings(e, false, &mut literals));
             }
         };
         for s in &file.styles {
@@ -468,6 +456,7 @@ impl Said {
                     // that arm isn't typed or the row's form doesn't say its
                     // type.
                     let mut fonts = None;
+                    let mut judged_own = Vec::new();
                     // A module tag's row lowering refuses is never judged
                     // (`native::refused`, before any check of it).
                     for (index, r) in own.iter().enumerate().filter(|(_, r)| {
@@ -495,6 +484,7 @@ impl Said {
                                 None => continue,
                             },
                         };
+                        judged_own.push(index);
                         rows.push(super::rows::Said {
                             attr: r.clone(),
                             fonts,
@@ -507,6 +497,15 @@ impl Said {
                                 .copied()
                                 .unwrap_or(0),
                         });
+                    }
+                    // The element's rows as written, where lowering rewrites
+                    // none of them, are each judged or left; all are left
+                    // where it does.
+                    let rewritten = coerced.is_some() || matches!(boxed, Ok(Some(_)));
+                    for (index, r) in a.iter().enumerate() {
+                        if rewritten || !judged_own.contains(&index) {
+                            leave(&mut uses_left, r);
+                        }
                     }
                     // A style's rows where an element applies it, as lowering
                     // applies them (`class::rows`: the element's own rows of
@@ -563,6 +562,7 @@ impl Said {
                             unjudged.extend(style(name).into_iter().flatten().map(|r| r.span));
                         }
                     }
+                    let (mut tried, mut pushed) = (Vec::new(), Vec::new());
                     for (index, r) in class
                         .iter()
                         .filter(|_| judged)
@@ -573,6 +573,7 @@ impl Said {
                             unjudged.insert(r.span);
                             continue;
                         }
+                        tried.push(r.span);
                         let computed = match super::rows::kept(r) {
                             Some(false) => None,
                             Some(true) => match here.as_ref().and_then(|t| {
@@ -592,6 +593,7 @@ impl Said {
                                 None => continue,
                             },
                         };
+                        pushed.push(r.span);
                         rows.push(super::rows::Said {
                             attr: r.clone(),
                             fonts,
@@ -608,6 +610,8 @@ impl Said {
                                 .unwrap_or(0),
                         });
                     }
+                    style_judged.extend(pushed.iter().copied());
+                    style_left.extend(tried.into_iter().filter(|s| !pushed.contains(s)));
                     let inside = svg || tag == "svg";
                     let left = left || (parent == Some("section") && crate::grouped::folds(node));
                     // A grouped list's sections, and a section's body there
@@ -633,8 +637,12 @@ impl Said {
                 }
                 // An `if`'s arms push a frame binding nothing, as lowering's do.
                 Node::When {
-                    then, otherwise, ..
+                    cond,
+                    then,
+                    otherwise,
+                    ..
                 } => {
+                    leave_expr(&mut uses_left, cond);
                     let arm = Around {
                         typing: here.as_ref().map(|t| t.pushed(|s| s.push_none())),
                         ..around.clone()
@@ -652,9 +660,12 @@ impl Said {
                     var,
                     index,
                     list,
+                    key,
                     body,
                     ..
                 } => {
+                    leave_expr(&mut uses_left, list);
+                    leave_expr(&mut uses_left, key);
                     let typing = here.as_ref().and_then(|t| {
                         let list = super::rows::typed(list, t)?;
                         Some(t.pushed(|s| s.push_each_of(var, index.as_deref(), list)))
@@ -671,6 +682,7 @@ impl Said {
                     none,
                     ..
                 } => {
+                    leave_expr(&mut uses_left, subject);
                     let subject = here
                         .as_ref()
                         .and_then(|t| Some((t, super::rows::typed(subject, t)?)));
@@ -696,6 +708,36 @@ impl Said {
         // A style row applied where the check leaves class rows to the build
         // is the build's everywhere.
         rows.retain(|r| r.element == 0 || !unjudged.contains(&r.attr.span));
+        // A style row is the build's unless judged at every element that
+        // applies it.
+        for r in file.styles.iter().flat_map(|s| &s.attrs) {
+            if !style_judged.contains(&r.span)
+                || style_left.contains(&r.span)
+                || unjudged.contains(&r.span)
+            {
+                leave(&mut uses_left, r);
+            }
+        }
+        // A judged row naming a role by another of its names (`label` for
+        // `-exact-label`) reads the token overriding it, which the check's
+        // reach does not follow.
+        let mut seen = std::collections::HashSet::new();
+        for r in &rows {
+            let mut found = Vec::new();
+            r.attr
+                .value
+                .walk()
+                .for_each(|e| strings(e, false, &mut found));
+            for (text, _, _) in found {
+                if !seen.insert(text.clone()) {
+                    continue;
+                }
+                let aliases = words(&text)
+                    .filter(|w| role_named(w).is_some_and(|(_, row)| row != *w))
+                    .map(str::to_string);
+                uses_left.words.extend(aliases);
+            }
+        }
         let mut folded = BTreeSet::new();
         // A colour keyframe folds its tokens as a row does (`keyframes::tokens`):
         // its value as the app compiles it, through a palette function's
@@ -706,6 +748,7 @@ impl Said {
             .flat_map(|k| &k.frames)
             .flat_map(|f| &f.attrs)
         {
+            leave(&mut uses_left, a);
             if colour_attr(&a.name) {
                 if let Some(text) = crate::keyframes::constant(&a.value, &file.fns) {
                     folded.extend(words(&text).map(str::to_string));
@@ -715,7 +758,10 @@ impl Said {
         }
         // A computed row may read a `fn`, a state, a derive or what an
         // action assigns: their literals too.
-        let mut loose = |e: &Expr| exprs(e, &mut |e| strings(e, false, &mut literals));
+        let mut loose = |e: &Expr| {
+            leave_expr(&mut uses_left, e);
+            e.walk().for_each(|e| strings(e, false, &mut literals))
+        };
         let bindings = root.derives.iter().chain(&root.states);
         for e in file
             .fns
@@ -728,6 +774,26 @@ impl Said {
         for a in &root.actions {
             stmts(&a.body, &mut loose);
         }
+        let mut seen = std::collections::HashSet::new();
+        literals.retain(|(text, _, strict)| seen.insert((text.clone(), *strict)));
+        Read {
+            literals,
+            computed,
+            computed_measure,
+            folded,
+            rows,
+            left: super::rows::Left {
+                roles: uses_left
+                    .words
+                    .iter()
+                    .filter_map(|w| role_named(w).map(|(_, row)| row))
+                    .collect(),
+                ..uses_left
+            },
+        }
+    }
+
+    pub(crate) fn bind(&self, design: &Design) -> Said {
         let declared: Vec<&str> = design
             .tokens
             .iter()
@@ -741,30 +807,56 @@ impl Said {
             declared.contains(&w) || role_named(w).is_some_and(|(id, _)| roles.contains(&id))
         };
         let mut said = Said {
-            computed,
-            computed_measure,
-            folded,
-            rows,
+            computed: self.computed,
+            computed_measure: self.computed_measure,
+            folded: self.folded.clone(),
             ..Default::default()
         };
-        for (text, span, strict) in literals {
-            said.words.extend(words(&text).map(str::to_string));
-            for expr in expressions(&text, &is_token) {
+        for (text, span, strict) in &self.literals {
+            said.words.extend(words(text).map(str::to_string));
+            for expr in expressions(text, &is_token) {
                 match said.synthetic.iter_mut().find(|s| s.expr == expr) {
-                    Some(s) if strict && !s.strict => {
+                    Some(s) if *strict && !s.strict => {
                         s.strict = true;
-                        s.span = span;
+                        s.span = *span;
                     }
                     Some(_) => {}
                     None => said.synthetic.push(Synthetic {
                         expr: expr.to_string(),
-                        span,
-                        strict,
+                        span: *span,
+                        strict: *strict,
                     }),
                 }
             }
         }
         said
+    }
+}
+
+/// `a` as the row map leaves it to the build: every word its literals
+/// write, and, for a style row whose value is computed, any token
+/// (`rows::Left`).
+fn leave(left: &mut super::rows::Left, a: &Attr) {
+    leave_expr(left, &a.value);
+    let name = contract_syntax::state::state_of(&a.name).map_or(a.name.as_str(), |(_, row)| row);
+    let style = a.name == "atomFaces"
+        || matches!(
+            crate::tags::attr(name),
+            Some(
+                crate::tags::AttrTarget::Styles(_)
+                    | crate::tags::AttrTarget::Shorthand
+                    | crate::tags::AttrTarget::Flex
+            )
+        );
+    left.computed |= style && !literal(&a.value) && !number(&a.value);
+}
+
+/// Every word `e`'s literals write, as left to the build.
+fn leave_expr(left: &mut super::rows::Left, e: &Expr) {
+    let mut found = Vec::new();
+    e.walk().for_each(|e| strings(e, false, &mut found));
+    for (text, _, _) in &found {
+        left.words.extend(words(text).map(str::to_string));
     }
 }
 
@@ -859,52 +951,6 @@ fn strings(e: &Expr, strict: bool, out: &mut Vec<(String, Span, bool)>) {
     }
 }
 
-/// Visit `e` and every expression inside it.
-pub(crate) fn exprs(e: &Expr, f: &mut dyn FnMut(&Expr)) {
-    f(e);
-    match e {
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(..) | Expr::Ident(..) => {}
-        Expr::Template(parts, _) => {
-            for p in parts {
-                if let TemplatePart::Expr(x) = p {
-                    exprs(x, f);
-                }
-            }
-        }
-        Expr::List(items, _) => items.iter().for_each(|a| exprs(a, f)),
-        Expr::Some(x, _)
-        | Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Unary(_, x, _) => exprs(x, f),
-        Expr::Call(_, args, _) => args.iter().for_each(|a| exprs(a, f)),
-        Expr::Binary(_, a, b, _) => {
-            exprs(a, f);
-            exprs(b, f);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            exprs(a, f);
-            exprs(b, f);
-            exprs(c, f);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            exprs(subject, f);
-            exprs(some, f);
-            exprs(none, f);
-        }
-        Expr::Let { value, body, .. } => {
-            exprs(value, f);
-            exprs(body, f);
-        }
-        Expr::Arrow { body, .. } => exprs(body, f),
-    }
-}
-
 /// Every expression an action's statements hold.
 pub(crate) fn stmts(body: &[Stmt], f: &mut dyn FnMut(&Expr)) {
     for s in body {
@@ -978,14 +1024,14 @@ fn expressions<'t>(text: &'t str, is_token: &dyn Fn(&str) -> bool) -> Vec<&'t st
 }
 
 /// Whether `word` is a dotted identifier, a name a design's token may have
-/// (`eu.glow`, `_eu.glow`): Tamber's own name grammar (`is_name`), with a
+/// (`eu.glow`, `_eu.glow`): Forma's own name grammar (`is_name`), with a
 /// `.`. A number, a dimension (`-1.5px`) or a function (`rgb(0.5 0 0)`) is
 /// none (stage 12 B3, round 1, Astra 4; round 2, Astra 2).
 pub(crate) fn dotted_name(word: &str) -> bool {
-    word.contains('.') && exact_tamber::is_name(word)
+    word.contains('.') && exact_forma::is_name(word)
 }
 
-/// `tamber-unknown-token` or `tamber-kind` for a word inside a literal the
+/// `forma-unknown-token` or `forma-kind` for a word inside a literal the
 /// kernel refused in a row that holds a colour among other words (a shadow,
 /// a border, a gradient; LLP 1121 stage 12 B3, QUEUE's item): a dotted word
 /// naming no token of the design and no role, in a colour row's words; in a
@@ -1012,14 +1058,14 @@ pub(crate) fn literal_word(
         .filter(|w| w.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_'));
     for word in words {
         let length =
-            scale::is_base(word) || super::measure_named(word) == Some(exact_tamber::Kind::Length);
+            scale::is_base(word) || super::measure_named(word) == Some(exact_forma::Kind::Length);
         let (id, message) = match shadow {
             Some(kind) if length => (
-                "tamber-kind",
+                "forma-kind",
                 format!("`{attr}=\"{text}\"`: a shadow row's lengths are px: name a shadow token (`x: {kind} = 0 {word} 4px black`) to read `{word}`"),
             ),
             _ if dotted_name(word) && theme::bound() && !theme::names(word) && !length => (
-                "tamber-unknown-token",
+                "forma-unknown-token",
                 format!("`{attr}=\"{text}\"`: `{word}` is no token of this app's design and no role"),
             ),
             _ => continue,

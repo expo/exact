@@ -1,5 +1,5 @@
 import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
-import { fold, launched, onFold, launchLocation } from "./environment.js";
+import { fold, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
@@ -10,7 +10,39 @@ let last = null, refused = new WeakMap();
 let managed = new WeakMap(), shown = new WeakMap(), placed = new WeakMap();
 let written = [], gone = new Set(), cursor = 0, first = null, originIndex = null, echo = null, pop = null, draining = false;
 const queue = [], waiters = new Set();
-let root, navigate, log, hostBack, hostGo, routeMatches = () => false;
+let root, navigate, log, hostBack, hostGo, routeMatches = () => false, canonicalOf = (location) => location;
+let pressedLink = null, heldLink = null, reportedLinkPop = false, duplicateIds = new WeakMap();
+// Bound inspection by projections, including when an agent holds time still.
+function inspectTestIds(root, log) {
+  let inspection = duplicateIds.get(root);
+  if (!inspection) duplicateIds.set(root, inspection = { left: 32, reported: new Set() });
+  if (inspection.left === 0) return;
+  inspection.left--;
+  const seen = new Map();
+  for (const el of root.querySelectorAll('[data-testid]')) {
+    const route = el.closest('[navigationKey]');
+    if (!route || route.hasAttribute('navigationBack') || el.closest('[data-exiting]')) continue;
+    const id = el.getAttribute('data-testid');
+    if (!id) continue;
+    if (seen.has(id) && seen.get(id) !== route && !inspection.reported.has(id)) {
+      inspection.reported.add(id);
+      log(`navigation: testId ${JSON.stringify(id)} occurs on multiple routes; covered routes remain mounted`);
+    }
+    seen.set(id, route);
+  }
+}
+function captureLink(event) {
+  pressedLink = null;
+  const link = event.target.closest?.('a[href]');
+  if (!link || !root.contains(link) || event.defaultPrevented || event.button !== 0 ||
+      event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+      link.hasAttribute('download') || link.target && link.target !== '_self') return;
+  const url = new URL(link.href, location.href);
+  if (url.origin !== location.origin || !routeMatches(url.pathname + url.search)) return;
+  // `url` names the link as clicked; `at` is the router's spelling of it, which a stored visit keeps.
+  const press = pressedLink = { event, from: last?.top, url: url.pathname + url.search + url.hash, at: canonicalOf(url.pathname + url.search) };
+  setTimeout(() => { if (pressedLink === press) pressedLink = null; }, 0);
+}
 const routesIn = (node) => viewChildren(node).filter((r) => r.hasAttribute("navigationKey") && !r.hasAttribute("data-exiting"));
 const setInert = (el, on) => {
   if (el.inert !== on) {
@@ -23,6 +55,22 @@ export const liveById = (id, root = document) => {
 };
 // a command by id means the live element: one leaving keeps its ids for its own references
 const leavingSheets = new Set(), shownRoutes = new WeakMap();
+// @ref LLP 1013.001 D2, D6 — while a route transition plays (shared.js), the route beneath a pushed route stays shown
+// and the pushed route inert; the projection keeps both so until the transition ends.
+const heldRoutes = new Set(), arrivingRoutes = new Set();
+/** Each navigation root under `root` with the routes it last showed in its selected stack, bottom first. */
+export const shownStacks = (root) => new Map([...root.querySelectorAll("[navigationBack]")].map((nav) => [nav, shownRoutes.get(nav) ?? []]));
+/** Hold `beneath` shown and `arriving` inert, projected now; what it returns lets them go and projects again. */
+export function holdRoutes(beneath, arriving) {
+  heldRoutes.add(beneath);
+  arrivingRoutes.add(arriving);
+  navigation.project(root, log);
+  return () => {
+    heldRoutes.delete(beneath);
+    arrivingRoutes.delete(arriving);
+    navigation.project(root, log);
+  };
+}
 export function sheetLeaves(el) {
   if (typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || el.getAttribute("navigationPresentation") !== "modal" || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
     return false;
@@ -33,21 +81,23 @@ export function sheetLeaves(el) {
   if (el.contains(document.activeElement)) {
     document.activeElement.blur();
   }
+  // It leaves from where it stands, though the stack under it changes (neutral.css lowers a sheet over another).
+  const top = getComputedStyle(el).top;
   el.setAttribute("navigationKey", "");
   el.setAttribute("data-exiting", "");
   el.setAttribute("aria-hidden", "true");
   el.inert = true;
-  const now = getComputedStyle(el), from = now.translate === "none" ? "0 0" : now.translate, shadow = now.boxShadow;
+  const now = getComputedStyle(el), from = now.translate === "none" ? "0 0" : now.translate;
   Object.assign(el.style, {
     transition: "none",
     pointerEvents: "none"
   });
+  el.style.setProperty("top", top, "important");
+  // Only `translate`, so the compositor runs it; the scrim fades on its own box as the projection turns it off.
   const slide = el.animate([{
-    translate: from,
-    boxShadow: shadow
+    translate: from
   }, {
-    translate: "0 100vh",
-    boxShadow: shadow.replace(/rgba?\([^)]*\)|color\([^)]*\)|#[\da-f]+\b/gi, "transparent")
+    translate: "0 100vh"
   }], {
     duration: 400,
     easing: "cubic-bezier(.32, .72, 0, 1)"
@@ -97,6 +147,78 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
+// A sheet's frame (`sheetFrame`, below), which the projection writes once a host hands it over: the wasm host's glue
+// for every plan, the JS target's compiler only for a plan that can present a sheet (LLP 1047.002 D1). A plan that
+// cannot has no route in a sheet, so there is nothing to write.
+let framing = null;
+export const useSheets = (frame) => {
+  framing = frame;
+};
+// @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
+// `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
+// word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
+// `--exact-sheet-detent`: `medium` is half the tallest sheet and a percentage that share, as UIKit's are, a point
+// height that many pixels, `fit-content` the route's content; `large`, or no detent, is the tallest. The detent is
+// chosen as the sheet is presented and when its detents change, as UIKit selects one, so a change to the initial
+// detent alone does not move an open sheet; it is written again at every projection, since the wasm target's
+// style op replaces a route's whole inline style.
+const sheetDetents = new WeakMap(), TALLEST = "(100% - env(safe-area-inset-top, 0px) - 12px - env(safe-area-inset-bottom, 0px))";
+function keptDetents(said) {
+  const kept = [];
+  for (const word of said.split(" ").filter(Boolean)) {
+    const share = word.endsWith("%") ? Number(word.slice(0, -1)) : NaN, points = Number(word);
+    const [kind, height] = word === "large" ? ["large", 100] : word === "medium" ? ["share", 50] : word === "fit-content" ? ["content", 0]
+      : word.endsWith("%") ? share > 0 && share <= 100 ? share === 100 ? ["large", 100] : ["share", share] : []
+      : Number.isFinite(points) && points > 0 ? ["points", points] : [];
+    const last = kept.at(-1);
+    if (kind && !(last && (last.kind === "large" || kind !== "large" && (last.kind !== kind || height <= last.height)))) {
+      kept.push({ word, kind, height });
+    }
+  }
+  return kept;
+}
+function selectedDetent(route) {
+  const said = route.getAttribute("data-navigationdetent") ?? "";
+  let chosen = sheetDetents.get(route);
+  if (chosen?.said !== said) {
+    const kept = keptDetents(said), initial = route.getAttribute("data-navigationinitialdetent");
+    const { kind = "large", height = 100, word } = kept.find((d) => d.word === initial) ?? kept[0] ?? {};
+    const css = kind === "share" ? `calc(${TALLEST} * ${word === "medium" ? ".5" : height / 100})` : kind === "points" ? `${height}px` : "";
+    sheetDetents.set(route, chosen = { said, kind: kind === "content" ? "fit-content" : css ? "height" : null, css });
+  }
+  return chosen;
+}
+/** The frame of `routes[index]`: its own detent, or its sheet's when it was pushed inside one; written only where it
+ * changed. `shownIn` is the sheet each route shows in (`sheetAt`), `inUse` the sheets something shown is in. */
+export function sheetFrame(routes, index, shownIn, inUse) {
+  const route = routes[index], at = shownIn[index], pushed = at >= 0 && at !== index;
+  // A sheet nothing shown is in forgets its detent, so its next presentation chooses it again.
+  if (at === index && !inUse.has(index)) {
+    sheetDetents.delete(route);
+  }
+  const chosen = inUse.has(at) ? selectedDetent(routes[at]) : null;
+  if (route.hasAttribute("data-exact-in-sheet") !== pushed) {
+    route.toggleAttribute("data-exact-in-sheet", pushed);
+  }
+  if ((route.getAttribute("data-exact-detent") ?? null) !== (chosen?.kind ?? null)) {
+    chosen?.kind ? route.setAttribute("data-exact-detent", chosen.kind) : route.removeAttribute("data-exact-detent");
+  }
+  if (route.style.getPropertyValue("--exact-sheet-detent") !== (chosen?.css ?? "")) {
+    route.style.setProperty("--exact-sheet-detent", chosen?.css ?? "");
+  }
+}
+// The route a route shows in as a sheet: itself, or the sheet it was pushed over, since a push inside a sheet stays in
+// it at its height, as a UINavigationController's in a presented sheet does; -1 for none (a full-screen route or the
+// stack's root ends the search).
+const sheetAt = (routes, i) => {
+  for (let j = i; j > 0; j--) {
+    const p = routes[j].getAttribute("navigationPresentation");
+    if (p === "modal" || p === "fullscreen") {
+      return p === "modal" ? j : -1;
+    }
+  }
+  return -1;
+};
 export const overPage = (route) => {
   const p = route?.getAttribute("navigationPresentation");
   if (p !== "fullscreen") {
@@ -370,7 +492,7 @@ const siteHeader = (header, links = 0) => {
 }, asWritten = (header) => header.matches(`${authored}, [data-exact-site]`);
 // The items of the bar iOS makes of a shown `header`, or null where it makes none: kernel/src/bars.rs `header_bar`,
 // ported to the elements both runtimes write alike, since the JS target keeps no kernel to ask. `walk` is `Walk::walk`:
-// a bar's header holds one heading, and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
+// a bar's header holds one heading, or none and only what the bar places (`unplaced`: a node that is no box), and an item is a pressable it reaches, not the title's, or a disabled button. A header drawn as written is no bar.
 function barItems(route, header) {
   if (route.getAttribute("data-navigationbar") === "none" || viewChildren(route)[0] !== header || asWritten(header)) {
     return null;
@@ -379,28 +501,39 @@ function barItems(route, header) {
   const holds = (el) => [...el.children].some((child) => !layer(child) && (child.matches(heading) || holds(child)));
   const disabled = (el) => el.matches("button[disabled]") && !el.hasAttribute("role") && root?.getAttribute("aria-busy") !== "true";
   // `fact::DISABLED`, dimmed whether or not it presses; a `button` element carries no `role` unless it has another one (element.rs); until input is ready, the glue disables every control itself (glue.js)
-  let headings = 0, tap = null;
+  // `fact::BOX`: a plain box, a `div` that is no text or a semantic box (element.rs `element`)
+  const box = (el) => el.localName === "div" ? !el.hasAttribute("data-exact-text") : /^(main|header|nav|section|footer|article|aside)$/.test(el.localName);
+  let headings = 0, tap = null, placed = 0, unplaced = false, searches = 0, tablists = 0;
   const items = [], walk = (node) => {
     for (const child of node.children) {
-      if (layer(child) || child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
+      if (layer(child)) {
+        continue;
+      }
+      if (child.matches(`[role=tablist], input[type="search"], ${authored}`)) {
+        placed++;
+        // The bar has one place for a search field and one for a tablist: a second is unplaced.
+        if (child.matches('input[type="search"]') && searches++ || child.matches("[role=tablist]") && tablists++) unplaced = true;
         continue;
       }
       // a layer, the bar's segments, its search field, or what its author wrote `appearance: none` on (iOS projects none of it): no item
       if (child.matches(heading)) {
         headings++;
-      } else if (child.matches(press) || opensPopover(child) || disabled(child) && !holds(child)) {
+      } else if (child.matches(press) || opens(child) || disabled(child) && !holds(child)) {
         if (!tap && child.matches(press) && holds(child)) {
           walk(tap = child);
         } else {
           items.push(child);
         }
-      } else if (!child.matches("[role=status]") || holds(child)) {
+      } else if (child.matches("[role=status]") && !holds(child)) {
+        placed++;
+      } else {
+        unplaced ||= !box(child);
         walk(child);
       }
     }
   };
   walk(header);
-  return headings === 1 ? items : null;
+  return headings === 1 || headings === 0 && !unplaced && (items.length > 0 || placed > 0) ? items : null;
 }
 /** Mark every route's bar and site header on a page rendered ahead of time (host/web-js/render.mjs), which runs no projection, as document.rs marks them. */
 export function markBars(node) {
@@ -415,27 +548,115 @@ export function markBars(node) {
     markBars(child);
   }
 }
-// Whether a button shows or toggles a popover, a header's menu (kernel/src/invocation.rs `opens_popover`).
-function opensPopover(el) {
+// Whether a button opens what it names, a header's item with no press of its own: a popover it shows or toggles, or a
+// dialog it shows modally (kernel/src/invocation.rs `opens`).
+function opens(el) {
   if (el.localName !== "button") {
     return false;
   }
   const commanded = document.getElementById(el.getAttribute("commandfor") || "");
   if (commanded) {
-    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(el.getAttribute("command") ?? "");
+    const command = el.getAttribute("command") ?? "";
+    return commanded.hasAttribute("popover") && /^(show|toggle)-popover$/i.test(command) || commanded.localName === "dialog" && /^show-modal$/i.test(command);
   }
   return !!document.getElementById(el.getAttribute("popovertarget") || "")?.hasAttribute("popover") && !/^hide$/i.test(el.getAttribute("popovertargetaction") ?? "");
 }
 // LLP 1115.000 D4.1: title precedence is authored head, visible route heading, then app name.
-const titleOf = (route) => headerOf(route)?.querySelector("h1, h2, h3, h4, h5, h6, [role=heading]")?.textContent.trim() ?? "";
+const titleOf = (route) => {
+  for (const el of headerOf(route)?.getElementsByTagName("*") ?? []) {
+    if (el.matches("h1, h2, h3, h4, h5, h6, [role=heading]")) return el.textContent.trim();
+  }
+  return "";
+};
 let saidTitle = null, appName = null;
+export function routeTitle(root) {
+  for (const nav of root?.getElementsByTagName("*") ?? []) {
+    if (nav.hasAttribute("navigationBack")) return titleOf(selectedRoute(nav)) || null;
+  }
+  return null;
+}
 export function pageTitle(said = saidTitle) {
   saidTitle = said;
   appName ??= document.querySelector("meta[property=\"og:site_name\"]")?.content ?? document.title;
-  const nav = root?.querySelector("[navigationBack]"), title = said ?? (nav && titleOf(selectedRoute(nav)) || appName);
+  const title = said ?? routeTitle(root) ?? appName;
   if (document.title !== title) {
     document.title = title;
   }
+}
+// The scroller whose top a route's bar sits at (presenter/bars.rs `content_scroller`): the one `navigationScroll` names,
+// else the shallowest under the route that scrolls up and down, eight levels at most.
+function contentScroller(route) {
+  const scrolls = (el) => /^(auto|scroll)$/.test(getComputedStyle(el).overflowY), named = route.getAttribute("data-navigationscroll");
+  if (named) {
+    return [...route.querySelectorAll(`[id="${CSS.escape(named)}"]`)].find(scrolls) ?? null;
+  }
+  let level = [route];
+  for (let depth = 0; depth < 8 && level.length && level.length <= 256; depth++) {
+    const hit = level.find(scrolls);
+    if (hit) {
+      return hit;
+    }
+    level = level.flatMap((el) => getComputedStyle(el).display === "none" ? [] : [...el.children]);
+  }
+  return null;
+}
+// What keeps a clear bar (`clearBar`, below), which the projection runs once a host hands it over: the wasm host's glue
+// for every plan, the JS target's compiler only for a plan whose route may say `navigationBar="transparent"` (LLP
+// 1047.002 D1).
+let clearing = null;
+export const useClearBars = (clear) => {
+  clearing = clear;
+};
+const clearInset = new WeakSet(), clearBars = new WeakMap();
+let barResized;
+/** A route that says `navigationBar="transparent"` lays its bar over its top, clear (neutral.css), as iOS gives the bar
+ * a clear scroll-edge appearance and insets no content (NavigationBarIOS.swift `transparentBar`): the route's top inset,
+ * `var(--exact-safe-area-inset-top)`, then includes the bar's height, and the bar is `scrolled` while content is under
+ * it. A header iOS makes no bar of keeps its place. */
+export function clearBar(route) {
+  const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && viewChildren(route)[0] === header && !asWritten(header);
+  if (clearInset.has(route)) {
+    clearInset.delete(route);
+    route.style.removeProperty("--exact-safe-area-inset-top");
+    route.style.removeProperty("--exact-bar-height");
+  }
+  for (const el of viewChildren(route)) {
+    if (el.hasAttribute("data-exact-clear") && !(clear && el === header)) {
+      el.removeAttribute("data-exact-clear");
+      barResized?.unobserve(el);
+      clearBars.delete(el);
+    }
+  }
+  if (!clear) {
+    return;
+  }
+  if (!clearBars.has(header)) {
+    // The first clear bar starts what follows each one: its height, and whether content has scrolled under it.
+    if (barResized === undefined) {
+      barResized = watchClearBars();
+    }
+    clearBars.set(header, route);
+    barResized?.observe(header);
+  }
+  const below = getComputedStyle(route).getPropertyValue("--exact-safe-area-inset-top") || "0px", height = header.offsetHeight;
+  clearInset.add(route);
+  route.style.setProperty("--exact-bar-height", `${height}px`);
+  route.style.setProperty("--exact-safe-area-inset-top", `calc(${below} + ${height}px)`);
+  barScrolled(route, header);
+}
+const barScrolled = (route, header) => header.setAttribute("data-exact-clear", (contentScroller(route) ?? document.scrollingElement)?.scrollTop > 0 ? "scrolled" : "");
+function watchClearBars() {
+  document.addEventListener("scroll", () => {
+    for (const header of root.querySelectorAll("[data-exact-clear]")) {
+      clearBars.has(header) && barScrolled(clearBars.get(header), header);
+    }
+  }, { capture: true, passive: true });
+  return globalThis.ResizeObserver ? new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      const route = clearBars.get(target);
+      route?.isConnected && clearBar(route);
+    }
+  }) : null;
 }
 function appBarBack(nav, routes, index, split, shown) {
   const route = routes[index], header = headerOf(route);
@@ -563,6 +784,17 @@ function commit(op) {
     originIndex = browserIndex();
     written[0] = stamp(0, op);
     history.replaceState(written[0], "", historyURL(op.url));
+    // After a reload, this document's entries before the current one (`launchVisits`) are the page's too, newest first,
+    // as far as each is at the URL of the visit beneath the one after it: Back, the app bar's as well as the browser's,
+    // then steps back to it rather than pushing it (#527). The JS target's launch builds the stack from those entries.
+    const before = launchVisits(), beneath = op.visits ?? [];
+    for (let k = 1, at = beneath.findIndex(([id]) => id === op.top) - 1; k <= before.length && at >= 0; k++, at--) {
+      if (canonicalOf(before[before.length - k].split("#")[0]) !== beneath[at][1]) {
+        break;
+      }
+      written[-k] = { exact: -k, id: beneath[at][0], url: before[before.length - k] };
+      first = -k;
+    }
   } else if (written[cursor]?.id === op.top && !(pop === null && written[cursor].url !== op.url && written[cursor].url.split("#")[0] === op.url.split("#")[0])) {
     // another fragment on the visit shown, or none, is one more browser entry of it, as a same-document link's is (LLP 1153 D5)
     if (written[cursor].url !== op.url) {
@@ -577,7 +809,8 @@ function commit(op) {
         const from = cursor;
         cursor = j;
         // The entry gone back to takes the top's url when that changed in the same commit (`replace(back(r), u)`).
-        return go(j, from, () => written[j].url === op.url || history.replaceState(written[j] = stamp(j, op), "", historyURL(op.url)));
+        // An entry a reload left holds the state of the page before it, which is stamped again.
+        return go(j, from, () => written[j].url === op.url && history.state?.exact === j && history.state.id === written[j].id || history.replaceState(written[j] = stamp(j, op), "", historyURL(op.url)));
       }
     }
     for (const index of Object.keys(written)) {
@@ -593,7 +826,7 @@ function commit(op) {
     globalThis.exact?.fragment?.forget(cursor);
   }
 }
-function popped({ j, state, url }) {
+function popped({ j, state, url, ua }) {
   const entry = written[j];
   const owned = entry && state?.exact === j && state.id === entry.id && state.url === entry.url;
   const target = owned ? entry.url : url;
@@ -604,7 +837,7 @@ function popped({ j, state, url }) {
   // control pressed (disabled, or closedby="none", refuses), else the runner's `back` from the visit the entry left (LLP 1115 D5), however routes are keyed. Any other entry unheard (Forward, or more than one away) is the runner's own `go` there (LLP 1115.000 D4.3). An entry given to `navigate` at the URL already shown, which this page did not write or which holds the visit shown, is accepted though nothing changed: a `replace` can give the only entry a reload wrote the URL of the one beneath it, and refusing would hold Back there. An earlier visit at that URL is still refused: accepting it would leave the visits after it on the stack.
   const step = owned && j === cursor - 1 && entry.id !== written[cursor]?.id, beneath = step && selected > 0 && routes[selected - 1].getAttribute("navigationKey") === String(entry.id);
   let back = beneath && !!backControl(nav), own = false, why = null;
-  pop = {};
+  pop = { ua };
   try {
     if (back) {
       why = pressBack(nav);
@@ -625,6 +858,7 @@ function popped({ j, state, url }) {
       first = Math.min(first, cursor);
       written[cursor] = stamp(cursor, last);
       go(cursor, j ?? cursor, () => history.replaceState(written[cursor], "", historyURL(written[cursor].url)));
+      if (!pop.op) globalThis.exact?.fragment?.traverse(root, last, navigation, log);
     } else if (pop.op) {
       const op = pop.op;
       if (j !== null && j !== cursor) {
@@ -677,19 +911,30 @@ const settled = () => {
 export const navigation = {
   personScrolls: 0,
   // the person's scrolls (`byPerson`) from the page's start: one after a navigation asked a fragment's scroll cancels it (fragment.js, LLP 1153 D5)
-  /** A Back or Forward being dispatched (`popped`): its commit must land before `popped` judges it, so a tree update that
-  * would wait for a view transition (shared.js) runs at once instead; its flight is forgone. */
+  /** The Back or Forward being dispatched (`popped`), else null: `ua` when the browser animated it (`hasUAVisualTransition`).
+  * A commit made then mirrors its router at once, before a view transition may defer its tree update (router.js `traversal`). */
   get traversing() {
-    return pop !== null;
+    return pop;
   },
-  /** `dispatch(location)` is false when no `navigate` handler heard it; `back(id)` is the runner's own `back` from visit `id`, `goTo(location)` its own `go`. */
-  connect(hostRoot, dispatch, journal, back = null, goTo = null, matchesRoute = () => false, waitForActivation = false) {
+  // A view transition or module load may defer a click's tree update until after dispatch.
+  holdLink() {
+    return heldLink ?? (pressedLink?.event.eventPhase ? pressedLink : null);
+  },
+  withLink(link, update) {
+    const was = heldLink;
+    heldLink = link;
+    try { return update(); } finally { heldLink = was; }
+  },
+  /** `dispatch(location)` is false when no `navigate` handler heard it; `back(id)` is the runner's own `back` from visit `id`, `goTo(location)` its own `go`;
+   * `canonical(location)` is the router's form of a path and query (route/src/location.rs `canonical`). */
+  connect(hostRoot, dispatch, journal, back = null, goTo = null, matchesRoute = () => false, waitForActivation = false, canonical = (location) => location) {
     root = hostRoot;
     navigate = dispatch;
     log = journal;
     hostBack = back;
     hostGo = goTo;
     routeMatches = matchesRoute;
+    canonicalOf = canonical;
     for (const type of [
       "wheel",
       "touchmove",
@@ -714,6 +959,7 @@ export const navigation = {
     }
     // Capture before either target's link listener commits. Early replay before connect has no action-row association.
     document.addEventListener("click", captureRow, true);
+    document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
       if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img")) {
         event.preventDefault();
@@ -739,7 +985,8 @@ export const navigation = {
       queue.push({
         j,
         state: event.state,
-        url: launchLocation()
+        url: launchLocation(),
+        ua: event.hasUAVisualTransition
       });
       if (echo !== null) {
         const pending = echo;
@@ -761,9 +1008,10 @@ export const navigation = {
         return;
       }
       // The innermost shown sheet's Back: its named control, else the app bar's way, as iOS's swipe down (`goBack`).
+      // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
       for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
-        const route = selectedRoute(nav);
-        if (!["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation")) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+        const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
+        if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
           continue;
         }
         event.preventDefault();
@@ -787,6 +1035,9 @@ export const navigation = {
     rowOf = new WeakMap();
     actionRows = new WeakMap();
     pressedRow = pendingRow = null;
+    pressedLink = heldLink = null;
+    reportedLinkPop = false;
+    duplicateIds = new WeakMap();
     visits = new Map((op?.visits ?? []).map(([id, url]) => [String(id), url]));
     if (op && written[cursor]?.id === op.top) {
       return;
@@ -805,6 +1056,13 @@ export const navigation = {
     }
   },
   apply(op) {
+    const link = navigation.holdLink();
+    pressedLink = null;
+    if (!reportedLinkPop && !pop && link && link.from === last?.top &&
+        link.at === visits.get(String(op.top)) && op.removed.includes(link.from)) {
+      reportedLinkPop = true;
+      log(`navigation: link ${JSON.stringify(link.url)} popped the stack to a retained visit`);
+    }
     visits = new Map((op.visits ?? []).map(([id, url]) => [String(id), url]));
     pendingRow = pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
       row: pressedRow.row,
@@ -826,51 +1084,6 @@ export const navigation = {
       queue.push({ op });
       drain();
     }
-  },
-  // @ref LLP 1116.006 D4 — the agent's `back` from a route: the browser's Back where the entry beneath is the route beneath, else (a reload left none) the app bar's.
-  back(hostRoot) {
-    const nav = hostRoot?.querySelector("[navigationBack]"), routes = nav ? routesOf(nav) : [], route = nav && selectedRoute(nav), at = routes.indexOf(route), way = sheet(route) ? "sheet" : "route", key = nav?.getAttribute("navigationKey"), kept = () => nav.getAttribute("navigationKey") === key ? { refused: "the app kept the route: its Back control is disabled, its closedby is \"none\", or its navigate changed nothing (logs say which)" } : {};
-    if (at < 1) {
-      return { error: "back: nothing to go back from: no dialog is open, and no route is beneath the selected one" };
-    }
-    if (cursor > first && written[cursor]?.id === Number(route.getAttribute("navigationKey")) && written[cursor - 1]?.id === Number(routes[at - 1].getAttribute("navigationKey"))) {
-      return navigation.travel(nav, -1).then((r) => ({
-        ...r,
-        back: way,
-        ...kept()
-      }));
-    }
-    appBack(route);
-    return {
-      back: way,
-      delivery: "app-bar",
-      ...kept()
-    };
-  },
-  // @ref LLP 1038 D11 — the agent uses the real browser traversal.
-  travel(nav, delta) {
-    if (nav !== root.querySelector("[navigationBack]")) {
-      return { error: "history target is not the navigation root" };
-    }
-    if (!Number.isInteger(delta) || delta === 0) {
-      return {
-        malformed: true,
-        error: "history must be a nonzero integer"
-      };
-    }
-    return new Promise((resolve) => {
-      const timer = setTimeout(finish, 1e3);
-      function finish() {
-        clearTimeout(timer);
-        waiters.delete(finish);
-        resolve({
-          history: delta,
-          delivery: "platform"
-        });
-      }
-      waiters.add(finish);
-      history.go(delta);
-    });
   },
   project(root, log) {
     if (activationRequired.has(root) && !activated.has(root)) {
@@ -948,31 +1161,44 @@ export const navigation = {
             }
           }
         }
-        const found = splitOf(routes), split = found.width, live = split && !sheet(routes[selected]);
-        const modal = overPage(routes[selected]), beneath = routes.findLastIndex((r, i) => i < selected && !overPage(r));
+        // A route pushed inside a sheet is presented as that sheet is: what the sheet covers shows beneath it.
+        const host = sheetAt(routes, selected), presented = host >= 0 ? host : selected;
+        const found = splitOf(routes), split = found.width, live = split && !sheet(routes[presented]);
+        const modal = overPage(routes[presented]), beneath = routes.findLastIndex((r, i) => i < presented && !overPage(r));
+        // The scrim under a presented sheet is its stack's parent's (neutral.css): written once a sheet has shown, so
+        // it fades out as the last one leaves.
+        const scrim = routes[presented]?.getAttribute("navigationPresentation") === "modal" ? "on" : "off", parent = viewParent(routes[0]);
+        if (parent && parent.getAttribute("data-exact-scrim") !== scrim && (scrim === "on" || parent.hasAttribute("data-exact-scrim"))) {
+          parent.setAttribute("data-exact-scrim", scrim);
+        }
         detailRows(routes, found);
         if (stack === at && list) {
-          setInert(list, sheet(routes[selected]) || !!list.authoredInert);
+          setInert(list, sheet(routes[presented]) || !!list.authoredInert);
         }
         // a sheet is modal: the root's tab bar is inert beneath it, as the route it covers is (LLP 1115.000 D4.5)
         // A split's detail shown is the top, or the route a sheet covers; its row is the one whose press pushed it, or pushed a route beneath it in its column, else (a detail the app opened itself, at launch or after Back) the row the app says is current.
-        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r)) : -1;
+        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r) && sheetAt(routes, i) < 0) : -1;
+        // The sheet each route shows in, and the sheets something shown is in.
+        const shownIn = routes.map((r, i) => sheetAt(routes, i));
+        const inUse = framing && new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
         for (const [index, route] of routes.entries()) {
           const active = index === selected || live && index === 0;
           if (!active && route.contains(document.activeElement)) {
             document.activeElement.blur();
           }
-          const covered = modal && (index >= beneath && index < selected || split > 0 && index === 0);
+          const covered = modal && (index >= beneath && index < presented || split > 0 && index === 0);
           // a sheet shows what it sits over: the page (in the strip above a narrow sheet) and any sheets between, which only the top one dims
-          route.style.visibility = active || covered ? "" : "hidden";
+          route.style.visibility = active || covered || heldRoutes.has(route) ? "" : "hidden";
           route.toggleAttribute("data-exact-covered", covered);
-          setInert(route, !active || !!route.authoredInert);
-          const column = !split ? null : index === 0 ? "list" : sheet(route) ? null : "detail";
+          setInert(route, !active || arrivingRoutes.has(route) || !!route.authoredInert);
+          const column = !split ? null : index === 0 ? "list" : sheet(route) || shownIn[index] >= 0 ? null : "detail";
           if (route.getAttribute("data-exact-split") !== column) {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
           }
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
+          framing?.(routes, index, shownIn, inUse);
           appBarBack(nav, routes, index, split > 0, active || covered);
+          clearing?.(route);
           if (stack === at && index === selected) {
             freshPath(route);
           }
@@ -1005,31 +1231,81 @@ export const navigation = {
       }
     }
     pendingRow = null;
+    inspectTestIds(root, log);
     // The page module's container hatches, when it has them (LLP 1075.003.000 §3.7); the wake lock, which follows what shows (LLP 1125 D11).
     globalThis.exact?.onProject?.(root);
     globalThis.exact?.wakeLockGlue?.projected(root);
     globalThis.exact?.orientationLockGlue?.projected(root);
     pageTitle();
   },
-  observation(root) {
-    const nav = root.querySelector("[navigationBack]");
-    const routes = routesOf(nav);
-    const key = nav?.getAttribute("navigationKey") ?? null;
-    const index = routes.findIndex((r) => r.getAttribute("navigationKey") === key);
-    const selected = index >= 0 ? routes[index] : null;
-    return {
-      url: last?.url ?? null,
-      route: key,
-      stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
-      presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
-      source: selected?.getAttribute("navigationSource") ?? null,
-      closedby: selected?.getAttribute("closedby") ?? null,
-      transition: {
-        interactive: false,
-        phase: "idle"
-      },
-      popover: popoverObservation(root)
-    };
-  }
+  // The agent's methods, which a production bake leaves out with the agent (LLP 1069.007 D2, LLP 1047.002 D4.1).
+  ...(AGENT_ADMITTED && {
+    // @ref LLP 1116.006 D4 — the agent's `back` from a route: the browser's Back where the entry beneath is the route beneath, else (a reload left none) the app bar's.
+    back(hostRoot) {
+      const nav = hostRoot?.querySelector("[navigationBack]"), routes = nav ? routesOf(nav) : [], route = nav && selectedRoute(nav), at = routes.indexOf(route), way = sheet(route) ? "sheet" : "route", key = nav?.getAttribute("navigationKey"), kept = () => nav.getAttribute("navigationKey") === key ? { refused: "the app kept the route: its Back control is disabled, its closedby is \"none\", or its navigate changed nothing (logs say which)" } : {};
+      if (at < 1) {
+        return { error: "back: nothing to go back from: no dialog is open, and no route is beneath the selected one" };
+      }
+      if (cursor > first && written[cursor]?.id === Number(route.getAttribute("navigationKey")) && written[cursor - 1]?.id === Number(routes[at - 1].getAttribute("navigationKey"))) {
+        return navigation.travel(nav, -1).then((r) => ({
+          ...r,
+          back: way,
+          ...kept()
+        }));
+      }
+      appBack(route);
+      return {
+        back: way,
+        delivery: "app-bar",
+        ...kept()
+      };
+    },
+    // @ref LLP 1038 D11 — the agent uses the real browser traversal.
+    travel(nav, delta) {
+      if (nav !== root.querySelector("[navigationBack]")) {
+        return { error: "history target is not the navigation root" };
+      }
+      if (!Number.isInteger(delta) || delta === 0) {
+        return {
+          malformed: true,
+          error: "history must be a nonzero integer"
+        };
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(finish, 1e3);
+        // Once the traversal's tree update has run, which a view transition defers (shared.js `afterCommit`).
+        function finish() {
+          clearTimeout(timer);
+          waiters.delete(finish);
+          (globalThis.exact?.afterCommit ?? ((run) => run()))(() => resolve({
+            history: delta,
+            delivery: "platform"
+          }));
+        }
+        waiters.add(finish);
+        history.go(delta);
+      });
+    },
+    observation(root) {
+      const nav = root.querySelector("[navigationBack]");
+      const routes = routesOf(nav);
+      const key = nav?.getAttribute("navigationKey") ?? null;
+      const index = routes.findIndex((r) => r.getAttribute("navigationKey") === key);
+      const selected = index >= 0 ? routes[index] : null;
+      return {
+        url: last?.url ?? null,
+        route: key,
+        stack: index >= 0 ? routes.slice(0, index + 1).map((r) => r.getAttribute("navigationKey")) : [],
+        presentation: ["modal", "fullscreen"].includes(selected?.getAttribute("navigationPresentation")) ? selected.getAttribute("navigationPresentation") : null,
+        source: selected?.getAttribute("navigationSource") ?? null,
+        closedby: selected?.getAttribute("closedby") ?? null,
+        transition: {
+          interactive: false,
+          phase: "idle"
+        },
+        popover: popoverObservation(root)
+      };
+    },
+  }),
 };
 export { queue, sheet, commit, root, log, settled, AGENT_ADMITTED, agentParameters, pop, last };

@@ -21,6 +21,8 @@ const sims = (prefix) => spawnSync('xcrun', ['simctl', 'list', 'devices'], { enc
   .split('\n').map((l) => l.match(new RegExp(`^\\s+${prefix}\\d* \\(([0-9A-F-]{36})\\)`))?.[1]).filter(Boolean);
 const say = (s) => { const line = `${new Date().toISOString().slice(11, 19)} ${s}`; console.log(line); writeFileSync(resolve(ROUND, 'round.log'), line + '\n', { flag: 'a' }); };
 
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
 /** A simulator held by this round: a lock file naming this process, so two rounds never drive one simulator (a
  * grade uninstalls every bake-off app on its simulator first). A lock whose process is gone is taken over. */
 const LOCKS = resolve(homedir(), 'bakeoff/locks');
@@ -30,9 +32,7 @@ async function hold(udid) {
   for (let said = false; ; said = true) {
     try { writeFileSync(path, String(process.pid), { flag: 'wx' }); return () => rmSync(path, { force: true }); } catch {}
     const owner = Number(readFileSync(path, 'utf8'));
-    let alive = true;
-    try { process.kill(owner, 0); } catch { alive = false; }
-    if (!alive || owner === process.pid) { rmSync(path, { force: true }); continue; }
+    if (!alive(owner) || owner === process.pid) { rmSync(path, { force: true }); continue; }
     if (!said) say(`waiting for ${udid}, held by PID ${owner}`);
     await new Promise((r) => setTimeout(r, 10000));
   }
@@ -61,6 +61,11 @@ function pinCheckout() {
   const recorded = !opt.rev && existsSync(resolve(ROUND, 'pin.txt')) ? readFileSync(resolve(ROUND, 'pin.txt'), 'utf8').split('\n')[0].trim() : null;
   const rev = recorded || spawnSync('git', ['-C', REPO, 'rev-parse', '--short=10', opt.rev ?? 'HEAD'], { encoding: 'utf8' }).stdout.trim();
   const pin = resolve(homedir(), 'bakeoff/pins', rev);
+  // While this process lives, another round's tidy keeps the pin (`pin-<rev>-<pid>`, beside the simulators' locks).
+  mkdirSync(LOCKS, { recursive: true });
+  const using = resolve(LOCKS, `pin-${rev}-${process.pid}`);
+  writeFileSync(using, '');
+  process.on('exit', () => rmSync(using, { force: true }));
   if (!existsSync(pin)) {
     spawnSync('git', ['-C', REPO, 'worktree', 'add', '--detach', pin, rev], { stdio: 'inherit' });
     spawnSync('bun', ['install', '--frozen-lockfile'], { cwd: pin, stdio: 'ignore' });
@@ -127,9 +132,18 @@ function report() {
   process.stdout.write(r.stdout + r.stderr);
   const dest = resolve(HERE, 'results', name);
   mkdirSync(dest, { recursive: true });
-  for (const d of ['records', 'feel', 'grades']) {
+  for (const d of ['records', 'feel']) {
     if (!existsSync(resolve(ROUND, d))) continue;
-    cpSync(resolve(ROUND, d), resolve(dest, d), { recursive: true, filter: (p) => !/\/(shots|log\.jsonl|prompt\.md|trace\.jsonl)$/.test(p) && !p.endsWith('.png') && !p.endsWith('.mov') });
+    cpSync(resolve(ROUND, d), resolve(dest, d), { recursive: true, filter: (p) => !/\/trace\.jsonl$/.test(p) && !p.endsWith('.png') && !p.endsWith('.mov') });
+  }
+  // Of a grade, its three records and any note the grader wrote (GRADING-ABORTED.md); not its prompt, log, screenshots
+  // or the scripts it wrote to drive the apps, which run the driver by a path on this machine.
+  const grades = resolve(ROUND, 'grades');
+  for (const spec of existsSync(grades) ? readdirSync(grades).filter((s) => s in pairs) : []) {
+    mkdirSync(resolve(dest, 'grades', spec), { recursive: true });
+    for (const f of readdirSync(resolve(grades, spec), { withFileTypes: true })) {
+      if (f.isFile() && (/^(grade|key|meta)\.json$/.test(f.name) || (f.name.endsWith('.md') && f.name !== 'prompt.md'))) cpSync(resolve(grades, spec, f.name), resolve(dest, 'grades', spec, f.name));
+    }
   }
   for (const f of ['summary.md', 'pin.txt', 'round.log']) if (existsSync(resolve(ROUND, f))) cpSync(resolve(ROUND, f), resolve(dest, f));
   // The builders' notes on what was hard: the experience half of the loop.
@@ -141,17 +155,25 @@ function report() {
 }
 
 /** A graded round's Exact build trees (several GB an app; the round's `built/` keeps each app) and every pin but the
- * round's own: nine rounds of them filled the disk. Sources, logs, records, probes and grades stay. */
+ * round's own and those a running round uses: nine rounds of them filled the disk. Sources, logs, records, probes and
+ * grades stay. */
 function tidy() {
   for (const d of existsSync(resolve(ROUND, 'apps')) ? readdirSync(resolve(ROUND, 'apps')) : []) rmSync(resolve(ROUND, 'apps', d, 'target'), { recursive: true, force: true });
   const own = (() => { try { return readFileSync(resolve(ROUND, 'pin.txt'), 'utf8').split('\n')[0]; } catch { return null; } })();
+  const used = new Set();
+  for (const f of existsSync(LOCKS) ? readdirSync(LOCKS) : []) {
+    const [, rev, pid] = f.match(/^pin-(.+)-(\d+)$/) ?? [];
+    if (!rev) continue;
+    if (!alive(Number(pid))) rmSync(resolve(LOCKS, f), { force: true });
+    else if (rev !== own) used.add(rev);
+  }
   const pins = resolve(homedir(), 'bakeoff/pins');
   for (const rev of existsSync(pins) ? readdirSync(pins) : []) {
-    if (rev === own) continue;
+    if (rev === own || used.has(rev)) continue;
     if (spawnSync('git', ['-C', REPO, 'worktree', 'remove', '--force', resolve(pins, rev)]).status !== 0) rmSync(resolve(pins, rev), { recursive: true, force: true });
   }
   spawnSync('git', ['-C', REPO, 'worktree', 'prune']);
-  say('tidied: build trees and older pins removed');
+  say(`tidied: build trees and older pins removed${used.size ? `; kept ${[...used].join(', ')}, in use` : ''}`);
 }
 
 if (phase === 'build' || phase === 'all') await build();

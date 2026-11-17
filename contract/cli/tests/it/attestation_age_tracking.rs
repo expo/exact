@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const APP: &str = r#"use requestAgeRange, ageRangeStatus, AgeRange, AgeRangeStatus from "@exact/age-range"
-use requestTrackingAuthorization, trackingAuthorizationStatus, TrackingStatus from "@exact/tracking-consent"
+use requestTrackingAuthorization, trackingAuthorizationStatus, TrackingStatus from "@exact/tracking-consent/apple"
 
 component App
   resource status = ageRangeStatus() as shape AgeRangeStatus

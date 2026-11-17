@@ -3,7 +3,8 @@
   "implements": "@exact/push@^1.0",
   "platform": "apple",
   "targets": [
-    "ios"
+    "ios",
+    "macos"
   ],
   "shapes": {},
   "options": {},

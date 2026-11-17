@@ -15,6 +15,7 @@ bench = false
 [dependencies]
 completion-storm-data = { path = "../data" }
 exact-linux = { path = "../../../host/linux" }
+exact-painted = { path = "../../../host/painted" }
 
 [build-dependencies]
 completion-storm-data = { path = "../data" }

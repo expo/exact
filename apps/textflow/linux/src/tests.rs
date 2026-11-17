@@ -1,6 +1,6 @@
 //! @ref LLP 1043.000 §3 D7/D8 — the actual app, clock, glyphs and CPU pixels.
 use exact_kernel::{PropId, ViewId};
-use exact_linux::{presenter::PainterChoice, Presenter};
+use exact_painted::{presenter::PainterChoice, Presenter};
 use std::time::{Duration, Instant};
 use textflow_data::Textflow;
 fn boot(wrap: bool) -> Presenter<Textflow> {

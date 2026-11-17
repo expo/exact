@@ -20,8 +20,13 @@ writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
 for (const h of hidden) {
   rmSync(join(DIST, h.path.slice(1)), { recursive: true, force: true });
   rmSync(join(DIST, 'assets/markdown', `${h.route}.md`), { force: true });
-  for (const chunk of readdirSync(DIST).filter(f => new RegExp(`^${h.route}-[\\w-]{8}\\.js$`).test(f))) rmSync(join(DIST, chunk));
+  for (const chunk of readdirSync(DIST).filter(f => new RegExp(`^${h.route}-[\\w-]{8}\\.js$`).test(f))) {
+    rmSync(join(DIST, chunk));
+    // Its row in the table of files named by content goes too (LLP 1153.004).
+    delete table.files?.[chunk];
+  }
 }
+writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const withSlash = (p: string) => (p === '/' ? p : `${p}/`);
@@ -50,29 +55,21 @@ for (const [from, to] of Object.entries(redirects)) {
 const frontmatter = (p: Page) =>
   `---\n${[['title', p.title], ['description', p.description], ...(p.updated ? [['modificationDate', p.updated]] : [])].map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')}\n---\n\n`;
 
-// Below each page's H1, as docs.expo.dev's scripts/agent-instructions.ts writes it: an agent sends feedback
-// through Expo's feedback CLI or its HTTP endpoint, so the subject and the text name Exact.
-const agentInstructions = (p: Page) => {
-  const url = ORIGIN + p.path;
-  return `<AgentInstructions>
+// Feedback uses the app's recorded policy, including its choice to keep nothing.
+const agentInstructions = (p: Page) => `<AgentInstructions>
 
 ## Submitting feedback
 
-This feedback is for Exact. Start the subject and the message with "Exact docs".
+From the app's directory, read \`bun exact.mjs feedback status\`. Under \`never\`, keep no note.
+Respect \`EXACT_FEEDBACK=0\` and do not change the policy.
 
-If you find an error, or misleading or outdated information on this page, report it:
+Otherwise record specific, actionable feedback with:
+\`bun exact.mjs feedback note "Exact docs: ${ORIGIN + p.path}: <what was wrong or missing>"\`
 
-Preferred command:
-npx --yes submit-expo-feedback@latest --category docs --subject "Exact docs: ${url}" "Exact docs: <specific, actionable feedback>"
-
-Direct HTTP fallback:
-curl -X POST https://api.expo.dev/v2/feedback/docs-send -H 'Content-Type: application/json' -d '{"url":"${url}","feedback":"🤖 Agent feedback for Exact docs: <specific, actionable description> (<model>, <harness>)"}'
-
-Only submit when you have something specific and actionable to report. Give as much context as you can.
+The note goes to Expo only as that status allows. Include no secrets or personal data.
 
 </AgentInstructions>
 `;
-};
 
 for (const p of pages) {
   const markdown = join(DIST, 'assets/markdown', `${p.route}.md`);
@@ -81,7 +78,7 @@ for (const p of pages) {
   writeFileSync(join(DIST, p.path === '/' ? 'index.md' : `${p.path.slice(1)}.md`), `${frontmatter(p)}> ## Documentation index\n> Fetch the complete documentation index at: ${ORIGIN}/llms.txt\n> Use this file to discover all available pages before exploring further.\n\n${body}`);
 }
 
-// exact2's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
+// Exact's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
 copyFileSync(resolve(SITE, '../../assets/brand/exact-mark.svg'), join(DIST, 'favicon.svg'));
 const FAVICON = '<link rel="icon" href="/favicon.svg" type="image/svg+xml">';
 
@@ -127,7 +124,24 @@ for (const f of readdirSync(DIST, { recursive: true, encoding: 'utf8' }).filter(
   prepainted++;
 }
 
-writeFileSync(join(DIST, 'robots.txt'), `User-agent: *\nAllow: /\n${ORIGIN ? `Sitemap: ${ORIGIN}/sitemap.xml\n` : ''}`);
+const SIGNAL = 'Content-Signal: search=yes, ai-input=yes, ai-train=yes';
+const CRAWLERS: [string, string[]][] = [
+  ['OpenAI', ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User']],
+  ['Anthropic', ['ClaudeBot', 'Claude-User', 'Claude-SearchBot']],
+  ['Perplexity', ['PerplexityBot', 'Perplexity-User']],
+  ['Google and Apple usage-control tokens', ['Google-Extended', 'Applebot-Extended']],
+  ['Other AI data crawlers', ['CCBot', 'Meta-ExternalAgent', 'Amazonbot', 'Bytespider']],
+];
+const crawler = (agent: string) => `User-agent: ${agent}\n${SIGNAL}\nAllow: /\n`;
+writeFileSync(
+  join(DIST, 'robots.txt'),
+  [
+    `# Content signals express how ${site.name} content may be used after access.\n# search: building a search index and returning links or excerpts.\n# ai-input: retrieval and grounding for AI-generated answers.\n# ai-train: training or fine-tuning AI models.\n`,
+    crawler('*'),
+    ...CRAWLERS.map(([owner, agents]) => `# ${owner}\n${agents.map(crawler).join('\n')}`),
+    ...(ORIGIN ? [`Sitemap: ${ORIGIN}/sitemap.xml\n`] : []),
+  ].join('\n'),
+);
 
 writeFileSync(
   join(DIST, 'llms.txt'),
@@ -141,7 +155,7 @@ const start = pages.find(p => p.path === '/start');
 function prerequisites(p: Page): string {
   const parent = parentOf(p);
   if (parent) return `[${parent.title}](${mdUrl(parent)})`;
-  if (p.path === '/recipes/website') return 'start-here-site.md in the exact2 checkout (a website reads it in place of Start here)';
+  if (p.path === '/recipes/website') return 'start-here-site.md in the Exact checkout (a website reads it in place of Start here)';
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }

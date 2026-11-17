@@ -12,7 +12,7 @@ extension ExactSession {
     /// is attached or drawn later takes the session as it stands, and its
     /// next layout tells the runner its size and insets.
     ///
-    /// The session's `firstDrawMs` is then this activation's time, and the
+    /// On first activation, `firstDrawMs` records its time, and the
     /// update store's after-pixel check runs in the wake. In front, a wake
     /// waits for first pixel, as every event of a launch with a view does.
     public func bootForWake() {
@@ -23,7 +23,7 @@ extension ExactSession {
             guard booted else { return WakeStore.log("wakes: the boot with no view was refused: \(bootError ?? "?")") }
             WakeStore.log("wakes: booted \(view == nil ? "with no view" : "under an undrawn view") in \(Int(ExactEnv.wall() - started)) ms")
         }
-        guard firstDrawMs == nil else { return }
+        guard activatedGeneration != generation else { return }
         WakeStore.log("wakes: the module and the data open for the wake, \(view == nil ? "no view" : "a view") attached")
         firstDrawn(generation: generation, token: updateToken)
     }

@@ -22,6 +22,27 @@ import UIKit
 
 /// The stepper in a number input: `UIStepper`, which keeps what it last showed.
 final class FieldStepper: UIStepper {
+    /// UIKit's parts stood in for at the frames the surface draws them at,
+    /// inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    private let placedParts = PlacedStandIns()
+    private func placedElements() -> [PlacedElement]? {
+        placedParts.elements(of: self) {
+            declaredElements(super.accessibilityElements, count: super.accessibilityElementCount(), at: { super.accessibilityElement(at: $0) })
+        }
+    }
+    override var accessibilityElements: [Any]? {
+        get { placedElements() ?? super.accessibilityElements }
+        set { super.accessibilityElements = newValue }
+    }
+    override func accessibilityElementCount() -> Int { placedElements()?.count ?? super.accessibilityElementCount() }
+    override func accessibilityElement(at index: Int) -> Any? {
+        guard let elements = placedElements() else { return super.accessibilityElement(at: index) }
+        return elements.indices.contains(index) ? elements[index] : nil
+    }
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        guard let elements = placedElements() else { return super.index(ofAccessibilityElement: element) }
+        return elements.firstIndex { $0 === element as AnyObject } ?? NSNotFound
+    }
     /// The field's value as last written: a change from it is a step up or down.
     var shown = 0.0
 }
@@ -157,14 +178,15 @@ extension NodeView {
     var stepperObservation: [String: Any]? {
         guard let stepper else { return nil }
         let f = stepper.frame
-        let point = { (x: CGFloat, y: CGFloat) in [Agent.r2(x), Agent.r2(y)] }
-        return ["frame": [f.minX, f.minY, f.width, f.height].map { Agent.r2($0) },
+        let point = { (x: CGFloat, y: CGFloat) in [InspectionValue.r2(x), InspectionValue.r2(y)] }
+        return ["frame": [f.minX, f.minY, f.width, f.height].map { InspectionValue.r2($0) },
                 "decrement": point(f.minX + f.width / 4, f.midY), "increment": point(f.maxX - f.width / 4, f.midY),
                 "value": stepper.value, "min": stepper.minimumValue, "max": stepper.maximumValue, "step": stepper.stepValue,
                 "enabled": stepper.isEnabled, "shown": !stepper.isHidden]
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// A plain press at a point of `node` that a finger would land on its
     /// stepper: the half it is on steps the field, as a touch up inside it
@@ -182,6 +204,7 @@ extension Agent {
         return ["tapped": Int(node.id), "at": at, "stepper": half, "stepped": after != before, "value": after, "delivery": "host-activation", "native": "stepper"]
     }
 }
+#endif
 #elseif os(tvOS)
 import UIKit
 

@@ -41,7 +41,8 @@ class PurchasesModule(context: ExtensionContext) : ExactExtension(context) {
         private var client: BillingClient? = null
         private var ready = false
         private var connecting = false
-        private val waiting = ArrayList<() -> Unit>()
+        /** Calls waiting on the first connection: each body, and its reply should the client end first. */
+        private val waiting = ArrayList<Pair<() -> Unit, (JSONObject) -> Unit>>()
         private var flowReply: ((JSONObject) -> Unit)? = null
         private var flowItem = ""
         private var country: String? = null
@@ -97,7 +98,7 @@ class PurchasesModule(context: ExtensionContext) : ExactExtension(context) {
 
     override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
         if (context.agent) return agentLater(name, args, preferred as? JSONObject, reply)
-        afterConnect { realLater(name, args, reply) }
+        afterConnect(reply) { realLater(name, args, reply) }
     }
 
     override fun preferred(values: JSONObject) {
@@ -115,9 +116,20 @@ class PurchasesModule(context: ExtensionContext) : ExactExtension(context) {
         changed()
     }
 
+    /** The client, its connection's waiters and the sheet's reply are the process's: the last session ends the client,
+     * and every call still waiting on it is answered, so none stays open and the next session can show a sheet. */
     override fun destroy(done: () -> Unit) {
         sessions.remove(this)
-        if (sessions.isEmpty()) { client?.endConnection(); client = null; ready = false; connecting = false; waiting.clear() }
+        if (sessions.isEmpty()) {
+            client?.endConnection(); client = null; ready = false; connecting = false
+            val ended = error("AbortError", "the purchases session ended")
+            val calls = ArrayList(waiting)
+            waiting.clear()
+            calls.forEach { (_, reply) -> reply(ended) }
+            val sheet = flowReply
+            flowReply = null
+            sheet?.invoke(ended)
+        }
         done()
     }
 
@@ -199,7 +211,7 @@ class PurchasesModule(context: ExtensionContext) : ExactExtension(context) {
                 }
                 val now = ArrayList(waiting)
                 waiting.clear()
-                now.forEach { it() }
+                now.forEach { (body, _) -> body() }
                 changed()
             }
             override fun onBillingServiceDisconnected() { if (client === c) ready = false }
@@ -207,7 +219,7 @@ class PurchasesModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** [body] once the client's first connection has answered (D6: a call waits for the first query's chance). */
-    private fun afterConnect(body: () -> Unit) { if (connecting) waiting.add(body) else body() }
+    private fun afterConnect(reply: (JSONObject) -> Unit, body: () -> Unit) { if (connecting) waiting.add(body to reply) else body() }
 
     private fun realLater(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
         val c = client ?: return reply(error("NotSupportedError"))

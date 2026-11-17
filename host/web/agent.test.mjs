@@ -1,6 +1,6 @@
 import { viewParent, viewChildren } from './navigation/lists.js';
 // @ref LLP 1043.000 §3 D7/D8 — flow settlement must not change LLP 1012's API.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -18,11 +18,15 @@ import { storageKey } from './storage-environment.js';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
 import { nodeNamed } from '../../scripts/agent-test.mjs';
-import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required, need } from '../../scripts/coverage.mjs';
+import { drivable, engineTests } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
 
-const engineTest = Object.fromEntries(await Promise.all(['chromium', 'firefox', 'webkit'].map(async e => [e, need(e, await browserMissing(e))])));
+const engineTest = await engineTests();
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 const mapAt = (digest, line = 12) => ({digest, nodes: [{file: '/app/ui/bubble.contract', line, col: 3, end_col: 9, component: 'Bubble',
   chain: [{file: '/app/app.contract', line: 45, col: 5, end_col: 11, component: 'App'}],
@@ -506,7 +510,7 @@ test('launch setup supplies fixed defaults and carries CLI overrides to every ho
 });
 
 test('programmatic web opens stay on Chrome and Firefox drives a small Exact plan', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-firefox-agent-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist'), png = join(dir, 'page.png');
+  const dir = scratch('exact-firefox-agent-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist'), png = join(dir, 'page.png');
   writeFileSync(contract, `component BrowserFixture
   state presses = 0
   state words = ""
@@ -544,10 +548,8 @@ test('programmatic web opens stay on Chrome and Firefox drives a small Exact pla
     expect(await chrome.carrier.evaluate(({ probe() { return 5; } }).probe)).toBe(5);
     expect(await chrome.carrier.evaluate(({ async probe() { return 6; } }).probe)).toBe(6);
     await chrome.close(); chrome = null;
-    // The Firefox half: a missing Firefox fails under EXACT_REQUIRED (scripts/coverage.mjs), else the Chrome half stands.
-    const firefoxMissing = await browserMissing('firefox');
-    if (firefoxMissing && required()) throw new Error(`missing firefox: ${firefoxMissing} (EXACT_REQUIRED=1)`);
-    if (firefoxMissing) return console.warn(`SKIP: missing firefox: ${firefoxMissing}`);
+    // The Firefox half; without Firefox the Chrome half stands.
+    if (!(await drivable(['firefox'])).length) return;
     session = await open({ host:'web', browser:'firefox', url, onProcess: child => { browserProcess = child; } });
     expect(session.carrier.browser).toBe('firefox');
     expect(browserProcess?.pid).toBeGreaterThan(0);
@@ -605,8 +607,8 @@ test('programmatic web opens stay on Chrome and Firefox drives a small Exact pla
 }, 120_000);
 
 test('page facts: the platform off the agent, the drive\'s values under it (LLP 1069.000 D2, D6)', () => {
-  const listened = [];
-  const platform = { document: { visibilityState: 'hidden', addEventListener: name => listened.push(name) }, navigator: { onLine: false, share() {} }, addEventListener: name => listened.push(name) };
+  const listened = [], on = {};
+  const platform = { document: { visibilityState: 'hidden', addEventListener: (name, f) => { listened.push(name); on[name] = f; } }, navigator: { onLine: false, share() {} }, addEventListener: name => listened.push(name) };
   const real = pageReporter(false, platform);
   expect(real.bits()).toBe(1 | 2 | 4 | 32); // no navigation entry is a page the browser navigated to (bits 5–6: 1)
   platform.document.visibilityState = 'visible'; platform.navigator = { onLine: true };
@@ -615,7 +617,9 @@ test('page facts: the platform off the agent, the drive\'s values under it (LLP 
   // The document pickers (studio diary R31): bit 3 where the browser has them.
   platform.showOpenFilePicker = () => {}; expect(real.bits()).toBe(32 | 8);
   delete platform.showOpenFilePicker; let focused = false; platform.document.hasFocus = () => focused; expect(real.bits()).toBe(32 | 16); focused = true; expect(real.bits()).toBe(32); // #114: bit 4 while `document.hasFocus()` is false
-  const on = {}; platform.addEventListener = (name, f) => { listened.push(name); on[name] = f; }; let told = 0; real.onChange(() => { told++; }); expect(listened).toEqual(['visibilitychange', 'online', 'offline', 'focus', 'blur', 'pagehide', 'pageshow']);
+  platform.addEventListener = (name, f) => { listened.push(name); on[name] = f; }; let told = 0; real.onChange(() => { told++; }); expect(listened).toEqual(['visibilitychange', 'freeze', 'resume', 'online', 'offline', 'focus', 'blur', 'pagehide', 'pageshow']);
+  on.freeze(); expect([real.bits(), told]).toEqual([32 | 128, 1]);
+  on.resume(); expect([real.bits(), told]).toEqual([32, 2]); told = 0;
   on.pageshow({ persisted: false }); on.pagehide({ persisted: false }); expect([real.bits(), told]).toEqual([32, 0]); on.pagehide({ persisted: true }); expect([real.bits(), told]).toEqual([32 | 1024, 1]); on.pageshow({ persisted: true }); expect([real.bits(), told]).toEqual([32 | 1 << 16, 2]); // the back/forward cache (LLP 1069.000 D2): bit 10 while put away, the returns above bit 16; a load's and an unload's events are neither
   const agent = pageReporter(true, new Proxy({}, {get(_, name) { if (name === 'devicePixelRatio') return 2; throw new Error('agent read the platform'); }})); // the display's scale alone is the page's own under the agent too: no drive value stands in for it (LLP 1115.000 D10.3)
   expect(agent.bits()).toBe(4 | 8 | 32 | 256); // the drive navigated to the page: `navigate` (bits 5–6: 1); files in a share, never a picture (LLP 1125 D12)
@@ -625,6 +629,10 @@ test('page facts: the platform off the agent, the drive\'s values under it (LLP 
   expect(() => agent.prefer({ online: 'maybe', 'can-share': false })).toThrow('prefer: online');
   expect(agent.read()['can-share']).toBe(true); expect(agent.read()['display-scale']).toBe(2); expect(real.displayScale()).toBe(1); agent.prefer({ 'display-scale': 2 }); expect(() => agent.prefer({ 'display-scale': 3 })).toThrow("prefer: display-scale: 3: the page's is 2");
   agent.onChange(() => { throw new Error('agent listened to the platform'); });
+  // `presented` (LLP 1069.000 D2 r7, D6): the page's false until its first picture, then true; the agent's true until
+  // `prefer presented` holds it; neither is a bit.
+  platform.getComputedStyle = () => ({ fontSize: '16px' }); expect(real.read().presented).toBe(false); expect(real.presentedNow()).toBe(true); expect(real.presentedNow()).toBe(false); expect(real.read().presented).toBe(true);
+  expect(agent.read().presented).toBe(true); expect(agent.presentedNow()).toBe(false); agent.prefer({ presented: 'false' }); expect(agent.read().presented).toBe(false); agent.prefer({ presented: true }); expect(agent.read().presented).toBe(true);
 });
 
 test('the app\'s root font size: a rule over the root, read past by the host (LLP 1069.000 D3)', () => { const rules = new Map(), said = [], say = line => said.push(line), document = { documentElement: {}, head: { append: el => rules.set(el.id, el) }, getElementById: id => rules.get(id) ?? null, createElement: () => ({ remove() { rules.delete(this.id); } }) }; const platform = { document, getComputedStyle: () => { const r = [...rules.values()].find(r => !r.disabled); return { fontSize: r ? r.textContent.match(/font-size:([\d.]+)px/)[1] + 'px' : '18px' }; } }, host = pageReporter(false, platform); // the browser's own 18; an enabled rule's `!important` wins
@@ -1035,7 +1043,8 @@ test('initial flow loading cannot hold the first frame or module activation', as
   const boot = f.boot(null).then(() => { painted = true; });
   await checkpoint();
   expect(painted).toBe(true);
-  expect(f.events).toEqual(['replace', 'batch']);
+  // The ordinary ticker keeps the clock until a flow controller is ready (wasm/flow.js).
+  expect(f.events).toEqual(['replace', 'batch', 'ticker']);
   loading.reject(new Error('flow unavailable'));
   await checkpoint();
   expect(f.logs.lines.at(-1)).toContain('textflow module: Error: flow unavailable');
@@ -1121,9 +1130,47 @@ test('tree forwards its target and preserves host annotations and runner errors'
     return request.target === 'missing' ? {error:'no view matches missing'} : {roots:[7],nodes:[{id:7,type:'WebView'}]};
   };
   const reply = f.exact.agent({op:'tree',target:'panel',shallow:true});
-  expect(requests[0]).toEqual({op:'tree',target:'panel',shallow:true});
+  expect(requests).toEqual([{op:'tree'}, {op:'tree',target:'panel',shallow:true}]);
   expect(reply.nodes[0]).toEqual({id:7,type:'WebView',focused:false,url:'/guest',loading:false,guest:[{tag:'button',depth:0,text:'guest'}]});
   expect(f.exact.agent({op:'tree',target:'missing'})).toEqual({error:'no view matches missing'});
+});
+
+test('a targeted wasm tree reads logical runs with browser activity inherited from their paragraph', () => {
+  const f = fixture();
+  vm.runInContext(declaration('tree'), f);
+  const list = { isConnected: true, dataset: { view: '3' } };
+  const copy = { isConnected: false, dataset: { view: '4', testid: 'shared' } };
+  const detail = { isConnected: true, dataset: { view: '6' } };
+  const run = { isConnected: false, dataset: { view: '7', testid: 'shared' } };
+  f.views = new Map([[7, run], [6, detail], [4, copy], [3, list]]);
+  let mode;
+  f.routeFlags = () => el => mode === 'modal' ? 1 : mode === 'narrow' && (el === list || el === copy) ? 2 : 0;
+  f.ask = request => {
+    // The runner sees a pushed stack, with no native pane report.
+    const nodes = [
+      { id: 3, type: 'View', props: {}, inactive: true, hidden: true },
+      { id: 4, parent: 3, type: 'Text', props: { testId: 'shared' }, inactive: true, hidden: true },
+      { id: 6, type: 'Text', props: {} },
+      { id: 7, parent: 6, type: 'Text', props: { testId: 'shared' } },
+    ];
+    if (request.target === undefined) return { roots: [3, 6], nodes };
+    const id = typeof request.target === 'number' ? request.target : 7;
+    return { roots: [id], nodes: nodes.filter(n => n.id === id) };
+  };
+  for (const [at, id, inactive] of [['wide', 4, false], ['narrow', 7, false], ['modal', 4, true]]) {
+    mode = at;
+    const copies = f.exact.agent({ op: 'tree' }).nodes.filter(n => n.props.testId === 'shared');
+    expect((copies.find(n => !n.inactive) ?? copies[0]).id).toBe(id);
+    for (const [target, expected] of [['shared', id], [4, 4], [7, 7]]) {
+      const full = copies.find(n => n.id === expected);
+      for (const shallow of [false, true]) {
+        const reply = f.exact.agent({ op: 'tree', target, shallow });
+        expect(reply.roots).toEqual([expected]);
+        expect([!!reply.nodes[0].inactive, !!reply.nodes[0].hidden]).toEqual([!!full.inactive, !!full.hidden]);
+      }
+    }
+    expect(!!copies.find(n => n.id === id).inactive).toBe(inactive);
+  }
 });
 
 // Uncontrolled fields live in the presenter; inspection must read what the
@@ -1222,7 +1269,7 @@ test('a typed pick answer split at a space names the pick step that keeps the pa
 });
 
 test('a mouse drag presses and releases the left button on the web', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-mouse-drag-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-mouse-drag-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, `component MouseDrag
   state log = ""
   action at(kind: string, e: PointerEvent)

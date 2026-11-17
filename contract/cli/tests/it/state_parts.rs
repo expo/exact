@@ -2,6 +2,7 @@
 //! hover and focus tracking with the host. Active targets may compute;
 //! hover and focus targets are literals. List rows admit active parts.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Color, ColorValue, Kernel, RowValue, StyleId};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -357,8 +358,9 @@ fn a_state_its_node_never_meets_is_linted() {
 }
 
 /// A node's own `:active` where it has no `press` never holds: the host's
-/// press needs one (theme2's 07:06 question); a lint. A link with no `press`
-/// is linted as unreliable: only Apple presses it (theme2's 11:48).
+/// press needs one (theme2's 07:06 question); a lint. A pressable link with
+/// no `press` is pressed on every host, as CSS's `:active` holds on a link
+/// (LLP 1121 D8), and is not linted; a `text` link is.
 #[test]
 fn an_active_part_without_a_press_is_linted() {
     let src = "component App\n  state n = 0\n  state url = \"https://example.com\"\n  action go\n    n = n + 1\n  view\n    column\n      column testId=\"dead\"\n        :active\n          opacity = 0.5\n        text \"d\"\n      column press=go testId=\"live\"\n        :active\n          opacity = 0.5\n        text \"l\"\n      text \"link\" href=\"https://example.com\"\n        :active\n          opacity = 0.5\n      link href=\"https://example.com\"\n        :active\n          opacity = 0.5\n        text \"l\"\n      link href=url\n        :active\n          opacity = 0.5\n        text \"b\"\n";
@@ -368,23 +370,12 @@ fn an_active_part_without_a_press_is_linted() {
         .iter()
         .filter(|w| w.id == "lower-state-dead")
         .collect();
-    // The column and the `text` link never hold; the pressable links are unreliable.
-    assert_eq!(dead.len(), 4, "{warnings:?}");
-    let at = |line| {
-        dead.iter()
-            .find(|w| w.span.line == line)
-            .unwrap_or_else(|| panic!("{dead:?}"))
-    };
-    assert!(at(10).message.contains("never holds"), "{dead:?}");
-    assert!(
-        at(18).message.contains("never holds"),
-        "a text link: {dead:?}"
-    );
-    assert!(at(21).message.contains("only on Apple"), "{dead:?}");
-    assert!(
-        at(25).message.contains("only on Apple"),
-        "a bound href: {dead:?}"
-    );
+    // The column and the `text` link never hold; the pressable links do.
+    assert_eq!(dead.len(), 2, "{warnings:?}");
+    let mut lines: Vec<_> = dead.iter().map(|w| w.span.line).collect();
+    lines.sort();
+    assert_eq!(lines, [10, 18], "{dead:?}");
+    assert!(dead.iter().all(|w| w.message.contains("never holds")));
 }
 
 /// Review round 1: a state that leaves a row unwritten in some arm keeps
@@ -463,12 +454,10 @@ fn round_one_refusals_and_typing() {
 /// every colour token, as the node's own computed row does (D7).
 #[test]
 fn a_computed_state_row_keeps_the_tokens_it_may_name() {
-    let dir = std::env::temp_dir().join(format!("exact2-state-retained-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-state-retained-{}", std::process::id()));
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  brand-on = #0a7aff\n  brand-off = #888888\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  brand-on = #0a7aff\n  brand-off = #888888\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  state suffix = \"on\"\n  state busy = false\n  view\n    column disabled=busy\n      :disabled\n        background-color=`brand-${suffix}`\n      text \"b\"\n").unwrap();
@@ -506,9 +495,7 @@ fn round_two_edges() {
     );
     // A refused look in a mapped build: the compile says why, and panics not.
     let src = "component App\n  view\n    column\n      column press=go\n        :hover\n          opacity=true\n        text \"a\"\n      column\n        text \"b\"\n  state n = 0\n  action go\n    n = n + 1\n";
-    let dir = std::env::temp_dir().join(format!("exact2-state-mapped-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-state-mapped-{}", std::process::id()));
     std::fs::write(dir.join("app.contract"), src).unwrap();
     assert!(contract::compile_path_mapped(&dir.join("app.contract")).is_err());
     let _ = std::fs::remove_dir_all(&dir);
@@ -550,12 +537,10 @@ fn round_three_edges() {
 /// `:disabled` folds into the node's row.
 #[test]
 fn a_param_read_only_by_a_state_part_is_reached() {
-    let dir = std::env::temp_dir().join(format!("exact2-state-params-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-state-params-{}", std::process::id()));
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  accent.fill = #0a7aff\n  ink = #111111\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  accent.fill = #0a7aff\n  ink = #111111\n",
     )
     .unwrap();
     std::fs::write(
@@ -618,7 +603,7 @@ fn a_param_read_only_by_a_state_part_is_reached() {
     // applying it reads its params (LLP 1139 D3).
     std::fs::write(dir.join("app.contract"), "component App\n  view\n    PostButton()\n    column class=Look\n      text \"x\"\n\nstyle Look\n  :active\n    background-color = \"param.fill\"\n\ncomponent PostButton\n  params\n    fill: color = \"accent.fill\"\n  view\n    column class=Look background-color=\"param.fill\"\n      text \"Post\"\n").unwrap();
     let e = contract::compile_path(&dir.join("app.contract")).unwrap_err();
-    assert_eq!(e.id, "tamber-param-scope", "{e:?}");
+    assert_eq!(e.id, "forma-param-scope", "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -786,4 +771,42 @@ fn active_targets_keep_default_buttons_native() {
     let node = k.node_by_key(k.find_by_test_id("paint")[0]).unwrap();
     assert_eq!(node.node_type, exact_kernel::NodeType::Control);
     assert!(node.style.mask.has(StyleId::PressBackgroundColor));
+}
+
+#[test]
+fn active_translate_compiles_without_changing_the_base_transform() {
+    let r = booted(
+        r#"component App
+  view
+    view translate="10px 20px" testId="slab"
+      :active
+        translate = "4px 4px"
+"#,
+    );
+    let k = r.kernel();
+    let node = k.node_by_key(k.find_by_test_id("slab")[0]).unwrap();
+    assert_eq!(node.style.translate.x, 10.);
+    assert_eq!(node.style.translate.y, 20.);
+    assert_eq!(node.style.press_translate.x, 4.);
+    assert_eq!(node.style.press_translate.y, 4.);
+}
+
+#[test]
+fn active_translate_refuses_a_third_axis() {
+    for value in [
+        r#""4px 4px 8px""#,
+        r#""0 0 0""#,
+        r#"(on ? "4px 4px" : "0 0 8px")"#,
+        r#"(match some(on) { case some(n) => "0 0 8px", case none => "4px 4px" })"#,
+        r#"(match some("0 0 8px") { case some(offset) => offset, case none => "4px 4px" })"#,
+        "offset",
+        r#"(on ? "4px 4px" : offset)"#,
+    ] {
+        let source = format!("component App\n  state on = false\n  derive offset = (on ? \"4px 4px\" : \"0 0 8px\")\n  view\n    view\n      :active\n        translate = {value}\n");
+        let error = contract::compile(&source).expect_err("a press is two-dimensional");
+        assert!(
+            error.to_string().contains("a press is a 2D offset"),
+            "{error}"
+        );
+    }
 }

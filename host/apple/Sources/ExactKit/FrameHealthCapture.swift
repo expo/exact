@@ -11,32 +11,40 @@ extension FrameHealth {
         updateCapture(at: CACurrentMediaTime())
     }
 
-    /// Agent capture is a bounded lease; expiration uses existing work or reads, never a timer.
+    /// Agent capture is a bounded lease; expiration uses existing work or reads, never a timer. On an on-demand
+    /// collector the lease is a demand, as the card's showing is, and its end ends that demand.
     func setAgentCapture(_ action: String, duration: Double = 60_000) -> [String: Any] {
         guard ["start", "stop", "clear"].contains(action), duration.isFinite,
               duration >= 1, duration <= 120_000, duration.rounded() == duration else {
             return ["error": "Frame capture requires start, stop or clear and a duration of 1–120000 ms."]
         }
-        guard enabled, !virtual else {
-            return ["available": false, "capture": false, "reason": unavailableCode ?? "virtual-clock"]
-        }
+        if let leaseBlocked { return ["available": false, "capture": false, "reason": leaseBlocked] }
         _ = nativeHealth?.setAgentCapture(action, duration: duration)
         let now = CACurrentMediaTime()
         if action == "start" { agentCaptureUntil = now + duration / 1000 }
         if action == "stop" { agentCaptureUntil = 0 }
         updateCapture(at: now)
+        // Its demand found no collector free
+        if action == "start", let blocked {
+            agentCaptureUntil = 0
+            return ["available": false, "capture": false, "reason": blocked]
+        }
         if action == "clear", enabled {
             exact_frame_health_capture(handle, 2, Self.nanoseconds(now))
             if captureID != 0 { captureID = exact_frame_health_history_status(handle).capture }
         }
-        return ["available": enabled && !virtual, "capture": captureID != 0,
-            "agentLeaseRemainingMs": max(0, ((agentCaptureUntil - now) * 1000).rounded()),
-            "reason": unavailableCode as Any? ?? (virtual ? "virtual-clock" : NSNull()),
+        return ["available": true, "capture": captureID != 0,
+            "agentLeaseRemainingMs": max(0, ((agentCaptureUntil - now) * 1000).rounded()), "reason": NSNull(),
             "capacity": 16, "maximumAgeMs": 120_000, "maximumReportBytes": FrameHealthReport.maximumBytes]
     }
 
+    /// Whether an agent's lease holds at `now`: a capture, or a scroll track that is still fed.
+    func agentLeased(at now: Double) -> Bool {
+        agentCaptureUntil > now || track.map { !$0.frozen && now < $0.until } == true
+    }
+
     func updateCapture(at now: Double) {
-        demand(!virtual && hudEffectiveVisible)
+        demand(!virtual && (hudEffectiveVisible || agentLeased(at: now)))
         let wanted = enabled && !virtual && (hudVisible || agentCaptureUntil > now)
         guard wanted != (captureID != 0) else { return }
         exact_frame_health_capture(handle, wanted ? 1 : 0, Self.nanoseconds(now))
@@ -49,11 +57,14 @@ extension FrameHealth {
         }
     }
 
+    /// Expire only this producer: a native callback can begin before a session pass and commit after it. A scroll
+    /// track's lease ends here too, so its demand ends without a read.
     func expireCapture(at now: Double) {
         if agentCaptureUntil != 0, now >= agentCaptureUntil {
             agentCaptureUntil = 0
             updateCapture(at: now)
         }
+        expireTrack(at: now)
     }
 
     /// While a capture runs, the conditions a frame met it under, such as thermal state and Low Power Mode
@@ -81,10 +92,8 @@ extension FrameHealth {
     }
 
     /// Record the outermost apply; match owner timestamps only to this batch's captured frame update.
-    func applied(_ batch: Batch, began: Double, flags: UInt64 = 0) {
+    func applied(_ batch: Batch, began: Double, finished: Double, flags: UInt64 = 0) {
         guard enabled, !virtual, began > 0 else { return }
-        let finished = CACurrentMediaTime()
-        expireCapture(at: finished)
         let owner = batch.frameWorkTiming.flatMap { $0.capture == captureID ? $0 : nil }
         var work = ExactFrameHealthWork()
         work.capture = captureID
@@ -107,7 +116,7 @@ extension FrameHealth {
             context.queued_ns = 0; context.owner_began_ns = 0; context.owner_finished_ns = 0; context.landed_ns = 0
             exact_frame_health_context(native.handle, context)
         }
-        (publicationOwner ?? self).publicationDue(at: finished)
+        (publicationOwner ?? self).markPublication()
     }
 
     func historyStatus() -> ExactFrameHealthHistoryStatus {
@@ -124,6 +133,16 @@ extension FrameHealth {
         guard period != requestedPeriodNs else { return }
         requestedPeriodNs = period
         if enabled { exact_frame_health_requested_period(handle, period) }
+    }
+}
+
+extension ExactSession {
+    func recordFrameHealthApply(_ batch: Batch, began: Double) {
+        guard frameHealth.enabled else { return }
+        let finished = CACurrentMediaTime()
+        frameHealth.expireCapture(at: finished)
+        frameHealth.applied(batch, began: began, finished: finished, flags: frameHealth.frameFlags(frames, session: self))
+        frameHealth.maintain(at: finished)
     }
 }
 

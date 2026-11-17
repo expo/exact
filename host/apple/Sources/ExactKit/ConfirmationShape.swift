@@ -54,6 +54,19 @@ extension NodeView {
         kind == "input" && ["text", "password", "email", "url", "search", "tel", "number"].contains(props["type"] ?? "text")
     }
 
+    /// HTML's close request (Escape, Back, a light dismissal) fires `cancel`
+    /// at a modal dialog, then the `close` that follows, queued after it. A
+    /// page's `close()` and its buttons' `command="close"` fire `close` alone.
+    /// A native alert has gone by the time this fires: it cannot keep the
+    /// dialog open.
+    func queueDialogCancel() {
+        guard props["semanticTag"] == "dialog", handlers.contains("cancel") else { return }
+        DispatchQueue.main.async { [weak self, weak presenter] in
+            guard let self, let presenter, presenter.views[self.id] === self, self.superview != nil else { return }
+            presenter.onCancel?(self.id)
+        }
+    }
+
     /// HTML queues `close` after restoring focus; app code may open it again.
     func queueDialogClose() {
         guard props["semanticTag"] == "dialog", handlers.contains("close") else { return }

@@ -1,6 +1,6 @@
-//! `theme` (LLP 1095 D4) and the app's design, `app.tamber` (LLP 1121 D2):
+//! `theme` (LLP 1095 D4) and the app's design, `app.forma` (LLP 1121 D2):
 //! the app's own colours, named once at its root. Either is checked and
-//! folded by `exact-tamber`, the build's one evaluator, and the default app
+//! folded by `exact-forma`, the build's one evaluator, and the default app
 //! tuple's values are bound while the app's styles are parsed
 //! (`exact_kernel::style::theme`), so a row writes `color="brand"` and the
 //! kernel reads the token's colour. A row's expression naming a token
@@ -23,10 +23,9 @@ pub(crate) use scheme::one_scheme_tokens;
 
 use crate::{LowerError, Lowerer};
 use contract_syntax::{Attr, Component, Expr, File, Span};
+use exact_forma as forma;
 use exact_kernel::style::{roles, theme};
 use exact_kernel::{Color, ColorValue};
-use exact_tamber as tamber;
-use scan::Said;
 pub(crate) use scan::{literal_leaves, words};
 
 /// One resolved entry: the names it answers to and the colour text it
@@ -43,38 +42,38 @@ pub(crate) struct ThemeEntry {
     /// Its text for every full app tuple (LLP 1121 D5) when it varies.
     pub slices: Vec<String>,
     /// Its kind (D3).
-    pub kind: tamber::Kind,
+    pub kind: forma::Kind,
     /// Where the token was declared, including its design file.
     pub span: Span,
 }
 
 /// The plan's `theme.kind` for a kind (LLP 1121 D3); `None` for a motion
 /// token, which the build writes into its rows and the plan does not keep.
-fn kind_code(kind: tamber::Kind) -> Option<u8> {
+fn kind_code(kind: forma::Kind) -> Option<u8> {
     Some(match kind {
-        tamber::Kind::Color => 0,
-        tamber::Kind::Length => 1,
-        tamber::Kind::Number => 2,
-        tamber::Kind::BoxShadow => 3,
-        tamber::Kind::TextShadow => 4,
-        tamber::Kind::Type => 5,
-        tamber::Kind::Family => 6,
-        tamber::Kind::Duration | tamber::Kind::Easing => return None,
+        forma::Kind::Color => 0,
+        forma::Kind::Length => 1,
+        forma::Kind::Number => 2,
+        forma::Kind::BoxShadow => 3,
+        forma::Kind::TextShadow => 4,
+        forma::Kind::Type => 5,
+        forma::Kind::Family => 6,
+        forma::Kind::Duration | forma::Kind::Easing => return None,
     })
 }
 
 /// The kernel's kind for a kind, as [`kind_code`].
-fn kernel_kind(kind: tamber::Kind) -> Option<exact_kernel::style::theme::Kind> {
+fn kernel_kind(kind: forma::Kind) -> Option<exact_kernel::style::theme::Kind> {
     use exact_kernel::style::theme::Kind;
     Some(match kind {
-        tamber::Kind::Color => Kind::Color,
-        tamber::Kind::Length => Kind::Length,
-        tamber::Kind::Number => Kind::Number,
-        tamber::Kind::BoxShadow => Kind::BoxShadow,
-        tamber::Kind::TextShadow => Kind::TextShadow,
-        tamber::Kind::Type => Kind::Type,
-        tamber::Kind::Family => Kind::Family,
-        tamber::Kind::Duration | tamber::Kind::Easing => return None,
+        forma::Kind::Color => Kind::Color,
+        forma::Kind::Length => Kind::Length,
+        forma::Kind::Number => Kind::Number,
+        forma::Kind::BoxShadow => Kind::BoxShadow,
+        forma::Kind::TextShadow => Kind::TextShadow,
+        forma::Kind::Type => Kind::Type,
+        forma::Kind::Family => Kind::Family,
+        forma::Kind::Duration | forma::Kind::Easing => return None,
     })
 }
 
@@ -101,19 +100,19 @@ fn parses(text: &str) -> bool {
 }
 
 /// The schema's roles, as the crate checks a design against them.
-pub fn vocab() -> tamber::Vocab {
+pub fn vocab() -> forma::Vocab {
     let hex = |c: u32| format!("#{c:08x}");
-    tamber::Vocab {
+    forma::Vocab {
         roles: exact_kernel::COLOR_ROLES
             .iter()
-            .map(|r| tamber::Role {
+            .map(|r| forma::Role {
                 name: r.name.into(),
                 system: roles::is_css_system(r),
                 fallback: [hex(r.light), hex(r.dark)],
                 accent: roles::web_accent(r),
             })
             .collect(),
-        named_lengths: tamber::Vocab::named_lengths(
+        named_lengths: forma::Vocab::named_lengths(
             exact_kernel::TEXT_STYLES.iter().map(|s| (s.name, s.alias)),
             exact_kernel::NAMED_LENGTHS
                 .iter()
@@ -123,7 +122,7 @@ pub fn vocab() -> tamber::Vocab {
         bases: exact_kernel::style::scale::names()
             .map(String::from)
             .collect(),
-        sizes: tamber::Vocab::named_lengths(
+        sizes: forma::Vocab::named_lengths(
             exact_kernel::TEXT_STYLES.iter().map(|s| (s.name, s.alias)),
             exact_kernel::NAMED_LENGTHS
                 .iter()
@@ -134,7 +133,7 @@ pub fn vocab() -> tamber::Vocab {
         .filter_map(|name| {
             use exact_kernel::style::relative::{parse, MEDIUM};
             let (unit, n) = parse(&name)?;
-            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0) * n);
+            let px = f64::from(unit.basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default()) * n);
             Some((name, exact_num::Shortest(px).to_string()))
         })
         .chain(crate::scale::sizes())
@@ -218,7 +217,7 @@ pub(crate) struct Profiled {
 }
 
 impl Lowerer<'_> {
-    /// Check and fold the app's design, inline or `app.tamber`, and bind it
+    /// Check and fold the app's design, inline or `app.forma`, and bind it
     /// for the styles that follow; the plan's table is what D7 keeps.
     /// `bindable`: the app can name a token outside its views
     /// ([`crate::names_tokens_outside_views`]).
@@ -246,7 +245,7 @@ impl Lowerer<'_> {
         PARAMS.with(|p| *p.borrow_mut() = params.clone());
         SHOWN.with(|p| *p.borrow_mut() = params.clone());
         let found = self.design(file).or_else(|| {
-            (!params.is_empty()).then(|| (tamber::Design::default(), Origin::Inline(Vec::new())))
+            (!params.is_empty()).then(|| (forma::Design::default(), Origin::Inline(Vec::new())))
         });
         let Some((mut design, origin)) = found else {
             return exact_kernel::style::theme::declarations([]);
@@ -264,7 +263,7 @@ impl Lowerer<'_> {
         for t in design.tokens.iter().chain(&design.icons) {
             if t.name.value.starts_with(crate::params::PREFIX) {
                 self.push(LowerError {
-                    id: "tamber-param-name",
+                    id: "forma-param-name",
                     message: format!("`{}`: a token named `param.…` is a component's param, which its component's `params` section declares (D15); name this token otherwise", t.name.value),
                     span: self.token_span(&origin, t.name.line, t.name.col),
                 });
@@ -323,57 +322,23 @@ impl Lowerer<'_> {
             self.declared_fonts.clone(),
             self.font_files.clone(),
         ));
-        let mut said = Said::of(file, root, &design, &declared, &typing);
-        // The rows a design server's write check reads again (`rows`).
-        rows::note(std::mem::take(&mut said.rows));
+        let mut said = retained::scan(file, root, &design, &declared, &typing);
         // D7's retention, left for the design server before the design is
         // folded, as it does not depend on the fold.
-        let mut words = std::mem::take(&mut said.words);
         // A component that isn't Contract reads its params outside the views:
-        // its declaration keeps each (D15), with every token its default
-        // reads, through any chain.
-        // A package design's components too (stage 12 B1).
+        // its declaration keeps each (D15), a package design's too (stage
+        // 12 B1). Cache the roots; their closure is the current design's.
         let designed = file
             .design
             .iter()
             .chain(&file.package_designs)
             .flat_map(|d| crate::params::design_tokens(d).0);
-        let mut kept: Vec<String> = designed.map(|p| p.token).collect();
-        let mut roots = std::collections::BTreeSet::new();
-        // A role's spelling in any case, as the fold reads one: the tokens
-        // and icons by their names lowercased, once (linear: the checker
-        // bound's sweep).
-        let mut by_lower: std::collections::HashMap<String, Vec<&tamber::Token>> =
-            std::collections::HashMap::new();
-        for t in design.tokens.iter().chain(&design.icons) {
-            by_lower
-                .entry(t.name.value.to_ascii_lowercase())
-                .or_default()
-                .push(t);
-        }
-        // Each spelling kept; each lowercased name's tokens read once, however
-        // many spellings reach it (round 1 of the checker sweep).
-        let mut expanded = std::collections::HashSet::new();
-        while let Some(name) = kept.pop() {
-            if !roots.insert(name.clone()) {
-                continue;
-            }
-            words.insert(name.clone());
-            let lower = name.to_ascii_lowercase();
-            if !expanded.insert(lower.clone()) {
-                continue;
-            }
-            for t in by_lower.get(&lower).into_iter().flatten() {
-                let read =
-                    std::iter::once(&t.value.value).chain(t.whens.iter().map(|w| &w.value.value));
-                kept.extend(read.flat_map(|v| scan::words(v)).map(str::to_string));
-            }
-        }
-        let retention = tamber::Retention {
+        let mut retention = forma::Retention {
             bindable,
             computed: said.computed,
             computed_measure: said.computed_measure,
-            words,
+            words: std::mem::take(&mut said.words),
+            native_params: designed.map(|p| p.token).collect(),
             folded: said.folded.clone(),
         };
         RETENTION.with(|r| *r.borrow_mut() = Some(retention.clone()));
@@ -387,6 +352,7 @@ impl Lowerer<'_> {
         if retained::stops_at_retention() {
             return exact_kernel::style::theme::declarations([]);
         }
+        let roots = retention.retain_native_params(&design);
         let profiled = profiles(self, &mut design, &origin);
         // An expression over a profile's colour is not the build's to fold.
         said.synthetic.retain(|s| {
@@ -402,7 +368,7 @@ impl Lowerer<'_> {
         });
         // A synthetic token from a literal no colour row is known to read
         // (a `fn`'s, a state's) is dropped when it does not fold.
-        let mut refused: Vec<(tamber::Diagnostic, Vec<scan::Synthetic>)> = Vec::new();
+        let mut refused: Vec<(forma::Diagnostic, Vec<scan::Synthetic>)> = Vec::new();
         let folding = fold(&design, &mut said.synthetic, &mut |d, synthetic| {
             refused.push((d.clone(), synthetic.to_vec()))
         });
@@ -417,7 +383,7 @@ impl Lowerer<'_> {
         if self.package_references(&folding, file) {
             return exact_kernel::style::theme::declarations([]);
         }
-        crate::control_roles::note_accent(tamber::white_over(&folding.tokens, "AccentColor"));
+        crate::control_roles::note_accent(forma::white_over(&folding.tokens, "AccentColor"));
         for e in crate::params::folded(&kinded, &folding, &overridden, None) {
             self.push(e);
         }
@@ -433,7 +399,7 @@ impl Lowerer<'_> {
                         .is_none_or(|e| e.iter().any(|x| x.value == name))
         };
         // Each SVG under the assets of the root whose file writes it (stage 13).
-        let home = |icon: &tamber::Icon| {
+        let home = |icon: &forma::Icon| {
             crate::icons::Home::of(icon, asset_root, &file.package_designs, &kinded)
         };
         let refused = crate::icons::declare(
@@ -454,19 +420,19 @@ impl Lowerer<'_> {
         scope
     }
 
-    /// The app's own design: `app.tamber` parsed, or the inline `theme`
+    /// The app's own design: `app.forma` parsed, or the inline `theme`
     /// (its packages' join it in `packages`).
-    fn app_design(&mut self, file: &File) -> Option<(tamber::Design, Origin)> {
+    fn app_design(&mut self, file: &File) -> Option<(forma::Design, Origin)> {
         if let (Some(_), Some(theme)) = (&file.design, &file.theme) {
             self.errors.push(LowerError {
-                id: "tamber-two-sources",
-                message: "this app has a design (`app.tamber`) and an inline `theme`: an app has one or the other; move the entries into `app.tamber`'s `theme` block (LLP 1121 D2)".into(),
+                id: "forma-two-sources",
+                message: "this app has a design (`app.forma`) and an inline `theme`: an app has one or the other; move the entries into `app.forma`'s `theme` block (LLP 1121 D2)".into(),
                 span: theme.span,
             });
         }
         if let Some(d) = &file.design {
             let origin = Origin::File(d.source_id);
-            return match tamber::parse(&d.text) {
+            return match forma::parse(&d.text) {
                 Ok(design) => Some((design, origin)),
                 Err(all) => {
                     for e in all {
@@ -514,7 +480,7 @@ impl Lowerer<'_> {
     /// synthetic token's row, or the design file's line.
     fn design_refusal(
         &mut self,
-        d: &tamber::Diagnostic,
+        d: &forma::Diagnostic,
         origin: &Origin,
         synthetic: &[scan::Synthetic],
     ) {
@@ -560,7 +526,7 @@ impl Lowerer<'_> {
 thread_local! {
     /// The roles the last design lowered on this thread overrides, each
     /// by its schema name (`AccentColor`, `placeholder`) and its token's
-    /// span: what `tamber-unreachable` judges (LLP 1121 D9).
+    /// span: what `forma-unreachable` judges (LLP 1121 D9).
     static ROLES: std::cell::RefCell<Vec<(String, Span)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The app's axes while its styles are lowered, each with its values:
     /// what a `-exact-mode` pin may name.
@@ -571,10 +537,10 @@ thread_local! {
     static CANDIDATES: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The design's length and number tokens while its styles are lowered
     /// (LLP 1121 D3): each name, kind and distinct values over the tuples.
-    static MEASURES: std::cell::RefCell<Vec<(String, tamber::Kind, Vec<String>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    /// The retention the last design lowered on this thread kept its
-    /// tokens by (D7): what the design server classes an edit with.
-    static RETENTION: std::cell::RefCell<Option<tamber::Retention>> = const { std::cell::RefCell::new(None) };
+    static MEASURES: std::cell::RefCell<Vec<(String, forma::Kind, Vec<String>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The last design's view retention and native-param roots (D7): what
+    /// the design server closes over each proposed design.
+    static RETENTION: std::cell::RefCell<Option<forma::Retention>> = const { std::cell::RefCell::new(None) };
     /// The design's duration and easing tokens while its styles are lowered
     /// (D3): each name and its value, which the build writes in its place.
     static MOTION: std::cell::RefCell<Vec<(String, String)>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -623,9 +589,10 @@ pub fn synthetic_candidates() -> Vec<(String, bool)> {
     CANDIDATES.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
-/// The retention the last build on this thread kept its design's tokens by
-/// (D7), taken: none when it stopped before its design.
-pub fn retention() -> Option<tamber::Retention> {
+/// The last build's view retention and native-param roots (D7), taken:
+/// none when it stopped before its design. Close the roots over the current
+/// design with [`forma::Retention::retain_native_params`] before querying it.
+pub fn retention() -> Option<forma::Retention> {
     RETENTION.with(|r| r.borrow_mut().take())
 }
 
@@ -635,7 +602,7 @@ pub(crate) fn bind_axes(file: &File) {
     let axes = file
         .design
         .as_ref()
-        .and_then(|d| tamber::parse(&d.text).ok())
+        .and_then(|d| forma::parse(&d.text).ok())
         .map(|d| {
             d.axes
                 .into_iter()
@@ -656,7 +623,7 @@ pub(crate) fn mode_pins(a: &Attr) -> Result<(), LowerError> {
     for (text, span) in literals.into_iter().filter(|(t, _)| !t.trim().is_empty()) {
         AXES.with(|axes| check_pins(&text, &axes.borrow()))
             .map_err(|message| LowerError {
-                id: "tamber-mode",
+                id: "forma-mode",
                 message: format!("`-exact-mode=\"{text}\"`: {message}"),
                 span,
             })?;
@@ -696,7 +663,7 @@ pub(crate) fn set_mode_args(args: &[Expr], span: Span) -> Result<(), LowerError>
     });
     match refused {
         Some(message) => Err(LowerError {
-            id: "tamber-mode",
+            id: "forma-mode",
             message: format!("`setMode`: {message}"),
             span,
         }),
@@ -762,8 +729,8 @@ pub(crate) fn lint_scope(file: &File) -> exact_kernel::style::theme::ThemeScope 
     });
     let design = match (&file.theme, &file.design) {
         (Some(theme), _) => Some(inline_design(theme)),
-        (None, Some(source)) => tamber::parse(&source.text).ok(),
-        _ => (!params.is_empty()).then(tamber::Design::default),
+        (None, Some(source)) => forma::parse(&source.text).ok(),
+        _ => (!params.is_empty()).then(forma::Design::default),
     };
     // Its packages' tokens too, which their views name (D11); what the
     // build refuses of them is the build's to say.
@@ -774,7 +741,7 @@ pub(crate) fn lint_scope(file: &File) -> exact_kernel::style::theme::ThemeScope 
     let folding = design.and_then(|mut d| {
         crate::params::add_to(&mut d, &params, &crate::params::identities(file));
         stand_in_profiles(&mut d);
-        tamber::check_design(d, &vocab()).ok()
+        forma::check_design(d, &vocab()).ok()
     });
     let Some(folding) = folding else {
         let theme = theme_decl(file);
@@ -792,7 +759,7 @@ pub(crate) fn lint_scope(file: &File) -> exact_kernel::style::theme::ThemeScope 
         *m.borrow_mut() = folding
             .tokens
             .iter()
-            .filter(|t| t.kind != tamber::Kind::Color && kind_code(t.kind).is_some())
+            .filter(|t| t.kind != forma::Kind::Color && kind_code(t.kind).is_some())
             .map(|t| {
                 let mut values: Vec<String> = Vec::new();
                 for v in t.values.iter().map(|v| v.css()) {
@@ -831,9 +798,9 @@ pub(crate) fn theme_decl(file: &File) -> Option<contract_syntax::ThemeDecl> {
         return Some(theme.clone());
     }
     let source = file.design.as_ref()?;
-    let design = tamber::parse(&source.text).ok()?;
+    let design = forma::parse(&source.text).ok()?;
     // Each at its place in the design file.
-    let at = |t: &tamber::At<String>| Span {
+    let at = |t: &forma::At<String>| Span {
         line: t.line,
         col: t.col,
         end_col: t.col + t.value.len() as u32,
@@ -858,7 +825,7 @@ pub(crate) fn theme_decl(file: &File) -> Option<contract_syntax::ThemeDecl> {
 /// The inline `theme` as the crate reads it: one token an entry, a bare
 /// role name (LLP 1095 D4's `"secondary-grouped-background"`) in the crate's
 /// spelling unless an entry is called that.
-pub(crate) fn inline_design(theme: &contract_syntax::ThemeDecl) -> tamber::Design {
+pub(crate) fn inline_design(theme: &contract_syntax::ThemeDecl) -> forma::Design {
     let names: Vec<&str> = theme.entries.iter().map(|e| e.name.as_str()).collect();
     let mut tokens = Vec::new();
     for (i, entry) in theme.entries.iter().enumerate() {
@@ -870,12 +837,12 @@ pub(crate) fn inline_design(theme: &contract_syntax::ThemeDecl) -> tamber::Desig
             Some((_, row)) if !names.contains(&text) => row,
             _ => text.to_string(),
         };
-        let at = |value: String| tamber::At {
+        let at = |value: String| forma::At {
             value,
             line: i as u32 + 1,
             col: 1,
         };
-        tokens.push(tamber::Token {
+        tokens.push(forma::Token {
             name: at(entry.name.clone()),
             kind: None,
             value: at(value),
@@ -883,7 +850,7 @@ pub(crate) fn inline_design(theme: &contract_syntax::ThemeDecl) -> tamber::Desig
             meta: Vec::new(),
         });
     }
-    tamber::Design {
+    forma::Design {
         name: "app".into(),
         tokens,
         ..Default::default()
@@ -893,7 +860,7 @@ pub(crate) fn inline_design(theme: &contract_syntax::ThemeDecl) -> tamber::Desig
 /// Stand `transparent` in for each token whose value is a profile's colour
 /// (`color(--…)`), which the crate does not fold alone: what a caller that
 /// folds the design outside the build reads.
-pub(crate) fn stand_in_profiles(design: &mut tamber::Design) {
+pub(crate) fn stand_in_profiles(design: &mut forma::Design) {
     for t in &mut design.tokens {
         let profiled = |v: &str| v.to_ascii_lowercase().contains("color(--");
         if profiled(&t.value.value) || t.whens.iter().any(|w| profiled(&w.value.value)) {
@@ -910,15 +877,15 @@ pub(crate) fn stand_in_profiles(design: &mut tamber::Design) {
 /// scale's length, its values every column's that draws in px.
 /// An expression over base names it leaves unset (stage 12 B2) is each
 /// column's px.
-pub(crate) fn measure_values(text: &str) -> Option<(tamber::Kind, Vec<String>)> {
+pub(crate) fn measure_values(text: &str) -> Option<(forma::Kind, Vec<String>)> {
     measure_written(text)
         .map(|(kind, values)| (kind, crate::scale::expanded(kind, &values)))
-        .or_else(|| crate::scale::values(text).map(|values| (tamber::Kind::Length, values)))
+        .or_else(|| crate::scale::values(text).map(|values| (forma::Kind::Length, values)))
 }
 
 /// The design's length or number token `text` names: its kind and its
 /// distinct values over the app's tuples, as the plan carries them.
-pub(crate) fn measure_written(text: &str) -> Option<(tamber::Kind, Vec<String>)> {
+pub(crate) fn measure_written(text: &str) -> Option<(forma::Kind, Vec<String>)> {
     MEASURES.with(|m| {
         m.borrow()
             .iter()
@@ -929,7 +896,7 @@ pub(crate) fn measure_written(text: &str) -> Option<(tamber::Kind, Vec<String>)>
 
 /// The design's length or number token `text` names, while its styles are
 /// lowered: its kind.
-pub(crate) fn measure_named(text: &str) -> Option<tamber::Kind> {
+pub(crate) fn measure_named(text: &str) -> Option<forma::Kind> {
     measure_values(text).map(|(kind, _)| kind)
 }
 
@@ -939,7 +906,7 @@ pub(crate) fn number_tokens() -> bool {
     MEASURES.with(|m| {
         m.borrow()
             .iter()
-            .any(|(_, kind, _)| *kind == tamber::Kind::Number)
+            .any(|(_, kind, _)| *kind == forma::Kind::Number)
     })
 }
 
@@ -996,7 +963,7 @@ pub(crate) fn names_measures(v: &Expr) -> bool {
             .all(|e| named(e) || matches!(e, Expr::Number(..)))
 }
 
-/// `tamber-kind` and `tamber-inherited-axis` (LLP 1121 D3, D7) for a row's
+/// `forma-kind` and `forma-inherited-axis` (LLP 1121 D3, D7) for a row's
 /// literals that name a length or number token: a number only in the rows
 /// D3 lists; a length in no colour row and no row that takes only a
 /// number; neither, when it varies by an app axis, in an inherited row,
@@ -1022,7 +989,7 @@ pub(crate) fn measure_row(
         let numbers: Vec<(String, Vec<String>)> = MEASURES.with(|m| {
             m.borrow()
                 .iter()
-                .filter(|(_, kind, _)| *kind == tamber::Kind::Number)
+                .filter(|(_, kind, _)| *kind == forma::Kind::Number)
                 .map(|(name, _, values)| (name.clone(), values.clone()))
                 .collect()
         });
@@ -1041,7 +1008,7 @@ pub(crate) fn measure_row(
                         .rsplit_once(": ")
                         .map_or(e.message.as_str(), |(_, why)| why);
                     return Err(LowerError {
-                        id: "tamber-kind",
+                        id: "forma-kind",
                         message: format!("`{}`'s computed value may name `{name}`, which is `{value}` in some app mode, which `{}` does not take: {why}", a.name, a.name),
                         span: a.value.span(),
                     });
@@ -1058,22 +1025,21 @@ pub(crate) fn measure_row(
         // written in there before this check (D3).
         if MOTION.with(|m| m.borrow().iter().any(|(name, _)| name == text.trim())) {
             return Err(LowerError {
-                id: "tamber-kind",
+                id: "forma-kind",
                 message: format!("`{}=\"{}\"`: `{}` is a motion token, a component of a `transition` or `animation` value (`transition=\"opacity {} ease\"`)", a.name, text.trim(), text.trim(), text.trim()),
                 span,
             });
         }
         // A type token is `font`'s, a family `font-family`'s (stage 6 C),
         // each lowered there before this check.
-        if let Some((kind @ (tamber::Kind::Type | tamber::Kind::Family), _)) = measure_values(text)
-        {
-            let row = if kind == tamber::Kind::Type {
+        if let Some((kind @ (forma::Kind::Type | forma::Kind::Family), _)) = measure_values(text) {
+            let row = if kind == forma::Kind::Type {
                 "font"
             } else {
                 "font-family"
             };
             return Err(LowerError {
-                id: "tamber-kind",
+                id: "forma-kind",
                 message: format!(
                     "`{}=\"{}\"`: `{}` is a {} token, which `{row}` names (`{row}=\"{}\"`)",
                     a.name,
@@ -1100,7 +1066,7 @@ pub(crate) fn measure_row(
             // font size, a press scale positive), not the default's alone.
             for value in &values {
                 let literal = match kind {
-                    tamber::Kind::Number => exact_num::parse_f64(value)
+                    forma::Kind::Number => exact_num::parse_f64(value)
                         .map(|n| Expr::Number(n, span))
                         .unwrap_or_else(|_| Expr::Str(value.clone(), span)),
                     _ => Expr::Str(value.clone(), span),
@@ -1118,7 +1084,7 @@ pub(crate) fn measure_row(
                     let place = measure_written(text)
                         .and_then(|(_, written)| crate::scale::place(kind, &written, value))
                         .unwrap_or_else(|| "in some app mode".into());
-                    return refuse("tamber-kind", format!("`{}=\"{text}\"`: `{text}` is the {kind_name} `{value}` {place}, which `{}` does not take: {why}", a.name, a.name));
+                    return refuse("forma-kind", format!("`{}=\"{text}\"`: `{text}` is the {kind_name} `{value}` {place}, which `{}` does not take: {why}", a.name, a.name));
                 }
             }
             // By its tuples: a base, or an expression over one, varies by
@@ -1126,7 +1092,7 @@ pub(crate) fn measure_row(
             if measure_written(text).is_some_and(|(_, written)| written.len() > 1)
                 && rows.iter().any(|r| r.inherited())
             {
-                return refuse("tamber-inherited-axis", format!("`{}=\"{text}\"`: `{text}` varies by an app axis, and `{}` is inherited: only a colour is chosen again at a mode boundary, so an inherited row names a token with one value (LLP 1121 D7)", a.name, a.name));
+                return refuse("forma-inherited-axis", format!("`{}=\"{text}\"`: `{text}` varies by an app axis, and `{}` is inherited: only a colour is chosen again at a mode boundary, so an inherited row names a token with one value (LLP 1121 D7)", a.name, a.name));
             }
             continue;
         };
@@ -1144,11 +1110,11 @@ pub(crate) fn measure_row(
             "a length"
         };
         let hint = match kind {
-            tamber::Kind::Number => ", and only `opacity`, `line-height`, `flex-grow`, `font-weight`, `-exact-press-scale` and `-exact-press-opacity` take one",
+            forma::Kind::Number => ", and only `opacity`, `line-height`, `flex-grow`, `font-weight`, `-exact-press-scale` and `-exact-press-opacity` take one",
             _ => "",
         };
         return refuse(
-            "tamber-kind",
+            "forma-kind",
             format!(
                 "`{}=\"{text}\"`: `{text}` is a {kind_name} token, and `{}` takes {takes}{hint}",
                 a.name, a.name
@@ -1158,7 +1124,7 @@ pub(crate) fn measure_row(
     Ok(())
 }
 
-/// `tamber-unknown-token` and `tamber-kind` (LLP 1121 D3) for a row's
+/// `forma-unknown-token` and `forma-kind` (LLP 1121 D3) for a row's
 /// literal the kernel refused, while a theme is bound: a name no token has,
 /// in a colour row; a token's name in a row that takes no colour.
 pub(crate) fn token_error(a: &Attr, rows: &[exact_kernel::StyleId], e: LowerError) -> LowerError {
@@ -1203,7 +1169,7 @@ pub(crate) fn token_error(a: &Attr, rows: &[exact_kernel::StyleId], e: LowerErro
             .rsplit_once(": ")
             .map_or(e.message.as_str(), |(_, why)| why);
         return LowerError {
-            id: "tamber-kind",
+            id: "forma-kind",
             message: format!(
                 "`{}=\"{text}\"`: `{text}` is the {} `{value}`, which `{}` does not take: {why}",
                 a.name,
@@ -1217,11 +1183,11 @@ pub(crate) fn token_error(a: &Attr, rows: &[exact_kernel::StyleId], e: LowerErro
     let named = exact_kernel::style::theme::names(text);
     let (id, message) = match (colour, named) {
         (true, false) => (
-            "tamber-unknown-token",
+            "forma-unknown-token",
             format!("`{}=\"{text}\"`: `{text}` is no token of this app's design, no role and no CSS colour", a.name),
         ),
         (false, true) => (
-            "tamber-kind",
+            "forma-kind",
             format!("`{}=\"{text}\"`: `{text}` is a colour token, and `{}` takes no colour", a.name, a.name),
         ),
         _ => return e,

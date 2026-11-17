@@ -51,7 +51,7 @@ pub(crate) fn sample() {
             .is_none_or(|last| now.duration_since(last) >= Duration::from_millis(100))
         {
             if r.samples.len() < 10_000 {
-                r.samples.push(exact_linux::ink::counter_state());
+                r.samples.push(exact_painted::ink::counter_state());
                 r.sampled = Some(now);
             } else {
                 r.dropped += 1;
@@ -68,7 +68,7 @@ pub(crate) fn save() {
     let data = RECORDING.with_borrow(|r| {
         json!({"mainThread":1,"clock":"monotonic microseconds anchored once to Unix time",
         "traceEvents":r.events,"samples":r.samples,"dropped":r.dropped,
-        "final":exact_linux::ink::counter_state()})
+        "final":exact_painted::ink::counter_state()})
     });
     let result = serde_json::to_vec(&data)
         .map_err(|e| e.to_string())

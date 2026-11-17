@@ -198,16 +198,15 @@ final class PhotoCanvas: UIView, UIGestureRecognizerDelegate {
         reset(turns: edit.turns)
     }
 
+    /// A crop drag is a gesture like the others: no pinch or rotation that
+    /// ends under it settles the edit, and its own end settles it.
     @objc private func dragHandle(_ g: UIPanGestureRecognizer) {
         guard let handle = g.view as? CropHandle, stage.width > 0, stage.height > 0 else { return }
-        switch g.state {
-        case .began: land(); cropStart = edit.crop
-        case .changed:
-            let t = g.translation(in: self)
-            edit.crop = handle.grip.moved(cropStart, by: CGPoint(x: t.x / stage.width, y: t.y / stage.height))
-            apply()
-        default: onEdit?(edit)
-        }
+        if g.state == .began { cropStart = edit.crop }
+        guard track(g) else { return settle() }
+        let t = g.translation(in: self)
+        edit.crop = handle.grip.moved(cropStart, by: CGPoint(x: t.x / stage.width, y: t.y / stage.height))
+        apply()
     }
 }
 #endif

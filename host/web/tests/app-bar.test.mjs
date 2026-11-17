@@ -382,3 +382,46 @@ check('an app bar Back control remains live inside a modal beneath an inert ance
   expect(await evaluate(`document.querySelector('#r3 #back').inert = false; document.querySelector('dialog').inert = true; press('r3'); calls.splice(0)`))
     .toEqual(['log app bar: Back refused: its id="back" control is disabled or inert']);
 }), 60000);
+
+// A route that says `navigationBar="transparent"` lays its bar over its top, clear, as iOS draws the bar's scroll-edge
+// appearance: its content starts under the bar and reads the bar's height in its top inset, and the bar's ground and
+// line come while its scroller's content is under it. A header drawn as written keeps its place.
+const clear = page.match(/^<style>[\s\S]*?<\/style>/)[0] + `
+<div id="exact-root">
+  <main id="nav" navigationKey="2" navigationBack="back" style="display:block;position:relative;height:600px">
+    <div navigationKey="1"><header><h1>Photos</h1></header></div>
+    <div navigationKey="2" id="photo" data-navigationbar="transparent" style="position:absolute;inset:0;display:flex;flex-direction:column">
+      <header style="display:flex;align-items:center"><h2>Photo</h2></header>
+      <div id="scroller" style="flex:1;min-height:0;overflow-y:auto"><div style="height:1600px"></div></div>
+      <span id="below" style="position:absolute;top:var(--exact-safe-area-inset-top)"></span>
+    </div>
+  </main>
+</div>
+<script type="module">
+  import { navigation, useClearBars, clearBar } from './navigation.js';
+  const root = document.getElementById('exact-root');
+  useClearBars(clearBar); // as both web hosts do for a plan whose route can say it
+  navigation.connect(root, () => false, () => {});
+  window.project = () => navigation.project(root, () => {});
+  window.look = () => {
+    const header = document.querySelector('#photo > header'), style = getComputedStyle(header), top = document.getElementById('photo').getBoundingClientRect().top;
+    return { ground: style.backgroundColor, line: style.borderBottomColor, header: header.offsetHeight, content: document.getElementById('scroller').getBoundingClientRect().top - top, below: document.getElementById('below').getBoundingClientRect().top - top };
+  };
+  window.scrolled = (y) => new Promise((done) => { document.getElementById('scroller').scrollTop = y; requestAnimationFrame(() => requestAnimationFrame(() => done(look()))); });
+  project();
+  window.ready = true;
+</script>`;
+
+check('a transparent bar lies clear over its route until the content scrolls under it', () => inChrome(async evaluate => {
+  const none = 'rgba(0, 0, 0, 0)', top = await evaluate('look()');
+  expect([top.ground, top.line, top.content, top.below === top.header && top.header > 0]).toEqual([none, none, 0, true]);
+  const under = await evaluate('scrolled(200)');
+  expect([under.ground, under.line].map(c => c !== none)).toEqual([true, true]);
+  expect((await evaluate('scrolled(0)')).ground).toBe(none);
+  // A route that stops saying it, or whose header is drawn as written, has the plain bar above its content.
+  for (const change of [`document.getElementById('photo').removeAttribute('data-navigationbar')`, `document.querySelector('#photo > header').setAttribute('data-exact-said', 'appearance')`]) {
+    const plain = await evaluate(`${change}; project(); look()`);
+    expect([plain.content === plain.header, plain.below]).toEqual([true, 0]);
+    await evaluate(`document.getElementById('photo').setAttribute('data-navigationbar', 'transparent'); document.querySelector('#photo > header').removeAttribute('data-exact-said'); project()`);
+  }
+}, clear), 60000);

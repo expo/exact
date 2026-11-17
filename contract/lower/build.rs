@@ -254,7 +254,7 @@ fn main() {
     .unwrap();
 
     // @ref LLP 1159.000 D2 — a row's `hosts` column, `painted` written out
-    // as the hosts that draw with exact-linux's paint walk.
+    // as the hosts that draw with exact-painted's paint walk.
     let mut hosts = Vec::new();
     for row in schema["styles"].as_array().expect("schema.json: `styles`") {
         let field = row["field"]

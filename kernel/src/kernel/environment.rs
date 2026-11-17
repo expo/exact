@@ -2,6 +2,17 @@
 use super::*;
 
 impl Kernel {
+    /// Restore the host's previous scale report after a refused update, including
+    /// its absence. An absent report uses the layout default of one.
+    pub fn restore_display_scale_report(&mut self, scale: Option<f32>) -> Result<(), KernelError> {
+        self.set_display_scale(scale.unwrap_or(1.0))?;
+        if scale.is_none() {
+            self.arena.display_scale = None;
+            self.arena.display_scale_next = None;
+        }
+        Ok(())
+    }
+
     /// Format an instant with the same host that measures its reserved width.
     pub fn format_time(&mut self, request: &crate::time::TimeRequest<'_>) -> Option<String> {
         self.measurer.format_time(request)
@@ -61,6 +72,20 @@ impl Kernel {
             }
         }
         !owners.is_empty()
+    }
+
+    /// Say whether text whose direction is unsaid takes each paragraph's
+    /// base direction from its first strong character (LLP 1060.000 D3): a
+    /// host whose platform fixes the layout direction for the process, and
+    /// draws its own text so, says it before the first commit. Every
+    /// paragraph is measured again. Whether it changed.
+    pub fn set_natural_text(&mut self, on: bool) -> bool {
+        if self.arena.natural_text == on {
+            return false;
+        }
+        self.arena.natural_text = on;
+        self.remeasure_text();
+        true
     }
 
     /// Say whether Bold Text is on (LLP 1115.000 D12.3): the person's
@@ -181,6 +206,18 @@ impl Kernel {
         }
         let control_changed = self.arena.env().control_text_styles != env.control_text_styles
             || self.arena.env().button_fonts != env.button_fonts;
+        let viewport_users: Vec<_> = self
+            .arena
+            .relative
+            .all
+            .iter()
+            .filter(|&slot| {
+                self.arena.style(slot).relative.iter().any(|(_, unit, _)| {
+                    matches!(unit, crate::style::relative::Unit::Viewport(u)
+                        if u.basis(self.arena.env()) != u.basis(&env))
+                })
+            })
+            .collect();
         // Host border and cell rules can change plain px lengths too.
         let box_rules_changed = self.arena.env().cell_spaces != env.cell_spaces
             || self.arena.env().cell_borders != env.cell_borders
@@ -204,7 +241,7 @@ impl Kernel {
         if let Some(r) = &mut self.region {
             r.invalidate();
         }
-        let mut users: Vec<u32> = self
+        let users: Vec<u32> = self
             .arena
             .iter_live()
             // A covered box too: its top cover can hold an inset (cover.rs).
@@ -215,12 +252,6 @@ impl Kernel {
                     || self.arena.neutral_alert(*s)
             })
             .collect();
-        // And a covered box's absolute children, placed past that inset.
-        let positioned: Vec<u32> = (users.iter())
-            .filter(|&&s| matches!(self.arena.cover(s), Some(super::HostCover::Edges(_))))
-            .flat_map(|&s| super::cover::positioned_children(&self.arena, s))
-            .collect();
-        users.extend(positioned);
         for slot in &users {
             if let (Some(node), Some(layout)) =
                 (self.arena.taffy(*slot), self.layout.as_deref_mut())
@@ -253,7 +284,10 @@ impl Kernel {
             }
         }
         let mut relative_receipt = CommitReceipt::default();
-        if control_changed {
+        for &slot in &viewport_users {
+            self.arena.relative.invalidate(slot);
+        }
+        if control_changed || !viewport_users.is_empty() {
             txn::relative::resolve(
                 &mut self.arena,
                 layout,

@@ -1,0 +1,147 @@
+// Starter: a chat thread that opens at its newest message and pages both ways through a long history.
+// The transcript is a window of the history (`feed(cursor)` in app.ts answers its rows and the
+// cursors either side), never the whole of it: the list opens at the end and follows it while the
+// window holds the end; reaching its start or its end moves the cursor and the next window lands
+// with the reader's row kept in place. A message that arrives while the reader is back in the
+// history leaves the window alone (no request); sending returns to the end. A day starts with a
+// pill (`formatDay(…, "section")`, a row of the window). Bubbles keep a message's line breaks; the
+// header with an avatar and a time on a bubble's last line are `docs recipe chat-header`.
+//
+// WORKAROUND (LLP 1168.000 D2): `moved`'s offset paging, `pendingStart`, `anchorKey`, the `landing`
+// task and `landed` page toward the start from the scroll offset too, and put the window's old first
+// message back at the top when a page lands while the list sits at its very top. Remove them
+// together, in one step, once the list's own edges reach the start on every host (LLP 1168.000
+// D1.1, D1.2): removing a part of them earlier loses a page either way. `returning`, `atTop` and
+// `endReturn` stay (its `pendingStart` and `anchorKey` lines go with the rest).
+
+routes nav
+  chat "/"
+
+shape Row
+  id: string
+  body: string
+  mine: bool
+  at: number
+  day: bool
+
+shape Window
+  rows: Row[]
+  first: string
+  earlier: string
+  later: string
+  hasEarlier: bool
+  hasLater: bool
+
+shape Ack
+  ok: bool
+
+shape Time
+  epochAtZero: number
+  utcOffset: number
+
+component App
+  state draft = ""
+  state cursor = ""
+  state pendingStart = ""
+  state anchorKey = ""
+  state atTop = false
+  state returning = false
+  resource time = exactTime() as shape Time
+  resource feed = feed(cursor, time.utcOffset) as shape Window
+  // A message that arrives at the end shows; one that arrives while the reader is back in the
+  // history is stored and shows when they return.
+  mutation arrived as shape Ack refreshes feed
+  mutation arrivedAway as shape Ack
+  mutation sent as shape Ack refreshes feed then toEnd
+  derive firstId = feed.first
+  derive lastId = match feed.rows.at(-1) { case some(r) => r.id, case none => "" }
+  task arrivals mount
+    every(4000, arrive)
+  action arrive
+    if cursor == ""
+      send arrived = incoming(time.epochAtZero + performanceNow())
+    else
+      send arrivedAway = incoming(time.epochAtZero + performanceNow())
+  // Not while a send returns to the end (until the list is there, or a second has passed: a gesture
+  // can cut the return short): the newest window lands under the old offset, near its start.
+  action earlier
+    if feed.hasEarlier and pendingStart == "" and cursor != feed.earlier and not returning
+      pendingStart = feed.earlier
+      anchorKey = firstId
+      cursor = feed.earlier
+  action later
+    if feed.hasLater and pendingStart == ""
+      cursor = feed.later
+  // A window that pages up to the end follows it again: a cursor of "" (the same rows).
+  task following when cursor != "" and not feed.hasLater
+    after(1, follow)
+  action follow
+    if cursor != "" and not feed.hasLater
+      cursor = ""
+  task returned when returning
+    after(1000, endReturn)
+  // A start edge spent while the return held it off fires no more: at the very top, ask now.
+  action endReturn
+    returning = false
+    if atTop and feed.hasEarlier and pendingStart == "" and cursor != feed.earlier
+      pendingStart = feed.earlier
+      anchorKey = firstId
+      cursor = feed.earlier
+  // WORKAROUND (LLP 1168.000 D2), with `landing` and `landed`: see the top of the file.
+  action moved(x: number, y: number, e: ScrollEvent)
+    if (y <= 1) != atTop
+      atTop = y <= 1
+    let held = returning and e.scrollHeight - y - e.clientHeight > 1
+    if held != returning
+      returning = held
+    if y < e.clientHeight and feed.hasEarlier and pendingStart == "" and cursor != feed.earlier and not held
+      pendingStart = feed.earlier
+      anchorKey = firstId
+      cursor = feed.earlier
+  task landing when pendingStart != "" key=firstId
+    after(1, landed)
+  action landed
+    if firstId != anchorKey
+      if atTop
+        scrollIntoView("transcript", anchorKey, block="start")
+      pendingStart = ""
+  action edit(v: string)
+    draft = v
+  action post
+    if draft.trim() != "" and not pending(sent)
+      send sent = sendMessage(draft.trim(), time.epochAtZero + performanceNow())
+      draft = ""
+      returning = true
+      pendingStart = ""
+      cursor = ""
+    focus("composer")
+  action toEnd
+    scrollIntoView("transcript", lastId, block="end")
+
+  view
+    main navigationKey=`${top(nav).id}` interactive-widget="resizes-content" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` navigationScroll="transcript" position="absolute" inset=0
+          header
+            h2 "Ada"
+          list id="transcript" appearance="none" virtualized=true scroll-start="end" scrollFollowEnd=(not feed.hasLater)
+            reachstart=earlier reachend=later scroll=moved flex=1 min-height=0 testId="transcript"
+            for r in feed.rows key=r.id
+              column padding="3px 12px"
+                if r.day
+                  text formatDay(r.at, time.epochAtZero, time.utcOffset, "section") align-self="center"
+                    padding="2px 10px" border-radius=10 background-color="-exact-fill" font="-exact-caption1"
+                    testId=`day-${r.id}`
+                else
+                  text r.body align-self=(r.mine ? "flex-end" : "flex-start") padding="8px 12px" border-radius=18
+                    max-width="75%" white-space="pre-wrap" overflow-wrap="break-word"
+                    background-color=(r.mine ? "AccentColor" : "-exact-fill") color=(r.mine ? "AccentColorText" : "-exact-label")
+                    testId=`message-${r.id}`
+          row align-items="flex-end" margin="6px 12px" padding="0 4px 0 12px" border-radius=20
+            border="1px solid -exact-separator"
+            textarea id="composer" value=draft input=edit rows=1 field-sizing="content" max-height=140
+              placeholder="Message" aria-label="Message" testId="composer" flex=1 min-width=0 padding="12px 0"
+              border="none" background-color="transparent"
+            button press=post disabled=(draft.trim() == "" or pending(sent)) buttonStyle="filled" margin="4px 0"
+              retainFocus=true aria-label="Send" testId="send"
+              image "symbol:send"

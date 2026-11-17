@@ -9,7 +9,7 @@
 import { test, expect } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 
-// [anchor x, anchor y, position-area, position-try-fallbacks, x, y, width, height, boxes (12 if unsaid)]
+// [anchor x, anchor y, area, fallbacks, x, y, width, height, boxes (12 if unsaid), CSS]
 export const TABLE = [
   [0, 100, 'bottom span-right', 'none', 0, 120, 400, 36],
   [150, 100, 'bottom span-right', 'none', 150, 120, 250, 54],
@@ -34,11 +34,20 @@ export const TABLE = [
   [300, 100, 'bottom span-right', 'flip-inline', 300, 120, 100, 54, 6],
   [300, 560, 'bottom span-right', 'flip-block', 300, 506, 100, 54, 6],
   [60, 100, 'bottom span-left', 'flip-inline', 0, 120, 100, 54, 6],
+  [100, 500, 'bottom span-right', 'flip-start', 140, 500, 180, 60, 6, 'width:60px;height:180px'],
+  [100, 500, 'bottom span-right', 'flip-start', 140, 500, 160, 90, 6,
+    'width:60px;height:180px;min-width:90px;min-height:140px;max-width:110px;max-height:160px'],
+  [100, 500, 'bottom span-right', 'flip-start', 160, 510, 180, 36, 6,
+    'height:180px;margin-top:20px;margin-right:30px;margin-bottom:5px;margin-left:10px'],
+  [100, 500, 'bottom span-right', 'flip-start', 144, 526, 180, 36, 6,
+    'height:180px;margin-top:4px;margin-right:5%;margin-bottom:8px;margin-left:10%'],
+  [100, 550, 'bottom span-right', 'flip-start flip-block', 160, 500, 180, 60, 6,
+    'width:60px;height:180px;margin-top:20px;margin-right:30px;margin-bottom:5px;margin-left:10px'],
 ];
 
 /** A row in a right-to-left document: the anchor, the area's sides and the box mirrored (Chrome's, checked). */
-export const mirrored = ([ax, ay, area, fallbacks, x, y, w, h, boxes]) =>
-  [400 - ax - 40, ay, area.replace(/left|right/g, side => (side === 'left' ? 'right' : 'left')), fallbacks, 400 - x - w, y, w, h, boxes];
+export const mirrored = ([ax, ay, area, fallbacks, x, y, w, h, boxes, css]) =>
+  [400 - ax - 40, ay, area.replace(/left|right/g, side => (side === 'left' ? 'right' : 'left')), fallbacks, 400 - x - w, y, w, h, boxes, css?.replace(/left|right/g, side => side === 'left' ? 'right' : 'left')];
 
 for (const rtl of [false, true]) test(`Chrome sizes a position-area box in its option's region, as the table says${rtl ? ', mirrored right to left' : ''}`, async () => {
   const browser = await suiteBrowser('chromium', { timeout: 10000 });
@@ -49,17 +58,20 @@ for (const rtl of [false, true]) test(`Chrome sizes a position-area box in its o
       .p{position:fixed;position-anchor:--a;margin:0;padding:0;border:0;inset:auto;display:flex;flex-wrap:wrap}
       .w{width:50px;height:18px;flex:none}
     </style><div class=a id=a></div><div class=p id=p popover></div>`);
-    for (const [ax, ay, area, fallbacks, x, y, w, h, boxes = 12] of rtl ? TABLE.map(mirrored) : TABLE) {
+    for (const [ax, ay, area, fallbacks, x, y, w, h, boxes = 12, css = ''] of rtl ? TABLE.map(mirrored) : TABLE) {
       const box = [x, y, w, h];
-      const got = await page.evaluate(([ax, ay, area, fallbacks, boxes]) => {
-        const a = document.getElementById('a'), p = document.getElementById('p');
+      const got = await page.evaluate(([ax, ay, area, fallbacks, boxes, css]) => {
+        const a = document.getElementById('a'), previous = document.getElementById('p');
+        const p = previous.cloneNode(false);
+        previous.replaceWith(p);
+        p.style.cssText = css;
         p.innerHTML = '<div class=w></div>'.repeat(boxes);
         a.style.left = `${ax}px`; a.style.top = `${ay}px`;
         p.style.positionArea = area; p.style.positionTryFallbacks = fallbacks;
-        p.hidePopover(); p.showPopover();
+        p.showPopover();
         const r = p.getBoundingClientRect();
         return [r.x, r.y, r.width, r.height].map(Math.round);
-      }, [ax, ay, area, fallbacks, boxes]);
+      }, [ax, ay, area, fallbacks, boxes, css]);
       expect([ax, ay, area, fallbacks, ...got]).toEqual([ax, ay, area, fallbacks, ...box]);
     }
   } finally {

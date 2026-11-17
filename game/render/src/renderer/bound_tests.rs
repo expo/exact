@@ -256,7 +256,7 @@ fn merged_runs_draw_what_single_draws_do() {
         [0, 96, 0, 96],
         [0, 32, 0, 32],
     ];
-    for (column, (got, want)) in merged.chunks_exact(4).zip(expected).enumerate() {
+    for (column, (got, want)) in merged.as_chunks::<4>().0.iter().zip(expected).enumerate() {
         assert!(
             got.iter().zip(want).all(|(a, b)| a.abs_diff(b) <= 1),
             "column {column}: {got:?}, want {want:?}"

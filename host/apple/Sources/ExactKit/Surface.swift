@@ -29,6 +29,7 @@ final class SurfaceLayer: CALayer {
     /// The children's clip at the shown size, and the layer it masks.
     let clip = CAShapeLayer()
     let ownClip = CAShapeLayer()
+    var authoredMask: CALayer?
     weak var clipped: CALayer?
     /// The node's own clip, turned off while this one stands in for it.
     var clippedSelf = false
@@ -55,6 +56,7 @@ extension NodeView {
 
     /// The surface at the laid-out size plus `layoutResize`; none at zero.
     func applySurface() {
+        defer { overflowClipGeometryChanged() }
         guard layoutResize != .zero, let host = hostLayer else { return endSurface() }
         let started = surface == nil
         let s = surface ?? SurfaceLayer()
@@ -71,8 +73,14 @@ extension NodeView {
         #else
         s.contentsScale = pixelScale ?? 2
         #endif
+        clipPath = ClipPath.path(style["clip_path"], size: box.size)
         paintSurface(s, box)
         clipSurface(s, box)
+        if (clipPath != nil || s.authoredMask != nil), !hasBoxFilter {
+            let outline = host.boxMask === s.ownClip ? s.ownClip : (host.boxMask === s.clip ? s.clip : nil)
+            s.authoredMask = composedMask(shaped: outline)
+            host.mask = s.authoredMask
+        }
         if started { surfaceChanged() }
     }
 
@@ -80,6 +88,8 @@ extension NodeView {
     func endSurface() {
         guard let s = surface else { return }
         surface = nil
+        // The mask cache may already hold the final bounds, especially for a filtered box.
+        clipPath = ClipPath.path(style["clip_path"], size: bounds.size)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
         if hostLayer?.boxMask === s.ownClip { hostLayer?.mask = nil }
@@ -92,6 +102,7 @@ extension NodeView {
     }
 
     private func surfaceChanged() {
+        if surface == nil { applyBoxMask() }
         applyShadow(outline: roundedPath(in: bounds).cgPath)
         #if os(iOS) || os(tvOS)
         applyBoxLayer()
@@ -116,7 +127,7 @@ extension NodeView {
         let radii = sizes.map { $0.width }
         let authored = channels("background_color").map { CGColor(srgbRed: $0[0] / 255, green: $0[1] / 255, blue: $0[2] / 255, alpha: $0[3] / 255) }
         let fill = authored ?? fieldGround
-        let gradients = Gradient.layers(style["background_image"])
+        let gradients = Gradient.layers(style["background_image"], tint: gradientTint)
         let radius = radii.max() ?? 0
         let shape = CornerShape(style["corner_shape"])
         // A background clipped inside the border box is drawn, in the clip `paintBackground` takes (`backgroundOutline`).
@@ -173,12 +184,22 @@ extension NodeView {
     /// shrinks) and a mask stands in; a box of its own that holds them is
     /// masked instead, keeping the node's shadow unclipped.
     private func clipSurface(_ s: SurfaceLayer, _ box: CGRect) {
+        if clipsOneAxis {
+            if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
+            s.clipped?.masksToBounds = s.clippedToBounds
+            s.clipped = nil
+            if hostLayer?.boxMask === s.ownClip { hostLayer?.mask = nil }
+            s.madeClipBox = false
+            syncClipBox(true)
+            clipsToBounds = false
+            return
+        }
         let uniform = number("border_width")
         let widths = ["top", "right", "bottom", "left"].map { devicePixels(number("border_width_" + $0, uniform)) }
         // A padding-edge mask must exclude the surface itself, or it cuts
         // away the border it is meant to protect from the children.
         if clipBox == nil, scroll == nil, clipsToBounds, widths.contains(where: { $0 > 0 }),
-           clipPath == nil, boxFilter == nil, style["mask_image"] == nil {
+           boxFilter == nil, style["mask_image"] == nil {
             s.madeClipBox = true
             syncClipBox(true)
             clipsToBounds = false
@@ -193,11 +214,11 @@ extension NodeView {
         let target: CALayer?
         if let clipped = clipBox?.layer { target = clipped }
         else if let scroller { target = scroller }
-        else if clipsToBounds, (clipPath == nil && boxFilter == nil && style["mask_image"] == nil) || hostLayer?.boxMask === s.clip {
+        else if clipsToBounds, (boxFilter == nil && style["mask_image"] == nil) || hostLayer?.boxMask === s.clip {
             clipsToBounds = false
             s.clippedSelf = true
             target = hostLayer
-        } else if overflowClips, hostLayer?.boxMask === s.clip { target = hostLayer } else { target = nil }
+        } else if overflowClips, s.clipped === hostLayer { target = hostLayer } else { target = nil }
         if s.clipped !== target {
             if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
             s.clipped?.masksToBounds = s.clippedToBounds
@@ -215,7 +236,7 @@ extension NodeView {
                                width: max(0, box.width - widths[1] - widths[3]),
                                height: max(0, box.height - widths[0] - widths[2]))
             let radii = BorderPaint.contentRadii(cornerSizes(in: box), outer: box, inner: inner)
-            s.clip.path = BorderPaint.roundedRect(inner, BorderPaint.reduced(radii, in: inner), shape: CornerShape(style["corner_shape"]))
+            s.clip.path = BorderPaint.roundedRect(inner, radii, shape: CornerShape(style["corner_shape"]))
         }
         // In the masked layer's own coordinates: a scroll view's are scrolled.
         s.clip.frame = CGRect(origin: target === hostLayer ? .zero : CGPoint(x: -target.frame.minX + target.bounds.minX, y: -target.frame.minY + target.bounds.minY), size: bounds.size)

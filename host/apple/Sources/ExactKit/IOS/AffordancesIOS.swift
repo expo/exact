@@ -104,14 +104,18 @@ enum NumeralRoll {
 
 #if !os(tvOS)
 extension NodeView {
+    /// The pointer is over an inline hover run or the rest of the paragraph,
+    /// one at a time: sliding off the run onto the paragraph enters the
+    /// paragraph, however the hover began.
     @objc func hovering(_ g: UIHoverGestureRecognizer) {
-        if g.state == .ended || g.state == .cancelled { presenter?.hoverInline(nil) }
-        else if let run = inlineTarget(at: g.location(in: self), handler: "hover") { presenter?.hoverInline(run.id); return }
-        else { presenter?.hoverInline(nil) }
         switch g.state {
-        case .began: presenter?.hover(self, true)
-        case .ended, .cancelled, .failed: presenter?.hover(self, false)
-        default: break
+        case .ended, .cancelled, .failed:
+            presenter?.hoverInline(nil)
+            presenter?.hover(self, false)
+        default:
+            if let run = inlineTarget(at: g.location(in: self), handler: "hover") { presenter?.hoverInline(run.id); return }
+            presenter?.hoverInline(nil)
+            if presenter?.hovered !== self { presenter?.hover(self, true) }
         }
     }
 }

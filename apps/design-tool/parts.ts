@@ -8,13 +8,13 @@ import type { Result } from './app.contract.d.ts';
 
 type Part = Result<'loadParts'>['parts'][number];
 
-// A CSS number, as Tamber's parser reads one: a sign, digits, a fraction,
+// A CSS number, as Forma's parser reads one: a sign, digits, a fraction,
 // an exponent. With a unit after it, a dimension.
 const NUMBER = '[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?';
 const numeric = new RegExp(`^${NUMBER}[a-zA-Z%]*$`);
 // (A name's dots join names, as a token's do: `red.0` is a name and a number.)
 const ITEM = new RegExp(`^(?:${NUMBER}[a-zA-Z%]*|#[0-9a-fA-F]+|-?[a-zA-Z_][\\w-]*(?:\\.[a-zA-Z_-][\\w-]*)*(?:\\(.*\\))?)$`, 's');
-/** A name as Tamber reads a type token's whole value as one (typeface.rs's
+/** A name as Forma reads a type token's whole value as one (typeface.rs's
  * `is_name`). */
 const isName = (t: string) => t !== '' && !/[\s/,"']/.test(t) && !/^[\d.]/.test(t);
 
@@ -154,7 +154,7 @@ function shadowParts(box: boolean, value: string, kindOf: (name: string) => stri
   return { parts: numbered(parts), tail };
 }
 
-/** A type token, CSS `font` as Tamber takes it: `italic`? a weight? a size,
+/** A type token, CSS `font` as Forma takes it: `italic`? a weight? a size,
  * `/` a line height?, a family? Each it leaves out is offered empty where it
  * goes. The family is the rest of the value, one field. */
 function typeParts(value: string, kindOf: (name: string) => string | undefined): { parts: Part[]; tail: string } | null {

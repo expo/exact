@@ -271,30 +271,20 @@ fn bodies(children: &[Node], span: Span, instance: u32) -> Vec<Node> {
 
 /// Whether `n` is a `tr` or makes one in some branch.
 fn holds_row(n: &Node) -> bool {
-    let any = |nodes: &[Node]| nodes.iter().any(holds_row);
     match n {
         Node::Element { tag, .. } => tag == "tr",
-        Node::When {
-            then, otherwise, ..
-        } => any(then) || any(otherwise),
-        Node::Each { body, .. } => any(body),
-        Node::Match { some, none, .. } => any(&some.1) || any(none),
-        _ => false,
+        Node::Use { .. } | Node::Children { .. } => false,
+        region => region.children().any(holds_row),
     }
 }
 
 /// Whether `n` is a `tr`, or a `for`, `if` or `match` that makes nothing
 /// else.
 fn rows(n: &Node) -> bool {
-    let all = |nodes: &[Node]| nodes.iter().all(rows);
     match n {
         Node::Element { tag, .. } => tag == "tr",
-        Node::When {
-            then, otherwise, ..
-        } => all(then) && all(otherwise),
-        Node::Each { body, .. } => all(body),
-        Node::Match { some, none, .. } => all(&some.1) && all(none),
-        _ => false,
+        Node::Use { .. } | Node::Children { .. } => false,
+        region => region.children().all(rows),
     }
 }
 

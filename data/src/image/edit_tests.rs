@@ -171,6 +171,15 @@ fn options_are_read_and_bad_ones_refused() {
     assert_eq!(t.resize_quality, ResizeQuality::Pixelated);
     assert_eq!(t.media_type.as_deref(), Some("image/png"));
     assert_eq!((t.quality, t.metadata), (0.5, Metadata::NoLocation));
+    for (written, side) in [(json!(32), 32), (json!(32.0), 32), (json!(16384.0), 16384)] {
+        let both =
+            parse_transform(&json!({"resizeWidth": written, "resizeHeight": written})).unwrap();
+        assert_eq!(
+            (both.resize_width, both.resize_height),
+            (Some(side), Some(side)),
+            "{written}"
+        );
+    }
     let unsaid = parse_transform(&json!({})).unwrap();
     assert_eq!(
         (unsaid.quality, unsaid.metadata, unsaid.resize_quality),
@@ -183,6 +192,9 @@ fn options_are_read_and_bad_ones_refused() {
         json!({"crop": [0, 0, 1, 1]}),
         json!({"resizeWidth": 0}),
         json!({"resizeHeight": 1.5}),
+        json!({"resizeWidth": 0.0}),
+        json!({"resizeWidth": 16385.0}),
+        json!({"resizeHeight": -32.0}),
         json!({"quality": 2}),
         json!({"metadata": "some"}),
         json!({"resizeQuality": "best"}),

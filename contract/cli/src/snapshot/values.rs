@@ -261,7 +261,7 @@ pub(super) fn tree(
     families: &[String],
     errors: &mut Vec<CompileError>,
 ) {
-    super::visit_nodes(nodes, &mut |n| {
+    Node::walk(nodes).for_each(|n| {
         let Node::Element {
             tag,
             attrs,

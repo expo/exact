@@ -22,6 +22,7 @@ pub enum StyleDomainError {
     NonFinite(StyleId),
     AutoNotAdmitted(StyleId),
     PercentNotAdmitted(StyleId),
+    KeywordNotAdmitted(StyleId),
     TooManyTracks { style: StyleId, count: usize },
     InvalidGridTrack(StyleId),
     InvalidGridSpan(StyleId),
@@ -33,6 +34,8 @@ pub enum StyleDomainError {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
+    /// An incoming patch carried an invalid retained relative length.
+    InvalidRelativeLength,
     /// Invalid line-height tag, negative length or ratio.
     InvalidLineHeight,
     /// Fewer bytes remained than the field needs.
@@ -40,6 +43,8 @@ pub enum DecodeError {
     /// A colour row's tag byte named neither a fixed colour nor a
     /// `light-dark()` pair (LLP 1034 D1).
     BadColorValue(u8),
+    /// An auto-integer tag was neither auto (0) nor an integer (1).
+    BadAutoI32(u8),
     /// The frame does not start with the EXWF magic.
     BadMagic,
     /// Invalid or unsupported CSS clipping path.
@@ -76,6 +81,12 @@ pub enum DecodeError {
     BadAnimationRange,
     /// Invalid `timeline-scope` (LLP 1057.003 D4).
     BadTimelineScope,
+    /// Invalid runtime custom properties (LLP 1123 D5).
+    BadSafeAreaProperties,
+    /// Invalid `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
+    BadTimelineName,
+    /// Invalid `view-timeline-inset` (LLP 1057.003 D5).
+    BadViewTimelineInset,
     /// Invalid invoker-popover flip fallback list.
     BadPositionTryFallbacks,
     /// Invalid SVG paint (LLP 1055 D2).
@@ -132,6 +143,8 @@ pub enum DecodeError {
     /// A percentage, alone or in a calculation, was encoded on a row CSS
     /// gives none.
     PercentNotAdmitted { style: StyleId },
+    /// A size keyword was encoded on a row that does not take it.
+    KeywordNotAdmitted { style: StyleId },
     /// A dimension kind byte is not auto/points/percent.
     UnknownDimensionKind(u8),
     /// A `min()`/`max()`/`clamp()` length's tree is malformed: an unknown
@@ -217,6 +230,12 @@ pub enum DecodeError {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyError {
+    /// SVG elements cannot present spatial rotation; animate a box around the SVG.
+    SpatialSvgAnimation {
+        op_index: usize,
+        id: ViewId,
+        style: StyleId,
+    },
     /// An authored line height was negative.
     InvalidLineHeight { op_index: usize },
     /// The op targets an id that is not live.
@@ -284,6 +303,8 @@ pub enum ApplyError {
     /// A percentage, alone or in a calculation, was supplied for a row CSS
     /// gives none.
     PercentNotAdmitted { op_index: usize, style: StyleId },
+    /// A size keyword was supplied for a row that does not take it.
+    KeywordNotAdmitted { op_index: usize, style: StyleId },
     /// A grid template exceeded the closed grammar's track bound.
     TooManyTracks {
         op_index: usize,
@@ -337,6 +358,10 @@ pub enum LayoutError {
     ContentRegion(&'static str),
     /// A host's containing block refused (LLP 1115.002 D8.2).
     HostBlock(&'static str),
+    /// A host's report of native targets refused (LLP 1123 D9).
+    NativeTarget(&'static str),
+    /// A host's report of Exact's contributions refused (LLP 1123 D11).
+    Contribution(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.
@@ -411,6 +436,9 @@ impl From<StyleDomainError> for DecodeError {
             StyleDomainError::PercentNotAdmitted(style) => {
                 DecodeError::PercentNotAdmitted { style }
             }
+            StyleDomainError::KeywordNotAdmitted(style) => {
+                DecodeError::KeywordNotAdmitted { style }
+            }
             StyleDomainError::TooManyTracks { count, .. } => DecodeError::TooManyTracks(count),
             StyleDomainError::InvalidGridTrack(_) => DecodeError::InvalidGridTrack,
             StyleDomainError::InvalidGridSpan(_) => DecodeError::InvalidGridSpan,
@@ -440,7 +468,10 @@ impl fmt::Display for DecodeError {
 
 impl fmt::Display for ApplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "apply rejected: {self:?}")
+        match self {
+            Self::SpatialSvgAnimation { id, .. } => write!(f, "apply rejected: spatial animation on SVG element #{id} cannot be drawn on Apple or painted hosts; animate a box around the svg"),
+            _ => write!(f, "apply rejected: {self:?}"),
+        }
     }
 }
 
@@ -476,6 +507,11 @@ pub enum StyleValueError {
     },
     /// `auto` on a row that does not admit it.
     AutoNotAdmitted {
+        style: StyleId,
+    },
+    /// A size keyword on a row that does not take it (`content` off
+    /// `flex-basis`, or any keyword off the size rows).
+    KeywordNotAdmitted {
         style: StyleId,
     },
     /// The number does not fit the row's integer codec.
@@ -562,6 +598,18 @@ pub enum StyleValueError {
     },
     /// Not `none`, `all` or a list of `<dashed-ident>`s.
     BadTimelineScope {
+        style: StyleId,
+    },
+    /// Not `--name: <length>` declarations of authors' names.
+    BadSafeAreaProperties {
+        style: StyleId,
+    },
+    /// Not `none` or one `<dashed-ident>`.
+    BadTimelineName {
+        style: StyleId,
+    },
+    /// Not one or two of `auto` and a length or percentage.
+    BadViewTimelineInset {
         style: StyleId,
     },
     /// Not none or a list of flip-block/flip-inline/flip-start combinations.

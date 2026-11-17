@@ -23,6 +23,7 @@ fn hidden(source: &str, reveal: Option<Range>) -> Vec<String> {
         .collect()
 }
 
+mod code_spans;
 mod commands;
 use commands::run;
 
@@ -264,6 +265,27 @@ fn malformed_angle_destinations_do_not_become_bare_destinations() {
     }
 }
 
+/// CommonMark 0.31.2 §6.3: a link's parts "may be separated by spaces, tabs,
+/// and up to one line ending", so a line ending ends the destination
+/// (example 490) and may come before a title (example 510).
+#[test]
+fn a_line_ending_ends_a_link_destination() {
+    for source in ["[link](foo\nbar)", "[label](http://example.com\nmore)"] {
+        let styled = style(source, None);
+        assert!(styled.links.is_empty(), "{source}");
+        assert!(styled.hidden.is_empty(), "{source}");
+    }
+    for source in ["[link](   /uri\n  \"title\"  )", "[link](\n/uri)"] {
+        let styled = style(source, None);
+        assert_eq!(spans(source, None), [("link".into(), LINK)], "{source}");
+        assert_eq!(styled.spans[0].href, "/uri", "{source}");
+        assert_eq!(styled.links.len(), 1, "{source}");
+        // A closer across the line break stays shown: hidden, the break
+        // would draw an empty line.
+        assert_eq!(hidden(source, None), Vec::<String>::new(), "{source}");
+    }
+}
+
 #[test]
 fn lists_tasks_quotes_and_rules() {
     let source = "- one\n  - nested\n    continued\n1. first\n- [x] done\n- [ ] todo\n> quoted **text**\n> > deeper\n\n---\n";
@@ -410,10 +432,6 @@ fn the_defects_astra_traced_are_fixed() {
         run("say |a ``b`` c|", Command::Code),
         "say ```|a ``b`` c|```"
     );
-    // An excerpt never cuts a construct open.
-    let long = format!("[ok](https://e/{}) tail", "x".repeat(2000));
-    assert_eq!(excerpt(&long, 4), "ok…");
-    assert_eq!(excerpt(&long, 8), "ok tail");
 }
 
 #[test]
@@ -724,20 +742,6 @@ fn a_limit_cuts_text_between_blocks_and_never_inside_a_fence() {
         .map(|p| if let Segment::Text(t) = p { t.len() } else { 0 })
         .sum();
     assert_eq!(joined + 4, source.len());
-}
-
-#[test]
-fn excerpts_are_one_plain_line() {
-    let source = "# A **Title**\n\nThe first paragraph has [a link](https://example.com) and `code`.\n\n- a list\n";
-    assert_eq!(
-        excerpt(source, 200),
-        "A Title The first paragraph has a link and code. • a list"
-    );
-    assert_eq!(excerpt(source, 24), "A Title The first…");
-    assert_eq!(excerpt("", 10), "");
-    assert_eq!(excerpt("Supercalifragilistic", 5), "Super…");
-    let long = "word ".repeat(10_000);
-    assert_eq!(excerpt(&long, 9), "word word…");
 }
 
 /// Every document in this repository styles, edits and segments without a

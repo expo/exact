@@ -7,7 +7,10 @@
     "macos"
   ],
   "shapes": {},
-  "options": {},
+  "options": {
+    "registerSync": { "requiresExternalPower": "bool" },
+    "registerPeriodicSync": { "task": "enum<refresh|processing>", "requiresExternalPower": "bool" }
+  },
   "names": [],
   "views": [],
   "hatches": [],

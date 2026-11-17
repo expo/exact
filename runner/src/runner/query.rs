@@ -45,11 +45,17 @@ pub(super) struct Churn {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Invalid options deferred until launch, once per resource and explanation.
+    pub fn bake_warnings(&self) -> &[String] {
+        &self.bake_warnings
+    }
+
     pub(super) fn check_send_arguments(&self, m: usize, args: &[Value]) -> Result<(), RunnerError> {
-        check_arguments(self.plan.str(self.plan.mutations[m].name), args)
+        check_arguments(self.mutation_name(m), args)
     }
 
     pub(super) fn query(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
+        self.resources[i].render_urls.clear();
         let row = self.resource_row(i);
         let source = self.plan.str(row.source).to_string();
         let resource = self.plan.str(row.name).to_string();
@@ -99,12 +105,26 @@ impl<D: DataSource> Runner<D> {
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
-        if source == crate::surface_record::SOURCE {
+        if matches!(
+            source.as_str(),
+            crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+        ) {
             let answer = self.links.surface_answer.ok_or_else(|| RunnerError::Data {
                 resource: resource.clone(),
                 error: DataError::Unavailable("this host links no surfaces".into()),
             })?;
-            return answer(&self.plan, &self.surface_records, i)
+            let records = if source == crate::canvas_performance::SOURCE {
+                crate::canvas_performance::validate(&self.plan, self.resource_row(i).ty).map_err(
+                    |error| RunnerError::Data {
+                        resource: resource.clone(),
+                        error: DataError::Unavailable(error),
+                    },
+                )?;
+                &self.canvas_performance
+            } else {
+                &self.surface_records
+            };
+            return answer(&self.plan, records, i)
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
@@ -112,6 +132,14 @@ impl<D: DataSource> Runner<D> {
         // (LLP 1133.002 D13).
         if self.plan.module_named(&source).is_some() {
             return self.module_answer(i, &source, args);
+        }
+        // A source declared in Contract is the runner's to ask (LLP 1162.001).
+        if self.plan.fetch_named(&source).is_some() {
+            self.log(lines::query(&resource, &source));
+            self.count_ask(i);
+            return self
+                .fetch_answer(&source, args)
+                .map_err(|error| RunnerError::Data { resource, error });
         }
         // @ref LLP 1038 D5 / §8 — distinguish asked sources from compiled boot values.
         self.log(lines::query(&resource, &source));
@@ -128,10 +156,7 @@ impl<D: DataSource> Runner<D> {
         // What its turn sent on its module's sockets (LLP 1016.000 D7, the
         // amendment of 2026-10-18), whatever it answered.
         self.stage_answer(super::Target::Resource(i));
-        self.hear_aborted();
-        for line in self.data.take_logs() {
-            self.log(line);
-        }
+        self.take_data_logs();
         answer.map_err(|error| RunnerError::Data { resource, error })
     }
 
@@ -212,6 +237,53 @@ mod tests {
         .unwrap()
     }
 
+    #[test]
+    fn journal_echo_starts_over_with_a_replacement_runner() {
+        let mut r = runner();
+        r.log("old runner");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            r.journal().collect::<Vec<_>>()
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("old runner's next line");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            ["t=0 old runner's next line"]
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+
+        r = runner();
+        let boot = r.journal().map(str::to_owned).collect::<Vec<_>>();
+        assert!(!boot.is_empty());
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), boot);
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("replacement's next line");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            ["t=0 replacement's next line"]
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+    }
+
+    #[test]
+    fn journal_echo_skips_lines_dropped_between_reads() {
+        let mut r = runner();
+        r.journal_echo().for_each(drop);
+        for n in 0..(JOURNAL_RING + 3) {
+            r.log(format!("line {n}"));
+        }
+        assert!(r.journal_start() > 0);
+        let retained = r.journal().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(retained.len(), JOURNAL_RING);
+        assert_eq!(retained.first().unwrap(), "t=0 line 3");
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), retained);
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("after wrap");
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), ["t=0 after wrap"]);
+        assert_eq!(r.journal_echo().count(), 0);
+    }
+
     /// A source whose storage is not ready yet: `answer` refuses with its
     /// error, or (with none) hands the host a continuation to finish once it is.
     struct NotReady(Option<DataError>);
@@ -290,9 +362,37 @@ mod tests {
             Some(crate::failure::FailureCode::Storage)
         );
         assert!(!failed.resources[0].pending);
-        for pending in [Some(DataError::DeferredAtBake("at bake".into())), None] {
-            assert!(boot(pending).unwrap().resources[0].pending);
+        for pending in [
+            Some(DataError::DeferredAtBake {
+                message: "at bake".into(),
+                warning: false,
+            }),
+            None,
+        ] {
+            let deferred = boot(pending).unwrap();
+            assert!(deferred.resources[0].pending);
+            assert!(deferred.bake_warnings().is_empty());
         }
+        let why = "exactTimeout: a stream has no timeout";
+        let mut warned = boot(Some(DataError::DeferredAtBake {
+            message: why.into(),
+            warning: true,
+        }))
+        .unwrap();
+        for _ in 0..2 {
+            warned.refresh_next.push(0);
+            warned.settle(false).unwrap();
+        }
+        assert_eq!(warned.bake_warnings().len(), 1);
+        assert!(warned.bake_warnings()[0].contains("resource `r`"));
+        assert!(warned.bake_warnings()[0].contains(why));
+        warned.data.0 = Some(DataError::DeferredAtBake {
+            message: "exactIdleTimeout must be an integer".into(),
+            warning: true,
+        });
+        warned.refresh_next.push(0);
+        warned.settle(false).unwrap();
+        assert_eq!(warned.bake_warnings().len(), 2);
         let mut overrun = boot(Some(DataError::Overrun("over budget".into()))).unwrap();
         assert!(overrun.resources[0].pending && overrun.failed_resources().is_empty());
         let t0 = overrun.now_ms();
@@ -325,7 +425,10 @@ mod tests {
         }
         let deferred = boot_on(
             plan(true),
-            Some(DataError::DeferredAtBake("at bake".into())),
+            Some(DataError::DeferredAtBake {
+                message: "at bake".into(),
+                warning: false,
+            }),
         )
         .err();
         assert!(

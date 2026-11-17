@@ -1,0 +1,12 @@
+[
+  {"scroller":"st","axis":"x","at":[0,60,150,250,300,420,600],
+   "read":["st-normal","st-px","st-pct","st-start","st-named","st-delay","st-fill"]},
+  {"scroller":"sv","axis":"y","at":[0,50,115,200,230],
+   "read":["sv-anon","sv-named","sv-self"]},
+  {"scroller":"vs","axis":"y","at":[0,80,100,150,200,250,300,330,350,400,450,500,550,600,700,800,1000],
+   "read":["vsub","v-contain","v-entry","v-exit","v-entry-crossing","v-exit-crossing","v-mixed","v-px","v-anon","vin","vb-contain","vb-entry","vb-exit","vb-crossing"]},
+  {"scroller":"hs","axis":"x","at":[0,60,100,150,200,250,300,350,400,450,520],
+   "read":["h-anon","h-auto","h-inset"]},
+  {"scroller":"vn","axis":"y","at":[0],
+   "read":["vflat","vflat-anon"]}
+]

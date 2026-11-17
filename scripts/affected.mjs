@@ -17,10 +17,10 @@
  * for any host), so in it only a path into one app or package counts; and a module that another unit imports is
  * loaded, not driven: its imports count, and of its names only those its top level reads. `GLOBAL` lists the files
  * every suite reads, and `suites` lists by hand the roots of the XCTests, touch smoke, Apple compiles and
- * conformance, from the scripts that run them. Code other than a test names a directory of tests to run the tests
- * there, and the suite that runs them has that directory among its roots, so in such code the name does not count; a
- * file there that it names (a fixture, a script) does. An XCTest suite selected by its own Swift files alone runs only
- * the classes they reach (`xctestClasses`).
+ * conformance and module drives, from the scripts that run them. Code other than a test names a directory of tests
+ * to run the tests there, and the suite that runs them has that directory among its roots, so in such code the name
+ * does not count; a file there that it names (a fixture, a script) does. An XCTest suite selected by its own Swift
+ * files alone runs only the classes they reach (`xctestClasses`).
  *
  * It reads the source, so a read that nothing names (a walk of the whole repository) escapes it; the async lane runs
  * every step in full at least daily (`scripts/async.mjs`), and `--audit` runs a suite with the units outside its
@@ -55,6 +55,10 @@ export const GLOBAL = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.carg
 
 /** The parity smokes whose Linux leg the async lane runs (`scripts/smoke.mjs`): each drives `<smoke>-gallery`. */
 export const PARITY = ['svg', 'motion'];
+/** `exact-game-apple` is its own workspace root, which no other check compiles (#559): Greybox, a game without data, is
+ * generated as its build generates it (its check), and the shared shell is compiled and linted for iOS in that
+ * workspace. */
+export const gameAppleLeg = 'bun game/app/shells.mjs game/games/greybox --check && CARGO_TARGET_DIR=game/games/greybox/target cargo clippy --manifest-path game/games/greybox/.shells/Cargo.toml -p exact-game-apple --target aarch64-apple-ios --locked --offline -- -D warnings';
 /** A parity smoke's Linux leg, as a shell line: the gallery's development build, then the smoke on a fresh web build. */
 export const parityLeg = smoke => `cargo build --profile host-dev -p ${smoke}-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs ${smoke} --hosts linux`;
 
@@ -118,9 +122,10 @@ export function xctestClasses(root, host, because) {
  *              runs them
  *   `xctest`   the Swift host tests (`host`: macos or ios), `build.mjs --test`
  *   `touch`    real touches on an iOS simulator, `smoke-touch.mjs --build`
- *   `compile`  the tvOS or watchOS build (`host`), installed on nothing
+ *   `compile`  the tvOS or watchOS build (`host`), installed on nothing, or the shared game Apple shell's check
  *   `conform`  the web JS target against the wasm runner and the Linux host, for one app (`app`)
  *   `parity`   a gallery (`app`) painted by the Linux host against Chrome's picture of it, `smoke.mjs <smoke> --hosts linux`
+ *   `drive`    a standalone module drive (`file`, `args`), including its fixture build and browser launch
  */
 export function suites(repo) {
   const out = [];
@@ -150,16 +155,24 @@ export function suites(repo) {
   const caltrain = appBuild(repo, 'apps/caltrain', ['apple']);
   out.push({ id: 'touch:ios', kind: 'touch', host: 'ios', roots: [...apple, 'js:scripts/smoke-touch.mjs', 'test:host/apple/link.test.mjs', ...caltrain] });
   for (const host of ['tvos', 'watchos']) out.push({ id: `compile:${host}`, kind: 'compile', host, roots: [...apple, ...caltrain] });
+  // `exact-game-apple` is in no workspace's metadata: its directory, what it depends on, and the game it is checked in.
+  out.push({ id: 'compile:game-apple', kind: 'compile', host: 'ios', command: ['sh', '-c', gameAppleLeg], roots: ['dir:game/app/apple', 'pkg:exact-apple', 'pkg:exact-logic', 'pkg:exact-runner', 'pkg:ibex2-sqlite', 'js:game/app/shells.mjs', 'dir:game/games/greybox'] });
   for (const app of WEB_APPS) {
     const dir = repo.appNames.get(app);
     if (!dir) continue;
-    out.push({ id: `conform:${app}`, kind: 'conform', app, roots: ['js:host/web-js/conform.mjs', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-linux', 'pkg:contract'] });
+    out.push({ id: `conform:${app}`, kind: 'conform', app, roots: ['js:host/web-js/conform.mjs', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-painted', 'pkg:contract'] });
   }
   for (const smoke of PARITY) {
     const app = `${smoke}-gallery`, dir = repo.appNames.get(app);
     if (!dir) continue;
-    out.push({ id: `parity:${smoke}`, kind: 'parity', smoke, app, roots: ['js:scripts/smoke.mjs', `js:scripts/${smoke}parity.mjs`, 'dir:scripts/fixtures', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-linux', 'pkg:contract'] });
+    out.push({ id: `parity:${smoke}`, kind: 'parity', smoke, app, roots: ['js:scripts/smoke.mjs', `js:scripts/${smoke}parity.mjs`, 'dir:scripts/fixtures', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-painted', 'pkg:contract'] });
   }
+  // Each drive builds an app outside the checkout; its generated CLI calls back into the SDK's build and agent.
+  const moduleWeb = ['platform:web', 'pkg:contract', 'pkg:exact-web-js', 'js:scripts/exact.mjs', 'js:scripts/agent.mjs'];
+  out.push({ id: 'drive:module-seams', kind: 'drive', file: 'contract/cli/tests/bell/seams.mjs', args: [],
+    roots: [...moduleWeb, 'js:contract/cli/tests/bell/seams.mjs', 'dir:contract/cli/tests/bell'] });
+  out.push({ id: 'drive:notifications-web', kind: 'drive', file: 'packages/notifications/test/drive.mjs', args: ['web'],
+    roots: [...moduleWeb, 'js:packages/notifications/test/drive.mjs', 'dir:packages/notifications'] });
   return out;
 }
 
@@ -188,7 +201,7 @@ const CONTAINERS = new Set(['apps', 'examples', 'packages', 'host']);
 const PLATFORMS = {
   web: ['host/web', 'host/web-js', 'host/web-capabilities', 'host/web-geometry'],
   apple: ['host/apple', 'host/apple-painted', 'host/apple-update'],
-  linux: ['host/linux', 'host/linux-update', 'host/ink', 'host/svg-raster'],
+  linux: ['host/linux', 'host/painted', 'host/linux-update', 'host/ink', 'host/svg-raster'],
   windows: ['host/windows'], android: ['host/android'], terminal: ['host/terminal'],
 };
 /** A platform's name as a test says it, or as a flag (`--ios`). */
@@ -216,7 +229,7 @@ export function unitOf(path) {
  */
 export class Repo {
   #sources = new Map();
-  #testFiles = new Map();
+  #roles = new Map();
   constructor(root = ROOT, { files, metadata, also = [] } = {}) {
     this.root = root;
     const listed = new Set(files ?? git(['ls-files', '-z', '-co', '--exclude-standard'], root).split('\0').filter(Boolean));
@@ -228,6 +241,7 @@ export class Repo {
     /** name → { name, dir, manifest, targets, deps: [{ name, kinds }] } for every package with a path here;
      * `manifest` is its workspace's when it is a member of one */
     this.packages = new Map();
+    this.defaultMembers = [];
     for (const manifest of WORKSPACES) {
       if (!listed.has(manifest)) continue;
       // Resolved metadata includes path dependencies outside either workspace, including patched crates.
@@ -257,6 +271,7 @@ export class Repo {
       this.packages.set(p.name, pkg);
       byId.set(p.id, pkg);
     }
+    if (manifest === 'Cargo.toml') this.defaultMembers = (data.workspace_default_members ?? []).map(id => byId.get(id)?.name).filter(Boolean);
     for (const node of data.resolve?.nodes ?? []) {
       const pkg = byId.get(node.id);
       for (const d of pkg ? node.deps : []) {
@@ -292,21 +307,25 @@ export class Repo {
     return this.#sources.get(file);
   }
 
-  /** What a Rust file is to its package: `build` (its build script), `test` (only its tests compile it: an integration
-   * test, a bench, an example, or a module declared under `#[cfg(test)]` and what is under it) or `library`. */
+  /** What a Rust file is to its package: `build` (its build script and the modules only that declares), `test` (only its
+   * tests compile it: an integration test, a bench, an example, or a module declared under `#[cfg(test)]` and what is
+   * under it) or `library`. */
   rustRole(file, pkg) {
     if (file === join(pkg.dir, 'build.rs')) return 'build';
-    return this.#testFilesOf(pkg).has(file) ? 'test' : 'library';
+    const { test, build } = this.#rolesOf(pkg);
+    return test.has(file) ? 'test' : build.has(file) ? 'build' : 'library';
   }
 
-  #testFilesOf(pkg) {
-    if (this.#testFiles.has(pkg.dir)) return this.#testFiles.get(pkg.dir);
+  #rolesOf(pkg) {
+    if (this.#roles.has(pkg.dir)) return this.#roles.get(pkg.dir);
     const own = this.under(pkg.dir || '.').filter(f => f.endsWith('.rs') && this.ownerOf.get(f) === pkg.dir);
-    // The files the modules `f` declares: `mod name;` in lib.rs, main.rs or mod.rs is name.rs or name/mod.rs beside
-    // it, in a.rs a/name.rs or a/name/mod.rs, `#[path]`'s beside the declaring file. A test module's directory is all
-    // test code (what it declares inside an inline module is under it too); a library module's holds its test modules.
+    const targetRoots = new Set(pkg.targets.map(t => relative(this.root, t.src_path)));
+    // The files the modules `f` declares: `mod name;` in a target's root (`lib.rs`, `build.rs`) or a mod.rs is name.rs
+    // or name/mod.rs beside it, in a.rs a/name.rs or a/name/mod.rs, `#[path]`'s beside the declaring file. A test
+    // module's directory is all test code (what it declares inside an inline module is under it too); a library
+    // module's holds its test modules.
     const declared = (f, keep, sweep) => this.sources(f).mods.filter(keep).flatMap(({ name, path }) => {
-      const base = /(?:^|\/)(?:lib|main|mod)\.rs$/.test(f) ? dirname(f) : f.slice(0, -3);
+      const base = targetRoots.has(f) || /(?:^|\/)(?:lib|main|mod)\.rs$/.test(f) ? dirname(f) : f.slice(0, -3);
       const at = path ? [normalize(join(dirname(f), path))] : [join(base, `${name}.rs`), join(base, name, 'mod.rs')];
       return [...at.filter(p => this.fileSet.has(p)), ...(path || !sweep ? [] : this.under(join(base, name)).filter(p => p.endsWith('.rs')))];
     });
@@ -316,14 +335,16 @@ export class Repo {
       return seen;
     };
     // Test code: integration tests, benches, examples, the modules declared under #[cfg(test)], and what they declare.
-    // Test-only is what test code reaches and the library's own modules, from its targets' roots, do not.
-    const roots = pkg.targets.filter(t => !t.kind.some(k => ['test', 'bench', 'example', 'custom-build'].includes(k))).map(t => relative(this.root, t.src_path));
-    const library = reach(roots.filter(f => this.fileSet.has(f)), m => !m.test, false);
+    // Test-only is what test code reaches and the library's own modules, from its targets' roots, do not; of those,
+    // the build script's are its own.
+    const rootsOf = keep => pkg.targets.filter(t => keep(t.kind)).map(t => relative(this.root, t.src_path)).filter(f => this.fileSet.has(f));
+    const library = reach(rootsOf(kind => !kind.some(k => ['test', 'bench', 'example', 'custom-build'].includes(k))), m => !m.test, false);
+    const build = new Set([...reach(rootsOf(kind => kind.includes('custom-build')), m => !m.test, false)].filter(f => !library.has(f)));
     const tests = reach([...own.filter(f => /^(?:tests|benches|examples)\//.test(pkg.dir ? f.slice(pkg.dir.length + 1) : f)),
       ...own.flatMap(f => declared(f, m => m.test, true))], () => true, true);
-    const test = new Set([...tests].filter(f => !library.has(f)));
-    this.#testFiles.set(pkg.dir, test);
-    return test;
+    const roles = { test: new Set([...tests].filter(f => !library.has(f) && !build.has(f))), build };
+    this.#roles.set(pkg.dir, roles);
+    return roles;
   }
 
 }
@@ -552,7 +573,7 @@ function references(graph, file, literals, pkgDir, as) {
       }
       // Read a build script's bare `..` (its package's parent) as the app sources there: an app's crate builds its app
       if (as === 'build' && word === '..' && pkgDir) { const up = dirname(pkgDir); if (repo.apps.has(unitOf(up))) add(`appsrc:${up}`, word); return; }
-      if (!word.includes('/') && !(passed && ROOTED.test(literal.receiver ?? ''))) return;
+      if (!word.includes('/') && literal.from !== 'own' && !(passed && ROOTED.test(literal.receiver ?? ''))) return;
       const path = word.replace(/^\/(?=\.\.?\/)/, '');
       if (path.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(path)) return;
       for (const base of bases[literal.from] ?? [...bases.own, ...bases.package, ...bases.root]) {
@@ -561,7 +582,7 @@ function references(graph, file, literals, pkgDir, as) {
         // A container, or the code's own directory or one above it, is where its paths start; a build script reads
         // the one above it (an app's crate builds its app).
         if ((!test && CONTAINERS.has(target)) || (as !== 'build' && (own === target || own.startsWith(`${target}/`)))) return;
-        // (`tamber tool` serves apps/design-tool, a path into one app; a table of hosts names each platform's, and a
+        // (`forma tool` serves apps/design-tool, a path into one app; a table of hosts names each platform's, and a
         // tool for games names game/ to make one)
         if (!reaches(target) && !/^(?:apps|examples|packages)\//.test(unitOf(target)) && !/^include_(?:str|bytes)!$/.test(call)) return;
         // Skip a directory of tests named by code other than a test: it names it to run the tests there (`build.mjs
@@ -584,10 +605,10 @@ const CONCAT_MANIFEST = new RegExp(`(?:(include_(?:str|bytes)!)\\(\\s*)?concat!\
 /**
  * Rust's or Swift's string literals, comments skipped, each `{ text, call, receiver, prev, compared }`: `text` up to a
  * format string's first `{` (Swift's: its first `\(`), or the path after `env!("CARGO_MANIFEST_DIR")` in a `format!`
- * or `concat!`, from the package's directory (`from: 'package'`), `call` the function or macro it is passed to
- * (`join`, `include_str!`), `receiver` what that is called on, `prev` the literal just before it in the same list or
- * call chain (`"-p", "exact-linux"`, `.arg("-p").arg("exact-linux")`), `compared` whether it is compared with
- * (`== "x"`, a match arm). An attribute's string is a note (`#[ignore = "…"]`), unless it is `#[path]`'s or
+ * or `concat!`, from the package's directory (`from: 'package'`), an include's path from the file's own (`from: 'own'`),
+ * `call` the function or macro it is passed to (`join`, `include_str!`), `receiver` what that is called on, `prev` the
+ * literal just before it in the same list or call chain (`"-p", "exact-painted"`, `.arg("-p").arg("exact-painted")`),
+ * `compared` whether it is compared with (`== "x"`, a match arm). An attribute's string is a note (`#[ignore = "…"]`), unless it is `#[path]`'s or
  * `include_str!`'s. They come as `library` and `test` (inside what is under `#[cfg(test)]`), with `mods`, the modules
  * declared (`mod name;`: `{ name, path, test }`, `path` from `#[path]`, `test` when under `#[cfg(test)]`).
  */
@@ -608,6 +629,8 @@ export function rustSource(src, { swift = false } = {}) {
     if (lead && new RegExp(lead[1] ? `^[^;]*?\\b${lead[1]}\\s*=${MANIFEST}` : `^\\s*,${MANIFEST}`).test(src.slice(end, end + 200))) Object.assign(item, { text: cut(`.${text.slice(lead[0].length - 1)}`, /\{/), from: 'package' });
     // Keep the call of an include around the `concat!`: what an include reads counts in any code
     else if (joined) Object.assign(item, { text: `.${text}`, from: 'package', call: joined[1] ?? call });
+    // rustc resolves an include's path from the directory of the file that holds it
+    else if (!swift && /^include_(?:str|bytes)!$/.test(call)) item.from = 'own';
     const attribute = /#!?\[[^\]]*$/.test(before);
     if (!attribute || /#!?\[\s*path\s*=\s*$/.test(before) || /^include_(?:str|bytes)!$/.test(call)) found.push(item);
     last = { text: item.text, end };
@@ -805,8 +828,9 @@ export function commands(selected) {
     if (s.kind === 'app') for (const f of s.files) out.push(['bun', 'scripts/agent.mjs', s.host, '--app', s.app, '--test', f]);
     else if (s.kind === 'xctest') out.push(['bun', 'host/apple/build.mjs', '--test', ...(s.host === 'ios' ? ['--ios'] : []), ...(only ? ['--only', only.join(',')] : [])]);
     else if (s.kind === 'touch') out.push(['bun', 'scripts/smoke-touch.mjs', '--build']);
-    else if (s.kind === 'compile') out.push(['bun', 'host/apple/build.mjs', `--${s.host}`, '--no-install']);
+    else if (s.kind === 'compile') out.push(s.command ?? ['bun', 'host/apple/build.mjs', `--${s.host}`, '--no-install']);
     else if (s.kind === 'parity') out.push(['sh', '-c', parityLeg(s.smoke)]);
+    else if (s.kind === 'drive') out.push(['bun', s.file, ...s.args]);
   }
   const conform = selected.filter(s => s.suite.kind === 'conform').map(s => s.suite.app);
   if (conform.length) out.push(['bun', 'host/web-js/conform.mjs', ...conform, '--synthetic', '--build', '--linux']);
@@ -937,7 +961,7 @@ if (import.meta.main) {
     process.exit(0);
   }
   const counts = kind => `${selected.filter(s => s.suite.kind === kind).length} of ${catalogue.filter(s => s.kind === kind).length}`;
-  console.log(`${changed.length} changed files select ${selected.length} of ${catalogue.length} suites: Cargo packages ${counts('cargo')}, Bun files ${counts('bun')}, app tests ${counts('app')}, Apple ${['xctest', 'touch', 'compile'].map(counts).join(' + ')}, conformance ${counts('conform')}, parity ${counts('parity')}`);
+  console.log(`${changed.length} changed files select ${selected.length} of ${catalogue.length} suites: Cargo packages ${counts('cargo')}, Bun files ${counts('bun')}, app tests ${counts('app')}, Apple ${['xctest', 'touch', 'compile'].map(counts).join(' + ')}, conformance ${counts('conform')}, parity ${counts('parity')}, module drives ${counts('drive')}`);
   const run = commands(selected);
   for (const c of run) console.log(`  ${c.map(quote).join(' ')}`);
   if (!argv.includes('--run')) process.exit(0);

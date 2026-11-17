@@ -1,0 +1,122 @@
+// A child's mutations (LLP 1035.005.004 D6): each instance of a component
+// that declares one sends it on its own. The answer is the instance's
+// slot, and its `then` runs in the instance, with the props it captured
+// read there, here calling a root action with the answer. Each pushed
+// screen sends for itself; one whose screen a commit pops before its
+// `then` runs does not run it; two of one instance's `then`s run in the
+// order its component declares them, after a root mutation's armed in the
+// same commit; a component used outside every region sends as the root
+// does.
+routes nav
+  list "/"
+  book "/book/:id"
+
+shape Lines
+  lines: string[]
+
+component App
+  state shown = ""
+  state heard = 0
+  mutation logged as shape Lines then noted
+  action open(id: string)
+    nav = push(nav, path("book", id))
+  action back
+    nav = back(nav)
+  action showLines(lines: string[])
+    shown = `${shown}|${lines.join(",")}`
+  action log(id: string)
+    send logged = record(id)
+  action noted
+    heard = heard + 1
+  view
+    main
+      text shown testId="shown"
+      text `${heard}` testId="heard"
+      Probe(label="p", show=showLines)
+      for e in stack(nav) key=e.id
+        if e.name == "book"
+          Book(id=e.params.id, show=showLines, leave=back, log=log)
+        else
+          text "List" testId="list"
+      button "1" press=open("1") testId="open-1"
+      button "2" press=open("2") testId="open-2"
+      button "back" press=back testId="back"
+
+component Book
+  props
+    id: string
+    show: action
+    leave: action
+    log: action
+  state got = 0
+  mutation detected as shape Lines then landed
+  mutation tagged as shape Lines then marked
+  action detect
+    send detected = detect(id)
+  action detectAndLeave
+    send detected = detect(id)
+    leave()
+  action both
+    send tagged = tag(id)
+    send detected = detect(id)
+    log(id)
+  action landed
+    got = got + 1
+    match detected
+      case some(d)
+        show([id].concat(d.lines))
+      case none
+        show([id, "none"])
+  action marked
+    show([`${id}#`])
+  view
+    column
+      text `${id}:${got}:${match detected { case some(d) => d.lines.length, case none => -1 }}` testId=`book-${id}`
+      button "detect" press=detect testId=`detect-${id}`
+      button "detect and leave" press=detectAndLeave testId=`leave-${id}`
+      button "both" press=both testId=`both-${id}`
+
+component Probe
+  props
+    label: string
+    show: action
+  mutation pinged as shape Lines then heard
+  action ping
+    send pinged = detect(label)
+  action heard
+    match pinged
+      case some(d)
+        show([label].concat(d.lines))
+      case none
+        show([label])
+  view
+    button "ping" press=ping testId="ping"
+
+test "each pushed screen sends for itself"
+  tap "open-1"
+  tap "open-2"
+  tap "detect-2"
+  tap "back"
+  tap "detect-1"
+  tap "open-2"
+  tap "detect-2"
+
+test "a screen popped before its then runs does not run it"
+  tap "open-1"
+  tap "open-2"
+  tap "leave-2"
+  tap "open-2"
+  tap "detect-1"
+
+test "one instance's thens in declaration order, after the root's"
+  tap "open-1"
+  tap "both-1"
+  tap "detect-1"
+  tap "both-1"
+
+test "a use outside every region sends as the root does"
+  tap "ping"
+  tap "ping"
+  tap "open-1"
+  tap "detect-1"
+  tap "ping"

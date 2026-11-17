@@ -307,3 +307,116 @@ fn crossing_the_layout_breakpoint_cancels_a_held_drag_without_writing() {
     assert_eq!(app.derived("revision"), &Value::Number(1.0));
     assert_eq!(app.derived("day"), &day(15));
 }
+
+#[test]
+fn completed_todo_drag_titles_keep_opaque_ink() {
+    for reduced_motion in [false, true] {
+        check_completed_todo_drag(reduced_motion);
+    }
+}
+
+fn check_completed_todo_drag(reduced_motion: bool) {
+    let root = Root::new();
+    let mut app = App::open(&root);
+    let mut preferences = app.runner.viewport().preferences;
+    preferences.reduced_motion = reduced_motion;
+    app.runner.set_preferences(preferences).unwrap();
+    app.settle();
+    let id = app.agenda_id("Check passport");
+    app.press(&format!("agenda-item-{id}"));
+    app.finish_motion();
+    app.press("color-Lilac");
+    app.press("save-schedule");
+    app.finish_motion();
+    let completed = items(&app.agenda()[3])
+        .iter()
+        .find(|item| fields(item)[0].as_str() == Some(&id))
+        .unwrap();
+    if fields(completed)[13] != Value::Bool(true) {
+        app.press(&format!("todo-check-{id}"));
+    }
+    assert_todo_mark_readable(&app, &format!("row-mark-{id}"));
+    let contact = Contact::new(&app, &id, 1);
+    app.event(
+        "calendar-input",
+        contact.event(1, "begin", contact.origin(), ""),
+    );
+    assert_eq!(app.state("dragCompleted"), &Value::Bool(true));
+    app.finish_motion();
+    assert_todo_mark_readable(&app, "calendar-drag-image");
+    let title = app
+        .runner
+        .kernel()
+        .node_by_key(app.key("calendar-drag-title"))
+        .unwrap();
+    assert_eq!(
+        title.style.opacity, 1.0,
+        "the carried title must not blend into its bar"
+    );
+    let target = app.center("date-2026-09-2026-09-03");
+    app.event("calendar-input", contact.event(2, "move", target, ""));
+    app.event("calendar-input", contact.event(3, "end", target, ""));
+    assert_eq!(app.state("dragPhase").as_str(), Some("landing"));
+    assert_todo_mark_readable(&app, "calendar-drag-image");
+    let face = app
+        .runner
+        .kernel()
+        .node_by_key(app.key("calendar-drag-landing-face"))
+        .unwrap();
+    let children = face.children();
+    let title = app.runner.kernel().node(children[0]).unwrap();
+    assert_eq!(
+        title.style.opacity, 1.0,
+        "the landing title keeps the month bar's ink"
+    );
+}
+
+fn assert_todo_mark_readable(app: &App, test_id: &str) {
+    use exact_kernel::{Color, NodeType, svg::Paint};
+
+    let kernel = app.runner.kernel();
+    let root = kernel.node_by_key(app.key(test_id)).unwrap();
+    let mut visit = vec![(root.id, 1.0)];
+    let mut fill = None;
+    let mut marks = Vec::new();
+    while let Some((id, opacity)) = visit.pop() {
+        let node = kernel.node(id).unwrap();
+        let opacity = opacity * node.style.opacity;
+        if node.node_type == NodeType::SvgCircle {
+            if let Paint::Color(color) = node.style.fill {
+                fill = Some(color.resolve(false));
+            }
+        }
+        if node.node_type == NodeType::SvgPath {
+            let Paint::Color(color) = node.style.stroke else {
+                panic!("the completed mark needs a stroke");
+            };
+            marks.push((color.resolve(false), opacity));
+        }
+        visit.extend(node.children().iter().map(|id| (*id, opacity)));
+    }
+    let luminance = |color: Color| {
+        [color.r(), color.g(), color.b()]
+            .into_iter()
+            .zip([0.2126, 0.7152, 0.0722])
+            .map(|(channel, weight)| {
+                let c = f64::from(channel) / 255.0;
+                weight
+                    * if c <= 0.04045 {
+                        c / 12.92
+                    } else {
+                        ((c + 0.055) / 1.055).powf(2.4)
+                    }
+            })
+            .sum::<f64>()
+    };
+    assert_eq!(marks.len(), 1, "{test_id} has one completed check");
+    let (ink, opacity) = marks[0];
+    let a = luminance(ink);
+    let b = luminance(fill.expect("the completed circle is filled"));
+    let contrast = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+    assert!(
+        contrast >= 3.0 && opacity == 1.0,
+        "{test_id}: contrast {contrast}, opacity {opacity}"
+    );
+}

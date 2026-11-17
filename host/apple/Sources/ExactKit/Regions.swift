@@ -10,14 +10,15 @@
 // an `NSMutableDictionary` whose `reply` the carrier sets): `{op: add,
 // package, name, latitude, longitude, radius}`, `{op: remove, package,
 // name}`, `{op: list, package}`, `{op: pending, package, name}`, `{op:
-// delivered, package, name}`.
+// delivered, package, name, event, timestamp}`.
 //
 // The store is the truth (D14): a crossing is written to it first, the
 // region's `inside` set and its one undelivered transition replaced, then
 // offered to the package that added it as a wake of kind `region`, its keys
-// the regions' names. A transition stays until the package says it was
-// delivered, and is offered again whenever a module becomes ready, which a
-// later launch's is after its first pixel.
+// the regions' names. A transition stays until the package says that one
+// was delivered, and is offered again whenever a module becomes ready, which
+// a later launch's is after its first pixel. One written while its region is
+// in a wake is offered when that wake ends.
 import Foundation
 #if os(iOS) || os(macOS)
 import CoreLocation
@@ -35,10 +36,12 @@ public enum RegionCarrier {
         var at: Double?
     }
 
-    private static var regions: [String: Region] = [:]
+    static var regions: [String: Region] = [:]
     private static var installed = false
     /// Names in a wake now, not offered again until it ends.
     private static var offering: Set<String> = []
+    /// Names in a wake whose transition changed meanwhile: offered again when it ends.
+    private static var crossedWhileOffering: Set<String> = []
 
     /// Under the app's support directory, not purgeable; on the Mac under its bundle id.
     static let file: URL = {
@@ -106,6 +109,9 @@ public enum RegionCarrier {
             guard let r = regions[name], r.package == package, let event = r.pending else { return nil }
             return ["event": event, "timestamp": r.at ?? 0]
         case "delivered":
+            // A later crossing may have replaced the transition raised.
+            guard let r = regions[name], r.package == package, r.pending == body["event"] as? String,
+                  r.at == (body["timestamp"] as? NSNumber)?.doubleValue else { return nil }
             regions[name]?.pending = nil
             regions[name]?.at = nil
             keep()
@@ -125,6 +131,7 @@ public enum RegionCarrier {
         regions[name] = r
         keep()
         WakeStore.log("regions: \(name) \(inside ? "entered" : "left")")
+        if offering.contains(name) { crossedWhileOffering.insert(name) }
         offer([name])
     }
 
@@ -147,6 +154,9 @@ public enum RegionCarrier {
         #endif
         WakeStore.region(fresh.compactMap { n in regions[n].map { ($0.package, n) } }) { _ in
             offering.subtract(fresh)
+            let again = crossedWhileOffering.intersection(fresh)
+            crossedWhileOffering.subtract(again)
+            offer(again.filter { regions[$0]?.pending != nil }.sorted())
             #if os(iOS)
             if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
             #endif

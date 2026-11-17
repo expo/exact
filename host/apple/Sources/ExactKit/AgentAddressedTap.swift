@@ -113,9 +113,18 @@ extension Agent {
     /// viewport), in one space. `reach` says what a press at a point
     /// reaches, nil where a finger cannot land on `v` (covered, under the
     /// keyboard, outside the viewport). Returns the point and, when it is not
-    /// the middle, what the middle would have pressed.
-    static func addressedAim(_ v: NodeView, middle mid: CGPoint, area: CGRect, reach: (CGPoint) -> PressReach?) -> AddressedAim {
-        guard let atMiddle = reach(mid) else { return .at(mid, nil) } // the caller's own refusals say why
+    /// the middle, what the middle would have pressed. `landsOutside`, where
+    /// the caller has no refusal of its own for a middle that lands off `v`,
+    /// names what a click there reaches: a target with a press of its own is
+    /// then clicked at its nearest point that does land on it (a Mac form
+    /// row's bezel, which bounds its hit), else refused, never reported
+    /// pressed by a click that reached something else.
+    static func addressedAim(_ v: NodeView, middle mid: CGPoint, area: CGRect, landsOutside: ((CGPoint) -> String)? = nil, reach: (CGPoint) -> PressReach?) -> AddressedAim {
+        guard let atMiddle = reach(mid) else {
+            guard let landsOutside, v.takesPress else { return .at(mid, nil) } // the caller's own refusals say why
+            if let p = aimPoints(in: area, from: mid).first(where: { reach($0)?.isOwn(v) == true }) { return .at(p, .nothing) }
+            return .refused(AddressedRefusal(addressed: v, pressing: .nothing, middle: mid, own: true, landing: landsOutside(mid)))
+        }
         if v.takesPress {
             if atMiddle.isOwn(v) { return .at(mid, nil) }
             for p in aimPoints(in: area, from: mid) where reach(p)?.isOwn(v) == true { return .at(p, atMiddle) }
@@ -147,13 +156,15 @@ struct AddressedRefusal {
     let middle: CGPoint
     /// The target has a press of its own, and no point of it reaches it.
     let own: Bool
+    /// What a click at its middle lands on instead, outside it.
+    var landing: String? = nil
 
     var reply: [String: Any] {
         let a = "#\(addressed.id)", d = pressing.described
         let how = "tap \(pressing.pressing.map { "#\($0)" } ?? d), or tap \(a) at <x> <y> (a point in its box) for whatever a finger there reaches"
-        let error = own
+        let error = landing.map { "tap \(a): a click at its middle lands on \($0), not on it, and no point of \(a) a click can reach takes it; tap \(a) at <x> <y> (a point in its box) for whatever a click there reaches" } ?? (own
             ? "tap \(a) would press \(d) inside it, at its middle; no point of \(a) a finger can reach presses \(a) itself; \(how)"
-            : "tap \(a) would press \(d) inside it; \(a) has no press of its own, and a tap that names it never presses a control inside it; \(how)"
+            : "tap \(a) would press \(d) inside it; \(a) has no press of its own, and a tap that names it never presses a control inside it; \(how)")
         var reply: [String: Any] = ["error": error, "addressed": Int(addressed.id), "middle": [Agent.r2(middle.x), Agent.r2(middle.y)]]
         if let id = pressing.pressing { reply["pressing"] = id }
         return reply
@@ -213,6 +224,14 @@ extension Agent {
             up = cur.superview
         }
         return .nothing
+    }
+
+    /// What a click at `p` (in the window) lands on, for a refusal: the
+    /// nearest node of the view the window's hit test finds, else its kind.
+    func landing(at p: CGPoint, in win: NSWindow) -> String {
+        guard let hit = TableRowCell.whatIsThere({ win.contentView?.hitTest(p) }) else { return "nothing" }
+        let node = sequence(first: hit as NSView, next: \.superview).lazy.compactMap { $0 as? NodeView }.first
+        return node.map { "#\($0.id)" } ?? String(describing: Swift.type(of: hit))
     }
 }
 #endif

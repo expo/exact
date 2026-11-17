@@ -166,10 +166,9 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     );
     assert!(css.contains("justify-self:start;"), "a block's: {css}");
     // A hidden one stays hidden: its grid is not written over `none`.
-    let hidden_style = StyleProps {
-        display: exact_kernel::Display::None,
-        ..StyleProps::default()
-    };
+    let hidden_style = StyleProps::default().with_rows(|rows| {
+        rows.display = exact_kernel::Display::None;
+    });
     let hidden = NodeFacts {
         style: &hidden_style,
         ..facts
@@ -178,10 +177,9 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     assert!(!css.contains("display:grid"), "{css}");
     // In a grid or a flex container it stretches as the kernel's does.
     for display in [exact_kernel::Display::Grid, exact_kernel::Display::Flex] {
-        let grid = StyleProps {
-            display,
-            ..StyleProps::default()
-        };
+        let grid = StyleProps::default().with_rows(|rows| {
+            rows.display = display;
+        });
         let parent = NodeFacts {
             id: 2,
             node_type: NodeType::View,
@@ -198,27 +196,14 @@ fn a_progress_is_a_busy_progressbar_box_the_page_draws_a_ring_in() {
     assert!(include_str!("../index.html").contains("[data-exact-progress]::before"));
 }
 
-/// A progress (and a canvas) keeps its width in block flow with `justify-self: start` only where a
-/// `div` would stretch: under a block parent whose `justify-items` is `normal` or `stretch`. Under
-/// one that says `start`, `center` or `end`, the parent's own justification aligns it, as the
-/// kernel's block layout does (Chrome's too), so nothing is written over it.
+/// An aligning block parent's `justify-items` applies to progress in flow and
+/// to canvases both in flow and absolutely positioned with automatic insets.
 #[test]
-fn a_progress_or_canvas_in_block_flow_follows_the_parents_justify_items() {
-    use exact_kernel::{StyleId, StyleValue};
+fn a_progress_or_canvas_follows_the_parents_justify_items() {
+    use exact_kernel::{PositionType, StyleId, StyleValue};
     let mut props = PropList::default();
     props.set(PropId::Type, PropValue::Str("progress".into()));
     let (parent_props, empty) = (PropList::default(), PropList::default());
-    let style = StyleProps::default();
-    let node = |node_type, props| NodeFacts {
-        id: 1,
-        node_type,
-        style: &style,
-        props,
-        is_root: false,
-        inline_run: false,
-        symbol_color: false,
-        has_looks: false,
-    };
     for (items, forced) in [
         ("normal", true),
         ("stretch", true),
@@ -243,15 +228,29 @@ fn a_progress_or_canvas_in_block_flow_follows_the_parents_justify_items() {
             symbol_color: false,
             has_looks: false,
         };
-        for (kind, props, tag) in [
-            (NodeType::Control, &props, "div"),
-            (NodeType::Canvas, &empty, "canvas"),
+        for (kind, props, tag, position_type) in [
+            (NodeType::Control, &props, "div", PositionType::Static),
+            (NodeType::Canvas, &empty, "canvas", PositionType::Static),
+            (NodeType::Canvas, &empty, "canvas", PositionType::Absolute),
         ] {
-            let css = super::host_css_of(&node(kind, props), Some(&parent), String::new(), tag);
+            let style = StyleProps::default().with_rows(|rows| {
+                rows.position_type = position_type;
+            });
+            let node = NodeFacts {
+                id: 1,
+                node_type: kind,
+                style: &style,
+                props,
+                is_root: false,
+                inline_run: false,
+                symbol_color: false,
+                has_looks: false,
+            };
+            let css = super::host_css_of(&node, Some(&parent), String::new(), tag);
             assert_eq!(
                 css.contains("justify-self:start;"),
                 forced,
-                "{tag} under justify-items {items}: {css}"
+                "{tag} {position_type:?} under justify-items {items}: {css}"
             );
         }
     }
@@ -263,10 +262,9 @@ fn a_progress_or_canvas_in_block_flow_follows_the_parents_justify_items() {
 #[test]
 fn a_date_or_time_control_takes_the_field_look_unless_the_author_has_it() {
     let marked = |ty: &str, appearance| {
-        let style = StyleProps {
-            appearance,
-            ..StyleProps::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.appearance = appearance;
+        });
         let mut props = PropList::default();
         props.set(PropId::Type, PropValue::Str(ty.into()));
         super::props_of(&NodeFacts {
@@ -298,10 +296,9 @@ fn a_date_or_time_control_takes_the_field_look_unless_the_author_has_it() {
 #[test]
 fn a_textfield_appearance_is_native_and_marked_for_the_page() {
     let marks = |appearance| {
-        let style = StyleProps {
-            appearance,
-            ..StyleProps::default()
-        };
+        let style = StyleProps::default().with_rows(|rows| {
+            rows.appearance = appearance;
+        });
         let mut props = PropList::default();
         props.set(PropId::Type, PropValue::Str("number".into()));
         let out = super::props_of(&NodeFacts {
@@ -331,12 +328,15 @@ fn a_textfield_appearance_is_native_and_marked_for_the_page() {
 /// its `target` is authored; a path stays (chat F11, hn-reader F3).
 #[test]
 fn a_link_out_of_the_app_opens_a_new_browsing_context() {
-    let link = |href: &str, target: Option<&str>| {
+    let link_rel = |href: &str, target: Option<&str>, rel: Option<&str>| {
         let style = StyleProps::default();
         let mut props = PropList::new();
         props.set(PropId::Href, PropValue::Str(href.into()));
         if let Some(t) = target {
             props.set(PropId::Target, PropValue::Str(t.into()));
+        }
+        if let Some(r) = rel {
+            props.set(PropId::Rel, PropValue::Str(r.into()));
         }
         let out = super::props_of(&NodeFacts {
             id: 1,
@@ -351,6 +351,7 @@ fn a_link_out_of_the_app_opens_a_new_browsing_context() {
         let get = |k: &str| out.get(k).cloned();
         (get("target"), get("rel"))
     };
+    let link = |href: &str, target: Option<&str>| link_rel(href, target, None);
     let out = (Some("_blank".into()), Some("external noopener".into()));
     assert_eq!(link("https://example.com/a", None), out);
     assert_eq!(link("//example.com/a", None), out);
@@ -361,12 +362,27 @@ fn a_link_out_of_the_app_opens_a_new_browsing_context() {
     );
     let blank = (Some("_blank".into()), Some("noopener".into()));
     assert_eq!(link("/c/42", Some("_blank")), blank);
-    let app = |t: &str| {
-        format!("component A\n  view\n    link href=\"/x\" target=\"{t}\"\n      text \"x\"\n")
-    };
-    assert!(contract::compile(&app("_blank")).is_ok());
-    let e = contract::compile(&app("_top")).unwrap_err().to_string();
-    assert!(e.contains("`target` takes"), "{e}");
+    // An authored `rel` keeps its tokens; the ones a new context needs join
+    // it once, whatever their case (LLP 1141.002 D1).
+    let kept = |rel: &str| (Some("_blank".into()), Some(rel.into()));
+    assert_eq!(
+        link_rel("https://example.com/", None, Some("noreferrer")),
+        kept("noreferrer external noopener")
+    );
+    assert_eq!(
+        link_rel("/c/42", Some("_blank"), Some("NoOpener help")),
+        kept("NoOpener help")
+    );
+    assert_eq!(link_rel("/c/42", None, Some("help")).1, Some("help".into()));
+    // A window's name is no new browsing context; HTML's keywords match in any case.
+    assert_eq!(
+        link("/compose", Some("compose")),
+        (Some("compose".into()), None)
+    );
+    assert_eq!(
+        link("/c/42", Some("_BLANK")),
+        (Some("_BLANK".into()), Some("noopener".into()))
+    );
 }
 
 /// @ref LLP 1075.003 §3.3 — every `data-` name this host writes on an
@@ -497,6 +513,8 @@ fn svg_geometry_attributes_preserve_css_lengths() {
         ("0", "0"),
         ("12px", "12"),
         ("25%", "25%"),
+        ("2em", "2em"),
+        ("0.5rem", "0.5rem"),
         ("50vh", "50vh"),
         ("10vw", "10vw"),
         ("5vmin", "5vmin"),
@@ -614,6 +632,88 @@ fn a_layout_region_is_the_browsers_safe_area() {
     }
 }
 
+/// A node's custom properties (LLP 1123 D5) are the browser's own: each
+/// declaration's length, and a length reads one through `var()`, which the
+/// browser substitutes.
+#[test]
+fn custom_properties_reach_the_browser_as_declarations() {
+    use exact_kernel::{StyleId, StyleValue};
+    let mut style = StyleProps::default();
+    let declared = "--gap: 8px; --pad: calc(var(--gap) * 2)";
+    style
+        .set_dynamic(
+            StyleId::SafeAreaProperties,
+            &StyleValue::Text(declared.into()),
+        )
+        .unwrap();
+    style
+        .set_dynamic(
+            StyleId::PaddingLeft,
+            &StyleValue::Text("var(--pad, 4px)".into()),
+        )
+        .unwrap();
+    // A fallback stands alone where the row's value does, so a sum keeps its `calc()`
+    style
+        .set_dynamic(
+            StyleId::MarginTop,
+            &StyleValue::Text("var(--missing, calc(10% + 2px))".into()),
+        )
+        .unwrap();
+    let (out, _) = crate::css::css_text(&style, &[]);
+    assert!(
+        out.contains("--gap:8px;--pad:calc(2 * var(--gap));"),
+        "{out}"
+    );
+    assert!(out.contains("padding-left:var(--pad, 4px)"), "{out}");
+    // As host/web/tests/local-insets.test.mjs has the browser read it
+    assert!(
+        out.contains("margin-top:var(--missing, calc(10% + 2px))"),
+        "{out}"
+    );
+}
+
+/// A content owner's local inset (LLP 1123 D9) reaches the browser as the
+/// registered custom property it reads, alone or in a calculation.
+#[test]
+fn a_local_inset_is_the_browsers_custom_property() {
+    use exact_kernel::{StyleId, StyleValue};
+    for (text, css) in [
+        (
+            "var(--exact-safe-area-inset-top)",
+            "padding-left:var(--exact-safe-area-inset-top)",
+        ),
+        (
+            "max(16px, var(--exact-safe-area-inset-bottom))",
+            "padding-left:max(16px, var(--exact-safe-area-inset-bottom))",
+        ),
+        (
+            "calc(env(-exact-layout-margins-inset-left) + var(--exact-safe-area-inset-left))",
+            "padding-left:calc(env(safe-area-inset-left) + var(--exact-safe-area-inset-left))",
+        ),
+    ] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(StyleId::PaddingLeft, &StyleValue::Text(text.into()))
+            .unwrap();
+        let (out, _) = crate::css::css_text(&style, &[]);
+        assert!(out.contains(css), "{text}: {out}");
+    }
+    // An author's own value is the custom property on the element, which
+    // its subtree inherits (D9); the opt-out of a clearance the browser
+    // never makes writes nothing, and is no row skipped (D4).
+    let mut style = StyleProps::default();
+    let own = StyleValue::Text("calc(var(--exact-safe-area-inset-top) + 8px)".into());
+    style.set_dynamic(StyleId::LocalInsetBottom, &own).unwrap();
+    let off = StyleValue::Text("top bottom".into());
+    style.set_dynamic(StyleId::SafeArea, &off).unwrap();
+    let (out, skipped) = crate::css::css_text(&style, &[]);
+    assert_eq!(
+        out,
+        "--exact-safe-area-inset-bottom:calc(8px + var(--exact-safe-area-inset-top));"
+    );
+    assert!(skipped.is_empty(), "{skipped:?}");
+}
+
 /// LLP 1116.018 D3: a live region's `aria-atomic` reaches the page.
 #[test]
 fn a_live_region_says_whether_it_is_announced_whole() {
@@ -653,4 +753,54 @@ fn a_frame_grants_its_guest_fullscreen() {
         written(NodeType::Video, PropId::Src, PropValue::Str("a.mp4".into())).get("allow"),
         None
     );
+}
+
+#[test]
+fn an_active_descendant_is_written_as_the_aria_attribute() {
+    for value in ["option-apple", ""] {
+        let out = written(
+            NodeType::TextInput,
+            PropId::AccessibilityActiveDescendant,
+            PropValue::Str(value.into()),
+        );
+        assert_eq!(
+            out.get("aria-activedescendant").map(String::as_str),
+            Some(value)
+        );
+    }
+}
+
+/// LLP 1047.003 D1: every attribute `props_of` writes by name (an `insert` or
+/// `get_or_insert_with` of a literal, in element.rs and the symbol marks) is in
+/// `attributes_by_data`, which the JS target's build counts where data sets a
+/// node's props or styles; one missing there could lose its rules.
+#[test]
+fn every_attribute_props_of_derives_is_one_data_can_give() {
+    let source = [
+        include_str!("element.rs"),
+        include_str!("element_symbol.rs"),
+    ]
+    .concat();
+    let body = &source[source.find("pub fn props_of").unwrap()..];
+    let listed: std::collections::BTreeSet<&str> = [
+        NodeType::View,
+        NodeType::Control,
+        NodeType::TextInput,
+        NodeType::Image,
+    ]
+    .into_iter()
+    .flat_map(super::attributes_by_data)
+    .collect();
+    let mut missing = Vec::new();
+    for call in ["insert(", "get_or_insert_with("] {
+        for at in body.match_indices(call).map(|(at, _)| at + call.len()) {
+            let rest = body[at..].trim_start();
+            if let Some(name) = rest.strip_prefix('"').and_then(|r| r.split('"').next()) {
+                if name != "data-" && !listed.contains(name) {
+                    missing.push(name.to_owned());
+                }
+            }
+        }
+    }
+    assert_eq!(missing, Vec::<String>::new());
 }

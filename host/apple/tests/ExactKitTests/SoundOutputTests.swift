@@ -38,7 +38,7 @@ private enum Arm {
             Arm.running = start ? 1 : 0
             return UnsafeMutableRawPointer(bitPattern: 0x5011)
         },
-        op: { _, kind, id, _, _, _, rate, pan in
+        op: { _, kind, id, _, _, _, rate, pan, _ in
             if let room = Arm.room { guard room > 0 else { return false }; Arm.room = room - 1 }
             Arm.taken.append([UInt64(kind), id])
             if kind == 1 { Arm.plays.append(id); Arm.placed.append([rate, pan]) }

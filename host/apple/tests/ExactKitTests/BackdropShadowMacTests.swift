@@ -39,16 +39,15 @@ final class BackdropShadowMacTests: XCTestCase {
             ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 200],
             ["op": "frame", "id": 2, "x": 50, "y": 40, "w": 100, "h": 60],
         ]))
-        settle()
+        prepareDisplay()
         return p
     }
 
-    /// AppKit attaches new views' layers at the window's display; the
-    /// window server shows a committed frame a refresh or two later.
-    private func settle() {
+    /// Attach backing layers and prepare the CPU capture without waiting
+    /// for the window server to present the frame.
+    private func prepareDisplay() {
         window?.displayIfNeeded()
         CATransaction.flush()
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
     }
 
     private func red(_ rep: NSBitmapImageRep, _ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
@@ -83,9 +82,26 @@ final class BackdropShadowMacTests: XCTestCase {
         guard let window, let live = Agent.ownWindowImage(window.windowNumber) else {
             throw XCTSkip("the window server gave no picture (a display asleep or a locked screen)")
         }
-        let rep = NSBitmapImageRep(cgImage: live)
-        XCTAssertLessThan(try red(rep, 100, 108), 0.75, "the shadow below the box, in the window")
-        XCTAssertGreaterThan(try red(rep, 20, 108), 0.98, "the page beside it, in the window")
+        var rep = NSBitmapImageRep(cgImage: live)
+        waitFor("the window's shadow") {
+            if let image = Agent.ownWindowImage(window.windowNumber) { rep = NSBitmapImageRep(cgImage: image) }
+            return ((try? self.red(rep, 100, 108)) ?? 1) < 0.75 && ((try? self.red(rep, 20, 108)) ?? 0) > 0.98
+        }
+    }
+
+    func testARaisedBackdropShadowPaintsOverEarlierContent() throws {
+        let sibling: [String: Any] = ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]]
+        let p = page([sibling])
+        p.apply(wireBatch([
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 200, "h": 200],
+            ["op": "rank", "id": 2, "rank": 1],
+        ]))
+        window?.displayIfNeeded()
+        for capture in [{ Capture.bitmap(of: p.viewport, scale: 1) }, { Capture.picture(of: p.viewport) }] {
+            let shot = try XCTUnwrap(capture())
+            XCTAssertLessThan(try red(shot, 100, 108), 0.75, "the raised box's shadow covers the lower sibling")
+            XCTAssertGreaterThan(try red(shot, 20, 108), 0.98)
+        }
     }
 
     /// The stand is directly under the node's layer and shows as it does.
@@ -130,7 +146,8 @@ final class BackdropShadowMacTests: XCTestCase {
         node.isHidden = false
         // The siblings reordered: under the node again once AppKit has moved the layers.
         p.apply(wireBatch([["op": "children", "id": 1, "ids": [3, 2]]]))
-        settle()
+        prepareDisplay()
+        waitForMainQueue("the shadow stand after AppKit reorders its siblings")
         try assertStands(node)
         // The blur gone, the node's own layer casts again and the stand leaves.
         let stand = try XCTUnwrap(node.shadowStand)
@@ -143,7 +160,7 @@ final class BackdropShadowMacTests: XCTestCase {
         XCTAssertFalse(layer.masksToBounds)
         // Back, then unmounted: the stand leaves with the node.
         p.apply(wireBatch([["op": "style", "id": 2, "style": glass]]))
-        settle()
+        prepareDisplay()
         try assertStands(node)
         let again = try XCTUnwrap(node.shadowStand)
         p.apply(wireBatch([["op": "children", "id": 1, "ids": [3]]]))

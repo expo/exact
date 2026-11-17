@@ -1,10 +1,14 @@
 // What has been run against an app's current sources (LLP 1146 D2).
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { resolveApp } from './app.mjs';
-import { changedPaths, hostsTouched, standing } from './evidence.mjs';
+import { changedPaths, hostsTouched, recordRun, runs, standing } from './evidence.mjs';
+import { privateNativeBuild, privateWebBuild } from './web-build.mjs';
+import { webInputDigests } from './agent-launch.mjs';
+import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 const allHosts = ['web', 'macos', 'ios', 'tvos', 'linux', 'windows', 'android'];
@@ -16,6 +20,34 @@ const appAt = (path) => {
     else process.env.EXACT_APP_DIR = previous;
   }
 };
+
+test('web evidence keeps its receipt after temporary publications are removed', () => {
+  mkdirSync(resolve(ROOT, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(ROOT, 'target/evidence-web-'));
+  const previous = process.env.EXACT_APP_DIR, distBefore = process.env.EXACT_WEB_DIST;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-web', app: { id: 'com.exact.evidence-web', name: 'Evidence Web' } }));
+    const source = resolve(dir, 'app.contract');
+    writeFileSync(source, 'component App\n  text "hello"\n');
+    const app = resolveApp(dir), build = privateWebBuild(app, 'test');
+    process.env.EXACT_WEB_DIST = build.dist;
+    mkdirSync(build.dist, { recursive: true });
+    writeFileSync(resolve(build.dist, '.exact-build.json'), JSON.stringify({ target: 'js', inputs: webInputDigests(app, true, []), inputRoots: [], inputsAt: 0 }));
+    recordRun(dir, { host: 'web', what: 'test', result: 'passed' });
+    build.close();
+    expect(existsSync(build.dist)).toBe(false);
+    const recorded = runs(app);
+    expect(recorded).toHaveLength(1);
+    expect(existsSync(recorded[0].receipt)).toBe(true);
+    expect(standing(app, recorded)[0].standing).toBe('current');
+    writeFileSync(source, 'changed');
+    expect(standing(app, recorded)[0].standing).toBe('stale');
+  } finally {
+    if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
+    if (distBefore === undefined) delete process.env.EXACT_WEB_DIST; else process.env.EXACT_WEB_DIST = distBefore;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('a run is current while its build is the host\'s and fresh', () => {
   const runs = [
@@ -33,6 +65,32 @@ test('a run is current while its build is the host\'s and fresh', () => {
   ]);
 });
 
+test('evidence lists native runs whose receipts predate backend metadata', () => {
+  mkdirSync(resolve(ROOT, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(ROOT, 'target/evidence-backend-'));
+  const put = (path, text = '') => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); };
+  try {
+    put(resolve(dir, 'app.contract'), 'component App\n  text "hello"\n');
+    put(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-backend', app: { id: 'com.exact.evidence-backend', name: 'Evidence Backend' } }));
+    put(resolve(dir, 'app.ts'), "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), all = [];
+    for (const host of ['macos', 'ios']) {
+      const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
+      const receipt = resolve(host === 'ios' ? paths.bundle : paths.products, 'receipt.json');
+      const text = JSON.stringify({ target: paths.target, build: { trust: 'development' } });
+      put(receipt, text);
+      if (host === 'macos') {
+        put(appleRunBinary(app));
+        put(resolve(paths.bundle, 'Contents/Resources/receipt.json'), text);
+      }
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(receipt, future, future);
+      all.push({ host, build: createHash('sha256').update(text).digest('hex').slice(0, 16), what: 'test fixture' });
+    }
+    expect(standing(app, all).map(r => r.standing)).toEqual(['current', 'current']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a change touches the hosts whose code it is', () => {
   expect(hostsTouched(['host/apple/Sources/ExactKit/Mac/PresenterMac.swift'])).toEqual(['macos', 'ios', 'tvos']);
   expect(hostsTouched(['host/web-js/rt.js', 'host/windows/src/main.rs'])).toEqual(['web', 'windows']);
@@ -41,7 +99,7 @@ test('a change touches the hosts whose code it is', () => {
 });
 
 test.each(['runner', 'canvas', 'route', 'color', 'logic', 'markdown', 'textflow', 'update', 'grants',
-  'data', 'tamber', 'bake', 'gpu', 'game/engine', 'a-new-shared-crate'])(
+  'data', 'forma', 'bake', 'gpu', 'game/engine', 'a-new-shared-crate'])(
   '%s touches every host', (dir) => {
     expect(hostsTouched([`${dir}/src/lib.rs`])).toEqual(allHosts);
   },
@@ -52,8 +110,9 @@ test.each([
   ['host/apple-painted/src/lib.rs', ['macos']],
   ['host/web-capabilities/src/lib.rs', ['web']],
   ['host/web-geometry/src/lib.rs', ['web']],
+  ['host/linux/src/display.rs', ['linux']],
   ['host/linux-update/src/lib.rs', ['linux']],
-  ['host/linux/src/presenter.rs', ['linux', 'windows', 'android']],
+  ['host/painted/src/presenter.rs', ['linux', 'windows', 'android']],
   ['host/ink/src/lib.rs', ['linux', 'windows', 'android']],
   ['host/listen/src/lib.rs', ['macos', 'linux', 'android']],
   ['host/raster/src/lib.rs', ['macos', 'ios', 'tvos', 'linux', 'windows', 'android']],
@@ -66,7 +125,7 @@ test.each([
 test('Mac coverage follows the selected app\'s dependencies', () => {
   const heavy = appAt('bench/heavy-list/exact-heavylist'), caltrain = appAt('apps/caltrain');
   expect(heavy.manifest.host.macos.presenter).toBeUndefined();
-  for (const path of ['host/ink/src/device/apple.rs', 'host/linux/src/presenter.rs']) {
+  for (const path of ['host/ink/src/device/apple.rs', 'host/painted/src/presenter.rs']) {
     expect(hostsTouched([path], heavy)).toEqual(['macos', 'linux', 'windows', 'android']);
     expect(hostsTouched([path], caltrain)).toEqual(['linux', 'windows', 'android']);
     expect(hostsTouched([path], { ...caltrain, manifest: { host: { macos: { presenter: 'painted' } } } }))
@@ -89,7 +148,7 @@ name = "app-apple"
 [dependencies]
 feed = { path = "../data" }
 [target.'cfg(all(unix, any(target_os = "linux", target_os = "windows")))'.dependencies]
-exact-linux = { path = ${JSON.stringify(resolve(ROOT, 'host/linux'))} }
+exact-painted = { path = ${JSON.stringify(resolve(ROOT, 'host/painted'))} }
 `);
     const data = (target) => `[package]
 name = "app-data"
@@ -100,7 +159,7 @@ probe.workspace = true
     for (const target of ['cfg(all(target_vendor = "apple", not(target_os = "ios")))', 'x86_64-apple-darwin']) {
       writeFileSync(resolve(dir, 'data/Cargo.toml'), data(target));
       expect(hostsTouched(['host/ink/src/lib.rs'], app)).toEqual(['macos', 'linux', 'windows', 'android']);
-      expect(hostsTouched(['host/linux/src/presenter.rs'], app)).toEqual(['linux', 'windows', 'android']);
+      expect(hostsTouched(['host/painted/src/presenter.rs'], app)).toEqual(['linux', 'windows', 'android']);
     }
     writeFileSync(resolve(dir, 'data/Cargo.toml'), data('cfg(not(unix))'));
     expect(hostsTouched(['host/ink/src/lib.rs'], app)).toEqual(['linux', 'windows', 'android']);
@@ -108,20 +167,20 @@ probe.workspace = true
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.each(['host/apple/src/executor_core.rs', 'host/apple/src/executor_async.rs'])(
+test.each(['host/executor/src/lib.rs', 'host/executor/src/async.rs'])(
   '%s touches native apps and web rendering', (path) => {
     expect(hostsTouched([path])).toEqual(allHosts);
   },
 );
 
 test.each([
-  ['executor_process.rs', ['web', 'macos', 'linux']],
-  ['executor_process_supervise.rs', ['web', 'macos', 'linux']],
-  ['executor_process_off.rs', ['web', 'ios', 'tvos', 'windows', 'android']],
-  ['executor_order_tests.rs', ['macos', 'ios', 'tvos']],
-])('%s touches only the hosts that compile it', (file, hosts) => {
-  expect(hostsTouched([`host/apple/src/${file}`])).toEqual(hosts);
-  expect(hostsTouched([`host/apple/src/${file}`], appAt('apps/realworld'))).toEqual(hosts);
+  ['host/executor/src/process.rs', ['web', 'macos', 'linux']],
+  ['host/executor/src/process_supervise.rs', ['web', 'macos', 'linux']],
+  ['host/executor/src/process_off.rs', ['web', 'ios', 'tvos', 'windows', 'android']],
+  ['host/apple/src/executor_order_tests.rs', ['macos', 'ios', 'tvos']],
+])('%s touches only the hosts that compile it', (path, hosts) => {
+  expect(hostsTouched([path])).toEqual(hosts);
+  expect(hostsTouched([path], appAt('apps/realworld'))).toEqual(hosts);
 });
 
 test('only the selected app touches its hosts', () => {
@@ -192,7 +251,7 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
     git('init', '-q');
     write('runner/src/lib.rs', 'runner\n');
     write('host/apple/old.swift', 'apple\n');
-    write('host/linux/src/lib.rs', 'linux\n');
+    write('host/painted/src/lib.rs', 'linux\n');
     git('add', '.');
     git('commit', '-qm', 'Fixture');
     const base = git('rev-parse', 'HEAD');
@@ -200,10 +259,10 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
     expect(changedPaths(base, root)).toEqual(['runner/src/lib.rs']);
     expect(hostsTouched(changedPaths(base, root))).toEqual(allHosts);
 
-    write('host/linux/src/lib.rs', 'linux staged\n');
-    git('add', 'host/linux/src/lib.rs');
-    write('host/linux/src/lib.rs', 'linux\n');
-    expect(changedPaths(base, root).sort()).toEqual(['host/linux/src/lib.rs', 'runner/src/lib.rs']);
+    write('host/painted/src/lib.rs', 'linux staged\n');
+    git('add', 'host/painted/src/lib.rs');
+    write('host/painted/src/lib.rs', 'linux\n');
+    expect(changedPaths(base, root).sort()).toEqual(['host/painted/src/lib.rs', 'runner/src/lib.rs']);
 
     git('add', '.');
     git('commit', '-qm', 'Changed runner');
@@ -237,4 +296,40 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
     git('commit', '-qm', 'Many changed paths');
     expect(changedPaths(base, root).sort()).toEqual([...before.filter(path => path !== 'runner/src/lib.rs'), ...many].sort());
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test.each(['macos', 'ios'])('%s evidence survives private product and bake cleanup', host => {
+  mkdirSync(resolve(ROOT, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(ROOT, 'target/evidence-native-'));
+  const previous = { ...process.env };
+  let build;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-native', app: { id: 'com.exact.evidence-native', name: 'Evidence Native' } }));
+    const source = resolve(dir, 'app.contract'), data = resolve(dir, 'logic.rs');
+    writeFileSync(source, 'component App\n  text "hello"\n'); writeFileSync(data, 'logic');
+    const app = resolveApp(dir); build = privateNativeBuild(app, 'test');
+    Object.assign(process.env, build.env);
+    const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
+    const receipt = resolve(host === 'ios' ? paths.bundle : paths.products, 'receipt.json');
+    const generated = resolve(build.env.EXACT_BAKE_OUTPUT, 'generated.rs');
+    mkdirSync(build.env.EXACT_BAKE_OUTPUT, { recursive: true }); writeFileSync(generated, 'generated');
+    mkdirSync(dirname(receipt), { recursive: true });
+    const text = JSON.stringify({ target: paths.target, build: { trust: 'development', compat: { inputs: { platform: host } },
+      linkedPlan: build.env.EXACT_BAKE_OUTPUT, linkedInputs: { paths: [source], missing: [], watchedDirectories: [] },
+      binary: { metadata: {}, inputs: [data, generated].map(path => ({ name: path, path, sha256: createHash('sha256').update(path === data ? 'logic' : 'generated').digest('hex') })), missing: [], directories: [], links: [], watchOutputs: [app.target] } } });
+    writeFileSync(receipt, text);
+    recordRun(dir, { host, what: 'test', result: 'passed' });
+    build.close();
+    expect(existsSync(receipt)).toBe(false);
+    const recorded = runs(app);
+    expect(recorded).toHaveLength(1);
+    expect(standing(app, recorded)[0].standing).toBe('current');
+    writeFileSync(data, 'changed');
+    expect(standing(app, recorded)[0].standing).toBe('stale');
+  } finally {
+    build?.close();
+    for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous); rmSync(dir, { recursive: true, force: true });
+  }
 });

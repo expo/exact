@@ -134,6 +134,24 @@ fn a_tab_is_built_when_first_selected_and_keeps_its_state() {
 }
 
 #[test]
+fn panels_inside_the_tablist_are_built_when_selected() {
+    let source = source(ARIA)
+        .replace("      column\n", "      row role=\"tablist\"\n")
+        .replace(
+            "      row role=\"tablist\"\n        button",
+            "        button",
+        );
+    let mut r = boot(&source, "/");
+    let tree = agent::tree(&r);
+    assert!(!unopened(&tree, "a"));
+    assert!(unopened(&tree, "b") && unopened(&tree, "c"));
+    r.act("pick", vec![Value::str("b")]).unwrap();
+    let tree = agent::tree(&r);
+    assert!(!unopened(&tree, "b") && unopened(&tree, "c"));
+    assert!(has(&tree, "bump-b") && !has(&tree, "bump-c"));
+}
+
+#[test]
 fn a_launch_into_another_tab_builds_that_tab_alone() {
     let r = boot(&source(ARIA), "/c");
     let tree = agent::tree(&r);
@@ -469,4 +487,103 @@ fn a_host_builds_named_tabs_without_selecting_them() {
     // A built panel, or a view that is no waiting panel, is left as it is.
     r.build_tabs(&[c, 0]).unwrap();
     assert_eq!(r.unopened_tabs().len(), 1);
+}
+
+#[test]
+fn selecting_a_tab_names_the_panel_when_its_initializer_traps() {
+    selected_panel_trap(
+        "Broken()",
+        "component Broken\n  state rows = range(65537)\n  view\n    text `${rows.length}`\n",
+        "state \"rows#1\" initializer",
+    );
+}
+
+#[test]
+fn selecting_a_tab_names_the_panel_when_its_direct_region_traps() {
+    selected_panel_trap(
+        "for n in range(65537) key=n\n          text `${n}`",
+        "",
+        "each subject",
+    );
+}
+
+fn selected_panel_trap(contents: &str, component: &str, evaluation: &str) {
+    let source = format!(
+        r#"component App
+  state selected = "a"
+  action pick
+    selected = "b"
+  view
+    column navigationKey=selected navigationBack="back"
+      row role="tablist"
+        button "A" role="tab" aria-controls="panel-a" aria-selected=(selected == "a")
+        button "B" role="tab" aria-controls="panel-b" aria-selected=(selected == "b") press=pick testId="tab-b"
+      column role="tabpanel" id="panel-a"
+        column navigationKey="a"
+          text "A"
+      column role="tabpanel" id="panel-b" testId="panel-b"
+        {contents}
+        column navigationKey="b"
+          text "B"
+{component}"#
+    );
+    let mut r = boot(&source, "/");
+    let tree = agent::tree(&r);
+    let id = |target: &str| -> u32 {
+        nodes(&tree)
+            .into_iter()
+            .find(|n| n.contains(&format!("\"testId\":\"{target}\"")))
+            .unwrap()
+            .split(',')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let view = id("panel-b");
+    let button = id("tab-b");
+    let error = r.dispatch(button, Event::Press).unwrap_err();
+    let text = format!("{error:?}");
+    assert!(text.contains("Trap(IterationLimit { pc: "), "{text}");
+    assert!(text.contains(&format!(" in view {view} (site ")), "{text}");
+    assert!(
+        text.contains(&format!(
+            ") {evaluation}: past the 65,536 list steps one evaluation may take"
+        )),
+        "{text}"
+    );
+    assert!(r.is_poisoned(), "{text}");
+    assert!(r.journal().any(|line| line.contains(&text)), "{text}");
+}
+
+#[test]
+fn panels_in_fixed_content_open_on_initial_selection_and_switching() {
+    let source = source(ARIA);
+    let start = source.find("      column\n").unwrap();
+    let end = source.find("      row role=\"tablist\"\n").unwrap();
+    let fixed = source[start..end]
+        .lines()
+        .map(|line| format!("  {line}\n"))
+        .collect::<String>();
+    let data = "        for item in [1, 2] key=item\n          text `${item}`\n";
+    for trail in [false, true] {
+        let children = if trail {
+            format!("{data}{fixed}")
+        } else {
+            format!("{fixed}{data}")
+        };
+        let source = format!(
+            "{}      list virtualized=true appearance=\"none\" height=400\n{children}{}",
+            &source[..start],
+            &source[end..]
+        );
+        let mut r = boot(&source, "/");
+        let tree = agent::tree(&r);
+        assert!(has(&tree, "bump-a"), "trail={trail}: {tree}");
+        assert!(unopened(&tree, "b") && unopened(&tree, "c"));
+        r.act("pick", vec![Value::str("b")]).unwrap();
+        let tree = agent::tree(&r);
+        assert!(has(&tree, "bump-b"), "trail={trail}: {tree}");
+        assert!(!unopened(&tree, "b") && unopened(&tree, "c"));
+    }
 }

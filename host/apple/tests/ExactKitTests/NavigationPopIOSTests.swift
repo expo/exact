@@ -3,12 +3,13 @@ import UIKit
 import XCTest
 @testable import ExactKit
 
-/// The end of a pop UIKit runs (`NavigationHost.completeTransition`): the app
-/// follows a pop UIKit finished, whatever became of the source's key or of a
-/// route the app selected again meanwhile, and a cancelled pop dispatches no
-/// Back. The tree is the test's own, written to the presenter as the runner
-/// writes it; a Back is the press of the route's `navigationBack` control,
-/// which the test answers as the app would, in the same turn.
+/// A pop UIKit runs reaches the app (`NavigationHost.followPops`, and a
+/// swipe's end in `completeTransition`): the app follows a pop UIKit
+/// committed, whatever became of the source's key or of a route the app
+/// selected again meanwhile, and a cancelled swipe dispatches no Back. The
+/// tree is the test's own, written to the presenter as the runner writes
+/// it; a Back is the press of the route's `navigationBack` control, which
+/// the test answers as the app would, in the same turn.
 final class NavigationPopIOSTests: XCTestCase {
     private var window: UIWindow?
     private var sessions: [ExactSession] = []
@@ -195,6 +196,22 @@ final class NavigationPopIOSTests: XCTestCase {
         until("the pop lands on Settings") { s.nav.transitionCoordinator == nil && s.nav.viewControllers.count == 1 && s.key == "settings" }
         XCTAssertEqual(pressed, [4], "Updates' Back, once")
         XCTAssertEqual(s.session.presenter.navigation.selectedKey, "settings")
+    }
+
+    /// The app goes back from Log, a route it retains, and then selects it
+    /// again: Exact took Log out for the app, so Log selected again is a
+    /// request Exact writes, and no pop of UIKit's to follow.
+    func testARouteTheAppWentBackFromIsWrittenWhenSelectedAgain() throws {
+        guard hasScene else { throw missing("scene", "UIKit animates the pop and the push Exact writes only in a window a scene holds") }
+        let s = try stack("app-back-retained")
+        var pressed: [UInt32] = []
+        s.session.presenter.onPress = { pressed.append($0) }
+        s.apply([["op": "props", "id": 1, "set": ["navigationKey": "updates"]]])
+        until("Exact takes Log out") { s.nav.transitionCoordinator == nil && s.nav.viewControllers.count == 2 && s.key == "updates" }
+        s.apply([["op": "props", "id": 1, "set": ["navigationKey": "log"]]])
+        until("Exact pushes Log again") { s.nav.transitionCoordinator == nil && s.nav.viewControllers.count == 3 && s.key == "log" }
+        waitForMainQueue()
+        XCTAssertEqual(pressed, [], "no Back")
     }
 }
 #endif

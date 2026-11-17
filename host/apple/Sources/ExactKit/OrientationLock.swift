@@ -68,17 +68,16 @@ extension Presenter {
     /// The batch's word on the orientation lock, when it says one.
     func applyOrientationLock(_ batch: Batch) {
         guard let request = batch.orientation else { return }
-        // `current` is captured once a hold: a release and a new lock capture again.
-        if !request.current { orientationLock.captured = 0 }
         orientationLock.request = request
         resolveOrientationLock()
     }
 
-    /// Resolve the request against the scene, have every controller answer
-    /// it, turn the scene when it is outside, and report what was asked.
-    func resolveOrientationLock() {
+    /// Resolve without changing UIKit or readback, so queued batches can be classified before they land.
+    private func resolvedOrientationLock(_ request: OrientationRequest) -> OrientationLock {
         var lock = orientationLock
-        let request = lock.request
+        // `current` is captured once a hold: a release and a new lock capture again.
+        if !request.current { lock.captured = 0 }
+        lock.request = request
         let window = viewport.window, scene = window?.windowScene
         var mask = 0, locked = false, line: String?, why: String?, conflict = false
         if request.types == 0 {
@@ -113,10 +112,28 @@ extension Presenter {
         } else {
             why = "no window"
         }
-        let changed = mask != lock.mask || locked != lock.locked
-        (lock.mask, lock.locked, lock.why, lock.conflict) = (mask, locked, why, conflict)
-        if line != lock.said, let line { session?.log(line) }
-        lock.said = line
+        (lock.mask, lock.locked, lock.why, lock.conflict, lock.said) = (mask, locked, why, conflict, line)
+        return lock
+    }
+
+    private func needsOrientationTurn(_ lock: OrientationLock) -> Bool {
+        guard lock.mask != 0, let scene = viewport.window?.windowScene else { return false }
+        return OrientationLock.bit(scene.effectiveGeometry.interfaceOrientation) & lock.mask == 0
+    }
+
+    func orientationChangesScreen(_ batch: Batch) -> Bool {
+        guard let request = batch.orientation else { return false }
+        let lock = resolvedOrientationLock(request)
+        return lock.mask != orientationLock.mask || lock.locked != orientationLock.locked || needsOrientationTurn(lock)
+    }
+
+    /// Resolve the request against the scene, have every controller answer
+    /// it, turn the scene when it is outside, and report what was asked.
+    func resolveOrientationLock() {
+        let lock = resolvedOrientationLock(orientationLock.request)
+        let window = viewport.window, scene = window?.windowScene
+        let changed = lock.mask != orientationLock.mask || lock.locked != orientationLock.locked
+        if lock.said != orientationLock.said, let line = lock.said { session?.log(line) }
         orientationLock = lock
         if changed, let root = window?.rootViewController {
             var controller: UIViewController? = root
@@ -126,8 +143,8 @@ extension Presenter {
                 controller = c.presentedViewController
             }
         }
-        if mask != 0, let scene, OrientationLock.bit(scene.effectiveGeometry.interfaceOrientation) & mask == 0 {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: OrientationLock.mask(mask))) { [weak self] error in
+        if needsOrientationTurn(lock), let scene {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: OrientationLock.mask(lock.mask))) { [weak self] error in
                 self?.session?.log("orientationlock: the turn was refused: \(error.localizedDescription)")
             }
         }
@@ -171,6 +188,7 @@ extension Presenter {
         orientationLock.said = "orientationlock: this host has no screen orientation"
         session?.log(orientationLock.said!)
     }
+    func orientationChangesScreen(_ batch: Batch) -> Bool { false }
     func reportOrientationLock() {}
     func releaseOrientationLock() { orientationLock.request = OrientationRequest() }
 }

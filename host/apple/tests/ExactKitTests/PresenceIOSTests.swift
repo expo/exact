@@ -363,6 +363,36 @@ final class PresenceIOSTests: XCTestCase {
         XCTAssertFalse(control.apportionsSegmentWidthsByContent, "wide again: equal")
     }
 
+    /// A long press runs the `contextmenu` of the tab whose segment is under
+    /// it, also where UIKit sizes the segments by their content.
+    func testALongPressNamesTheSegmentUnderItWhenSegmentsAreSizedByContent() throws {
+        let p = fixture()
+        defer { p.reset() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 30, "kind": "view", "props": ["accessibilityRole": "tablist"]],
+            ["op": "create", "id": 31, "kind": "button", "props": ["accessibilityRole": "tab", "accessibilitySelected": "true"], "handlers": ["press", "contextmenu"]],
+            ["op": "create", "id": 32, "kind": "button", "props": ["accessibilityRole": "tab"], "handlers": ["press", "contextmenu"]],
+            ["op": "create", "id": 33, "kind": "text", "props": ["text": "Temperature"]],
+            ["op": "create", "id": 34, "kind": "text", "props": ["text": "Length"]],
+            ["op": "children", "id": 31, "ids": [33]],
+            ["op": "children", "id": 32, "ids": [34]],
+            ["op": "children", "id": 30, "ids": [31, 32]],
+            ["op": "roots", "ids": [1, 30]],
+            ["op": "frame", "id": 30, "x": 0.0, "y": 0.0, "w": 160.0, "h": 32.0],
+        ]))
+        let control = try XCTUnwrap(p.segments.control(of: 30))
+        control.layoutIfNeeded()
+        XCTAssertTrue(control.apportionsSegmentWidthsByContent, "too narrow for equal segments")
+        let views = control.segmentViews
+        XCTAssertEqual(views.count, 2)
+        let boundary = try XCTUnwrap(views.first).convert(try XCTUnwrap(views.first).bounds, to: control).maxX
+        XCTAssertGreaterThan(boundary, 85, "Temperature takes more than its half")
+        for x in stride(from: 2.0, to: 158.0, by: 4.0) where abs(x - boundary) > 1 {
+            let tab = p.segments.contextTab(at: CGPoint(x: x, y: control.bounds.midY), in: control)
+            XCTAssertEqual(tab?.id, x < boundary ? 31 : 32, "at x = \(x), the segments meeting at \(boundary)")
+        }
+    }
+
     /// LLP 1116 D6: a text tab whose `aria-label` says more than its words
     /// (`Temp`, named `Temperature`) keeps the native segmented control —
     /// the words its title, the label its segment's accessibility label —

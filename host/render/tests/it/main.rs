@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 mod boot;
 mod checkpoints;
 mod direct;
+mod each;
+mod http_cache;
 mod longpoll;
 mod overload;
 mod serve;
@@ -336,6 +338,16 @@ fn a_fetch_runs_through_the_native_executor() {
         Ok(line)
     });
     let r = at(Post::Local(port), bound);
+    let checkpoint = exact_web::document::read_checkpoint(&r.checkpoint).unwrap();
+    let post = checkpoint
+        .answers
+        .iter()
+        .position(|a| a.0 == "post")
+        .unwrap();
+    assert_eq!(
+        checkpoint.urls[post],
+        [format!("http://127.0.0.1:{port}/post/7")]
+    );
     let request = server.join().expect("the test server panicked");
     assert_eq!(request.as_deref(), Ok("GET /post/7 HTTP/1.1"));
     assert_eq!(r.settled, Settled::Complete);
@@ -349,6 +361,16 @@ fn a_fetch_runs_through_the_native_executor() {
     let port = closed.local_addr().unwrap().port();
     drop(closed);
     let r = at(Post::Local(port), bound);
+    let checkpoint = exact_web::document::read_checkpoint(&r.checkpoint).unwrap();
+    let post = checkpoint
+        .answers
+        .iter()
+        .position(|a| a.0 == "post")
+        .unwrap();
+    assert_eq!(
+        checkpoint.urls[post],
+        [format!("http://127.0.0.1:{port}/post/7")]
+    );
     assert_eq!(r.settled, Settled::Complete);
     assert!(r.document.root.contains(">failed: "), "{}", r.document.root);
 }
@@ -393,6 +415,16 @@ fn a_keep_alive_answer_ends_at_its_framing_not_at_the_close() {
             let _ = hold.recv_timeout(Duration::from_secs(30));
         });
         let r = at(Post::Local(port), bound);
+        let checkpoint = exact_web::document::read_checkpoint(&r.checkpoint).unwrap();
+        let post = checkpoint
+            .answers
+            .iter()
+            .position(|a| a.0 == "post")
+            .unwrap();
+        assert_eq!(
+            checkpoint.urls[post],
+            [format!("http://127.0.0.1:{port}/post/7")]
+        );
         let done = Instant::now();
         let sent = when.recv_timeout(bound).expect("the server never answered");
         release.send(()).unwrap();
@@ -430,7 +462,7 @@ fn a_document_whose_ids_nobody_keeps_is_the_settled_tree_projected() {
     for (post, deadline) in [(Post::Soon, 5_000), (Post::Never, 100)] {
         let [runtime, any] = [exact_render::Ids::Runtime, exact_render::Ids::Any].map(|ids| {
             exact_render::render_with_at(
-                &plan(),
+                plan(),
                 &|| Blog::new(post),
                 Default::default(),
                 "/post/7",
@@ -439,6 +471,7 @@ fn a_document_whose_ids_nobody_keeps_is_the_settled_tree_projected() {
                 ids,
                 exact_render::Projection::Auto,
                 1_700_000_000_000.0,
+                &Default::default(),
             )
             .unwrap()
         });
@@ -466,7 +499,7 @@ fn a_document_whose_ids_nobody_keeps_is_the_settled_tree_projected() {
 
 #[test]
 fn a_page_is_the_shell_around_the_document() {
-    let r = at(Post::Soon, Duration::from_secs(5));
+    let mut r = at(Post::Soon, Duration::from_secs(5));
     let shell =
         std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/index.html"))
             .unwrap();
@@ -489,7 +522,13 @@ fn a_page_is_the_shell_around_the_document() {
     assert!(html.find(&capture) < html.find("<body").or(html.find("<div id=\"exact-root\"")));
     assert!(scripts[1].starts_with("<script type=\"application/vnd.exact.checkpoint\""));
     assert!(scripts[2].starts_with("<script type=\"module\" src=\"./glue.js\">"));
-    assert!(exact_render::capture().len() <= 1024);
+    assert!(exact_render::capture().len() <= 1536);
+    assert!(!html.contains("<meta name=\"exact-scheme\""));
+    r.chooses_scheme = true;
+    let chosen = exact_render::page(&shell, &r).unwrap();
+    let meta = "<meta name=\"exact-scheme\" content=\"exact.state.#scheme\">";
+    assert!(chosen.contains(meta));
+    assert!(chosen.find(meta) < chosen.find(&capture));
     assert_eq!(html.matches("<meta name=\"viewport\"").count(), 1);
     // An idle page's runtime downloads with the document (LLP 1048.000 D3).
     assert!(html.contains("<link rel=\"preload\" href=\"./app.wasm\" as=\"fetch\" crossorigin>"));
@@ -521,7 +560,25 @@ fn a_page_is_the_shell_around_the_document() {
         !rest.contains("navigation.js"),
         "an interaction page names navigation.js outside a comment, so something fetches it before intent"
     );
+    audio_policy_precedes_runtime(&shell, &interaction);
     a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(interaction);
+}
+
+fn audio_policy_precedes_runtime(shell: &str, rendered: &Rendered) {
+    let entry = "<script src=\"./audio-session.js\"></script>\n";
+    let shell = shell.replace(
+        "<div id=\"exact-root\"></div>",
+        &format!("<div id=\"exact-root\" data-audio-session=\"ambient\"></div>{entry}"),
+    );
+    let html = exact_render::page(&shell, rendered).unwrap();
+    assert_eq!(html.matches(entry).count(), 1);
+    assert!(html.contains("data-audio-session=\"ambient\""));
+    assert!(
+        html.find(entry).unwrap()
+            < html
+                .find("<script type=\"application/vnd.exact.checkpoint\"")
+                .unwrap()
+    );
 }
 
 /// The shell with its CSS (`/* … */`) and HTML (`<!-- … -->`) comments cut:
@@ -554,7 +611,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     // @ref LLP 1071 D6
     r.activate = exact_plan::ActivatePolicy::Inferred;
     // The shell as host/web-js/build.mjs writes it.
-    let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<link rel=\"modulepreload\" href=\"./shared-1.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+    let shell = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<link rel=\"modulepreload\" href=\"./shared-1.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
     let html = exact_render::page(shell, &r).unwrap();
     // Undeclared is eager: the runtime downloads from the head, before the
     // stylesheet and the document, while the page streams, at low priority:
@@ -582,7 +639,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     let root = strip_view_ids(&r.document.root);
     assert!(r.document.root.contains(" data-view=\""));
     assert!(html.ends_with(&format!(
-        "<div id=\"exact-root\">{root}</div>\n<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"eager\">{}</script>\n",
+        "<div id=\"exact-root\">{root}</div>\n<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"eager\" data-entry=\"./app.js\">{}</script>\n",
         r.digest, r.checkpoint
     )), "{html}");
     // The head goes first, as a server flushes it before the render: the
@@ -626,7 +683,7 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
         assert!(tag.contains(" data-view"), "{tag}");
     }
     for part in [
-        "import(\"./app.js\")",
+        "import(c().dataset.entry)",
         "observe({type:\"paint\",buffered:!0})",
         "DOMContentLoaded",
         "requestIdleCallback",
@@ -643,7 +700,12 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
     r.activate = exact_plan::ActivatePolicy::Interaction;
     let html = exact_render::page(shell, &r).unwrap();
     assert!(html.contains("data-activate=\"interaction\""));
-    assert!(!html.replace(capture, "").contains(".js"), "{html}");
+    // The checkpoint names the entry, which nothing fetches yet.
+    let fetched = html
+        .replace(capture, "")
+        .replace(" data-entry=\"./app.js\"", "");
+    assert!(!fetched.contains(".js"), "{html}");
+    audio_policy_precedes_runtime(shell, &r);
     // A shell that declares the plan's fonts (their faces with
     // `font-display`, their preloads early in the head) keeps its own: the
     // render's copies would replace the shell's rules.
@@ -743,6 +805,34 @@ fn a_route_lists_its_pages_with_its_source() {
         exact_web::document::build_locations(&plan).unwrap(),
         vec![("/".to_string(), false)]
     );
+}
+
+/// A worker-placed source (a lone `Placed`, one ordered set, LLP 1027.002
+/// Change 2) lists its pages too: the enumerator parses each turn's reply
+/// before it dispatches the next, so it never meets `Dispatch::Held`.
+#[test]
+fn a_worker_placed_pages_source_is_never_held() {
+    struct Listed;
+    impl DataSource for Listed {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::list(vec![Value::str("1")])))
+        }
+    }
+    let plan = contract::compile(
+        "routes nav\n  tab home \"/\" render=build\n    post \"/post/:post\" render=build pages=posts(\"public\")\ncomponent A\n  view\n    text \"a\"\n",
+    )
+    .unwrap();
+    let row = plan
+        .routes
+        .iter()
+        .find(|r| plan.str(r.name) == "post")
+        .unwrap();
+    let worker = exact_data::Placed::new(Listed, exact_runner::Placement::Worker);
+    let listed = exact_render::pages(&plan, worker, row, Duration::from_secs(5));
+    assert_eq!(listed.unwrap(), ["/post/1"]);
 }
 
 /// A `pages=` source that is re-asked without end (`Dispatch::Again` gets
@@ -845,7 +935,7 @@ fn rendered_document_sets_html_language_and_direction() {
     // rule (LLP 1048.003 D4), on either runtime's shell; a JavaScript page
     // sent whole needs no script for it.
     rendered.document.scroll_document = true;
-    let js = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+    let js = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
     for shell in [shell.as_str(), js] {
         let html = exact_render::page(shell, &rendered).unwrap();
         assert!(
@@ -895,6 +985,7 @@ component Clock
             exact_render::Ids::Any,
             projection,
             now,
+            &Default::default(),
         )
         .unwrap();
         for label in ["First", "Clock", "Resource"] {
@@ -919,4 +1010,158 @@ component Clock
     )
     .unwrap();
     assert!(fresh.state.now_ms > now);
+}
+
+#[test]
+fn rendered_delivery_uses_web_version_inputs() {
+    warm_transport();
+    let plan = contract::compile(
+        r#"
+routes nav
+  home "/" render=build activate=never
+shape Build
+  version: string
+  buildNumber: string
+component App
+  resource build = exactDelivery() as shape Build
+  view
+    text `${build.version} (${build.buildNumber})`
+"#,
+    )
+    .unwrap();
+    for (version, build_number) in [("2.3.4", "56"), ("", "")] {
+        let delivery = exact_runner::delivery::Delivery {
+            version: version.into(),
+            build_number: build_number.into(),
+            ..Default::default()
+        };
+        let expected = format!(">{version} ({build_number})<");
+        for (ids, projection) in [
+            (exact_render::Ids::Any, exact_render::Projection::Direct),
+            (exact_render::Ids::Any, exact_render::Projection::Kernel),
+            (exact_render::Ids::Runtime, exact_render::Projection::Kernel),
+        ] {
+            let rendered = exact_render::render_with_at(
+                &plan,
+                &|| Blog::default(),
+                Default::default(),
+                "/",
+                &SITE,
+                Duration::from_secs(5),
+                ids,
+                projection,
+                1700000123456.,
+                &delivery,
+            )
+            .unwrap();
+            assert!(
+                rendered.document.root.contains(&expected),
+                "{ids:?} {projection:?}: {}",
+                rendered.document.root
+            );
+            assert_eq!(rendered.activate, exact_plan::ActivatePolicy::Never);
+        }
+    }
+}
+
+#[test]
+fn served_delivery_uses_the_web_builds_version() {
+    const CHILD: &str = "EXACT_SERVE_VERSION_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "served_delivery_uses_the_web_builds_version",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("EXACT_VERSION")
+            .env_remove("EXACT_BUILD_NUMBER")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let dir = root.join(format!("target/render-version-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("app.json"), r#"{"name":"Version","app":{"id":"test.render-version","name":"Version"},"host":{"web":{}}}"#).unwrap();
+    std::fs::write(
+        dir.join("app.contract"),
+        r#"
+routes nav
+  home "/" render=request activate=never
+shape Build
+  version: string
+  buildNumber: string
+component App
+  resource build = exactDelivery() as shape Build
+  view
+    text `${build.version} (${build.buildNumber})` testId="version"
+"#,
+    )
+    .unwrap();
+    let dist = dir.join("dist");
+    let built = std::process::Command::new("bun")
+        .args(["host/web-js/build.mjs", "render-version", "--out"])
+        .arg(&dist)
+        .args(["--render", "none"])
+        .current_dir(&root)
+        .env("EXACT_APP_DIR", &dir)
+        .env("EXACT_VERSION", "2.3.4")
+        .env("EXACT_BUILD_NUMBER", "56")
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&built.stdout),
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let plan = Plan::decode(&std::fs::read(dist.join("app.plan")).unwrap()).unwrap();
+    let server = exact_render::Server::bind(
+        exact_render::Serve {
+            dist: dist.clone(),
+            port: 0,
+            name: "Version".into(),
+            origin: None,
+            deadline: Duration::from_secs(5),
+            renders: 1,
+            queue: 1,
+            viewport: Default::default(),
+            lifetime: Duration::from_secs(60),
+            generations: None,
+        },
+        plan,
+        "",
+    )
+    .unwrap();
+    let server = serve::serving(server, Blog::default);
+    let (status, _, body) = serve::get(server.addr, "/");
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(status, 200, "{body}");
+    assert!(body.contains(">2.3.4 (56)<"), "{body}");
+    assert!(!body.contains("type=\"module\""), "activate=never: {body}");
+}
+
+/// A dist directory, removed when dropped.
+struct Dist(std::path::PathBuf);
+
+impl Drop for Dist {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl std::ops::Deref for Dist {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
 }

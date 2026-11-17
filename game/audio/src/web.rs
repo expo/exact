@@ -92,8 +92,14 @@ impl WebOutput {
             voices: BTreeMap::new(),
         })
     }
-    /// Stop device time while hidden or interrupted.
+    /// Stop device time while hidden or interrupted, and every voice with it,
+    /// as the native outputs do: a context resumed with its sources would play
+    /// them until the first sync after `resume` starts new ones.
     pub fn suspend(&mut self) -> Result<(), JsValue> {
+        let ids: Vec<u64> = self.voices.keys().copied().collect();
+        for id in ids {
+            Output::stop(self, id);
+        }
         self.suspended.set(true);
         self.activation.set(self.activation.get().wrapping_add(1));
         self.unlocking.set(false);

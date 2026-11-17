@@ -27,16 +27,24 @@ use std::collections::{BTreeMap, BTreeSet};
 /// What names a body may read, from where it is compiled.
 #[derive(Clone, Default)]
 pub struct Scope {
+    /// JavaScript label, evaluated only in the trap catch; whether it poisons a tree update.
+    pub evaluation: Option<(String, bool)>,
     /// JavaScript getters for the enclosing region frames, innermost last:
     /// (item, index, bound).
     pub frames: Vec<Frame>,
     /// Whether this is an action body (writes and commands are allowed).
     pub action: bool,
+    /// A shared at-read body accepts its reader's budget.
+    pub unsettled: bool,
     /// The JavaScript object holding the row slots in force (LLP 1017 P4c:
     /// a slot owned by a `for` lives on its row), by slot index.
     pub rows: Option<String>,
     /// Row slots available in this scope, excluding slots owned by descendants.
     pub row_slots: BTreeSet<usize>,
+    /// The JavaScript expression of the instance path in force, where the
+    /// plan has a child's resource (LLP 1035.005.004 D8): each region
+    /// crossed, with its arm or its row's key.
+    pub path: Option<String>,
 }
 
 /// One region frame's getters.
@@ -144,10 +152,35 @@ fn metered(ins: &[Instruction]) -> bool {
 
 /// Whether `code` reads or writes a row slot.
 pub fn touches_rows(plan: &Plan, code: &[u8]) -> bool {
-    instructions(code).flatten().any(|i| {
-        matches!(i.op, Opcode::LoadSlot | Opcode::StoreSlot)
-            && plan.slots[i.args[0] as usize].owner.is_some()
-    })
+    exact_runner::vm::transitive_instructions(plan, code)
+        .flatten()
+        .any(|i| {
+            matches!(i.op, Opcode::LoadSlot | Opcode::StoreSlot)
+                && plan.slots[i.args[0] as usize].owner.is_some()
+                || reads_resource(i.op) && plan.resources[i.args[0] as usize].owner.is_some()
+                || reads_mutation(i.op) && plan.mutations[i.args[0] as usize].owner.is_some()
+        })
+}
+
+/// Whether `op` sends to or reads mutation `args[0]`.
+fn reads_mutation(op: Opcode) -> bool {
+    matches!(
+        op,
+        Opcode::Send | Opcode::PendingMutation | Opcode::FailedMutation | Opcode::FailureMutation
+    )
+}
+
+/// Whether `op` reads or refreshes resource `args[0]`.
+fn reads_resource(op: Opcode) -> bool {
+    matches!(
+        op,
+        Opcode::LoadResource
+            | Opcode::Refresh
+            | Opcode::PendingResource
+            | Opcode::CurrentResource
+            | Opcode::FailedResource
+            | Opcode::FailureResource
+    )
 }
 
 /// A JavaScript function expression for `code` (`() => …`, or `(p0, …) =>`
@@ -162,7 +195,14 @@ pub fn function(
     let ins: Vec<Instruction> = instructions(code)
         .collect::<Result<_, _>>()
         .map_err(|t| format!("malformed code: {t:?}"))?;
+    let before = uses.metered;
+    let loads = ins
+        .iter()
+        .filter(|i| i.op == Opcode::LoadDerive && plan.unsettled_body(i.args[0] as u32).is_some())
+        .count();
+    let shared = scope.unsettled || loads > 1 || loads != 0 && metered(&ins);
     let mut t = Translator {
+        shared,
         plan,
         scope,
         uses,
@@ -176,16 +216,24 @@ pub fn function(
     let body = t.range(&ins, 0, ins.len())?;
     let ps: Vec<String> = (0..params).map(|i| format!("p{i}")).collect();
     let head = format!("({})", ps.join(","));
-    if metered(&ins) {
-        // One call, one evaluation: its own steps from 0, whatever it reads.
+    if shared || metered(&ins) {
         let out = t.out.strip_suffix("return;").unwrap_or(&t.out);
         let ret = match body {
             Body::Expr(e) => format!("return {e};"),
             Body::Stmts => String::new(),
         };
-        return Ok(format!("{head}=>{{let $s=0;{}{out}{ret}}}", t.decls()));
+        let (head, init) = if scope.unsettled {
+            ("($budget)".to_string(), "")
+        } else if shared {
+            (head, "let $budget={s:0,n:0,d:0};")
+        } else {
+            (head, "let $s=0;")
+        };
+        let f = format!("{head}=>{{{init}{}{out}{ret}}}", t.decls());
+        return Ok(evaluated(f, scope, before, uses));
     }
-    Ok(wrap(&head, &t, body))
+    let f = wrap(&head, &t, body);
+    Ok(evaluated(f, scope, before, uses))
 }
 
 /// `code` as one JavaScript expression evaluated where it is written: the
@@ -198,10 +246,42 @@ pub fn expression(
     uses: &mut Uses,
 ) -> Result<String, String> {
     let f = function(plan, code, scope, 0, uses)?;
-    Ok(match f.strip_prefix("()=>") {
+    Ok(called_expression(f))
+}
+
+pub fn called_expression(f: String) -> String {
+    match f.strip_prefix("()=>") {
         Some(e) if !e.starts_with('{') => e.to_string(),
         _ => format!("({f})()"),
-    })
+    }
+}
+
+pub fn evaluated(f: String, scope: &Scope, before: usize, uses: &mut Uses) -> String {
+    let Some((label, instance)) = &scope.evaluation else {
+        return f;
+    };
+    if uses.metered == before {
+        return f;
+    }
+    let guard = uses.budget("$E");
+    let (head, body) = f.split_once("=>").expect("function");
+    let body = if body.starts_with('{') {
+        body[1..body.len() - 1].to_string()
+    } else {
+        format!("return {body};")
+    };
+    format!(
+        "{head}=>{{try{{{body}}}catch($e){{{guard}($e,{label},{});}}}}",
+        *instance as u8
+    )
+}
+
+/// A scope whose label is only constructed if this evaluation traps.
+pub fn evaluation(scope: &Scope, label: String, instance: bool) -> Scope {
+    Scope {
+        evaluation: Some((serde_json::to_string(&label).unwrap(), instance)),
+        ..scope.clone()
+    }
 }
 
 fn wrap(head: &str, t: &Translator<'_>, body: Body) -> String {
@@ -230,6 +310,7 @@ enum Body {
 }
 
 struct Translator<'a> {
+    shared: bool,
     plan: &'a Plan,
     scope: &'a Scope,
     uses: &'a mut Uses,
@@ -257,6 +338,28 @@ impl Translator<'_> {
         } else {
             format!("let {};", names.join(","))
         }
+    }
+
+    /// Resource `i`'s reader: the root's `r_<i>`, or a child's on the
+    /// instance in force (LLP 1035.005.004 D1).
+    fn resource(&self, i: u64) -> Result<String, String> {
+        if self.plan.resources[i as usize].owner.is_none() {
+            return Ok(format!("r_{i}"));
+        }
+        let rows = (self.scope.rows.as_ref())
+            .ok_or("a child's resource read with no instance in force")?;
+        Ok(format!("{rows}.r{i}"))
+    }
+
+    /// Mutation `i`'s object: the root's `m_<i>`, or a child's, the
+    /// instance's in force (LLP 1035.005.004 D6).
+    fn mutation(&self, i: u64) -> Result<String, String> {
+        if self.plan.mutations[i as usize].owner.is_none() {
+            return Ok(format!("m_{i}"));
+        }
+        let rows = (self.scope.rows.as_ref())
+            .ok_or("a child's mutation used with no instance in force")?;
+        Ok(format!("{rows}.m{i}"))
     }
 
     fn push(&mut self, e: String) {
@@ -406,8 +509,23 @@ impl Translator<'_> {
                         self.push(format!("s_{}()", x.args[0]))
                     }
                 }
-                Opcode::LoadDerive => self.push(format!("d_{}()", x.args[0])),
-                Opcode::LoadResource => self.push(format!("r_{}()", x.args[0])),
+                Opcode::LoadDerive => {
+                    if self.plan.unsettled_body(x.args[0] as u32).is_some() {
+                        self.uses.budget("$enter");
+                        self.push(format!(
+                            "d_{}({},{})",
+                            x.args[0],
+                            if self.shared { "$budget" } else { "undefined" },
+                            x.pc
+                        ));
+                    } else {
+                        self.push(format!("d_{}()", x.args[0]));
+                    }
+                }
+                Opcode::LoadResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}()"))
+                }
                 Opcode::LoadParam => self.push(format!("p{}", x.args[0])),
                 Opcode::LoadItem | Opcode::LoadIndex | Opcode::LoadBound => {
                     let d = x.args[0] as usize;
@@ -493,8 +611,9 @@ impl Translator<'_> {
                             }
                         }
                         self.out.push_str(&format!(
-                            "if(($s+={list}.length)>65536){t}(\"IterationLimit\",{pc});{list}={join}({list},{sep},{pc});",
-                            pc = x.pc
+                            "if(({steps}+={list}.length)>65536){t}(\"IterationLimit\",{pc});{list}={join}({list},{sep},{pc});",
+                            pc = x.pc,
+                            steps = if self.shared { "$budget.s" } else { "$s" }
                         ));
                         self.push(list);
                     } else if stepped(f as u64) {
@@ -515,10 +634,11 @@ impl Translator<'_> {
                             self.uses.budget(&format!("x_{}", f.name())),
                         );
                         self.out.push_str(&format!(
-                            "{r}={name}({},$s,{pc});$s+={st};",
+                            "{r}={name}({},{steps},{pc});{steps}+={st};",
                             regs.join(","),
                             r = regs[0],
-                            pc = x.pc
+                            pc = x.pc,
+                            steps = if self.shared { "$budget.s" } else { "$s" }
                         ));
                         self.push(regs[0].clone());
                     } else if checked(f) {
@@ -575,6 +695,7 @@ impl Translator<'_> {
                     }
                     let base = self.locals;
                     let mut inner = Translator {
+                        shared: self.shared,
                         plan: self.plan,
                         scope: self.scope,
                         uses: self.uses,
@@ -646,16 +767,35 @@ impl Translator<'_> {
                 }
                 Opcode::Refresh => {
                     self.flush();
-                    let r = self.uses.rt("R");
-                    self.out.push_str(&format!("{r}(r_{});", x.args[0]));
+                    let refresh = self.uses.rt("R");
+                    let r = self.resource(x.args[0])?;
+                    self.out.push_str(&format!("{refresh}({r});"));
                 }
-                Opcode::PendingResource => self.push(format!("r_{}.p()", x.args[0])),
-                Opcode::CurrentResource => self.push(format!("r_{}.c()", x.args[0])),
-                Opcode::FailedMutation => self.push(format!("m_{}.f()", x.args[0])),
-                Opcode::FailureMutation => self.push(format!("m_{}.e()", x.args[0])),
-                Opcode::FailedResource => self.push(format!("r_{}.f()", x.args[0])),
+                Opcode::PendingResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.p()"))
+                }
+                Opcode::CurrentResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.c()"))
+                }
+                Opcode::FailedMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.f()"))
+                }
+                Opcode::FailureMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.e()"))
+                }
+                Opcode::FailedResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.f()"))
+                }
                 // `none` or the `Failure` record, `[code, message, reason]` (LLP 1109 D3).
-                Opcode::FailureResource => self.push(format!("r_{}.e()", x.args[0])),
+                Opcode::FailureResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.e()"))
+                }
                 Opcode::Return => {
                     match self.stack.pop() {
                         Some(e) => {
@@ -679,15 +819,18 @@ impl Translator<'_> {
                         .to_string();
                     let args = self.popn(x.args[2] as usize)?;
                     self.flush();
+                    let target = self.mutation(x.args[0])?;
                     let m = self.uses.rt("M");
                     self.out.push_str(&format!(
-                        "{m}(m_{},{},[{}]);",
-                        x.args[0],
+                        "{m}({target},{},[{}]);",
                         serde_json::to_string(&source).unwrap(),
                         args.join(",")
                     ));
                 }
-                Opcode::PendingMutation => self.push(format!("m_{}.p()", x.args[0])),
+                Opcode::PendingMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.p()"))
+                }
                 // A native module's props (LLP 1024 D1): the pairs as one
                 // JSON object of strings, as `stdlib::native_props` writes it.
                 Opcode::NativeProps => {
@@ -756,7 +899,8 @@ impl Translator<'_> {
         let add = format!(
             "if(typeof $v===\"string\"){{$c++;$b+=$e?{u}($v):3*$v.length}}else if(typeof $v===\"object\"&&$v!==null){{$c+={p}($v,$e);$b+={eb}}}else $c++;if($c>16777216||$b>67108864&&($e||($e=1,$b={q}($o,{kept}))>67108864)){t}(\"ValueTooLarge\",{pc})"
         );
-        let step = format!("if(++$s>65536){t}(\"IterationLimit\",{pc});");
+        let steps = if self.shared { "$budget.s" } else { "$s" };
+        let step = format!("if(++{steps}>65536){t}(\"IterationLimit\",{pc});");
         let each = if map {
             format!("const $v=$f($a[$k],$k);$o[$k]=$v;{add}")
         } else {
@@ -818,14 +962,17 @@ mod tests {
     use exact_plan::Stdlib;
 
     /// Every roster entry an `Opcode::Call` can name has its `x_` export in
-    /// rt.js (or roster.js and router.js, which it re-exports, or budget.js,
-    /// the checked string builders); `at`, `formatDate` and `formatNumber` compiled and then failed
+    /// rt.js (or a runtime file it re-exports: clock.js, pieces.js, roster.js
+    /// and router.js; or budget.js, the checked string builders); `at`,
+    /// `formatDate` and `formatNumber` compiled and then failed
     /// the bundle for want of one (an app's diary, 2026-10-04). `map` and
     /// `filter` are opcodes with a callback body, never a call.
     #[test]
     fn every_called_roster_entry_has_a_runtime_export() {
         let rt = [
             include_str!("../rt.js"),
+            include_str!("../clock.js"),
+            include_str!("../pieces.js"),
             include_str!("../roster.js"),
             include_str!("../router.js"),
             include_str!("../format.js"),

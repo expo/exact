@@ -12,6 +12,13 @@ pub const SOURCE: &str = "exactViewport";
 pub const FIELDS: &[&str] = &[
     "width",
     "height",
+    "devicePixelRatio",
+    "safeAreaTop",
+    "safeAreaRight",
+    "safeAreaBottom",
+    "safeAreaLeft",
+    "segments",
+    "keyboardHeight",
     "prefersReducedMotion",
     "prefersReducedTransparency",
     "prefersContrast",
@@ -26,6 +33,7 @@ pub const FIELDS: &[&str] = &[
     "hover",
     "gpuTier",
     "accessibilityTextSize",
+    "update",
 ];
 
 /// The host's layout viewport, before the first settlement.
@@ -35,6 +43,12 @@ pub struct Viewport {
     pub width: f64,
     /// Height in CSS pixels, under the host's interactive-widget policy.
     pub height: f64,
+    /// Display pixels per logical point; absent until a host reports its scale.
+    pub device_pixel_ratio: Option<f64>,
+    /// How much of the layout viewport the software keyboard covers, before
+    /// the page avoids it, in CSS pixels: `env(keyboard-inset-height)`, 0
+    /// with no keyboard (LLP 1039 D9).
+    pub keyboard_height: f64,
     /// The user's display preferences; a host that cannot read them says
     /// `no-preference`, as a browser does.
     pub preferences: Preferences,
@@ -85,9 +99,8 @@ impl Posture {
 
 /// `device-posture` and the viewport segment counts (Media Queries 5's
 /// `horizontal-viewport-segments` and `vertical-viewport-segments`), as
-/// `exactViewport()` answers them (LLP 1078 D1, D2). The segments' rects are
-/// the kernel's (`Kernel::set_segments`), not the app's: an app reads them
-/// as `env()` lengths.
+/// `exactViewport()` answers them (LLP 1078 D1, D2). The kernel also
+/// supplies their rectangles to `segments` and CSS `env()` lengths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fold {
     /// `devicePosture`.
@@ -197,6 +210,33 @@ pub struct Preferences {
     /// Bold Text is on (LLP 1115.000 D12.3): no media feature, the
     /// kernel's, which weights the system font (`Kernel::set_bold_text`).
     pub bold_text: bool,
+    /// `update`: how often the output can change once shown.
+    pub update: Update,
+}
+
+/// Media Queries 4's `update` values (§6.4): how often the output device
+/// can change what it shows. A screen is `fast`; output that cannot change
+/// once written, the terminal's print mode, is `none` (LLP 1101.003 D6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Update {
+    /// `fast`, and what a host that reports nothing says.
+    #[default]
+    Fast,
+    /// `slow`.
+    Slow,
+    /// `none`.
+    None,
+}
+
+impl Update {
+    /// CSS's keyword.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Update::Fast => "fast",
+            Update::Slow => "slow",
+            Update::None => "none",
+        }
+    }
 }
 
 /// CSS's `display-mode`, including the Window Controls Overlay extension.
@@ -355,6 +395,7 @@ impl Preferences {
         high_dynamic_range: false,
         display_mode: DisplayMode::Standalone,
         bold_text: false,
+        update: Update::Fast,
     };
 
     /// The hosts' wire form: bit 0 reduced motion, bit 1 reduced
@@ -362,8 +403,9 @@ impl Preferences {
     /// `custom`), bit 4 a dark system scheme, bit 5 pointer `coarse`, bit 6
     /// pointer `none` (over bit 5), bit 7 hover `none`, bits 8–9 the gamut
     /// (0 sRGB, 1 P3, 2 rec2020), bit 10 a high dynamic range, bits 11–13
-    /// the [`DisplayMode`] discriminant, bit 14 Bold Text; other bits
-    /// are ignored. Zero is a mouse's `fine` and `hover`.
+    /// the [`DisplayMode`] discriminant, bit 14 Bold Text, bits 15–16
+    /// `update` (0 `fast`, 1 `slow`, 2 `none`); other bits are ignored.
+    /// Zero is a mouse's `fine` and `hover` on a screen.
     pub fn from_bits(bits: u32) -> Self {
         Self {
             reduced_motion: bits & 1 != 0,
@@ -393,6 +435,11 @@ impl Preferences {
             high_dynamic_range: bits & 1024 != 0,
             display_mode: DisplayMode::from_bits(bits),
             bold_text: bits & (1 << 14) != 0,
+            update: match (bits >> 15) & 3 {
+                1 => Update::Slow,
+                2 | 3 => Update::None,
+                _ => Update::Fast,
+            },
         }
     }
 
@@ -422,6 +469,11 @@ impl Preferences {
             | (u32::from(self.high_dynamic_range) << 10)
             | ((self.display_mode as u32) << 11)
             | (u32::from(self.bold_text) << 14)
+            | (match self.update {
+                Update::Fast => 0,
+                Update::Slow => 1,
+                Update::None => 2,
+            } << 15)
     }
 
     /// `"light"` or `"dark"`, CSS's words for the system's scheme.
@@ -447,6 +499,8 @@ impl Viewport {
         Self {
             width,
             height,
+            device_pixel_ratio: None,
+            keyboard_height: 0.0,
             preferences: Preferences::default(),
             fold: Fold::default(),
         }
@@ -458,6 +512,11 @@ impl Viewport {
             && self.height.is_finite()
             && self.width > 0.0
             && self.height > 0.0
+            && self
+                .device_pixel_ratio
+                .is_none_or(|s| s.is_finite() && s > 0.0)
+            && self.keyboard_height.is_finite()
+            && self.keyboard_height >= 0.0
         {
             Ok(())
         } else {
@@ -470,6 +529,11 @@ impl Viewport {
         match name {
             "width" => Some(Value::Number(self.width)),
             "height" => Some(Value::Number(self.height)),
+            "devicePixelRatio" => Some(
+                self.device_pixel_ratio
+                    .map_or(Value::NONE, |s| Value::some(Value::Number(s))),
+            ),
+            "keyboardHeight" => Some(Value::Number(self.keyboard_height)),
             "prefersReducedMotion" => Some(Value::Bool(self.preferences.reduced_motion)),
             "prefersReducedTransparency" => {
                 Some(Value::Bool(self.preferences.reduced_transparency))
@@ -488,6 +552,7 @@ impl Viewport {
             "verticalViewportSegments" => Some(Value::Number(f64::from(self.fold.rows))),
             "pointer" => Some(Value::str(self.preferences.pointer.keyword())),
             "hover" => Some(Value::str(self.preferences.hover.keyword())),
+            "update" => Some(Value::str(self.preferences.update.keyword())),
             _ => None,
         }
     }
@@ -616,6 +681,15 @@ mod tests {
         for bits in [0, 256, 512, 1024, 256 | 1024] {
             assert_eq!(Preferences::from_bits(bits).bits(), bits);
         }
+        // LLP 1101.003 D6: `update`, unset `fast`.
+        for (bits, name) in [(0, "fast"), (1 << 15, "slow"), (2 << 15, "none")] {
+            assert_eq!(Preferences::from_bits(bits).bits(), bits);
+            let viewport = Viewport {
+                preferences: Preferences::from_bits(bits),
+                ..Viewport::default()
+            };
+            assert_eq!(viewport.field("update"), Some(Value::str(name)));
+        }
         // LLP 1115.000 D12.3: Bold Text.
         assert!(Preferences::from_bits(1 << 14).bold_text);
         assert_eq!(Preferences::from_bits(1 << 14 | 16).bits(), 1 << 14 | 16);
@@ -668,5 +742,98 @@ mod tests {
         for bits in [32, 64, 128, 32 | 128, 64 | 128 | 16] {
             assert_eq!(Preferences::from_bits(bits).bits(), bits);
         }
+    }
+}
+
+/// The kernel environment last published to viewport readers.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Geometry {
+    pub insets: [f32; 4],
+    pub segments: Vec<exact_kernel::Rect>,
+    pub cols: u8,
+    pub rows: u8,
+}
+
+impl Geometry {
+    pub fn of(kernel: &exact_kernel::Kernel) -> Self {
+        let env = kernel.env();
+        Self {
+            insets: [env.top, env.right, env.bottom, env.left],
+            segments: env.segments,
+            cols: env.cols,
+            rows: env.rows,
+        }
+    }
+
+    pub fn restore(&self, kernel: &mut exact_kernel::Kernel) {
+        let [top, right, bottom, left] = self.insets;
+        let env = kernel.env().with_insets(top, right, bottom, left);
+        let _ = kernel.set_env(env);
+        let _ = kernel.set_segments(self.cols, self.rows, self.segments.clone());
+    }
+
+    pub fn field(
+        &self,
+        plan: &exact_plan::Plan,
+        ty: exact_plan::TypesId,
+        name: &str,
+        viewport: Viewport,
+    ) -> Result<Option<Value>, crate::DataError> {
+        if let Some(i) = [
+            "safeAreaTop",
+            "safeAreaRight",
+            "safeAreaBottom",
+            "safeAreaLeft",
+        ]
+        .iter()
+        .position(|n| *n == name)
+        {
+            return Ok(Some(Value::Number(self.insets[i] as f64)));
+        }
+        if name != "segments" {
+            return Ok(None);
+        }
+        let list = plan.type_(ty);
+        let record = list
+            .elem
+            .map(|t| plan.type_(t))
+            .filter(|t| {
+                list.kind == exact_plan::TypeKind::List && t.kind == exact_plan::TypeKind::Record
+            })
+            .ok_or_else(|| {
+                crate::DataError::Unavailable(
+                    "exactViewport.segments needs a list of rectangle records".into(),
+                )
+            })?;
+        let fields = record
+            .fields
+            .iter()
+            .map(|f| {
+                let field = plan.field(f);
+                let name = plan.str(field.name);
+                ["x", "y", "width", "height"]
+                    .iter()
+                    .position(|n| *n == name)
+                    .filter(|_| plan.type_(field.ty).kind == exact_plan::TypeKind::Number)
+                    .ok_or_else(|| {
+                        crate::DataError::Unavailable(format!(
+                            "exactViewport.segments has no numeric field `{name}`"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let rect = |[x, y, w, h]: [f64; 4]| {
+            let values = [x, y, w, h];
+            Value::record(fields.iter().map(|i| Value::Number(values[*i])).collect())
+        };
+        let values = if viewport.fold.cols == 1 && viewport.fold.rows == 1 {
+            vec![rect([0.0, 0.0, viewport.width, viewport.height])]
+        } else {
+            self.segments
+                .iter()
+                .map(|r| rect([r.x as f64, r.y as f64, r.width as f64, r.height as f64]))
+                .collect()
+        };
+        Ok(Some(Value::list(values)))
     }
 }

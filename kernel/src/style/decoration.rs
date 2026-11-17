@@ -14,3 +14,7 @@ impl crate::generated::TextDecorationLine {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "decoration_tests.rs"]
+mod tests;

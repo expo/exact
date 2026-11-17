@@ -246,16 +246,20 @@ impl Lexer {
                 let span = col_of(pos);
                 // A vendor-prefixed CSS name, as the Compat Standard spells
                 // some (`-webkit-text-stroke`, LLP 1077 D7), or one Exact
-                // invents (`-exact-press-scale`, LLP 1081 D7): these prefixes
-                // only, and only as an attribute's name (followed by `=`),
-                // so `-webkit-x` in an expression stays a negation.
-                let vendor = ["-webkit-", "-apple-", "-exact-"].iter().any(|p| {
-                    trimmed[pos..].starts_with(p)
-                        && bytes
-                            .get(pos + p.len())
-                            .is_some_and(|n| (*n as char).is_ascii_alphabetic())
+                // invents (`-exact-press-scale`, LLP 1081 D7), or a custom
+                // property (`--gap`, LLP 1123 D5; the host's own,
+                // `--exact-safe-area-inset-top`, D9): these prefixes only,
+                // and only as an attribute's name (followed by `=`), so
+                // `-webkit-x` in an expression stays a negation.
+                let vendor = ["-webkit-", "-apple-", "-exact-", "--"].iter().find(|p| {
+                    trimmed[pos..].starts_with(*p)
+                        && bytes.get(pos + p.len()).is_some_and(|n| {
+                            let n = *n as char;
+                            n.is_ascii_alphabetic()
+                                || (**p == "--" && (n.is_ascii_digit() || n == '_'))
+                        })
                         && {
-                            let rest = &trimmed[pos + 1..];
+                            let rest = &trimmed[pos + leading_dashes(p)..];
                             let end = rest
                                 .find(|c: char| {
                                     !(c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -265,22 +269,25 @@ impl Lexer {
                             after.starts_with('=') && !after.starts_with("==")
                         }
                 });
-                if c.is_ascii_alphabetic() || c == '_' || vendor {
+                let dashes = vendor.map_or(0, |p| leading_dashes(p));
+                if c.is_ascii_alphabetic() || c == '_' || dashes > 0 {
                     // An identifier may contain hyphens — `font-size`,
                     // `aria-label` — as CSS's do; so, as in CSS `calc()`,
                     // subtraction between two names needs spaces (`a - b`),
                     // while `x-1` still lexes as `x`, `-`, `1` (LLP 1017 §8.1).
                     let start = pos;
-                    if vendor {
-                        pos += 1;
-                    }
+                    pos += dashes;
+                    // A custom property's name, only ever an attribute's, takes
+                    // every character CSS's does (`--gap-2`)
+                    let custom = dashes == 2;
                     while pos < bytes.len()
                         && ((bytes[pos] as char).is_ascii_alphanumeric()
                             || bytes[pos] == b'_'
                             || (bytes[pos] == b'-'
-                                && bytes
-                                    .get(pos + 1)
-                                    .is_some_and(|n| (*n as char).is_ascii_alphabetic())))
+                                && (custom
+                                    || bytes
+                                        .get(pos + 1)
+                                        .is_some_and(|n| (*n as char).is_ascii_alphabetic()))))
                     {
                         pos += 1;
                     }
@@ -599,40 +606,56 @@ pub(crate) fn escape(rest: &str) -> Result<(char, usize), String> {
 /// The byte offset of the backtick closing a template literal. Nested
 /// `${…}` expressions may themselves contain strings, braces, or templates.
 pub(crate) fn template_literal_end(text: &str, start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut pos = start + 1;
-    while pos < bytes.len() {
-        match bytes[pos] {
-            b'\\' => pos = skip_escaped(text, pos),
-            b'`' => return Some(pos),
-            b'$' if bytes.get(pos + 1) == Some(&b'{') => {
-                let end = template_expr_end(&text[pos + 2..])?;
-                pos += end + 3;
-            }
-            _ => pos += char_len(text, pos),
-        }
-    }
-    None
+    template_end(text, start + 1, Nest::Template)
 }
 
 /// The byte offset of the `}` matching an expression immediately after
 /// `${`. Braces in strings and nested template literals do not close it.
 pub(crate) fn template_expr_end(text: &str) -> Option<usize> {
+    template_end(text, 0, Nest::Expr(0))
+}
+
+/// What the template scan is inside: a template literal, or a `${…}`
+/// expression with the count of braces it has opened.
+#[derive(Clone, Copy)]
+enum Nest {
+    Template,
+    Expr(usize),
+}
+
+/// The byte offset that closes `outer`, scanning from `pos`. The nesting is
+/// kept on a stack of its own, not the native one, so a template nested
+/// thousands deep lexes and the parser refuses it (`syntax-expression-depth`)
+/// instead of the scan overflowing the stack.
+fn template_end(text: &str, mut pos: usize, outer: Nest) -> Option<usize> {
     let bytes = text.as_bytes();
-    let mut pos = 0;
-    let mut depth = 0usize;
+    let mut stack = vec![outer];
     while pos < bytes.len() {
-        match bytes[pos] {
-            b'\\' => pos = skip_escaped(text, pos),
-            b'"' => pos = quoted_end(text, pos, b'"')?,
-            b'`' => pos = template_literal_end(text, pos)? + 1,
-            b'{' => {
-                depth += 1;
+        let top = stack.last_mut()?;
+        match (*top, bytes[pos]) {
+            (_, b'\\') => pos = skip_escaped(text, pos),
+            (Nest::Template, b'`') | (Nest::Expr(0), b'}') => {
+                stack.pop();
+                if stack.is_empty() {
+                    return Some(pos);
+                }
                 pos += 1;
             }
-            b'}' if depth == 0 => return Some(pos),
-            b'}' => {
-                depth -= 1;
+            (Nest::Template, b'$') if bytes.get(pos + 1) == Some(&b'{') => {
+                stack.push(Nest::Expr(0));
+                pos += 2;
+            }
+            (Nest::Expr(_), b'"') => pos = quoted_end(text, pos, b'"')?,
+            (Nest::Expr(_), b'`') => {
+                stack.push(Nest::Template);
+                pos += 1;
+            }
+            (Nest::Expr(depth), b'{') => {
+                *top = Nest::Expr(depth + 1);
+                pos += 1;
+            }
+            (Nest::Expr(depth), b'}') => {
+                *top = Nest::Expr(depth - 1);
                 pos += 1;
             }
             _ => pos += char_len(text, pos),
@@ -665,4 +688,10 @@ fn skip_escaped(text: &str, slash: usize) -> usize {
 
 fn char_len(text: &str, pos: usize) -> usize {
     text[pos..].chars().next().map(char::len_utf8).unwrap_or(1)
+}
+
+/// How many `-` a name prefix starts with: two for a custom property's
+/// `--`, one for a vendor's.
+fn leading_dashes(prefix: &str) -> usize {
+    prefix.len() - prefix.trim_start_matches('-').len()
 }

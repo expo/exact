@@ -1,20 +1,6 @@
-// The shapes emitted by host/apple/src/batch.rs. This is a consumer, not a
-// second style schema; unknown rows/keys keep their existing meaning.
+// Inline values and compound envelope values on the Apple JSON wire. Record
+// readers come from kernel/tables/schema.json (LLP 1172.001 E4, §4 step 4).
 import Foundation
-
-/// One ordinary task's native timer; generations reject delivery after cancellation.
-public struct NativeTimerWake: Equatable, Sendable {
-    public let index: UInt32
-    public let generation: UInt64
-    public let due: Double
-    public let interval: UInt32
-    public let tolerance: UInt32
-    public let once: Bool
-    public init(index: UInt32, generation: UInt64, due: Double, interval: UInt32, tolerance: UInt32, once: Bool) {
-        self.index = index; self.generation = generation; self.due = due
-        self.interval = interval; self.tolerance = tolerance; self.once = once
-    }
-}
 
 extension BatchReader {
     /// A `canvas2d` op's lists, `[address, length]` pairs in the runtime's
@@ -29,117 +15,50 @@ extension BatchReader {
         }
     }
 
-    package mutating func batch() throws -> Batch {
-        var ops: [BatchOp] = [], timers = false, motion = false, pending = false, spatial = false, canvas = false, frames = false, canvasOwed = false, controls = false
-        var layoutProvisional = false, busy = false, requests = false
-        var clock: Double?, due: Double?, error: String?
-        var waits: [Double] = [], waitContinue = false
-        var nativeTimers: [NativeTimerWake]?
-        var images: [String] = []
-        var seq: (UInt64, UInt64)?
-        var alerts: [String] = []
-        var journal: [String] = []
-        var modes: [String: String]?
-        var live: String?, unsupported = false, design: String?, facts = false, wakelock: Bool?, orientation: OrientationRequest?, mustFinish: Bool?
-        var unchanged = false, storeReadPending = false, storeActivationPending = false, landing = false
-        var seen: Set<String> = []
-        try object { r, key in
-            guard seen.insert(key).inserted else { try r.skip(); return }
-            if try r.null() { return }
-            switch key {
-            case "ops": ops = try r.array { try $0.batchOp() }
-            case "timers": timers = try r.bool()
-            case "motion": motion = try r.bool()
-            case "canvas": canvas = try r.bool()
-            case "nativeTimers": nativeTimers = try r.array { try $0.nativeTimer() }
-            case "waits": waits = try r.array { try $0.number() }
-            case "waitContinue": waitContinue = try r.bool()
-            case "frames": frames = try r.bool()
-            case "canvasOwed": canvasOwed = try r.bool()
-            case "controls": controls = try r.bool()
-            case "layoutProvisional": layoutProvisional = try r.bool()
-            case "canvasImages": images = try r.array { try $0.string() }
-            case "unchanged": unchanged = try r.bool()
-            case "storeReadPending": storeReadPending = try r.bool()
-            case "storeActivationPending": storeActivationPending = try r.bool()
-            case "pending": pending = try r.bool()
-            case "requests": requests = try r.bool()
-            case "busy": busy = try r.bool()
-            case "spatial": spatial = try r.bool()
-            case "clock": clock = try r.number()
-            case "timer_due_ms": due = try r.number()
-            case "landing": landing = try r.bool()
-            case "error": error = try r.string()
-            case "modes": if case .object(let object) = try r.value() { modes = object.compactMapValues { $0.string } }
-            case "live": live = try r.string()
-            case "unsupported": unsupported = try r.bool()
-            case "design": design = try r.value().string
-            case "facts": facts = try r.bool()
-            case "wakelock": wakelock = try r.bool()
-            case "mustFinish": mustFinish = try r.bool()
-            case "orientationlock": if case .object(let o) = try r.value() { orientation = OrientationRequest(o) }
-            case "alerts": alerts = try r.array { try $0.string() }
-            case "journal": journal = try r.array { try $0.string() }
-            case "seq":
-                let range = try r.array { try $0.number() }
-                if range.count == 2, range.allSatisfy({ $0 >= 0 && $0 == $0.rounded() }) { seq = (UInt64(range[0]), UInt64(range[1])) }
-            default: try r.skip()
-            }
-        }
-        var batch = Batch(ops: ops, timers: timers, motion: motion, clock: clock, error: error, timerDueMs: due, pending: pending, busy: busy)
-        batch.unchanged = unchanged
-        batch.landing = landing
-        batch.storeReadPending = storeReadPending
-        batch.storeActivationPending = storeActivationPending
-        batch.spatial = spatial
-        batch.requests = requests
-        batch.canvas = canvas
-        batch.frames = frames
-        batch.timerWaits = waits
-        batch.nativeTimers = nativeTimers
-        batch.waitContinue = waitContinue
-        batch.canvasOwed = canvasOwed
-        batch.controls = controls
-        batch.layoutProvisional = layoutProvisional
-        batch.canvasImages = images
-        batch.seq = seq
-        batch.alerts = alerts
-        batch.journal = journal
-        batch.modes = modes
-        batch.live = live
-        batch.unsupported = unsupported
-        batch.design = design
-        batch.facts = facts
-        batch.wakelock = wakelock
-        batch.orientation = orientation
-        batch.mustFinish = mustFinish
-        return batch
+    package mutating func batchModes() throws -> [String: String]? {
+        if case .object(let object) = try value() { return object.compactMapValues { $0.string } }
+        return nil
     }
 
-    private mutating func nativeTimer() throws -> NativeTimerWake {
-        var index: UInt32?, generation: UInt64?, due: Double?, interval: UInt32?, tolerance: UInt32?, once: Bool?
-        try object { r, key in
-            switch key {
-            case "index": index = try r.id()
-            case "generation": generation = UInt64(try r.string())
-            case "due": due = try r.number()
-            case "interval": interval = try r.id()
-            case "tolerance": tolerance = try r.id()
-            case "once": once = try r.bool()
-            default: try r.skip()
-            }
-        }
-        guard let index, let generation, let due, due >= 0, let interval, interval > 0, let tolerance, let once else { throw Invalid.wire }
-        return NativeTimerWake(index: index, generation: generation, due: due, interval: interval, tolerance: tolerance, once: once)
+    package mutating func batchOrientation() throws -> OrientationRequest? {
+        if case .object(let object) = try value() { return OrientationRequest(object) }
+        return nil
+    }
+
+    package mutating func batchSequence() throws -> (UInt64, UInt64)? {
+        let range = try array { try $0.number() }
+        if range.count == 2, range.allSatisfy({ $0 >= 0 && $0 == $0.rounded() }) { return (UInt64(range[0]), UInt64(range[1])) }
+        return nil
     }
 
     package mutating func batchOp() throws -> BatchOp {
+        let start = offset, startDepth = depth
         try enter(123)
         // Rust writes the discriminator first. JSON object order is not part of
-        // the contract: other writers take the typed-value path below, also in
-        // one pass. Only the rare adapters finally bridge their payload to Any.
+        // the contract: a reordered op's discriminator is found before its
+        // fields are read. Only unconverted adapters bridge their payload to Any.
         let first = try string(); try expect(58)
         if first != "op" {
+            let fieldsStart = offset
+            offset = start
+            depth = startDepth
+            var discriminator: String?
+            try object { r, key in
+                if key == "op", discriminator == nil { discriminator = try r.string() }
+                else { try r.skip() }
+            }
+            if discriminator == "collections" {
+                offset = start
+                var op = BatchOp(op: .collections)
+                try object { r, key in
+                    if key == "items" { op.collections = try r.collectionSnapshots() }
+                    else if key == "id" { if !(try r.null()) { op.nodeID = try r.id() } }
+                    else { try r.skip() }
+                }
+                return op
+            }
+            offset = fieldsStart
+            depth = startDepth + 1
             var fields = [first: try value()]
             while !take(125) {
                 try expect(44)
@@ -165,73 +84,15 @@ extension BatchReader {
             if op.op == .canvas2d { op.payload["lists"] = BatchReader.canvasLists(op.payload["lists"]) }
             return op
         }
+        let skipsNull = !op.isTypedPayload
         while !take(125) {
             try expect(44)
             let key = try string(); try expect(58)
-            if try null() { continue }
-            switch (op.op, key) {
-            case (_, "id"): op.nodeID = try id()
-            case (.create, "kind"): op.kind = try string()
-            case (.create, "props"), (.props, "set"): op.props = try strings()
-            case (.create, "style"), (.style, "style"): op.style = try style()
-            case (.roles, "roles"): op.style = try values()
-            case (.create, "handlers"): op.handlers = Set(try array { try $0.string() })
-            case (.props, "clear"): op.clear = try array { try $0.string() }
-            case (.paragraph, "runs"): op.runs = try array { try $0.inline() }
-            case (.children, "ids"), (.roots, "ids"): op.ids = try array { try $0.id() }
-            case (.frame, "x"), (.content, "x"), (.present, "x"): op.x = try number()
-            case (.frame, "y"), (.content, "y"), (.present, "y"): op.y = try number()
-            case (.frame, "w"), (.content, "w"), (.present, "w"): op.w = try number()
-            case (.frame, "h"), (.content, "h"), (.present, "h"): op.h = try number()
-            case (.frame, "property"), (.content, "property"), (.present, "property"): op.property = try string()
-            default: try skip()
-            }
+            if skipsNull, try null() { continue }
+            try recordField(&op, key: key)
         }
         depth -= 1
         return op
-    }
-
-    package mutating func inline() throws -> InlineText {
-        var id: UInt32?, parent: UInt32?, props: [String: String] = [:]
-        var style = InlineStyle(), handlers: Set<String> = [], paints = false, opacity = 1.0
-        try object { r, key in
-            switch key {
-            case "id": id = try r.id()
-            case "parent": parent = try r.id()
-            default:
-                if try r.null() { return }
-                switch key {
-                case "props": props = try r.strings()
-                case "style": style = try r.inlineStyle()
-                case "handlers": handlers = Set(try r.array { try $0.string() })
-                case "paint": paints = try r.bool()
-                case "opacity": opacity = try r.number()
-                default: try r.skip()
-                }
-            }
-        }
-        guard let id, let parent else { throw Invalid.wire }
-        return InlineText(id: id, parent: parent, props: props, style: style, handlers: handlers, paints: paints, opacity: opacity)
-    }
-    package mutating func inlineStyle() throws -> InlineStyle {
-        var style = InlineStyle(), height: BatchValue?
-        try object { r, key in
-            switch key {
-            case "line_height": height = try r.value()
-            default: try style.set(key, r.value(), colorChannels: r.colorChannels)
-            }
-        }
-        try style.height(height)
-        return style
-    }
-}
-
-extension BatchOp {
-    package var isAdapter: Bool {
-        switch op {
-        case .create, .props, .style, .children, .paragraph, .frame, .content, .present, .roots, .destroy, .roles: return false
-        default: return true
-        }
     }
 }
 
@@ -271,76 +132,24 @@ package struct BatchFields {
     package func array<T>(_ key: String, _ element: (BatchValue) throws -> T) throws -> [T] {
         try value(key).map { try Self.array($0, element) } ?? []
     }
-    package func inline(colorChannels: ((BatchValue, Bool) -> [Double]?)? = nil) throws -> InlineText {
-        guard let id = try id("id"), let parent = try self.id("parent") else { throw BatchReader.Invalid.wire }
-        var style = InlineStyle()
-        let rows = try object("style")
-        for (key, value) in rows where key != "line_height" { try style.set(key, value, colorChannels: colorChannels) }
-        try style.height(rows["line_height"])
-        return InlineText(id: id, parent: parent, props: try strings("props"), style: style,
-                          handlers: Set(try array("handlers", Self.string)), paints: try bool("paint") ?? false,
-                          opacity: try number("opacity") ?? 1)
-    }
-    package func op(colorChannels: ((BatchValue, Bool) -> [Double]?)? = nil) throws -> BatchOp {
-        guard let name = try string("op") else { throw BatchReader.Invalid.wire }
-        var op = BatchOp(op: BatchOp.Kind(rawValue: name) ?? .unknown, nodeID: try id("id"))
-        switch op.op {
-        case .create:
-            op.kind = try string("kind") ?? "view"
-            op.props = try strings("props"); op.style = try CalculatedLength.decode(object("style"))
-            op.handlers = Set(try array("handlers", Self.string))
-        case .props: op.props = try strings("set"); op.clear = try array("clear", Self.string)
-        case .style: op.style = try CalculatedLength.decode(object("style"))
-        case .paragraph: op.runs = try array("runs") { try Self(Self.object($0)).inline(colorChannels: colorChannels) }
-        case .children, .roots: op.ids = try array("ids", Self.id)
-        case .frame, .content, .present:
-            op.x = try number("x") ?? 0; op.y = try number("y") ?? 0
-            op.w = try number("w") ?? 0; op.h = try number("h") ?? 0
-            op.property = try string("property") ?? ""
-        case .destroy: break
-        case .roles: op.style = try object("roles")
-        default: op.payload = fields.mapValues(\.any)
-        }
-        return op
-    }
 }
 
 extension InlineStyle {
-    package mutating func set(_ key: String, _ value: BatchValue, colorChannels: ((BatchValue, Bool) -> [Double]?)? = nil) throws {
-        if value == .null { return }
-        let channels = colorChannels ?? { $0.fallbackChannels(dark: $1) }
-        if key == "text_color" { fixedInk = value.fixesInk }
-        switch key {
-        case "font_size": run.size = CGFloat(Float(try BatchFields.number(value)))
-        case "font_weight", "font_family":
-            let n = try BatchFields.number(value)
-            guard n >= Double(Int.min), n < Double(Int.max) else { throw BatchReader.Invalid.wire }
-            if key == "font_weight" { run.weight = Int(n) } else { run.family = Int(n) }
-        case "font_style": run.italic = try BatchFields.string(value) == "italic"
-        case "font_stretch": run.stretch = CGFloat(Float(try BatchFields.number(value)))
-        case "font_variation_settings": run.variations = FontAxis.settings(value, keeping: run.variations)
-        case "font_optical_sizing": run.variations = FontAxis.opticalSizing(try BatchFields.string(value), run.variations)
-        case "letter_spacing": run.letterSpacing = CGFloat(Float(try BatchFields.number(value)))
-        case "font_variant_numeric": run.numeric = Int(try BatchFields.number(value)) & 0xff
-        case "font_variant_ligatures": run.ligatures = Int(try BatchFields.number(value)) & 0xff
-        case "font_feature_settings": run.features = FontFeature.of(value)
-        case "visibility": run.hidden = try BatchFields.string(value) != "visible"
-        case "user_select": selectsAll = try BatchFields.string(value) == "all"
-        case "outline_style": outlineNone = try BatchFields.string(value) == "none"
-        case "text_decoration_line": run.decoration = try BatchFields.string(value)
-        case "text_color" where value.isWideColor, "background_color" where value.isWideColor:
+    package mutating func color(_ value: BatchValue, foreground: Bool, channels: (BatchValue, Bool) -> [Double]?) throws {
+        if foreground { fixedInk = value.fixesInk }
+        if value.isWideColor {
             // @ref LLP 1100 D2
             guard let light = channels(value, false), let dark = channels(value, true) else { throw BatchReader.Invalid.wire }
             paired = value.isSchemeColor
-            if key == "text_color" { run.color = light; darkColor = dark } else { run.background = light; darkBackground = dark }
-        case "text_color" where value.isSystemColor, "background_color" where value.isSystemColor:
+            if foreground { run.color = light; darkColor = dark } else { run.background = light; darkBackground = dark }
+        } else if value.isSystemColor {
             // @ref LLP 1095 D5 — a platform colour, kept by name and resolved
             // as the run is read, in its paragraph owner's traits (an inline
             // run has no view), so a contrast or level change reaches it.
             guard channels(value, false) != nil, channels(value, true) != nil else { throw BatchReader.Invalid.wire }
             paired = true
-            if key == "text_color" { colorRef = value } else { backgroundRef = value }
-        case "text_color":
+            if foreground { colorRef = value } else { backgroundRef = value }
+        } else if foreground {
             guard case .array(let a) = value else { throw BatchReader.Invalid.wire }
             if a.count == 2 {
                 paired = true
@@ -350,7 +159,7 @@ extension InlineStyle {
                 run.color = try a.map(BatchFields.number); darkColor = run.color
             }
             guard run.color?.count == 4, darkColor?.count == 4 else { throw BatchReader.Invalid.wire }
-        case "background_color":
+        } else {
             guard case .array(let a) = value else { throw BatchReader.Invalid.wire }
             if a.count == 2 {
                 paired = true
@@ -360,12 +169,6 @@ extension InlineStyle {
                 run.background = try a.map(BatchFields.number); darkBackground = run.background
             }
             guard run.background?.count == 4, darkBackground?.count == 4 else { throw BatchReader.Invalid.wire }
-        case "border_radius_top_left", "border_radius_top_right", "border_radius_bottom_right", "border_radius_bottom_left":
-            let corners = ["border_radius_top_left", "border_radius_top_right", "border_radius_bottom_right", "border_radius_bottom_left"]
-            if run.backgroundRadii.isEmpty { run.backgroundRadii = Array(repeating: InlineRadius(), count: 4) }
-            let i = corners.firstIndex(of: key)!
-            run.backgroundRadii[i] = InlineRadius(value)
-        default: paint.set(key, value)
         }
     }
     package mutating func height(_ value: BatchValue?) throws {
@@ -376,5 +179,43 @@ extension InlineStyle {
             if s.hasSuffix("px"), let px = Float(s.dropLast(2)) { run.lineHeight = CGFloat(px) }
         default: throw BatchReader.Invalid.wire
         }
+    }
+}
+
+extension BatchValue {
+    package var adapterRank: Int64? { (any as? NSNumber)?.int64Value }
+    package var adapterString: String? { any as? String }
+    package var adapterBool: Bool? { any as? Bool }
+}
+
+// Foundation's numeric adapter casts accept booleans; a field's `[Double]`
+// rectangle does not. Keep those wire semantics (LLP 1172.001 §4 step 4).
+extension BatchValue {
+    package var adapterNumber: Double? {
+        switch self {
+        case .number(let n): return n
+        case .bool(let b): return b ? 1 : 0
+        default: return nil
+        }
+    }
+    package var adapterID: UInt32? { adapterNumber.map { NSNumber(value: $0).uint32Value } }
+    package var adapterIDs: [UInt32]? {
+        guard let values = array else { return nil }
+        let ids = values.compactMap(\.adapterID)
+        return ids.count == values.count ? ids : nil
+    }
+    package var adapterPadding: [CGFloat?]? {
+        guard let values = array, values.count == 4 else { return nil }
+        return values.map { $0.adapterNumber.map { CGFloat($0) } }
+    }
+    package var adapterRect: CGRect? { Self.rectangle(numbers) }
+    package var adapterNumberRect: CGRect? {
+        guard let values = array else { return nil }
+        let numbers = values.compactMap(\.adapterNumber)
+        return numbers.count == values.count ? Self.rectangle(numbers) : nil
+    }
+    private static func rectangle(_ values: [Double]?) -> CGRect? {
+        guard let values, values.count == 4 else { return nil }
+        return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
     }
 }

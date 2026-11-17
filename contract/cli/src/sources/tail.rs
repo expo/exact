@@ -11,6 +11,8 @@ pub struct GraphBase {
     pub(super) sources: Sources,
     /// The loaded sources, the root first.
     pub(super) base: Vec<Source>,
+    /// Literal bundled SVG images, present or not.
+    pub(super) images: Vec<PathBuf>,
     /// The Contract components' params, before scoping.
     pub(super) params: Vec<contract_lower::params::ParamToken>,
     /// The components' identities before scoping (the compile load's), and after.
@@ -56,7 +58,7 @@ impl GraphBase {
                 },
                 |p| p.to_string_lossy().replace('\\', "/"),
             );
-        let parses = exact_tamber::parse(&text).is_ok();
+        let parses = exact_forma::parse(&text).is_ok();
         let source = contract_syntax::DesignSource {
             path: path.display().to_string(),
             home,
@@ -81,6 +83,12 @@ impl GraphBase {
     pub fn tail(&self) -> SourceGraph {
         let root_key = &self.root_key;
         let mut sources = self.base.clone();
+        let (images, missing_images): (Vec<_>, Vec<_>) =
+            self.images.iter().cloned().partition(|p| p.is_file());
+        sources.extend(images.into_iter().map(|path| Source {
+            path,
+            origin: Origin::App,
+        }));
         // A package design's components' too (stage 12 B1 round 3): an icon
         // param's SVG is read by the build as the app's own are.
         let package_designs: Vec<_> = packages::read(&self.sources, false)
@@ -109,16 +117,16 @@ impl GraphBase {
             Some(text) => Some(text),
             // Its packages' designs alone fold too: their icons' SVGs are read (round 1, Astra 5).
             None => (!params.is_empty() || !package_designs.is_empty())
-                .then(|| "tamber app\n".to_string()),
+                .then(|| "forma app\n".to_string()),
         };
         // With its packages' tokens, which an app token may name (D11); a
         // package's SVG under its root, a source of the package (stage 13).
         let icons: Vec<(PathBuf, Option<Origin>, Option<Origin>)> = text
-            .and_then(|text| exact_tamber::parse(&text).ok())
+            .and_then(|text| exact_forma::parse(&text).ok())
             .and_then(|d| contract_lower::with_package_designs(Some(d), &package_designs))
             .and_then(|mut d| {
                 contract_lower::params::add_to(&mut d, &params, &self.identities);
-                exact_tamber::check_design(d, &contract_lower::tamber_vocab()).ok()
+                exact_forma::check_design(d, &contract_lower::forma_vocab()).ok()
             })
             .map(|folding| {
                 let app = root_key.parent().unwrap_or(Path::new("."));
@@ -221,6 +229,7 @@ impl GraphBase {
             .iter()
             .cloned()
             .chain(missing)
+            .chain(missing_images)
             .chain(library)
             .collect();
         for m in manifests {

@@ -5,8 +5,8 @@
 //! flattened: every arm's children under the region's parent node), with
 //! its literal bindings applied through the runner's own bridge
 //! (`exact_runner::bridge`). `exact_web::host::template::parts` then gives
-//! the tag, props and CSS the live host would compute. A binding that is an
-//! expression is left out, and emitted as an effect instead.
+//! the tag, props and CSS the live host would compute. A computed binding or
+//! a refused SVG length is left out and emitted as an effect instead.
 
 use exact_kernel::{
     Kernel, NodeType, Op, PropId, PropKind, PropValue, StyleCodec, StyleId, ViewId,
@@ -15,6 +15,9 @@ use exact_plan::{BindingKind, Opcode, Plan};
 use exact_runner::bridge;
 use exact_runner::vm::instructions;
 use exact_web::host::template::{self, Parts};
+
+mod bound;
+pub use bound::bound_tokens;
 
 /// A canvas's explicit bitmap size (LLP 1056 D6 r3) and getContext settings
 /// (LLP 1100 D12a) as the attributes canvas2d.js reads, as the runner reads
@@ -48,6 +51,7 @@ pub fn canvas_bitmap(
 
 /// A literal binding's value, if the code is one push and `Return`.
 pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
+    let code = plan.read_code(code).0;
     let ins: Vec<_> = instructions(code).collect::<Result<_, _>>().ok()?;
     match ins.as_slice() {
         [a, r] if r.op == Opcode::Return => match a.op {
@@ -65,7 +69,7 @@ pub fn literal(plan: &Plan, code: &[u8]) -> Option<exact_plan::Value> {
 /// Whether a binding's code pushes a string `used` accepts: what it can be,
 /// as runner/src/uses.rs asks it.
 pub fn can_be(plan: &Plan, code: &[u8], used: &dyn Fn(&str) -> bool) -> bool {
-    instructions(code).any(|i| {
+    exact_runner::vm::transitive_instructions(plan, code).any(|i| {
         i.is_ok_and(|i| i.op == Opcode::Str && used(plan.str(exact_plan::StrId(i.args[0] as u32))))
     })
 }
@@ -156,6 +160,7 @@ pub fn static_tree(
                         value,
                     }),
                     Err(bridge::BridgeError::Unset(_)) => {}
+                    Err(e) if crate::svg_lengths::refused(&e) => {}
                     Err(e) => return Err(format!("node {i}: {e:?}")),
                 },
                 (BindingKind::Prop, None) => {
@@ -204,6 +209,9 @@ pub fn static_tree(
             }
         }
         if styled {
+            let keyframes = bridge::keyframes(plan);
+            let _ = keyframes.resolve(&mut patch.animation);
+            let _ = keyframes.resolve(&mut patch.rare.exit_animation);
             ops.push(Op::SetStyle {
                 id: view(i),
                 patch: Box::new(patch),
@@ -313,8 +321,28 @@ pub fn project(
             continue;
         }
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
-        let mut parts = template::parts_with(&kernel, plan, view(i), may_fold[i], child_may_fold)
-            .ok_or("a view the kernel lost")?;
+        let press_translate = node.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+            b.kind == BindingKind::Style
+                && b.id == StyleId::PressTranslate as u16
+                && literal(plan, plan.code(b.expr)).is_none()
+        });
+        let mut parts = template::parts_with(
+            &kernel,
+            plan,
+            view(i),
+            may_fold[i],
+            child_may_fold,
+            press_translate,
+        )
+        .ok_or("a view the kernel lost")?;
+        if kernel
+            .node(view(i))
+            .is_some_and(|n| n.style.rare.animation_trigger == exact_kernel::AnimationTrigger::None)
+        {
+            parts
+                .props
+                .insert("data-exact-animation-trigger".into(), "none".into());
+        }
         if let Some(writes) = exact_runner::press_writes_router(plan, exact_plan::NodesId(i as u32))
         {
             parts
@@ -384,139 +412,7 @@ pub fn project(
             crate::sized::own_css(&node, canvas[i], reads_alt, &mut parts.css);
         }
     }
-    symbol_marks(plan, &kernel, &parents, &mut out);
     Ok(out)
-}
-
-/// Whether image `i` draws a symbol in its author's `color` (LLP 1121 stage
-/// 9 B; `NodeRef::symbol_color_said`), as far as the static tree says:
-/// `None` where it can't be a symbol (a literal source that is none) or is
-/// a native button's face; else the nodes between it and the nearest node
-/// whose static rows decide that decide at run time ([`Ink`]: a bound
-/// `color`, a mode boundary's implied row), and that decision. A bound source may be a symbol whatever
-/// its code names (a state's or a data's role), and the sheet asks for a
-/// symbol's path, so a photo's mark draws nothing. A bound `color` decides
-/// while it has a value: written as its binding is, a CSS-wide clear
-/// included; `none` takes it away, as the runner clears the written bit,
-/// and the next node up decides (symbols.js `inked`). A colour only a state
-/// look sets (`:hover`) does not count. `modes`: whether the plan has modes
-/// ([`crate::modes::active`]).
-fn symbol_color(
-    plan: &Plan,
-    kernel: &Kernel,
-    parents: &[Option<usize>],
-    i: usize,
-    modes: bool,
-) -> Option<(Vec<(usize, Ink)>, bool)> {
-    let view = |i: usize| -> ViewId { i as u32 + 1 };
-    let rows = |i: usize| {
-        plan.nodes
-            .get(i)
-            .unwrap()
-            .bindings
-            .iter()
-            .map(|b| plan.binding(b))
-    };
-    let bound = |i: usize, kind: BindingKind, id: u16| {
-        rows(i).find(|b| b.kind == kind && b.id == id && literal(plan, plan.code(b.expr)).is_none())
-    };
-    let node = kernel.node(view(i)).expect("template node");
-    let symbol = node
-        .props
-        .str(PropId::ImageSource)
-        .is_some_and(|s| s.starts_with("symbol:"))
-        || bound(i, BindingKind::Prop, PropId::ImageSource as u16).is_some();
-    let face = parents[i].is_some_and(|p| {
-        kernel
-            .node(view(p))
-            .is_some_and(|p| p.node_type == NodeType::Control)
-    });
-    if !symbol || face {
-        return None;
-    }
-    // A mode boundary (a pin or a scheme, LLP 1121 D7) writes again a row
-    // it does not set when the one around read a token: an implied row, no
-    // author's, which `says` stops at (modes.js `apply`, `$xs`).
-    let mut writers = Vec::new();
-    let mut at = Some(i);
-    while let Some(j) = at {
-        let node = kernel.node(view(j)).expect("template node");
-        let boundary = modes
-            && !node.style.mask.has(StyleId::TextColor)
-            && [StyleId::Mode, StyleId::ColorScheme]
-                .iter()
-                .any(|id| rows(j).any(|b| b.kind == BindingKind::Style && b.id == *id as u16));
-        let row = bound(j, BindingKind::Style, StyleId::TextColor as u16);
-        match (row, boundary) {
-            (Some(row), _) => writers.push((j, Ink::Bound(row.written, boundary))),
-            (None, true) => writers.push((j, Ink::Boundary)),
-            (None, false) => {}
-        }
-        if node.style.written.has(StyleId::TextColor) {
-            return Some((writers, true));
-        }
-        if node.style.mask.has(StyleId::TextColor) || node.starts(StyleId::TextColor) {
-            return Some((writers, false));
-        }
-        at = parents[j];
-    }
-    Some((writers, false))
-}
-
-/// A node between a symbol and what decides its ink statically, which
-/// decides it at run time.
-#[derive(Clone, Copy)]
-enum Ink {
-    /// A bound `color` (its author wrote it, and whether the node is also a
-    /// mode boundary, whose implied row stands when the binding has none).
-    Bound(bool, bool),
-    /// A mode boundary that sets no `color` of its own.
-    Boundary,
-}
-
-/// The marks of [`symbol_color`]: `data-symbol-color` on an image the
-/// static tree decides; else `data-symbol-ink` (how many bound colours up,
-/// then the decision past them, `1` or `0`) for symbols.js to decide after
-/// each commit, and `data-exact-ink` (written, `1` or `0`) on each node a
-/// bound `color` makes one of those.
-fn symbol_marks(
-    plan: &Plan,
-    kernel: &Kernel,
-    parents: &[Option<usize>],
-    out: &mut [Option<Parts>],
-) {
-    let mut writers = Vec::new();
-    let modes = crate::modes::active(plan);
-    for (i, parts) in out.iter_mut().enumerate() {
-        let Some(parts) = parts.as_mut().filter(|p| p.tag == "img") else {
-            continue;
-        };
-        parts.props.remove("data-symbol-color");
-        match symbol_color(plan, kernel, parents, i, modes) {
-            Some((up, true)) if up.is_empty() => {
-                parts
-                    .props
-                    .insert("data-symbol-color".into(), String::new());
-            }
-            Some((up, said)) if !up.is_empty() => {
-                let ink = format!("{}{}", up.len(), u8::from(said));
-                parts.props.insert("data-symbol-ink".into(), ink);
-                writers.extend(up);
-            }
-            _ => {}
-        }
-    }
-    for (j, ink) in writers {
-        if let Some(parts) = out[j].as_mut() {
-            let ink = match ink {
-                Ink::Bound(written, boundary) => {
-                    format!("{}{}", u8::from(written), if boundary { "b" } else { "" })
-                }
-                Ink::Boundary => "b".into(),
-            };
-            parts.props.insert("data-exact-ink".into(), ink);
-        }
-    }
 }
 
 /// Every `for` row's roots, through any region at its top.
@@ -750,7 +646,7 @@ const PLATFORM: &str = "-exact-platform-color(";
 pub fn metric_map(plan: &Plan, code: &[u8]) -> Option<String> {
     use exact_kernel::style::metrics::{column, named, value};
     let mut pairs: Vec<String> = Vec::new();
-    for i in instructions(code).flatten() {
+    for i in exact_runner::vm::transitive_instructions(plan, code).flatten() {
         if i.op != Opcode::Str {
             continue;
         }
@@ -795,21 +691,25 @@ fn ramp_rem(text: &str) -> Option<String> {
     };
     Some(format!(
         "{}rem",
-        exact_web::css::num(unit.basis(MEDIUM, MEDIUM, 1.0) / MEDIUM)
+        exact_web::css::num(
+            unit.basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default()) / MEDIUM
+        )
     ))
 }
 
 /// A computed `transition`'s entries as an author's (LLP 1081 D5), shared by
 /// the ordinary and the pressed mappers: comments go (CSS removes them, so a
-/// check must too); springs on non-physics properties become `linear()`;
-/// an entry naming the host's `--exact-*` or an old spelling is dropped,
-/// as the native parser refuses it. `-exact-tint-color` becomes the property
-/// the browser animates, `--exact-tint`. `p` is the list of kept entries.
+/// check must too); each entry is folded to ASCII lower case, as the native
+/// parser reads its words in any case (motion/src/word.rs); springs on
+/// non-physics properties become `linear()`; an entry naming the host's
+/// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
+/// `-exact-tint-color` becomes the property the browser animates,
+/// `--exact-tint`. `p` is the list of kept entries.
 pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
         .into_iter()
-        .chain([Property::D])
+        .chain(Property::TRANSITION_ONLY)
         .filter(|p| *p != Property::ShadowColor)
         .map(|p| {
             (
@@ -826,7 +726,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     properties.insert("all", vec![]);
     let all: Vec<_> = Property::ALL
         .into_iter()
-        .chain([Property::D])
+        .chain(Property::TRANSITION_ONLY)
         .filter(|p| !p.springs() && *p != Property::ShadowColor)
         .map(|p| {
             if p == Property::BorderTopColor {
@@ -840,7 +740,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     let spring = include_str!("../transition-spring.js")
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
-    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim()).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
+    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
 });
 
 /// A computed `transition`, as the browser takes it: [`TRANSITION_ENTRIES`].
@@ -893,7 +793,9 @@ pub static TEXT_STYLE_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::ne
     use exact_kernel::style::relative::{Unit, MEDIUM};
     let mut pairs = Vec::new();
     for (i, s) in exact_kernel::TEXT_STYLES.iter().enumerate() {
-        let rem = Unit::TextStyle(i as u8).basis(MEDIUM, MEDIUM, 1.0) / MEDIUM;
+        let rem =
+            Unit::TextStyle(i as u8).basis(MEDIUM, MEDIUM, 1.0, &exact_kernel::Env::default())
+                / MEDIUM;
         let css = format!("{rem}rem");
         pairs.push(format!("{:?}:{css:?}", format!("-exact-{}", s.name)));
         if !s.alias.is_empty() {
@@ -943,8 +845,17 @@ pub fn style_fallback(name: &str) -> String {
 /// css.rs writes no declaration for the row's empty value.
 const NONE: &str = "v=>v==null||/^\\s*none\\s*$/i.test(v)?null:v";
 
+/// `animation-timeline` as CSS's own row where a name may be a drag's: only
+/// `scroll()` and `view()` (css.rs).
+pub(super) const ANONYMOUS_TIMELINE: &str = "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?v:null";
+
+/// `animation-range` as CSS's own row.
+pub(super) const ANIMATION_RANGE: &str = "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v";
+
+/// A name's consumer is paused for the drag code; `scroll()` or `view()`
+/// only where the browser has no `animation-timeline` (css.rs, index.html).
 pub(super) const TIMELINE_PLAY_STATE: &str =
-    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:\"paused\"";
+    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:/^\\s*(scroll|view)\\(/i.test(v)?\"var(--exact-timeline-play,paused)\":\"paused\"";
 
 /// A bound corner's map: a list (white space outside parentheses, or a
 /// `/`) is the elliptical radius no row holds, refused whole with the
@@ -962,6 +873,14 @@ fn invalid_unset(row: &str) -> String {
     format!("(()=>{{const e=globalThis.exact;e?.journal?.push(`t=${{e.now?.()??0}} invalid {row} value ${{JSON.stringify(v)}}; unset`);return \"unset\"}})()")
 }
 
+static Z_INDEX_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "v=>{{const z=({})(v);return Number.isNaN(z)?{}:z}}",
+        crate::paint::Z_INDEX,
+        invalid_unset("z-index")
+    )
+});
+
 // The bounded cursor vocabulary is the schema's, including dynamic bindings.
 static CURSOR_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
@@ -969,9 +888,27 @@ static CURSOR_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         StyleId::Cursor.enum_names(), invalid_unset("cursor")
     )
 });
+// Match the kernel's basic-shape subset for computed values too: the browser
+// also accepts relative units and calculations that the native parser refuses.
+const BASIC_CLIP: &str = r#"v=>{
+ if(typeof v!=="string")return false;
+ const m=v.trim().toLowerCase().match(/^(polygon|inset|circle|ellipse)\(([^()]*)\)$/);
+ if(!m)return false;
+ const tokens=s=>s.trim()?s.trim().split(/[ \t\r\n\f]+/):[];
+ const length=s=>{const m=s?.match(/^([+-]?(?:[0-9]*\.)?[0-9]+(?:e[+-]?[0-9]+)?)(px|%)?$/);return !!m&&Number.isFinite(Math.fround(+m[1]))&&(!!m[2]||+m[1]===0)};
+ const positive=s=>length(s)&&parseFloat(s)>=0;
+ const radius=s=>s==='closest-side'||s==='farthest-side'||positive(s);
+ const axis=(s,a,b)=>s==='center'||s===a||s===b||length(s);
+ const position=p=>p.length===1?(axis(p[0],'left','right')||p[0]==='top'||p[0]==='bottom'):p.length===2?((p[0]==='top'||p[0]==='bottom'||p[1]==='left'||p[1]==='right')?['top','bottom','center'].includes(p[0])&&['left','right','center'].includes(p[1]):axis(p[0],'left','right')&&axis(p[1],'top','bottom')):false;
+ const [_,kind,body]=m;
+ if(kind==='polygon'){const parts=body.split(',');if(['nonzero','evenodd'].includes(parts[0].trim()))parts.shift();return parts.length>0&&parts.every(p=>{const t=tokens(p);return t.length===2&&t.every(length)})}
+ if(kind==='inset'){const parts=body.split(/[ \t\r\n\f]+round[ \t\r\n\f]+/);if(parts.length>2)return false;const edges=tokens(parts[0]);if(edges.length<1||edges.length>4||!edges.every(length))return false;if(parts.length===1)return true;const radii=parts[1].split('/');return radii.length<=2&&radii.every(r=>{const t=tokens(r);return t.length>=1&&t.length<=4&&t.every(positive)})}
+ const t=tokens(body),at=t.indexOf('at'),r=at<0?t:t.slice(0,at);
+ return (r.length===0||r.length===(kind==='circle'?1:2)&&r.every(radius))&&(at<0||position(t.slice(at+1)));
+}"#;
 static CLIP_MAP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
-        r#"v=>v==null||/^\s*(unset\s*$|none\s*$|path\(|url\()/i.test(v)?v:{}"#,
+        r#"v=>v==null||/^\s*(unset\s*$|none\s*$|path\(|url\()/i.test(v)||({BASIC_CLIP})(v)?v:{}"#,
         invalid_unset("clip-path")
     )
 });
@@ -1082,6 +1019,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         ],
         StyleId::TintColor => vec![with("--exact-tint", &TINT_MAP)],
         StyleId::PlaceholderColor => vec![with("--exact-placeholder-color", "v=>v==null?v:/^\\s*(unset)?\\s*$/i.test(v)?'initial':v")],
+        StyleId::BackdropColor => vec![with("--exact-backdrop-color", "v=>v==null?v:/^\\s*(unset)?\\s*$/i.test(v)?'initial':v")],
         // A capsule's ends are half-circles, so it takes no curve (index.html).
         StyleId::ControlCornerStyle => vec![
             with("--exact-control-radius", "v=>v==null?v:v==='capsule'?'calc(infinity * 1px)':'revert'"),
@@ -1116,7 +1054,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         }
         StyleId::TextAlign => vec![with("text-align", "v=>v"), with("--exact-button-align", "v=>v==null?v:({left:'start',start:'start',right:'end',end:'end'})[v]??'center'")],
         StyleId::Cursor => vec![with("cursor", &CURSOR_MAP)],
-        StyleId::ZIndex => vec![with("z-index", crate::paint::Z_INDEX)],
+        StyleId::ZIndex => vec![with("z-index", &Z_INDEX_MAP)],
         // @ref LLP 1055 D5/D7 — the browser runs it; its `@keyframes` are in
         // the stylesheet (emit.rs), under the author's names.
         StyleId::Animation if timeline => vec![
@@ -1137,9 +1075,11 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::ScrollEdgeEffect
         | StyleId::HoverEffect
         | StyleId::SmartInvert => vec![],
-        // @ref LLP 1055 D13 — the browser starts an animation at insertion;
-        // this target does not hold one for its row (a declared deviation).
-        StyleId::AnimationTrigger => vec![],
+        // @ref LLP 1055 D13 — tree.js `css` gives the list's hold rule this value as an attribute.
+        StyleId::AnimationTrigger => vec![with(
+            "--exact-animation-trigger",
+            "v=>v===\"none\"?\"none\":\"view\"",
+        )],
         StyleId::Animation => vec![with("animation", NONE)],
         // @ref LLP 1069.011 D8 — and the custom property a native button reads.
         // The accent role must inherit, never write a self-reference.
@@ -1154,10 +1094,17 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         StyleId::DragTimeline => vec![with("--exact-drag-timeline", NONE)],
         // @ref LLP 1055.002 — `-exact-clock(Name)` is css.rs's clock property and
         // leaves the play state alone; a drag timeline pauses.
+        // @ref LLP 1057.003 D5 — `scroll()` and `view()` as CSS's own row
+        // too, which the browser runs; a name the glue resolves (css.rs).
         StyleId::AnimationTimeline => vec![
             with(
                 "--exact-animation-timeline",
                 "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-timeline", ANONYMOUS_TIMELINE),
+            with(
+                "--exact-css-timeline",
+                "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?\"1\":null",
             ),
             with(
                 "--exact-animation-clock",
@@ -1168,14 +1115,28 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
                 TIMELINE_PLAY_STATE,
             ),
         ],
-        StyleId::AnimationRange => vec![with(
-            "--exact-animation-range",
-            "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
-        )],
+        StyleId::AnimationRange => vec![
+            with(
+                "--exact-animation-range",
+                "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-range", ANIMATION_RANGE),
+        ],
+        StyleId::ScrollTimelineName => vec![
+            with("scroll-timeline-name", NONE),
+            with("--exact-scroll-timeline", NONE),
+        ],
+        StyleId::ViewTimelineName => vec![
+            with("view-timeline-name", NONE),
+            with("--exact-view-timeline", NONE),
+        ],
         StyleId::TimelineScope => vec![
             with("timeline-scope", NONE),
             with("--exact-timeline-scope", NONE),
         ],
+        // @ref LLP 1123 D5 — a node's custom properties, which tree.js `css`
+        // writes one declaration at a time
+        StyleId::SafeAreaProperties => vec![with("--", "v=>v")],
         StyleId::GridTemplateColumns | StyleId::GridTemplateRows => vec![with(
             &css_property(row),
             "v=>gridValue(\"tracks\",v)",
@@ -1198,8 +1159,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             "transition",
             TRANSITION_MAP.as_str(),
         )],
-        // The kernel's `clip-path` is `none`, `url(#id)` or `path()` (clip.rs);
-        // any other shape, which the browser would take, is refused: unset.
+        // CSS shapes and paths are drawn by the browser.
         StyleId::ClipPath => vec![with(
             "clip-path",
             &CLIP_MAP,
@@ -1264,6 +1224,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
 /// css.rs names it, its logical side.
 pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
     let row = StyleId::from_bit(id as u32).ok_or("unknown style row")?;
+    if row == StyleId::TranslateVelocity {
+        return Ok(("--exact-translate-velocity".into(), String::new()));
+    }
     // `translate` is one declaration of the author's two lengths (css.rs
     // `lowered`): written as the author wrote them.
     if row == StyleId::Translate {
@@ -1315,6 +1278,7 @@ pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
             | StyleCodec::U16
             | StyleCodec::U32
             | StyleCodec::I32
+            | StyleCodec::AutoI32
     ) || matches!(
         row,
         StyleId::FontFamily
@@ -1369,6 +1333,7 @@ pub(crate) fn css_property(id: StyleId) -> String {
         StyleId::TintColor => return "--exact-tint".into(),
         // @ref LLP 1104 D3 — css.rs's `spell_property`.
         StyleId::PlaceholderColor => return "--exact-placeholder-color".into(),
+        StyleId::BackdropColor => return "--exact-backdrop-color".into(),
         StyleId::GlassTint => return "--exact-glass-tint".into(),
         StyleId::PositionType => return "position".into(),
         StyleId::BackdropFilter => return "backdrop-filter".into(),
@@ -1464,3 +1429,36 @@ pub(crate) fn unset_mirrors(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Transition authored bases independently of host press feedback.
+pub(crate) fn composed_transition_map(press: bool, shift: bool) -> String {
+    let names: Vec<_> = [(press, "scale"), (shift, "translate")]
+        .into_iter()
+        .filter_map(|(yes, name)| yes.then_some(name))
+        .collect();
+    format!(
+        r#"v=>{{if(v==null)return v;{}let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
+        crate::style::TRANSITION_ENTRIES.as_str(),
+        serde_json::to_string(&names).unwrap()
+    )
+}
+
+/// The live offset and its CSS axes; `none` removes the composition selector.
+pub(crate) fn press_translation_writes() -> Vec<(String, String, Option<String>)> {
+    let valid = r#"v=>{const t=String(v??'').trim();return /^(?:[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?|none)(?:\s+[+-]?(?:\d*\.\d+|\d+\.?\d*)(?:e[+-]?\d+)?(?:px|%)?)?$/i.test(t)&&CSS.supports('translate',t)&&!/^none$/i.test(t)?t:null}"#;
+    let mut writes = vec![(
+        "--exact-press-translate".into(),
+        String::new(),
+        Some(valid.into()),
+    )];
+    for (i, axis) in ["x", "y"].iter().enumerate() {
+        writes.push((
+            format!("--exact-press-{axis}"),
+            String::new(),
+            Some(format!(
+                "v=>{{const t=({valid})(v);return t?.split(/\\s+/)[{i}]??'0px'}}"
+            )),
+        ));
+    }
+    writes
+}

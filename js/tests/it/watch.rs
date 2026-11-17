@@ -90,3 +90,35 @@ fn an_atomic_save_from_typescript_keeps_the_document() {
     kept::end(9132);
     exact_data::documents::forget(9132);
 }
+
+/// An atomic save from TypeScript whose kept set cannot be saved fails,
+/// though the file is written, and saving again keeps the document.
+#[cfg(unix)]
+#[test]
+fn an_atomic_save_from_typescript_that_cannot_keep_the_document_fails() {
+    use exact_data::documents::kept;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let root = Root::new();
+    std::fs::create_dir_all(root.0.join("set")).unwrap();
+    let file = root.0.join("saved.md");
+    std::fs::write(&file, "before").unwrap();
+    let set = root.0.join("set/kept.json");
+    kept::open(9133, "test.js.kept-unsaved", &set);
+    let doc = kept::keep(9133, &file, "", "readwrite").unwrap();
+    let mut module = root.module();
+    module.set_document_owner(9133);
+    module.activate().unwrap();
+    let mut store = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(root.0.join("set"), mode(0o555)).unwrap();
+    let refused = call(&mut module, &mut store, "kept-save", &doc);
+    std::fs::set_permissions(root.0.join("set"), mode(0o755)).unwrap();
+    assert_eq!(refused, "Unavailable failed");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "saved");
+    assert_eq!(call(&mut module, &mut store, "kept-save", &doc), doc);
+    let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&set).unwrap()).unwrap();
+    let after = std::fs::metadata(&file).unwrap().ino();
+    assert_eq!(written["documents"][0]["inode"], after);
+    kept::end(9133);
+    exact_data::documents::forget(9133);
+}

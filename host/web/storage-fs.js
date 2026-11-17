@@ -60,8 +60,9 @@ function descendants(path) {
 // lock. Unrelated files remain usable; replacing an open database or moving its
 // parent fails instead of silently discarding SQLite's later commit.
 // `timers`: the realm's own; a module Worker's are taken before its prelude takes the module's (module-worker.js).
+// `cancel`: a signal that ends the wait when whoever asked has gone (storage-worker.js, a disposed client).
 const ownTimers = { set: (f, ms) => setTimeout(f, ms), clear: id => clearTimeout(id) };
-export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimers) {
+export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimers, cancel = null) {
   if (!globalThis.navigator?.locks) throw failure('Web Locks are unavailable');
   const requested = new Map();
   for (let path of paths) {
@@ -75,11 +76,14 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
   const held = [];
   const abort = new AbortController();
   const timer = timers.set(() => abort.abort(), timeout);
+  const cancelled = () => abort.abort();
   async function release() {
     for (const lock of held) lock.release();
     await Promise.all(held.map(lock => lock.done));
   }
   try {
+    if (cancel?.aborted) throw failure('storage was let go before its lock was acquired');
+    cancel?.addEventListener('abort', cancelled, { once: true });
     for (const [path, mode] of [...requested].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
       let unlock;
       const lifetime = new Promise(resolve => { unlock = resolve; });
@@ -91,8 +95,8 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
           acquired();
           await lifetime;
         });
-      void done.catch(error => refused(abort.signal.aborted
-        ? failure(`storage is busy after ${timeout} ms: ${path}; close the other database or tab and retry`, 'EBUSY')
+      void done.catch(error => refused(cancel?.aborted ? failure('storage was let go before its lock was acquired')
+        : abort.signal.aborted ? failure(`storage is busy after ${timeout} ms: ${path}; close the other database or tab and retry`, 'EBUSY')
         : failure(error.message)));
       await ready;
       held.push({ release: unlock, done });
@@ -101,7 +105,10 @@ export async function lockPaths(appId, paths, timeout = 10000, timers = ownTimer
   } catch (error) {
     await release();
     throw error;
-  } finally { timers.clear(timer); }
+  } finally {
+    timers.clear(timer);
+    cancel?.removeEventListener('abort', cancelled);
+  }
 }
 function requireBelowRoot(path) {
   if (rootPaths.includes(path)) throw failure('operation needs a path below the app root');
@@ -230,11 +237,12 @@ export function createFileStore(appId) {
     },
     // Trusted host only: a file as a Blob, for an `image` or `video` source
     // (LLP 1069.002 D7), its modification time and its version. A picked entry is its File.
-    async blob(path, type, maxBytes = Infinity, label = 'compressImage') {
+    // `bytesOnly` bounds only an entry of bytes, which IndexedDB read whole.
+    async blob(path, type, maxBytes = Infinity, label = 'compressImage', bytesOnly = false) {
       path = normalizePath(path);
       const { contents, modifiedMs, version } = await run(false, records => file(records, path), path);
       const size = contents.byteLength ?? contents.size;
-      if (size > maxBytes) throw failure(`${label}: too-large: ${size} bytes is over ${maxBytes}`, 'too-large');
+      if (size > maxBytes && !(bytesOnly && contents instanceof Blob)) throw failure(`${label}: too-large: ${size} bytes is over ${maxBytes}`, 'too-large');
       // A stored Blob with no type (an `exactBodyTo` reply's) takes the caller's, as bytes do.
       const blob = !(contents instanceof Blob) ? new Blob([contents], { type })
         : contents.type || !type ? contents : contents.slice(0, contents.size, type);
@@ -242,10 +250,11 @@ export function createFileStore(appId) {
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).
-    putBlob(path, blob) {
+    putBlob(path, blob, refusal = () => undefined) {
       path = normalizePath(path);
       requireBelowRoot(path);
       return run(true, (records, changes) => {
+        const refused = refusal(); if (refused) throw refused;
         directory(records, parentOf(path));
         const previous = records.get(path);
         if (previous && previous.kind !== 'file') throw failure('write needs a regular file', 'EISDIR');
@@ -316,7 +325,10 @@ export function createFileStore(appId) {
         if (below(to, from)) throw failure('cannot move a directory into itself');
         const target = records.get(to);
         if (target) {
-          if (source.kind !== target.kind) throw failure('rename requires matching file kinds');
+          // As rename(2) answers natively: a file onto a folder is EISDIR, a folder onto a file ENOTDIR.
+          if (source.kind !== target.kind) {
+            throw failure('rename requires matching file kinds', target.kind === 'directory' ? 'EISDIR' : 'ENOTDIR');
+          }
           if (target.kind === 'directory' && keys.some(key => below(key, to))) {
             throw failure('destination directory is not empty', 'ENOTEMPTY');
           }
@@ -405,15 +417,15 @@ export function createFileSystem(appId, grants, timers = ownTimers) {
     const file = await open();
     return mutate([to], () => store.putBlob(to, file));
   };
-  // `compressImage(from, to, {maxDimension, maxBytes, type, rotate, flip, crop})`
-  // (LLP 1069.002 A1, LLP 1133.019 D15): both grants are checked and the
+  // `compressImage(from, to, {maxDimension, maxBytes, quality, type, rotate,
+  // flip, crop})` (LLP 1069.002 A1, A1.12; LLP 1133.019 D15): both grants are checked and the
   // options too before anything is read; the codec runs outside the mutation
   // lock, and only the write takes it.
   fs.compressImage = async (from, to, options) => {
     if (typeof from !== 'string' || typeof to !== 'string' || !from.startsWith('app:/') || !to.startsWith('app:/'))
       throw failure('compressImage: needs app:/ paths', 'failed');
     const image = await import('./storage-image.js');
-    const { maxDimension, maxBytes, type } = image.limits(options);
+    const { type, ...budget } = image.limits(options);
     const edit = image.editOptions('storage.fs.compressImage()', options, false);
     from = authorize(grants, 'fs.read', from);
     to = authorize(grants, 'fs.write', to);
@@ -421,7 +433,7 @@ export function createFileSystem(appId, grants, timers = ownTimers) {
     // An entry is one IndexedDB record, read whole by any operation (`stat`
     // too); its size is checked before it becomes a Blob or is decoded.
     const { blob } = await store.blob(from, undefined, image.MAX_BYTES);
-    const out = await image.compress(blob, maxDimension, maxBytes, undefined, type, edit);
+    const out = await image.compress(blob, budget, undefined, type, edit);
     const size = out.bytes.byteLength;
     await mutate([to], () => store.atomicWriteOwnedFile(to, out.bytes));
     return { path: to, type, size, width: out.width, height: out.height };
@@ -447,13 +459,16 @@ export function createFileSystem(appId, grants, timers = ownTimers) {
 }
 
 /** `fetch(url, {exactBodyFrom})` (LLP 1108 D6 R2): the app file at `path` as
- * a request body, read by the host that sends it, under `fs.read`, at most
- * 64 MiB. A Blob, never bytes handed to app code: a picked file's entry is
- * its own `File` (LLP 1069.002 D5), sliced with no type so the browser adds
- * no Content-Type (the author's header is the only one); a byte entry is the
- * record IndexedDB already read, wrapped. Every refusal names the path and
- * why, as the native executor's does. Trusted host only. */
-export const MAX_BODY_FROM_BYTES = 64 * 1024 * 1024;
+ * a request body, read by the host that sends it, under `fs.read`. A Blob,
+ * never bytes handed to app code: a picked file's or a recorded video's entry
+ * is its own `File` (LLP 1069.002 D5), and an `exactBodyTo` reply's a Blob,
+ * which the browser reads from disk as it sends, with no bound; each is
+ * sliced with no type so the browser adds no Content-Type (the author's header
+ * is the only one). A byte entry, a file the app wrote, is the record
+ * IndexedDB already read whole, wrapped, so it keeps a bound of 64 MiB (LLP
+ * 1133.008.000 D4). Every refusal names the path and why, as the native
+ * executor's does. Trusted host only. */
+export const MAX_WRITTEN_BODY_BYTES = 64 * 1024 * 1024;
 export async function requestBody(appId, grants, path) {
   const named = (why, code) => Object.assign(new Error(`exactBodyFrom ${path}: ${why}`), { kind: 'Unavailable', code });
   if (typeof path !== 'string' || !path.startsWith('app:/')) throw named('exactBodyFrom needs an app:/ path');
@@ -466,9 +481,11 @@ export async function requestBody(appId, grants, path) {
   try {
     // The size is checked before a Blob is made; a byte entry's record is
     // read whole by IndexedDB first, as for any operation on it.
-    const { blob } = await store.blob(normalized, '', MAX_BODY_FROM_BYTES, 'exactBodyFrom').catch(error => {
-      const why = String(error.message).replace(/^filesystem: (exactBodyFrom: )?/, '');
-      throw named(error.code === 'EISDIR' ? 'not a file' : why, error.code);
+    const { blob } = await store.blob(normalized, '', MAX_WRITTEN_BODY_BYTES, 'exactBodyFrom', true).catch(error => {
+      const why = error.code === 'EISDIR' ? 'not a file'
+        : error.code === 'too-large' ? `too-large: an app-written file is read whole on the web, at most ${MAX_WRITTEN_BODY_BYTES} bytes`
+        : String(error.message).replace(/^filesystem: (exactBodyFrom: )?/, '');
+      throw named(why, error.code);
     });
     return blob.type ? blob.slice(0, blob.size, '') : blob;
   } finally { store.close(); }
@@ -501,7 +518,7 @@ export async function bodyTarget(appId, grants, path) {
     // Until the file starts to be replaced, the request's end refuses the write: `refusal()`, asked just before, says
     // whether the request has ended and with what, and `ended` aborts when it may have, rejecting the write at once.
     // Once the file starts to be replaced the write waits for it, so a request never fails while its file changes.
-    async put(response, limit, ended, refusal = () => undefined) {
+    async put(response, limit, ended, refusal = () => undefined, publishRefusal) {
       try {
         // A browser rejects the read with its own words, so the overflow is kept to say why.
         let size = 0, over = null;
@@ -515,7 +532,7 @@ export async function bodyTarget(appId, grants, path) {
           refused = refusal();
           if (refused) throw refused;
           replacing = true;
-          return store.putBlob(normalized, blob);
+          return store.putBlob(normalized, blob, publishRefusal);
         }).catch(error => { throw error === refused ? error : named(error.message, error.code); });
         if (ended) {
           await new Promise((done, failed) => {

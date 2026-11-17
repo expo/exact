@@ -63,7 +63,10 @@ const groupedByPage = (hits: SearchHit[]): SearchHit[] =>
 const none = { title: '', href: '' };
 const missing: Page = {
   slug: 'notfound',
+  path: '',
+  movedFrom: [],
   section: '',
+  crumbs: [],
   title: 'Page Not Found',
   description: 'No page of the Exact docs is at this address.',
   subtitle: '',
@@ -78,6 +81,9 @@ const missing: Page = {
   chatgptUrl: '',
   codexUrl: '',
   cursorUrl: '',
+  t3Url: '',
+  grokUrl: '',
+  metaUrl: '',
   blocks: [],
   toc: [],
 };
@@ -92,7 +98,7 @@ function resolve(url: string): Result<'resolveMoved'> {
   if (!url) return { to: '', go: '', suggestions: [] };
   const path = url.split(/[?#]/)[0].replace(/^\/+/, '/').replace(/\/index\.html$/, '/').replace(/\.(html|md)$/, '');
   const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
-  const go = (to: string) => ({ to, go: `${to}?from=${encodeURIComponent(path)}`, suggestions: [] });
+  const go = (to: string) => ({ to, go: `${to}?from=${encodeURIComponent(clean)}`, suggestions: [] });
   if (moved.redirects[clean]) return go(moved.redirects[clean]);
   if (clean !== url && moved.pages.some(p => p.path === clean)) return { to: clean, go: clean, suggestions: [] };
   const asked = new Set(words(clean));
@@ -106,10 +112,11 @@ function resolve(url: string): Result<'resolveMoved'> {
 }
 
 const sources: Sources = {
+  // Only a route with no page is missing. A page whose module fails to download rejects, so the
+  // reader is told and can try again.
   loadPage: async ([route]): Promise<Page> => {
     const load = pages[route];
-    const module = await load?.().catch(() => null);
-    return module ? (module.default as Page) : missing;
+    return load ? ((await load()).default as Page) : missing;
   },
   loadNav: async (): Promise<Result<'loadNav'>> => nav,
   resolveMoved: async ([url]): Promise<Result<'resolveMoved'>> => resolve(url),
@@ -129,6 +136,7 @@ const sources: Sources = {
     if (!response.ok) throw new Error(`The page's Markdown answered ${response.status}.`);
     return { text: await response.text() };
   },
+  pageAddress: async ([path]): Promise<Result<'pageAddress'>> => ({ url: new URL(path, import.meta.url).href }),
 };
 
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);

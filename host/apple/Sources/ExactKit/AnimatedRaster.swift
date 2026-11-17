@@ -9,18 +9,18 @@ import ImageIO
 
 /// What playing an animated image needs, read once by the decode that made
 /// its first frame: the frame count, each frame's time on screen, how many
-/// times it plays, and where its bytes are (the source's own file, kept by
-/// `owner` while this lives). Immutable; the frames are decoded on demand.
+/// times it plays, and a provider retaining its opened file. Immutable;
+/// the frames are decoded on demand without reopening the file's name.
 final class RasterAnimation: @unchecked Sendable {
-    let url: URL
+    let provider: CGDataProvider
     let count: Int
     let schedule: AnimationSchedule
     let plan: RasterDecodePlan
     let webp: Bool
     private let owner: (any RasterSourceOwner)?
 
-    private init(url: URL, count: Int, schedule: AnimationSchedule, plan: RasterDecodePlan, webp: Bool, owner: (any RasterSourceOwner)?) {
-        self.url = url; self.count = count; self.schedule = schedule; self.plan = plan; self.webp = webp; self.owner = owner
+    private init(provider: CGDataProvider, count: Int, schedule: AnimationSchedule, plan: RasterDecodePlan, webp: Bool, owner: (any RasterSourceOwner)?) {
+        self.provider = provider; self.count = count; self.schedule = schedule; self.plan = plan; self.webp = webp; self.owner = owner
     }
 
     /// The bytes of one decoded frame at the plan's size.
@@ -28,10 +28,10 @@ final class RasterAnimation: @unchecked Sendable {
 
     /// A GIF or WebP with more than one frame; nil for anything else (a
     /// still, or an animated PNG, whose first frame paints as before).
-    static func read(_ source: CGImageSource, url: URL, plan: RasterDecodePlan, owner: (any RasterSourceOwner)?) -> RasterAnimation? {
+    static func read(_ source: CGImageSource, file: FileHandle, plan: RasterDecodePlan, owner: (any RasterSourceOwner)?) -> RasterAnimation? {
         guard let type = CGImageSourceGetType(source) as String?, type == "com.compuserve.gif" || type == "org.webmproject.webp" else { return nil }
         let count = CGImageSourceGetCount(source)
-        guard count > 1 else { return nil }
+        guard count > 1, let provider = FileImageSource.provider(file) else { return nil }
         let webp = type == "org.webmproject.webp"
         let key = webp ? kCGImagePropertyWebPDictionary : kCGImagePropertyGIFDictionary
         let properties = CGImageSourceCopyProperties(source, nil) as? [CFString: Any]
@@ -49,7 +49,7 @@ final class RasterAnimation: @unchecked Sendable {
             let seconds = (frame?[unclamped] as? NSNumber ?? frame?[clamped] as? NSNumber)?.doubleValue ?? 0
             delays.append(seconds)
         }
-        return RasterAnimation(url: url, count: count, schedule: AnimationSchedule(seconds: delays, plays: max(0, plays)),
+        return RasterAnimation(provider: provider, count: count, schedule: AnimationSchedule(seconds: delays, plays: max(0, plays)),
                                plan: plan, webp: webp, owner: owner)
     }
 }
@@ -170,7 +170,7 @@ final class ImageIOFrames: AnimatedFrames {
     private let source: CGImageSource
     private let plan: RasterDecodePlan
     init?(_ animation: RasterAnimation) {
-        guard let source = CGImageSourceCreateWithURL(animation.url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        guard let source = CGImageSourceCreateWithDataProvider(animation.provider, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         self.source = source; plan = animation.plan
     }
     func frame(_ index: Int) -> CGImage? {
@@ -199,7 +199,7 @@ final class WebPFrames: AnimatedFrames {
     static let canvasLimit = 64 * 1024 * 1024
 
     init?(_ animation: RasterAnimation) {
-        guard let data = try? Data(contentsOf: animation.url, options: .alwaysMapped),
+        guard let data = animation.provider.data as Data?,
               let (width, height, frames) = Self.parse(data), frames.count == animation.count,
               width * height * 4 <= Self.canvasLimit,
               let canvas = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,

@@ -760,8 +760,10 @@ pub(crate) mod tests {
         skin.encode(&mut encoder, None);
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         for (a, b) in actual.iter().zip(expected.to_cols_array()) {
             assert!((a - b).abs() < 1e-5, "{actual:?}");
@@ -988,8 +990,8 @@ pub(crate) mod tests {
             skin.pack(w, &[e], true);
             skin.feed(&gpu.queue, w, &[e], false);
             let mut attachments = crate::world::scene::Attachments::default();
-            attachments.feed(w, true, true, false, false);
-            attachments.feed(w, false, false, false, false);
+            attachments.feed(w, true, true, None, false);
+            attachments.feed(w, false, false, None, false);
             for alpha in [0., 0.5, 1.] {
                 let mut values = [0f32; 20];
                 values[19] = alpha;
@@ -998,8 +1000,10 @@ pub(crate) mod tests {
                 skin.encode(&mut encoder, None);
                 gpu.queue.submit([encoder.finish()]);
                 let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-                    .chunks_exact(4)
-                    .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|v| f32::from_ne_bytes(*v))
                     .collect();
                 let expected = Mat4::from_scale_rotation_translation(
                     parent.scale,
@@ -1119,7 +1123,7 @@ pub(crate) mod tests {
         .unwrap();
         skin.pack(w, &[e], true);
         let mut attachments = crate::world::scene::Attachments::default();
-        attachments.feed(w, true, true, false, false);
+        attachments.feed(w, true, true, None, false);
         sim.run(17.);
         let w = sim.world_mut();
         skin.feed(&gpu.queue, w, &[e], false);
@@ -1135,8 +1139,10 @@ pub(crate) mod tests {
         skin.encode(&mut encoder, None);
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         let expected = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4)
             * Mat4::from_translation(Vec3::new(1., 0., 2.));
@@ -1147,7 +1153,7 @@ pub(crate) mod tests {
             actual[12] > 0.7,
             "a lerp of composed matrices would give 0.5"
         );
-        attachments.feed(w, false, true, false, false);
+        attachments.feed(w, false, true, None, false);
         attachments.frame(0.5);
         let displayed = attachments
             .output
@@ -1167,7 +1173,7 @@ pub(crate) mod tests {
             displayed.distance(Vec3::new(0.5, 0.5, 0.)) > 0.2,
             "endpoint interpolation is the negative control"
         );
-        attachments.feed(w, false, false, false, true);
+        attachments.feed(w, false, false, None, true);
         attachments.frame(0.5);
         assert!(
             attachments.output[0].pose.position.distance(joint) < 1e-4,
@@ -1177,7 +1183,7 @@ pub(crate) mod tests {
             Transform::default(),
             exact_game::SocketFollow::new(e, "tip"),
         ));
-        attachments.feed(w, false, false, false, false);
+        attachments.feed(w, false, false, None, false);
         attachments.frame(0.5);
         assert!(
             attachments
@@ -1193,7 +1199,7 @@ pub(crate) mod tests {
         );
         // Different attachments resolve different joints; invalid targets use their authored pose.
         let second = w.spawn((Transform::default(), exact_game::SocketFollow::new(e, "")));
-        attachments.feed(w, false, false, false, false);
+        attachments.feed(w, false, false, None, false);
         attachments.frame(0.5);
         assert_eq!(
             attachments
@@ -1206,7 +1212,7 @@ pub(crate) mod tests {
             Vec3::ZERO
         );
         w.get_mut::<exact_game::SocketFollow>(charm).unwrap().joint = "missing".into();
-        attachments.feed(w, false, false, false, false);
+        attachments.feed(w, false, false, None, false);
         attachments.frame(0.5);
         assert!(!attachments.output.iter().any(|a| a.entity == charm));
         assert_eq!(
@@ -1416,8 +1422,10 @@ mod normal_tests {
         }
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<f32> = super::tests::read(&gpu, &output, 16)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         let expected = (a * 0.75 + b * 0.25)
             .inverse()

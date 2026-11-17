@@ -120,27 +120,12 @@ fn key_codes(key: &str, shift: bool) -> Vec<String> {
 /// Whether any button in `file` declares `aria-keyshortcuts`: only then
 /// does a stale or missing key declaration matter.
 pub fn declares_shortcuts(file: &File) -> bool {
-    fn any(nodes: &[Node]) -> bool {
-        nodes.iter().any(|node| match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                (tag == "button" && attrs.iter().any(|a| a.name == "aria-keyshortcuts"))
-                    || any(children)
-            }
-            Node::Use { children, .. } => any(children),
-            Node::Each { body, .. } => any(body),
-            Node::When {
-                then, otherwise, ..
-            } => any(then) || any(otherwise),
-            Node::Match { some, none, .. } => any(&some.1) || any(none),
-            Node::Children { .. } => false,
+    file.components.iter().any(|c| {
+        Node::walk(&c.view).any(|node| {
+            matches!(node, Node::Element { tag, attrs, .. }
+                if tag == "button" && attrs.iter().any(|a| a.name == "aria-keyshortcuts"))
         })
-    }
-    file.components.iter().any(|c| any(&c.view))
+    })
 }
 
 /// A button's `aria-keyshortcuts`: the button's attributes, the attribute,
@@ -175,35 +160,17 @@ fn button_shortcuts(file: &File) -> Vec<ButtonShortcut<'_>> {
         user: &'a str,
         args: &mut BTreeMap<(&'a str, &'a str), Vec<(&'a str, &'a Expr)>>,
     ) {
-        for node in nodes {
-            match node {
-                Node::Use {
-                    name,
-                    args: given,
-                    children,
-                    ..
-                } => {
-                    for Attr {
-                        name: prop, value, ..
-                    } in given
-                    {
-                        args.entry((name, prop)).or_default().push((user, value));
-                    }
-                    uses(children, user, args);
+        for node in Node::walk(nodes) {
+            if let Node::Use {
+                name, args: given, ..
+            } = node
+            {
+                for Attr {
+                    name: prop, value, ..
+                } in given
+                {
+                    args.entry((name, prop)).or_default().push((user, value));
                 }
-                Node::Element { children, .. } => uses(children, user, args),
-                Node::Each { body, .. } => uses(body, user, args),
-                Node::When {
-                    then, otherwise, ..
-                } => {
-                    uses(then, user, args);
-                    uses(otherwise, user, args);
-                }
-                Node::Match { some, none, .. } => {
-                    uses(&some.1, user, args);
-                    uses(none, user, args);
-                }
-                Node::Children { .. } => {}
             }
         }
     }

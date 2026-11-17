@@ -275,8 +275,8 @@ final class SplitDetail: NSViewController {
         let view = NSView()
         ground.frame = view.bounds
         ground.autoresizingMask = [.width, .height]
-        ground.drawsBackground = true
-        ground.backgroundColor = presenter?.pageBackground ?? .windowBackgroundColor
+        ground.drawsBackground = presenter?.viewport.drawsBackground ?? true
+        ground.backgroundColor = presenter?.viewport.backgroundColor ?? .windowBackgroundColor
         ground.hasVerticalScroller = false
         ground.hasHorizontalScroller = false
         view.addSubview(ground)
@@ -352,8 +352,9 @@ final class SplitDetail: NSViewController {
     /// What the pane says while it shows no route.
     var saysNothing: String? { isViewLoaded && !nothing.isHidden ? nothing.stringValue : nil }
     func groundChanged() {
-        guard isViewLoaded, let color = presenter?.pageBackground, ground.backgroundColor != color else { return }
-        ground.backgroundColor = color
+        guard isViewLoaded, let page = presenter?.viewport else { return }
+        if ground.backgroundColor != page.backgroundColor { ground.backgroundColor = page.backgroundColor }
+        if ground.drawsBackground != page.drawsBackground { ground.drawsBackground = page.drawsBackground }
     }
 }
 

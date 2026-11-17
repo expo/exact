@@ -436,7 +436,7 @@ def setStack (r : Router) (i : Nat) (f : List Entry → List Entry) : Router :=
 
 /-- Select the declared tab and replace its chain: the same URL at the
 same position keeps its id. Seeds every tab at its root first, when there
-are none. -/
+are none, the location's own tab at its chain's root visit. -/
 def «open» (t : Table) (r : Router) (location : String) : Verb := do
   let ch := chain t location
   let .some d0 := ch.head? | throw (noMatch location)
@@ -445,8 +445,11 @@ def «open» (t : Table) (r : Router) (location : String) : Verb := do
   if out.tabs.isEmpty then
     for root in roots t do
       let .some route := t[root]? | pure ()
-      let d : Destination := { name := route.name, url := canonical route.pattern,
-                               tab := route.name, params := emptyParams t }
+      -- The location's own tab is seeded at its chain's root visit, so a
+      -- query on a root location changes no id.
+      let d : Destination := if d0.name == route.name then d0 else
+        { name := route.name, url := canonical route.pattern,
+          tab := route.name, params := emptyParams t }
       let (e, o) ← mint out d
       out := { o with tabs := o.tabs ++ [{ name := route.name, stack := [e] }] }
   let .some index := out.tabs.findIdx? (·.name == target) | throw s!"unknown tab {target}"
@@ -545,7 +548,8 @@ def go (t : Table) (r : Router) (location : String) : Verb :=
     | .some i => select (setStack r i (withFragment !fragment.isEmpty)) ((r.tabs[i]?.map (·.name)).getD "")
     | .none => push t r location
 
-/-- Seed every tab at its root, then open the launch location. -/
+/-- Seed every tab at its root, the location's own tab at its chain's root
+visit, then open the launch location. -/
 def launch (t : Table) (location : String) : Verb := «open» t {} location
 
 /-! ## The plan boundary (`runner/src/runner/router.rs`) -/

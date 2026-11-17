@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'bun:test';
 
 const added: string[] = [];
-mock.module('@exact/photos', () => ({ addToPhotoLibrary: async ({ path }: { path: string }) => { added.push(path); return { asset: path }; }, photoAssets: async () => ({ assets: [] }) }));
+mock.module('@exact/photos', () => ({ addToPhotoLibrary: async ({ path }: { path: string }) => { added.push(path); return { asset: path }; }, photoAssets: async () => ({ assets: [], cursor: null }) }));
 const { answer } = await import('./app.ts');
 
 test('overlapping saves give each edit its own file, and a failed transform adds nothing', async () => {

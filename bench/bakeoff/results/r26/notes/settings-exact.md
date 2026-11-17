@@ -1,6 +1,6 @@
 # Paperback Settings: notes
 
-Built with Exact (`app.contract`, the view and logic; `app.tamber`, two sepia colours; `app.ts`
+Built with Exact (`app.contract`, the view and logic; `app.forma`, two sepia colours; `app.ts`
 is empty because there is no data). Installed on simulator CEDFB9C9… as `dev.bakeoff.settings.b40bbcc`.
 `bun exact.mjs verify` and `verify ios` are both clean: 9 tests pass, nothing flagged in light,
 dark or at the largest text size, and scrolling is "like UIKit".

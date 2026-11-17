@@ -6,7 +6,13 @@ use crate::{Pad, PadState, PAD_BUTTONS};
 impl<G: Game> Sim<G> {
     /// A pad's state at the host boundary, including events still queued.
     pub fn pad(&self, index: u32) -> Option<PadState> {
-        self.host_input().pad(index)
+        self.host_input().pad_state(index)
+    }
+    /// Whether the world reads pads: an action or a rebinding names a pad
+    /// button or stick, or a tick has read one (`Input::pad`). A host opens
+    /// its pad service only for a world that does.
+    pub fn reads_pads(&self) -> bool {
+        self.input.reads_pads()
     }
     fn send_pad(&mut self, index: u32, change: impl FnOnce(&mut PadState)) {
         let mut pad = self.pad(index).unwrap_or(PadState {

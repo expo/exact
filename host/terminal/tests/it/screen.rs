@@ -165,6 +165,33 @@ fn native_buttons_preserve_newlines_before_clamping_the_title() {
     }
 }
 
+/// LLP 1075.003 §9.9 (expo/exact#391): a tab that names its panel holds its
+/// badge beside its native face; the terminal measures and paints it after
+/// the title, where it had painted the badge box as a child of a bare tab.
+#[test]
+fn a_native_tabs_badge_is_measured_and_painted_after_its_title() {
+    let source = "component App\n  state n = 3\n  view\n    column\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"panel\" aria-selected=true testId=\"tab\"\n          text \"Saved\"\n          if n > 0\n            row background-color=\"-exact-system-red\"\n              text `${n}`\n      column role=\"tabpanel\" id=\"panel\"\n        text \"Panel\"\n";
+    let plan = contract::compile_terminal(source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 30, 6).unwrap();
+    let id = host.by_test_id("tab").unwrap();
+    assert_eq!(
+        host.kernel().press_face(id).unwrap().badge.as_deref(),
+        Some("3")
+    );
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let text = vt.text(false);
+    assert!(
+        text.lines().next().unwrap_or("").contains("Saved (3)"),
+        "{text}"
+    );
+    // One cell of chrome either side of the title and its badge.
+    assert_eq!(
+        host.kernel().node(id).unwrap().frame.width,
+        ("Saved (3)".len() + 2) as f32 * exact_kernel::style::cells::COLUMN
+    );
+}
+
 #[test]
 fn overflow_clip_leaves_the_other_axis_visible() {
     for (overflow, placement, expected) in [
@@ -319,6 +346,7 @@ fn an_image_can_appear_disappear_and_reappear_after_image_free_commits() {
     assert!(!vt.text(false).contains('▀'));
     for pass in 0..2 {
         host.act("show");
+        host.wait_images(std::time::Duration::from_secs(5));
         vt.render(&mut host);
         let id = host.by_test_id("picture").unwrap();
         assert_eq!(host.images.nodes.len(), 1);
@@ -334,6 +362,76 @@ fn an_image_can_appear_disappear_and_reappear_after_image_free_commits() {
         assert!(host.images.of(id).is_none());
         assert!(!vt.text(false).contains('▀'));
     }
+}
+
+/// Each source is read off the commit and heard as HTML's `<img>` hears it:
+/// a file, a `data:` URL and a source with no file the app names load; what
+/// the terminal does not read errs with the reason, and a FIFO or a device
+/// is refused rather than waited on or read without end.
+#[cfg(unix)]
+#[test]
+fn an_images_source_is_resolved_bounded_and_heard() {
+    let dir = std::env::temp_dir().join(format!("terminal-image-sources-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("one.png");
+    let mut encoder = png::Encoder::new(std::fs::File::create(&png).unwrap(), 1, 1);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[20, 40, 60]).unwrap();
+    writer.finish().unwrap();
+    let fifo = dir.join("fifo.png");
+    let _ = std::fs::remove_file(&fifo);
+    let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    let data = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    let sources = [
+        ("file", format!("file://{}", png.display())),
+        ("data", data.to_string()),
+        ("remote", "https://example.com/a.png".into()),
+        ("app", "app:/data/a.png".into()),
+        ("relative", "a.png".into()),
+        ("fifo", fifo.display().to_string()),
+        ("device", "/dev/zero".into()),
+        ("text", dir.join("missing.png").display().to_string()),
+    ];
+    let mut source = String::from(
+        "component App\n  state said = \"\"\n  state n = 0\n  action bump\n    n = n + 1\n  action heard(name: string)\n    said = `${said}${name} loaded\\n`\n  action erred(name: string, message: string)\n    said = `${said}${name}: ${message}\\n`\n  view\n    column\n      text said white-space=\"pre-line\"\n",
+    );
+    for (name, src) in &sources {
+        source.push_str(&format!(
+            "      image \"{src}\" width=\"1ch\" height=\"1lh\" load=heard(\"{name}\") error=erred(\"{name}\")\n"
+        ));
+    }
+    let plan = contract::compile_terminal(&source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 80, 20).unwrap();
+    host.wait_images(std::time::Duration::from_secs(5));
+    let screen = host.frame().grid.text();
+    let mut said: Vec<&str> = screen
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| l.contains(' '))
+        .collect();
+    said.sort();
+    assert_eq!(
+        said,
+        [
+            "app: the terminal host has no app directories",
+            "data loaded",
+            "device: not a regular file",
+            "fifo: not a regular file",
+            "file loaded",
+            "relative: no app directory to resolve a relative source against",
+            "remote: the terminal host does not download images",
+            "text: No such file or directory (os error 2)",
+        ],
+        "{screen}"
+    );
+    // Heard once per source: a later commit sends nothing again.
+    host.act("bump");
+    host.wait_images(std::time::Duration::from_secs(5));
+    assert_eq!(host.frame().grid.text(), screen);
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
@@ -1322,4 +1420,43 @@ fn an_images_alternate_text_draws_no_control_character() {
             "{label}: {row:?}"
         );
     }
+}
+
+/// Each side is drawn in its own line style (LLP 1101 §4): dashed `┄┆`,
+/// dotted `┈┊`, with the light corners, which have no such forms.
+#[test]
+fn dashed_and_dotted_borders_draw_their_own_lines() {
+    for (border, expected) in [
+        ("border=\"thin dashed\"", ["┌┄┄┄┄┐", "┆x   ┆", "└┄┄┄┄┘"]),
+        ("border=\"thin dotted\"", ["┌┈┈┈┈┐", "┊x   ┊", "└┈┈┈┈┘"]),
+        (
+            "border=\"thin solid\" border-top-style=\"dotted\" border-left-style=\"dashed\"",
+            ["┌┈┈┈┈┐", "┆x   │", "└────┘"],
+        ),
+    ] {
+        let plan = contract::compile_terminal(&format!(
+            "component App\n  view\n    column width=\"4ch\" {border}\n      text \"x\"\n"
+        ))
+        .unwrap();
+        let mut host = Host::boot(plan, (), Mode::Fullscreen, 10, 4).unwrap();
+        let screen = host.frame().grid.text();
+        assert_eq!(
+            screen.lines().take(3).collect::<Vec<_>>(),
+            expected,
+            "{border}"
+        );
+    }
+}
+
+/// A corner rounds by its own box's radius, which may read the safe area
+/// where the box is (LLP 1123 D9): here an inset its parent declares.
+#[test]
+fn a_corner_reads_its_boxs_own_inset() {
+    let source = "component App\n  view\n    column --exact-safe-area-inset-top=\"8px\"\n      column width=\"6ch\" height=\"3lh\" border=\"thin solid\" border-radius=\"var(--exact-safe-area-inset-top)\"\n";
+    let plan = contract::compile(source).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 20, 6).unwrap();
+    let mut vt = Vt::new(&mut host);
+    vt.render(&mut host);
+    let screen = vt.text(false);
+    assert!(screen.starts_with('╭'), "{screen}");
 }

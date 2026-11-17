@@ -122,7 +122,9 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
         }
         val device = onDevice()
         val available = if (local(args)) device else SpeechRecognizer.isRecognitionAvailable(context.application)
-        return JSONObject().put("available", available).put("state", context.permission(Manifest.permission.RECORD_AUDIO).state)
+        val state = context.permission(Manifest.permission.RECORD_AUDIO).state
+        said = state
+        return JSONObject().put("available", available).put("state", state)
             .put("inputs", JSONArray(if (available) listOf("microphone") else emptyList()))
             .put("local", local(args) && device).put("apple", JSONObject.NULL)
             .put("android", JSONObject().put("service", service(args)?.flattenToString() ?: JSONObject.NULL).put("onDeviceAvailable", device))
@@ -135,7 +137,8 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
         val recognizer = recognizer(args) ?: return answer(null)
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         val done = { s: RecognitionSupport? -> main.post { recognizer.destroy(); answer(s) }; Unit }
-        recognizer.checkRecognitionSupport(intent, Executors.newSingleThreadExecutor(), object : RecognitionSupportCallback {
+        // On main, which costs no thread: an executor of its own per check would leave its thread waiting forever.
+        recognizer.checkRecognitionSupport(intent, context.application.mainExecutor, object : RecognitionSupportCallback {
             override fun onSupportResult(recognitionSupport: RecognitionSupport) = done(recognitionSupport)
             override fun onError(error: Int) = done(null)
         })
@@ -338,6 +341,19 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
             say("$id: its reply was dropped; aborted")
             r.abort("aborted") {}
         }
+    }
+
+    /** The `state` of the status last answered, which [resumed] compares with: the grant is what Settings moves,
+     * and a status's other members depend on its arguments. */
+    private var said: String? = null
+
+    /** The activity is in front again: `RECORD_AUDIO` granted in Settings meanwhile is a change. */
+    override fun resumed() {
+        val before = said ?: return
+        val now = context.permission(Manifest.permission.RECORD_AUDIO).state
+        if (now == before) return
+        said = now
+        context.changed("speech-recognition.speechRecognitionStatus")
     }
 
     /** Recognition is a foreground activity: leaving the foreground aborts every one (D10). */

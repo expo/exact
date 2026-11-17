@@ -21,6 +21,12 @@ final class TableHost {
     private var pressContact: PressNode?
     private weak var pressCell: TableRowCell?
 
+    /// A row's view renewed for another item (RenewMac.swift): a press of
+    /// it, or of a node in it, was the old item's.
+    func renewed(_ node: NodeView) {
+        if let pressed = pressContact?.node, pressed === node || pressed.isDescendant(of: node) { cancelPress() }
+    }
+
     func cancelPress() {
         pressContact?.node?.pressed = false
         pressContact = nil
@@ -278,7 +284,9 @@ final class TableHost {
     /// After a batch's ops (`Presenter.apply`).
     func sync(_ batch: Batch) {
         if !painted || !feeds.isEmpty, batch.ops.contains(where: { Self.deciding.contains($0.op) }) { decide() }
-        for feed in feeds.values { feed.sync() }
+        // A separator follows its row's authored border, shadow and `aria-hidden`, and its neighbour.
+        let provenance = batch.ops.contains { Self.deciding.contains($0.op) && $0.op != .collections }
+        for feed in feeds.values { feed.sync(separators: provenance) }
         syncPainted()
         if let pressContact, !pressContact.isLive { cancelPress() }
         for op in batch.ops where op.op == .style {

@@ -23,6 +23,7 @@ pub(super) fn engine_event(event: &InputEvent) -> exact_game::InputEvent {
             kind,
             buttons,
             at_ms,
+            ..
         } => E::Pointer {
             id: u64::from(*id),
             phase: match phase {

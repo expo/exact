@@ -273,21 +273,33 @@ impl super::Device {
                 options.setLanguageVersion(self.shared.private_caps.msl_version);
 
                 // https://developer.apple.com/documentation/metal/mtlcompileoptions/preserveinvariance
-                if available!(macos = 11.0, ios = 13.0, tvos = 14.0, visionos = 1.0) {
+                let invariance = available!(macos = 11.0, ios = 13.0, tvos = 14.0, visionos = 1.0);
+                if invariance {
                     options.setPreserveInvariance(true);
                 }
 
-                let library = self
-                    .shared
-                    .device
-                    .newLibraryWithSource_options_error(
-                        &NSString::from_str(&source),
-                        Some(&options),
-                    )
-                    .map_err(|err| {
-                        log::debug!("Naga generated shader:\n{source}");
-                        crate::PipelineError::Linkage(stage_bit, format!("Metal: {err}"))
-                    })?;
+                // EXACT (EXACT-PATCHES.md, 16): a library the build compiled
+                // from this very source, else the source, recorded for the next build.
+                let version = self.shared.private_caps.msl_version;
+                let key = super::shipped::key(&source, version, invariance);
+                let library = match super::shipped::shipped(&self.shared.device, &key) {
+                    Some(library) => library,
+                    None => {
+                        let library = self
+                            .shared
+                            .device
+                            .newLibraryWithSource_options_error(
+                                &NSString::from_str(&source),
+                                Some(&options),
+                            )
+                            .map_err(|err| {
+                                log::debug!("Naga generated shader:\n{source}");
+                                crate::PipelineError::Linkage(stage_bit, format!("Metal: {err}"))
+                            })?;
+                        super::shipped::record(&key, &source, version, invariance);
+                        library
+                    }
+                };
 
                 let ep_index = module
                     .entry_points
@@ -441,6 +453,8 @@ impl super::Device {
         let shared = super::AdapterShared::new(raw, &capabilities_query);
         super::Device {
             shared: Arc::new(shared),
+            // EXACT (EXACT-PATCHES.md, 15).
+            binary_archive: Mutex::new(None),
             features,
             counters: Default::default(),
             limits: limits.clone(),
@@ -1746,10 +1760,14 @@ impl crate::Device for super::Device {
 
             // Create the pipeline from descriptor
             let raw = match descriptor {
-                MetalGenericRenderPipelineDescriptor::Standard(d) => self
-                    .shared
-                    .device
-                    .newRenderPipelineStateWithDescriptor_error(&d),
+                MetalGenericRenderPipelineDescriptor::Standard(d) => {
+                    // EXACT (EXACT-PATCHES.md, 15).
+                    let archive = self.binary_archive.lock().clone();
+                    match archive {
+                        Some(archive) => archive.render(&self.shared.device, &d),
+                        None => self.shared.device.newRenderPipelineStateWithDescriptor_error(&d),
+                    }
+                },
                 MetalGenericRenderPipelineDescriptor::Mesh(d) => self
                     .shared
                     .device
@@ -1856,14 +1874,14 @@ impl crate::Device for super::Device {
                 descriptor.setLabel(Some(&NSString::from_str(name)));
             }
 
-            let raw = self
-                .shared
-                .device
-                .newComputePipelineStateWithDescriptor_options_reflection_error(
-                    &descriptor,
-                    MTLPipelineOption::empty(),
-                    None,
-                );
+            // EXACT (EXACT-PATCHES.md, 15).
+            let archive = self.binary_archive.lock().clone();
+            let raw = match archive {
+                Some(archive) => archive.compute(&self.shared.device, &descriptor),
+                None => self.shared.device.newComputePipelineStateWithDescriptor_options_reflection_error(
+                    &descriptor, MTLPipelineOption::empty(), None,
+                ),
+            };
 
             let raw: Retained<ProtocolObject<dyn MTLComputePipelineState>> =
                 raw.map_err(|e: Retained<NSError>| {

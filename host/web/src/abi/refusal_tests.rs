@@ -150,7 +150,7 @@ invalid_input!(
     invalid_design_frame,
     design_rows,
     b"invalid",
-    "live: not a tamber batch or snapshot"
+    "live: not a forma batch or snapshot"
 );
 invalid_input!(
     invalid_collection_length,

@@ -9,6 +9,8 @@
 //! `rem` inside a calculation or a grid track is no row of its own: it
 //! resolves at layout against the environment's root font size, which a
 //! change here writes, restyling the nodes that hold one.
+//! Scalar viewport lengths resolve with these rows; a changed viewport basis
+//! invalidates their owners through `Kernel::replace_env` before layout.
 use super::*;
 use crate::generated::StyleProps;
 use crate::style::env::root_font_readers;
@@ -168,6 +170,7 @@ pub(crate) fn resolve(
                     layout.mark_dirty(node);
                 }
                 touched.push(arena.key(slot));
+                crate::kernel::owner::resolved_again(arena, layout, slot, rows, touched, receipt);
             }
         }
     }
@@ -255,7 +258,7 @@ pub(crate) fn resolve(
             if id != StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, parent, device);
+            let px = unit.px(n, root, parent, device, arena.env());
             if next.set_resolved(id, px) {
                 changed.set(id);
             }
@@ -267,7 +270,7 @@ pub(crate) fn resolve(
             if id == StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, font, device);
+            let px = unit.px(n, root, font, device, arena.env());
             if next.set_resolved(id, px) {
                 changed.set(id);
             }
@@ -277,11 +280,13 @@ pub(crate) fn resolve(
             continue;
         }
         let excluded = crate::flow::is_exclusion(arena, slot);
+        let before = crate::kernel::owner::before_style(arena, slot, changed);
         arena.set_style(slot, next);
         arena.update_exclusion_count(slot, excluded);
         style_changed(arena, layout, slot, changed, receipt);
         touched.push(arena.key(slot));
         propagate_inherited(arena, layout, slot, changed, touched, receipt);
+        crate::kernel::owner::after_style(arena, layout, slot, before, touched, receipt);
         arena.relative.pending.remove(&slot);
     }
 }

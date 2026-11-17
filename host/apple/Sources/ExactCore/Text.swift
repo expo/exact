@@ -29,6 +29,7 @@ extension Run {
         run.size = CGFloat(Float(size) * scale)
         run.lineHeight = lineHeight.map { CGFloat(Float($0) * scale) }
         run.letterSpacing = CGFloat(Float(letterSpacing) * scale)
+        // Its boxes' room and reach come from the kernel at its scale.
         return run
     }
 }
@@ -54,6 +55,10 @@ package struct Run: Hashable {
     /// CSS `font-feature-settings`: a metric, applied after `numeric` and
     /// `ligatures` and winning for the same feature.
     package var features: [FontFeature] = []
+    /// Opacity groups from the outermost inline box inward; each alpha is relative to its parent.
+    package var opacity: [InlineOpacity] = []
+    /// An inherited background can belong to an ancestor's group.
+    package var backgroundOpacity: [InlineOpacity] = []
     package var color: [Double]? = nil
     package var decoration: String = ""
     /// The lines its decorating ancestors draw through it, each in that
@@ -69,6 +74,14 @@ package struct Run: Hashable {
     /// share one background, rounded only at the box's own ends.
     package var backgroundBox: UInt32 = 0
     package var backgroundRadii: [InlineRadius] = []
+    /// How far that box's padding box stands out from its first and last characters: its background covers it. Paint.
+    package var backgroundBefore: CGFloat = 0, backgroundAfter: CGFloat = 0
+    /// How far it stands above and below the run's content area, which the line makes no room for (CSS 2 §10.6.1). Paint.
+    package var backgroundAbove: CGFloat = 0, backgroundBelow: CGFloat = 0
+    /// That box's border, which paints over its background. Paint.
+    package var border: InlineBorder?
+    /// The boxes around that one with backgrounds or borders of their own, nearest first. Paint.
+    package var outerBackgrounds: [OuterBackground] = []
     /// CSS visibility hides ink without changing shaping or descendant visibility.
     package var hidden = false
     /// Its colour is one its author fixed: a literal or a `light-dark()`
@@ -77,7 +90,7 @@ package struct Run: Hashable {
     /// `NSTextView` leaves it (LLP 1115.000 D7.9). Paint, never metrics.
     package var fixedInk = false
     /// Its own `text-shadow` (offset x, y, blur, r g b a) when the
-    /// paragraph's runs differ (`Spec.gatherShadows`), and its
+    /// paragraph cannot share it (`Spec.gatherShadows`), and its
     /// `-webkit-text-stroke` (width, r g b a): paint (LLP 1077 D3, D7).
     package var shadow: [Double]? = nil
     package var stroke: [Double]? = nil
@@ -88,17 +101,26 @@ package struct Run: Hashable {
     /// An image in the paragraph's text (LLP 1011.002): the box this run's
     /// U+FFFC reserves. A metric.
     package var box: InlineBox?
+    /// The reader atom's icon; its box reserves horizontal room only.
+    package var atomIcon: AtomIconRun?
+    /// Its inline boxes' room before its first glyph and after its last, in the paragraph's direction
+    /// (`TextRun::edges`): a metric, kerned in (`TextEngine.kernInlineEdges`).
+    package var inlineStart: CGFloat = 0, inlineEnd: CGFloat = 0
 
     package static func == (lhs: Run, rhs: Run) -> Bool {
         guard lhs.size == rhs.size, lhs.weight == rhs.weight, lhs.family == rhs.family,
               lhs.italic == rhs.italic, lhs.lineHeight == rhs.lineHeight,
               lhs.letterSpacing == rhs.letterSpacing, lhs.numeric == rhs.numeric, lhs.ligatures == rhs.ligatures, lhs.stretch == rhs.stretch,
               lhs.variations == rhs.variations, lhs.features == rhs.features, lhs.color == rhs.color,
+              lhs.opacity == rhs.opacity, lhs.backgroundOpacity == rhs.backgroundOpacity,
               lhs.decoration == rhs.decoration, lhs.underlineColor == rhs.underlineColor,
               lhs.strikeColor == rhs.strikeColor, lhs.href == rhs.href,
               lhs.hidden == rhs.hidden, lhs.fixedInk == rhs.fixedInk, lhs.background == rhs.background, lhs.backgroundBox == rhs.backgroundBox,
               lhs.backgroundRadii == rhs.backgroundRadii, lhs.shadow == rhs.shadow, lhs.stroke == rhs.stroke,
-              lhs.indent == rhs.indent, lhs.hang == rhs.hang, lhs.box == rhs.box else { return false }
+              lhs.backgroundBefore == rhs.backgroundBefore, lhs.backgroundAfter == rhs.backgroundAfter,
+              lhs.backgroundAbove == rhs.backgroundAbove, lhs.backgroundBelow == rhs.backgroundBelow, lhs.border == rhs.border, lhs.outerBackgrounds == rhs.outerBackgrounds,
+              lhs.indent == rhs.indent, lhs.hang == rhs.hang, lhs.box == rhs.box, lhs.atomIcon == rhs.atomIcon,
+              lhs.inlineStart == rhs.inlineStart, lhs.inlineEnd == rhs.inlineEnd else { return false }
         // CoreText's ranges address the original UTF16 source. Swift String's
         // canonical equality would alias NFC/NFD paragraphs with different
         // source lengths, so both equality and hashing use the exact UTF8.
@@ -124,6 +146,8 @@ package struct Run: Hashable {
         hasher.combine(variations)
         hasher.combine(features)
         hasher.combine(color)
+        hasher.combine(opacity)
+        hasher.combine(backgroundOpacity)
         hasher.combine(decoration)
         hasher.combine(underlineColor)
         hasher.combine(strikeColor)
@@ -131,6 +155,12 @@ package struct Run: Hashable {
         hasher.combine(background)
         hasher.combine(backgroundBox)
         hasher.combine(backgroundRadii)
+        hasher.combine(backgroundBefore)
+        hasher.combine(backgroundAfter)
+        hasher.combine(backgroundAbove)
+        hasher.combine(backgroundBelow)
+        hasher.combine(border)
+        hasher.combine(outerBackgrounds)
         hasher.combine(hidden)
         hasher.combine(fixedInk)
         hasher.combine(shadow)
@@ -138,6 +168,9 @@ package struct Run: Hashable {
         hasher.combine(indent)
         hasher.combine(hang)
         hasher.combine(box)
+        hasher.combine(atomIcon)
+        hasher.combine(inlineStart)
+        hasher.combine(inlineEnd)
     }
     package init(text: String, size: CGFloat, weight: Int, family: Int, italic: Bool, lineHeight: CGFloat?, letterSpacing: CGFloat, numeric: Int = 0, ligatures: Int = 0, stretch: CGFloat = 100, variations: [FontAxis] = [], features: [FontFeature] = [], color: [Double]? = nil, decoration: String = "", href: String = "", background: [Double]? = nil, hidden: Bool = false, fixedInk: Bool = false, shadow: [Double]? = nil, stroke: [Double]? = nil, indent: CGFloat = 0, hang: Bool = false) {
         self.text = text
@@ -183,6 +216,10 @@ package struct Spec: Hashable {
     package var color: [Double] // r g b a, 0–255
     package var overflowWrap: Int = 0 // CSS: normal, break-word, anywhere
     package var direction: Int = 0 // CSS: ltr, rtl
+    /// Natural text (LLP 1060.000 D3): each paragraph's base is its first
+    /// strong character's (`TextEngine.naturalBases`), `direction` where it
+    /// has none; `direction` alone resolves alignment.
+    package var natural = false
     package var whiteSpace: Int = 0 // CSS: normal, pre-wrap, nowrap, pre-line, pre (runs already collapsed unless pre-wrap or pre)
     /// `white-space-collapse: preserve` (pre-wrap, pre): spaces, tabs and breaks are text.
     package var preserves: Bool { whiteSpace == 1 || whiteSpace == 4 }
@@ -206,7 +243,7 @@ package struct Spec: Hashable {
     package var language = ""
     /// CSS `text-shadow` (LLP 1077 D3) shared by every run: offset x, y and
     /// blur in points, then the colour's r g b a (0–255), resolved for the
-    /// appearance. Nil when the runs' own differ (`gatherShadows`).
+    /// appearance. Nil when it must stay with the runs (`gatherShadows`).
     package var shadow: [Double]? = nil
     /// CSS `text-box-trim` (0 none, 1 trim-start, 2 trim-end, 3 trim-both)
     /// and `text-box-edge`'s over (0 text, 1 cap, 2 ex) and under (0 text,
@@ -550,6 +587,7 @@ package final class TextEngine {
     package func stack(named name: String) -> Int? { familyStacks[name] }
     /// Where a declared face's relative source resolves: the app's resolver
     /// (LLP 1031 D1 — the committed complete generation, else the root).
+    package let assetResolver: AssetResolver?
     package let resolve: (String) -> URL?
     package let read: (String) -> Data?
     /// A face's file in the signed app bundle, when the generation is the
@@ -567,7 +605,8 @@ package final class TextEngine {
 
     package init(assets resolve: @escaping (String) -> URL?, read: ((String) -> Data?)? = nil,
          bundled: @escaping (String) -> URL? = { _ in nil },
-         coldTextTargetBytes: Int = TextResidency.defaultSoftTargetBytes, presentation: TextPresentation? = nil) {
+         coldTextTargetBytes: Int = TextResidency.defaultSoftTargetBytes, presentation: TextPresentation? = nil, assetResolver: AssetResolver? = nil) {
+        self.assetResolver = assetResolver
         self.presentation = presentation
         residency = TextResidency(softTargetBytes: coldTextTargetBytes)
         self.resolve = resolve
@@ -852,7 +891,7 @@ package final class TextEngine {
         // their text once, then assign UTF-16 spans, instead of allocating and
         // appending an attributed string for every run.
         let s = NSMutableAttributedString(string: spec.runs.map(\.text).joined())
-        var offset = 0
+        var offset = 0, empties: [EmptyRun] = []
         for (index, r) in spec.runs.enumerated() {
             var a: [NSAttributedString.Key: Any] = [.font: font(r)]
             if r.letterSpacing != 0 { a[.kern] = r.letterSpacing }
@@ -860,6 +899,7 @@ package final class TextEngine {
             if let box = r.box { TextEngine.boxAttributes(box, font: font(r) as CTFont, index: index, scale: lineScale, into: &a) }
             let length = r.text.utf16.count
             if length > 0 { s.setAttributes(a, range: NSRange(location: offset, length: length)) }
+            else if r.box == nil { empties.append(EmptyRun(offset: offset, attributes: a, past: spec.roomPast(index))) }
             offset += length
         }
         if spec.lineClamp > 0, s.length > 0, var block = spec.strut ?? spec.runs.first {
@@ -869,47 +909,13 @@ package final class TextEngine {
             presentation?.attributes(block, color: spec.color, scale: lineScale, attributes: &a)
             s.addAttribute(.exactClampStyle, value: a, range: NSRange(location: 0, length: s.length))
         }
-        TextEngine.setBaseDirection(s, direction: spec.direction)
-        presentation?.finish(s)
+        TextEngine.kernInlineEdges(s, runs: spec.runs, rtl: spec.direction == 1)
+        TextEngine.setBaseDirection(s, direction: spec.direction, natural: spec.natural)
+        presentation?.finish(s, empties: empties)
         if spec.preserves, s.string.contains("\t"), let first = spec.strut ?? spec.runs.first {
             setTabStops(s, run: first)
         }
         return s
-    }
-
-    /// Eight spaces of `font`, letter spacing included: a tab stop's interval.
-    package static func tabInterval(_ font: CTFont, letterSpacing: CGFloat) -> CGFloat {
-        let space = CTLineGetTypographicBounds(CTLineCreateWithAttributedString(
-            NSAttributedString(string: " ", attributes: [.font: font])), nil, nil, nil)
-        return 8 * (CGFloat(space) + letterSpacing)
-    }
-
-    /// CSS `tab-size: 8` (its initial value): a preserved tab advances to the
-    /// next multiple of eight spaces of the paragraph's own font, letter
-    /// spacing included, from the line's start. CoreText's default is twelve
-    /// stops 28 pt apart; Chrome's is this (LLP 1053 G5).
-    private func setTabStops(_ s: NSMutableAttributedString, run: Run) {
-        TextEngine.setTabStops(s, interval: TextEngine.tabInterval(font(run) as CTFont, letterSpacing: run.letterSpacing))
-    }
-
-    package static func setTabStops(_ s: NSMutableAttributedString, interval: CGFloat) {
-        guard interval > 0, s.length > 0 else { return }
-        let range = NSRange(location: 0, length: s.length)
-        let paragraph = ((s.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
-        paragraph.tabStops = []
-        paragraph.defaultTabInterval = interval
-        s.addAttribute(.paragraphStyle, value: paragraph, range: range)
-    }
-
-    /// CSS direction sets the paragraph base; normal Unicode bidi still
-    /// orders each run. The first strong character never selects the base.
-    package static func setBaseDirection(_ s: NSMutableAttributedString, direction: Int) {
-        let range = NSRange(location: 0, length: s.length)
-        s.enumerateAttribute(.paragraphStyle, in: range) { value, range, _ in
-            let paragraph = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
-            paragraph.baseWritingDirection = direction == 1 ? .rightToLeft : .leftToRight
-            s.addAttribute(.paragraphStyle, value: paragraph, range: range)
-        }
     }
 
     /// Urgent raster work stays on the text engine's owning thread and uses
@@ -1133,22 +1139,26 @@ package final class TextEngine {
             // A justified one also depends on the width, so it is made again.
             if spec.align != 3, let oldLine, CTLineGetStringRange(oldLine).location == start, CTLineGetStringRange(oldLine).length == count {
                 line = oldLine
-            } else { line = TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range) }
+            } else {
+                line = TextEngine.placingRooms(TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: shape.attributed, range: range),
+                                               source: shape.attributed, range: range)
+            }
             var clamps = false
             // A word too long for its line keeps its width in layout, as CSS
             // measures it; only what is drawn ends in "…".
             var natural: CGFloat?
+            let indent = insets.at(start).width
+            let room = limit - Double(indent)
             if spec.lineClamp > 0 && lines.count + 1 == spec.lineClamp
-                && Self.clampsLast(line, start: start, count: count, length: length, width: limit) {
+                && Self.clampsLast(line, start: start, count: count, length: length, width: room) {
                 if start + count == length { natural = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) }
-                line = ellipsizedLine(spec, range: NSRange(location: start, length: count), width: limit) ?? line
+                line = ellipsizedLine(spec, range: NSRange(location: start, length: count), width: room) ?? line
                 clampedRange = range
                 clamps = true
             }
             var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
             // The natural width, the first line's indent in it: justification
             // fills the box, never sizes it.
-            let indent = insets.at(start).width
             let drawn = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
             let w = max(0, (natural ?? (drawn - removed(line, CGFloat(limit) - indent))) + indent)
             if spec.align == 3, !clamps, width.isFinite {
@@ -1315,25 +1325,22 @@ package final class TextEngine {
         // one; this measure does not make one resident.
         // `text-indent` applies to the first line only (CSS Text 3 §8.1), so
         // only to the first piece. A run's own indent (a list item's) applies to
-        // each of its pieces.
+        // each piece that starts in it.
         let resident = residency.shape(TextShapeKey(identity: identity, paint: TextPaint(spec)))
         let source = resident?.attributed ?? attributed(spec)
         let typesetter = resident?.typesetter ?? CTTypesetterCreateWithAttributedString(source)
-        var indent = spec.textIndent
-        var offset = 0
+        var indent = spec.firstLineIndent
+        let edgeStarts = LineInsets.edgeStarts(spec.runs)
+        let text = source.string as NSString
         let emergencyEnds = Set(spec.emergencyBreaks.map { $0 + 1 })
-        for r in spec.runs {
-            let text = r.text as NSString
-            defer { offset += text.length }
-            guard !r.hang else { continue }
-            let boundaries = lineBoundaries(text, length: text.length).filter { !emergencyEnds.contains(offset + $0) }
-            for piece in Self.pieceRanges(text, boundaries: boundaries) {
-                let range = CFRange(location: offset + piece.range.location, length: piece.range.length)
-                var line = CTTypesetterCreateLine(typesetter, range)
-                if piece.hyphenated { line = Self.inkedSoftHyphen(line, source: source, range: range) }
-                widest = max(widest, CSSLineBox.layoutWidth(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))) + indent + r.indent)
-                indent = 0
-            }
+        let boundaries = (resident?.lineBreakBoundaries ?? lineBoundaries(text, length: text.length)).filter { !emergencyEnds.contains($0) }
+        for piece in Self.paragraphPieces(text, runs: spec.runs, boundaries: boundaries) {
+            let range = CFRange(location: piece.range.location, length: piece.range.length)
+            var line = CTTypesetterCreateLine(typesetter, range)
+            if piece.hyphenated { line = Self.inkedSoftHyphen(line, source: source, range: range) }
+            let leaves = TextEngine.breakRoom(endingAt: NSMaxRange(piece.range), in: source) // the next piece's
+            widest = max(widest, CSSLineBox.layoutWidth(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - leaves) + indent + piece.indent + (edgeStarts[piece.range.location] ?? 0))
+            indent = 0
         }
         residency.putMinimum(identity, width: widest)
         return widest
@@ -1437,6 +1444,7 @@ package final class TextEngine {
             var made = run(r)
             // An image's box draws no ink of its own (LLP 1011.002).
             if let box = InlineBox(r) { made.box = box; made.hidden = true }
+            made.inlineStart = CGFloat(r.inline_start); made.inlineEnd = CGFloat(r.inline_end)
             return made
         }
         // Markdown source arrives as one run; the archive expands it the
@@ -1447,14 +1455,14 @@ package final class TextEngine {
             let atoms = utf8(request.atoms, request.atoms_len), faces = utf8(request.faces, request.faces_len)
             if request.markup == 2, let laid = presentation?.editorMarkdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1, width: request.width >= 0 ? CGFloat(request.width) : nil) {
                 runs = laid + runs.dropFirst()
-            } else if let expanded = presentation?.markdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1) { runs = expanded }
+            } else if let expanded = presentation?.markdown(self, source: source, atoms: atoms, faces: faces, rtl: request.direction == 1) { runs = presentation?.resolveRuns(self, runs: expanded) ?? expanded }
             else if requiresMarkdownExpansion { refusedMarkdown = request.view; runs = [] }
         }
         // Metric-only keys match the geometry used by the colored presenter.
         var made = Spec(runs: runs, align: Int(request.align), lineClamp: Int(request.line_clamp), color: [0, 0, 0, 255], overflowWrap: Int(request.overflow_wrap), direction: Int(request.direction), whiteSpace: Int(request.white_space), strut: run(request.strut))
         made.textIndent = CGFloat(request.text_indent); made.hyphens = Int(request.hyphens)
         made.textBoxTrim = Int(request.text_box_trim); made.textBoxOver = Int(request.text_box_over); made.textBoxUnder = Int(request.text_box_under)
-        made.balance = request.text_wrap_style == 1
+        made.balance = request.text_wrap_style == 1; made.natural = request.natural != 0
         if made.automaticHyphens, let lang = request.lang {
             made.language = String(decoding: UnsafeBufferPointer(start: lang, count: request.lang_len), as: UTF8.self)
         }

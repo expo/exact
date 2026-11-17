@@ -10,14 +10,14 @@
 // app publishes a reload or a kept design (`designKept`), never before, so
 // it follows each kept edit, not a scrub's frames. It stops with the loop,
 // and a minute after it was last asked for with no page of it open. The
-// page registers on the build channel with `page: 'gallery'` (tamber/1.15),
+// page registers on the build channel with `page: 'gallery'` (forma/1.15),
 // a label only.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { buildTreeFileAsync as buildTreeFile, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
-import { fresh } from './module.mjs';
+import { buildTreeFileAsync as buildTreeFile, copyStaticTreeIfPresent, replaceBuild, sendStaticBody, webContentType } from '../web/serve.mjs';
+import { EXE, depInfoOf, fresh } from './module.mjs';
 
 /** The gallery's build cache: under the app's nearest `node_modules` (which
  * package resolution reaches, and git and describe's files don't), else the
@@ -59,7 +59,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
 
   // The contract compiler as built, while it is fresh by its dep-info (the design server's `cargo run` keeps it so),
   // never another `cargo run` on the app's target and its lock: else Cargo builds it in a target of the gallery's own.
-  const target = env.CARGO_TARGET_DIR ?? resolve(root, 'target'), contractBin = resolve(target, 'debug/contract');
+  const target = env.CARGO_TARGET_DIR ?? resolve(root, 'target'), contractBin = resolve(target, `debug/contract${EXE}`);
 
   /** `cmd args`, its output, in a process group of its own, which the gallery owns (`procs`) until the whole
    * group is gone (the builder's own children, its `git`, outlive it a moment), killed after 5 s more. */
@@ -88,7 +88,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
     // The design it builds on: one kept since is news, this one isn't. A failure before is taken up by this run.
     design = designNow(); failed = null;
     try {
-      const own = fresh(contractBin, `${contractBin}.d`);
+      const own = fresh(contractBin, depInfoOf(contractBin));
       let made = own ? await step(contractBin, ['gallery', app.dir, '-o', source], { env }) : { code: 2 };
       if (mine !== run) return;
       if (made.code === 2) made = await step('cargo', ['run', '-q', '-p', 'contract', '--', 'gallery', app.dir, '-o', source], { env: { ...env, CARGO_TARGET_DIR: resolve(cache, 'cargo') } });
@@ -99,8 +99,10 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
         const next = readFileSync(resolve(source, name));
         if (!existsSync(resolve(live, name)) || !next.equals(readFileSync(resolve(live, name)))) writeFileSync(resolve(live, name), next);
       }
-      const link = (dir) => { try { return lstatSync(resolve(dir, 'assets')).isSymbolicLink() ? readlinkSync(resolve(dir, 'assets')) : null; } catch { return null; } };
-      if (link(source) !== link(live)) { rmSync(resolve(live, 'assets'), { force: true }); if (link(source)) symlinkSync(link(source), resolve(live, 'assets')); }
+      // The generated source links the app's assets for compilation; the JS builder requires real static trees.
+      const assets = resolve(live, 'assets');
+      rmSync(assets, { recursive: true, force: true });
+      copyStaticTreeIfPresent(resolve(app.dir, 'assets'), assets);
       log(made.output.trim().split('\n').pop());
       // The JS target's build, rendering no pages, into its own stage: nothing of the app's build is shared.
       rmSync(stage, { recursive: true, force: true });
@@ -166,7 +168,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
       const tool = tableTool(), out = resolve(cache, `inspect-${digest}-${process.pid}.json`); // (this loop's own, as dev.mjs's)
       tables.set(digest, (async () => {
         if (!tool) return null;
-        const made = await step(tool.cmd, [...tool.pre, 'inspect-table', resolve(dist, 'app.plan'), out], {});
+        const made = await step(tool.cmd, [...tool.pre, 'inspect-table', resolve(dist, 'app.plan'), out], tool.env ? { env: tool.env } : {});
         tool.done?.();
         let bytes = null;
         try { bytes = made.code === 0 ? readFileSync(out) : null; if (bytes && JSON.parse(bytes).plan !== digest) bytes = null; } catch { bytes = null; }
@@ -219,7 +221,7 @@ export function galleryLoop({ app, root, appDist, channel = () => null, client, 
         return true;
       }
       ensure();
-      // Its assets are the app's (its own `assets` is a link the builder copies as one): from the app's dist.
+      // Its assets are served from the app's dist.
       if (rest.startsWith('/assets/')) {
         const found = await buildTreeFile(appDist, rest, req.headers.accept);
         if (!found) { res.writeHead(404, { 'cache-control': 'no-store' }); res.end(); return true; }

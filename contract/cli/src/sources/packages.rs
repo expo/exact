@@ -1,5 +1,5 @@
 //! Package designs (LLP 1121 D11, stage 11 A): each linked package's
-//! `<name>.tamber`, read as a source of the app's, and where one not there
+//! `<name>.forma`, read as a source of the app's, and where one not there
 //! yet would be, for a watcher.
 
 use super::{digest, Package, Source, Sources};
@@ -101,7 +101,7 @@ fn refusal(id: &str, path: &Path, message: String) -> CompileError {
 
 /// The designs of the packages the app's sources are in (LLP 1121 D11), in
 /// link order, each a source of its own so a refusal in it names it. A file
-/// outside its package (a `"tamber"` path, or a link out) is refused, and
+/// outside its package (a `"forma"` path, or a link out) is refused, and
 /// so are two that would take one namespace (the last part of their
 /// names: `@exact/reading` and `@else/reading`), naming both: no app line
 /// can tell their tokens apart. `bindable`: the app has code that can name
@@ -144,10 +144,53 @@ pub(super) fn read(
 ) -> Result<Vec<(contract_syntax::DesignSource, Package)>, CompileError> {
     let mut found: Vec<(contract_syntax::DesignSource, Package)> = Vec::new();
     for package in packages(sources).0 {
+        let json = std::fs::read_to_string(&package.manifest)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        if json
+            .as_ref()
+            .is_some_and(|json| json.get("tamber").is_some())
+        {
+            return Err(refusal(
+                "forma-name",
+                &package.manifest,
+                "rename package.json's tamber key to forma".into(),
+            ));
+        }
         let Some(design) = package_design(&package.root, &package.manifest) else {
             continue;
         };
+        let former = json
+            .as_ref()
+            .map(|json| package.root.join(crate::resolve::package_entry(json)))
+            .and_then(|entry| {
+                entry
+                    .parent()
+                    .map(|dir| dir.join(format!("{}.tamber", namespace(&design.name))))
+            });
+        if let Some(path) = former.filter(|path| path.symlink_metadata().is_ok()) {
+            return Err(refusal(
+                "forma-name",
+                &path,
+                format!(
+                    "rename {} to {}",
+                    path.display(),
+                    path.with_extension("forma").display()
+                ),
+            ));
+        }
         let path = design.path;
+        if path.extension().is_some_and(|e| e == "tamber") {
+            return Err(refusal(
+                "forma-name",
+                &path,
+                format!(
+                    "rename {} to {}",
+                    path.display(),
+                    path.with_extension("forma").display()
+                ),
+            ));
+        }
         if !design.named && !path.is_file() {
             continue;
         }
@@ -158,7 +201,7 @@ pub(super) fn read(
                     .is_ok_and(|real| real.starts_with(&package.root)));
         if !inside {
             return Err(refusal(
-                "tamber-unreadable",
+                "forma-unreadable",
                 &path,
                 format!(
                     "the package `{}`'s design `{}` is outside the package",
@@ -169,7 +212,7 @@ pub(super) fn read(
         }
         let text = std::fs::read_to_string(&path).map_err(|e| {
             refusal(
-                "tamber-unreadable",
+                "forma-unreadable",
                 &path,
                 format!(
                     "the package `{}`'s design `{}`: {e}",
@@ -183,7 +226,7 @@ pub(super) fn read(
             .iter()
             .find(|(d, _)| d.package.as_deref().map(namespace) == Some(ns))
         {
-            return Err(refusal("tamber-package-name", &path, format!(
+            return Err(refusal("forma-package-name", &path, format!(
                 "the packages `{}` and `{}` both ship a design under `{ns}.`: a package's tokens are named by the last part of its name, and no app line can tell these apart",
                 other.package.as_deref().unwrap_or_default(),
                 design.name

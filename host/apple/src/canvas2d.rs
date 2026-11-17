@@ -6,23 +6,24 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The display's scale and physical memory, as the presenter last said:
-/// process-wide, since every session shares the screen.
-static SCALE: AtomicU64 = AtomicU64::new(0x4000_0000_0000_0000); // 2.0
+/// The device's physical memory, as a presenter last said: process-wide.
+/// The display's scale is each session's (`Host::canvas_scale`): two
+/// windows can be on different displays or at different page zoom.
 static MEMORY: AtomicU64 = AtomicU64::new(8 << 30);
 
-/// What the presenter knows of the display (`exact_canvas_display`).
-pub fn set_display(scale: f64, memory: f64) {
-    if scale.is_finite() && scale > 0.0 {
-        SCALE.store(scale.to_bits(), Ordering::Relaxed);
-    }
+/// The scale a session's canvases back at before its presenter tells one.
+pub(crate) const DEFAULT_SCALE: f64 = 2.0;
+
+/// What the presenter knows of the device (`exact_canvas_display`).
+pub fn set_memory(memory: f64) {
     if memory.is_finite() && memory > 0.0 {
         MEMORY.store(memory as u64, Ordering::Relaxed);
     }
 }
 
-fn scale() -> f64 {
-    f64::from_bits(SCALE.load(Ordering::Relaxed))
+/// `scale` when a canvas can back at it.
+pub(crate) fn usable_scale(scale: f64) -> Option<f64> {
+    (scale.is_finite() && scale > 0.0).then_some(scale)
 }
 
 impl<D: DataSource> Host<D> {
@@ -51,7 +52,7 @@ impl<D: DataSource> Host<D> {
         if self.runner.plan().surfaces.is_empty() {
             return;
         }
-        self.runner.layout_canvases(scale());
+        self.runner.layout_canvases(self.canvas_scale);
         self.canvas_owed_onto(batch);
     }
 
@@ -86,7 +87,7 @@ impl<D: DataSource> Host<D> {
         if self.runner.plan().surfaces.is_empty() {
             return;
         }
-        self.runner.layout_canvases(scale());
+        self.runner.layout_canvases(self.canvas_scale);
         let held = &self.canvas_held;
         self.runner.draw_canvases(&|v| !held.contains(&v));
         let lists = self.runner.take_canvas_lists();
@@ -139,9 +140,18 @@ impl<D: DataSource> Host<D> {
         self.finish(batch, None)
     }
 
-    /// The display changed: canvases redraw at the new scale (a new
-    /// generation, LLP 1056 D4).
-    pub fn canvas_display(&mut self) -> String {
+    /// The presenter let the decoded `src` go: a canvas that draws it again
+    /// asks for it again (LLP 1056 D9).
+    pub fn canvas_image_released(&mut self, src: &str) {
+        self.runner.canvas_image_released(src);
+    }
+
+    /// The display changed: canvases redraw at this session's new scale (a
+    /// new generation, LLP 1056 D4).
+    pub fn canvas_display(&mut self, scale: f64) -> String {
+        if let Some(scale) = usable_scale(scale) {
+            self.canvas_scale = scale;
+        }
         self.canvas_limits();
         let mut batch = Batch::new();
         self.canvas_turn(&mut batch);

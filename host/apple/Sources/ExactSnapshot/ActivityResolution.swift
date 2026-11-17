@@ -36,7 +36,7 @@ public struct ActivityFacts: Hashable, Sendable {
     public var rootFontSize: Double
     public var locale: String
     public var timeZone: String
-    public init(displayScale: Double, preferences: Preferences, rootFontSize: Double, locale: String = Locale.preferredLanguages.first ?? Locale.current.identifier(.bcp47), timeZone: TimeZone = .current) {
+    public init(displayScale: Double, preferences: Preferences, rootFontSize: Double, locale: String = SessionFacts.viewerLocale(), timeZone: TimeZone = .current) {
         self.displayScale = displayScale; self.preferences = preferences.rawValue; self.rootFontSize = rootFontSize; self.locale = locale; self.timeZone = timeZone.identifier
     }
     public var dark: Bool { Preferences(rawValue: preferences).contains(.dark) }

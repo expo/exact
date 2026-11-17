@@ -70,7 +70,7 @@ final class HeaderMacTests: XCTestCase {
     }
     private func node(_ p: Presenter, _ id: UInt32) throws -> NodeView { try XCTUnwrap(p.views[id]) }
     private func identifiers() -> [String] { window.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [] }
-    private let back = WindowToolbarHost.backIdentifier.rawValue
+    private let back = WindowToolbarHost.historyIdentifier.rawValue
 
     func testAuthoredClearInkReachesToolbarAndAbsenceRestoresAppKit() throws {
         let p = fixture(extra: [
@@ -176,7 +176,7 @@ final class HeaderMacTests: XCTestCase {
             XCTAssertEqual(save.style, .prominent, "a filled button is the prominent item")
             XCTAssertEqual(add.style, .plain)
         }
-        XCTAssertFalse(p.toolbar.backItem.isEnabled, "nowhere to go back to at the stack's root")
+        XCTAssertFalse(p.toolbar.backEnabled, "nowhere to go back to at the stack's root")
         // The header is the platform's: hidden, and its box out of layout.
         XCTAssertTrue(try node(p, 10).isHidden)
         XCTAssertTrue(p.toolbar.hides(try node(p, 10)))
@@ -208,8 +208,8 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(p.toolbar.items[23]).title, "Share")
         XCTAssertTrue(try node(p, 20).isHidden)
         XCTAssertEqual(p.covers.delivered, [20: .whole], "the route beneath is no longer the bar's")
-        XCTAssertTrue(p.toolbar.backItem.isEnabled)
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(p.toolbar.backItem.action), to: p.toolbar.backItem.target, from: p.toolbar.backItem))
+        XCTAssertTrue(p.toolbar.backEnabled)
+        XCTAssertTrue(p.toolbar.pressBack())
         XCTAssertEqual(pressed.last, 21, "Back presses the authored control, hidden as it is")
         XCTAssertEqual(p.toolbar.activate(try node(p, 21)), true, "and a driver's tap on that control is the bar's Back")
         XCTAssertEqual(pressed.suffix(2), [21, 21])
@@ -253,6 +253,16 @@ final class HeaderMacTests: XCTestCase {
         let status = try node(p, 16)
         XCTAssertEqual(readout.accessibilityRole(), .group)
         XCTAssertEqual(readout.accessibilitySubrole()?.rawValue, "AXApplicationStatus")
+        // `tree --ax sync-status` reads the readout AppKit exposes as the authored status.
+        let bar = try XCTUnwrap(p.toolbar.accessibilityRoot)
+        let scoped = p.axElements(roots: [p.viewport, bar], scope: [16])["elements"] as? [[String: Any]] ?? []
+        let named = scoped.filter { $0["testId"] as? String == "sync-status" }
+        XCTAssertEqual(named.count, 1, "AppKit's item viewer is not the status: \(scoped)")
+        let element = try XCTUnwrap(named.first)
+        XCTAssertEqual(element["id"] as? UInt32, 16)
+        XCTAssertEqual(element["via"] as? String, "owner")
+        XCTAssertEqual(element["role"] as? String, "status")
+        XCTAssertEqual(element["name"] as? String, "Syncing")
         XCTAssertTrue(status.liveAnnouncementView === readout)
         XCTAssertTrue(status.liveSpeaks("Saved", launching: false), "a projected status still announces changes")
         p.apply(wireBatch([["op": "props", "id": 16, "set": ["text": "Saved"]]]))
@@ -430,6 +440,34 @@ final class HeaderMacTests: XCTestCase {
         q.toolbar.detach()
     }
 
+    /// Issue #364: a header of buttons and no heading is the bar with no
+    /// title. The window keeps the app's name, and every button is a
+    /// trailing item, as SwiftUI's automatic placement puts an action. A
+    /// text beside the buttons is something the toolbar has no place for:
+    /// the header paints whole.
+    func testAHeaderOfButtonsAloneIsTheBarWithNoTitle() throws {
+        let p = fixture(extra: [children(10, [11, 13, 14])])
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        XCTAssertEqual(window.title, "Shelf", "no heading: the app's name")
+        XCTAssertEqual(identifiers(), [back, "exact.command.11", "exact.command.13", "exact.command.14"])
+        XCTAssertFalse(try XCTUnwrap(p.toolbar.items[11]).isNavigational, "with no heading every button trails")
+        XCTAssertTrue(try node(p, 10).isHidden, "the bar shows the header")
+        XCTAssertEqual(p.covers.delivered, [10: .whole])
+        let add = try XCTUnwrap(p.toolbar.items[13])
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(add.action), to: add.target, from: add))
+        XCTAssertEqual(pressed, [13])
+        let summary = try XCTUnwrap(p.toolbar.summary["header"] as? [String: Any])
+        XCTAssertEqual((summary["items"] as? [[String: Any]])?.map { $0["place"] as? String }, ["trailing", "trailing", "trailing"])
+        // A text that is no heading beside them: the header is the page's, whole.
+        p.apply(wireBatch(view(16, "text", ["text": "Library"]) + [children(10, [16, 11, 13, 14])]))
+        XCTAssertEqual(identifiers(), [back])
+        XCTAssertFalse(try node(p, 10).isHidden)
+        XCTAssertEqual(p.covers.delivered, [:])
+        p.toolbar.detach()
+    }
+
     /// `appearance: none` written on the header keeps it the page's (LLP
     /// 1075.003 §9.10, the shared rule's `AUTHORED`); on one of its buttons
     /// the whole header paints, since the window's bar shows a header whole
@@ -515,7 +553,7 @@ final class HeaderMacTests: XCTestCase {
         let add = try XCTUnwrap(p.toolbar.items[13])
         XCTAssertFalse(p.toolbar.validateToolbarItem(add), "the route beneath is inert under it")
         XCTAssertFalse(add.isEnabled)
-        XCTAssertFalse(p.toolbar.backItem.isEnabled, "a modal route's close is its own")
+        XCTAssertFalse(p.toolbar.backEnabled, "a modal route's close is its own")
         XCTAssertNil(p.toolbar.activate(try node(p, 23)), "its buttons are in the sheet")
         XCTAssertEqual(p.dialogs.activate(try node(p, 21)), true, "the sheet's row presses the authored button")
         XCTAssertEqual(pressed, [21])
@@ -570,6 +608,25 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertTrue(attach(["popovertarget": "form", "commandfor": "form", "command": "hide-popover"]).inBar, "its commandfor governs: a command")
         XCTAssertTrue(attach(["popovertarget": "form"]).inBar, "AppKit anchors the form to its toolbar item")
         XCTAssertTrue(attach(["commandfor": "more", "command": "toggle-popover"]).identifiers.contains("exact.menu.16"), "a command-only menu item")
+    }
+
+    /// A header button that shows an alert by `commandfor` alone, pressing
+    /// nothing, is a toolbar item, and its item shows the alert (#387).
+    func testAButtonShowingAnAlertByItsCommandAloneIsAToolbarItem() throws {
+        let clear = view(16, "button", ["accessibilityLabel": "Clear", "commandfor": "clear", "command": "show-modal"]) + view(160, "image", ["symbolName": "trash"])
+            + view(40, "view", ["semanticTag": "dialog", "id": "clear", "accessibilityRole": "alertdialog", "accessibilityLabel": "Clear History?"])
+            + view(43, "text", ["text": "Every conversation will be deleted."])
+            + view(41, "button", ["commandfor": "clear", "command": "close", "destructive": "true"], press: true) + view(411, "text", ["text": "Clear History"])
+            + view(42, "button", ["commandfor": "clear", "command": "close"]) + view(421, "text", ["text": "Cancel"])
+            + [children(16, [160]), children(41, [411]), children(42, [421]), children(40, [43, 41, 42]), children(10, [11, 12, 13, 14, 16]), children(2, [10, 15, 40])]
+        let p = fixture(extra: clear)
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        XCTAssertEqual(window.title, "Library", "the header is the window's bar")
+        XCTAssertTrue(identifiers().contains("exact.command.16"), "\(identifiers())")
+        XCTAssertEqual(p.toolbar.activate(try node(p, 16)), true)
+        XCTAssertEqual(p.alerts.presented?.alert.messageText, "Clear History?")
+        _ = p.alerts.close(try node(p, 40))
+        p.toolbar.detach()
     }
 
     func testAFormWithAuthoredPopoverPlacementKeepsItsPaintedHeader() throws {
@@ -633,6 +690,22 @@ final class HeaderMacTests: XCTestCase {
             XCTAssertTrue(row.superview === p.views[2]?.container)
             XCTAssertNil(row.nativeActiveRefusals["NSMenuItem"], "a former menu row now belongs to the page (status: \(status))")
         }
+    }
+
+    /// Status items that name neither `testId` nor `id` keep their
+    /// positions under names of their own: one placed after another is
+    /// removed takes no survivor's.
+    func testUntitledStatusItemsNeverShareAnAutosaveName() throws {
+        let status = ["menuPlacement": "status"]
+        let p = fixture(extra: symbolButton(16, "One", "1.circle", status) + symbolButton(17, "Two", "2.circle", status)
+            + [children(15, [16, 17])])
+        defer { p.statusItems.reset() }
+        XCTAssertEqual(p.statusItems.items.count, 2)
+        p.apply(wireBatch([children(15, [17])]))
+        p.apply(wireBatch(symbolButton(18, "Three", "3.circle", status) + [children(15, [17, 18])]))
+        let names = [17, 18].map { p.statusItems.items[$0]?.autosaveName }
+        XCTAssertEqual(names.compactMap { $0 }.count, 2, "both are placed: \(names)")
+        XCTAssertNotEqual(names[0], names[1])
     }
 
     /// A header's button that opens a menu is AppKit's menu item: the menu
@@ -731,6 +804,8 @@ final class HeaderMacTests: XCTestCase {
             + tab(171, "All", selected: true) + tab(172, "Unread") + tab(173, "Flagged")
             + [children(17, [171, 172, 173]), children(10, [11, 12, 17, 13, 14])]
         let p = fixture(extra: tablist)
+        // Leave room for AppKit's expanded segments.
+        window.setContentSize(NSSize(width: 1200, height: 400))
         var pressed: [UInt32] = []
         p.onPress = { pressed.append($0) }
         // As authored the page makes its own segmented control of it.
@@ -750,6 +825,20 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertNil(p.segments.control(of: 17), "the bar shows it: the page makes no control of it")
         XCTAssertTrue(p.toolbar.adopts(try node(p, 17)))
         XCTAssertFalse(try node(p, 172).isHidden, "its tabs are hidden by the header alone")
+        let bar = try XCTUnwrap(p.toolbar.accessibilityRoot)
+        let ax = p.axElements(roots: [p.viewport, bar])
+        let projected = ax["elements"] as? [[String: Any]] ?? []
+        for (id, title) in [(UInt32(171), "All"), (UInt32(172), "Unread"), (UInt32(173), "Flagged")] {
+            let element = try XCTUnwrap(projected.first { $0["testId"] as? String == "tab-\(title)" }, "\(ax)")
+            XCTAssertEqual(element["id"] as? UInt32, id)
+            XCTAssertEqual(element["name"] as? String, title)
+            XCTAssertEqual(element["via"] as? String, "owner")
+            let object = try XCTUnwrap(p.toolbar.accessibilityItems.first { $0.id == id }?.object)
+            XCTAssertEqual(Presenter.axFacts(object)?.label, title)
+        }
+        XCTAssertEqual(projected.filter { $0["testId"] as? String == "add" }.count, 1, "the hidden authored header adds no duplicate")
+        let scoped = p.axElements(roots: [p.viewport, bar], scope: [172])["elements"] as? [[String: Any]] ?? []
+        XCTAssertEqual(scoped.compactMap { $0["testId"] as? String }, ["tab-Unread"])
 
         // A person's choice presses the tab. The app has not answered, so the group shows the app's tab still.
         group.selectedIndex = 1
@@ -969,14 +1058,14 @@ final class HeaderMacTests: XCTestCase {
 
     """
 
-    private func boot(size: CGSize) throws -> ExactSession {
+    private func boot(size: CGSize, source: String? = nil) throws -> ExactSession {
         _ = NSApplication.shared
         let dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("../../target/header-test-" + UUID().uuidString).standardizedFileURL
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let contract = dir.appendingPathComponent("app.contract"), plan = dir.appendingPathComponent("app.plan")
-        try app.write(to: contract, atomically: true, encoding: .utf8)
+        try (source ?? app).write(to: contract, atomically: true, encoding: .utf8)
         let compiler = Process(), said = Pipe()
         compiler.executableURL = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_CONTRACT"]))
         compiler.arguments = ["build", contract.path, "-o", plan.path]
@@ -990,6 +1079,28 @@ final class HeaderMacTests: XCTestCase {
     }
     private func named(_ testId: String) throws -> NodeView {
         try XCTUnwrap(session?.presenter.views.values.first { $0.props["testId"] == testId }, testId)
+    }
+
+    func testASingleLocationRootHeaderDoesNotRetainItsToolbarWithoutHistory() throws {
+        let source = app.replacingOccurrences(of: "    book \"/book\"\n", with: "")
+            .replacingOccurrences(of: "go(nav, \"/book\")", with: "go(nav, \"/\")")
+        let session = try boot(size: CGSize(width: 600, height: 400), source: source)
+        let p = session.presenter, view = ExactView(session: session)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        XCTAssertTrue(p.navigation.oneLocation)
+        XCTAssertFalse(p.navigation.backPossible)
+        XCTAssertTrue(view.attachWindowToolbar(to: window))
+        XCTAssertNotNil(window.toolbar, "the root header supplies the toolbar")
+        let header = try named("header"), route = try named("route-library")
+        p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["display": "none"]]]))
+        XCTAssertNil(window.toolbar, "a hidden root header removes its toolbar before history retains it")
+        p.apply(wireBatch([["op": "style", "id": Int(header.id), "style": ["display": "flex"]]]))
+        XCTAssertNotNil(window.toolbar)
+        p.apply(wireBatch([["op": "props", "id": Int(route.id), "set": ["navigationBar": "none"]]]))
+        XCTAssertNil(window.toolbar, "a single-location route can withhold its header's toolbar")
     }
 
     /// The kernel behind it: the page is laid out without the header while
@@ -1017,6 +1128,16 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertEqual(page.frame.height, view.bounds.height, "and has the route's whole height")
         let add = try XCTUnwrap(p.toolbar.items[try named("add").id])
         let agent = Agent(session: session), addNode = try named("add")
+        let ax = try XCTUnwrap(agent.accessibilityElementsTree([:])["ax"] as? [String: Any])
+        let addElement = try XCTUnwrap((ax["elements"] as? [[String: Any]])?.first { $0["testId"] as? String == "add" })
+        XCTAssertEqual(addElement["id"] as? UInt32, addNode.id)
+        XCTAssertEqual(addElement["name"] as? String, "Add Book")
+        XCTAssertEqual(addElement["via"] as? String, "owner")
+        XCTAssertEqual((ax["coverage"] as? [String: Any])?["complete"] as? Bool, true)
+        for element in (ax["elements"] as? [[String: Any]] ?? []) where ["Back", "Forward"].contains(element["name"] as? String ?? "") {
+            XCTAssertTrue(element["id"] is NSNull, "system history buttons have no authored control")
+            XCTAssertNil(element["testId"])
+        }
         let row = try XCTUnwrap((agent.layout()["nodes"] as? [[String: Any]])?.first { $0["id"] as? Int == Int(addNode.id) })
         XCTAssertNil(row["radii"], "a system-owned toolbar item has no observable corner geometry")
         let target = try XCTUnwrap(agent.layout(["id": Int(addNode.id)])["node"] as? [String: Any])
@@ -1032,8 +1153,8 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertEqual(identifiers(), [back])
         XCTAssertEqual(try named("book-page").frame.minY, 0)
         XCTAssertEqual(p.covers.delivered, [try named("book-header").id: .whole])
-        XCTAssertTrue(p.toolbar.validateToolbarItem(p.toolbar.backItem))
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(p.toolbar.backItem.action), to: p.toolbar.backItem.target, from: p.toolbar.backItem))
+        XCTAssertTrue(p.toolbar.validateToolbarItem(p.toolbar.backSlot))
+        XCTAssertTrue(p.toolbar.pressBack())
         XCTAssertEqual(window.title, "Library")
         XCTAssertEqual(p.covers.delivered, [header.id: .whole])
         XCTAssertEqual(page.frame.minY, 0)

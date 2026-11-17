@@ -25,6 +25,8 @@ pub struct LayoutContext<B: Brush = [u8; 4]> {
     pub(crate) style_table: Vec<ResolvedStyle<B>>,
     pub(crate) style_runs: Vec<StyleRun>,
     pub(crate) inline_boxes: Vec<InlineBox>,
+    /// Text indices where shaping starts a new run (`push_shaping_break`).
+    pub(crate) shaping_breaks: Vec<usize>,
     pub(crate) bidi: BidiResolver,
 
     // Reusable style builders (to amortise allocations)
@@ -46,6 +48,7 @@ impl<B: Brush> LayoutContext<B> {
             style_table: vec![],
             style_runs: vec![],
             inline_boxes: vec![],
+            shaping_breaks: vec![],
             bidi: BidiResolver::new(),
             ranged_style_builder: RangedStyleBuilder::default(),
             tree_style_builder: TreeStyleBuilder::default(),
@@ -191,6 +194,7 @@ impl<B: Brush> LayoutContext<B> {
         self.style_table.clear();
         self.style_runs.clear();
         self.inline_boxes.clear();
+        self.shaping_breaks.clear();
         self.info.clear();
         self.bidi.clear();
     }

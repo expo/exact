@@ -1,7 +1,32 @@
 //! LLP 1017 P7: `test` blocks parse to the agent's steps and print as JSON
 //! the driver reads (`scripts/agent.mjs --test`).
 
-use contract_syntax::{Expr, Step, TapForm};
+use contract_syntax::{Expr, StateComparison, Step, TapForm};
+
+#[test]
+fn authored_http_responses_are_launch_facts_and_steps() {
+    let tests = contract::tests(
+        r#"answer fetch "https://api.example.com/" with 200 {"text":"Stubbed greeting"}
+test "inherited"
+  expect text "greeting" == "Stubbed greeting"
+test "overridden"
+  fail fetch "https://api.example.com/"
+  clock data
+  answer fetch "https://api.example.com/" with 503 "unavailable"
+  reload
+"#,
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
+    assert_eq!(json[0]["steps"][0]["op"], "answer-fetch");
+    assert_eq!(json[0]["steps"][0]["response"]["status"], 200);
+    assert_eq!(json[1]["steps"][0]["op"], "fail-fetch");
+    assert_eq!(json[1]["steps"][2]["op"], "answer-fetch");
+    assert!(contract::tests(
+        "answer fetch \"x\" with 200\nfail fetch \"x\"\ntest \"t\"\n  clock data\n"
+    )
+    .is_err());
+}
 
 #[test]
 fn a_test_block_parses_to_the_eight_operations_and_expects() {
@@ -25,16 +50,16 @@ fn a_test_block_parses_to_the_eight_operations_and_expects() {
     let json = contract::tests_json(&tests);
     assert!(json.starts_with("[{\"name\":\"login\",\"steps\":[{\"op\":\"tap\",\"target\":\"title\",\"form\":\"press\",\"line\":2}"), "{json}");
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"attempt\",\"value\":1,\"line\":13}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"attempt\",\"comparison\":\"equal\",\"value\":1,\"line\":13}"),
         "{json}"
     );
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"picked\",\"value\":null,\"line\":15}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"picked\",\"comparison\":\"equal\",\"value\":null,\"line\":15}"),
         "{json}"
     );
     // `[]` is the empty list on the wire too, never `null`.
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"tags\",\"value\":[],\"line\":16}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"tags\",\"comparison\":\"equal\",\"value\":[],\"line\":16}"),
         "{json}"
     );
     assert!(
@@ -186,6 +211,19 @@ fn a_test_drags_a_card_to_another_list() {
 }
 
 #[test]
+fn a_test_opts_into_dragging_to_the_keyboard() {
+    let tests = contract::tests("test \"keyboard\"\n  tap \"transcript\" drag 0 300 hold 1000 into keyboard during \"state\"\n").unwrap();
+    let json = contract::tests_json(&tests);
+    assert!(json.contains("\"into\":\"keyboard\""), "{json}");
+    assert!(json.contains("\"during\":[\"state\"]"), "{json}");
+    for option in ["into screen", "into", "into keyboard into keyboard"] {
+        assert!(
+            contract::tests(&format!("test \"t\"\n  tap \"a\" drag 0 300 {option}\n")).is_err()
+        );
+    }
+}
+
+#[test]
 fn a_test_drags_and_opens_at_its_size() {
     // kanban F18, paint F5: a drag, as the driver's `tap … drag`, and the
     // viewport a test's session opens at, as its `--size`.
@@ -299,7 +337,7 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
         "{json}"
     );
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"items.0\",\"value\":-3,\"line\":8}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"items.0\",\"comparison\":\"equal\",\"value\":-3,\"line\":8}"),
         "{json}"
     );
     // `pinch` is not a leftover word on the line (stocks: syntax-expected-newline).
@@ -604,7 +642,7 @@ fn a_test_double_clicks_scrolls_a_list_appends_reloads_and_reads_a_field() {
         "{\"op\":\"tap\",\"target\":\"timeline\",\"form\":\"into\",\"key\":\"s2981\",\"line\":5}",
         "{\"op\":\"type\",\"target\":\"reply\",\"text\":\"agree\",\"append\":true,\"line\":6}",
         "{\"op\":\"reload\",\"line\":7}",
-        "{\"op\":\"expect-state\",\"name\":\"feed.page.next\",\"value\":\"b\",\"line\":9}",
+        "{\"op\":\"expect-state\",\"name\":\"feed.page.next\",\"comparison\":\"equal\",\"value\":\"b\",\"line\":9}",
     ] {
         assert!(json.contains(want), "{want} in {json}");
     }
@@ -625,7 +663,7 @@ fn a_list_position_in_a_state_path_parses() {
     let json = contract::tests_json(&tests);
     assert!(
         json.contains(
-            "{\"op\":\"expect-state\",\"name\":\"cards.0.id\",\"value\":\"a\",\"line\":2}"
+            "{\"op\":\"expect-state\",\"name\":\"cards.0.id\",\"comparison\":\"equal\",\"value\":\"a\",\"line\":2}"
         ),
         "{json}"
     );
@@ -640,7 +678,7 @@ fn a_negative_number_is_an_expect_state_value() {
     ));
     let json = contract::tests_json(&tests);
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"offset\",\"value\":-1,\"line\":2}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"offset\",\"comparison\":\"equal\",\"value\":-1,\"line\":2}"),
         "{json}"
     );
 }
@@ -750,6 +788,61 @@ fn a_test_asserts_that_a_control_is_disabled_or_enabled() {
 }
 
 #[test]
+fn a_test_asserts_which_node_has_the_focus() {
+    let src = "test \"t\"\n  type \"picker\" key \"Escape\"\n  expect focused \"picker\"\n";
+    let tests = contract::tests(src).unwrap();
+    assert!(matches!(&tests[0].steps[1], Step::ExpectFocused { target, .. } if target == "picker"));
+    let json = contract::tests_json(&tests);
+    assert!(
+        json.contains("{\"op\":\"expect-focused\",\"target\":\"picker\",\"line\":3}"),
+        "{json}"
+    );
+    let e = contract::tests("test \"t\"\n  expect focus \"picker\"\n").unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("write `expect focused \"<testId>\"`"),
+        "{e}"
+    );
+    for src in [
+        "test \"t\"\n  expect focused picker\n",
+        "test \"t\"\n  expect focused\n",
+    ] {
+        let e = contract::tests(src).unwrap_err();
+        assert_eq!(e.span.line, 2, "{src}: {e}");
+    }
+}
+
+#[test]
+fn a_test_bounds_a_nodes_laid_out_width_or_height() {
+    let src = "test \"t\"\n  expect layout \"status-mark\" height <= 24\n  expect layout \"status-mark\" width >= 12.5\n  expect layout \"rule\" height == 1\n";
+    let tests = contract::tests(src).unwrap();
+    assert!(matches!(
+        &tests[0].steps[0],
+        Step::ExpectLayout { target, dimension, comparison: StateComparison::AtMost, value, .. }
+            if target == "status-mark" && dimension == "height" && *value == 24.0
+    ));
+    let json = contract::tests_json(&tests);
+    for step in [
+        "{\"op\":\"expect-layout\",\"target\":\"status-mark\",\"dimension\":\"height\",\"comparison\":\"at-most\",\"value\":24,\"line\":2}",
+        "{\"op\":\"expect-layout\",\"target\":\"status-mark\",\"dimension\":\"width\",\"comparison\":\"at-least\",\"value\":12.5,\"line\":3}",
+        "{\"op\":\"expect-layout\",\"target\":\"rule\",\"dimension\":\"height\",\"comparison\":\"equal\",\"value\":1,\"line\":4}",
+    ] {
+        assert!(json.contains(step), "{step}\n{json}");
+    }
+    for (rest, says) in [
+        ("\"mark\" x <= 24", "reads `width` or `height`, not `x`"),
+        ("\"mark\" height < 24", "takes `==`, `<=` or `>=`"),
+        ("\"mark\" height <= 24px", "in points, written bare"),
+        ("\"mark\" height <= -1", "a size of 0 or more"),
+        ("mark height <= 24", "a testId"),
+    ] {
+        let e = contract::tests(&format!("test \"t\"\n  expect layout {rest}\n")).unwrap_err();
+        assert!(e.to_string().contains(says), "{rest}: {e}");
+        assert_eq!(e.span.line, 2, "{rest}: {e}");
+    }
+}
+
+#[test]
 fn a_test_writes_through_the_apps_server_as_another_person() {
     // LLP 1116.006 D8: method, a path under the server the app calls (or a
     // whole URL), a JSON body that may span lines, and the persona.
@@ -818,10 +911,36 @@ fn a_test_writes_through_the_apps_server_as_another_person() {
         ("test \"t\"\n  request POST \"/items\" {a: 1}\n", 2),
         ("test \"t\"\n  request POST \"/items\" {\"a\": x}\n", 2),
         ("test \"t\"\n  request POST \"/items\" as\n", 2),
-        ("test \"t\"\n  request POST \"/items\" \"body\"\n", 2),
+        ("test \"t\"\n  request POST \"/items\" - as bob\n", 2),
     ] {
         let e = contract::tests(src).unwrap_err();
         assert_eq!(e.span.line, line, "{src}: {e}");
+    }
+}
+
+/// A body is any JSON value, a scalar as well as an object or a list.
+#[test]
+fn a_request_body_may_be_a_json_scalar() {
+    for (written, body) in [
+        ("\"str\"", "\"str\""),
+        ("5", "5"),
+        ("-5", "-5"),
+        ("1.5", "1.5"),
+        ("true", "true"),
+        ("false", "false"),
+        ("null", "null"),
+    ] {
+        let src = format!("test \"r\"\n  request PATCH \"/x\" {written} as bob expect 409\n");
+        let tests = contract::tests(&src).unwrap_or_else(|e| panic!("{written}: {e}"));
+        assert!(
+            matches!(
+                &tests[0].steps[0],
+                Step::Request { body: Some(b), persona: Some(who), status: Some(409), .. }
+                    if b == body && who == "bob"
+            ),
+            "{written}: {:?}",
+            tests[0].steps[0]
+        );
     }
 }
 
@@ -872,14 +991,84 @@ fn media_preferences_inherit_by_name_and_can_change_between_steps() {
     }
     assert!(contract::tests("test \"t\"\n  prefer hover none\n").is_ok());
     assert!(contract::tests("test \"t\"\n  prefer online false\n").is_ok());
+    let sized = contract::tests("prefer root-font-size \"24\"\ntest \"sized\"\n  expect tree has \"root\"\n  prefer root-font-size \"28px\"\n  reload\n").unwrap();
+    let sized: serde_json::Value = serde_json::from_str(&contract::tests_json(&sized)).unwrap();
+    assert_eq!(sized[0]["steps"][0]["name"], "root-font-size");
+    assert_eq!(sized[0]["steps"][0]["value"], "24");
+    assert_eq!(sized[0]["steps"][2]["value"], "28px");
     // The driver validates media names and values at the failing test's line.
     assert!(contract::tests("test \"t\"\n  prefer unknown banana\n").is_ok());
     assert!(contract::tests("test \"t\"\n  prefer prefers-color-scheme banana\n").is_ok());
+    // A module's permission, as a launch line or a step (#557).
+    let permission = contract::tests(
+        "prefer permission.notifications granted\n\ntest \"t\"\n  prefer permission.health.steps denied\n",
+    )
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&permission)).unwrap();
+    assert_eq!(
+        json[0]["steps"][0],
+        serde_json::json!({"op":"prefer", "name":"permission.notifications", "value":"granted", "line":1})
+    );
+    assert_eq!(json[0]["steps"][1]["name"], "permission.health.steps");
     assert!(contract::tests("prefer midi.state granted\n").is_err());
     let midi =
         contract::tests("test \"midi\"\n  prefer midi.state granted midi.outputs \"synth\"\n")
             .unwrap();
     assert!(contract::tests_json(&midi).contains("prefer-midi"));
+}
+
+#[test]
+fn preference_aliases_share_launch_defaults_and_duplicate_detection() {
+    for (alias, canonical) in [
+        ("displayScale", "display-scale"),
+        ("color-scheme", "prefers-color-scheme"),
+        ("rootFontSize", "root-font-size"),
+        ("PREFER-ONLINE", "online"),
+        ("Segments", "segments"),
+        ("preferMode", "mode"),
+    ] {
+        for (inherited, own) in [(alias, canonical), (canonical, alias)] {
+            let source = format!(
+                "prefer {inherited} \"2\"\ntest \"override\"\n  prefer {own} \"1\"\n  expect tree has \"root\"\n"
+            );
+            let tests = contract::tests(&source).unwrap();
+            assert_eq!(tests[0].steps.len(), 2, "{source}");
+            assert!(
+                matches!(&tests[0].steps[0], Step::Prefer { name, value, .. }
+                if name == own && value == "1"),
+                "{source}"
+            );
+            for prefix in ["", "test \"duplicates\"\n  "] {
+                let indent = if prefix.is_empty() { "" } else { "  " };
+                let source =
+                    format!("{prefix}prefer {inherited} \"2\"\n{indent}prefer {own} \"1\"\n");
+                assert_eq!(
+                    contract::tests(&source).unwrap_err().id,
+                    "syntax-duplicate-declaration",
+                    "{source}"
+                );
+            }
+        }
+    }
+    for (first, second) in [
+        ("permission.notifications", "permission.Notifications"),
+        ("permission.health.steps", "permission.healthsteps"),
+        ("unknown-name", "unknownName"),
+        ("extension", "Extension"),
+        ("preferSegments", "segments"),
+    ] {
+        let source =
+            format!("prefer {first} granted\ntest \"distinct\"\n  prefer {second} denied\n");
+        assert_eq!(contract::tests(&source).unwrap()[0].steps.len(), 2);
+        let source =
+            format!("test \"distinct\"\n  prefer {first} granted\n  prefer {second} denied\n");
+        assert_eq!(contract::tests(&source).unwrap()[0].steps.len(), 2);
+        let source = format!("prefer {first} granted\nprefer {first} denied\n");
+        assert_eq!(
+            contract::tests(&source).unwrap_err().id,
+            "syntax-duplicate-declaration"
+        );
+    }
 }
 
 /// `clock held [<resource>…]` (LLP 1016.000 D9): the driver's `clock held`, real time with the clock frozen until each
@@ -1006,8 +1195,16 @@ fn a_perf_block_and_its_counts_parse_to_the_drivers_steps() {
 
 #[test]
 fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
-    let e = contract::tests("test \"t\"\n  perf\n    clock +100 real\n").unwrap_err();
-    assert!(e.message.contains("wall clock"), "{e}");
+    for clock in [
+        "clock +100 real",
+        "clock held",
+        "clock held board 5s",
+        "clock until state ready == true within 500",
+    ] {
+        let e = contract::tests(&format!("test \"t\"\n  perf\n    {clock}\n")).unwrap_err();
+        assert!(e.message.contains("wall clock"), "{clock}: {e}");
+        assert_eq!(e.span.line, 3, "{clock}: {e}");
+    }
     let e = contract::tests("test \"t\"\n  expect perf query a == 1\n").unwrap_err();
     assert!(e.message.contains("`perf` block before it"), "{e}");
     let e = contract::tests("test \"t\"\n  perf\n    clock data\n  expect perf query a == 1.5\n")
@@ -1016,4 +1213,61 @@ fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
     let e = contract::tests("test \"t\"\n  perf\n    clock data\n  expect perf time a == 1\n")
         .unwrap_err();
     assert!(e.message.contains("counts `query"), "{e}");
+}
+
+#[test]
+fn state_steps_compare_numeric_bounds_and_literal_membership() {
+    use contract_syntax::StateComparison as C;
+    let tests = contract::tests("test \"bounds\"\n  expect state offset >= -2\n  expect state offset <= 2\n  expect state rows.0 in 0 -2 2\n  expect state choice in \"ready\" false none []\n").unwrap();
+    let steps = &tests[0].steps;
+    assert!(
+        matches!(&steps[0], Step::ExpectState { comparison: C::AtLeast, value: Expr::Number(n, _), .. } if *n == -2.0)
+    );
+    assert!(matches!(
+        &steps[1],
+        Step::ExpectState {
+            comparison: C::AtMost,
+            ..
+        }
+    ));
+    assert!(
+        matches!(&steps[2], Step::ExpectState { comparison: C::In, value: Expr::List(values, _), .. } if values.len() == 3)
+    );
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
+    assert_eq!(json[0]["steps"][0]["comparison"], "at-least");
+    assert_eq!(json[0]["steps"][2]["value"], serde_json::json!([0, -2, 2]));
+    assert_eq!(
+        json[0]["steps"][3]["value"],
+        serde_json::json!(["ready", false, null, []])
+    );
+    for line in [
+        "offset >= \"1\"",
+        "offset <= true",
+        "offset in",
+        "offset in 1 + 2",
+        "offset == computed",
+        "offset == [1, 2]",
+    ] {
+        assert!(
+            contract::tests(&format!("test \"bad\"\n  expect state {line}\n")).is_err(),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn authored_http_fixtures_refuse_large_bodies_and_cookie_headers() {
+    for step in [
+        format!(
+            "answer fetch \"https://api.test/\" with 200 \"{}\"",
+            "a".repeat(70 * 1024)
+        ),
+        "answer fetch \"https://api.test/\" with 200 header \"Set-Cookie\" \"sid=1\" {}".into(),
+        "answer fetch \"https://api.test/\" with 200 header \"set-cookie2\" \"sid=1\" {}".into(),
+    ] {
+        assert!(
+            contract::tests(&format!("test \"fixture\"\n  clock data\n  {step}\n")).is_err(),
+            "invalid answer accepted"
+        );
+    }
 }

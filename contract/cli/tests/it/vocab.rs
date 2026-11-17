@@ -1,6 +1,7 @@
 //! LLP 1086 D3: `contract vocab` lists what the compiler admits, from its
 //! own lookups, and refuses a name as the compiler would.
 
+use crate::scratch::Scratch;
 use serde_json::Value;
 use std::process::{Command, Output};
 
@@ -77,12 +78,13 @@ fn time_names_numeric_instant_sources() {
     }
 }
 
-/// An event record an arity refusal names (`ScrollEvent`) and a grammar word
-/// a recipe answers (`sequence`, `keyframes`) are one lookup each: euxy ports
-/// 19 and 20 grepped the guides for them.
+/// An event record an arity refusal names (`ScrollEvent`) and a word a
+/// recipe answers (`sequence`, `keyframes`, `exactDelivery`) are one lookup
+/// each.
 #[test]
 fn event_records_and_recipe_words_answer_in_one_lookup() {
-    let out = stdout(&vocab(&["ScrollEvent", "sequence", "keyframes"]));
+    let names = ["ScrollEvent", "sequence", "keyframes", "exactDelivery"];
+    let out = stdout(&vocab(&names));
     assert!(
         out.contains(
             "ScrollEvent: an event record, its fields scrollLeft: number, scrollTop: number"
@@ -93,14 +95,11 @@ fn event_records_and_recipe_words_answer_in_one_lookup() {
         out.contains("\n  `scroll=act` calls `action act(scrollLeft: number, scrollTop: number)`"),
         "{out}"
     );
-    assert!(
-        out.contains("sequence: the recipe docs/recipes/sequencer.md"),
-        "{out}"
-    );
-    assert!(
-        out.contains("keyframes: the recipe docs/recipes/motion.md"),
-        "{out}"
-    );
+    let recipes = ["sequencer", "motion", "over-the-air-updates"];
+    for (word, recipe) in names[1..].iter().zip(recipes) {
+        let line = format!("{word}: the recipe docs/recipes/{recipe}.md");
+        assert!(out.contains(&line), "{out}");
+    }
     let json: Value =
         serde_json::from_str(&stdout(&vocab(&["--json", "MIDIMessageEvent"]))).unwrap();
     assert_eq!(
@@ -137,6 +136,35 @@ fn a_handler_leads_with_the_action_it_calls() {
     // A record that depends on the element (a field's `InputEvent`) is no one signature.
     let out = stdout(&vocab(&["selectionchange"]));
     assert!(!out.contains("`selectionchange=act` calls"), "{out}");
+}
+
+/// The same signature as data, for a tool that types a handler without
+/// reading prose: `params`, and `record` when the event has one.
+#[test]
+fn a_handler_names_its_parameters_and_record_as_data() {
+    let all: Value = serde_json::from_str(&stdout(&vocab(&["--json", "--all"]))).unwrap();
+    let handler = |name: &str| {
+        (all["attributes"].as_array().unwrap().iter())
+            .find(|a| a["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+            .clone()
+    };
+    let press = handler("press");
+    assert_eq!(
+        (&press["params"], &press["record"]),
+        (&serde_json::json!([]), &serde_json::json!("MouseEvent"))
+    );
+    let scroll = handler("scroll");
+    assert_eq!(
+        scroll["params"],
+        serde_json::json!([
+            { "name": "scrollLeft", "type": "number" },
+            { "name": "scrollTop", "type": "number" },
+        ])
+    );
+    // A handler whose parameters depend on its element has neither.
+    let change = handler("change");
+    assert!(change.get("params").is_none() && change.get("calls").is_none());
 }
 
 /// LLP 1116.009 D6: a builder guessed a colour role (tip-splitter), so a colour property's entry lists the roles it takes:
@@ -548,7 +576,8 @@ fn the_host_commands_are_listed_and_answer_by_name() {
 fn a_function_shows_its_signature_rules_and_example() {
     let out = stdout(&vocab(&["formatNumber"]));
     assert!(out.starts_with("formatNumber: standard function\n  signature: formatNumber(number, \"compact\" | \"decimal\" | \"currency\" | \"percent\"[, \"USD\" | "), "{out}");
-    assert!(out.contains("Intl.NumberFormat(\"en-US\")"), "{out}");
+    assert!(out.contains("Intl.NumberFormat"), "{out}");
+    assert!(out.contains("format locale"), "{out}");
     assert!(
         out.contains("example: `formatNumber(1481.47, \"currency\", \"USD\")` is `\"$1,481.47\"`"),
         "{out}"
@@ -652,7 +681,7 @@ fn the_functions_are_listed_and_in_the_json() {
     assert!(one["function"]["rules"][0]["example"]
         .as_str()
         .unwrap()
-        .contains("Sep 21, 2026"));
+        .contains("`formatDate(\"2026-10-16\", 0, \"medium\")` is `\"Oct 16, 2026\"`"));
 }
 
 /// The grammar's table is the roster's: every standard function has a row
@@ -859,8 +888,7 @@ fn every_content_part_ends_with_one_working_call() {
         .filter_map(|l| l.strip_prefix("component "))
         .collect();
     assert_eq!(parts.len(), 9, "{parts:?}");
-    let dir = std::env::temp_dir().join(format!("exact-parts-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-parts-{}", std::process::id()));
     let path = dir.join("app.contract");
     let mut failures = Vec::new();
     for part in &parts {
@@ -993,6 +1021,21 @@ fn the_grammars_words_each_answer_in_under_a_kilobyte() {
     assert!(stepper.contains("appearance=\"textfield\""), "{stepper}");
 }
 
+#[test]
+fn titlebar_vocab_explains_routes_that_withhold_their_bars() {
+    let answer = stdout(&vocab(&["titlebar"]));
+    assert!(answer.contains("navigationBar=\"none\""), "{answer}");
+    assert!(
+        answer.contains("single-location") && answer.contains("root header"),
+        "{answer}"
+    );
+    assert!(
+        answer.contains("hides") && answer.contains("history"),
+        "{answer}"
+    );
+    assert!(answer.contains("window-controls-overlay"), "{answer}");
+}
+
 /// Each concept's answer holds the repair whole: the concepts D5.1 names
 /// each carry code, every `contract` block they print compiles with no
 /// diagnostic, and no name answers for two concepts.
@@ -1008,8 +1051,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
             names.push(n);
         }
     }
-    let dir = std::env::temp_dir().join(format!("exact-concepts-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-concepts-{}", std::process::id()));
     let path = dir.join("app.contract");
     let mut failures = Vec::new();
     for name in [
@@ -1040,7 +1082,10 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
         "menu",
         "menubar",
         "::placeholder",
+        "::backdrop",
+        "view-transition",
         "glass",
+        "titlebar",
         "haptics",
         "toast",
         "var",
@@ -1079,14 +1124,24 @@ fn menu_bar_attributes_explain_the_fixed_removal_ids() {
     }
 }
 
-/// LLP 1104 D3: `::placeholder` answers with its block, and so does the
-/// name an author guesses for it; the part's declaration is no attribute.
+/// LLP 1104 D3, LLP 1035.001 D11: `::placeholder` and `::backdrop` answer
+/// with their blocks, and so do the names an author guesses for them; a
+/// part's declaration is no attribute.
 #[test]
-fn placeholder_answers_with_its_block() {
-    for name in ["::placeholder", "placeholder-color"] {
+fn parts_answer_with_their_blocks() {
+    let (colour, background) = ("admits `color` alone", "admits `background-color` alone");
+    for (name, part, admits) in [
+        ("::placeholder", "::placeholder", colour),
+        ("placeholder-color", "::placeholder", colour),
+        ("::backdrop", "::backdrop", background),
+        ("scrim", "::backdrop", background),
+    ] {
         let out = stdout(&vocab(&[name]));
-        assert!(out.contains("::placeholder (a concept)"), "{name}: {out}");
-        assert!(out.contains("admits `color` alone"), "{name}: {out}");
+        assert!(
+            out.contains(&format!("{part} (a concept)")),
+            "{name}: {out}"
+        );
+        assert!(out.contains(admits), "{name}: {out}");
         assert!(!out.contains("native module"), "{name}: {out}");
     }
     let all: Value = serde_json::from_str(&stdout(&vocab(&["--json"]))).unwrap();
@@ -1424,4 +1479,20 @@ fn an_iframe_takes_a_frame_name() {
             "{refused}: {error:?}"
         );
     }
+}
+
+/// expo/exact#488: a builder looking up right to left found CSS's
+/// `direction`, not the strings table that sets the page's `lang` and `dir`.
+#[test]
+fn right_to_left_leads_to_the_strings_table() {
+    for name in ["rtl", "dir", "right-to-left"] {
+        let out = stdout(&vocab(&[name]));
+        assert!(out.contains("rtl (a concept)"), "{name}: {out}");
+        assert!(
+            out.contains("\"strings\": { \"base\": \"ur\" }"),
+            "{name}: {out}"
+        );
+    }
+    let out = stdout(&vocab(&["direction"]));
+    assert!(out.contains("`contract vocab rtl`"), "{out}");
 }

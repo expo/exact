@@ -94,7 +94,7 @@ fn append_outline(
         ..Default::default()
     });
     let normal = Mat3::from_mat4(local).inverse().transpose();
-    for (n, &r) in source.normals.chunks_exact(3).zip(&source.reach) {
+    for (n, &r) in source.normals.as_chunks::<3>().0.iter().zip(&source.reach) {
         let n = Vec3::from_slice(n);
         let transformed = normal * n;
         target.normals.extend(transformed.to_array());
@@ -242,7 +242,7 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
                     }));
                 // A mirrored node keeps its front faces by reversing its winding.
                 let mirrored = local.determinant() < 0.;
-                for t in mesh.indices.chunks_exact(3) {
+                for t in mesh.indices.as_chunks::<3>().0 {
                     let t = if mirrored {
                         [t[0], t[2], t[1]]
                     } else {
@@ -292,7 +292,7 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
                 }));
                 parts.extend(std::iter::repeat_n(joint as u32, count));
                 let mirrored = rest[skin.joints[joint] as usize].determinant() < 0.;
-                for t in mesh.indices.chunks_exact(3) {
+                for t in mesh.indices.as_chunks::<3>().0 {
                     let t = if mirrored {
                         [t[0], t[2], t[1]]
                     } else {
@@ -366,7 +366,9 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
             .collect();
         let indices: Vec<_> = mesh
             .indices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|t| [t[0], t[2], t[1]])
             .collect();
         let id = self.add_mesh(&vertices, &indices);

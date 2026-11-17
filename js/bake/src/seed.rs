@@ -14,6 +14,7 @@ use std::path::Path;
 /// by name.
 pub struct Seed {
     values: BTreeMap<String, Result<exact_plan::Value, String>>,
+    pub(crate) rust_sources: Vec<String>,
 }
 
 impl Seed {
@@ -51,7 +52,10 @@ impl Seed {
                 ))
             });
         }
-        Ok(Seed { values })
+        Ok(Seed {
+            values,
+            rust_sources: rust_sources.to_vec(),
+        })
     }
 
     /// From the files on disk, when both exist; `None` otherwise.
@@ -177,6 +181,13 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     fn app_id(&self) -> &str {
         self.module.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.module.launch()
+    }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.module.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.module.grants()
     }
@@ -207,6 +218,9 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     }
     fn set_document_owner(&mut self, owner: u64) {
         self.module.set_document_owner(owner)
+    }
+    fn render_web(&mut self) {
+        self.module.render_web()
     }
     fn configure_storage(
         &mut self,
@@ -285,12 +299,32 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     ) -> Result<(), DataError> {
         self.module.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.module.take_reports()
+    }
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         self.module.background_state()
     }
     fn take_logs(&mut self) -> Vec<String> {
         self.module.take_logs()
     }
+    fn parse_tool(
+        &mut self,
+        fetch: Option<u64>,
+        continuation: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        self.module
+            .parse_tool(fetch, continuation, store, source, args, outcome)
+    }
+
+    fn module_identity(&self, source: &str) -> Option<exact_runner::ModuleIdentity> {
+        self.module.module_identity(source)
+    }
+
     fn take_aborted(&mut self) -> Vec<u64> {
         self.module.take_aborted()
     }

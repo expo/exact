@@ -7,6 +7,25 @@ use exact_game::spawn::Spawner;
 use exact_game::steer::{self, Steer};
 use exact_game::*;
 
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 const HZ: u32 = 120;
 const DT: f32 = 1.0 / HZ as f32;
 
@@ -484,7 +503,8 @@ fn two_spawners_continue_identically_in_a_fresh_process() {
     let ms = |ticks: u64| ticks as f64 * 1000.0 / HZ as f64;
     let mut whole = Sim::<Kit>::new(()).unwrap();
     whole.run(ms(500));
-    let dir = std::env::temp_dir().join(format!("exact-kit-spawner-{}", std::process::id()));
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("exact-kit-spawner-{}", std::process::id())));
     std::fs::create_dir_all(&dir).unwrap();
     let (save, out) = (dir.join("half.world"), dir.join("log.txt"));
     std::fs::write(&save, whole.save().unwrap()).unwrap();

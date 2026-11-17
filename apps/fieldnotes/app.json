@@ -21,5 +21,6 @@
     "macos": { "minimumOS": "14.0", "window": { "width": 1100, "height": 760, "minWidth": 760, "minHeight": 560 } },
     "web": {}
   },
-  "deploy": { "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" } }
+  "deploy": { "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" } },
+  "rust": { "data": { "crate": "fieldnotes-data", "type": "fieldnotes_data::Backup" } }
 }

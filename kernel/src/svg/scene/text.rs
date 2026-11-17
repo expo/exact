@@ -15,6 +15,8 @@ use crate::generated::{
 use crate::id::ViewId;
 use crate::kernel::NodeRef;
 use crate::svg::length::{Length, Viewport};
+use crate::svg::server::{resolve, Resolved};
+use crate::svg::Paint;
 use crate::text::TextStyle;
 
 /// A `text` element, resolved.
@@ -202,21 +204,54 @@ impl Resolver<'_, '_> {
         let dx = first(node.props.str(PropId::TextDx), vp.width).unwrap_or(0.0);
         let dy = first(node.props.str(PropId::TextDy), vp.height).unwrap_or(0.0);
         let hidden = style.visibility != Visibility::Visible;
-        let paint = |p: &crate::svg::Paint, opacity: f32| -> Option<ShapePaint> {
+        let paint = |p: &Paint, opacity: f32| -> Option<ShapePaint> {
             if hidden {
                 return None;
             }
-            let color = match p {
-                crate::svg::Paint::None | crate::svg::Paint::Url(..) => return None,
-                crate::svg::Paint::CurrentColor => style.text_color,
-                crate::svg::Paint::Color(c) => *c,
+            let opacity = opacity.clamp(0.0, 1.0);
+            let solid = |color, opacity| {
+                Some(ShapePaint {
+                    color,
+                    opacity,
+                    server: None,
+                    pattern: None,
+                })
             };
-            Some(ShapePaint {
-                color,
-                opacity: opacity.clamp(0.0, 1.0),
-                server: None,
-                pattern: None,
-            })
+            match p {
+                Paint::None => None,
+                Paint::CurrentColor => solid(style.text_color, opacity),
+                Paint::Color(c) => solid(*c, opacity),
+                // As a shape's paint resolves it, with no box: the host
+                // measures the glyphs, so a server in bounding-box units
+                // paints nothing here, and a pattern is not painted on text.
+                Paint::Url(id, _) => {
+                    let target = self.kernel.resolve_id(node.id, id);
+                    if target
+                        .and_then(|t| self.kernel.node(t))
+                        .is_some_and(|t| t.node_type == NodeType::SvgPattern)
+                    {
+                        return None;
+                    }
+                    match resolve(self.kernel, node.id, id, None, vp) {
+                        Resolved::Server(server) if self.budget.cost(server.stops.len() as u64) => {
+                            Some(ShapePaint {
+                                color: style.text_color,
+                                opacity,
+                                server: Some(Box::new(server)),
+                                pattern: None,
+                            })
+                        }
+                        Resolved::Server(_) | Resolved::Nothing => None,
+                        Resolved::Color(color, stop) => solid(color, opacity * stop),
+                        // A missing server paints the fallback, or nothing.
+                        Resolved::Fallback => match p.fallback()? {
+                            Paint::CurrentColor => solid(style.text_color, opacity),
+                            Paint::Color(c) => solid(c, opacity),
+                            _ => None,
+                        },
+                    }
+                }
+            }
         };
         // Bold Text (LLP 1115.000 D12.3), on the run's own weight and family.
         let mut drawn = TextStyle::from_style(style);

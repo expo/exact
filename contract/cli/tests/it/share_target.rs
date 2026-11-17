@@ -1,5 +1,6 @@
 //! @ref LLP 1133.024 D2, D3 — a received share is one location, and its
 //! files arrive by token after its text.
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropValue};
 use exact_runner::share_in::{self, Claims, Pending, PendingFile, ShareTarget, SharedFiles};
 use exact_runner::time::{launching_with, Launch};
@@ -81,7 +82,8 @@ fn target() -> ShareTarget {
 
 #[test]
 fn a_cold_share_shows_its_text_first_with_its_files_pending_then_they_land() {
-    let dir = std::env::temp_dir().join(format!("exact-share-{}", std::process::id()));
+    let dir =
+        Scratch::adopt(std::env::temp_dir().join(format!("exact-share-{}", std::process::id())));
     let inbox = dir.join("inbox");
     let shared = dir.join("shared");
     std::fs::create_dir_all(&inbox).unwrap();
@@ -274,9 +276,7 @@ fn the_manifest_and_the_inbox_record_read_as_the_rfc_writes_them() {
 
 #[test]
 fn the_bake_refuses_a_share_target_no_route_matches() {
-    let dir = std::env::temp_dir().join(format!("exact2-share-target-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact2-share-target-{}", std::process::id()));
     std::fs::write(dir.join("app.contract"), SOURCE).unwrap();
     let compile = |action: &str| {
         let manifest = format!(
@@ -295,6 +295,42 @@ fn the_bake_refuses_a_share_target_no_route_matches() {
         refused[0]
             .1
             .contains("matches none of the app's routes (/, /share)"),
+        "{}",
+        refused[0].1
+    );
+    // expo/exact#413: the bake admits an action exactly when a share delivered
+    // there reaches the share route by the router's own match, under which a
+    // trailing `/` matches no pattern (the share would open `notfound`).
+    for action in [
+        "/share",
+        "/share?from=sheet",
+        "/share#top",
+        "/share/",
+        "/share//",
+        "//share",
+        "/share/x",
+    ] {
+        let shared = share_in::Incoming {
+            text: Some("hi".into()),
+            ..Default::default()
+        };
+        let at = share_in::location(
+            &ShareTarget {
+                action: action.into(),
+                text: Some("text".into()),
+                ..Default::default()
+            },
+            &shared,
+            |_| String::new(),
+        );
+        let delivered = text_of(&boot(Launch::NONE, &at), "text") == ["hi"];
+        assert_eq!(compile(action).is_ok(), delivered, "{action} as {at}");
+    }
+    let refused = compile("/share/").unwrap_err();
+    assert!(
+        refused[0]
+            .1
+            .ends_with("a path ending in `/` matches no route, so write `/share`"),
         "{}",
         refused[0].1
     );

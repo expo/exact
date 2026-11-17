@@ -1,0 +1,3 @@
+# Android 16 API 36, google/sdk_gphone64_arm64/emu64a:16/BE4B.251210.005/14574095 (google_apis_playstore/arm64-v8a).
+  mWakefulness=Asleep
+mWakefulness=0

@@ -242,3 +242,40 @@ fn undefined_primitive_lengths_keep_the_filter_region() {
         }
     }
 }
+
+/// LLP 1123 D9: each element's lengths read the safe area where it is: a
+/// circle's radius under an `svg` whose own lengths read none, and a group's
+/// author override, which its child reads and the `svg` does not.
+#[test]
+fn each_elements_lengths_read_its_own_inset() {
+    use NodeType::*;
+    let mut d = Doc::new();
+    let svg = d.node(
+        Svg,
+        &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+        &[(PropId::ViewBox, "0 0 100 100")],
+    );
+    let r = "var(--exact-safe-area-inset-top)";
+    let circle = d.node(
+        SvgCircle,
+        &[(StyleId::Cx, "50"), (StyleId::Cy, "50"), (StyleId::R, r)],
+        &[],
+    );
+    let group = d.node(SvgGroup, &[(StyleId::LocalInsetTop, "9")], &[]);
+    let inner = d.node(
+        SvgCircle,
+        &[(StyleId::Cx, "50"), (StyleId::Cy, "50"), (StyleId::R, r)],
+        &[],
+    );
+    d.children(group, &[inner]);
+    d.children(svg, &[circle, group]);
+    let mut k = d.kernel(&[svg], 400.0);
+    k.set_local_insets(1, Some([7.0, 0.0, 0.0, 0.0])).unwrap();
+    let s = resolve(&k, svg);
+    let radius = |id: u32| match &find(&s.items, id).unwrap().kind {
+        Kind::Shape(c) => c.circle.unwrap().2,
+        _ => panic!("a shape"),
+    };
+    assert_eq!(radius(circle), 7.0, "the page's 7, through the svg");
+    assert_eq!(radius(inner), 9.0, "the group's own");
+}

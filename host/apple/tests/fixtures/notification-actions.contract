@@ -1,0 +1,34 @@
+// NotificationActionTests' app: a post that declares a background action
+// and a text action (LLP 1133.004 stage 2), and the root's handler, which
+// shows what it heard.
+use showNotification, notificationclick, NotificationEvent, NotificationAction from "@exact/notifications"
+
+use clearAppShortcuts, requestPinShortcut, ShortcutItem, PinShortcutResult from "@exact/quick-actions"
+
+component App
+  state acted = "none"
+  state finished = false
+  mutation status as shape PinShortcutResult then finish
+  action finish
+    finished = true
+  action clicked(tag: string, e: NotificationEvent)
+    if tag == "wait"
+      clearAppShortcuts()
+    if tag == "quiet"
+      send status = requestPinShortcut(shortcut=ShortcutItem(name="quiet", short_name=none, description=none, url="/", icons=none, apple=none, android=none))
+    match e.action
+      case some(a)
+        match e.reply
+          case some(r)
+            acted = `${tag} ${a} ${r}`
+          case none
+            acted = `${tag} ${a}`
+      case none
+        acted = tag
+  action review
+    showNotification(title="Coffee, $4.50", tag="p1", actions=[NotificationAction(action="approve", title="Approve", foreground=false, destructive=false, authenticationRequired=true, placeholder=none), NotificationAction(action="note", title="Add a note", foreground=true, destructive=false, authenticationRequired=false, placeholder=some("Note"))])
+  view
+    column notificationclick=clicked
+      text testId="acted" acted
+      button testId="review" press=review
+        text "Review"

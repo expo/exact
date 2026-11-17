@@ -1,7 +1,7 @@
 // LLP 1056 D4 on the JS target: a canvas draws in its node's colour and direction (`currentColor`, `direction =
 // "inherit"`), so a change that changes them draws it again, cause "style", as the runner's canvases do: a commit's
 // bound colour, its `setScheme` (a host command, applied after the commit's settle), the modes it resolves, the
-// window's scheme, a development page's held scheme (the root's own style), a mode switch outside a commit and a
+// window's scheme or contrast, a development page's held scheme (the root's own style), a mode switch outside a commit and a
 // colour transition's end. A change that leaves them as they were draws nothing, and a commit that changes a canvas's
 // arguments and its colour draws it once, with both causes (D4: causes coalesce).
 import { test, expect, mock } from "bun:test";
@@ -18,10 +18,14 @@ test("whatever changes a canvas's colour draws it again, cause style", async () 
 });
 
 async function run() {
-  let ink = "rgb(52, 199, 89)", scheme = null;
+  let ink = "rgb(52, 199, 89)";
+  const media = new Map();
   const watched = [];
   globalThis.getComputedStyle = () => ({ color: ink, direction: "ltr" });
-  globalThis.matchMedia = () => ({ addEventListener: (type, f) => { scheme = f; } });
+  globalThis.matchMedia = query => {
+    if (!media.has(query)) media.set(query, new EventTarget());
+    return media.get(query);
+  };
   globalThis.MutationObserver = class { constructor(f) { this.f = f; } observe(target, options) { watched.push([this.f, options]); } };
   // An attribute written on the root (`below`: on an element inside it), as the page's observers would see it.
   const write = (name, below = false) => { for (const [f, o] of watched) if (o.attributes && o.attributeFilter.includes(name) && (o.subtree || !below)) f(); };
@@ -55,7 +59,11 @@ async function run() {
   after.shift();
   // The window's scheme.
   ink = "rgb(48, 209, 88)";
-  scheme();
+  media.get('(prefers-color-scheme: dark)').dispatchEvent(new Event('change'));
+  for (const green of [90, 209]) {
+    ink = `rgb(48, ${green}, 88)`;
+    media.get('(prefers-contrast: more)')?.dispatchEvent(new Event('change'));
+  }
   // A development page's held scheme, on the root's own style.
   ink = "rgb(0, 130, 0)";
   write("style");
@@ -72,13 +80,13 @@ async function run() {
   ended({ propertyName: "color" });
   // A commit that changes the canvas's arguments and its scheme.
   await commit(() => { ink = "rgb(0, 170, 0)"; }, [1]);
-  expect(seen()).toEqual([[1, 199], [64, 100], [64, 110], [64, 120], [64, 209], [64, 130], [64, 150], [64, 160], [66, 170]]);
+  expect(seen()).toEqual([[1, 199], [64, 100], [64, 110], [64, 120], [64, 209], [64, 90], [64, 209], [64, 130], [64, 150], [64, 160], [66, 170]]);
   for (const color of ["color(display-p3 1 0 0)", "color(display-p3 0.95 0 0)", "oklch(0.6 0.2 30)", "oklch(0.7 0.2 30)"]) {
     ink = color; await commit();
     expect(draws.at(-1).frame[2]).toBe(64);
     expect(draws.at(-1).color).toEqual(parseColor(color));
     expect(draws.at(-1).color.lin).toHaveLength(3);
   }
-  expect(draws).toHaveLength(13);
+  expect(draws).toHaveLength(15);
 
 }

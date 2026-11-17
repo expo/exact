@@ -3,8 +3,8 @@
 //! the providers' grants and FedCM's rules before any ticket, and answered
 //! through the one `credential` ticket, whose `args` name what
 //! `packages/sign-in/test/idp.mjs` signs over. The tests run on this Mac,
-//! whose cells are macOS's (D3): Google through the host's session, and
-//! Apple only with a profile, which `prefer` stands in for.
+//! with Google explicitly enabled by `prefer` to exercise ticket handling.
+//! Apple and combined requests are likewise enabled only by individual tests.
 
 #[cfg(target_os = "macos")]
 use exact_runner::HoldAnswer;
@@ -144,7 +144,7 @@ impl DataSource for Data {
     }
 }
 
-fn boot(name: &str) -> (App, Host, Data) {
+fn boot_unpreferred(name: &str) -> (App, Host, Data) {
     let app = App::new(name, APP);
     let (plan, _) = contract::compile_path_all(&app.0.join("app.contract"), false)
         .unwrap_or_else(|e| panic!("{e:?}"));
@@ -161,6 +161,18 @@ fn boot(name: &str) -> (App, Host, Data) {
         r,
         waiting: Vec::new(),
     };
+    (app, host, data)
+}
+
+fn boot(name: &str) -> (App, Host, Data) {
+    let (app, host, data) = boot_unpreferred(name);
+    #[cfg(target_os = "macos")]
+    let mut host = host;
+    #[cfg(target_os = "macos")]
+    host.prefer(
+        "sign-in.getIdentityCapabilities",
+        json!({ "providers": { "google": { "active": true } } }),
+    );
     (app, host, data)
 }
 
@@ -210,6 +222,23 @@ impl Host {
 
     fn logs(&self) -> String {
         exact_runner::agent::handle(&self.r, r#"{"op":"logs"}"#)
+    }
+
+    /// The fixture's bound implementations answer capabilities themselves.
+    #[cfg(target_os = "macos")]
+    fn bind(&mut self, extensions: &[&str]) {
+        self.r.native_slot().host_call(Some(Arc::new(|body| {
+            let body: Json = serde_json::from_slice(body).unwrap();
+            assert_eq!(body["extension"], "sign-in");
+            assert_eq!(body["sync"], "getIdentityCapabilitiesSync");
+            Ok(json!({ "available": true, "providers": {
+                "apple": { "active": true, "passive": true, "withPublicKey": true },
+                "google": { "active": true, "passive": false, "withPublicKey": false }
+            } })
+            .to_string()
+            .into_bytes())
+        })));
+        self.r.bind_extensions(extensions, &[]);
     }
 
     /// The capabilities laid over this target's default.
@@ -377,7 +406,7 @@ fn a_passkey_and_passive_apple_share_one_ticket() {
     );
     host.prefer(
         "sign-in.getIdentityCapabilities",
-        json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true } } }),
+        json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true }, "google": { "active": true } } }),
     );
     let both = json!({ "extension": "passkeys", "send": "get", "args": {
         "publicKey": { "challenge": "Z2V0", "rpId": "auth-fixture.exact.test" },
@@ -470,7 +499,7 @@ fn a_dropped_sign_in_is_disposed_of_by_its_member() {
                         }));
                     }
                 })));
-            host.r.bind_extensions(&["passkeys", "sign-in"], &[]);
+            host.bind(&["passkeys", "sign-in"]);
         }
         host.r.act("google", vec![]).unwrap();
         host.pump();
@@ -557,7 +586,7 @@ fn a_bound_sign_in_goes_to_the_member_s_package() {
                 body: b"{}".to_vec(),
             }));
         })));
-    host.r.bind_extensions(&["passkeys", "sign-in"], &[]);
+    host.bind(&["passkeys", "sign-in"]);
     host.r.act("google", vec![]).unwrap();
     host.pump();
     let calls: Vec<Json> = (heard.lock().unwrap().iter())
@@ -577,7 +606,7 @@ fn bound_sign_in_preserves_options_and_combined_requests_stay_with_passkeys() {
         "passkeys.getClientCapabilities",
         json!({ "available": true }),
     );
-    host.prefer("sign-in.getIdentityCapabilities", json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true } } }));
+    host.prefer("sign-in.getIdentityCapabilities", json!({ "providers": { "apple": { "active": true, "passive": true, "withPublicKey": true }, "google": { "active": true } } }));
     let heard: Arc<Mutex<Vec<Json>>> = Default::default();
     let seen = heard.clone();
     host.r
@@ -592,7 +621,7 @@ fn bound_sign_in_preserves_options_and_combined_requests_stay_with_passkeys() {
                 body: b"{}".to_vec(),
             }));
         })));
-    host.r.bind_extensions(&["passkeys", "sign-in"], &[]);
+    host.bind(&["passkeys", "sign-in"]);
     let mut alone = google("web.apps.googleusercontent.com");
     alone["args"]["mediation"] = json!("required");
     host.answered(&alone);
@@ -619,7 +648,7 @@ fn bound_sign_in_preserves_options_and_combined_requests_stay_with_passkeys() {
     let unsupported = host.answered(&alone);
     assert_eq!(unsupported["error"], "NotSupportedError");
     assert!(unsupported["message"].as_str().unwrap().contains("signal"));
-    host.r.bind_extensions(&["passkeys"], &[]);
+    host.bind(&["passkeys"]);
     let answer = host.answered(&both);
     assert!(answer["error"].is_null(), "{answer}");
     let calls = heard.lock().unwrap();
@@ -647,6 +676,64 @@ fn bound_sign_in_preserves_options_and_combined_requests_stay_with_passkeys() {
     );
 }
 
+/// Production admission reads the bound provider's current capabilities.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_combined_request_uses_bound_capabilities_without_prefer() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (_app, mut host, _) = boot_unpreferred("bound-capabilities");
+    let enabled = Arc::new(AtomicBool::new(false));
+    let apple = enabled.clone();
+    host.r.native_slot().host_call(Some(Arc::new(move |body| {
+        let body: Json = serde_json::from_slice(body).unwrap();
+        assert_eq!(
+            body,
+            json!({ "extension": "sign-in", "sync": "getIdentityCapabilitiesSync", "args": {} })
+        );
+        let enabled = apple.load(Ordering::Relaxed);
+        Ok(json!({ "available": true, "providers": {
+            "apple": { "active": enabled, "passive": enabled, "withPublicKey": enabled },
+            "google": { "active": false, "passive": false, "withPublicKey": false }
+        } })
+        .to_string()
+        .into_bytes())
+    })));
+    let heard: Arc<Mutex<Vec<Json>>> = Default::default();
+    let seen = heard.clone();
+    host.r.native_slot().host(Some(Arc::new(move |body, reply| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_slice(&body).unwrap());
+        reply.send(Outcome::Response(Response {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        }));
+    })));
+    host.r.bind_extensions(&["passkeys", "sign-in"], &[]);
+    let both = json!({ "extension": "passkeys", "send": "get", "args": {
+        "publicKey": { "challenge": "Z2V0", "rpId": "auth-fixture.exact.test" },
+        "identity": { "providers": [{ "configURL": APPLE, "clientId": "com.exact.authfixture.web" }] }
+    } });
+    assert_eq!(host.answered(&both)["error"], "NotSupportedError");
+    enabled.store(true, Ordering::Relaxed);
+    let answer = host.answered(&both);
+    assert!(answer["error"].is_null(), "{answer}");
+    enabled.store(false, Ordering::Relaxed);
+    assert_eq!(host.answered(&both)["error"], "NotSupportedError");
+    let calls: Vec<Json> = heard
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c["send"] == "get")
+        .cloned()
+        .collect();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["extension"], "passkeys");
+    assert_eq!(calls[0]["args"], both["args"]);
+    assert!(calls[0].get("preferred").is_none());
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_superseded_bound_sign_in_cancels_its_member_request() {
@@ -670,7 +757,7 @@ fn a_superseded_bound_sign_in_cancels_its_member_request() {
                 }));
             }
         })));
-    host.r.bind_extensions(&["passkeys", "sign-in"], &[]);
+    host.bind(&["passkeys", "sign-in"]);
     host.r.act("google", vec![]).unwrap();
     host.pump();
     let request = heard

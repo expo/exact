@@ -67,7 +67,8 @@ for (const p of pages) {
   if (!body.includes(`> Fetch the complete documentation index at: ${ORIGIN}/llms.txt`)) fail(where, 'no llms.txt pointer');
   const lines = prose(where, body);
   if (!lines.some(line => /^# \S/.test(line))) fail(where, 'no H1');
-  if (!new RegExp(`^# .*\\n\\n<AgentInstructions>\\n[\\s\\S]*--subject "Exact docs: ${(ORIGIN + p.path).replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}"[\\s\\S]*?\\n</AgentInstructions>\\n`, 'm').test(body)) fail(where, 'no feedback block naming this page below the H1');
+  const feedback = body.match(/^# .*\n\n<AgentInstructions>\n([\s\S]*?)\n<\/AgentInstructions>\n/m)?.[1];
+  if (!feedback?.includes(`Exact docs: ${ORIGIN + p.path}:`) || !feedback.includes('bun exact.mjs feedback status') || !feedback.includes('bun exact.mjs feedback note') || !feedback.includes('never')) fail(where, 'no policy-aware feedback block naming this page below the H1');
   if (lines.filter(line => line.trim()).length < 3) fail(where, 'nothing below the pointer and the H1');
   lines.forEach(line => {
     const html = line.match(LEAKED_HTML);

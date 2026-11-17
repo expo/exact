@@ -17,11 +17,13 @@
 //! that two sibling `if`s share as the same `or` term is the split's, not a
 //! loading view's: it is set aside and the state parts are judged. A swap
 //! counts only when a press in one of its arms moves it: the detail's Back,
-//! the list's row, a form's Cancel. The outermost swap is named once.
+//! the list's row, a form's Cancel. The outermost swap is named once. A
+//! slot component that chooses by state how to wrap its `children`, with no
+//! screen of its own in any arm, shows one screen two ways.
 
 use super::{computed, has, literal};
 use crate::LowerError;
-use contract_syntax::{BinOp, Component, Expr, Node, Stmt, TemplatePart, UnOp};
+use contract_syntax::{BinOp, Component, Expr, File, Node, Span, Stmt, UnOp};
 use contract_types::Checked;
 use std::collections::BTreeSet;
 
@@ -35,15 +37,20 @@ pub(super) fn screen_by_state(checked: &Checked<'_>) -> Vec<LowerError> {
     if root.resources.iter().any(|r| r.source == "exactSurface") {
         return Vec::new();
     }
-    let app = App::new(root);
+    let app = App::new(root, checked.file);
     let mut out = Vec::new();
     app.walk(&root.view, false, &mut out);
+    // A slot's fill is walked once in each arm of its wrapper.
+    let mut seen = BTreeSet::new();
+    out.retain(|w| seen.insert(w.span));
     out
 }
 
 /// What the expanded root's names are.
 struct App<'a> {
     root: &'a Component,
+    /// The authored file, whose components still hold their `children`.
+    file: &'a File,
     /// The root's actions by name, the first of each.
     actions: std::collections::HashMap<&'a str, &'a contract_syntax::Action>,
     /// States a `tab` or a `radio` reads its selection from.
@@ -51,13 +58,14 @@ struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    fn new(root: &'a Component) -> Self {
+    fn new(root: &'a Component, file: &'a File) -> Self {
         let mut actions = std::collections::HashMap::new();
         for a in &root.actions {
             actions.entry(a.name.as_str()).or_insert(a);
         }
         let mut app = App {
             root,
+            file,
             actions,
             picked: BTreeSet::new(),
         };
@@ -74,7 +82,7 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            stack.extend(lists(node).into_iter().flatten());
+            stack.extend(node.children());
         }
         app.picked = picked;
         app
@@ -142,13 +150,14 @@ impl<'a> App<'a> {
                         || literal(attrs, "display") == Some("none")
                         || computed(attrs, "role");
                     if !closed {
-                        lists(node)
+                        node.child_lists()
                             .into_iter()
                             .for_each(|l| self.walk(l, routed, out));
                     }
                 }
                 Node::When { .. } | Node::Match { .. } => {
                     let mut arms = choice(node);
+                    let mut grouped = false;
                     let named = single_when(node).and_then(|(cond, then)| {
                         let (state, page, test) = self.page_test(cond)?;
                         let mut group = vec![(Some(test), then)];
@@ -173,6 +182,7 @@ impl<'a> App<'a> {
                     });
                     if let Some((group, members)) = named {
                         arms = group;
+                        grouped = true;
                         paired.extend(members);
                     } else if let Some((cond, then)) = single_when(node) {
                         for (j, sibling) in nodes.iter().enumerate().skip(i + 1) {
@@ -184,6 +194,7 @@ impl<'a> App<'a> {
                                     let pair = vec![(Some(a), then), (Some(b), body)];
                                     if self.swaps(&pair) {
                                         arms = pair;
+                                        grouped = true;
                                         paired.insert(j);
                                         break;
                                     }
@@ -191,7 +202,7 @@ impl<'a> App<'a> {
                             }
                         }
                     }
-                    if self.swaps(&arms) {
+                    if self.swaps(&arms) && (grouped || !self.wraps_slot(node.span())) {
                         let what = if matches!(node, Node::Match { .. }) {
                             "match"
                         } else {
@@ -214,6 +225,27 @@ impl<'a> App<'a> {
                 Node::Use { children, .. } => self.walk(children, routed, out),
             }
         }
+    }
+
+    /// Whether the authored choice at `span` only wraps its component's
+    /// slot: every arm places `children`, and no arm has a heading or two
+    /// controls of its own.
+    fn wraps_slot(&self, span: Span) -> bool {
+        let Some(node) = self
+            .file
+            .components
+            .iter()
+            .find_map(|c| authored(&c.view, span))
+        else {
+            return false;
+        };
+        let arms = choice(node);
+        arms.len() >= 2
+            && arms.iter().all(|(_, arm)| {
+                let mut seen = Seen::default();
+                look(arm, &mut seen);
+                places_children(arm) && !seen.heading && seen.controls < 2
+            })
     }
 
     /// The page a condition names, `page == "detail"` on a state of the
@@ -352,8 +384,27 @@ fn look(nodes: &[Node], seen: &mut Seen) {
                 seen.heading = true;
             }
         }
-        lists(node).into_iter().for_each(|l| look(l, seen));
+        node.child_lists().into_iter().for_each(|l| look(l, seen));
     }
+}
+
+/// The authored `if` or `match` at `span`.
+fn authored(nodes: &[Node], span: Span) -> Option<&Node> {
+    nodes.iter().find_map(|node| {
+        if matches!(node, Node::When { .. } | Node::Match { .. }) && node.span() == span {
+            return Some(node);
+        }
+        node.child_lists()
+            .into_iter()
+            .find_map(|l| authored(l, span))
+    })
+}
+
+/// Whether `nodes` place their component's slot.
+fn places_children(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| {
+        matches!(node, Node::Children { .. }) || node.child_lists().into_iter().any(places_children)
+    })
 }
 
 /// The `press` and `submit` handlers in `nodes`, outside dialogs and popovers.
@@ -370,7 +421,7 @@ fn pressed<'n>(nodes: &'n [Node], out: &mut Vec<&'n Expr>) {
                     .map(|a| &a.value),
             );
         }
-        lists(node).into_iter().for_each(|l| pressed(l, out));
+        node.child_lists().into_iter().for_each(|l| pressed(l, out));
     }
 }
 
@@ -471,20 +522,6 @@ fn choice(node: &Node) -> Vec<(Option<&Expr>, &[Node])> {
     }
 }
 
-/// Every child list of a node: an element's children, a choice's arms, a
-/// row's body, a use's fill.
-fn lists(node: &Node) -> Vec<&[Node]> {
-    match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => vec![children],
-        Node::When {
-            then, otherwise, ..
-        } => vec![then, otherwise],
-        Node::Match { some, none, .. } => vec![&some.1, none],
-        Node::Each { body, .. } => vec![body],
-        Node::Children { .. } => Vec::new(),
-    }
-}
-
 /// Every state a statement list assigns, through branches and calls.
 fn assigned(body: &[Stmt], out: &mut BTreeSet<String>) {
     for s in body {
@@ -511,43 +548,8 @@ fn assigned(body: &[Stmt], out: &mut BTreeSet<String>) {
 /// Every name an expression reads (a `fn`'s body reads only its
 /// parameters, so a call reads its arguments).
 pub(super) fn idents(e: &Expr, out: &mut Vec<String>) {
-    match e {
-        Expr::Ident(n, _) => out.push(n.clone()),
-        Expr::Call(_, args, _) | Expr::List(args, _) => args.iter().for_each(|a| idents(a, out)),
-        Expr::Member(x, _, _)
-        | Expr::NamedArg(_, x, _)
-        | Expr::Typed(x, _, _)
-        | Expr::Some(x, _)
-        | Expr::Unary(_, x, _)
-        | Expr::Arrow { body: x, .. } => idents(x, out),
-        Expr::Binary(_, a, b, _) => {
-            idents(a, out);
-            idents(b, out);
-        }
-        Expr::Ternary(a, b, c, _) => {
-            idents(a, out);
-            idents(b, out);
-            idents(c, out);
-        }
-        Expr::Match {
-            subject,
-            some,
-            none,
-            ..
-        } => {
-            idents(subject, out);
-            idents(some, out);
-            idents(none, out);
-        }
-        Expr::Let { value, body, .. } => {
-            idents(value, out);
-            idents(body, out);
-        }
-        Expr::Template(parts, _) => parts.iter().for_each(|p| {
-            if let TemplatePart::Expr(x) = p {
-                idents(x, out);
-            }
-        }),
-        Expr::Number(..) | Expr::Str(..) | Expr::Bool(..) | Expr::None(_) => {}
-    }
+    out.extend(e.walk().filter_map(|x| match x {
+        Expr::Ident(n, _) => Some(n.clone()),
+        _ => None,
+    }));
 }

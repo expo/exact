@@ -154,10 +154,30 @@ impl<D: DataSource> Host<D> {
         }) else {
             return Ok(None);
         };
-        // Validate both payload fields before the engine can advance. Its own
-        // update validates the position range and time atomically.
+        // Reject malformed live input before timers can commit.
         if velocity.is_some_and(|v| !v.is_finite()) {
             return Err(EngineError::NonFinite);
+        }
+        crate::motion::validate_height_position(Property::Height, Value::scalar(height))?;
+        if !now_ms.is_finite() {
+            return Err(EngineError::NonFinite);
+        }
+        if now_ms / 1000.0 < self.springs.now() {
+            return Err(EngineError::ClockWentBackwards);
+        }
+        let (batch, early_error, _) = self.commit_input_timers(now_ms);
+        if !self.active_height_valid(active) {
+            let (receipts, error, _) = self.deliver_after(
+                handle_view,
+                Event::HeightRelease {
+                    height,
+                    velocity: velocity.unwrap_or(0.0),
+                },
+                Vec::new(),
+                early_error,
+                false,
+            );
+            return Ok(Some(self.batch_from(batch, &receipts, error.as_deref())));
         }
         if !self
             .springs
@@ -174,11 +194,14 @@ impl<D: DataSource> Host<D> {
             action_fired: true,
             ..active
         });
-        Ok(Some(self.dispatch_at(
+        let (receipts, error, _) = self.deliver_after(
             handle_view,
             Event::HeightRelease { height, velocity },
-            now_ms,
-        )))
+            Vec::new(),
+            early_error,
+            true,
+        );
+        Ok(Some(self.batch_from(batch, &receipts, error.as_deref())))
     }
 
     fn active_height_valid(&self, active: Active) -> bool {

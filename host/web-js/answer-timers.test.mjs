@@ -17,7 +17,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 async function load() {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-answer-timers-'));
   for (const name of ['ts-fetch.js', 'held.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what);
 export const signalDeadline = { arm: null };
 // As the real one: the deadline armed with the signal the request reads, ended when it is done
@@ -43,11 +43,16 @@ test("an answer's timer is a clock entry it owns, and only timers out count for 
     tsf.answering.call = call;
     let ranAs = null;
     tsf.setTimeout((a, b) => { ranAs = [tsf.answering.call, a, b]; }, 100, 'x', 'y');
-    const cleared = tsf.setTimeout(() => { throw new Error('a cleared timer ran'); }, 50);
+    const cleared = [50, 50, 50].map(ms => tsf.setTimeout(() => { throw new Error('a cleared timer ran'); }, ms));
     tsf.answering.call = null;
-    expect(clock.timers.map(e => [e.due, e.data, e.once])).toEqual([[110, true, true], [60, true, true]]);
+    expect(clock.timers.map(e => [e.due, e.data, e.once])).toEqual([[110, true, true], ...Array(3).fill([60, true, true])]);
     expect(inflight.n).toBe(0);
-    tsf.clearTimeout(cleared);
+    // A handle is converted as Web IDL converts a `long`: its string or a boxed number clears it too.
+    tsf.clearTimeout('no such timer');
+    expect(clock.timers.length).toBe(4);
+    tsf.clearTimeout(cleared[0]);
+    tsf.clearTimeout(String(cleared[1]));
+    tsf.clearTimeout(new Number(cleared[2]));
     expect(clock.timers.length).toBe(1);
 
     // It runs as its answer, in flight until the page's next task, and the answer counts again for what follows.
@@ -186,8 +191,12 @@ export const answer = resume(function* () {
     await page.clock.pauseAt(1100);
     await page.goto(server.url.href);
     await page.evaluate(async () => {
+      // The page mounts at time 0, as it may on a paused clock (how far the page's time ran before the pause is real
+      // time): a mount at 0 is a mount, and the page's time runs from it.
+      const now = performance.now.bind(performance), at = now();
+      performance.now = () => now() - at;
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const source = await import('/source.js');
       install(rt.data);
       rt.mount(root => {

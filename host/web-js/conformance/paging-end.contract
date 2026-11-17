@@ -1,0 +1,29 @@
+// Synthetic conformance plan: a transcript that opens at its end and loads
+// older pages at its start (Jérémy Magrin's chat benchmark). The reader
+// scrolls to the top of the loaded window, `reachstart` asks for a page, and
+// a timer lands it 30 rows before the first. A list that opens at its end
+// keeps its last visible row when rows land before the window (LLP 1168.000
+// D1.2), so the reader stays on the message they were reading, the page is a
+// port and more above them, and the start waits for them to scroll again
+// (D1.1's re-arm finds the new first row outside the band).
+component PagingEnd
+  state older = 0
+  state loading = false
+  state pages = 0
+  action more
+    if not loading
+      loading = true
+  action land
+    if loading and pages < 5
+      older = older + 30
+      loading = false
+      pages = pages + 1
+  task arrive mount
+    every(300, land)
+  view
+    column testId="root" height="100%" display="flex" flex-direction="column"
+      text `${pages} ${pages == 1 ? "page" : "pages"}${loading ? ", loading" : ""}` testId="summary" flex-shrink=0 padding=8
+      list virtualized=true scroll-start="end" reachstart=more estimated-item-height=44 testId="feed" flex=1 min-height=0 width="100%" overflow-x="hidden"
+        for x in range(60 + older) key=(x - older)
+          row testId=`row-${x - older}` height=44 box-sizing="border-box" padding-left=12 align-items="center"
+            text `Message ${x - older}` font-size=14

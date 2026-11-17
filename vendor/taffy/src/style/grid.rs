@@ -1464,7 +1464,8 @@ impl TrackSizingFunction {
     pub fn max_sizing_function(&self) -> MaxTrackSizingFunction {
         self.max
     }
-    /// Determine whether at least one of the components ("min" and "max") are fixed sizing function
+    /// Determine whether at least one of the components ("min" and "max") are fixed sizing function.
+    /// EXACT PATCH 63: a `calc()` handle is a length-percentage, so it is fixed.
     pub fn has_fixed_component(&self) -> bool {
         let fixed = |value: CompactLength| {
             #[cfg(feature = "calc")]

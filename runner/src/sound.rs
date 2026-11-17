@@ -25,6 +25,12 @@
 //!   `stopSounds` stops the sounding ones and leaves those still to start,
 //!   which are the sequence's next steps (D4). A step's haptic is a timed
 //!   [`SoundOp::Haptic`], recorded beside the voices.
+//! - **A change** (`setSounds`, LLP 1096 D14) moves a voice's gain, rate
+//!   and pan from the commit's time, each linearly over its `ramp`. A voice
+//!   not yet started takes the values outright, and so does one this batch
+//!   made, whose `Play` carries them. The table follows where in its file a
+//!   voice is, so a rate change moves its natural end, which cuts and is
+//!   cut as any other end.
 //! - **The record** keeps the last [`RECORD`] voices for the driver (D10).
 
 use crate::agent::num;
@@ -42,6 +48,10 @@ pub const RECORD: usize = 1024;
 pub const HAPTICS: usize = 1024;
 /// The range of `playbackRate=` (LLP 1125 D10); a computed one is clamped to it.
 pub const PLAYBACK_RATE: std::ops::RangeInclusive<f64> = 0.25..=4.0;
+/// `setSounds`' `ramp=` when the call gives none, ms (LLP 1096 D14): a value
+/// that follows a pointer, changed at every event, then moves without the
+/// click of a step.
+pub const RAMP: f64 = 20.0;
 
 /// What the output does: the table's changes, in order.
 #[derive(Clone, Debug, PartialEq)]
@@ -62,6 +72,23 @@ pub enum SoundOp {
         playback_rate: f64,
         /// Web Audio's `StereoPannerNode.pan`, −1 (left) to 1 (right).
         pan: f64,
+    },
+    /// From runner time `at`, each given value of voice `id` moves linearly
+    /// from where it is to the new one, reaching it at `at + ramp`; a voice
+    /// whose start is after `at` takes them outright.
+    Set {
+        /// The voice.
+        id: u64,
+        /// When the change starts, runner milliseconds.
+        at: f64,
+        /// The new linear gain, 0–1, if the call gave one.
+        gain: Option<f64>,
+        /// The new playback rate, 0.25–4, if the call gave one.
+        playback_rate: Option<f64>,
+        /// The new pan, −1–1, if the call gave one.
+        pan: Option<f64>,
+        /// How long each value takes to reach its new one, milliseconds.
+        ramp: f64,
     },
     /// Voice `id` now ends at runner time `at`, replacing its previous end.
     End {
@@ -140,13 +167,14 @@ pub struct Voice {
     pub src: String,
     /// Its effective start, `max(at, t)`.
     pub at: f64,
-    /// Its gain, clamped to 0–1.
+    /// Its gain, clamped to 0–1; after a `setSounds` that gave one, that one.
     pub gain: f64,
     /// Its group; empty is none.
     pub group: String,
     /// Its playback rate, clamped to [`PLAYBACK_RATE`]; 1 is the file's own.
+    /// After a `setSounds` that gave one, the rate it moves to.
     pub playback_rate: f64,
-    /// Its pan, clamped to −1–1; 0 is centred.
+    /// Its pan, clamped to −1–1; 0 is centred. As the gain, the last given.
     pub pan: f64,
     /// When it ends: its start plus its length, or earlier.
     pub ends: f64,
@@ -158,9 +186,55 @@ pub struct Voice {
     /// 1125 D7); its own start otherwise.
     step_at: f64,
     natural: f64,
+    /// Its file's length at rate 1, ms.
+    file: f64,
+    /// From `anchor` (its start, or its last rate change) the rate moves
+    /// linearly from `rate_from` to `playback_rate`, reached at `ramp_end`;
+    /// `pos` ms of the file had played at `anchor`.
+    anchor: f64,
+    pos: f64,
+    rate_from: f64,
+    ramp_end: f64,
 }
 
 impl Voice {
+    /// Its rate at `t`, at or after `anchor`.
+    fn rate_at(&self, t: f64) -> f64 {
+        let (a, b) = (self.rate_from, self.playback_rate);
+        if t >= self.ramp_end {
+            b
+        } else {
+            a + (b - a) * (t - self.anchor) / (self.ramp_end - self.anchor)
+        }
+    }
+
+    /// How much of its file has played by `t`, at or after `anchor`: ms at rate 1.
+    fn position(&self, t: f64) -> f64 {
+        let (a, b) = (self.rate_from, self.playback_rate);
+        let d = self.ramp_end - self.anchor;
+        if t >= self.ramp_end {
+            self.pos + (a + b) / 2.0 * d + b * (t - self.ramp_end)
+        } else {
+            let s = t - self.anchor;
+            self.pos + a * s + (b - a) * s * s / (2.0 * d)
+        }
+    }
+
+    /// When the rest of its file has played, at the rates it is set to.
+    fn natural_end(&self) -> f64 {
+        let (a, b) = (self.rate_from, self.playback_rate);
+        let d = self.ramp_end - self.anchor;
+        let rest = (self.file - self.pos).max(0.0);
+        let ramp = (a + b) / 2.0 * d;
+        if rest >= ramp {
+            return self.ramp_end + (rest - ramp) / b;
+        }
+        // Within the ramp: a·s + k·s²/2 = rest. The root, written so that
+        // it does not cancel when k is small.
+        let k = (b - a) / d;
+        self.anchor + 2.0 * rest / (a + (a * a + 2.0 * k * rest).sqrt())
+    }
+
     /// Sounding or waiting at `t`.
     fn live(&self, t: f64) -> bool {
         self.by.sounds() && self.ends > t
@@ -224,9 +298,16 @@ pub struct Sounds {
     evicted: u64,
     evicted_through: f64,
     ops: Vec<SoundOp>,
+    /// The open batch's changes, queued after its new voices' plays.
+    sets: Vec<SoundOp>,
+    /// The first voice the open batch made.
+    batch_first: u64,
     haptics: VecDeque<Haptic>,
     next_haptic: u64,
     restore_at: Option<f64>,
+    /// A change moved an end later: at `restore_at`, every voice still to
+    /// start is checked against the bound again.
+    recount: bool,
 }
 
 /// What became of a sequence step's sample.
@@ -269,15 +350,17 @@ pub(crate) enum Call<'a> {
     Play(&'a [Value]),
     Hits(&'a Value),
     Stop(Option<&'a Value>),
+    Set(&'a [Value]),
 }
 
 impl<'a> Call<'a> {
-    /// The command's call, when it is one of the three.
+    /// The command's call, when it is one of the four.
     pub(crate) fn of(name: &str, args: &'a [Value]) -> Option<Call<'a>> {
         match name {
             "playSound" => Some(Call::Play(args)),
             "playSounds" => args.first().map(Call::Hits),
             "stopSounds" => Some(Call::Stop(args.first())),
+            "setSounds" => Some(Call::Set(args)),
             _ => None,
         }
     }
@@ -359,6 +442,7 @@ impl Sounds {
                         let group = given(*group).map(|g| g.text().to_string());
                         s.stop(t, group.as_deref(), log);
                     }
+                    Call::Set(args) => s.set(t, args, log),
                 }
             }
         });
@@ -382,6 +466,7 @@ impl Sounds {
     pub(crate) fn batch<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
         let before: Vec<(u64, f64)> = self.voices.iter().map(|v| (v.id, v.ends)).collect();
         let first_new = self.next + 1;
+        self.batch_first = first_new;
         let out = f(self);
         self.queue(before, first_new);
         out
@@ -513,7 +598,8 @@ impl Sounds {
     /// Restore pending group cuts and revalidate future admissions, keeping
     /// sounding voices. At each start, the last admitted voices lose first.
     fn restore(&mut self, t: f64, log: &mut Vec<String>) {
-        if !self.restore_groups(t, log) {
+        let recount = std::mem::take(&mut self.recount);
+        if !self.restore_groups(t, log) && !recount {
             return;
         }
         let mut waiting: Vec<usize> = self
@@ -606,6 +692,109 @@ impl Sounds {
                 }
             }
         }
+        self.ops.append(&mut self.sets);
+    }
+
+    /// `setSounds(group=, gain=, playbackRate=, pan=, ramp=)` at `t`: every
+    /// voice sounding, and every one waiting that is not a sequence's next
+    /// step (as `stopSounds` leaves those), in `group` when one is given.
+    /// Inside [`Sounds::batch`].
+    fn set(&mut self, t: f64, args: &[Value], log: &mut Vec<String>) {
+        let group = given(args.first())
+            .map(|g| g.text().to_string())
+            .filter(|g| !g.is_empty());
+        let mut asked = [None; 4];
+        for (i, name) in ["gain", "playbackRate", "pan", "ramp"].iter().enumerate() {
+            match given(args.get(i + 1)) {
+                None => {}
+                Some(Value::Number(n)) if n.is_finite() => asked[i] = Some(*n),
+                Some(_) => {
+                    log.push(format!("sounds not set: {name} is not a number"));
+                    return;
+                }
+            }
+        }
+        let gain = asked[0].map(|g| g.clamp(0.0, 1.0));
+        let rate = asked[1].map(|r| r.clamp(*PLAYBACK_RATE.start(), *PLAYBACK_RATE.end()));
+        let pan = asked[2].map(|p| p.clamp(-1.0, 1.0));
+        let ramp = asked[3].map_or(RAMP, |r| r.max(0.0));
+        let mut n = 0;
+        let mut ends = Vec::new();
+        for i in 0..self.voices.len() {
+            let v = &self.voices[i];
+            if !v.live(t) || v.seq && v.at >= t || group.as_ref().is_some_and(|g| v.group != *g) {
+                continue;
+            }
+            n += 1;
+            let made = v.id >= self.batch_first;
+            let outright = made || v.at > t;
+            let v = &mut self.voices[i];
+            if let Some(g) = gain {
+                v.gain = g;
+            }
+            if let Some(p) = pan {
+                v.pan = p;
+            }
+            if !made {
+                self.sets.push(SoundOp::Set {
+                    id: v.id,
+                    at: t,
+                    gain,
+                    playback_rate: rate,
+                    pan,
+                    ramp,
+                });
+            }
+            let Some(r) = rate else { continue };
+            if outright {
+                (v.anchor, v.pos, v.rate_from, v.ramp_end) = (v.at, 0.0, r, v.at);
+            } else {
+                (v.pos, v.rate_from) = (v.position(t), v.rate_at(t));
+                (v.anchor, v.ramp_end) = (t, t + ramp);
+            }
+            v.playback_rate = r;
+            v.natural = v.natural_end();
+            // Its end is its natural one, or the start of the next voice in
+            // its group, as a play decides it.
+            let v = &self.voices[i];
+            let next = self
+                .voices
+                .iter()
+                .filter(|w| {
+                    !v.group.is_empty() && w.group == v.group && w.by.sounds() && w.at > v.at
+                })
+                .map(|w| w.at)
+                .reduce(f64::min)
+                .unwrap_or(f64::INFINITY);
+            let (end, by) = if next < v.natural {
+                (next, By::Group)
+            } else {
+                (v.natural, By::End)
+            };
+            if end != v.ends {
+                ends.push((v.id, end, by));
+                if end > v.ends {
+                    self.recount = true;
+                    self.restore_at = Some(t);
+                }
+            }
+            let v = &mut self.voices[i];
+            (v.ends, v.by) = (end, by);
+        }
+        let mut line = format!("sounds set: {n}");
+        if let Some(g) = &group {
+            line.push_str(&format!(" (group {g})"));
+        }
+        for (name, v) in [("gain", gain), ("playbackRate", rate), ("pan", pan)] {
+            if let Some(v) = v {
+                line.push_str(&format!(" {name} {}", num(v)));
+            }
+        }
+        line.push_str(&format!(" ramp {}", num(ramp)));
+        log.push(line);
+        for (id, end, by) in ends {
+            log.push(format!("sound {id} ends at {} ({})", num(end), by.word()));
+        }
     }
 
     /// One `playSound(src, at, gain, group, playbackRate, pan)`, or one
@@ -675,7 +864,8 @@ impl Sounds {
                 ),
             );
         }
-        let length = 1000.0 * f64::from(row.frames) / f64::from(row.rate.max(1)) / playback_rate;
+        let file = 1000.0 * f64::from(row.frames) / f64::from(row.rate.max(1));
+        let length = file / playback_rate;
         let saved: Vec<(u64, f64, By)> = self.voices.iter().map(|v| (v.id, v.ends, v.by)).collect();
         self.next += 1;
         let id = self.next;
@@ -693,6 +883,11 @@ impl Sounds {
             seq,
             step_at: step_at.unwrap_or(at),
             natural: at + length,
+            file,
+            anchor: at,
+            pos: 0.0,
+            rate_from: playback_rate,
+            ramp_end: at,
         };
         let mut cuts = Vec::new();
         if !voice.group.is_empty() {

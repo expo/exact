@@ -39,10 +39,11 @@ final class TitleRowTapMacTests: XCTestCase {
         return try Data(contentsOf: dir.appendingPathComponent("app.plan"))
     }
 
-    func testAButtonInTheTitleRowTakesTheAgentsTapAndTheWindowsClick() throws {
+    /// The window ExactMac's `coverChrome` makes for the overlay, showing
+    /// the plan; the caller closes it and destroys the session.
+    private func mount() throws -> (NSWindow, ExactSession) {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "title-row-tap")
-        // The window ExactMac's `coverChrome` makes for the overlay.
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 900, height: 600),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -54,12 +55,17 @@ final class TitleRowTapMacTests: XCTestCase {
         let view = ExactView(session: session)
         view.controlsOverlay = true
         window.contentView = view
-        defer { window.close(); session.destroy() }
         XCTAssertNil(session.boot(plan: try Self.plan.get(), size: CGSize(width: 900, height: 600)).error)
         window.orderFront(nil)
         view.layoutSubtreeIfNeeded()
         view.syncInsets()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        return (window, session)
+    }
+
+    func testAButtonInTheTitleRowTakesTheAgentsTapAndTheWindowsClick() throws {
+        let (window, session) = try mount()
+        defer { window.close(); session.destroy() }
 
         let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
         let band = try XCTUnwrap(close.superview).frame.height
@@ -108,6 +114,62 @@ final class TitleRowTapMacTests: XCTestCase {
         NSApp.sendEvent(try click(.leftMouseDown))
         if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) { NSApp.sendEvent(up) }
         XCTAssertEqual(slot("top"), "3", "the application's click pressed")
+    }
+
+    /// A double click on the empty part of the title row does what one on
+    /// the title bar does by the system setting; one on a button in the row
+    /// leaves the window as it was.
+    func testADoubleClickOnTheTitleRowsGroundActsAsTheTitleBars() throws {
+        let (window, session) = try mount()
+        defer { window.close(); session.destroy() }
+        func node(_ id: String) throws -> NodeView { try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == id }) }
+        // Each mouseUp is queued before its mouseDown is sent, as the single click above does: a button's
+        // tracking loop waits in mouseDown for the up, which nothing would post once it is waiting.
+        func doubleClick(at p: NSPoint) throws {
+            for clicks in 1...2 {
+                func event(_ type: NSEvent.EventType) throws -> NSEvent {
+                    try XCTUnwrap(NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                     windowNumber: window.windowNumber, context: nil, eventNumber: clicks,
+                                                     clickCount: clicks, pressure: type == .leftMouseDown ? 1 : 0))
+                }
+                NSApp.postEvent(try event(.leftMouseUp), atStart: true)
+                NSApp.sendEvent(try event(.leftMouseDown))
+                if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) { NSApp.sendEvent(up) }
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        }
+        let frame = window.frame
+        let left = try node("left"), right = try node("right")
+        try doubleClick(at: right.convert(NSPoint(x: right.bounds.midX, y: right.bounds.midY), to: nil))
+        XCTAssertEqual(window.frame, frame, "a button in the row takes its clicks")
+        XCTAssertFalse(window.isMiniaturized)
+
+        // The ground half needs a real mouse. Events sent with NSApp.sendEvent never reach the page in the title bar's
+        // band: the row's ground can move the window (`mouseDownCanMoveWindow`), so AppKit's title-bar tracking takes
+        // the mouse-down (NodeView.mouseDown, PageScrollView.mouseDown and TitleBarAreaMac.doubleClicked never run,
+        // checked by logging each), and AppKit runs no title-bar double-click action for synthesized events.
+        try XCTSkipIf(true, "a double click on the title row's ground needs real window-server events; NSApp.sendEvent's never reach the page there")
+        let a = left.convert(NSPoint(x: left.bounds.maxX, y: left.bounds.midY), to: nil)
+        let b = right.convert(NSPoint(x: right.bounds.minX, y: right.bounds.midY), to: nil)
+        let ground = NSPoint(x: (a.x + b.x) / 2, y: a.y)
+        XCTAssertGreaterThan(ground.y, window.contentLayoutRect.maxY, "in the title bar's band")
+        try doubleClick(at: ground)
+        switch TitleBarAreaMac.action(.standard) {
+        case .zoom: XCTAssertNotEqual(window.frame, frame, "zoomed")
+        case .minimize: XCTAssertTrue(window.isMiniaturized)
+        case .none: XCTAssertEqual(window.frame, frame)
+        }
+    }
+
+    /// Read from the two settings' values, not a defaults suite: a suite also reads the global domain, where this
+    /// Mac's own AppleMiniaturizeOnDoubleClick would win over the test's.
+    func testTheTitleBarsDoubleClickFollowsTheSystemSetting() throws {
+        let action = TitleBarAreaMac.action(actionOnDoubleClick:miniaturizeOnDoubleClick:)
+        XCTAssertEqual(action(nil, false), .zoom, "unset: zoom")
+        XCTAssertEqual(action(nil, true), .minimize, "the older setting")
+        for (value, expected) in [("Maximize", TitleBarAreaMac.Action.zoom), ("Fill", .zoom), ("Minimize", .minimize), ("None", .none)] {
+            XCTAssertEqual(action(value, true), expected, value)
+        }
     }
 }
 #endif

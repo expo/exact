@@ -243,13 +243,10 @@ impl Lowerer<'_> {
                     || self.may_hold_absolute(children)
             }
             Node::Use { .. } | Node::Children { .. } => true,
-            Node::Each { body, .. } => self.may_hold_absolute(body),
-            Node::When {
-                then, otherwise, ..
-            } => self.may_hold_absolute(then) || self.may_hold_absolute(otherwise),
-            Node::Match { some, none, .. } => {
-                self.may_hold_absolute(&some.1) || self.may_hold_absolute(none)
-            }
+            node => node
+                .child_lists()
+                .into_iter()
+                .any(|list| self.may_hold_absolute(list)),
         })
     }
 }

@@ -1,12 +1,11 @@
 # Recipe: tabs
 
-`bun exact.mjs pattern tabs` (docs/patterns/tabs/app.contract) gives native tabs with separate stacks: iOS's bar,
-a sidebar on wide Mac/web windows.
+`bun exact.mjs pattern tabs` gives native tabs with separate stacks: iOS's bar, a sidebar on iPad and
+wide Mac/web windows.
 
 For an **app-drawn bar**, use `appearance="none"`: iOS lays routes full-height.
 Overlay the bar and pad **every route** by its height plus the bottom safe inset.
-Root `viewport-fit="cover"` exposes the insets. Label the badge for VoiceOver;
-`testId` is iOS's `accessibilityIdentifier` for XCUITest.
+Root `viewport-fit="cover"` exposes the insets. Label the badge for VoiceOver.
 
 ```contract
 routes nav
@@ -21,7 +20,7 @@ component App
   action follow(url: string)
     nav = go(nav, url)
   view
-    main viewport-fit="cover" navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow
+    main viewport-fit="cover" navigationKey=`${top(nav).id}` navigate=follow
       width="100%" height="100%" position="relative"
       column position="absolute" inset=0
         for t in nav.tabs key=t.name
@@ -57,4 +56,5 @@ component App
 ```
 
 Tabs mount on selection and keep stacks, drafts and scroll. Reselecting pops.
-Hide with `display="none"`, never `if`; remove route padding while hidden.
+Hide a tab with `display="none"`, never `if`; while hidden, drop route padding and gate its
+resources ([how](../contract-for-agents.md#a-features-requests)).

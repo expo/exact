@@ -15,21 +15,9 @@
 //! use or a slot is the benefit of the doubt.
 
 use crate::LowerError;
+use contract_checking::{Structure, Visit};
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Attr, Expr, Node, Span, TemplatePart};
-
-/// The children of a node, through choices.
-pub(super) fn arms(node: &Node) -> Vec<&[Node]> {
-    match node {
-        Node::Element { children, .. } | Node::Use { children, .. } => vec![children],
-        Node::When {
-            then, otherwise, ..
-        } => vec![then, otherwise],
-        Node::Match { some, none, .. } => vec![&some.1, none],
-        Node::Each { body, .. } => vec![body],
-        Node::Children { .. } => Vec::new(),
-    }
-}
+use contract_syntax::{Attr, Expr, Span, TemplatePart};
 
 /// One piece of a name: written text, or a `${…}` hole.
 #[derive(Clone, PartialEq)]
@@ -42,6 +30,13 @@ enum Piece {
 /// spell (`row-${i}`, `delete-${m.id}`).
 #[derive(Clone, PartialEq)]
 struct Name(Vec<Piece>);
+
+pub(super) fn names_may_match(a: &Expr, b: &Expr) -> bool {
+    match (Name::of(a), Name::of(b)) {
+        (Some(a), Some(b)) => a.may_match(&b),
+        _ => true,
+    }
+}
 
 impl Name {
     /// The name, when it is a literal or a template of holes it can spell.
@@ -131,11 +126,42 @@ impl Name {
 
     /// Whether some value of the holes could make the two names one.
     fn may_match(&self, other: &Name) -> bool {
-        if let (Some(a), Some(b)) = (self.literal(), other.literal()) {
-            return a == b;
+        if let Some(a) = self.literal() {
+            return other.can_be(&a);
+        }
+        if let Some(b) = other.literal() {
+            return self.can_be(&b);
         }
         let (ha, hb, ta, tb) = (self.head(), other.head(), self.tail(), other.tail());
         (ha.starts_with(&hb) || hb.starts_with(&ha)) && (ta.ends_with(&tb) || tb.ends_with(&ta))
+    }
+
+    /// Holes may be empty, but cannot remove or overlap the written text.
+    fn can_be(&self, literal: &str) -> bool {
+        let mut chunks = vec![String::new()];
+        for piece in &self.0 {
+            match piece {
+                Piece::Text(text) => chunks.last_mut().unwrap().push_str(text),
+                Piece::Hole(_) => chunks.push(String::new()),
+            }
+        }
+        let Some(mut rest) = literal.strip_prefix(chunks[0].as_str()) else {
+            return false;
+        };
+        if chunks.len() == 1 {
+            return rest.is_empty();
+        }
+        let Some(middle) = rest.strip_suffix(chunks.last().unwrap().as_str()) else {
+            return false;
+        };
+        rest = middle;
+        for chunk in &chunks[1..chunks.len() - 1] {
+            let Some(position) = rest.find(chunk.as_str()) else {
+                return false;
+            };
+            rest = &rest[position + chunk.len()..];
+        }
+        true
     }
 
     /// As written: the literal's text, a template's with its holes.
@@ -172,27 +198,24 @@ fn attr<'a>(attrs: &'a [Attr], name: &str) -> Option<&'a Attr> {
 /// Every `id` among the elements under `nodes`, with the element it names; `None`
 /// when one cannot be read (a computed `id`, an unexpanded use): the benefit of the
 /// doubt.
-fn ids<'a>(nodes: &'a [Node], out: &mut Vec<(Name, &'a Node)>) -> Option<()> {
-    for node in nodes {
-        if let Node::Use { .. } | Node::Children { .. } = node {
+fn ids<'a>(nodes: Structure<'a>, out: &mut Vec<(Name, Visit<'a>)>) -> Option<()> {
+    for node in nodes.walk() {
+        if node.component_use().is_some() || node.is_slot() {
             return None;
         }
-        if let Node::Element { attrs, .. } = node {
+        if let Some((_, _, attrs)) = node.element() {
             if let Some(id) = attr(attrs, "id") {
                 out.push((Name::of(&id.value)?, node));
             }
-        }
-        for list in arms(node) {
-            ids(list, out)?;
         }
     }
     Some(())
 }
 
 /// Whether the elements under `node` (its own `id` included) hold one called `name`.
-fn holds(node: &Node, name: &Name) -> Option<bool> {
+fn holds(node: Visit<'_>, name: &Name) -> Option<bool> {
     let mut found = Vec::new();
-    ids(std::slice::from_ref(node), &mut found)?;
+    ids(node.subtree(), &mut found)?;
     Some(found.iter().any(|(id, _)| id.may_match(name)))
 }
 
@@ -215,7 +238,12 @@ const SWIPE_FIX: &str = "(docs/recipes/list-rows.md)";
 /// descendant of it`); the web then leaves the button where it sits, in the page, which is
 /// grocery-list's seven minutes. A swipe action named without a `swipeContent`, and a
 /// `swipeContent` with no action, are refused or ignored the same way.
-pub(super) fn swipe(attrs: &[Attr], children: &[Node], fresh: bool, out: &mut Vec<LowerError>) {
+pub(super) fn swipe(
+    attrs: &[Attr],
+    children: Structure<'_>,
+    fresh: bool,
+    out: &mut Vec<LowerError>,
+) {
     let content = attr(attrs, "swipeContent");
     let actions: Vec<&Attr> = ["swipeLeading", "swipeTrailing"]
         .iter()
@@ -266,7 +294,7 @@ pub(super) fn swipe(attrs: &[Attr], children: &[Node], fresh: bool, out: &mut Ve
             };
             // The action sits beside the content: one inside it is no action.
             let inner = contents.iter().filter_map(&find).any(|(_, content)| {
-                !std::ptr::eq(*content, *control) && holds(content, name) == Some(true)
+                content.site() != control.site() && holds(*content, name) == Some(true)
             });
             if inner {
                 warn(a.span, format!("`{}` names {}, which sits inside the `swipeContent` element: iOS refuses the row (`… is inside swipeContent`). Move the button out of the content box, to be its sibling inside this `scroll` {SWIPE_FIX}", a.name, written(name)), out);
@@ -308,16 +336,17 @@ fn key_of(e: &Expr) -> Key {
 
 /// The `navigationKey` attributes of the routes under a navigation root: elements that carry
 /// one, found through choices and boxes (a tab panel), never inside another route.
-fn route_keys<'a>(nodes: &'a [Node], out: &mut Vec<&'a Attr>) {
-    for node in nodes {
-        if let Node::Element { attrs, .. } = node {
-            if let Some(k) = attr(attrs, "navigationKey") {
-                out.push(k);
-                continue;
+fn route_keys<'a>(nodes: Structure<'a>, out: &mut Vec<&'a Attr>) {
+    for (node, ()) in nodes.walk_regions_with((), |node, _| {
+        let keyed = node
+            .element()
+            .is_some_and(|(_, _, attrs)| attr(attrs, "navigationKey").is_some());
+        [(!keyed).then_some(()), (!keyed).then_some(())]
+    }) {
+        if let Some((_, _, attrs)) = node.element() {
+            if let Some(key) = attr(attrs, "navigationKey") {
+                out.push(key);
             }
-        }
-        for list in arms(node) {
-            route_keys(list, out);
         }
     }
 }
@@ -333,7 +362,7 @@ fn route_keys<'a>(nodes: &'a [Node], out: &mut Vec<&'a Attr>) {
 /// `rest` pattern's, which names "items" while the list is on top) is the benefit.
 pub(super) fn navigation_keys(
     root: &[Attr],
-    children: &[Node],
+    children: Structure<'_>,
     declared: Option<Span>,
     fresh: bool,
     out: &mut Vec<LowerError>,

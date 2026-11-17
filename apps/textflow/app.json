@@ -12,6 +12,7 @@
     "name": "Textflow"
   },
   "rust": {
+    "data": { "crate": "textflow-data", "type": "textflow_data::Textflow" },
     "mode": "off"
   },
   "host": {

@@ -1,0 +1,19 @@
+[package]
+name = "exact-js-bake-tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "The bake command compiled as an Apple app's build script compiles exact-js-bake"
+
+[lib]
+test = false
+bench = false
+
+# The command is this package's build script, so Cargo compiles exact-js-bake
+# and everything under it as the build dependency an Apple app's crate has:
+# the same profile (the build override), features and units. An Apple build
+# makes the bake with it before Cargo builds the app, which then finds those
+# units built (scripts/linked-plan.mjs `appleBakeTool`).
+[build-dependencies]
+exact-js-bake = { path = ".." }

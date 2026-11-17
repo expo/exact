@@ -216,7 +216,13 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
         val provider = provider(args) ?: return deliver(error("POSITION_UNAVAILABLE"))
         val listener = object : Listener() {
             override fun onLocationChanged(fix: Location) = deliver(position(fix))
-            override fun onProviderDisabled(provider: String) = deliver(error("POSITION_UNAVAILABLE"))
+            // Held as the answer until the next fix: after the first, no reader waits, and a re-read gets `last`. The
+            // registration outlives the provider, so its next fix once enabled again answers the watch.
+            override fun onProviderDisabled(provider: String) {
+                val unavailable = error("POSITION_UNAVAILABLE")
+                last = unavailable
+                deliver(unavailable)
+            }
         }
         watch = listener
         val interval = INTERVALS.getValue(quality(args))

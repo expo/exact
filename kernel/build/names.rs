@@ -115,3 +115,47 @@ fn write_symbol_glyphs(w: &mut String, schema: &Schema) {
     }
     writeln!(w, "_ => None, }} }}").unwrap();
 }
+/// @ref LLP 1043.000 §3 D1 — `refused_enum_names`: the keywords of an enum row that the wire
+/// carries and the compiler refuses an author, which `contract vocab` leaves out of what a row
+/// takes.
+fn write_refused_enum_names(w: &mut String, schema: &Schema) {
+    writeln!(
+        w,
+        "    /// Of `enum_names`, those the compiler refuses an author (the schema's `refused`).\n    pub fn refused_enum_names(self) -> &'static [&'static str] {{\n        match self {{"
+    )
+    .unwrap();
+    for row in &schema.styles {
+        if let Codec::Enum(name) = parse_codec(&row.codec) {
+            let refused = &schema.enums[&name].refused;
+            if !refused.is_empty() {
+                writeln!(w, "            StyleId::{} => &{refused:?},", pascal(&row.field)).unwrap();
+            }
+        }
+    }
+    writeln!(w, "            _ => &[],\n        }}\n    }}").unwrap();
+}
+
+/// `StyleId::admits_size_keyword`, from each row's `sizeKeywords`.
+fn write_admits_size_keyword(w: &mut String, schema: &Schema) {
+    let rows = |kind: &str| -> Vec<String> {
+        schema
+            .styles
+            .iter()
+            .filter(|r| r.size_keywords.as_deref() == Some(kind))
+            .map(|r| format!("StyleId::{}", pascal(&r.field)))
+            .collect()
+    };
+    let (size, basis) = (rows("size"), rows("basis"));
+    writeln!(w, "    /// Whether `keyword` is a legal value: `min-content`, `max-content` and `fit-content` on the size rows (CSS Box Sizing 3 §3.2), and `content` too on `flex-basis` (CSS Flexbox 1 §7.2.3).").unwrap();
+    writeln!(w, "    pub fn admits_size_keyword(self, keyword: crate::style::SizeKeyword) -> bool {{").unwrap();
+    writeln!(w, "        match self {{").unwrap();
+    if !size.is_empty() {
+        writeln!(w, "            {} => keyword != crate::style::SizeKeyword::Content,", size.join(" | ")).unwrap();
+    }
+    if !basis.is_empty() {
+        writeln!(w, "            {} => true,", basis.join(" | ")).unwrap();
+    }
+    writeln!(w, "            _ => false,").unwrap();
+    writeln!(w, "        }}").unwrap();
+    writeln!(w, "    }}").unwrap();
+}

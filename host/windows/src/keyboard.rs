@@ -1,5 +1,5 @@
 //! Windows key names, what a key types, and held modifiers.
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 use exact_runner::{DataSource, KeyModifiers};
 
 #[cfg(windows)]
@@ -111,8 +111,8 @@ fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use exact_linux::presenter::{clipboard::Clipboard, PainterChoice};
-    use exact_linux::Presenter;
+    use exact_painted::presenter::{clipboard::Clipboard, PainterChoice};
+    use exact_painted::Presenter;
     use std::{cell::RefCell, rc::Rc};
 
     struct Memory(Rc<RefCell<String>>);

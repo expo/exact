@@ -123,7 +123,7 @@ impl Clipboard {
         Ok(Open)
     }
 }
-impl exact_linux::presenter::clipboard::Clipboard for Clipboard {
+impl exact_painted::presenter::clipboard::Clipboard for Clipboard {
     fn read_text(&mut self) -> Result<Option<String>, String> {
         if substituting() {
             return Ok(super::PRIVATE.with(|b| b.borrow().text.clone()));

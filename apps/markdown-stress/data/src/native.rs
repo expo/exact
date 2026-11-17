@@ -12,7 +12,7 @@ static SERIAL: AtomicU64 = AtomicU64::new(0);
 
 fn reserve_serial(counter: &AtomicU64) -> Result<u64, DataError> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map(|n| n + 1)
         .map_err(|_| DataError::Unavailable("native document serial exhausted".into()))
 }

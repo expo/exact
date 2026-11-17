@@ -585,6 +585,7 @@ macro_rules! module {
                 }
             }
             fn unlock(&mut self) { self.0.unlock(); }
+            fn audio_state(&self) -> Option<&'static str> { self.0.state() }
         }
         $crate::module!($game, audio_hook GameAudio, $assets, $hooks, $shaders);
     };

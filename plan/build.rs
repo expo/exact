@@ -57,6 +57,10 @@ struct StdlibEntry {
     /// no call can write (LLP 1116 D8: `formatNumber`'s currency code).
     #[serde(default)]
     optional: Vec<String>,
+    /// Whether a call carries the format locale after its parameters, a
+    /// string the compiler fills and no call writes (LLP 1054.000.003 D6).
+    #[serde(default)]
+    locale: bool,
     returns: String,
 }
 
@@ -354,7 +358,7 @@ pub use rows::{Rows, RowsIter};
 
 fn validate(schema: &Schema) {
     assert_eq!(
-        schema.format_version, 5,
+        schema.format_version, 6,
         "format: unsupported formatVersion"
     );
     let tables: BTreeSet<&str> = schema.tables.iter().map(|t| t.name.as_str()).collect();
@@ -447,23 +451,30 @@ fn validate(schema: &Schema) {
         for (t, param) in f.params.iter().map(|p| (p, true)).chain(returns) {
             // A parameter spelled as string literals, `"a" | "b"` (LLP
             // 1054.000.003 D9): a string the compiler requires written as one.
-            let literals = param
-                && t.split(" | ").all(|l| {
-                    l.len() > 2
-                        && l.starts_with('"')
-                        && l.ends_with('"')
-                        && !l[1..l.len() - 1].contains('"')
-                });
+            let literal = |l: &str| {
+                l.len() > 2
+                    && l.starts_with('"')
+                    && l.ends_with('"')
+                    && !l[1..l.len() - 1].contains('"')
+            };
             // A whole-number literal in a range, `0..=100` (LLP 1102 §3.2:
-            // `toFixed`'s digits), likewise written at the call.
-            let range = param
-                && t.split_once("..=").is_some_and(|(a, b)| {
+            // `toFixed`'s digits), likewise written at the call; it may close
+            // a list of string literals (`formatNumber`'s code or digits).
+            let range = |l: &str| {
+                l.split_once("..=").is_some_and(|(a, b)| {
                     a.parse::<u32>()
                         .is_ok_and(|a| b.parse::<u32>().is_ok_and(|b| a <= b))
-                });
+                })
+            };
+            let choices: Vec<&str> = t.split(" | ").collect();
+            let (last, first) = choices.split_last().expect("a type");
+            let literals =
+                param && first.iter().all(|l| literal(l)) && (literal(last) || range(last));
+            let range = param && range(t);
             assert!(
                 literals
                     || range
+                    || (param && t == "number | string")
                     || matches!(
                         t.as_str(),
                         "number"
@@ -591,11 +602,31 @@ fn main() {
         let _ = writeln!(w, "    /// From the declared name.");
         let _ = writeln!(w, "    pub fn from_name(s: &str) -> Option<Self> {{ Self::ALL.into_iter().find(|v| v.name() == s) }}");
         if name == "Stdlib" {
-            let _ = writeln!(w, "    /// Declared argument count.");
             let _ = writeln!(
                 w,
-                "    pub fn arity(self) -> usize {{ self.params().len() }}"
+                "    /// The plan's argument count: the declared parameters, then the\n    /// format locale of a [`Stdlib::localized`] entry."
             );
+            let _ = writeln!(
+                w,
+                "    pub fn arity(self) -> usize {{ self.params().len() + usize::from(self.localized()) }}"
+            );
+            let _ = writeln!(
+                w,
+                "    /// Whether a call carries the format locale as its last argument, which\n    /// the compiler fills and no call writes (LLP 1054.000.003 D6)."
+            );
+            let _ = writeln!(w, "    pub fn localized(self) -> bool {{ {} }}", {
+                let names: Vec<String> = schema
+                    .stdlib
+                    .iter()
+                    .filter(|f| f.locale)
+                    .map(|f| format!("Stdlib::{}", pascal(&f.name)))
+                    .collect();
+                if names.is_empty() {
+                    "false".to_string()
+                } else {
+                    format!("matches!(self, {})", names.join(" | "))
+                }
+            });
             let _ = writeln!(
                 w,
                 "    /// Declared parameter types, as the table spells them."
@@ -620,7 +651,7 @@ fn main() {
             );
             let _ = writeln!(
                 w,
-                "    pub fn min_arity(self) -> usize {{ self.arity() - self.defaults().len() }}"
+                "    pub fn min_arity(self) -> usize {{ self.params().len() - self.defaults().len() }}"
             );
             let _ = writeln!(
                 w,
@@ -654,7 +685,7 @@ fn main() {
             );
             let _ = writeln!(
                 w,
-                "    pub fn omitted(self, given: usize) -> &'static [StdlibDefault] {{ let d = self.defaults(); &d[(given + d.len()).saturating_sub(self.arity()).min(d.len())..] }}"
+                "    pub fn omitted(self, given: usize) -> &'static [StdlibDefault] {{ let d = self.defaults(); &d[(given + d.len()).saturating_sub(self.params().len()).min(d.len())..] }}"
             );
             let _ = writeln!(w, "    /// Declared return type, as the table spells it.");
             let _ = writeln!(
@@ -1163,20 +1194,22 @@ fn main() {
 
     // decode
     let _ = writeln!(w, "    /// Decode only the named snapshot entry (LLP 1126 D2); running app plans are refused.");
-    let _ = writeln!(w, "    pub fn decode_snapshot(bytes: &[u8], kind: &str) -> Result<Plan, PlanError> {{ if kind.is_empty() {{ return Err(PlanError::WrongEntry); }} Self::decode_from(bytes, None, Some(kind)) }}");
+    let _ = writeln!(w, "    pub fn decode_snapshot(bytes: &[u8], kind: &str) -> Result<Plan, PlanError> {{ if kind.is_empty() {{ return Err(PlanError::WrongEntry); }} Self::decode_from(bytes, None, Some(kind), false) }}");
+    let _ = writeln!(w, "    /// Decode a terminal entry's plan (LLP 1101.003 D9): a plan for another surface is refused by name before its tables are read.");
+    let _ = writeln!(w, "    pub fn decode_terminal(bytes: &[u8]) -> Result<Plan, PlanError> {{ Self::decode_from(bytes, None, None, true) }}");
     let _ = writeln!(w, "    /// Decode and validate whole. Every index, range, code, and data reference is checked before the plan is returned; a failure names the row.");
     let _ = writeln!(
         w,
-        "    pub fn decode(bytes: &[u8]) -> Result<Plan, PlanError> {{ Self::decode_from(bytes, None, None) }}"
+        "    pub fn decode(bytes: &[u8]) -> Result<Plan, PlanError> {{ Self::decode_from(bytes, None, None, false) }}"
     );
     let _ = writeln!(w, "    /// [`Plan::decode`] of bytes that live as long as the program (a plan linked into it): the data pool, a baked app's largest part, stays in those bytes instead of a copy.");
     let _ = writeln!(
         w,
-        "    pub fn decode_static(bytes: &'static [u8]) -> Result<Plan, PlanError> {{ Self::decode_from(bytes, Some(bytes), None) }}"
+        "    pub fn decode_static(bytes: &'static [u8]) -> Result<Plan, PlanError> {{ Self::decode_from(bytes, Some(bytes), None, false) }}"
     );
     let _ = writeln!(
         w,
-        "    fn decode_from(bytes: &[u8], lent: Option<&'static [u8]>, snapshot: Option<&str>) -> Result<Plan, PlanError> {{"
+        "    fn decode_from(bytes: &[u8], lent: Option<&'static [u8]>, snapshot: Option<&str>, terminal: bool) -> Result<Plan, PlanError> {{"
     );
     let _ = writeln!(w, "        let mut r = Reader::new(bytes);");
     let _ = writeln!(
@@ -1204,6 +1237,7 @@ fn main() {
         let _ = writeln!(w, "        let {} = {expr};", f.name);
     }
     let _ = writeln!(w, "        if snapshot_entry != snapshot.unwrap_or(\"\") {{ return Err(PlanError::WrongEntry); }}");
+    let _ = writeln!(w, "        if (surface == \"terminal\") != terminal {{ return Err(PlanError::WrongSurface {{ plan: if surface.is_empty() {{ \"gui\".into() }} else {{ surface }}, host: if terminal {{ \"terminal\" }} else {{ \"gui\" }} }}); }}");
     // A string is its 4-byte length and its bytes.
     let _ = writeln!(
         w,

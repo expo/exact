@@ -1,15 +1,29 @@
 // `input type="radio"` on UIKit (x2apps survey #2), which has no radio
 // control: the SF Symbols pair, `circle` and, checked, `circle.inset.filled`
 // in `accent-color`, scaled with the body text, the way the checkbox is
-// (`ExactCheckbox`), with its 44-point target (LLP 1115.000 D13.2). It had
-// been Safari's 16-point circle at every text size. In a grouped list's row
-// it is not drawn at all: the row shows the platform's checkmark
-// (`Accessory::Radio`, GroupedListIOS.swift). tvOS keeps the drawn circle.
+// (`ExactCheckbox`), with its 44-point target (LLP 1115.000 D13.2). A standard
+// grouped row shows the platform's checkmark (`Accessory::Radio`,
+// GroupedListIOS.swift); a custom row carries the control.
+// tvOS keeps the drawn circle.
 // A tap never moves its own state: the group is Exact's (`Radios.swift`).
 #if os(iOS) || os(tvOS)
 import UIKit
 
 final class ExactRadio: ExactCheckbox {
+    weak var owner: NodeView?
+
+    /// A custom choice keeps its row's name unless the radio has its own.
+    /// Read the row live: a sibling's text can change without a control update.
+    override var accessibilityLabel: String? {
+        get {
+            if let label = super.accessibilityLabel { return label }
+            guard let owner, let row = owner.presenter?.groupedLists?.radioRow(for: owner) else { return nil }
+            let name = row.accessibleName
+            return name.isEmpty ? nil : name
+        }
+        set { super.accessibilityLabel = newValue }
+    }
+
     #if os(tvOS)
     override var intrinsicContentSize: CGSize { CGSize(width: 16, height: 16) }
     #else
@@ -20,6 +34,13 @@ final class ExactRadio: ExactCheckbox {
             .withTintColor(tint, renderingMode: .alwaysOriginal)
     }
     #endif
+
+    override func accessibilityActivate() -> Bool {
+        guard isEnabled, !ariaUnavailable, let owner, !owner.inert, !owner.formDisabled,
+              let presenter = owner.presenter else { return false }
+        if !isOn { presenter.checkRadio(owner.id) }
+        return true
+    }
 
     /// A tap moves nothing here: the host hears it (`radioTapped`), and
     /// checks it and unchecks the rest of its group.

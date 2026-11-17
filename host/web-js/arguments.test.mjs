@@ -7,12 +7,161 @@ function runtimeServer() {
   return Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/favicon.ico') { return new Response(null, { status: 204 }); }
-    if (path.endsWith('/names.js')) { return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } }); }
+    if (path.endsWith('/names.js')) { return new Response('export default [[], [], []]; export const types = [[], [], []], sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } }); }
     if (path === '/') { return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } }); }
     const local = new URL('../..' + path, import.meta.url), file = existsSync(local) ? local : new URL('../web/' + path.split('/').pop(), import.meta.url);
     return new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } });
   } });
 }
+
+// A Rust source's GET or HEAD read is marked `cancel` (rust-data.js, rust-readers.test.mjs); here the runtime's half.
+test.each([1, 128])('a commit forgets and aborts %s Rust HTTP reads, and old replies land nowhere after remount', async lanes => {
+  const server = runtimeServer();
+  let browser, page;
+  try {
+    browser = await suiteBrowser();
+    page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async lanes => {
+      const rt = await import('/host/web-js/rt.js');
+      const wave = rt.sig(0), refusing = rt.sig(false), requests = [], values = [];
+      rt.clock.agent = true;
+      rt.data.answer = (_source, [wave, lane]) => wave
+        ? { req: { method: lane % 2 ? 'HEAD' : 'GET', url: `/hold/${wave}/${lane}`, cancel: true } }
+        : { v: 'idle' };
+      let parsed = 0;
+      rt.data.parse = (_source, _args, outcome) => { parsed++; return { v: outcome.value }; };
+      rt.data.fetch = (req, _message, controller) => new Promise(resolve => requests.push({ req, controller, resolve }));
+      rt.mount(() => {
+        for (let lane = 0; lane < lanes; lane++) {
+          const value = rt.res(`lane-${lane}`, 'completion', () => [wave(), lane], 'idle', [0, lane], 's', '', true);
+          values.push(value);
+          rt.effect(() => value());
+        }
+        rt.memo(() => { if (refusing()) throw new rt.Refusal('refuse navigation'); });
+      });
+      rt.commit(() => rt.W(wave, 1));
+      const pending = values.filter(v => v.p()).length;
+      // A refused navigation keeps the requests alive.
+      const refused = rt.commit(() => { rt.W(wave, 0); rt.W(refusing, true); });
+      const kept = requests.every(r => r.controller && !r.controller.signal.aborted);
+      rt.commit(() => rt.W(wave, 0));
+      const away = { pending: values.filter(v => v.p()).length, inflight: rt.inflight.n,
+        aborted: requests.filter(r => r.controller?.signal.aborted).length };
+      rt.commit(() => rt.W(wave, 2));
+      // Even a transport that delivers a reply after abort cannot land an old answer.
+      for (const r of requests.slice(0, lanes)) r.resolve({ value: 'old' });
+      await Promise.resolve();
+      const remounted = { pending: values.filter(v => v.p()).length, parsed, values: [...new Set(values.map(v => v()))] };
+      for (const r of requests.slice(lanes)) r.resolve({ value: 'fresh' });
+      await Promise.resolve();
+      return { pending, refused, kept, away, remounted,
+        complete: { pending: values.filter(v => v.p()).length, parsed, inflight: rt.inflight.n,
+          values: [...new Set(values.map(v => v()))] } };
+    }, lanes);
+    expect(result).toEqual({ pending: lanes, refused: false, kept: true,
+      away: { pending: 0, inflight: 0, aborted: lanes },
+      remounted: { pending: lanes, parsed: 0, values: ['idle'] },
+      complete: { pending: 0, parsed: lanes, inflight: 0, values: ['fresh'] } });
+  } finally {
+    await page?.close();
+    await browser?.close();
+    server.stop(true);
+  }
+});
+
+test('agent state distinguishes cancellable HTTP reads from Rust and TypeScript streams', async () => {
+  const server = runtimeServer();
+  let browser, page;
+  try {
+    browser = await suiteBrowser();
+    page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js'), { install } = await import('/host/web-js/agent.js');
+      rt.clock.agent = true;
+      rt.data.answer = source => source === 'typescript' ? { stream: () => new Promise(() => {}) }
+        : { req: { method: source === 'head' ? 'HEAD' : 'GET', url: '/held', stream: source === 'rust', cancel: source !== 'rust' } };
+      rt.data.fetch = () => new Promise(() => {});
+      let region;
+      rt.mount(() => {
+        region = rt.scope(() => {
+          for (const source of ['get', 'head', 'rust', 'typescript']) {
+            const value = rt.res(source, source, () => [], undefined, undefined, 's', 'idle');
+            rt.effect(() => value());
+          }
+        });
+      });
+      const exact = globalThis.exact;
+      Object.assign(exact, { clock: rt.clock, After: rt.After, views: rt.Views, viewId: rt.viewId,
+        resources: rt.Resources, mutations: rt.Mutations, state: [[], [], []] });
+      install(exact);
+      const state = await exact.agentSettled({ op: 'state' });
+      const cancellable = rt.Resources.every(r => r.ticket?.ctl instanceof AbortController);
+      rt.commit(() => rt.end(region));
+      const ended = await exact.agentSettled({ op: 'state' });
+      return { cancellable, pending: state.pending.map(r => r.name), streams: state.streams.map(r => r.name),
+        ended: { pending: ended.pending, streams: ended.streams, inflight: rt.inflight.n } };
+    });
+    expect(result).toEqual({ cancellable: true, pending: ['get', 'head', 'rust', 'typescript'],
+      streams: ['rust', 'typescript'], ended: { pending: [], streams: [], inflight: 0 } });
+  } finally {
+    await page?.close();
+    await browser?.close();
+    server.stop(true);
+  }
+});
+
+// A region's arm owns its resources (mount.js `when`): a refused commit keeps the arm, its read and its reply.
+test.each([false, true])("a region's HTTP read follows the committed region (refused: %s)", async refused => {
+  const server = runtimeServer();
+  let browser, page;
+  try {
+    browser = await suiteBrowser();
+    page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async refused => {
+      const rt = await import('/host/web-js/rt.js');
+      const mounted = rt.sig(true), refusing = rt.sig(false), requests = [], values = [], parsed = [];
+      rt.clock.agent = true;
+      rt.data.answer = () => ({ req: { method: 'GET', url: '/held', cancel: true } });
+      rt.data.parse = (_source, _args, outcome, store) => {
+        parsed.push(outcome);
+        store.set('answer', 'parsed');
+        return { v: 'parsed' };
+      };
+      rt.data.fetch = (_req, _message, controller) => new Promise(resolve => {
+        requests.push({ controller, resolve });
+        controller.signal.addEventListener('abort', () => resolve({ failed: 1, message: 'aborted' }));
+      });
+      rt.mount(root => {
+        const region = document.createElement('div');
+        root.append(region);
+        rt.when(region, () => mounted(), () => {
+          const value = rt.res('value', 'read', () => [], undefined, undefined, 's', 'idle');
+          values.push(value);
+          rt.effect(() => value());
+        });
+        rt.memo(() => { if (refusing()) throw new rt.Refusal('refuse navigation'); });
+      });
+      const committed = rt.commit(() => { rt.W(mounted, false); rt.W(refusing, refused); });
+      const ended = !!values[0].r.gone, aborted = requests[0].controller.signal.aborted, inflight = rt.inflight.n;
+      requests[0].resolve({ value: 'late' });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { committed, ended, aborted, inflight, parsed: parsed.length, value: values[0].r.value,
+        stored: rt.Store.map.has('answer'), closed: rt.journal.some(line => line.endsWith(': its ticket was let go')),
+        arms: values.length, requests: requests.length };
+    }, refused);
+    expect(result).toEqual({ committed: !refused, ended: !refused, aborted: !refused, inflight: refused ? 1 : 0,
+      parsed: refused ? 1 : 0, value: refused ? 'parsed' : 'idle', stored: refused, closed: !refused,
+      arms: 1, requests: 1 });
+  } finally {
+    await page?.close();
+    await browser?.close();
+    server.stop(true);
+  }
+});
 
 test.each(['startActivity', 'updateActivity', 'endActivity'])('an unlinked %s send counts only finite arguments', async source => {
   const server = runtimeServer();

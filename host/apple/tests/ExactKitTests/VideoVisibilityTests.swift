@@ -63,7 +63,8 @@ final class VideoLoadingTests: XCTestCase {
                 if request == 2 {
                     player.command("load", seconds: 0)
                 } else {
-                    p.apply(wireBatch([["op": "props", "id": 1, "set": ["src": server.url + "?source=\(request)"]]]))
+                    let source = request == 0 ? server.url : server.url.replacingOccurrences(of: "movie.mp4", with: "playlist.m3u8")
+                    p.apply(wireBatch([["op": "props", "id": 1, "set": ["src": source + "?source=\(request)"]]]))
                 }
                 XCTAssertEqual(player.state()["hdr"] as? Bool, false)
                 p.apply(wireBatch([["op": "props", "id": 1, "set": ["volume": String(Double(request) / 2)]]]))
@@ -100,7 +101,7 @@ final class VideoLoadingTests: XCTestCase {
 
 /// The response waits for the main-thread update and state reads to return.
 /// Its deadline only breaks the deadlock if a read waits on the response.
-private final class HeldMediaServer {
+final class HeldMediaServer {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "exact.test.held-media")
     private let gate = NSCondition()

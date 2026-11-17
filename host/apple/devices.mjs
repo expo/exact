@@ -2,8 +2,8 @@
 // device side of host/apple/build.mjs, shared with scripts/agent.mjs and the
 // smokes, which launch the same bundles.
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { homedir, networkInterfaces, tmpdir } from 'node:os';
+import { createHash, randomBytes } from 'node:crypto';
+import { constants, homedir, networkInterfaces, tmpdir } from 'node:os';
 import { createServer as createTCPServer } from 'node:net';
 import { basename, dirname, resolve } from 'node:path';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -46,6 +46,8 @@ export function developerDir(env = process.env) {
  * promise that the host compiles; an older one certainly does not. Xcode N.M
  * carries the N.M SDKs. */
 export const HOST_SDKS = { ios: '27.1', tvos: '27.0', macos: '26.0' };
+// Swift 6.2.4 exhausts the host's expression solver; 6.4 builds it.
+export const HOST_SWIFT = '6.4';
 /** Each SDK a build compiles with: its platform's floor and its name in a message. */
 const SDK_NAMES = { iphoneos: ['ios', 'iOS'], iphonesimulator: ['ios', 'iOS Simulator'], appletvos: ['tvos', 'tvOS'], appletvsimulator: ['tvos', 'tvOS Simulator'], macosx: ['macos', 'macOS'] };
 /** The SDK an Apple build compiles with: a device's or a simulator's (`device`), or the Mac's. */
@@ -70,12 +72,18 @@ export function olderVersion(have, need) {
  * (`appleSdkName`'s), or null when it can. An SDK older than the floor is
  * named, with the Xcode it needs and how to select one: it would fail deep in
  * the Swift compile, after the Rust build, on a missing symbol. An SDK whose
- * version cannot be read is said in xcrun's own words. `run` runs a command
+ * version cannot be read is said in xcrun's own words. A sufficient SDK
+ * also needs the tested Swift compiler floor. `run` runs a command
  * (as `spawnSync`) in `developer`, the developer directory the build uses. */
 export function xcodeRefusal(sdkName, run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }), developer = developerDir()) {
   const [platform, label] = SDK_NAMES[sdkName], need = HOST_SDKS[platform];
   const probe = run('xcrun', ['--sdk', sdkName, '--show-sdk-version']), sdk = probe.status === 0 ? probe.stdout.trim() : '';
-  if (/^\d+(\.\d+)*$/.test(sdk) && !olderVersion(sdk, need)) return null;
+  if (/^\d+(\.\d+)*$/.test(sdk) && !olderVersion(sdk, need)) {
+    const compiler = run('xcrun', ['swift', '--version']);
+    const version = compiler.status === 0 && /Swift version (\d+(?:\.\d+)*)/.exec(compiler.stdout ?? '')?.[1];
+    if (version && !olderVersion(version, HOST_SWIFT)) return null;
+    return `host/apple: ${version ? `Swift ${version} is too old` : `could not report the selected Swift compiler: ${compiler.stderr?.trim() || compiler.stdout?.trim() || compiler.error?.message || compiler.status}`}; the Swift host needs Swift ${HOST_SWIFT} or later. Select an Xcode or Swift toolchain providing it with DEVELOPER_DIR or TOOLCHAINS`;
+  }
   const built = run('xcodebuild', ['-version']), xcode = `${built.status === 0 ? built.stdout.trim().split('\n')[0] : 'no Xcode'}, ${developer || 'none selected'}`;
   if (!/^\d+(\.\d+)*$/.test(sdk)) {
     const said = [...new Set(String(probe.stderr ?? '').split('\n').map(line => line.trim()).filter(line => /error/.test(line)))];
@@ -219,6 +227,22 @@ function displayReads(udid, gap = 400) {
  *  `EXACT_AGENT_PADS`, a drive's game pads (LLP 1133.022 §21). */
 export function forwardedEnv(env = process.env) {
   return Object.fromEntries(['EXACT_STORE', 'EXACT_AGENT_PADS'].filter((k) => env[k]).map((k) => [k, env[k]]));
+}
+
+/** What `simctl launch` gives the app of `env`: each `SIMCTL_CHILD_` variable, without the prefix. */
+export const simulatorChildEnv = (env = process.env) =>
+  Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('SIMCTL_CHILD_')).map(([k, v]) => [k.slice('SIMCTL_CHILD_'.length), v]));
+
+/** The environment a drive's simulator launch gives the app (agent-ios.mjs): `env`'s `SIMCTL_CHILD_` variables, then
+ * `forwardedEnv()`, then `extra`, the names the drive sets. A freshness check on the way to that launch reads it
+ * (LLP 1153.002 D2). */
+export const simulatorLaunch = (extra = {}, env = process.env) => ({ ...simulatorChildEnv(env), ...forwardedEnv(env), ...extra });
+
+/** The installed app's bundle or data directory, outside the checkout's macOS privacy protections. */
+export function simulatorAppContainer(udid, id, kind, run = read) {
+  const r = run('xcrun', ['simctl', 'get_app_container', udid, id, kind]);
+  if (r.status !== 0 || !r.stdout?.trim()) throw new Error(`simctl get_app_container: ${r.stderr || 'no container returned'}`);
+  return r.stdout.trim();
 }
 
 /** A page capture (`path`) whose area holds glass or a blur, its pixels then the display's there too: the app names
@@ -525,6 +549,19 @@ export function crashReports(name, since, { bundleId, udid, dir = resolve(homedi
   return names.filter((f) => f.startsWith(name + '-') && /\.(ips|crash)$/.test(f))
     .map((f) => resolve(dir, f)).filter((f) => at(f) >= since && ours(f)).sort((a, b) => at(b) - at(a));
 }
+/** Launch the Mac executable and preserve how it ended for the build command's caller. */
+export function runMac(binary, env, { stdio = 'inherit', say = console.error } = {}) {
+  const crashed = crashWatch(basename(binary), dirname(binary));
+  const result = spawnSync(binary, [], { env, stdio });
+  if (result.error) say(`${binary}: launch failed: ${result.error.message}`);
+  if (result.signal) {
+    say(`${binary}: killed by ${result.signal}`);
+    const fatal = ['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGTRAP', 'SIGSYS'].includes(result.signal);
+    for (const line of crashed(fatal ? 5000 : 0)) say(line);
+  }
+  return result.status ?? (result.signal ? 128 + (constants.signals[result.signal] ?? 0) : 1);
+}
+
 /** A crash report as one shape, whichever form it is in: its bundle id, time,
  *  the paths that place it on a simulator, how the process ended and why (the
  *  exception, the termination, the app-specific message, such as a Swift
@@ -599,6 +636,20 @@ export function crashWatch(name, bundle, scope) {
 
 
 // ---------------------------------------------------------------- a phone: devicectl, a profile, an identity
+
+/** Startup can fail before the app's first line; keep devicectl's evidence and
+ * distinguish a reported lock from a prompt the carrier cannot observe. */
+export function phoneStartupFailure(reason, lines) {
+  const details = [reason, ...lines.filter(line => !reason.includes(line))].join('\n');
+  const silent = lines.length ? '' : '\nthe app printed nothing';
+  if (/FBSOpenApplication[^\n]*\bLocked\b|\breason:\s*Locked\b|(?:device|iPhone|iPad) is locked|\bDeviceLocked\b/i.test(details)) {
+    return `the iPhone is locked: unlock it and run again\n${details}${silent}`;
+  }
+  const prompt = /No route to host|EHOSTUNREACH|waiting for foreground/i.test(details)
+    ? "\nApple's local-network prompt may be waiting on the phone. Allow Local Network there, including a prompt left by another app, then run again."
+    : '';
+  return `${details}${silent}${prompt}\nUnlock the phone and keep the app in the foreground; the phone must reach this Mac on the same LAN.`;
+}
 
 /** One launch, one phone connection; reject other peers before any agent request.
  * The token crosses via the paired device's launch environment, not a public URL. */
@@ -770,9 +821,8 @@ export const byExpiry = (a, b) => b.expires - a.expires;
 export const iosProfile = p => !p.platforms?.length || p.platforms.includes('iOS');
 /** The profiles among `installed` whose App ID is `bundle` itself or its team's wildcard. */
 export const profilesFor = (bundle, installed) => installed.filter((p) => p.appId === `${p.prefix}.*` || p.appId === `${p.prefix}.${bundle}`);
-/** How a profile distributes, from what it carries: a debugger (development), named devices (Ad Hoc), every device
- * (enterprise), or none of those (the App Store). */
-export const METHODS = { development: 'development', adhoc: 'Ad Hoc', enterprise: 'enterprise', appstore: 'App Store' };
+/** How a profile distributes: development, iOS Ad Hoc or enterprise, Mac Developer ID, or the App Store. */
+export const METHODS = { development: 'development', adhoc: 'Ad Hoc', enterprise: 'enterprise', developerid: 'Developer ID', appstore: 'App Store' };
 /** Why `p` cannot sign on `udid`, or null when it can: its expiry, and with a phone named, that phone (an App Store
  * profile names none). `like`, another profile (the app's, when `p` is for its extension), asks for its team, App
  * ID prefix and method too, and that `p` name the phone, or, for an archive, every device `like` names. */
@@ -790,17 +840,21 @@ export function profileMisfit(p, udid, like = null) {
 /** Every `.mobileprovision` or `.provisionprofile` Xcode or a download installed, decoded once per process (a hundred of them is two seconds). */
 let decoded = null;
 export function installedProfiles() {
-  const dirs = ['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d)).filter(existsSync);
+  const dirs = [...(process.env.EXACT_PROFILE_DIR ? [resolve(process.env.EXACT_PROFILE_DIR)] : []), ...['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d))].filter(existsSync);
   return decoded ??= dirs.flatMap((d) => readdirSync(d).filter((f) => /\.(mobileprovision|provisionprofile)$/.test(f)).map((f) => decodeProfile(resolve(d, f))));
 }
 
-/** The fields of a `.mobileprovision` this script reads (it is a CMS-signed XML plist). */
-export function decodeProfile(path) {
-  const xml = read('security', ['cms', '-D', '-i', path]).stdout ?? '';
+/** The fields of a `.mobileprovision` or `.provisionprofile` this script reads (a CMS-signed XML plist). */
+export function decodeProfile(path, os = process.platform, { read: readProfile = read } = {}) {
+  const result = os === 'linux' ? readProfile('openssl', ['smime', '-verify', '-inform', 'DER', '-in', path, '-noverify'])
+    : readProfile('security', ['cms', '-D', '-i', path]);
+  if (os === 'linux' && result.status !== 0) throw new Error(`host/apple: cannot decode provisioning profile ${path}: ${result.stderr || result.error?.message}`);
+  const xml = result.stdout ?? '';
   const str = (key) => new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)?.[1];
   const strings = (key) => [...(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`).exec(xml)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
   const team = /<key>TeamIdentifier<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(xml)?.[1];
   const devices = strings('ProvisionedDevices');
+  const platforms = strings('Platform'), mac = platforms.length > 0 && platforms.every(p => p === 'OSX');
   const expires = /<key>ExpirationDate<\/key>\s*<date>([^<]*)<\/date>/.exec(xml)?.[1];
   // The keys of its Entitlements whose value is not `false`: what it allows.
   const allowed = /<key>Entitlements<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(xml)?.[1] ?? '';
@@ -808,32 +862,79 @@ export function decodeProfile(path) {
   const appId = str('application-identifier') ?? str('com.apple.application-identifier');
   // What an app with widgets or Live Activities needs of it (LLP 1126.001 WP13): the App Groups it grants, the
   // Keychain groups (the team's `<prefix>.*`, usually) and the push environment.
-  const dev = /<key>(?:com.apple.security.)?get-task-allow<\/key>\s*<true\/>/.test(xml), enterprise = /<key>ProvisionsAllDevices<\/key>\s*<true\/>/.test(xml);
-  return { path, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, platforms: strings('Platform'),
-    method: dev ? 'development' : devices.length ? 'adhoc' : enterprise ? 'enterprise' : 'appstore',
-    groups: strings('com.apple.security.application-groups'), keychain: strings('keychain-access-groups'), aps: str('aps-environment') ?? null };
+  // Mac development profiles name devices; their unrestricted debugger entitlement need not be in the profile.
+  // Developer ID covers all devices, and the App Store names none (Apple TN3125):
+  // https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles
+  const dev = mac ? devices.length > 0 : /<key>(?:com\.apple\.security\.)?get-task-allow<\/key>\s*<true\/>/.test(xml);
+  const allDevices = /<key>ProvisionsAllDevices<\/key>\s*<true\/>/.test(xml);
+  const aps = mac ? str('com.apple.developer.aps-environment') ?? str('aps-environment')
+    : str('aps-environment') ?? str('com.apple.developer.aps-environment');
+  const certificates = [...(/<key>DeveloperCertificates<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(xml)?.[1] ?? '').matchAll(/<data>([\s\S]*?)<\/data>/g)]
+    .map(m => createHash('sha1').update(Buffer.from(m[1].replace(/\s/g, ''), 'base64')).digest('hex').toUpperCase());
+  return { path, certificates, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, platforms,
+    method: dev ? 'development' : devices.length ? 'adhoc' : allDevices ? (mac ? 'developerid' : 'enterprise') : 'appstore',
+    groups: strings('com.apple.security.application-groups'), keychain: strings('keychain-access-groups'), aps: aps ?? null };
 }
 
-/** The Apple Development identity (its SHA-1) for a team, from the keychain; EXACT_IDENTITY names one. */
-export function identity(team, { env = process.env, read: readSigning = read } = {}) {
-  if (env.EXACT_IDENTITY) return env.EXACT_IDENTITY;
-  const valid = [...(readSigning('security', ['find-identity', '-v', '-p', 'codesigning']).stdout ?? '').matchAll(/\d+\) ([0-9A-F]{40}) "(Apple Development: [^"]+)"/g)].map((m) => ({ sha1: m[1], name: m[2] }));
-  const pems = (readSigning('security', ['find-certificate', '-a', '-c', 'Apple Development', '-p']).stdout ?? '').split('-----END CERTIFICATE-----').filter((c) => c.includes('BEGIN CERTIFICATE'));
-  for (const pem of pems) {
-    const x = readSigning('openssl', ['x509', '-noout', '-subject', '-fingerprint', '-sha1'], { input: pem + '-----END CERTIFICATE-----\n' }).stdout ?? '';
-    const sha1 = /Fingerprint=([0-9A-F:]+)/i.exec(x)?.[1].replace(/:/g, '');
-    const ou = /OU\s*=\s*([A-Z0-9]+)/.exec(x)?.[1];
-    const id = valid.find((v) => v.sha1 === sha1);
-    if (id && ou === team) return id.sha1;
+/** Valid Apple Development certificates, newest expiry first, with the team from the certificate's OU. */
+export function developmentIdentities({ read: readSigning = read } = {}) {
+  const valid = new Set([...(readSigning('security', ['find-identity', '-v', '-p', 'codesigning']).stdout ?? '').matchAll(/\d+\) ([0-9A-F]{40}) "Apple Development: /g)].map(m => m[1]));
+  if (!valid.size) return [];
+  const pems = (readSigning('security', ['find-certificate', '-a', '-c', 'Apple Development', '-p']).stdout ?? '').split('-----END CERTIFICATE-----').filter(c => c.includes('BEGIN CERTIFICATE'));
+  return pems.flatMap(pem => {
+    const x = readSigning('openssl', ['x509', '-noout', '-subject', '-fingerprint', '-sha1', '-enddate'], { input: pem + '-----END CERTIFICATE-----\n' }).stdout ?? '';
+    const sha1 = /Fingerprint=([0-9A-F:]+)/i.exec(x)?.[1].replace(/:/g, '').toUpperCase();
+    const team = /OU\s*=\s*([A-Z0-9]+)/.exec(x)?.[1];
+    const expires = Date.parse(/notAfter=(.+)/.exec(x)?.[1] ?? '') || 0;
+    return valid.has(sha1) && team ? [{ sha1, team, expires }] : [];
+  }).sort((a, b) => b.expires - a.expires || a.sha1.localeCompare(b.sha1));
+}
+
+/** Refuse a certificate excluded by any profile in the signed bundle. Selectors may name a keychain certificate
+ * or, on a cross-builder, a PKCS#12 file; only the public certificate is read. */
+export function profileIdentity(selected, profiles, { env = process.env, read: readSigning = read, selector = 'EXACT_IDENTITY' } = {}) {
+  if (!profiles.length) return selected;
+  let fingerprint = selected?.toUpperCase();
+  if (!/^[0-9A-F]{40}$/.test(fingerprint ?? '')) {
+    const pem = existsSync(selected ?? '')
+      ? readSigning('openssl', ['pkcs12', '-in', selected, '-clcerts', '-nokeys', '-passin', `file:${env.EXACT_APPLE_SIGN_PASSWORD_FILE}`]).stdout
+      : readSigning('security', ['find-certificate', '-c', selected ?? '', '-p']).stdout;
+    const x = pem ? readSigning('openssl', ['x509', '-noout', '-fingerprint', '-sha1'], { input: pem }).stdout : '';
+    fingerprint = /Fingerprint=([0-9A-F:]+)/i.exec(x ?? '')?.[1].replace(/:/g, '').toUpperCase();
   }
-  throw new Error(`no valid "Apple Development" identity for team ${team} in the keychain (security find-identity -v -p codesigning); name one with EXACT_IDENTITY=<sha1>`);
+  const excluded = profiles.find(p => !p.certificates?.includes(fingerprint));
+  if (excluded) throw new Error(`host/apple: profile "${excluded.name}" does not authorize ${selected} in DeveloperCertificates; choose an authorized certificate with ${selector} or install matching profiles`);
+  return selected;
 }
 
-/** The first valid "Apple Development" identity in the keychain (EXACT_IDENTITY names one), or null: the macOS binary is then ad-hoc signed. */
+/** The team's newest valid Apple Development identity authorized by every profile; EXACT_IDENTITY is checked too. */
+export function identity(team, { env = process.env, read: readSigning = read, profiles = [] } = {}) {
+  if (env.EXACT_IDENTITY) return profileIdentity(env.EXACT_IDENTITY, profiles, { env, read: readSigning });
+  const selected = developmentIdentities({ read: readSigning }).find(id => id.team === team && profiles.every(p => p.certificates?.includes(id.sha1)));
+  if (selected) return selected.sha1;
+  throw new Error(`no valid "Apple Development" identity for team ${team}${profiles.length ? ` authorized by profiles ${profiles.map(p => '"' + p.name + '"').join(', ')}` : ''} in the keychain (security find-identity -v -p codesigning); name one with EXACT_IDENTITY=<sha1>`);
+}
+
+/** The selected team's newest certificate, or the sole team's when no team is selected.
+ * EXACT_MAC_PROFILE overrides DEVELOPMENT_TEAM; EXACT_IDENTITY overrides both. Null leaves profile-based team
+ * selection to the build, which must refuse unresolved ambiguity (LLP 1018 D7). */
 export function macIdentity() {
   if (process.env.EXACT_IDENTITY) return process.env.EXACT_IDENTITY;
-  const m = /\d+\) ([0-9A-F]{40}) "Apple Development: /.exec(read('security', ['find-identity', '-v', '-p', 'codesigning']).stdout ?? '');
-  return m ? m[1] : null;
+  const profile = process.env.EXACT_MAC_PROFILE ? decodeProfile(process.env.EXACT_MAC_PROFILE) : null;
+  const team = profile?.team ?? process.env.DEVELOPMENT_TEAM?.trim();
+  if (team) return identity(team, { profiles: profile ? [profile] : [] });
+  const ids = developmentIdentities();
+  return new Set(ids.map(id => id.team)).size === 1 ? ids[0].sha1 : null;
+}
+
+/** This Mac's Provisioning UDID, which a Mac development profile names; on Apple silicon it is not the hardware UUID. */
+export function macHardwareID(readOut = (command, args) => read(command, args).stdout ?? '') {
+  try {
+    const hardware = JSON.parse(readOut('system_profiler', ['SPHardwareDataType', '-json']));
+    const id = hardware.SPHardwareDataType?.find(row => row.provisioning_UDID)?.provisioning_UDID;
+    if (id) return id;
+  } catch { /* Older system_profiler versions may supply only IOPlatformUUID. */ }
+  return /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(readOut('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']))?.[1] ?? null;
 }
 
 /** Every orientation: an iPad app supports them all, as its multitasking requires. Without this key iPad reads
