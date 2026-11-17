@@ -14,10 +14,9 @@ use windows::{
             COINIT_APARTMENTTHREADED,
         },
         UI::Shell::{
-            FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
-            FOLDERID_Pictures, FOLDERID_Screenshots, FOLDERID_Videos, FileOpenDialog,
-            FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem, SHCreateItemFromParsingName,
-            SHGetKnownFolderItem, FILEOPENDIALOGOPTIONS, KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
+            FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IShellItem,
+            SHCreateItemFromParsingName, SHGetKnownFolderItem, FILEOPENDIALOGOPTIONS,
+            KF_FLAG_DEFAULT, SIGDN_FILESYSPATH,
         },
     },
 };
@@ -232,16 +231,9 @@ fn set_folder(dialog: &IFileDialog, folder: &StartFolder) -> windows::core::Resu
                 dialog.SetFolder(&item)
             }
             StartFolder::Known(name) => {
-                let id = match name.as_str() {
-                    "desktop" => FOLDERID_Desktop,
-                    "documents" => FOLDERID_Documents,
-                    "downloads" => FOLDERID_Downloads,
-                    "music" => FOLDERID_Music,
-                    "pictures" => FOLDERID_Pictures,
-                    "videos" => FOLDERID_Videos,
-                    "screenshots" => FOLDERID_Screenshots,
-                    _ => return Err(windows::core::Error::from_hresult(E_INVALIDARG)),
-                };
+                let id = exact_data::known_folders::windows_id(name)
+                    .map(windows::core::GUID::from_u128)
+                    .ok_or_else(|| windows::core::Error::from_hresult(E_INVALIDARG))?;
                 let item: IShellItem = SHGetKnownFolderItem(&id, KF_FLAG_DEFAULT, None)?;
                 if !path(item.clone())?.is_dir() {
                     return Err(windows::core::Error::from_hresult(windows::core::HRESULT(

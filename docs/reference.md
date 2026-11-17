@@ -2671,7 +2671,7 @@ the filesystem's POSIX name (`'ENOENT'`, `'EEXIST'`, `'ENOTDIR'`, `'EISDIR'`,
 one in flight: the module's storage queue is full, LLP 1097), else `'failed'`. Branch on the code, never the
 message: `catch (e) { if (e.code === 'ENOENT') return empty; throw e; }`.
 
-On macOS and Linux, `desktop:/`, `documents:/`, `downloads:/`, `music:/`,
+On macOS, Linux and Windows, `desktop:/`, `documents:/`, `downloads:/`, `music:/`,
 `pictures:/`, `videos:/` and `screenshots:/` name the person's well-known
 folders (LLP 1173 D4). Declare `fs.write pictures:/` for the whole folder, or
 `fs.write pictures:/Exports` for a subtree. `fs.read` and `sqlite.open` lines
@@ -2680,11 +2680,15 @@ on these namespaces are refused at build.
 These paths take only `writeFile`, `atomicWriteFile`, `mkdir`, `realpath`, and
 `copyFile` from an `app:/` file with `fs.read` on its source. Files are created
 exclusively: an existing name returns `'EEXIST'`, including an atomic write or
-copy. Retry with another name. `realpath` uses the write grant and returns the
+copy. For `mkdir`, every component below the root must be new; an existing
+component returns `'EEXIST'` without creating anything below it. Retry with
+another name. `realpath` uses the write grant and returns the
 native path of an existing item. Reads, listing, watching, appending, replacing,
 renaming and removal are refused. No link below the resolved root is followed.
-A link at or above the root is followed only where the app's write grants
-cannot replace it.
+On macOS and Linux, a link at or above the root is followed only where the
+app's write grants cannot replace it. Windows opens the OS-selected root,
+including UNC paths, and refuses name-surrogate reparse tags below it while
+admitting cloud placeholders.
 
 ```ts
 export const grants = 'fs.read app:/tmp\nfs.write screenshots:/';
@@ -2705,10 +2709,22 @@ not an existing folder returns `'ENOENT'`. Linux reads `$XDG_CONFIG_HOME/user-di
 entries return `'ENOENT'`. Linux's `screenshots:` is the Pictures folder's
 untranslated `Screenshots`, and returns `'ENOENT'` when absent. Under the agent,
 all seven resolve inside `--home`, or its temporary home, never the person's folders.
-Links below the drive's home are refused.
+Links below the drive's home are refused. Windows asks `SHGetKnownFolderPath`
+on each use, following redirected folders, and creates Screenshots if Pictures
+exists. Controlled folder access may refuse a write with `'EACCES'`.
 
-The web, Apple mobile platforms, Android and, until its folder walk is built,
-Windows refuse these paths with `NotSupportedError` (`code: 'failed'`):
+Windows folder writes are implemented but remain unqualified on Windows.
+Run `cargo run -p exact-windows --example known-folders` there with a
+OneDrive-backed Pictures and a UNC-redirected folder. The probe reports each
+folder's path, attributes, reparse tag, exclusive creation and no-replace
+rename, and removes its temporary subdirectories. Append `-- pictures OnlineOnly`
+with the name of an existing online-only child to exercise placeholder recall.
+Claim the Windows cell only
+after that probe and an app drive copying an `app:/` capture into `screenshots:/`,
+retrying the same name (`'EEXIST'`) and confirming the first file's bytes.
+
+The web, Apple mobile platforms and Android refuse these paths with
+`NotSupportedError` (`code: 'failed'`):
 `well-known folders are unavailable on this host`. Platform access denial is
 `'EACCES'`. A sandboxed Mac build admits Downloads, Pictures, Music and Movies
 through their entitlements and refuses Desktop, Documents and Screenshots.

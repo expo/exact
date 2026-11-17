@@ -7,14 +7,22 @@ use exact_runner::{FailureKind, Request, SocketOp};
 use ibex2::stdlib::abort::AbortController;
 use std::sync::{Arc, Condvar};
 
+#[cfg(windows)]
+#[path = "folders_windows.rs"]
+mod folders;
+
 pub(crate) struct Processes {
     pub(crate) drained: Condvar,
+    #[cfg(windows)]
+    roots: std::sync::OnceLock<ibex2::stdlib::fs::Roots>,
 }
 
 impl Processes {
     pub(crate) fn new(_budget: super::WorkerBudget) -> Processes {
         Processes {
             drained: Condvar::new(),
+            #[cfg(windows)]
+            roots: Default::default(),
         }
     }
 }
@@ -63,11 +71,12 @@ pub(crate) fn admit_one_shot(
 pub(crate) fn release_one_shot(_shared: &Shared, _ticket: u64) {}
 
 impl Core {
-    /// This target starts no programs; Windows folder writes await their native walk.
+    /// This target starts no programs. Windows installs its storage resolver.
     pub fn allow_processes(&self) {
         #[cfg(windows)]
         {
-            ibex2::stdlib::fs::set_roots(Default::default());
+            let roots = self.shared.processes.roots.get_or_init(folders::from_env);
+            ibex2::stdlib::fs::set_roots(roots.clone());
         }
     }
 

@@ -2,7 +2,7 @@
 fn refuse(detail: &str) -> std::io::Error {
     std::io::Error::other(detail)
 }
-fn validate_name(value: &str) -> io::Result<()> {
+pub(crate) fn validate_name(value: &str) -> io::Result<()> {
     let base = value
         .split('.')
         .next()
@@ -34,6 +34,110 @@ fn validate_name(value: &str) -> io::Result<()> {
     Ok(())
 }
 use std::io;
+
+// IsReparseTagNameSurrogate, tested independently of a Windows syscall.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn known_entry(attributes: u32, tag: u32) -> bool {
+    attributes & 0x400 == 0 || tag & 0x20000000 == 0
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn open_known<T>(
+    file: T,
+    attributes: u32,
+    tag: u32,
+    reopen: impl FnOnce(&T) -> io::Result<T>,
+) -> io::Result<T> {
+    if !known_entry(attributes, tag) {
+        return Err(refuse("known-folder entries cannot be name surrogates"));
+    }
+    // Windows can hide cloud tags, so even an apparently ordinary directory
+    // needs a normal open before it can be the parent of a create.
+    if attributes & 0x410 != 0 {
+        reopen(&file)
+    } else {
+        Ok(file)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn known_folders_admit_cloud_placeholders_and_refuse_name_surrogates() {
+        for attributes in [0, 0x10, 0x1000, 0x40000, 0x400000] {
+            assert!(known_entry(attributes, 0));
+            for tag in [0xa0000003, 0xa000000c, 0x20000000] {
+                assert!(!known_entry(attributes | 0x400, tag), "{tag:x}");
+            }
+            for cloud in 0..=15 {
+                assert!(known_entry(attributes | 0x400, 0x9000001a | cloud << 12));
+            }
+            assert!(known_entry(attributes | 0x400, 0x80000017)); // WOF
+            assert!(known_entry(attributes, 0xa000000c)); // tag absent without attribute
+        }
+    }
+
+    #[test]
+    fn known_placeholders_use_the_reopened_handle_and_propagate_recall_failure() {
+        for tag in (0..=15)
+            .map(|cloud| 0x9000001a | cloud << 12)
+            .chain([0x80000017])
+        {
+            assert_eq!(open_known(1, 0x410, tag, |_| Ok(2)).unwrap(), 2);
+            let error = open_known(1, 0x410, tag, |_| {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "recall"))
+            })
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }
+        assert_eq!(open_known(1, 0x10, 0, |_| Ok(2)).unwrap(), 2);
+        assert_eq!(
+            open_known(1, 0x80, 0, |_| panic!("plain file reopened")).unwrap(),
+            1
+        );
+        for tag in [0xa0000003, 0xa000000c, 0x20000000] {
+            assert!(open_known(1, 0x410, tag, |_| panic!("surrogate followed")).is_err());
+        }
+    }
+
+    #[test]
+    fn windows_leaf_names_cannot_address_devices_or_alternate_streams() {
+        for name in [
+            "",
+            ".",
+            "..",
+            "CON",
+            "con.png",
+            "PRN.txt",
+            "AUX",
+            "NUL",
+            "CLOCK$",
+            "COM1",
+            "LPT9.png",
+            "COM¹.png",
+            "LPT²",
+            "COM³",
+            "a:b",
+            "a/b",
+            "a\\b",
+            "a.",
+            "a ",
+            "a?",
+            "a*",
+            "a\0",
+            "a\n",
+        ] {
+            assert!(validate_name(name).is_err(), "{name:?}");
+        }
+        for name in ["Screenshot 2026-11-17 142307.png", "COM10.png", "写真.png"] {
+            assert!(validate_name(name).is_ok(), "{name}");
+        }
+        assert!(validate_name(&"x".repeat(256)).is_err());
+        assert!(validate_name(&"📸".repeat(128)).is_err());
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct NativePath {

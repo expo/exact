@@ -73,7 +73,16 @@ pub(crate) fn create_below(
     data: &[u8],
 ) -> Result<FsResult, HostError> {
     if op == FsOp::Mkdir {
-        return run_below(op, path, None, data);
+        let mut dir = path.root;
+        for part in &path.parts {
+            let encoded = name(part).map_err(error)?;
+            // SAFETY: the retained parent and terminated component stay live.
+            if unsafe { libc::mkdirat(dir.as_raw_fd(), encoded.as_ptr(), 0o700) } != 0 {
+                return Err(error(io::Error::last_os_error()));
+            }
+            dir = directory(&dir, part).map_err(error)?;
+        }
+        return Ok(FsResult::Done);
     }
     let (parent, leaf) = path.parent()?;
     if op == FsOp::AtomicWriteFile {

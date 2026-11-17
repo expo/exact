@@ -6,6 +6,7 @@
 // metadata), and delivered as `change` (host kind 26). Under the agent the
 // driver's bytes arrive as Files and take the same path (D9). Also loaded
 // by the first `app:/` source an `image` or `video` shows (D7): `appURL`,
+// or a GPU surface reads (LLP 1133.039 D11): `appFile`,
 // and by a `share` with `files=` (LLP 1125 D12): `share`.
 const picked = new Map(); // app:/tmp/picked/… → File
 const urls = new Map(); // app:/… → [its object URL, the version it was made from], for `image`/`video` (D7)
@@ -33,7 +34,7 @@ function fileStore(appId) {
   })();
 }
 
-async function appFile(path, appId) {
+export async function appFile(path, appId) {
   const file = picked.get(path);
   // Opening the app's store can succeed while preparing the picked directory fails.
   const store = await (file ? emptied : fileStore(appId));

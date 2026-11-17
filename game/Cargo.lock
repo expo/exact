@@ -636,6 +636,7 @@ dependencies = [
  "ctt-astcenc",
  "ctt-intel-texture-compressor",
  "exact-game",
+ "exact-meshopt",
  "flate2",
  "gltf",
  "image",
@@ -743,6 +744,10 @@ dependencies = [
  "exact-plan",
  "exact-runner",
 ]
+
+[[package]]
+name = "exact-meshopt"
+version = "0.1.0"
 
 [[package]]
 name = "exact-motion"

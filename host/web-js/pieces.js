@@ -48,6 +48,7 @@ export function gs(e, name, values) {
       x.generation = 0;
       x.devAssets = null;
       x.root = document.getElementById('exact-root');
+      ((x.compat ??= {}).inputs ??= {}).app = data.appId;
       // a release's asset path, as the wasm glue's `localAssetURL` (LLP 1098 D6)
       x.assetURL = v => rel('src', v);
       // The GPU glue's name NUL JSON wire reaches the reserved readers in facts.js.

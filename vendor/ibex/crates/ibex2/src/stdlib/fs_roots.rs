@@ -456,7 +456,31 @@ pub(super) fn run_known(
         };
         crate::stdlib::app_fs::create_below(op, target, source, data.unwrap_or_default())
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let (name, rest) =
+            known_parts(target).ok_or_else(|| HostError::InvalidArgument(target.into()))?;
+        let parts = parts(rest)?;
+        for part in &parts {
+            super::super::windows_path::validate_name(part)
+                .map_err(|e| HostError::Failed(e.to_string()))?;
+        }
+        let resolver = ROOTS
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .known_folder
+            .clone()
+            .ok_or_else(|| HostError::Failed(UNSUPPORTED.into()))?;
+        let root = resolve_root(&resolver, name)?;
+        let source = if copy {
+            Some(super::open_read(grants, directories, path)?)
+        } else {
+            None
+        };
+        super::super::fs_known_windows::create(root, &parts, op, source, data.unwrap_or_default())
+            .map_err(|e| HostError::Failed(format!("{target}: {e}")))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (directories, data);
         Err(HostError::Failed(UNSUPPORTED.into()))

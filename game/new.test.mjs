@@ -484,6 +484,26 @@ test('game and generated shell workspaces inherit every root vendor patch', asyn
   } finally {rmSync(root, {recursive:true, force:true});}
 });
 
+test('a game optimizes its build-time meshopt decoder across build profiles', () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+  const root = realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/meshopt-profile-')));
+  try {
+    const app = resolve(root, 'model-game');
+    createGame(app, undefined, {assets:true});
+    for (const profile of ['release', 'web', 'host-dev', 'gpu-dev']) {
+      const result = spawnSync('cargo', ['build', '-p', 'model-game-gpu', '--profile', profile,
+        '--unit-graph', '-Z', 'unstable-options', '--offline', '--locked'], {
+        cwd:resolve(app, '.shells'), env:{...process.env, RUSTC_BOOTSTRAP:'1'},
+        encoding:'utf8', maxBuffer:1 << 24,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const units = JSON.parse(result.stdout).units.filter(unit => unit.target.name === 'exact_meshopt');
+      assert.equal(units.length, 1, `${profile}: one decoder build`);
+      assert.equal(units[0].profile.opt_level, '3', `${profile}: the build-time decoder stays optimized`);
+    }
+  } finally {rmSync(root, {recursive:true, force:true});}
+});
+
 test('a Windows game shell links the shared presenter its baked entry uses', () => {
   const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'game-windows-host-')));
   try {

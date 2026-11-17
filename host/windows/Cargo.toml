@@ -10,6 +10,7 @@ publish = false
 exact-grants = { path = "../../grants" }
 exact-painted = { path = "../painted" }
 exact-runner = { path = "../../runner" }
+exact-data = { path = "../../data" }
 serde_json = "1.0"
 # An interlaced image's row stride follows how this decoder expands Adam7
 # rows (`src/clipboard/image.rs`).
@@ -19,6 +20,7 @@ accesskit = "0.25.1"
 
 [dev-dependencies]
 contract = { path = "../../contract/cli" }
+ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 exact-ink = { path = "../ink" }
@@ -30,4 +32,4 @@ softbuffer = { version = "0.4", default-features = false }
 tiny-skia = "0.12"
 unicode-segmentation = "1.13"
 windows = { version = "0.62", features = ["UI_ViewManagement", "Foundation", "Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Shell_PropertiesSystem", "Foundation_Collections", "Networking_Connectivity", "Win32_System_Power", "Win32_System_SystemServices", "Win32_UI_WindowsAndMessaging"] }
-windows-sys = { version = "0.61", features = ["Win32_Devices_Display", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_XboxController", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Pointer", "Win32_UI_Input_Ime", "Win32_System_DataExchange", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Performance", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Wdk_Storage_FileSystem", "Win32_Storage_FileSystem", "Win32_Devices_Display", "Win32_Graphics_Dwm", "Win32_System_LibraryLoader", "Win32_UI_HiDpi", "Win32_UI_Input_XboxController", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Pointer", "Win32_UI_Input_Ime", "Win32_System_DataExchange", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_Performance", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }

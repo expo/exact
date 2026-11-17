@@ -584,15 +584,19 @@ function declarations(dir, platform) {
  *  those that throw `missing("scene", …)` (a presentation completes only in a scene's
  *  window) or `missing("accessibility", …)` (UIKit's accessibility runtime), which run
  *  hosted. `missing("touch", …)` selects tests that need the XCTest touch runner too.
- *  Each must say so in the test method itself, so a helper's need is not missed. */
+ *  Each must say so in the test method itself, so a helper's need is not missed. A test method in
+ *  an extension of a test class, in any file, is that class's. */
 export function hostedTests(dir, prerequisite = 'scene|accessibility') {
   const tests = new Set();
   const requirement = new RegExp(`missing\\("(${prerequisite})"`);
-  for (const file of readdirSync(dir).filter(f => f.endsWith('.swift'))) {
-    const lines = readFileSync(resolve(dir, file), 'utf8').split('\n');
+  const declaration = /class (\w+)\s*:\s*(XCTestCase|\w+Fixture)\b/;
+  const files = readdirSync(dir).filter(f => f.endsWith('.swift')).map(f => [f, readFileSync(resolve(dir, f), 'utf8').split('\n')]);
+  const classes = new Set(files.flatMap(([, lines]) => lines.map(line => declaration.exec(line)?.[1]).filter(Boolean)));
+  for (const [file, lines] of files) {
     let className = null, func = null;
     lines.forEach((line, i) => {
-      className = /class (\w+)\s*:\s*(XCTestCase|\w+Fixture)\b/.exec(line)?.[1] ?? className;
+      const extended = /^extension (\w+)\b/.exec(line)?.[1];
+      className = declaration.exec(line)?.[1] ?? (classes.has(extended) ? extended : className);
       func = /\bfunc (\w+)\s*\(/.exec(line)?.[1] ?? func;
       if (!requirement.test(line)) return;
       if (!className || !func?.startsWith('test')) throw new Error(`${file}:${i + 1}: missing(${prerequisite}) outside a test method (${func ?? 'none'}); say it in the test so the test runs hosted`);

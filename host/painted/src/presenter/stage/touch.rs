@@ -164,6 +164,7 @@ impl Preview {
             origin: (width / 2.0, height / 2.0),
             opacity: 1.0,
             radius: 28.0 * p,
+            height: None,
         }
     }
 
@@ -580,12 +581,13 @@ impl<D: DataSource> Presenter<D> {
                     sheet: sheet.map(|i| keys[i]),
                 })
             }
-            // A full-screen route over a page whose exit is declared.
+            // A full-screen route over a page, with an exit or a zoom.
             Presented::Over | Presented::Full
                 if top > 0
                     && sheet_of(&kinds, top - 1).is_none()
-                    && (self.stage.top.as_ref())
-                        .is_some_and(|t| t.key == keys[top] && t.exit.is_some()) =>
+                    && ((self.stage.top.as_ref())
+                        .is_some_and(|t| t.key == keys[top] && t.exit.is_some())
+                        || self.stage.zooms.iter().any(|z| z.route == keys[top])) =>
             {
                 Some(Target::Page {
                     outgoing: keys[top],

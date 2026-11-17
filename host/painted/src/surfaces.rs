@@ -36,6 +36,7 @@ pub use android::{buffer_frame, window_ready};
 pub(crate) use android::{device_pending as gpu_device_pending, prepare as prepare_gpu, sensors};
 #[cfg(target_os = "macos")]
 pub(crate) mod apple;
+mod assets;
 mod capture;
 #[path = "surface_controls.rs"]
 pub(crate) mod controls;
@@ -805,98 +806,7 @@ impl Surfaces {
                 }
             }
         }
-        for (&view, c) in &mut self.canvases {
-            let abi = &self.abis[&c.artifact];
-            let mut delivered = false;
-            for _ in 0..16 {
-                let names = abi
-                    .read(b"gpu_assets", c.id)
-                    .and_then(|b| {
-                        serde_json::from_slice::<serde_json::Value>(&b)
-                            .ok()
-                            .and_then(|v| {
-                                serde_json::from_value::<Vec<String>>(v["requests"].clone()).ok()
-                            })
-                    })
-                    .unwrap_or_default();
-                if names.is_empty() {
-                    break;
-                }
-                for name in names {
-                    delivered = true;
-                    let bytes = match assets.read_asset(&format!("assets/{name}")) {
-                        Ok(bytes) => bytes,
-                        Err(reason) => {
-                            let ok = unsafe {
-                                abi.symbol::<unsafe extern "C" fn(
-                                    u32,
-                                    *const u8,
-                                    usize,
-                                    *const u8,
-                                    usize,
-                                ) -> bool>(b"gpu_asset_failed")(
-                                    c.id,
-                                    name.as_ptr(),
-                                    name.len(),
-                                    reason.as_ptr(),
-                                    reason.len(),
-                                )
-                            };
-                            if !ok {
-                                let error = abi.error().unwrap_or("asset delivery refused".into());
-                                self.error =
-                                    c.finish_restore(Some(error.clone()), None).or(Some(error));
-                            }
-                            continue;
-                        }
-                    };
-                    let (ptr, len) = bytes
-                        .as_ref()
-                        .map_or((std::ptr::null(), 0), |b| (b.as_ptr(), b.len()));
-                    let ok = unsafe {
-                        abi.symbol::<unsafe extern "C" fn(u32, *const u8, usize, *const u8, usize) -> bool>(b"gpu_asset")(c.id, name.as_ptr(), name.len(), ptr, len)
-                    };
-                    if !ok {
-                        let error = abi.error().unwrap_or("asset delivery refused".into());
-                        self.error = c.finish_restore(Some(error.clone()), None).or(Some(error));
-                    }
-                }
-            }
-            if delivered {
-                // Headless has no first frame to establish the ready world's
-                // epoch. Do it after delivery, at the unchanged host clock.
-                abi.agent(c.id, &json!({"op":"clock","now":host.now()}));
-            }
-            if c.restore_input {
-                let state = abi.agent(c.id, &json!({"op":"state"}));
-                c.finish_restore(None, Some(&state));
-            }
-            if let Some(bytes) = abi.read(b"gpu_published", c.id) {
-                if c.owner {
-                    let record = String::from_utf8_lossy(&bytes);
-                    self.error = self
-                        .error
-                        .take()
-                        .or(host.surface_record(&c.name, Some(&record)));
-                    changed = true;
-                }
-            }
-            if let Some(bytes) = abi.read(b"gpu_messages", c.id) {
-                if let Ok(messages) = serde_json::from_slice::<Vec<String>>(&bytes) {
-                    for message in messages {
-                        if message == "exact:audio" || self.haptics.take(view, &message) {
-                            continue;
-                        }
-                        self.error = self.error.take().or(host.dispatch_at(
-                            view,
-                            Event::Message(message),
-                            host.now(),
-                        ));
-                        changed = true;
-                    }
-                }
-            }
-        }
+        changed |= self.service_canvases(host, assets);
         let mut completed = Vec::new();
         for request in std::mem::take(&mut self.work) {
             let ticket = request.ticket;

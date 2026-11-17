@@ -40,9 +40,10 @@ for (const storage of ['available', 'absent', 'refused', 'unprepared']) {
           });
           return request;
         };
-        globalThis.exact = {};
-        await import('/picker-glue.js');
         const appId = 'picker-url-test', path = 'app:/tmp/picked/notes.txt';
+        globalThis.exact = {compat:{inputs:{app:appId}}};
+        await import('/picker-glue.js');
+        const {assetDelivery} = await import('/gpu-assets.js');
         const sent = [];
         const picker = exact.picker({ appId, pickedPath: name => `app:/tmp/picked/${name}`,
           dispatch: (...args) => sent.push(args), log() {} });
@@ -66,7 +67,16 @@ for (const storage of ['available', 'absent', 'refused', 'unprepared']) {
             share: { configurable: true, value: async ({ files }) => { shared = await files[0].text(); } },
           });
           const share = await picker.share({}, [{ path }]);
-          return { direct, page, shared, share: share.startsWith('share: refused:') ? 'refused' : share };
+          const entry = {id:1,view:1}, names = [path];
+          let gpuText;
+          const gpu = {
+            gpu_assets:()=>JSON.stringify({requests:names.splice(0),retired:[]}),
+            gpu_asset:(_,name,bytes)=>{ gpuText = bytes ? new TextDecoder().decode(bytes) : ''; return true; },
+          };
+          const delivery = assetDelivery({getModule:()=>gpu,live:()=>entry,
+            baseURI:()=>document.baseURI,fetch:()=>{ throw new Error('app files must not fetch'); }});
+          await delivery.settled(()=>[entry]);
+          return { direct, page, shared, gpu:gpuText, share: share.startsWith('share: refused:') ? 'refused' : share };
         }
         const original = await picker.appURL(path);
         const result = {
@@ -116,12 +126,12 @@ for (const storage of ['available', 'absent', 'refused', 'unprepared']) {
       expect(result).toEqual({
         sent: [[7, 26, 'app:/tmp/picked/notes.txt\tnotes.txt\ttext/plain\t8\t\t\t']],
         original: 'original', cached: true, missing: '',
-        readers: { direct: 'original', page: 'original', shared: 'original', share: 'share: shared' },
+        readers: { direct: 'original', page: 'original', shared: 'original', gpu: 'original', share: 'share: shared' },
         ...(storage === 'unprepared' ? { directoryRefused: true, otherFile: 'stored' } : {}),
         ...(storage === 'available' ? { sameMetadata: true, stored: 'replaced', updated: 'replaced', cachedUpdate: true,
           originalRevoked: true, recreated: 'recreate', updatedRevoked: true, deleted: '', recreatedRevoked: true,
-          updatedReaders: { direct: 'replaced', page: 'replaced', shared: 'replaced', share: 'share: shared' },
-          deletedReaders: { direct: '', page: '', shared: '', share: 'refused' } } : {}),
+          updatedReaders: { direct: 'replaced', page: 'replaced', shared: 'replaced', gpu: 'replaced', share: 'share: shared' },
+          deletedReaders: { direct: '', page: '', shared: '', gpu: '', share: 'refused' } } : {}),
       });
     } finally { await browser?.close(); server.stop(true); }
   }, 60_000);

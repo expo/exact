@@ -1303,5 +1303,5 @@ fn image_cancellation_orders_publication_and_the_consumer_reads_only_success() {
     assert_eq!(work.pending_completions(), 0);
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod known_folders;

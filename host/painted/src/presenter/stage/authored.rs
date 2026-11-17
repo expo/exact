@@ -42,7 +42,7 @@ impl Authored {
             rotate: picture.rotate as f32,
             origin: (w / 2.0, h / 2.0),
             opacity: picture.opacity as f32,
-            radius: 0.0,
+            ..Pose::REST
         }
     }
 }
@@ -166,15 +166,21 @@ impl<D: DataSource> Presenter<D> {
             from: None,
             authored: Some(part),
             alone,
+            container: None,
         });
     }
 
     /// Where a kept drawing of `key` is posed: a popped owner where it was.
     pub(super) fn taped_at(&self, key: NodeKey) -> (f32, f32) {
-        (self.stage.shift.as_ref())
-            .filter(|s| s.outgoing == key)
-            .and_then(|s| s.authored.as_ref())
-            .map_or((0.0, 0.0), |part| part.at)
+        let Some(shift) = self.stage.shift.as_ref().filter(|s| s.outgoing == key) else {
+            return (0., 0.);
+        };
+        shift
+            .authored
+            .as_ref()
+            .map(|part| part.at)
+            .or_else(|| shift.container.map(|c| (c.route.0, c.route.1)))
+            .unwrap_or((0., 0.))
     }
 
     /// The exit predictive Back seeks: the top route's, when the preview is
@@ -185,11 +191,11 @@ impl<D: DataSource> Presenter<D> {
         top.exit.as_ref()
     }
 
-    /// The route an authored entrance brings in takes no input until it
-    /// ends (D6), as UIKit ignores input to a controller in transition.
+    /// An authored or container entrance takes no input until it ends,
+    /// as UIKit ignores input to a controller in transition (D6).
     pub(super) fn hold_arriving(&mut self) {
         let arriving = (self.stage.shift.as_ref())
-            .filter(|s| s.forward && s.authored.is_some())
+            .filter(|s| s.forward && (s.authored.is_some() || s.container.is_some()))
             .and_then(|s| self.host.kernel().node_by_key(s.incoming))
             .map(|n| n.id);
         if arriving != self.stage.arriving {

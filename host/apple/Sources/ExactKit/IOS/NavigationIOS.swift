@@ -98,9 +98,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// bar for a root's hidden tablist (LLP 1075.003 §3.7, amended).
     weak var tablistRoot: RouteController?
     var tablistHidBar = false
-    /// The transition whose end settles the root's tablist (`followTablistAtRoot`), weak so that one gone without
-    /// completing frees it
-    weak var tablistTransition: UIViewControllerTransitionCoordinator?
+    /// The transitions whose end runs what they held (`runHeld(after:)`), held weakly so that one gone without completing
+    /// leaves the table
+    let heldTransitions = NSHashTable<AnyObject>.weakObjects()
+    /// A pushed route on top whose tablist changed while a transition ran over its stack: the bar follows it when the
+    /// transition ends if it is the selected route then, and the next follow of another route drops it
+    weak var tablistOwed: RouteController?
     var tabItems: [String] = []
     /// The tabs the items were last made from, made again when the size
     /// class (a path glyph's size) changes.
@@ -522,8 +525,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             }
             // Write a stack with a transition UIKit runs there (or left there, off screen) once it is over; one that
             // holds the routes already is projected now
-            guard nav.transitionCoordinator == nil || nav.stackRoutes.elementsEqual(stack, by: ===) else {
+            if let transition = nav.transitionCoordinator, !nav.stackRoutes.elementsEqual(stack, by: ===) {
                 tabsHeld = true
+                runHeld(after: transition)
                 continue
             }
             prepareRoutes(stack, in: nav)

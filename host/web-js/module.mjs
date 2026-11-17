@@ -109,8 +109,10 @@ function cargoWasm(manifest) {
  * `<name>` or `<name>.exe` alike. */
 export const depInfoOf = (product) => product.replace(/\.exe$/i, '') + '.d';
 /** The package directory of a source a dep-info lists: the path before its
- * last `src` component, by either separator. null outside one. */
+ * last `src` component, by either separator. null outside one, and for a build
+ * script's output, whose path has a `src` only when a folder above it is named so. */
 export function crateDir(file) {
+  if (buildScriptDir(file)) return null;
   const at = Math.max(file.lastIndexOf('/src/'), file.lastIndexOf('\\src\\'));
   return at < 0 ? null : file.slice(0, at);
 }

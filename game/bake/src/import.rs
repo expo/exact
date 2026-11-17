@@ -100,7 +100,7 @@ pub(crate) fn read(path: &Path) -> Result<Imported, String> {
                 .0
                 .get(offset..end)
                 .ok_or("meshopt source bytes are missing")?;
-            crate::meshopt::decode(count, stride, source, mode, filter)
+            exact_meshopt::decode(count, stride, source, mode, filter)
         })()
         .map_err(|e: String| format!("{MESHOPT}: bufferView {}: {e}", view.index()))?;
         let index = buffers.len();

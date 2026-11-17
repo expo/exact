@@ -932,8 +932,19 @@ impl<'a> Replay<'a> {
                     let n = &self.picture.nodes[i];
                     let r = &self.nodes[i];
                     let (x, y, w, h) = r.geometry.outer.rect;
+                    let start = hit_starts.pop().unwrap();
+                    if let Some(shape) =
+                        field::overflow_clip(&r.geometry.outer, n.paint.widths, n.axes)
+                    {
+                        shape::overflow_hits(
+                            &mut walk.boxes[start + usize::from(r.live_hit)..],
+                            &shape,
+                            r.transform,
+                            r.transform,
+                        );
+                    }
                     shape::clip_hits(
-                        &mut walk.boxes[hit_starts.pop().unwrap()..],
+                        &mut walk.boxes[start..],
                         &n.css_clip.resolved(w, h),
                         r.transform.pre_translate(x, y),
                         r.transform.pre_translate(x, y),

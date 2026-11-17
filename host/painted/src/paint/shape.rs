@@ -90,9 +90,51 @@ pub(super) fn clip_hits(
     if !css.has_path() {
         return;
     }
+    path_hits(
+        boxes,
+        css.path(),
+        css.rule() == exact_kernel::FillRule::Evenodd,
+        ts,
+        hit_ts,
+    );
+}
+
+pub(super) fn overflow_hits(
+    boxes: &mut [super::PaintedBox],
+    shape: &Shape,
+    ts: tiny_skia::Transform,
+    hit_ts: tiny_skia::Transform,
+) {
+    if !shape.rounded() || boxes.is_empty() {
+        return;
+    }
+    use super::border::PathOp;
+    use exact_kernel::svg::{Path, Seg};
+    let mut ops = Vec::new();
+    border::shape_path(&mut ops, shape);
+    let path = Path(
+        ops.into_iter()
+            .map(|op| match op {
+                PathOp::Move(x, y) => Seg::Move(x, y),
+                PathOp::Line(x, y) => Seg::Line(x, y),
+                PathOp::Cubic(a, b, c, d, x, y) => Seg::Cubic(a, b, c, d, x, y),
+                PathOp::Close => Seg::Close,
+            })
+            .collect(),
+    );
+    path_hits(boxes, path, false, ts, hit_ts);
+}
+
+fn path_hits(
+    boxes: &mut [super::PaintedBox],
+    path: exact_kernel::svg::Path,
+    even_odd: bool,
+    ts: tiny_skia::Transform,
+    hit_ts: tiny_skia::Transform,
+) {
     let clip = HitClip {
-        path: std::rc::Rc::new(css.path()),
-        even_odd: css.rule() == exact_kernel::FillRule::Evenodd,
+        path: std::rc::Rc::new(path),
+        even_odd,
         inverse: ts
             .invert()
             .map(|t| [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.]),
@@ -144,6 +186,58 @@ impl super::PaintedBox {
                 inside(rect) && clip.is_none_or(inside) && crate::placement::accepts(&planes, x, y)
             })
     }
+    /// Whether shape clips leave painted coverage inside this rectangle.
+    pub(crate) fn visible_through_shapes(&self, rect: Rect4, scale: f32) -> bool {
+        if self.shape_clips.is_empty() {
+            return true;
+        }
+        use exact_kernel::svg::Seg;
+        use tiny_skia::{FillRule, Mask, PathBuilder, Rect, Transform};
+        let (x, y, w, h) = rect;
+        let device = Transform::from_row(scale, 0., 0., scale, -x * scale, -y * scale);
+        let Some(mut mask) = Mask::new((w * scale).ceil() as u32, (h * scale).ceil() as u32) else {
+            return false;
+        };
+        let Some(rect) = Rect::from_xywh(x, y, w, h) else {
+            return false;
+        };
+        mask.fill_path(
+            &PathBuilder::from_rect(rect),
+            FillRule::Winding,
+            true,
+            device,
+        );
+        for clip in &self.shape_clips {
+            let Some(inv) = clip.inverse else {
+                return false;
+            };
+            let Some(ts) =
+                Transform::from_row(inv[0], inv[3], inv[1], inv[4], inv[2], inv[5]).invert()
+            else {
+                return false;
+            };
+            let mut builder = PathBuilder::new();
+            for seg in &clip.path.0 {
+                match *seg {
+                    Seg::Move(x, y) => builder.move_to(x, y),
+                    Seg::Line(x, y) => builder.line_to(x, y),
+                    Seg::Cubic(a, b, c, d, x, y) => builder.cubic_to(a, b, c, d, x, y),
+                    Seg::Close => builder.close(),
+                }
+            }
+            let Some(path) = builder.finish() else {
+                return false;
+            };
+            let rule = if clip.even_odd {
+                FillRule::EvenOdd
+            } else {
+                FillRule::Winding
+            };
+            mask.intersect_path(&path, rule, true, device.pre_concat(ts));
+        }
+        mask.data().iter().any(|coverage| *coverage > 0)
+    }
+
     pub(super) fn map_clips(&mut self, inverse: [f32; 9]) {
         for clip in &mut self.shape_clips {
             clip.inverse = clip.inverse.map(|m| super::space::mul3(&m, &inverse));

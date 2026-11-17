@@ -6,6 +6,10 @@ export function assetName(name) {
 }
 
 export function assetDelivery({getModule, live, baseURI, devAssets = () => undefined,
+  readAppFile = async name => {
+    const {appFile} = await import("./picker-glue.js");
+    return appFile(name, globalThis.exact.compat?.inputs?.app).then(file => file.blob, () => null);
+  },
   delivered = () => {}, fetch = globalThis.fetch, deadlineMs = 20_000,
   attemptMs = 5_000, backoffMs = 250, byteLimit = 64 * 1024 * 1024}) {
 const assetFlights = new Set();
@@ -41,6 +45,13 @@ function assets(entry) {
       let bytes = null, failure;
       const deadline = performance.now() + deadlineMs;
       if (!assetName(name)) failure = "invalid asset name";
+      else if (name.startsWith("app:/")) {
+        try {
+          const blob = await readAppFile(name);
+          if (blob?.size > byteLimit) failure = "exceeds 64 MiB";
+          else if (blob) bytes = new Uint8Array(await blob.arrayBuffer());
+        } catch (error) { failure = String(error.message ?? error); }
+      }
       else if (devAssets() instanceof Map) {
         // A dev generation's card: its bytes, or read now and verified (dev.js `later`).
         const card = devAssets().get(`assets/${name}`);
@@ -56,7 +67,8 @@ function assets(entry) {
         let retry = true;
         try {
           const path = name.split("/").map(encodeURIComponent).join("/");
-          const response = await fetch(new URL(`./assets/${path}`, baseURI()), {signal:controller.signal});
+          const url = new URL(`./assets/${path}`, baseURI());
+          const response = await fetch(url, {signal:controller.signal});
           if (response.status === 404) { failure = undefined; break; }
           if (!response.ok) {
             retry = response.status >= 500;

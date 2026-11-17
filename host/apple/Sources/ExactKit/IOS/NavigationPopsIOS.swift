@@ -187,6 +187,32 @@ extension NavigationHost {
         resync()
     }
 
+    /// Runs what `transition` held when it ends, on the turn after its completion: the held sync (`runHeldSync`: a
+    /// stack's write, `tabsHeld`, or a sync a route's sheet deferred, `pendingSync`) and the selected stack's tablist,
+    /// which the bar could not follow while it ran, at the root (`tablistRoot`) or at a pushed route on top
+    /// (`tablistOwed`). The stack's own push or pop also runs the held sync from `willShow`'s completion, `didShow` and
+    /// `completeTransition`; this release serves any transition the stack reports, such as a presentation over it. A
+    /// call that finds a transition whose run is pending asks nothing more and loses nothing: the run reads the router
+    /// and the tree as they are then.
+    func runHeld(after transition: UIViewControllerTransitionCoordinator) {
+        guard !heldTransitions.contains(transition) else { return }
+        heldTransitions.add(transition)
+        let run = { [weak self] in
+            guard let self else { return }
+            runHeldSync()
+            guard let stack = routesStack(routerTab) else { return }
+            followTablist(stack.stackRoutes.compactMap { $0 as? RouteController }, in: stack)
+        }
+        let release = { [weak self, weak transition] in self?.heldTransitions.remove(transition) }
+        let queued = transition.animate(alongsideTransition: nil) { _ in DispatchQueue.main.async { release(); run() } }
+        // Run on the next turn too when the coordinator answers that it queued nothing, as one does once its completions
+        // have begun (`ModalController.viewDidAppear` meets one still installed), holding it through that run so it does
+        // not ask again; a stack that still reports it then leaves the work to the next batch, and a completion UIKit runs
+        // all the same finds nothing left to do
+
+        if !queued { DispatchQueue.main.async { run(); release() } }
+    }
+
     /// The child lists `batch` sets on the root and the tab panels.
     func foldChildren(_ batch: Batch) {
         for op in batch.ops where op.op == .children && logicalChildren[op.id] != nil {

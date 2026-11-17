@@ -16,6 +16,23 @@ private let out = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
 final class CanvasAssetReadsMacTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactSurfaces.install() } // LLP 1047.001 D4
 
+    func testAppFilesUseTheirRootsAndKeepTheGPUNameRules() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gpu-app-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("model".utf8).write(to: root.appendingPathComponent("part.glb"))
+        let resolver = AssetResolver(root: root, names: []) { _ in XCTFail("app files must bypass bundled assets"); return nil }
+        let roots = ["cache": root, "data": root, "tmp": root]
+        for kind in ["cache", "data", "tmp"] {
+            XCTAssertEqual(try CanvasesHost.readAsset("app:/\(kind)/part.glb", resolver: resolver, roots: roots), Data("model".utf8))
+        }
+        XCTAssertNil(try CanvasesHost.readAsset("app:/cache/missing.glb", resolver: resolver, roots: roots))
+        XCTAssertNil(try CanvasesHost.readAsset("app:/other/part.glb", resolver: resolver, roots: roots))
+        for name in ["app:/cache/../part.glb", "app:/cache/./part.glb", "app:/cache/café.glb", "app:/cache/" + String(repeating: "a", count: 118)] {
+            XCTAssertThrowsError(try CanvasesHost.readAsset(name, resolver: resolver, roots: roots), name)
+        }
+    }
+
     /// A session with one live canvas whose module asks for `requested` and records `delivered`.
     private func canvas(label: String) -> (ExactSession, CanvasesHost.Entry) {
         let s = ExactApp.shared.makeSession(label: label)

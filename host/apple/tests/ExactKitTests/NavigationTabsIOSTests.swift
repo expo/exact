@@ -41,7 +41,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         return tabs.tabBar.isHidden
     }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
@@ -52,7 +52,7 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// default window is iPhone 17's size at the screen's top left, which on
     /// a larger phone (iPhone Air, 18 Pro Max) ends above the indicator, and
     /// UIKit gives it no bottom inset.
-    private func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN", prepare: ((ExactSession) -> Void)? = nil) throws -> ExactSession {
+    func fixture(_ label: String, module: Bool = false, wholeScreen: Bool = false, plan key: String = "EXACT_FIXTURE_PLAN", prepare: ((ExactSession) -> Void)? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[key], "build.mjs --test --ios compiles \(key)")))
         let session = ExactApp.shared.makeSession(label: label)
@@ -88,7 +88,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
@@ -102,37 +102,6 @@ final class NavigationTabsIOSTests: XCTestCase {
         until(authored ? "the tablist writes appearance none" : "the tablist is the tab bar's again") {
             session.presenter.navigation.adopts(tablist: list) == !authored
         }
-    }
-
-    /// The root's tablist shown while its stack is in a transition (a sheet
-    /// presenting over the tabs), when the bar cannot move, brings the bar
-    /// back as the transition ends, with no batch after it.
-    func testTheRootsTablistShownDuringATransitionBringsTheBarBackAfterIt() throws {
-        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
-        guard hostedWindowScene() != nil else { throw missing("scene", "a presentation completes only in a scene's window") }
-        let session = try fixture("basics-roottabbar")
-        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
-        let root = try XCTUnwrap(nav.stackRoutes.first as? RouteController)
-        try tapNode(session, "toggle-choosing")
-        until("the bar left") { tabs.isTabBarHidden }
-        let held = HeldPresentation(), sheet = UIViewController()
-        defer { held.end() }
-        sheet.modalPresentationStyle = .overFullScreen
-        sheet.transitioningDelegate = held
-        tabs.present(sheet, animated: true)
-        let presentation = try XCTUnwrap(nav.transitionCoordinator, "the sheet's transition holds the stack")
-        until("the presentation animates") { held.animating }
-        // Press the control through the runtime: it is under the sheet
-        session.apply(session.runtime.press(try node(session, "toggle-choosing").id, now: session.now()))
-        until("the stack takes the shown tablist") { root.tablistHidden == false }
-        XCTAssertTrue(tabs.isTabBarHidden, "the bar waits for the transition")
-        // Read the bar on the turn after the transition's completions, this one added after the settle's
-        var hiddenAtEnd: Bool?
-        presentation.animate(alongsideTransition: nil) { _ in DispatchQueue.main.async { hiddenAtEnd = tabs.isTabBarHidden } }
-        held.end()
-        until("the sheet is up") { hiddenAtEnd != nil }
-        XCTAssertEqual(hiddenAtEnd, false, "the bar came back as the transition ended")
     }
 
     func testAgentActivatesAHiddenRootTabThroughItsVisibleBar() throws {
@@ -1480,17 +1449,4 @@ extension XCTestCase {
     }
 }
 
-/// A presentation whose transition runs until `end`, so a batch the test sends meanwhile lands mid-transition in every run.
-private final class HeldPresentation: NSObject, UIViewControllerTransitioningDelegate, UIViewControllerAnimatedTransitioning {
-    private var context: UIViewControllerContextTransitioning?
-    /// UIKit has asked for the animation, which `end` completes
-    var animating: Bool { context != nil }
-    func animationController(forPresented presented: UIViewController, presenting: UIViewController, source: UIViewController) -> UIViewControllerAnimatedTransitioning? { self }
-    func transitionDuration(using context: UIViewControllerContextTransitioning?) -> TimeInterval { 0 }
-    func animateTransition(using context: UIViewControllerContextTransitioning) {
-        if let view = context.view(forKey: .to) { context.containerView.addSubview(view) }
-        self.context = context
-    }
-    func end() { context?.completeTransition(true); context = nil }
-}
 #endif

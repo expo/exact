@@ -1630,6 +1630,7 @@ dependencies = [
  "same-file",
  "serde_json",
  "sha2 0.10.9",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2311,11 +2312,13 @@ dependencies = [
  "accesskit_windows",
  "accesskit_winit",
  "contract",
+ "exact-data",
  "exact-grants",
  "exact-ink",
  "exact-kernel",
  "exact-painted",
  "exact-runner",
+ "ibex2",
  "png",
  "serde_json",
  "sha2 0.10.9",

@@ -4,6 +4,12 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "known_folders_windows.rs"]
+mod windows;
+pub use windows::windows_id;
+#[cfg(windows)]
+pub use windows::windows_storage;
+
 /// Where the well-known folder `name` is on a Linux desktop: its
 /// `XDG_<NAME>_DIR` in `user-dirs.dirs` under `$XDG_CONFIG_HOME` (else
 /// `~/.config`), and `screenshots` the pictures folder's `Screenshots`,

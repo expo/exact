@@ -66,8 +66,9 @@ transform or an ancestor's) use the live-subtree scale path instead: it draws th
 transform, where the raster would fly upright. The largest corner radius is
 used while flying. Reversal preserves position, not velocity.
 
-This supports in-page transitions. Separate native dialog panes, presentation
-zooms and the platform's edge-stretch deformation are not covered. The Android
+This supports in-page transitions. Separate native dialog panes and the
+platform's edge-stretch deformation are not covered. Route zooms use the
+stage's container transform (below). The Android
 reader and Rust recorder must be rebuilt together after a stream change.
 
 ### Build
@@ -1273,6 +1274,25 @@ other side and fades in over the rest (`FastOutSlowIn`). The top app bar crosses
 in the page for the crossing. A popped route is drawn from its kept drawing. Under the agent a sheet and a crossing
 move on its clock: `clock settle` ends them.
 
+**A pushed or full-screen route with `navigationSource`** uses Material's container transform when the named
+source is visible in the route beneath. It picks the first matching `id` by node id, as the iOS zoom does, and
+uses the source's last painted rectangle, including scrolling and transforms. The route's whole box grows
+from that rectangle, fitted by width and clipped to the moving container's height, with corners rounding to
+16 dp at the source and content fading in over the first 30 %. The route beneath stays at rest. Back shrinks
+the kept drawing into the source, fading out over the last 30 %; it rechecks the source's current geometry
+and visibility, including rounded overflow clips. A missing, hidden, fully clipped or offscreen source uses
+the shared axis for a pushed route and a cut for a full-screen route, on both entrance and return.
+Reader-owned transform or opacity tracks on the source or an ancestor also take this fallback, since the
+stage cannot read their live samples. A full-screen entrance without a usable source keeps no drawing
+and offers no predictive Back preview. The source binding follows the live route, including changes and clearing it,
+and survives switching tabs until the route leaves its stack. A predictive
+Back's committed return starts at the preview's pose. Inside a sheet the shared axis stays; Remove animations
+cuts. This transforms the whole route rather than aligning to a matching image inside it as UIKit can.
+
+The timing follows Material's `MaterialContainerTransform`: `motionDurationMedium4` (400 ms) entering,
+`motionDurationMedium3` (350 ms) returning, and `motionEasingEmphasizedInterpolator` (the two-segment
+[Material 3 emphasized path](https://github.com/material-components/material-components-android/blob/master/lib/java/com/google/android/material/motion/res/values/tokens.xml)).
+
 **Predictive Back** (Android 14, `OnBackAnimationCallback`, `Native.backProgress`): the reader passes the gesture's
 start, progress and edge, and its cancel. Where Back would pop a route, the route shrinks toward 90 %, moves toward
 the side the swipe came from by a twentieth of the width less 8 dp and rounds its corners to 28 dp, the route it
@@ -1291,7 +1311,7 @@ agent's clock. The callback registers as an animation callback (`CoreBackPreview
 the system's Back gesture, so the preview itself was seen only in the presenter's tests.
 
 Not built: the hand-off between a sheet and a scroller in it (a list at its top dragged down moves the list's edge,
-not the sheet); a tab switch's fade-through; a `fullscreen` route's own entrance; a sheet's window of its own
+not the sheet); a tab switch's fade-through; a `fullscreen` route's entrance without a visible `navigationSource`; a sheet's window of its own
 (the IME's insets move it by ending the page, as they move any page).
 
 ## The bars (LLP 1115.001 D11)

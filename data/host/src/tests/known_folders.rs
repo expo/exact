@@ -1,9 +1,7 @@
 use super::*;
 
-#[cfg(unix)]
 static KNOWN_ROOTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(unix)]
 #[test]
 fn portable_storage_creates_in_known_folders_without_a_document_service() {
     let _roots = KNOWN_ROOTS.lock().unwrap_or_else(|e| e.into_inner());
@@ -34,12 +32,42 @@ fs.read app:/tmp";
     )
     .unwrap();
     assert_eq!(std::fs::read(root.0.join("note")).unwrap(), b"new");
-    assert!(run(
+    let error = run(
         "fs.atomicWriteFile",
-        json!({"path":"documents:/note","text":"overwrite"})
+        json!({"path":"documents:/note","text":"overwrite"}),
     )
-    .unwrap_err()
-    .contains("os error 17"));
+    .unwrap_err();
+    let exists = if cfg!(windows) {
+        &[80, 183][..]
+    } else {
+        &[17][..]
+    };
+    assert!(
+        exists
+            .iter()
+            .any(|code| error.contains(&format!("os error {code}"))),
+        "{error}"
+    );
+    run("fs.mkdir", json!({"path":"pictures:/Exports/2026"})).unwrap();
+    assert!(root.0.join("Exports/2026").is_dir());
+    for path in [
+        "pictures:/Exports",
+        "pictures:/Exports/2026",
+        "pictures:/Exports/2027",
+    ] {
+        let error = run("fs.mkdir", json!({"path":path})).unwrap_err();
+        assert!(
+            exists
+                .iter()
+                .any(|code| error.contains(&format!("os error {code}"))),
+            "{path}: {error}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(root.0.join("Exports")).unwrap().count(),
+        1
+    );
+    assert!(root.0.join("Exports/2026").is_dir());
     std::fs::create_dir_all(root.0.join("temporary")).unwrap();
     std::fs::write(root.0.join("temporary/capture"), b"png").unwrap();
     run(
@@ -47,6 +75,19 @@ fs.read app:/tmp";
         json!({"path":"app:/tmp/capture","destination":"pictures:/shot.png"}),
     )
     .unwrap();
+    assert_eq!(std::fs::read(root.0.join("shot.png")).unwrap(), b"png");
+    std::fs::write(root.0.join("temporary/capture"), b"replacement").unwrap();
+    let error = run(
+        "fs.copyFile",
+        json!({"path":"app:/tmp/capture","destination":"pictures:/shot.png"}),
+    )
+    .unwrap_err();
+    assert!(
+        exists
+            .iter()
+            .any(|code| error.contains(&format!("os error {code}"))),
+        "{error}"
+    );
     assert_eq!(std::fs::read(root.0.join("shot.png")).unwrap(), b"png");
     assert!(run("fs.rm", json!({"path":"pictures:/shot.png"}))
         .unwrap_err()
@@ -155,6 +196,7 @@ fn agent_storage_uses_the_folder_handle_after_its_name_is_replaced() {
     set_roots(Default::default());
 }
 
+#[cfg(unix)]
 #[test]
 fn desktop_known_folders_refuse_links_planted_through_home() {
     use ibex2::stdlib::fs::{run, set_roots, FsOp, Roots};
@@ -222,6 +264,7 @@ fn desktop_known_folders_refuse_links_planted_through_home() {
     set_roots(Default::default());
 }
 
+#[cfg(unix)]
 #[test]
 fn writable_folder_settings_and_their_hard_links_cannot_redirect_desktop_storage() {
     use ibex2::stdlib::fs::{run, set_roots, FsOp, Roots};
@@ -306,6 +349,7 @@ fn writable_folder_settings_and_their_hard_links_cannot_redirect_desktop_storage
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn desktop_folder_links_outside_write_grants_and_settings_changes_are_followed() {
     use ibex2::stdlib::fs::{run, set_roots, FsOp, Roots};
@@ -359,6 +403,7 @@ fn desktop_folder_links_outside_write_grants_and_settings_changes_are_followed()
     set_roots(Default::default());
 }
 
+#[cfg(unix)]
 #[test]
 fn writable_settings_refuse_only_the_roles_they_control() {
     use ibex2::stdlib::fs::{run, set_roots, FsOp, Roots};
@@ -403,6 +448,7 @@ fn writable_settings_refuse_only_the_roles_they_control() {
     set_roots(Default::default());
 }
 
+#[cfg(unix)]
 #[test]
 fn storage_preserves_resolver_access_denial() {
     use ibex2::stdlib::fs::{run, set_roots, FsOp, Roots};

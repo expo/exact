@@ -136,15 +136,18 @@ No decoder or additional asset format is linked into a game.
 Meshopt supports vertex codecs v0/v1, triangle and index-sequence codecs, and
 `OCTAHEDRAL`, `QUATERNION` and `EXPONENTIAL` filters. Invalid streams, unsupported
 modes or filters, and missing fallback data refuse with the extension and view
-named. A decoded view is limited to 256 MiB. The port retains meshoptimizer's
-[MIT notice](src/meshopt/LICENSE.md).
+named. A decoded view is limited to 256 MiB. The decoder is the dependency-free
+[`exact-meshopt`](../../packages/model-viewer/meshopt/) leaf crate (LLP 1133.039 D13),
+which retains meshoptimizer's [MIT notice](../../packages/model-viewer/meshopt/LICENSE.md).
 
 `tests/fixtures/meshopt/optimized.glb` is the existing cube fixture, with its
-material removed, passed through `optimize`. `buffers.json` records compressed
-inputs and expected bytes from npm `meshoptimizer@0.25.0`; Rust tests read those
-committed bytes and need no JavaScript packages or network. They cover both vertex
-versions, all three filters, both index widths, block boundaries and malformed
-streams. Filter arithmetic matches npm's WASM SIMD decoder (`f32`, ties-to-even),
+material removed, passed through `optimize`. The decoder's
+[`tests/fixtures/buffers.json`](../../packages/model-viewer/meshopt/tests/fixtures/buffers.json)
+records compressed inputs and expected bytes from npm `meshoptimizer@0.25.0`.
+Rust tests read those committed bytes and need no JavaScript packages or network.
+They cover both vertex versions, all three filters, both index widths, block
+boundaries and malformed streams. The bake runs the same decoder tests through a
+shared test target. Filter arithmetic matches npm's WASM SIMD decoder (`f32`, ties-to-even),
 which can differ by one integer from its JavaScript reference decoder.
 
 They were made once with glTF-Transform's CLI 4.2.1 (core, extensions and functions

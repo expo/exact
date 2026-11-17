@@ -4,7 +4,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { readManifest } from '../scripts/app.mjs';
 import { appVerbs } from '../scripts/app-cli.mjs';
 import { bringPlatform, ensureShells } from '../scripts/app-shells.mjs';
@@ -72,6 +72,20 @@ test('launchers and generated own commands find pinned Bun with an old PATH', ()
       const root = spawnSync(old, [resolve(import.meta.dirname, '../scripts/exact.mjs'), 'list'], {env, encoding: 'utf8'});
       assert.equal(root.status, 0, root.stderr);
     }
+  } finally {rmSync(parent, {recursive: true, force: true});}
+});
+
+test('a launcher whose creating Bun is not on this machine runs the Bun on PATH', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-bun-'));
+  try {
+    const dir = resolve(parent, 'moved'); createApp(dir);
+    const launcher = resolve(dir, 'exact.mjs'), text = readFileSync(launcher, 'utf8');
+    // The app as another account or machine checks it out: the Bun `exact new` ran is not there.
+    writeFileSync(launcher, text.replace(`'${process.execPath}'`, `'${resolve(parent, 'gone/bun')}'`), {mode: 0o755});
+    const env = {...process.env, HOME: parent, PATH: `${dirname(process.execPath)}:/usr/bin:/bin`};
+    delete env.BUN;
+    const run = spawnSync(launcher, ['--help'], {env, encoding: 'utf8'});
+    assert.equal(run.status, 0, run.stderr);
   } finally {rmSync(parent, {recursive: true, force: true});}
 });
 

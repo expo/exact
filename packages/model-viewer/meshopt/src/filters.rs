@@ -1,4 +1,4 @@
-// Port of meshoptimizer v0.25's WASM filters; see mod.rs and LICENSE.md.
+// Port of meshoptimizer v0.25's WASM filters; see lib.rs and ../LICENSE.md.
 // https://github.com/zeux/meshoptimizer/blob/v0.25/src/vertexfilter.cpp
 use super::Result;
 

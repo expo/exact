@@ -376,17 +376,39 @@ extension CanvasesHost {
     /// The module's answer when a canvas asks for no asset (`AssetChanges::json`).
     static let noAssetChanges = Data(#"{"requests":[],"retired":[]}"#.utf8)
 
+    static func readAsset(_ name: String, resolver: AssetResolver?, roots: [String: URL]) throws -> Data? {
+        guard AssetResolver.validAssetName(name) else { throw CocoaError(.fileReadInvalidFileName) }
+        if name.hasPrefix("app:/") {
+            guard let file = AppFileWalk.open(name, roots: roots) else { return nil }
+            defer { try? file.close() }
+            return try file.readToEnd() ?? Data()
+        }
+        return try resolver?.delivery("assets/" + name)
+    }
+
+    private func assetReader(_ names: [String]) -> (String) throws -> Data? {
+        let resolver = session?.app.resolver
+        var roots: [String: URL] = [:]
+        if names.contains(where: { $0.hasPrefix("app:/") }), let session,
+           let reply = try? JSONSerialization.jsonObject(with: Data(session.runtime.agent(#"{"op":"appRoots"}"#).utf8)) as? [String: Any],
+           let paths = reply["roots"] as? [String: String] {
+            roots = paths.filter { ["data", "cache", "tmp"].contains($0.key) }.mapValues { URL(fileURLWithPath: $0, isDirectory: true) }
+        }
+        return { name in try Self.readAsset(name, resolver: resolver, roots: roots) }
+    }
+
     /// Read `names` for `e` off the main thread, in order; each lands in
     /// `e.arrived` and is delivered at once on the main thread, so a canvas's
     /// deliveries take a turn each between frames.
     func readAssets(_ names: [String], for e: Entry) {
-        guard !names.isEmpty, let resolver = session?.app.resolver else { return }
+        guard !names.isEmpty, session != nil else { return }
+        let read = assetReader(names)
         for name in names {
             assetReadSerial += 1
             let serial = assetReadSerial
             e.reading[name] = serial
             assetReads.async { [weak self, weak e] in
-                let bytes = Result { try resolver.delivery("assets/" + name) }
+                let bytes = Result { try read(name) }
                 DispatchQueue.main.async {
                     guard let self, let e, e.reading[name] == serial else { return }
                     e.reading.removeValue(forKey: name)
@@ -433,7 +455,8 @@ extension CanvasesHost {
                     // here, in the order asked, and their late results dropped.
                     let inFlight = e.reading.sorted { $0.value < $1.value }.map(\.key)
                     e.reading.removeAll()
-                    ready += (inFlight + requests).map { name in (name, Result { try session?.app.resolver.delivery("assets/" + name) }) }
+                    let names = inFlight + requests, read = assetReader(names)
+                    ready += names.map { name in (name, Result { try read(name) }) }
                 }
                 guard !ready.isEmpty else { break }
                 delivered = true

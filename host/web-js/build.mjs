@@ -593,7 +593,6 @@ if (launchWeb.length) {
 if (ts) writeFileSync(resolve(gen, 'held-hooks.js'), "import { answering } from './ts-fetch.js'; import { heldReply, looseFetch } from './held.js'; Object.assign(answering, { loose: looseFetch, heldReply });\n");
 const rustAdmissionImports = rustLinked ? ["import { setAppGrantSet } from './admission.js'; import { tsGrantSet, rustGrantSet } from './admission-data.js';"] : [];
 const rustAdmission = rustLinked ? [
-  `data.appId ??= ${JSON.stringify((await import('../../scripts/app.mjs')).readManifest(appDir, app).app.id)};`,
   'data.grants = setAppGrantSet(tsGrantSet, rustGrantSet);',
 ] : [];
 // The web host's base stylesheet, as its build writes it (comments out).
@@ -638,6 +637,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `views`: media-glue.js; `viewId`: navigation.js; `After`: motion.js); the agent adapter, inspect and the dev
   // loop read the rest, so a development page names them too.
   `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources${production ? '' : ', agentMode, advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
+  `data.appId = ${JSON.stringify(readManifest(appDir, app).app.id)};`,
   `data.keepSurfaceAnswers = ${!tsGrantSet.keepsNoAnswers && !rustGrantSet.keepsNoAnswers};`,
   ...(secretNames.length ? [`import { install as secrets } from './store-reader.js'; secrets(${JSON.stringify(secretNames)});`] : []),
   ...(production ? [] : ["import { develop } from './perf.js';"]),

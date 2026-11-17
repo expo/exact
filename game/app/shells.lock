@@ -1202,6 +1202,7 @@ dependencies = [
  "ctt-astcenc",
  "ctt-intel-texture-compressor",
  "exact-game",
+ "exact-meshopt",
  "gltf",
  "image",
  "lewton",
@@ -1405,6 +1406,10 @@ version = "0.1.0"
 dependencies = [
  "exact-markdown",
 ]
+
+[[package]]
+name = "exact-meshopt"
+version = "0.1.0"
 
 [[package]]
 name = "exact-motion"

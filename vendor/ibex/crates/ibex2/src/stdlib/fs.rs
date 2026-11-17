@@ -494,6 +494,8 @@ pub enum FsResult {
 
 #[path = "fs_roots.rs"]
 mod roots;
+#[cfg(windows)]
+pub use super::fs_known_windows::WindowsAgentFolders;
 use roots::run_namespaced;
 #[cfg(unix)]
 pub use roots::KnownFolderGuard;
