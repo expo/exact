@@ -3,8 +3,8 @@
 
 use super::answers::{left_out, property, role_can};
 use super::Em;
-use exact_kernel::{PropId, StyleId};
-use exact_plan::{BindingKind, EventKind};
+use exact_kernel::PropId;
+use exact_plan::EventKind;
 
 /// The constants of input-glue.js, each a behaviour of the piece.
 pub(crate) const ALL: [&str; 6] = [
@@ -21,18 +21,9 @@ pub(crate) const ALL: [&str; 6] = [
 pub(super) fn unused(em: &Em) -> Vec<&'static str> {
     let plan = em.plan;
     let any = |f: &dyn Fn(u32) -> bool| (0..plan.nodes.len() as u32).any(f);
-    // A pressed paint is the rows `:active` lowers to (css.rs), which the piece reads from the
-    // node's own style.
-    let paints = [
-        StyleId::PressOpacity,
-        StyleId::PressOpacityTo,
-        StyleId::PressBackgroundColor,
-        StyleId::PressColor,
-    ];
     let used = [
-        plan.bindings
-            .iter()
-            .any(|b| b.kind == BindingKind::Style && paints.iter().any(|s| b.id == *s as u16)),
+        // Set where emit.rs and rows.rs write a pressed paint, which the piece reads from the node's own style.
+        em.press_paint,
         !em.looks.is_empty(),
         plan.handlers.iter().any(|h| h.event == EventKind::Pan),
         // A chooser is an `alertdialog` a menu's row opens (navigation/popover.js).

@@ -10,8 +10,8 @@ const AGENT_ADMITTED = true;
 const WASM_HOST = true;
 // @ref LLP 1047.002 D4.2 — the behaviours that act only on what a plan makes: a pressed paint, a state look's edges, a
 // pan, a tablist's and a menu's keys, a radio group's, and keyboard shortcuts. The JS target's build writes false each
-// one its plan cannot make (input.flag), and the bundler drops its code. A development page that meets one left out
-// says so once in its journal (`arrive`).
+// one its plan cannot make (input.flag), and the bundler drops its code. The hourly conformance check fails a page
+// holding what a left-out behaviour acts on (conform-cut.mjs `LEFT_OUT`).
 const PRESS_PAINT = true, STATE_LOOKS = true, PANS = true, ROVING = true, RADIO_GROUPS = true, SHORTCUTS = true;
 const hearsPress = el => (el.exactHandlers ?? el.dataset?.exactOn?.split(" "))?.includes("press") === true;
 /** An element whose `press` the keyboard reaches only through its tabindex:
@@ -137,7 +137,6 @@ function typeAhead(root, event) {
   return true;
 }
 export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
-  const unlinked = new Set(), missing = what => unlinked.has(what) || (unlinked.add(what), log(`input: the page has ${what}, which this build left out: its plan makes none (LLP 1047.002 D4.2)`));
   // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
   // Append the default there so the handler's updates and showPicker run first.
   // A successful showPicker consumes the activation, even for another input.
@@ -1164,7 +1163,6 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     if (mark !== (names ? "named" : "")) { route.setAttribute("data-exact-dialog", names ? "named" : ""); route.setAttribute("role", "dialog"); route.setAttribute("aria-modal", "true"); }
   };
   const arrive = () => {
-    if (AGENT_ADMITTED) for (const [kept, what, at] of [[PRESS_PAINT, "a pressed paint", '[style*="--exact-press-opacity"], [style*="--exact-press-background-color"], [style*="--exact-press-color"]'], [STATE_LOOKS, "a state look", "[data-exact-looks]"], [ROVING, "a tablist or a menu", ROVES], [RADIO_GROUPS, "a radio group", '[role="radiogroup"]'], [SHORTCUTS, "a keyboard shortcut", "button[aria-keyshortcuts]"]]) if (!kept && root.querySelector(at)) missing(what);
     const nav = root.querySelector("[navigationBack]"), key = nav?.getAttribute("navigationKey");
     for (const route of nav?.querySelectorAll(":is([navigationPresentation], [data-exact-dialog]):not([data-exiting])") ?? []) dialog(route); // a sheet sliding away is no route (navigation.js `sheetLeaves`)
     const top = key == null ? null : [...nav.querySelectorAll("[navigationKey]")].find(r => r.getAttribute("navigationKey") === key && r.parentElement.closest("[navigationKey]") === nav);

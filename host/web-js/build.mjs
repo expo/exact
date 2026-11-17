@@ -749,8 +749,10 @@ writeFileSync(resolve(gen, 'mount.js'), localImports(production
 const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
   : launchWeb.length ? `its launch service ${launchWeb[0].name}`
   : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
-// The behaviours a flag says the plan cannot use (input.flag, navigation.flag; LLP 1047.002 D2.1, D4.2).
+// The behaviours a flag says the plan cannot use (input.flag, navigation.flag; LLP 1047.002 D2.1, D4.2), which the page
+// leaves out; `left-out.json` names them for the hourly check (conform-cut.mjs).
 const unusedOf = flag => otherWriter ? [] : readFileSync(resolve(gen, flag), 'utf8').split('\n').filter(Boolean);
+writeFileSync(resolve(gen, 'left-out.json'), JSON.stringify([...unusedOf('navigation.flag'), ...unusedOf('input.flag')]));
 // The web host's own pieces the runtime loads (glue.mjs).
 stageHostGlue(root, gen, unusedOf('input.flag'));
 // The input piece imports the dialog glue for the wasm host; this page imports it where the plan has a dialog (main.js,

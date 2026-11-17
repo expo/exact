@@ -6,8 +6,8 @@ import { popoverObservation } from "./popover.js";
 const AGENT_ADMITTED = true; // false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
 // @ref LLP 1047.002 D2.1 — the behaviours that act only on what a plan makes: a tablist's panels and the sidebar, a
 // split's list, a presented route (its frame, its slide down and Escape), a route's app bar, a clear bar. The JS
-// target's build writes false each one its plan cannot make (navigation.flag), and the bundler drops its code. A
-// development page that meets one left out says so once in its journal (`missing`).
+// target's build writes false each one its plan cannot make (navigation.flag), and the bundler drops its code. The
+// hourly conformance check fails a page holding what a left-out behaviour acts on (conform-cut.mjs `LEFT_OUT`).
 const TABS = true, SPLITS = true, SHEETS = true, BARS = true, CLEAR_BARS = true;
 let last = null, refused = new WeakMap();
 // The tabpanels each root last hid or showed (one it stops naming shows again); the keys of the stack it last showed.
@@ -118,7 +118,6 @@ export function sheetLeaves(el) {
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
 const tabsOf = (nav) => {
   if (!TABS) {
-    AGENT_ADMITTED && nav?.querySelector("[role=tablist]") && missing("a tablist");
     return [null, []];
   }
   const all = [...nav?.getElementsByTagName("*") ?? []];
@@ -155,7 +154,6 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
-const unlinked = new Set(), missing = (what) => unlinked.has(what) || (unlinked.add(what), log?.(`navigation: the page has ${what}, which this build left out: its plan makes none (LLP 1047.002 D2)`));
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
 // `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
 // word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
@@ -194,7 +192,6 @@ function selectedDetent(route) {
  * changed. `shownIn` is the sheet each route shows in (`sheetAt`), `inUse` the sheets something shown is in. */
 function sheetFrame(routes, index, shownIn, inUse) {
   if (!SHEETS) {
-    AGENT_ADMITTED && sheet(routes[index]) && missing("a presented route");
     return;
   }
   const route = routes[index], at = shownIn[index], pushed = at >= 0 && at !== index;
@@ -377,7 +374,6 @@ function captureRow(event) {
 /** Href rows restore from retained visits. Action-only rows remember a router change made inside a normal click dispatch. */
 function detailRows(routes, found) {
   if (!SPLITS) {
-    AGENT_ADMITTED && (routes[0]?.hasAttribute("navigationSplit") || routes[0]?.querySelector("[data-exact-list]")) && missing("a list or split");
     return;
   }
   for (const route of routes.slice(1)) {
@@ -672,7 +668,6 @@ function watchClearBars() {
 }
 function appBarBack(nav, routes, index, split, shown) {
   if (!BARS) {
-    AGENT_ADMITTED && headerOf(routes[index]) && missing("a route's header");
     return;
   }
   const route = routes[index], header = headerOf(route);
