@@ -1,0 +1,5 @@
+component App
+  view
+    column padding=16 align-items="flex-start"
+      button aria-label="Add" buttonStyle="bordered" testId="specimen"
+        image "symbol:add"

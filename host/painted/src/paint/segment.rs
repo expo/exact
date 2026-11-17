@@ -54,7 +54,7 @@ fn material_role(role: Material, nearest: &str, dark: bool) -> [u8; 4] {
 
 /// A box's outline as a path, `by` inside its edge, each corner round by
 /// its radius less `by` (top left, top right, bottom right, bottom left).
-fn outline_path(rect: Rect4, radii: [f32; 4], by: f32) -> String {
+pub(super) fn outline_path(rect: Rect4, radii: [f32; 4], by: f32) -> String {
     let (l, t) = (rect.0 + by, rect.1 + by);
     let (r, b) = (rect.0 + rect.2 - by, rect.1 + rect.3 - by);
     let [tl, tr, br, bl] = radii.map(|v| (v - by).max(0.0));

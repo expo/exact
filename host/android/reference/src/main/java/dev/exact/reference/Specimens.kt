@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
@@ -23,12 +24,15 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -95,6 +99,12 @@ private fun Inline(id: String) {
                     shape = SegmentedButtonDefaults.itemShape(i, 3),
                 ) { Text(label) }
             }
+        }
+        "icon-button" -> IconButton(onClick = {}) { Icon(Icons.Filled.Add, contentDescription = "Add") }
+        "icon-button-tonal" -> FilledTonalIconButton(onClick = {}) { Icon(Icons.Filled.Add, contentDescription = "Add") }
+        "icon-button-outlined" -> OutlinedIconButton(onClick = {}) { Icon(Icons.Filled.Add, contentDescription = "Add") }
+        "icon-toggle-checked" -> IconToggleButton(checked = true, onCheckedChange = {}) {
+            Icon(Icons.Filled.Add, contentDescription = "Add")
         }
         "defect-missing-control" -> Box(Modifier.size(48.dp))
         "defect-neighbour-role" -> Button(

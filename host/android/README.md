@@ -556,6 +556,15 @@ in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a swi
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
 The controls' shapes are still the desktop painter's (D9).
 
+**An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
+title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
+`SmallIconButtonTokens`), in a 48 dp touch target. Its `buttonStyle` picks which: unsaid or `plain` the standard
+`IconButton` (no container, in `onSurface`), `tinted` the `FilledTonalIconButton`, `filled` the
+`FilledIconButton`, any other said style the `OutlinedIconButton`. With an `aria-pressed` it is that button's toggle
+(`IconToggleButton` and the rest), in `IconButtonDefaults`' checked and unchecked colours. The oracle draws it
+beside Compose's as the `icon-button`, `icon-button-tonal`, `icon-button-outlined` and `icon-toggle-checked`
+specimens.
+
 **A press is Material's ripple** (D9; `host/painted/src/paint/ripple.rs`): on a button, a segment, a field that opens
 something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other
 node that presses (a `press` or a link's `href`) with no pressed look of its own (`:active`, `-exact-press-scale`,

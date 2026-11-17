@@ -1043,3 +1043,95 @@ fn rtl_switch_thumb_follows_checked_state_and_direction() {
         );
     }
 }
+
+const ICONS: &str = r##"component App
+  view
+    column padding=10 align-items="flex-start" gap=10
+      button aria-label="Save" testId="standard"
+        image "symbol:bookmark"
+      button aria-label="Saved" aria-pressed=true testId="standard-on"
+        image "symbol:bookmark-fill"
+      button buttonStyle="tinted" aria-label="Add" testId="tonal"
+        image "symbol:add"
+      button buttonStyle="filled" aria-label="Add" testId="filled"
+        image "symbol:add"
+      button buttonStyle="bordered" aria-label="Add" testId="outlined"
+        image "symbol:add"
+      button buttonStyle="tinted" disabled=true aria-label="Add" testId="tonal-off"
+        image "symbol:add"
+      button aria-label="Add" width=56 height=56 testId="sized"
+        image "symbol:add"
+"##;
+
+/// A button holding only a symbol is Material's icon button
+/// (`IconButton.kt`): a round 40 dp container round a 24 dp icon, its
+/// container and ink by its emphasis. Unsaid it has no container and no
+/// outline; `tinted` is filled in `secondaryContainer`, `filled` in the
+/// accent, `bordered` outlined; pressed, a toggle's icon is the accent;
+/// disabled, the container is no longer its colour. A size the author
+/// wrote wins.
+#[test]
+fn materials_icon_buttons_are_round_and_take_their_emphasis() {
+    if !material_process() {
+        return;
+    }
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(ICONS),
+        (),
+        (400., 600.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let page = pixel(&mut p, 2.0, 2.0);
+    let accent = crate::paint::control::accents(None, false).0;
+    let rect = |p: &mut Presenter<()>, name| {
+        let view = id(p, name);
+        p.rect_of(view).unwrap()
+    };
+    for name in [
+        "standard",
+        "standard-on",
+        "tonal",
+        "filled",
+        "outlined",
+        "tonal-off",
+    ] {
+        let r = rect(&mut p, name);
+        assert_eq!((r.2, r.3), (40.0, 40.0), "{name}: icon-button-size");
+        assert_eq!(pixel(&mut p, r.0 + 1.0, r.1 + 1.0), page, "{name}: round");
+    }
+    // Inside the container, clear of the icon (8 dp in from its edge).
+    let inside = |p: &mut Presenter<()>, name| {
+        let r = rect(p, name);
+        pixel(p, r.0 + 5.0, r.1 + 20.0)
+    };
+    assert_eq!(inside(&mut p, "standard"), page, "no container");
+    assert_eq!(inside(&mut p, "outlined"), page, "an outline, not a fill");
+    let outlined = rect(&mut p, "outlined");
+    assert_ne!(
+        pixel(&mut p, outlined.0 + 0.5, outlined.1 + 20.0),
+        page,
+        "its outline"
+    );
+    // The test reports no palette: `secondaryContainer` is `ButtonFace`'s fallback.
+    let tonal = inside(&mut p, "tonal");
+    assert_ne!(tonal, page, "a container");
+    assert_eq!(inside(&mut p, "filled"), accent);
+    assert_ne!(inside(&mut p, "tonal-off"), tonal, "disabled");
+    let on = rect(&mut p, "standard-on");
+    let frame = (*p.frame()).clone();
+    let at = |v: f32| (v * 2.4375) as u32;
+    let accented = (at(on.1)..at(on.1 + on.3))
+        .flat_map(|y| (at(on.0)..at(on.0 + on.2)).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let c = frame.pixel(x, y).unwrap().demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()] == accent
+        })
+        .count();
+    assert!(accented > 0, "a pressed toggle's icon is the accent");
+    let sized = rect(&mut p, "sized");
+    assert_eq!((sized.2, sized.3), (56.0, 56.0));
+}
