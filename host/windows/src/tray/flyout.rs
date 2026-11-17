@@ -1,21 +1,21 @@
 //! The status menu's popup window: the shared presenter's MenuFlyout,
-//! painted into a window of its own at the pointer, which can open while
-//! the app's window is hidden (LLP 1115.004 D10.1). Windows places it as
-//! `TrackPopupMenuEx` places a menu, inside the work area of the monitor
-//! the pointer is on, flipped where it would not fit
-//! ([CalculatePopupWindowPosition](https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-calculatepopupwindowposition));
-//! the Desktop Window Manager rounds its corners as a Windows 11 flyout's
+//! painted into a window of its own beside the notification icon, which
+//! can open while the app's window is hidden (LLP 1115.004 D10.1). Its
+//! room excludes the icon and taskbar, even when auto-hide leaves the
+//! taskbar inside the monitor's work area. The Desktop Window Manager
+//! rounds its corners as a Windows 11 flyout's
 //! (`DWMWCP_ROUND`, 8 px) and the class's drop shadow is a menu's
 //! (`CS_DROPSHADOW`). It takes the foreground, so that its keys reach it
 //! and a click anywhere else, which activates another window, dismisses
 //! it. Its pointer and keys are handed to the loop's next turn.
 #![allow(unsafe_code)]
+use super::placement::{Edge, Placement, Rect};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT, RECT, SIZE},
+    Foundation::{HWND, POINT, RECT},
     Graphics::{
         Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND},
         Gdi::{
@@ -31,16 +31,18 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{
             ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
         },
-        Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
+        Shell::{
+            DefSubclassProc, RemoveWindowSubclass, SHAppBarMessage, SetWindowSubclass, ABE_BOTTOM,
+            ABE_LEFT, ABE_RIGHT, ABE_TOP, ABM_GETAUTOHIDEBAREX, ABM_GETTASKBARPOS, APPBARDATA,
+        },
         WindowsAndMessaging::{
-            CalculatePopupWindowPosition, CreateWindowExW, DefWindowProcW, DestroyWindow,
-            GetSystemMetrics, LoadCursorW, RegisterClassExW, SetForegroundWindow, SetWindowPos,
-            ShowWindow, SystemParametersInfoW, CS_DROPSHADOW, HWND_TOPMOST, IDC_ARROW,
-            SM_MENUDROPALIGNMENT, SPI_GETWHEELSCROLLLINES, SWP_NOACTIVATE, SW_HIDE, SW_SHOW,
-            TPM_LEFTALIGN, TPM_RIGHTALIGN, TPM_WORKAREA, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
-            WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-            WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WNDCLASSEXW,
-            WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, GetSystemMetrics, GetWindowRect,
+            LoadCursorW, RegisterClassExW, SetForegroundWindow, SetWindowPos, ShowWindow,
+            SystemParametersInfoW, CS_DROPSHADOW, HWND_TOPMOST, IDC_ARROW, SM_MENUDROPALIGNMENT,
+            SPI_GETWHEELSCROLLLINES, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WA_INACTIVE, WM_ACTIVATE,
+            WM_CANCELMODE, WM_CHAR, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+            WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+            WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
         },
     },
 };
@@ -70,6 +72,7 @@ struct State {
     /// hiding, is no one's.
     shown: Cell<bool>,
     tracking: Cell<bool>,
+    high_surrogate: Cell<Option<u16>>,
 }
 
 impl State {
@@ -87,14 +90,60 @@ pub(crate) struct Flyout {
     state: Rc<State>,
     /// The opening shown.
     shown: Option<u32>,
+    access: crate::accessibility::MenuAccess,
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
 
+impl From<RECT> for Rect {
+    fn from(rect: RECT) -> Self {
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        }
+    }
+}
+
+/// `ABM_GETTASKBARPOS` names the system taskbar. An auto-hide bar on a
+/// secondary monitor is queried by its monitor and edge instead.
+/// https://learn.microsoft.com/windows/win32/shell/abm-getautohidebarex
+fn taskbar(monitor: RECT) -> Option<(Edge, Rect)> {
+    let edges = [
+        (ABE_LEFT, Edge::Left),
+        (ABE_TOP, Edge::Top),
+        (ABE_RIGHT, Edge::Right),
+        (ABE_BOTTOM, Edge::Bottom),
+    ];
+    let mut data = APPBARDATA {
+        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+        ..Default::default()
+    };
+    if unsafe { SHAppBarMessage(ABM_GETTASKBARPOS, &mut data) } != 0
+        && Rect::from(data.rc).intersects(monitor.into())
+    {
+        // Only rc is documented as output for ABM_GETTASKBARPOS.
+        return Some((Edge::of_bar(data.rc.into(), monitor.into()), data.rc.into()));
+    }
+    for (value, edge) in edges {
+        data.uEdge = value;
+        data.rc = monitor;
+        let window = unsafe { SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &mut data) } as HWND;
+        let mut rect = RECT::default();
+        if !window.is_null() && unsafe { GetWindowRect(window, &mut rect) } != 0 {
+            return Some((edge, rect.into()));
+        }
+    }
+    None
+}
+
 impl Flyout {
-    pub(crate) fn new() -> Option<Flyout> {
+    pub(crate) fn new(
+        proxy: winit::event_loop::EventLoopProxy<crate::accessibility::Event>,
+    ) -> Option<Flyout> {
         let class = wide("ExactStatusMenu");
         let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
         let registration = WNDCLASSEXW {
@@ -152,11 +201,31 @@ impl Flyout {
                 4,
             )
         };
+        let access = crate::accessibility::MenuAccess::new(accesskit_windows::HWND(window), proxy);
         Some(Flyout {
+            access,
             window,
             state,
             shown: None,
         })
+    }
+
+    pub(crate) fn sync_access<D: exact_runner::DataSource>(
+        &mut self,
+        p: &mut exact_painted::Presenter<D>,
+        scale: f64,
+    ) {
+        if self.shown.is_some() {
+            self.access.sync(p, scale);
+        }
+    }
+
+    pub(crate) fn access_action<D: exact_runner::DataSource>(
+        &mut self,
+        p: &mut exact_painted::Presenter<D>,
+        request: accesskit::ActionRequest,
+    ) {
+        self.access.action(p, request);
     }
 
     pub(crate) fn set_wake(&self, wake: impl Fn() + 'static) {
@@ -167,9 +236,19 @@ impl Flyout {
         std::mem::take(&mut *self.state.input.borrow_mut())
     }
 
-    /// The room a menu has on the monitor at `at` (screen pixels): its work
-    /// area in points, at that monitor's scale.
-    pub(crate) fn room(at: (i32, i32)) -> ((f32, f32), f32) {
+    /// The icon's monitor, available room and scale. The callback's point
+    /// is used only if the shell cannot locate the icon.
+    pub(crate) fn anchor(icon: Option<Rect>, at: (i32, i32)) -> (Placement, f32) {
+        let icon = icon.unwrap_or(Rect {
+            left: at.0,
+            top: at.1,
+            right: at.0 + 1,
+            bottom: at.1 + 1,
+        });
+        let at = (
+            icon.left + (icon.right - icon.left) / 2,
+            icon.top + (icon.bottom - icon.top) / 2,
+        );
         let monitor =
             unsafe { MonitorFromPoint(POINT { x: at.0, y: at.1 }, MONITOR_DEFAULTTONEAREST) };
         let mut info = MONITORINFO {
@@ -182,18 +261,20 @@ impl Flyout {
             GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut unused);
         }
         let scale = dpi.max(96) as f32 / 96.;
-        let work = info.rcWork;
-        let size = (
-            (work.right - work.left) as f32,
-            (work.bottom - work.top) as f32,
-        );
-        ((size.0 / scale, size.1 / scale), scale)
+        (
+            Placement::new(
+                icon,
+                info.rcMonitor.into(),
+                info.rcWork.into(),
+                taskbar(info.rcMonitor),
+            ),
+            scale,
+        )
     }
 
-    /// Show opening `serial` at `at` (screen pixels, the anchor the shell
-    /// gave), its picture premultiplied RGBA `rgba` of `size` pixels; again,
-    /// where it is shown, with a new picture.
-    pub(crate) fn show(&mut self, serial: u32, at: (i32, i32), rgba: &[u8], size: (u32, u32)) {
+    /// Show opening `serial` beside its icon, with premultiplied RGBA
+    /// pixels. A new picture keeps the same anchor.
+    pub(crate) fn show(&mut self, serial: u32, anchor: Placement, rgba: &[u8], size: (u32, u32)) {
         let bgra: Vec<u8> = rgba
             .as_chunks::<4>()
             .0
@@ -201,32 +282,17 @@ impl Flyout {
             .flat_map(|px| [px[2], px[1], px[0], 255])
             .collect();
         *self.state.pixels.borrow_mut() = (bgra, size.0 as i32, size.1 as i32);
-        let align = if unsafe { GetSystemMetrics(SM_MENUDROPALIGNMENT) } != 0 {
-            TPM_RIGHTALIGN
-        } else {
-            TPM_LEFTALIGN
-        };
-        let mut place = RECT::default();
-        let anchor = POINT { x: at.0, y: at.1 };
-        let extent = SIZE {
-            cx: size.0 as i32,
-            cy: size.1 as i32,
-        };
+        let right_align = unsafe { GetSystemMetrics(SM_MENUDROPALIGNMENT) } != 0;
+        let (width, height) = (size.0 as i32, size.1 as i32);
+        let (x, y) = anchor.position((width, height), right_align);
         unsafe {
-            CalculatePopupWindowPosition(
-                &anchor,
-                &extent,
-                align | TPM_WORKAREA,
-                std::ptr::null_mut(),
-                &mut place,
-            );
             SetWindowPos(
                 self.window,
                 HWND_TOPMOST,
-                place.left,
-                place.top,
-                place.right - place.left,
-                place.bottom - place.top,
+                x,
+                y,
+                width,
+                height,
                 SWP_NOACTIVATE,
             );
             InvalidateRect(self.window, std::ptr::null(), 0);
@@ -249,6 +315,7 @@ impl Flyout {
             return;
         }
         self.state.shown.set(false);
+        self.access.hide();
         unsafe {
             ReleaseCapture();
             ShowWindow(self.window, SW_HIDE);
@@ -358,8 +425,29 @@ unsafe extern "system" fn receive(
                 return 0;
             }
             WM_KEYDOWN if shown => {
-                if let Some(key) = super::key(wparam as u32) {
+                if let Some(key) =
+                    super::key(wparam as u32).filter(|key| key.len() > 1 || key == " ")
+                {
                     state.hear(Input::Key(key));
+                }
+                return 0;
+            }
+            WM_CHAR if shown => {
+                let unit = wparam as u16;
+                if (0xD800..=0xDBFF).contains(&unit) {
+                    state.high_surrogate.set(Some(unit));
+                } else {
+                    let units: Vec<_> = state
+                        .high_surrogate
+                        .take()
+                        .into_iter()
+                        .chain(Some(unit))
+                        .collect();
+                    if let Some(Ok(ch)) = char::decode_utf16(units).next() {
+                        if !ch.is_control() && ch != ' ' {
+                            state.hear(Input::Key(ch.to_string()));
+                        }
+                    }
                 }
                 return 0;
             }

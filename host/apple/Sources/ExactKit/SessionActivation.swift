@@ -50,6 +50,7 @@ extension ExactSession {
         declareNotificationCategories { [weak self] in
             guard let self, state != .destroyed, generation == drawnGeneration else { return }
             dataPreparing = false
+            defer { releaseCanvases() }
             // Prepare before any source calls the module (LLP 1067.000 D8).
             let started = CACurrentMediaTime()
             natives.prepareAppModule()
@@ -60,6 +61,27 @@ extension ExactSession {
             openNativeViews(drawnGeneration)
             activateData(drawnGeneration, token: token)
         }
+    }
+
+    /// The GPU module's load, unless the draw's evaluation is in flight: then
+    /// it waits for the rest of what follows first pixel, which `activateData`
+    /// ends by loading it. Loading it first held this thread for the world's
+    /// start (about 55 ms on a simulator, 45 ms on an iPhone) between the
+    /// evaluation's end and the data's first requests, since the first apply
+    /// posts the load before the draw does (LLP 1027.008 Q2).
+    func loadCanvases() {
+        if runtime.evaluatesFromDraw, dataPreparing, preparedGeneration == generation { canvasesHeld = true; return }
+        canvases.loadIfNeeded()
+    }
+
+    /// A held load runs when the rest has: also when the activation waits
+    /// for its source, so a canvas does not wait on the data.
+    private func releaseCanvases() {
+        guard canvasesHeld else { return }
+        canvasesHeld = false
+        canvases.loadIfNeeded()
+        drainSurfaceWorkNow()
+        frames.run(frames.hasWork)
     }
 
     /// Whether activation still has work queued: the agent's settle waits for it.

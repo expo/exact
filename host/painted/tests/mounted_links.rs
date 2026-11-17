@@ -12,6 +12,7 @@ fn delivery(platform: &str) {
         );
         assert_eq!(launch, "/post/42?q=1#part", "{platform}: cold launch");
         let mut config = Config {
+            output_rotation: Default::default(),
             #[cfg(target_os = "macos")]
             painted_boot: None,
             content_region: None,

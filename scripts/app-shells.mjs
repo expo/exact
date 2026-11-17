@@ -775,13 +775,13 @@ export function settleLock(dir, workspace, captured = resolve(dir, 'Cargo.lock')
   return JSON.parse(result.stdout);
 }
 
-/** `bun exact.mjs lock` for a generated workspace (LLP 1153.003 D1.4): resolve it again with exact2's lock deciding
- * every crate it names and the captured lock (`captured`) the rest, fetching what the graph lacks, and capture the
- * result when it leaves exact2's lock or a lock was captured before. What it did, as a line. */
+/** `bun exact.mjs lock` for a generated workspace (LLP 1153.003 D1.4): resolve from the captured lock when present,
+ * otherwise from exact2's, fetching what the graph lacks. Capture the result when it leaves exact2's lock or a
+ * lock was captured before. What it did, as a line. */
 export function lockShells(dir, workspace, captured = resolve(dir, 'Cargo.lock')) {
   const shell = resolve(workspace, 'Cargo.lock'), sdk = readFileSync(resolve(ROOT, 'Cargo.lock'), 'utf8');
   const before = existsSync(captured) ? readFileSync(captured, 'utf8') : null;
-  writeFileSync(shell, before === null ? sdk : lockSeed(sdk, before));
+  writeFileSync(shell, before ?? sdk);
   const options = { cwd: workspace, env: cargoEnvironment(), stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' };
   let result = spawnSync('cargo', ['metadata', '--offline', '--format-version', '1'], options);
   if (result.status !== 0) {
@@ -835,19 +835,6 @@ export async function bringPlatform(dir, platform, { report = null, os = process
 export const series = version => { const [major, minor, patch] = String(version).split('.'); return major !== '0' ? major : minor !== '0' ? `0.${minor}` : `0.0.${patch}`; };
 export const seriesId = block => `${/^name = "([^"]+)"/m.exec(block)?.[1]} ${series(/^version = "([^"]+)"/m.exec(block)?.[1])}`;
 export const lockBlocks = text => text.split(/\n(?=\[\[package\]\]\n)/).slice(1).map(block => block.trimEnd());
-
-/** `lock`'s starting point for a workspace with its own lock (LLP 1046.011 D2, LLP 1153.003 D1.4): the
- * SDK lock decides every name and series it holds, a same-series bump included,
- * and the captured lock keeps the rest (its own packages, git and path ones too),
- * so Cargo prefers exactly these versions and fetches only what they lack. */
-export function lockSeed(sdk, own) {
-  // The same crate from another source (a git fork, a path) is another package:
-  // the SDK's supersedes only its own source's, whatever the git revision.
-  const key = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.exec(block)?.[1] ?? ''}`;
-  const held = new Set(lockBlocks(sdk).map(key));
-  const kept = lockBlocks(own).filter(block => !held.has(key(block)));
-  return kept.length ? `${sdk.trimEnd()}\n\n${kept.join('\n\n')}\n` : sdk;
-}
 
 // A lock's packages by identity. Dependency edges follow from the versions
 // and the activated features, so a workspace's subset keeps every version but may

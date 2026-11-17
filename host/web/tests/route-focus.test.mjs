@@ -12,9 +12,11 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { cdpBrowser, chromium, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { engineTests, need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
 import { fileURLToPath } from 'node:url';
+
+const engineTest = await engineTests();
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const { unavailable } = chromium();
@@ -489,7 +491,7 @@ check('a focus the opener moves on as a sheet closes stays where it moved', () =
 
 // The focus in a frame or a shadow root inside the sheet, which a blur does not take from a frame in Firefox, comes
 // back to the button too, in every engine.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet that slides away with the focus in a frame or a shadow root gives the focus back`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet that slides away with the focus in a frame or a shadow root gives the focus back`, async () => {
   const server = await serve(), browser = await suiteBrowser(engine);
   try {
     const seen = [];

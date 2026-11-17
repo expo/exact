@@ -184,6 +184,7 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
     windows: ['host/windows/build.mjs', name],
     // The APK on the Canvas reader, installed (LLP 1107 D1); `--headless` the Linux host for Android instead.
     android: ['scripts/agent-android.mjs', 'build', name, '--apk', '--install'],
+    ...game ? {} : { deploy: ['scripts/deploy.mjs', dir], push: ['scripts/push.mjs', name] },
     update: ['scripts/exact.mjs', 'new', dir, '--update'],
     lock: ['scripts/app-cli.mjs', '--lock', dir],
     add: ['scripts/exact.mjs', 'add'],
@@ -215,7 +216,7 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
 export const beforeBuild = {
   status: false, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
   linux: true, windows: true, android: true, update: false, lock: false, hatch: false, snapback: true, backend: false, docs: false,
-  feedback: false, add: false,
+  feedback: false, add: false, deploy: true, push: true,
   contract: ([command, ...rest]) => ['build', 'types', 'rust', 'verify', 'test', 'lean', 'symbols', 'gallery'].includes(command)
     || command === 'forma' && checksDesign(rest),
   forma: (rest) => checksDesign(rest),
@@ -564,7 +565,7 @@ if (verb === 'contract') {
   const prepares = beforeBuild[verb];
   if (declared.before_build !== undefined && !own[verb] && (typeof prepares === 'function' ? prepares(rest) : prepares)) {
     // The verbs whose scripts refuse a flag they do not take (`guardFlags`)
-    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share'].includes(verb)) {
+    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
       const refused = await refusedFlag();
       if (refused != null) return log(refused);
     }

@@ -24,6 +24,8 @@ import { generationFile, generationPath, servedFile } from '../web/generations.m
 import { besidePattern } from '../web/beside.mjs';
 import { cargoContractReads, changedContractReads, contractReadReceipt } from '../../scripts/web-build.mjs';
 import { webSourceRoots } from '../web/build.mjs';
+import { shaderWatchRoots } from '../../scripts/app.mjs';
+import { within } from '../../scripts/paths.mjs';
 import { localInstaller } from '../web/local-install.mjs';
 import { designPath, frameOnlyByTool, formaServer } from '../../scripts/forma-server.mjs';
 import { pluginOnLoopback } from '../../scripts/forma-remote.mjs';
@@ -166,7 +168,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
       if (types) console.log(types);
       // What it said: its last 12 lines, or from the compiler's first error when those leave it out.
       const said = log.split('\n').filter((l) => l.trim() && !/^\s*(Compiling|Finished|Running|warning)/.test(l) && !compilerWarnings(l).length), first = said.findIndex(compilerError);
-      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, said.length - 12) : -12).join('\n') || `build exited ${code}` }); }
+      if (code !== 0) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: said.slice(first >= 0 ? Math.min(first, Math.max(0, said.length - 12)) : -12).join('\n') || `build exited ${code}` }); }
       let cargo;
       try { cargo = cargoContractReads(webSourceRoots(app, true), began); }
       catch (error) { rmSync(stage, { recursive: true, force: true }); return done({ packages, error: error.message }); }
@@ -730,6 +732,15 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     const design = m && (m[1] ?? m[2] ?? m[3]);
     return !!design && existsSync(resolve(dirname(path), design));
   };
+  const outputIsInput = (name) => {
+    const path = resolve(app.dir, name);
+    if (INPUT_TREE.test(name) || JSON.stringify(app.manifest ?? {}).includes(name)
+      || shaderWatchRoots(app).some(root => within(root, path))) return true;
+    for (let at = dirname(path); at !== app.dir && within(app.dir, at); at = dirname(at)) {
+      if (existsSync(resolve(at, 'Cargo.toml'))) return true;
+    }
+    return false;
+  };
   // A build reading a tree (the assets it copies) is reported too on macOS:
   // a path not modified since the last build started is no edit.
   const changed = (base, skip = skipped, fresh = true) => (_, name) => {
@@ -753,9 +764,8 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // `app.forma.tmp` and renames it over `app.forma`; its event can come
     // before or after the rename): never an input, whenever it comes.
     if (name && temporaryOfDesign(resolve(base, String(name)))) return;
-    // A screenshot, film, log or note written into the app folder, outside the input trees and not named by
-    // app.json, does not reload a page under a test (authoring bench).
-    if (base === app.dir && OUTPUT.test(String(name)) && !INPUT_TREE.test(String(name)) && !JSON.stringify(app.manifest ?? {}).includes(String(name))) return;
+    // Crates can include any extension; declared inputs and input trees also keep their output-looking files.
+    if (base === app.dir && OUTPUT.test(String(name)) && !outputIsInput(String(name))) return;
     // A package's events are all edits: a link replaced by one to an older
     // file is newer than nothing, and its target's time says nothing of it.
     if (fresh && name && !backendMoved && !movedSince(resolve(base, String(name)), since)) return;
@@ -1029,7 +1039,8 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='forma-batch'||m.kind===
       return res.end(bytes);
     }
     // Inspect mode's half in the page (LLP 1122 T2b, the JS target): the
-    // dev client loads it; it is in no build.
+    // dev client loads it; it is in no build. It may write inside the root,
+    // so every build reads it for what the sheet keeps (build.mjs `cutSheet`).
     if (url.pathname === '/__dev/inspect.js' && (req.method === 'GET' || req.method === 'HEAD')) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(req.method === 'HEAD' ? undefined : readFileSync(resolve(root, 'host/web-js/inspect-dev.js')));

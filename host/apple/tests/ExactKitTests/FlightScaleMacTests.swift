@@ -120,6 +120,41 @@ final class FlightScaleMacTests: XCTestCase {
         XCTAssertEqual(cardLayer.affineTransform(), .identity, "unscaled again")
     }
 
+    /// A card that plays a transform animation flies by the flight's scale
+    /// alone, about its top left: the animation comes off for the flight and
+    /// goes back on, about the card's centre, when it lands.
+    func testAFlightOwnsTheTransformOfACardThatAnimatesIt() throws {
+        let p = Presenter()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 402, height: 874), styleMask: [.borderless], backing: .buffered, defer: false)
+        let content = try XCTUnwrap(window.contentView)
+        content.wantsLayer = true
+        let thumb = NodeView(id: 1, kind: "view", presenter: p)
+        p.views[1] = thumb; content.addSubview(thumb)
+        thumb.frame = NSRect(x: 300, y: 600, width: 56, height: 84)
+        let card = NodeView(id: 2, kind: "view", presenter: p)
+        p.views[2] = card; content.addSubview(card)
+        card.frame = NSRect(x: 0, y: 62, width: 402, height: 714)
+        let key = "pulse#0#transform.scale"
+        p.apply(wireBatch([["op": "animations", "id": 2, "specs": [["id": key, "k": "transform.scale", "s": 0.0, "dl": 0.0,
+            "d": 1.0, "n": -1.0, "t": [0.0, 1.0], "v": [0.5, 1.5], "c": [], "fill": 0.0]]]]))
+        let cardLayer = try XCTUnwrap(card.layer)
+        XCTAssertNotNil(cardLayer.animation(forKey: key))
+        XCTAssertEqual(cardLayer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
+        var op = BatchOp(op: .flight, nodeID: 2)
+        op.payload["from"] = NSNumber(value: 1)
+        p.beginFlight(op); p.presentFlight(2, 0.5); p.flightsBatchApplied()
+        let s = 229.0 / 402.0
+        XCTAssertNil(cardLayer.animation(forKey: key), "the flight's scale is the card's whole transform")
+        XCTAssertEqual(cardLayer.anchorPoint, .zero)
+        XCTAssertEqual(cardLayer.position, .zero, "at the clip's top left")
+        XCTAssertEqual(cardLayer.affineTransform(), CGAffineTransform(scaleX: s, y: s))
+        p.landFlight(try XCTUnwrap(p.flights[2]))
+        XCTAssertNotNil(cardLayer.animation(forKey: key), "it plays again once landed")
+        XCTAssertEqual(cardLayer.anchorPoint, CGPoint(x: 0.5, y: 0.5))
+        XCTAssertEqual(cardLayer.position, CGPoint(x: card.frame.midX, y: card.frame.midY))
+        XCTAssertEqual(cardLayer.affineTransform(), .identity)
+    }
+
     /// Caught mid-way, a flight flies on from its clip as shown, its rect and
     /// radius, with the content view unlayered as in an app: AppKit's
     /// geometry, which knows nothing of the card's scale, is the clip's.

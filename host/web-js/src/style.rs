@@ -16,6 +16,9 @@ use exact_runner::bridge;
 use exact_runner::vm::instructions;
 use exact_web::host::template::{self, Parts};
 
+mod bound;
+pub use bound::bound_tokens;
+
 /// A canvas's explicit bitmap size (LLP 1056 D6 r3) and getContext settings
 /// (LLP 1100 D12a) as the attributes canvas2d.js reads, as the runner reads
 /// the node's props; a dynamic one is refused.

@@ -312,6 +312,6 @@ mod bus;
 #[cfg(unix)]
 pub(crate) use bus::choose;
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "portal_tests.rs"]
 mod tests;

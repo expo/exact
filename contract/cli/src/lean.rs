@@ -548,6 +548,20 @@ impl Emitter<'_> {
     ) -> Result<String, CompileError> {
         let mut resources = Vec::new();
         for (i, r) in root.resources.iter().enumerate() {
+            let args = r
+                .placeholder
+                .as_ref()
+                .filter(|p| p.source == contract_types::placeholder::EMPTY)
+                .map_or(&[][..], |p| p.args.as_slice());
+            let placeholder = contract_types::placeholder::materialize(
+                &ct.resources[i],
+                args,
+                &self.checked.types.shapes,
+                &r.name,
+                r.span,
+            )
+            .map_err(|mut all| CompileError::from(all.swap_remove(0)))?;
+            let placeholder = self.value(&placeholder, &ct.resources[i])?;
             // Over a list (LLP 1017.000 P4c): its element's name, list and key.
             let each = match &r.each {
                 Some(e) => format!(
@@ -576,7 +590,7 @@ impl Emitter<'_> {
                 Some(contract_syntax::Owner::Root) | None => String::new(),
             };
             resources.push(format!(
-                "{{ name := {}, ty := {}, source := {}, args := {}{each}{gate}{owner} }}",
+                "{{ name := {}, ty := {}, source := {}, args := {}, placeholder := .some {placeholder}{each}{gate}{owner} }}",
                 string(&r.name),
                 ty(&ct.resources[i]),
                 string(&r.source),
@@ -600,6 +614,37 @@ impl Emitter<'_> {
             ));
         }
         Ok(format!("[{}]", resources.join(",\n    ")))
+    }
+
+    /// A materialized placeholder, with record names restored from its type.
+    fn value(&self, value: &exact_plan::Value, ty: &Ty) -> Result<String, CompileError> {
+        use exact_plan::Value;
+        Ok(match (value, ty) {
+            (Value::Number(n), _) => format!("(.num (Contract.F64.ofBits 0x{:016x}))", n.to_bits()),
+            (Value::Bool(b), _) => format!("(.bool {b})"),
+            (v, _) if v.is_str() => format!("(.str {})", string(v.as_str().unwrap())),
+            (Value::Unit, _) => ".unit".into(),
+            (Value::Option(None), _) => ".none".into(),
+            (Value::Option(Some(v)), Ty::Option(t)) => format!("(.some {})", self.value(v, t)?),
+            (Value::List(items), Ty::List(t)) => {
+                format!("(.list {})", list(items, |v| self.value(v, t))?)
+            }
+            (Value::Record(values), Ty::Record(name)) => {
+                let fields = &self.checked.types.shapes.map[name];
+                let values = values
+                    .iter()
+                    .zip(fields)
+                    .map(|(v, (_, t))| self.value(v, t))
+                    .collect::<Result<Vec<_>, _>>()?;
+                format!("(.record {} [{}])", string(name), values.join(", "))
+            }
+            _ => {
+                return Err(refuse(
+                    "a placeholder does not match its type",
+                    Span::default(),
+                ))
+            }
+        })
     }
 
     /// The mutations, each with what owns it and its `then`'s arguments

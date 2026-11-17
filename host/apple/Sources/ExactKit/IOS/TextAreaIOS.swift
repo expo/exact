@@ -28,10 +28,12 @@ enum ResignTrace {
         return tokens
     }
     static func resigned(_ view: UIView, node: UInt32?) {
+        #if EXACT_INSPECT
         guard ExactEnv.agentMode else { return }
         // UIKit's keyboard machinery, and no frame of the app between it and the
         // editor's `resignFirstResponder` (this function and that override are
-        // below the override's frames)
+        // below the override's frames): a private name, read in a development
+        // build only (LLP 1035.003)
         let frames = Thread.callStackSymbols
         let app = Bundle.main.executableURL?.lastPathComponent ?? "ExactKit"
         let uikit: Bool = {
@@ -40,6 +42,7 @@ enum ResignTrace {
             return !frames[(j + 1)..<k].contains { $0.contains(app) || $0.contains("ExactKit") }
         }()
         note(["kind": "resign", "node": node.map { Int($0) } ?? NSNull(), "token": token(view), "by": uikit ? "uikit-keyboards" : "other"])
+        #endif
     }
     static func detached(_ view: UIView, node: UInt32?) {
         guard ExactEnv.agentMode else { return }

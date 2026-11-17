@@ -9,6 +9,9 @@ import { installData } from '../../scripts/install-page.mjs';
 import { serveBuildTree } from '../web/serve.mjs';
 import { renderer, sitePages } from './render.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const root = resolve(import.meta.dir, '../..');
 const manifest = base => ({ name: 'Mounted', app: { id: 'test.mounted', name: 'Mounted', origin: 'https://site.invalid' }, host: { web: base === undefined ? {} : { base } } });
@@ -442,7 +445,7 @@ test.each(['media', 'markdown', 'head', 'head-whitespace', 'one-off'])('mounted 
 }, 120000);
 
 
-test.each([['chrome', undefined], ['chrome', '/item'], ['firefox', undefined], ['webkit', undefined]])('the %s driver opens the mounted launch location %s', async (browser, url) => {
+for (const [browser, url] of [['chrome', undefined], ['chrome', '/item'], ['firefox', undefined], ['webkit', undefined]]) engineTest[browser](`the ${browser} driver opens the mounted launch location${url ? ` ${url}` : ''}`, async () => {
   const dir = workspace(); let session;
   try {
     save(dir, 'app.json', JSON.stringify(manifest('/app/'))); save(dir, 'app.contract', source);

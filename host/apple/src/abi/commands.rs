@@ -170,9 +170,24 @@ impl<D: DataSource> Bridge<D> {
 
     /// `exact_scrolled`: a scroller the presenter shows, or the page, now
     /// stands at `(left, top)` CSS px, for `frame` (LLP 1051.000 D1).
-    pub fn scrolled(&mut self, page: bool, view: u32, left: f64, top: f64) {
+    /// Page 2 consumes the collection mailbox's revision and sequence words;
+    /// `top` is its main-axis offset (LLP 1171 D21).
+    pub fn scrolled(&mut self, page: u32, view: u32, left: f64, top: f64) {
+        if page == 2 {
+            let Some(words) = self.input.get(..16) else {
+                return;
+            };
+            let revision = u64::from_le_bytes(words[..8].try_into().unwrap());
+            let sequence = u64::from_le_bytes(words[8..].try_into().unwrap());
+            if let Some(h) = self.host.as_mut() {
+                h.runner_mut()
+                    .collection_travel(view, revision, sequence, top);
+            }
+            return;
+        }
         if let Some(h) = self.host.as_mut() {
-            h.runner_mut().scrolled((!page).then_some(view), left, top);
+            h.runner_mut()
+                .scrolled((page == 0).then_some(view), left, top);
             if !h.runner_mut().intersect_due().is_empty() {
                 if let Some(executor) = self.executor.as_deref() {
                     executor.notify();

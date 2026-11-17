@@ -9,7 +9,8 @@
 // 20–25 ms a scroll frame on an iPhone 17 Pro Max; this is what replaces it.
 // A nested canvas contributes its readback picture as one layer's contents,
 // as it does through `draw` in the CPU capture, which remains the fallback
-// where there is no Metal device.
+// where there is no Metal device, and inside an open transaction, where the
+// shadow tree cannot be committed (`mirror(_:in:width:height:scale:)`).
 import Metal
 import QuartzCore
 #if os(iOS) || os(tvOS)
@@ -46,6 +47,8 @@ package final class Shadow {
         let root = CALayer()
         var mirrors: [ObjectIdentifier: CALayer] = [:]
         var used: Set<ObjectIdentifier> = []
+        /// How many times the tree was mirrored: the number its root carries.
+        var mirrored: CGFloat = 0
         /// Its own pixels back (`render`); none for the hand-over.
         let readback: MTLBuffer?
         init(_ texture: MTLTexture, queue: MTLCommandQueue, readback: MTLBuffer?) {
@@ -101,7 +104,8 @@ package final class Shadow {
     /// texture stays the presenter's, alive as long as this object, the same
     /// one every time at a size. The renderer's work is complete when this
     /// returns (a wait on the presenter's queue), since the module samples
-    /// on its own queue.
+    /// on its own queue. Nil, with nothing drawn, when the tree could not be
+    /// committed (`mirror(_:in:width:height:scale:)`).
     package func renderTexture(_ view: UIView, scale: CGFloat) -> MTLTexture? {
         let w = Int((view.bounds.width * scale).rounded()), h = Int((view.bounds.height * scale).rounded())
         guard w > 0, h > 0 else { return nil }
@@ -109,8 +113,7 @@ package final class Shadow {
             guard let t = texture(width: w, height: h) else { return nil }
             handed = Pass(t, queue: queue, readback: nil)
         }
-        guard let handed else { return nil }
-        mirror(view, in: handed, width: w, height: h, scale: scale)
+        guard let handed, mirror(view, in: handed, width: w, height: h, scale: scale) else { return nil }
         draw(handed, width: w, height: h)
         guard let cb = queue.makeCommandBuffer() else { return nil }
         cb.commit()
@@ -120,14 +123,16 @@ package final class Shadow {
 
     /// The view's subtree rendered at `scale`: premultiplied RGBA, rows
     /// top-down, into `bitmap` — the same bytes the CPU capture makes.
+    /// False, with `bitmap` untouched, when the tree could not be committed
+    /// (`mirror(_:in:width:height:scale:)`).
     func render(_ view: UIView, scale: CGFloat, into bitmap: Bitmap) -> Bool {
         let w = bitmap.width, h = bitmap.height
         if readback?.texture.width != w || readback?.texture.height != h {
             guard let t = texture(width: w, height: h), let b = device.makeBuffer(length: w * h * 4, options: .storageModeShared) else { return false }
             readback = Pass(t, queue: queue, readback: b)
         }
-        guard let bytes = bitmap.bytes, let pass = readback, let target = pass.readback else { return false }
-        mirror(view, in: pass, width: w, height: h, scale: scale)
+        guard let bytes = bitmap.bytes, let pass = readback, let target = pass.readback,
+              mirror(view, in: pass, width: w, height: h, scale: scale) else { return false }
         draw(pass, width: w, height: h)
         // The pixels back: a blit on the same queue after the renderer's
         // work, waited for (the per-child textures of a deck, and any host
@@ -141,8 +146,19 @@ package final class Shadow {
         return true
     }
 
-    /// The shadow tree brought up to date with the view's layer tree.
-    private func mirror(_ view: UIView, in pass: Pass, width w: Int, height h: Int, scale: CGFloat) {
+    /// The shadow tree brought up to date with the view's layer tree, and
+    /// whether Core Animation committed it. The renderer draws the tree as
+    /// last committed, and a commit waits until every explicit transaction
+    /// open on the thread has ended
+    /// (https://developer.apple.com/documentation/quartzcore/catransaction/flush()).
+    /// Inside one (a UIKit animation block, a host's transaction around a
+    /// batch, another capture's walk) the renderer would draw the tree of an
+    /// earlier capture: nothing in a new pass, else the last child of that
+    /// size. The root carries this mirror's number, and its presentation
+    /// layer, which holds committed values
+    /// (https://developer.apple.com/documentation/quartzcore/calayer/presentation()),
+    /// has that number only once this tree is the renderer's.
+    private func mirror(_ view: UIView, in pass: Pass, width w: Int, height h: Int, scale: CGFloat) -> Bool {
         self.pass = pass
         let root = pass.root
         CATransaction.begin()
@@ -166,8 +182,12 @@ package final class Shadow {
         if root.sublayers?.first !== top || root.sublayers?.count != 1 { root.sublayers?.forEach { $0.removeFromSuperlayer() }; root.addSublayer(top) }
         // What was not seen this time is dropped from the cache.
         for key in pass.mirrors.keys where !pass.used.contains(key) { pass.mirrors.removeValue(forKey: key) }
+        // A property that draws nothing while the root is not rasterized.
+        pass.mirrored += 1
+        root.rasterizationScale = pass.mirrored
         CATransaction.commit()
         CATransaction.flush()
+        return root.presentation()?.rasterizationScale == pass.mirrored
     }
 
     /// One frame of the renderer into `target`, cleared first (the renderer
@@ -294,6 +314,8 @@ package final class Shadow {
         if b.isHidden != a.isHidden { b.isHidden = a.isHidden }
         if b.masksToBounds != a.masksToBounds { b.masksToBounds = a.masksToBounds }
         if b.cornerRadius != a.cornerRadius { b.cornerRadius = a.cornerRadius }
+        // A new layer's curve is not the box's: on iOS 27 it is continuous.
+        if b.cornerCurve != a.cornerCurve { b.cornerCurve = a.cornerCurve }
         if b.maskedCorners != a.maskedCorners { b.maskedCorners = a.maskedCorners }
         if b.backgroundColor != a.backgroundColor { b.backgroundColor = a.backgroundColor }
         if b.borderWidth != a.borderWidth { b.borderWidth = a.borderWidth }

@@ -1301,7 +1301,7 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const bindings = {
     ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
     process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
-    resolveApp: () => app, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    resolveApp: selector => { expect(selector).toBe(state === 'new' ? 'bundle' : app.dir); return app; }, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
     channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
     loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
     bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
@@ -1317,7 +1317,8 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
   const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
   try {
-    expect(await deploy({ _: ['bundle'], platform: ['ios'], keys: root, yes: true, json: true }, {
+    const selector = state === 'new' ? 'bundle' : state === 'invalid' ? '.' : resolve(root, 'live/app');
+    expect(await deploy({ _: [selector], platform: ['ios'], keys: root, yes: true, json: true }, {
       version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
       snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] }, receipts: [],
     })).toBe(0);

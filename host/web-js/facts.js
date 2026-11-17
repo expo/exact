@@ -148,8 +148,9 @@ export function delivery(readers) {
  * calls the wasm host's `exact_surface_record`); the host's bytes are
  * `name` alone (disposed) or `name\0json`. */
 export function canvasPerformance(readers) {
-  const names = new Set(Object.values(readers).map(r => r[0]));
-  (globalThis.exact ??= {}).canvasPerformanceRequested = name => names.has(name);
+  (globalThis.exact ??= {}).canvasPerformanceRequested = name => Resources.some(r =>
+    r.source === "exactCanvasPerformance" && readers[r.name]?.[0] === name && !r.asleep && !r.gone);
+  rt.After?.push(() => globalThis.exact?.gpu?.syncPerformance?.());
   surfaces(readers, "exactCanvasPerformance", "canvasPerformanceRecord", 16 * 1024);
 }
 

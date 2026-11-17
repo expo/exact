@@ -1,0 +1,10 @@
+component App
+  state reaches = 0
+  action reached
+    reaches = reaches + 1
+  view
+    column
+      list virtualized=true height=300 width=240 estimated-item-height=100 reachend=reached reach-margin="0px" testId="feed"
+        for row in [0, 1, 2, 3, 4, 5] key=row
+          box height=100
+      text `${reaches}` testId="reaches"

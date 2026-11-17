@@ -1,0 +1,22 @@
+{
+  "kind": "implementation",
+  "implements": "@fixture/camera-calibration@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "androidx.camera:camera-camera2:1.6.2"
+  ],
+  "artifacts": [],
+  "class": "fixture.calibration.CalibrationModule"
+}

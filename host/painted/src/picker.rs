@@ -360,7 +360,7 @@ pub fn place(path: &str) -> Option<PathBuf> {
     place_from(path, roots())
 }
 
-fn place_from(path: &str, roots: [PathBuf; 3]) -> Option<PathBuf> {
+pub(crate) fn place_from(path: &str, roots: [PathBuf; 3]) -> Option<PathBuf> {
     if open_from(path, || roots.clone()).is_some() {
         return resolve_from(path, || roots);
     }

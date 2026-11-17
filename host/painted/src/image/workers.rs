@@ -245,6 +245,17 @@ impl Backend {
         }
         result
     }
+    pub fn forget_source(&self, generation: u64, name: &str) {
+        let mut state = self.state.lock().unwrap();
+        let owners: Vec<_> = state.sources.values().filter_map(Weak::upgrade).collect();
+        for source in &owners {
+            if source.generation == generation && source.name == name {
+                state.sources.remove(&source.id);
+            }
+        }
+        drop(state);
+    }
+
     fn owners(&self) -> Vec<Arc<SourceOwner>> {
         let mut state = self.state.lock().unwrap();
         state.sources.retain(|_, source| source.strong_count() > 0);

@@ -75,6 +75,68 @@ final class HeadlessLiveTests: XCTestCase {
                                    facts: SessionFacts(displayScale: 2, preferences: [], clock: clock), live: live)
     }
 
+    func testScrollingAnIntersectionTargetWakesAnIdleLiveSession() throws {
+        let s = try session("INTERSECT", live: true)
+        defer { s.onWake(nil); s.close() }
+        _ = try s.pump(at: HeadlessSession.liveNow())
+        waitForMainQueue("initial intersection delivery")
+        let port = try node("port", in: s.snapshot())
+        XCTAssertEqual(try text("facts", in: s.snapshot()), "1:false:0")
+        XCTAssertNil(s.timerDue)
+        var observed: [String] = []
+        let entered = expectation(description: "scroll delivers the intersection without another owner job")
+        s.onWake { [weak s] in
+            do {
+                let s = try XCTUnwrap(s)
+                let snapshot = try s.pump(at: HeadlessSession.liveNow())
+                observed.append(try self.text("facts", in: snapshot))
+            } catch { XCTFail("\(error)") }
+            entered.fulfill()
+        }
+        s.scrolled(port.id, left: 0, top: 150)
+        wait(for: [entered], timeout: 5)
+        XCTAssertEqual(observed, ["2:true:1"])
+        let left = expectation(description: "reversal delivers the exit")
+        s.onWake { [weak s] in
+            do {
+                let s = try XCTUnwrap(s)
+                observed.append(try self.text("facts", in: s.pump(at: HeadlessSession.liveNow())))
+            } catch { XCTFail("\(error)") }
+            left.fulfill()
+        }
+        s.scrolled(port.id, left: 0, top: 0)
+        wait(for: [left], timeout: 5)
+        XCTAssertEqual(observed, ["2:true:1", "3:false:0"])
+    }
+
+    #if os(iOS) || os(tvOS)
+    func testRemovingTheLastObserverCannotRestoreAnOlderQueuedOffset() throws {
+        let s = try session("SCROLL_FACTS", live: false)
+        defer { s.close() }
+        let initial = try s.snapshot()
+        let port = try node("port", in: initial).id
+        let stop = try node("stop", in: initial).id
+        let sample = try node("sample", in: initial).id
+        let posts = Owner.shared.postedJobsForTests
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                s.scrolled(port, left: 0, top: 10)
+            }
+            // The owner is still in this job; the observed offset remains queued.
+            _ = s.core.runtime.press(stop, now: 0)
+            Owner.shared.callMain {
+                s.core.runtime.scrolled(port, left: 0, top: 20, observing: false)
+            }
+        }
+        Owner.shared.sync {}
+        XCTAssertEqual(Owner.shared.postedJobsForTests - posts, 1,
+                       "only the observed scroll wakes the owner")
+        let sampled = try s.press(sample, at: 0)
+        XCTAssertEqual(try text("sampled", in: sampled), "130",
+                       "frame() reads the latest offset after the observer is removed")
+    }
+    #endif
+
     func testAResourceReplyWakesOnMainAndPumpsTheLiveSession() throws {
         let s = try session("HEADLESS_REPLY", live: true)
         let module = HeadlessReplyModule()

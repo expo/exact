@@ -21,11 +21,14 @@ package exact.mediacapture
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
+import android.util.Range
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
+import androidx.camera.core.SessionConfig
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
@@ -58,6 +61,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         var leased = false
         var waiting: String? = null
         var platformMute: String? = null
+        var frameRate: Double? = null
     }
 
     private val tracks = LinkedHashMap<String, Track>()
@@ -81,11 +85,13 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         val make = {
             val t = Track("track-${context.session}-${nextId()}", stream)
             t.camera = constraints.optString("deviceId").ifEmpty { if (constraints.optString("facingMode") == "user") "front" else "back" }
+            t.frameRate = FrameRates.requested(constraints.opt("frameRate"))
             read(t)
             t.platformMute = overlay
             tracks[t.id] = t
             opened = true
             val entry = TrackEntry(t.id, "video", owner = this)
+            entry.startedAt = context.now()
             entry.state = { shape(t) }
             entry.video = { if (t.leased && !context.agent) CameraCapture else null }
             context.tracks.add(entry)
@@ -111,16 +117,22 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         if (t.readyState != "live") return reply(shape(t))
         val next = args.optString("deviceId").ifEmpty { null }
             ?: when (args.optString("facingMode")) { "user" -> "front"; "environment" -> "back"; else -> null }
+        val rate = FrameRates.requested(args.opt("frameRate"))
         if (next != null && next != t.camera) {
             // Another camera under the same id (D1): a capture start (D6), refused while another lease holds the camera.
             if (context.origin != "app" || !context.foreground) return reply(error("NotAllowedError"))
             if (t.leased && CameraCapture.holders.size > 1) return reply(error("NotReadableError"))
             t.camera = next
-            if (t.leased && !context.agent) CameraCapture.rebind(context.application, t.camera)
+            if (rate != null) t.frameRate = rate
+            if (t.leased && !context.agent) CameraCapture.rebind(t.camera, t.frameRate)
             read(t)
             say("${t.id}: moved to ${t.label}")
             announce()
             return reply(shape(t))
+        }
+        if (rate != null) {
+            t.frameRate = rate
+            if (t.leased && !context.agent) CameraCapture.rebind(t.camera, rate)
         }
         val kept = JSONObject()
         for (k in listOf("zoom", "torch")) if (args.has(k) && !args.isNull(k)) kept.put(k, args.get(k))
@@ -352,6 +364,8 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         t.capabilities = JSONObject().put("torch", info.hasFlashUnit())
         facing?.let { t.capabilities.put("facingMode", JSONArray().put(it)) }
         zoom?.let { t.capabilities.put("zoom", JSONObject().put("min", it.minZoomRatio.toDouble()).put("max", it.maxZoomRatio.toDouble()).put("step", 0.1)) }
+        FrameRates.capability(info.supportedFrameRateRanges)?.let { t.capabilities.put("frameRate", it) }
+        if (t.leased) CameraCapture.frameRate?.let { t.settings.put("frameRate", it) }
     }
 
     private fun shape(t: Track): JSONObject {
@@ -381,6 +395,11 @@ internal object CameraCapture : VideoSource {
     }
     private var inFront = true
     private var selected = "back"
+    private var requestedFrameRate: Double? = null
+    var frameRate: Int? = null
+        private set
+    private data class Binding(val camera: String, val cases: List<UseCase>, val rate: Range<Int>?)
+    private var bound: Binding? = null
     private val useCases = LinkedHashSet<UseCase>()
     private val objects = HashMap<String, Any>()
     val holders = LinkedHashMap<VideoTracks.Track, VideoTracks>()
@@ -415,7 +434,7 @@ internal object CameraCapture : VideoSource {
         if (holders.isNotEmpty() && t.camera != selected) return false
         val first = holders.isEmpty()
         holders[t] = tracks
-        if (first) { selected = t.camera; bind(); started() }
+        if (first) { selected = t.camera; requestedFrameRate = t.frameRate; bind(); started() }
         return true
     }
 
@@ -424,6 +443,9 @@ internal object CameraCapture : VideoSource {
         owner.registry.currentState = Lifecycle.State.CREATED
         ready?.unbindAll()
         camera = null
+        bound = null
+        frameRate = null
+        requestedFrameRate = null
         useCases.clear()
         objects.clear()
         // A track waiting for the camera takes it.
@@ -434,7 +456,7 @@ internal object CameraCapture : VideoSource {
     fun wait(t: VideoTracks.Track, tracks: VideoTracks) { waiters += t to tracks }
     private fun waitingTracks() = waiters.filter { it.first.waiting != null }.also { waiters.clear() }
 
-    fun rebind(app: Context, next: String) { selected = next; bind() }
+    fun rebind(next: String, rate: Double?) { selected = next; requestedFrameRate = rate; bind() }
 
     fun foreground(shown: Boolean) { inFront = shown; started() }
 
@@ -445,9 +467,45 @@ internal object CameraCapture : VideoSource {
     /** The whole set bound in one call on main (CameraX binds use cases together). */
     private fun bind(): Boolean {
         val provider = ready ?: return false
+        val cases = useCases.toList()
+        val rate = requestedFrameRate?.takeIf { cases.isNotEmpty() }?.let { ideal ->
+            info(selected)?.let { info ->
+                // CameraX's session filter can discard LEGACY ranges before their units are corrected.
+                val ranges = runCatching { info.getSupportedFrameRateRanges(SessionConfig.Builder(cases).build()) }
+                    .onFailure { Log.w("exact", "media-capture: frame-rate query failed (${it.message}); trying device ranges") }
+                    .getOrDefault(emptySet())
+                FrameRates.choose(ranges, ideal) ?: FrameRates.choose(info.supportedFrameRateRanges, ideal)
+            }
+        }
+        val next = Binding(selected, cases, rate)
+        if (bound == next) return true
+        // Unbinding all use cases resets CameraX controls. Keep them when the camera itself stays.
+        val previous = camera?.cameraInfo?.takeIf { bound?.camera == selected }
+        val zoom = previous?.zoomState?.value?.zoomRatio
+        val torch = previous?.takeIf { it.hasFlashUnit() }?.torchState?.value
+        bound = null
         provider.unbindAll()
-        val result = runCatching { provider.bindToLifecycle(owner, selector(selected), *useCases.toTypedArray()) }
+        var result = runCatching {
+            if (rate == null) provider.bindToLifecycle(owner, selector(selected), *cases.toTypedArray())
+            else provider.bindToLifecycle(owner, selector(selected), SessionConfig.Builder(cases).setFrameRateRange(rate).build())
+        }
+        var applied = rate
+        if (rate != null && result.isFailure) {
+            Log.i("exact", "media-capture: camera refused $rate fps (${result.exceptionOrNull()?.message}); retrying its default")
+            provider.unbindAll()
+            applied = null
+            result = runCatching { provider.bindToLifecycle(owner, selector(selected), *cases.toTypedArray()) }
+        }
         camera = result.getOrNull()
+        camera?.let {
+            bound = next.copy(rate = applied)
+            zoom?.let { ratio -> it.cameraControl.setZoomRatio(ratio) }
+            torch?.let { state -> it.cameraControl.enableTorch(state == 1) }
+        }
+        // Read the negotiated rate, including after a fallback; never publish a refused ideal as applied.
+        frameRate = if (result.isSuccess) (cases.firstNotNullOfOrNull {
+            it.attachedStreamSpec?.expectedFrameRateRange?.takeIf { range -> range.lower > 0 }
+        } ?: applied)?.upper else null
         camera?.cameraInfo?.cameraState?.observe(owner) { state ->
             val reason = when (state.error?.code) {
                 null -> null
@@ -456,6 +514,7 @@ internal object CameraCapture : VideoSource {
             }
             for ((t, tracks) in holders) tracks.interrupted(t, reason)
         }
+        for ((t, tracks) in holders) tracks.changed(t)
         return result.isSuccess
     }
 

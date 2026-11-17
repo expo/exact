@@ -1,4 +1,4 @@
-//! Offscreen targets reserved per frame and reused after GPU completion.
+//! Offscreen targets reserved per frame; the device orders their GPU writes.
 //! @ref LLP 1149 D2.5, D11.
 use crate::counters::{self, Counter};
 use crate::device::{Device, Result};
@@ -31,7 +31,7 @@ impl Pool {
             self.frame += 1;
             for (target, _, _) in self
                 .targets
-                .extract_if(.., |(_, seen, _)| self.frame.saturating_sub(*seen) > 120)
+                .extract_if(.., |(_, seen, _)| self.frame.saturating_sub(*seen) > 2)
             {
                 device.retire_texture(target)?;
                 counters::add(Counter::TargetsRetired, 1);
@@ -44,6 +44,29 @@ impl Pool {
                 self.size = size;
             }
             self.used = 0;
+            Ok(())
+        })();
+        self.observe_ownership();
+        result
+    }
+
+    /// Keep at most 16 MiB of unused targets between frames. Active layers are
+    /// bounded by the scene; retirement still follows the device's last use.
+    pub fn end(&mut self, device: &mut impl Device) -> Result<()> {
+        let mut spare_bytes = 0;
+        let result = (|| {
+            for (target, _, _) in self.targets.extract_if(self.used.., |(_, _, size)| {
+                let bytes = u64::from(size[0]) * u64::from(size[1]) * 4;
+                if spare_bytes + bytes > 16 * 1024 * 1024 {
+                    true
+                } else {
+                    spare_bytes += bytes;
+                    false
+                }
+            }) {
+                device.retire_texture(target)?;
+                counters::add(Counter::TargetsRetired, 1);
+            }
             Ok(())
         })();
         self.observe_ownership();
@@ -82,49 +105,34 @@ impl Pool {
 
     pub fn take_sized(&mut self, device: &mut impl Device, size: [u32; 2]) -> Result<TextureId> {
         let observing = counters::enabled();
-        let completed = device.completed()?;
-        let mut available = None;
-        let mut resizable = None;
-        let mut blocked = false;
-        for (i, target) in self.targets.iter().enumerate().skip(self.used) {
-            if target.2 == size {
-                if device.last_use(target.0)? <= completed {
-                    available = Some(i);
-                    break;
-                }
-                if observing {
-                    blocked = true;
-                    counters::add(Counter::TargetCandidatesBlocked, 1);
-                }
-            } else if resizable.is_none() && device.last_use(target.0)? <= completed {
-                resizable = Some(i);
-            }
-        }
+        // Earlier frames have submitted every read. Reusing a target orders its
+        // next write after those reads; waiting for completion would duplicate
+        // the whole pool whenever the CPU starts a frame ahead of the GPU.
+        let available = self.targets[self.used..]
+            .iter()
+            .position(|t| t.2 == size)
+            .map(|i| i + self.used)
+            .or_else(|| (self.used < self.targets.len()).then_some(self.used));
         if let Some(i) = available {
-            self.targets.swap(self.used, i);
-        } else {
-            if blocked {
-                counters::add(Counter::TargetBlocked, 1);
-            }
-            if let Some(i) = resizable {
+            if self.targets[i].2 != size {
                 let target = device.resize_target(self.targets[i].0, size[0], size[1])?;
                 self.targets[i] = (target, self.frame, size);
-                self.targets.swap(self.used, i);
                 counters::add(Counter::TargetsRetired, 1);
-            } else {
-                self.targets
-                    .push((device.create_target(size[0], size[1])?, self.frame, size));
-                let last = self.targets.len() - 1;
-                self.targets.swap(self.used, last);
-            }
-            if observing {
                 counters::add(Counter::TargetsAllocated, 1);
             }
+            self.targets.swap(self.used, i);
+        } else {
+            self.targets
+                .push((device.create_target(size[0], size[1])?, self.frame, size));
+            let last = self.targets.len() - 1;
+            self.targets.swap(self.used, last);
+            counters::add(Counter::TargetsAllocated, 1);
         }
         self.targets[self.used].1 = self.frame;
         let target = self.targets[self.used].0;
         self.used += 1;
         if observing {
+            let completed = device.completed()?;
             self.observe(device, completed)?;
         }
         Ok(target)
@@ -176,7 +184,7 @@ mod tests {
         assert_gauges(&pool, 1);
         pool.begin(&mut d, [16, 16]).unwrap();
         assert_gauges(&pool, 0);
-        for _ in 0..121 {
+        for _ in 0..3 {
             pool.begin(&mut d, [16, 16]).unwrap();
         }
         assert_eq!(pool.retained(), 0);

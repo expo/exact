@@ -11,6 +11,8 @@ Names are kept as names: a variable is resolved by the semantics' own
 lexical scoping (`Contract.Eval`), never by an index the compiler chose, so
 the semantics is of the language and not of its lowering.
 -/
+import Contract.Binary64
+
 namespace Contract
 
 /-- A written or inferred type. `record s` is a declared shape. -/
@@ -25,6 +27,20 @@ inductive Ty where
   /-- A type the checker left open (the element type of a bare `[]`). -/
   | unknown
   deriving Repr, BEq, Inhabited, DecidableEq
+
+/-- A run-time value. Resource placeholders are constants of these values. -/
+inductive Value where
+  | num (f : F64)
+  | bool (b : Bool)
+  | str (s : String)
+  | unit
+  | none
+  | some (v : Value)
+  | list (xs : List Value)
+  /-- A record: the shape it was built as (for field access by name and
+  printing; never compared) and its fields in declaration order. -/
+  | record (shape : String) (fields : List Value)
+  deriving Repr, Inhabited
 
 inductive UnOp where
   | neg
@@ -167,6 +183,9 @@ structure ResourceDecl where
   /-- `when cond` (LLP 1161.002 D1): asked only while `cond` holds, idle
   while it does not. A resource over a list has none. -/
   gate : Option Expr := .none
+  /-- The type's zero with any `else empty(…)` overrides (LLP 1054.000.002).
+  The embedding carries enum defaults here because `Ty` erases enums to strings. -/
+  placeholder : Option Value := .none
   /-- A child's resource (LLP 1035.005.004 D1): the region arm whose every
   instance owns a request of its own, asked in the render that makes or
   updates the instance (`Runtime.settleOwned`); `none` for the root's. -/

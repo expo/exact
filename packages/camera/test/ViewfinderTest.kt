@@ -1,5 +1,6 @@
 package exact.camera
 
+import android.graphics.Bitmap
 import android.view.View
 import android.widget.ImageView
 import androidx.camera.core.Preview
@@ -136,6 +137,26 @@ class ViewfinderTest {
         assertEquals(attachments, source.attachments)
         assertNull(source.preview.surfaceProvider)
         f.destroy(current)
+    }
+
+    @Test fun aClipSelectsFramesByPresentationTimeAndLoopsFromTheTracksStart() {
+        val images = (0..2).map { Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888) }
+        val clip = AgentClip(images.mapIndexed { i, b -> AgentClip.Frame(i * 100.0, b) }, 300.0, "fixture")
+        val start = 500.0
+        val times = listOf(500.0, 599.0, 600.0, 700.0, 800.0, 1600.0)
+        val expected = listOf(0, 0, 1, 2, 0, 2)
+        val track = TrackEntry("clip", "video")
+        val observed = ArrayList<Bitmap?>()
+        val stop = track.observePicture { observed += track.picture }
+        for ((time, index) in times.zip(expected)) {
+            val frame = clip.frame(time - start)
+            assertSame(images[index], frame)
+            track.picture = frame
+        }
+        assertEquals(listOf(images[0], images[1], images[2], images[0], images[2]), observed)
+        stop()
+        track.picture = null
+        assertEquals(5, observed.size)
     }
 
     @Test fun theAgentsNullVideoSourceRestoresItsTestCardOnUnmute() {

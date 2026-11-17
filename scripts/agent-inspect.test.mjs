@@ -1,12 +1,54 @@
 // `state <name>` (agent-inspect.mjs `stateOp`, LLP 1116.007 D3.9): a state, derive or resource (or a field of the record)
 // reads by name, down a dotted path, as `expect state` does, even where a view carries the name; a plain view's is the record.
 import { test, expect } from 'bun:test';
-import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta, pidTrace } from './agent-inspect.mjs';
+import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta, pidTrace, scaledScreenshot } from './agent-inspect.mjs';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open } from './agent-session.mjs';
 import { launchFacts } from './agent-launch.mjs';
+import { compareOp } from './agent-compare.mjs';
+import { encodePng } from './png.mjs';
+
+test('rotated panel captures scale on image axes and compare against rotated layout boxes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-rotated-capture-'));
+  const logical = { x: 10, y: 40, w: 60, h: 30 };
+  const cases = [
+    [0, 120, 200, { x: 10, y: 40, w: 60, h: 30 }],
+    [90, 200, 120, { x: 130, y: 10, w: 30, h: 60 }],
+    [180, 120, 200, { x: 50, y: 130, w: 60, h: 30 }],
+    [270, 200, 120, { x: 40, y: 50, w: 30, h: 60 }],
+  ];
+  const session = {
+    host: 'linux',
+    layout: async () => ({ viewport: { w: 120, h: 200 }, nodes: [{ id: 1, ...logical }] }),
+    tree: async () => ({ nodes: [{ id: 1, type: 'View', props: { testId: 'card' } }] }),
+  };
+  const picture = (w, h, box, color) => {
+    const data = new Uint8Array(w * h * 16).fill(255);
+    for (let y = box.y * 2; y < (box.y + box.h) * 2; y++)
+      for (let x = box.x * 2; x < (box.x + box.w) * 2; x++) data.set([...color, 255], (y * w * 2 + x) * 4);
+    return encodePng({ width: w * 2, height: h * 2, data });
+  };
+  try {
+    for (const [rotation, w, h, box] of cases) {
+      const shot = { screenshot: join(dir, 'shot.png'), w, h, rotation };
+      const reference = join(dir, 'ref.png');
+      writeFileSync(shot.screenshot, picture(w, h, box, [0, 0, 0]));
+      writeFileSync(reference, picture(w, h, box, [160, 0, 0]));
+      const full = scaledScreenshot(shot, 2, 'linux');
+      expect(full.shrunk).toBe(false);
+      const scaled = scaledScreenshot(shot, 1, 'linux');
+      expect([scaled.image.width, scaled.image.height]).toEqual([w, h]);
+      expect(scaled.shrunk).toBe(true);
+      expect(render('screenshot', shot)).toContain(`${w}×${h}`);
+      const result = await compareOp(session, reference, async () => shot);
+      expect(result.compare.regions.length).toBeGreaterThan(0);
+      expect(result.text).toContain(`under card [${box.x},${box.y} ${box.w}×${box.h}]`);
+      expect(await session.layout()).toEqual({ viewport: { w: 120, h: 200 }, nodes: [{ id: 1, ...logical }] });
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('bounded frame report and capture controls bypass legacy perf collection', async () => {
   const asked = [];

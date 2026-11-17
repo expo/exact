@@ -129,3 +129,57 @@ fn tree_rows<D: DataSource>(
     s.push('}');
     s
 }
+
+/// Props and SVG geometry by their schema names, with password values masked.
+pub(super) fn props_json(node: &NodeRef<'_>, s: &mut String) {
+    for (i, (id, value)) in node.props.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        quote(id.name(), s);
+        s.push(':');
+        match value {
+            PropValue::Str(t) if id == exact_kernel::PropId::Value => {
+                quote(shown_value(node.props, t), s)
+            }
+            PropValue::Str(t) => quote(t, s),
+            PropValue::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
+            PropValue::Int(i) => {
+                let _ = write!(s, "{i}");
+            }
+            PropValue::Float(f) => {
+                let _ = write!(s, "{}", num(*f));
+            }
+        }
+    }
+
+    // SVG 2 geometry lives in style rows, unlike the other SVG attributes.
+    // Expose it beside those attributes on every host using the runner's tree.
+    use exact_kernel::NodeType;
+    let geometry: &[StyleId] = match node.node_type {
+        NodeType::SvgCircle => &[StyleId::Cx, StyleId::Cy, StyleId::R],
+        NodeType::SvgEllipse => &[StyleId::Cx, StyleId::Cy, StyleId::Rx, StyleId::Ry],
+        NodeType::SvgRect => &[
+            StyleId::X,
+            StyleId::Y,
+            StyleId::Width,
+            StyleId::Height,
+            StyleId::Rx,
+            StyleId::Ry,
+        ],
+        NodeType::SvgUse | NodeType::SvgViewport | NodeType::SvgForeignObject => {
+            &[StyleId::X, StyleId::Y, StyleId::Width, StyleId::Height]
+        }
+        _ => &[],
+    };
+    let mut comma = node.props.iter().next().is_some();
+    for &row in geometry.iter().filter(|row| node.style.mask.has(**row)) {
+        if comma {
+            s.push(',');
+        }
+        comma = true;
+        quote(row.name(), s);
+        s.push(':');
+        row_json(row, node.computed(row), s);
+    }
+}

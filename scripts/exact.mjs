@@ -58,7 +58,7 @@ export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, readManifest, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, rustApp, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
 const { gameDefaults, sdkFetch } = await import('../game/app/shells.mjs');
-const { HOST_SDKS, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
+const { HOST_SDKS, HOST_SWIFT, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
 const { closeFilesystemReader } = await import('./filesystem.mjs');
 const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs');
@@ -542,7 +542,7 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     const need = HOST_SDKS[platform], refused = !version
       ? (built.stderr?.trim() || built.stdout?.trim() || built.error?.message || null)
       : swift ? xcodeRefusal(sdkName, inXcode, developer) : null;
-    rows.push(row('Xcode', version ? `${version} (${developer})` : developer, swift ? `Xcode ${need} or later` : 'Xcode.app', !!version && !refused,
+    rows.push(row('Xcode', version ? `${version} (${developer})` : developer, swift ? `${platform} SDK ${need}+, Swift ${HOST_SWIFT}+` : 'Xcode.app', !!version && !refused,
       refused ?? `install Xcode${swift ? ` ${need} or later` : ''}, then sudo xcode-select -s /path/to/Xcode.app (or set DEVELOPER_DIR to its Contents/Developer)`, 'macOS and iOS'));
   }
   if (process.platform === 'darwin' && want('iOS SDK')) {
@@ -553,12 +553,11 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
     rows.push(row('iOS SDK', sdk, swift ? `${HOST_SDKS[tv ? 'tvos' : 'ios']} or later (${sdkName})` : sdkName,
       !!sdk && !refused, refused ?? 'install Xcode and select it with DEVELOPER_DIR', tv ? 'tvOS' : 'iOS'));
   }
-  // Rust build scripts compile C with PATH's clang while the Swift host goes through xcrun: another toolchain first on
-  // PATH (Swiftly, a Homebrew LLVM) breaks an iOS build with errors that never name it. A warning: it may be meant.
-  if (process.platform === 'darwin' && want('clang and swift on PATH')) {
-    const other = ['clang', 'swift'].map(tool => [tool, Bun.which(tool, { PATH: env.PATH ?? '' }), output('xcrun', ['--find', tool])])
+  // Rust build scripts compile C with PATH's clang: another toolchain first on PATH can break an iOS build.
+  if (process.platform === 'darwin' && want('clang on PATH')) {
+    const other = ['clang'].map(tool => [tool, Bun.which(tool, { PATH: env.PATH ?? '' }), output('xcrun', ['--find', tool])])
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
-    rows.push(row('clang and swift on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
+    rows.push(row('clang on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
   } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).

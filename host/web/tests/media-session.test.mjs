@@ -4,7 +4,7 @@
 // `navigator.mediaSession`'s calls recorded. The owner rule, what is
 // published and never thrown, a retired owner, the artwork, and the remote
 // play's latch over `playbackVisibilityThreshold`. Every engine comes from
-// Playwright (`bunx playwright@1.64.1 install chromium-headless-shell firefox
+// Playwright (`bunx playwright@1.65.1 install chromium-headless-shell firefox
 // webkit`); an engine that is missing is skipped.
 import { afterAll, test, expect } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
@@ -12,8 +12,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { chromium as installed, suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { browserMissing } from '../../../scripts/agent-playwright.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -70,7 +69,7 @@ const page = `<!doctype html><meta charset="utf-8"><div id="exact-root"></div>
 </script>`;
 
 const engines = ['chromium', 'firefox', 'webkit'];
-const engineTest = Object.fromEntries(await Promise.all(engines.map(async e => [e, need(e === 'chromium' ? 'chrome' : e, await browserMissing(e))])));
+const engineTest = await engineTests();
 
 async function launch(name) {
   const playwright = await import('playwright-core');

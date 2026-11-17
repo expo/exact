@@ -524,7 +524,15 @@ fn pre_line_justifies_soft_wraps_after_unicode_break_characters() {
         height: 48.,
         radius: 0.,
     }];
-    for ch in ['\u{2028}', '\n', '\r', '\u{85}', '\u{c}', '\u{2029}'] {
+    // A form feed is text with no break beside it, as in Chrome: its word
+    // goes to the next line whole.
+    let mut s = spec("");
+    s.white_space = exact_kernel::WhiteSpace::PreLine;
+    s.runs[0].text = "one two\u{c}ABCDEFGHIJKLMN".into();
+    s.align = TextAlign::Left;
+    let unbroken = engine.paragraph_flow(&s, 180., &shapes, None);
+    assert_eq!(unbroken.fragments()[0].end, "one ".len());
+    for ch in ['\u{2028}', '\n', '\r', '\u{85}', '\u{2029}'] {
         let mut s = spec("");
         s.white_space = exact_kernel::WhiteSpace::PreLine;
         s.runs[0].text = format!("one two{ch}ABCDEFGHIJKLMN");

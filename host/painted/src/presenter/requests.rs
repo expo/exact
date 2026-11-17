@@ -104,6 +104,8 @@ pub enum Request {
     /// D1): the reader opens its sounds, videos and pages there again, and
     /// says when it drew the new generation (D5).
     Assets(String),
+    /// A desktop file dialog, taken as a typed request by the window host.
+    FileDialog(super::file_dialog::FileDialog),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -150,6 +152,7 @@ impl Request {
             Request::AuthEnd(_) => 19,
             Request::Files(_) => 18,
             Request::Assets(_) => 20,
+            Request::FileDialog(_) => 21,
         }
     }
 }
@@ -211,7 +214,7 @@ impl Haptic {
 }
 
 /// A request the shell took and has not answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) enum Waiting {
     /// The share sheet: its outcome is a journal line (LLP 1069.003 D2).
     Share,
@@ -227,6 +230,7 @@ pub(super) enum Waiting {
     /// None after the input is replaced: still consume and remove the
     /// shell's copies, but never deliver them to the new input.
     Files(Option<ViewId>),
+    FileDialog(super::file_dialog::Waiting),
 }
 
 /// Module calls' bodies and replies, handed over from the native slot's
@@ -238,10 +242,11 @@ type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(Vec<u8>, exact_runner::Reply)>
 pub(super) struct State {
     /// Whether a shell takes requests ([`Presenter::serve_requests`]).
     shell: bool,
+    pub(super) file_dialogs: bool,
     pub(super) agent_turn: Option<AgentTurn>,
     /// The last id given; ids start at 1 and are never reused.
     last: u32,
-    queued: Vec<(u32, Request)>,
+    pub(super) queued: Vec<(u32, Request)>,
     pub(super) waiting: BTreeMap<u32, Waiting>,
     pub(super) importing: std::collections::BTreeSet<u32>,
     pub(super) files: super::picker::Inbox,
@@ -353,6 +358,7 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
                 string(out, mime);
             }
         }
+        Request::FileDialog(dialog) => string(out, &dialog.picker.summary()),
         Request::Surface(surface) => surface.encode(out),
         Request::Hatch(words) => out.extend(words),
         Request::SurfaceHaptic(surface, json) => {
@@ -560,6 +566,9 @@ impl<D: DataSource> Presenter<D> {
     /// package's, called now; a shell's, queued for it, each answered by its
     /// id (`answer_request`); any other, `NotSupportedError`.
     pub(super) fn modules_in(&mut self) {
+        for source in self.requests.packages.take_pictures() {
+            self.picture_changed(&source, false);
+        }
         let calls = std::mem::take(
             &mut *self
                 .requests
@@ -972,6 +981,9 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
             Waiting::Files(view) => self.files_chosen(id, view, answer),
+            Waiting::FileDialog(waiting) => {
+                self.finish_file_dialog(id, waiting, super::file_dialog::Outcome::Cancelled)
+            }
         }
         true
     }
@@ -1025,6 +1037,11 @@ impl<D: DataSource> Presenter<D> {
 
     fn drop_picks(&mut self, stale: impl Fn(ViewId) -> bool) {
         for waiting in self.requests.waiting.values_mut() {
+            if let Waiting::FileDialog(waiting) = waiting {
+                if waiting.view.is_some_and(&stale) {
+                    waiting.view = None;
+                }
+            }
             if let Waiting::Files(view) = waiting {
                 if view.is_some_and(&stale) {
                     *view = None;

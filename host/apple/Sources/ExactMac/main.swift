@@ -37,6 +37,17 @@ let smoke = ExactEnv.smoke
 let agentMode = ExactEnv.agentMode
 setvbuf(stdout, nil, _IOLBF, 0)
 if ExactEnv.agentCarried { AgentLink.prepareStdio() }
+let requestedRTL = ExactEnv.appMetadata["ExactLayoutDirection"] as? String == "rtl"
+var directionArguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+let directionLaunchOverride = directionArguments["AppleTextDirection"] != nil || directionArguments["NSForceRightToLeftWritingDirection"] != nil
+// AppKit reads these Xcode pseudolanguage switches once, before its first
+// window. Registered defaults do not reach it; the argument domain does
+// (LLP 1060.000 §2). Preserve a launch argument naming either switch.
+if requestedRTL && !directionLaunchOverride {
+    directionArguments["AppleTextDirection"] = true
+    directionArguments["NSForceRightToLeftWritingDirection"] = true
+    UserDefaults.standard.setVolatileDomain(directionArguments, forName: UserDefaults.argumentDomain)
+}
 // Nothing restores this app: a session boots its plan, and the window below is
 // not restorable. AppKit still saves the application's own state some fifteen
 // seconds after launch, and to do that it asks the window server for the order
@@ -47,6 +58,15 @@ if ExactEnv.agentCarried { AgentLink.prepareStdio() }
 // default, is undocumented, which shipped code does not read (LLP 1035.003 §3).
 let app = NSApplication.shared
 ExactEnv.stamp("NSApplication.shared")
+func directionName(_ direction: NSUserInterfaceLayoutDirection) -> String { direction == .rightToLeft ? "rtl" : "ltr" }
+func checkLayoutDirection(_ window: NSWindow) {
+    guard requestedRTL else { return }
+    let application = app.userInterfaceLayoutDirection, titlebar = window.windowTitlebarLayoutDirection
+    guard application != .rightToLeft || titlebar != .rightToLeft else { return }
+    #if DEBUG
+    fputs("exact: ERROR host.macos.layoutDirection=rtl did not mirror the whole window: NSApplication=\(directionName(application)), windowTitlebar=\(directionName(titlebar)), launch override=\(directionLaunchOverride)\n", stderr)
+    #endif
+}
 // The manifest's fixed `userInterfaceStyle`, before any window or view reads an appearance.
 app.appearance = ExactEnv.fixedAppearance
 // Under a script (LLP 1012) the app is an accessory — no Dock tile, no
@@ -278,6 +298,7 @@ final class DocumentWindow: NSObject, NSWindowDelegate {
         // AppKit's own opening animation, and window tabs only where documents
         // have windows of their own (LLP 1115.000 D7.9).
         ExactDocuments.furnish(window)
+        checkLayoutDirection(window)
         // Nothing restores this window — a session boots its plan and the frame has
         // its own autosave below — so AppKit's restoration has nothing to keep for it.
         // Left on, a scroll view invalidates restorable state as it scrolls and AppKit
@@ -685,7 +706,13 @@ ExactDocuments.shown = { session, url in
     windows.first { $0.session === session }?.document = url.standardizedFileURL.path
 }
 AgentLink.hostState = {
-    ["documents": [
+    ["layoutDirection": [
+        "requested": requestedRTL ? "rtl" : "auto", "launchOverride": directionLaunchOverride,
+        "application": directionName(app.userInterfaceLayoutDirection),
+        "windows": windows.map { ["session": $0.label, "titlebar": directionName($0.window.windowTitlebarLayoutDirection)] },
+        "mirrored": app.userInterfaceLayoutDirection == .rightToLeft && !windows.isEmpty
+            && windows.allSatisfy { $0.window.windowTitlebarLayoutDirection == .rightToLeft },
+    ] as [String: Any], "documents": [
         "launchMode": ExactDocuments.launchMode,
         "windows": windows.map(\.observed),
         "recent": ExactDocuments.recent,

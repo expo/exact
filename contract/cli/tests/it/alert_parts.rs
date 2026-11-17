@@ -74,6 +74,39 @@ const OK: &str = "  button commandfor=\"c\" command=\"close\" testId=\"ok\"\n   
 const SAVE: &str =
     "  button press=go commandfor=\"c\" command=\"close\" testId=\"save\"\n    text \"Save\"";
 
+#[test]
+fn a_written_alert_family_warns_that_apple_keeps_the_system_face() {
+    for own in ["font-family=\"serif\"", "class=Face", ""] {
+        let src = format!(
+            "style Face\n  font-family=\"serif\"\n{}",
+            app(&format!("{LABELLED} {own}\n  text \"Body\"\n{OK}"))
+                .replace("    column\n", "    column font-family=\"serif\"\n")
+        );
+        let (result, warnings) = contract::compile_warned(&src);
+        assert!(result.is_ok(), "{result:?}");
+        let warnings: Vec<_> = warnings
+            .iter()
+            .filter(|w| w.id == "lower-alert-font")
+            .collect();
+        assert_eq!(warnings.len(), usize::from(!own.is_empty()), "{own}");
+        if let Some(warning) = warnings.first() {
+            assert!(warning.is_warning());
+            assert!(warning
+                .message
+                .contains("iOS and macOS keep the system face"));
+            let line = if own == "class=Face" {
+                2
+            } else {
+                src.lines()
+                    .position(|line| line.contains("alertdialog"))
+                    .unwrap() as u32
+                    + 1
+            };
+            assert_eq!(warning.span.line, line);
+        }
+    }
+}
+
 fn text(id: &str) -> String {
     format!("  text \"Words\" testId=\"{id}\"")
 }

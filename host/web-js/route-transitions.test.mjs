@@ -7,6 +7,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 // Long parts, so that a test sees the transition while it runs.
 const SOURCE = `routes nav
@@ -131,7 +134,7 @@ const tap = (p, id) => p.click(`[data-testid=${id}]`);
 const shown = s => s.routes.filter(r => !r.hidden).map(r => r.name);
 
 // Chrome, Firefox and Safari run same-document view transitions alike.
-test.each(['chromium', 'firefox', 'webkit'])('in %s a push plays the entrance over the route beneath, which stays shown while the arriving route is inert', async engine => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`in ${engine} a push plays the entrance over the route beneath, which stays shown while the arriving route is inert`, async () => {
   const { p, errors, state, ready, finished, close } = await page({ engine });
   try {
     await tap(p, 'item-home');

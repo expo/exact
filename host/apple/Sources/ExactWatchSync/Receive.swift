@@ -1,13 +1,13 @@
 // The watch app's side of replication as one transition function.
 //
 // `step` takes the process's state and one event. It answers the effects to perform, in
-// order. `WatchReceiver` performs them on one serial queue and feeds an effect's answer
-// back before any other event, so `reconciled` always answers the `reconcile` before it.
+// order. `WatchReceiver` performs a step's effects on one serial queue, then consumes
+// their answers in order before outside events. Local readiness must precede activation:
+// a synchronous activation answer can start a retained import.
 //
-// WCSession's retained context is valid only after activation completes (`WCSession.h`),
-// and SwiftUI reports an active scene before that. So readers open on one path only: a
-// `reconciled` that leaves no context owed and finds the store readable. A failed
-// activation counts as a context that cannot be known, and opens the last accepted store.
+// Readers open on the last applied store, without waiting for activation. WCSession's
+// retained context is valid only after activation completes (`WCSession.h`); importing
+// it then refreshes readers. An unfinished import still keeps new readers closed.
 //
 // The phone seals to the key this watch publishes, so a publication WatchConnectivity
 // refuses is owed and retried. Readers never wait for it: the store is readable with no
@@ -91,9 +91,9 @@ enum WatchReceive {
     }
 
     /// Work a retry can finish: an activation to try again, a context to import,
-    /// readers waiting on an unfinished import, or a key to publish.
+    /// readers waiting for their store, or a key to publish.
     static func owed(_ s: State) -> Bool {
-        s.link == .failed || (s.link == .active && (s.held || s.readers == .waiting || s.keyOwed))
+        s.link == .failed || s.readers == .waiting || (s.link == .active && (s.held || s.keyOwed))
     }
 
     /// Feed `event`, then each effect's answer, until none is left.
@@ -115,7 +115,7 @@ enum WatchReceive {
         func reconcile() {
             if s.link == .active, s.held || s.readers == .waiting {
                 effects.append(.reconcile(context: true))
-            } else if s.link == .failed, s.readers == .waiting {
+            } else if s.readers == .waiting {
                 effects.append(.reconcile(context: false))
             }
         }
@@ -128,7 +128,8 @@ enum WatchReceive {
         switch event {
         case .launch:
             if s.readers == .closed { s.readers = .waiting }
-            if s.link == .idle { activate() } else { reconcile() }
+            reconcile()
+            if s.link == .idle { activate() }
         case .activated:
             s.link = .active
             s.held = true
@@ -152,7 +153,7 @@ enum WatchReceive {
                 }
             }
             if s.readers == .waiting {
-                if ready, !s.held {
+                if ready {
                     s.readers = .open
                     effects.append(.open)
                 } else {
@@ -170,8 +171,10 @@ enum WatchReceive {
             guard active else { break }
             s.wait = 1
             switch s.link {
-            case .idle, .failed: activate()
-            case .activating: break
+            case .idle, .failed:
+                reconcile()
+                activate()
+            case .activating: reconcile()
             case .active:
                 effects.append(.publishKey)
                 reconcile()
@@ -186,6 +189,7 @@ enum WatchReceive {
             s.timer = false
             guard s.sceneActive else { break }
             if s.link == .failed {
+                reconcile()
                 activate()
             } else {
                 if s.keyOwed { effects.append(.publishKey) }

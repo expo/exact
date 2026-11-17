@@ -236,14 +236,16 @@
           if (t.call === call) armed.delete(id);
         });
       },
-      // An `AbortSignal.timeout` still to fire, or one composed of it: the ms
-      // left, the deadline a fetch carrying it gives the host; `expire` aborts
+      // An `AbortSignal.timeout` still to fire, or one composed of it: the
+      // whole ms left, rounded up so the host's deadline is never before the
+      // signal's (the runner's clock is fractional; the wire's deadline is an
+      // integer), the deadline a fetch carrying it gives the host; `expire` aborts
       // it when that passes, its timer dropped or not, as a browser's fires:
       // a fetch its answer let go runs to its end (LLP 1146 D2), and another
       // answer may carry the same signal.
       left: function (signal) {
         var s = deadline(signal);
-        return s && !signal.aborted ? Math.max(1, s.due - time()) : undefined;
+        return s && !signal.aborted ? Math.max(1, Math.ceil(s.due - time())) : undefined;
       },
       expire: function (signal) {
         var s = deadline(signal);

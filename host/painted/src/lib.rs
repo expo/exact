@@ -57,6 +57,7 @@ pub mod com;
 pub mod content_region;
 pub mod delivery;
 pub mod desktop;
+pub mod screen_capture;
 // The packages' own Rust names this crate so; `desktop_tests.rs` compiles it here.
 #[cfg(test)]
 extern crate self as exact_painted;
@@ -65,6 +66,7 @@ pub mod executor;
 pub mod fetch;
 pub mod fields;
 mod file;
+mod forma;
 #[cfg(any(target_os = "android", test))]
 mod frame_health;
 pub mod frames;
@@ -84,8 +86,7 @@ pub mod pads;
 pub mod paint;
 pub mod picker;
 mod placement;
-// Asked only on Linux: elsewhere this host refuses the document pickers.
-mod forma;
+// The Linux desktop portal; Windows uses its window's common item dialogs.
 #[cfg_attr(any(not(unix), target_os = "android"), allow(dead_code))]
 mod portal;
 pub mod presence_secrets;

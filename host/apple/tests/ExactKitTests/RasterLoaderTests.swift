@@ -46,6 +46,25 @@ final class RasterLoaderTests: XCTestCase {
         }
     }
 
+    func testPublishedFilesReplaceAnImagesPixels() throws {
+        let (root, resolver, presenter, node, loader, window) = try fixture()
+        defer {
+            loader.shutdown(); node.raster = nil; window.close()
+            try? FileManager.default.removeItem(at: root)
+            withExtendedLifetime(presenter) {}
+        }
+        node.frame = CGRect(x: 0, y: 0, width: 32, height: 32); node.loadGeneration = 1
+        try png(root, "still.png", width: 32, height: 32, identity: 1)
+        XCTAssertTrue(loader.load(node, source: "still.png", resolver: resolver))
+        settle { node.raster != nil }
+        let first = try XCTUnwrap(node.raster?.image.image)
+        try png(root, "still.png", width: 32, height: 32, identity: 2)
+        loader.pictureChanged("still.png")
+        settle { node.raster?.image.image !== first }
+        let next = try XCTUnwrap(node.raster?.image.image)
+        XCTAssertNotEqual(first.dataProvider?.data as Data?, next.dataProvider?.data as Data?)
+    }
+
     func testAResolutionReductionKeepsTheLargestSizeTheBudgetHolds() throws {
         let (root, resolver, presenter, node, loader, window) = try fixture()
         defer {

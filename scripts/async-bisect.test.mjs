@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { bisectAffected, bisectFailures, probeOutcomes } from './async-bisect.mjs';
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -103,8 +103,16 @@ test('lane edits are restored after success, an error and a child killed before 
         git('add', paths[0]);
         if (outcome === 'error') throw new Error('check failed');
         if (outcome === 'killed') {
-          const child = spawnSync(process.execPath, ['-e', "require('node:fs').writeFileSync('apps/caltrain/app.contract', 'child edit'); process.kill(process.pid, 'SIGKILL')"], { cwd: root });
-          expect(child.signal).toBe('SIGKILL');
+          const child = spawnSync(process.execPath, ['-e', `
+            const fs = require('node:fs');
+            fs.writeFileSync('apps/caltrain/app.contract', 'child edit');
+            process.on('exit', () => fs.writeFileSync('exit-cleanup', 'ran'));
+            process.kill(process.pid, 'SIGKILL');
+          `], { cwd: root });
+          expect(child.error).toBeUndefined();
+          expect(process.platform === 'win32' ? child.status : child.signal).toBe(process.platform === 'win32' ? 1 : 'SIGKILL');
+          expect(readFileSync(join(root, paths[1]), 'utf8')).toBe('child edit');
+          expect(existsSync(join(root, 'exit-cleanup'))).toBe(false);
         }
       });
       if (outcome === 'error') await expect(run).rejects.toThrow('check failed');
@@ -123,9 +131,13 @@ test('lane edits are restored after success, an error and a child killed before 
       const fs = require('node:fs');
       for (const path of ${JSON.stringify(paths)}) fs.writeFileSync(path, 'interrupted lane');
       require('node:child_process').execFileSync('git', ['add', ${JSON.stringify(paths[0])}]);
+      process.on('exit', () => fs.writeFileSync('exit-cleanup', 'ran'));
       process.kill(process.pid, 'SIGKILL');
     `], { cwd: root });
-    expect(killed.signal).toBe('SIGKILL');
+    expect(killed.error).toBeUndefined();
+    expect(process.platform === 'win32' ? killed.status : killed.signal).toBe(process.platform === 'win32' ? 1 : 'SIGKILL');
+    for (const path of paths) expect(readFileSync(join(root, path), 'utf8')).toBe('interrupted lane');
+    expect(existsSync(join(root, 'exit-cleanup'))).toBe(false);
     checkout(tip, root);
     expect(git('status', '--porcelain')).toBe('');
     for (const path of paths) expect(readFileSync(join(root, path), 'utf8')).toBe('original');
@@ -136,7 +148,7 @@ test('lane edits are restored after success, an error and a child killed before 
     expect(readFileSync(join(root, paths[0]), 'utf8')).toBe('original');
     expect(readFileSync(join(root, 'unrelated'), 'utf8')).toBe('keep');
   } finally { rmSync(root, { recursive: true, force: true }); }
-});
+}, 30000);
 
 test('a preexisting failure repaired in the range is attributed to its new introduction', async () => {
   const result = await bisectFailures(['base', 'pass', 'tip'], ['x'], async sha => ({ x: sha === 'pass' ? 'pass' : 'fail' }));

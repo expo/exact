@@ -7,7 +7,7 @@
 //
 // usage: bun packages/speech-synthesis/test/web.mjs [chrome] [chromium] [firefox] [webkit]
 //   (every engine by default; `chrome` is the installed Google Chrome, `chromium`
-//   Playwright's; `bunx playwright@1.64.1 install firefox webkit` first)
+//   Playwright's; `bunx playwright@1.65.1 install firefox webkit` first)
 import { rmSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { checker, makeFixture, root, run } from './fixture.mjs';

@@ -833,7 +833,10 @@ fn opted_in_idle_canvas_reports_on_a_wake_without_a_render() {
   frames: option<number>
   fps: option<number>
 component App
-  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  state perfHud = false
+  action toggle
+    perfHud = not perfHud
+  resource metrics = exactCanvasPerformance("world") when perfHud as shape Metrics
   view
     canvas surface=world width=50 height=50
 "#;
@@ -851,6 +854,9 @@ component App
         p.surfaces.abis[""].symbol::<unsafe extern "C" fn() -> u32>(b"test_performance_reads")
     };
     assert_eq!(unsafe { reads() }, 0);
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    p.sync_surfaces();
     assert_eq!(p.surfaces.performance_due_in_ms(), Some(0.));
     assert!(p.wake_due_ms().is_some());
     assert!(p.pump(0.).is_none());
@@ -878,11 +884,22 @@ component App
     p.surfaces.hidden = false;
     assert!(p.pump(0.).is_none());
     assert_eq!(unsafe { reads() }, 2);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    p.sync_surfaces();
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    assert!(p.surfaces.canvases.values().all(|c| !c.performance));
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 2);
     let view = *p.surfaces.canvases.keys().next().unwrap();
     p.surfaces.retire(view, &mut p.host);
     assert_eq!(p.surfaces.performance_due_in_ms(), None);
     assert!(p.pump(0.).is_none());
     assert_eq!(unsafe { reads() }, 2);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    assert_eq!(
+        p.host.runner().resource("metrics"),
+        Some(&exact_plan::Value::record(vec![exact_plan::Value::NONE; 2]))
+    );
     drop(p);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

@@ -79,6 +79,28 @@ final class SpaceHitMacTests: XCTestCase {
         XCTAssertFalse(child.pressInside(parent.convert(NSPoint(x: 140, y: 100), to: nil)))
     }
 
+    /// A layer playing a transform animation turns about its centre
+    /// (`NodeView.anchorLayer`); the perspective it holds for its children
+    /// is about its anchor, so it is placed again as the anchor moves, both
+    /// ways, and the turned child stays where it was drawn.
+    func testAnAnimatedHolderKeepsItsPerspective() {
+        let (p, parent, child) = fixture(child: ["rotate_axis": [0, 1, 0]], degrees: 60)
+        func width() -> CGFloat {
+            let xs = [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0), CGPoint(x: 0, y: 100), CGPoint(x: 100, y: 100)].map { NodeView.map(child.plane!, $0).x }
+            return xs.max()! - xs.min()!
+        }
+        let drawn = width()
+        XCTAssertEqual(drawn, 52.46, accuracy: 0.01)
+        p.apply(wireBatch([["op": "animations", "id": 1, "specs": [["id": "grow#0#transform.scale", "k": "transform.scale", "s": 0.0, "dl": 0.0,
+            "d": 1.0, "n": -1.0, "t": [0.0, 1.0], "v": [1.0, 2.0], "c": [], "fill": 0.0]]]]))
+        XCTAssertEqual(parent.layer?.anchorPoint, CGPoint(x: 0.5, y: 0.5))
+        XCTAssertEqual(width(), drawn, accuracy: 0.01)
+        XCTAssertTrue(hit(parent, 75, 45) === child)
+        p.apply(wireBatch([["op": "animations", "id": 1, "specs": []]]))
+        XCTAssertEqual(parent.layer?.anchorPoint, .zero)
+        XCTAssertEqual(width(), drawn, accuracy: 0.01)
+    }
+
     // Moved 100 px toward the viewer under a 300 px perspective from the
     // top left, a 60 px box at (100, 100) is drawn half again as large at
     // (150, 150)…(240, 240), clear of its frame.

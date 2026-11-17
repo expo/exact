@@ -4,6 +4,7 @@
 
 mod balance;
 mod bands;
+mod controls;
 mod corpus;
 mod flow;
 mod shapes;

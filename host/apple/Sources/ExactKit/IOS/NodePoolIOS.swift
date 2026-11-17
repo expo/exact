@@ -530,6 +530,7 @@ extension NodeView {
     func recycle() {
         layoutHits = nil
         trackClipboardHandlers(false)
+        trackIntersections(listening: false)
         holdGone() // a held state goes with its node, parked under its row (HeldState.swift)
         cancelPressContact()
         pressContact = nil

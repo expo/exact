@@ -238,7 +238,13 @@ Linux host, and the iOS cross compiler. On Windows, use WSL 2 with Ubuntu 24.04 
   not needed.
 - **Google Chrome.** The agent drives the web through headless Chrome. Set `CHROME` to
   use another Chromium.
-- **Xcode 27.1 or later**, for Apple builds on macOS (`exact setup --check` checks it). For iOS builds on Linux/WSL, install
+- **Apple SDKs and Swift**, for Apple builds on macOS (`exact setup --check` checks both).
+  The host needs the macOS 26.0 SDK (Xcode 26.0+), iOS 27.1 SDK (Xcode 27.1+),
+  or tvOS 27.0 SDK (Xcode 27.0+), and Swift 6.4 or later. Swift 6.4 is tested;
+  Swift 6.2.4 cannot type-check the host. The SDK and compiler floors live in
+  [`host/apple/devices.mjs`](host/apple/devices.mjs).
+  Swift builds use `xcrun`'s selected compiler; select it with `DEVELOPER_DIR` or `TOOLCHAINS`.
+  For iOS builds on Linux/WSL, install
   [Swift 6.4.2](https://www.swift.org/install/linux/),
   [xtool 1.24.0](https://github.com/xtool-org/xtool/releases/tag/1.24.0),
   [LLVM 23](https://apt.llvm.org/), and
@@ -353,6 +359,19 @@ and take a minute or two. Watch its output rather than waiting blind. iOS comman
 iPhone simulator that's already booted, or boot the newest iPhone Pro. To choose one,
 set `EXACT_SIM` to its name or UDID (or pass `--sim` to `build.mjs`), and keep the same
 setting for `agent.mjs ios`.
+
+On Linux KMS, `EXACT_ROTATE=0|90|180|270` turns the completed image clockwise.
+Without it, the connector's `panel orientation` property chooses the angle; an
+absent property means 0. At 90 or 270 degrees layout uses the swapped mode size.
+The GPU rotates the image before display. Absolute evdev and VNC coordinates use
+the inverse transform; relative mouse movement and scrolling keep the user's axes.
+Agent screenshots show the rotated framebuffer, at the panel mode's size. Their
+replies give that image's point dimensions and clockwise `rotation` in degrees;
+comparison maps layout boxes onto those axes. Agent layout and target coordinates
+remain logical. In a headless Linux host, `EXACT_SIZE` supplies the unrotated panel
+size in points. Ink blits its retained target before readback; other painters
+upload their completed pixels for the GPU blit. KMS still reads back into dumb
+buffers.
 
 On Linux, a development build can serve its screen with `EXACT_VNC=1` and
 `EXACT_VNC_PASSWORD` set to 1–8 bytes. It listens on `127.0.0.1:5900`;
@@ -782,7 +801,10 @@ else here was admitted because a real app needed it.
   native controls over Contract and the kernel with an app-local Win32 presenter;
   general Windows control parity and delivery remain unfinished.
   A `-exact-menu="status"` button is a notification-area icon with a painted
-  menu (LLP 1133.025 D4), built and not yet run on Windows.
+  menu (LLP 1133.025 D4), verified on Windows 11 for a hidden launch,
+  pointer input, checkbox state, Exit and placement clear of an auto-hiding
+  taskbar. Its UI Automation menu tree and file-backed status images at
+  changing display scales still need a Windows run.
 - **Android.** Admitted (2026-10-07) and early. An app builds for Android and runs
   on an emulator or a phone: `bun exact.mjs android` builds it, `bun exact.mjs test
   android` runs its tests, and `bun exact.mjs agent android …` drives it

@@ -15,6 +15,9 @@ import { resolve } from 'node:path';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const ROOT = resolve(import.meta.dir, '../../..');
 const schema = JSON.parse(readFileSync(resolve(ROOT, 'kernel/tables/schema.json'), 'utf8'));
@@ -97,7 +100,7 @@ for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`symbol
   } finally { await suite.close(); }
 }, 30000);
 
-for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: a bar item's symbol is the bar's size at ${root}px (${file})`, async () => {
+for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) engineTest[engine](`${engine}: a bar item's symbol is the bar's size at ${root}px (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const style = symbolSheet(source);
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
@@ -199,7 +202,7 @@ for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'w
   }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: authored empty text remains part of a custom bar face`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: authored empty text remains part of a custom bar face`, async () => {
   const cases = ['bar-button', 'bar-pressable', 'sheet-button', 'sheet-pressable'];
   const content = cases.map(id => {
     const tag = id.endsWith('button') ? 'button' : 'div';

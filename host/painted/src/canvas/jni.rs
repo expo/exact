@@ -61,6 +61,24 @@ macro_rules! canvas_jni {
             const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
             const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
 
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_environment(
+                env: *mut JNIEnv,
+                _class: jclass,
+                values: $crate::canvas::jni_sys::jbyteArray,
+            ) {
+                // The reader calls once before starting host threads. Copy through JNI:
+                // Android's Os.setenv may belong to another libc under ARM translation.
+                let values = $crate::canvas::jni::utf8(env, values);
+                for entry in values.split('\0') {
+                    if let Some((name, value)) = entry.split_once('=') {
+                        if !name.is_empty() {
+                            std::env::set_var(name, value);
+                        }
+                    }
+                }
+            }
+
             fn pipeline_cache() {
                 use std::hash::{Hash, Hasher};
                 let mut key = std::collections::hash_map::DefaultHasher::new();

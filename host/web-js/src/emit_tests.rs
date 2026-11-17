@@ -1303,61 +1303,6 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
     }
 }
 
-/// @ref LLP 1047.002 D1 — the projection frames a sheet (navigation/routes.js `sheetFrame`)
-/// only for a plan with a route whose `navigationPresentation` is, or may be,
-/// `modal`, handed over before the router connects the projection.
-#[test]
-fn sheet_frames_link_only_where_a_route_can_be_a_sheet() {
-    let emitted = |route: &str| {
-        let source = format!("routes nav\n  home \"/\"\ncomponent App\n  state sheet = true\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` {route}\n          text \"Card\"\n");
-        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
-            .unwrap()
-            .js
-    };
-    for route in [
-        "navigationPresentation=\"modal\"",
-        "navigationPresentation=(sheet ? \"modal\" : \"fullscreen\")",
-    ] {
-        let js = emitted(route);
-        let install = js.find("$useSheets($sheetFrame);");
-        assert!(install.is_some() && install < js.find("router(s_"), "{js}");
-    }
-    for route in ["", "navigationPresentation=\"fullscreen\""] {
-        let js = emitted(route);
-        assert!(
-            !js.contains("sheetFrame") && !js.contains("useSheets"),
-            "{js}"
-        );
-    }
-}
-
-/// @ref LLP 1047.002 D1 — the projection keeps a clear bar (navigation/routes.js `clearBar`)
-/// only for a plan with a route whose `navigationBar` is, or may be, `transparent`.
-#[test]
-fn clear_bars_link_only_where_a_routes_bar_can_be_transparent() {
-    let emitted = |route: &str| {
-        let source = format!("routes nav\n  home \"/\"\ncomponent App\n  state clear = true\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${{e.id}}` {route}\n          header\n            text \"Card\" role=\"heading\"\n");
-        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
-            .unwrap()
-            .js
-    };
-    for route in [
-        "navigationBar=\"transparent\"",
-        "navigationBar=(clear ? \"transparent\" : \"auto\")",
-    ] {
-        let js = emitted(route);
-        let install = js.find("$useClearBars($clearBar);");
-        assert!(install.is_some() && install < js.find("router(s_"), "{js}");
-    }
-    for route in ["", "navigationBar=\"none\""] {
-        let js = emitted(route);
-        assert!(
-            !js.contains("clearBar") && !js.contains("useClearBars"),
-            "{js}"
-        );
-    }
-}
-
 /// @ref LLP 1047.002 D1 — a link's `rel` and `target` are kept by links.js only
 /// for a plan that binds a link's `href`, `rel` or `target`, handed over before
 /// the first commit builds the view; a static link's are the template's.

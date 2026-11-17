@@ -393,7 +393,7 @@ impl Build {
 
 impl<D: DataSource> Presenter<D> {
     /// `aria-labelledby`'s words, else `aria-label`, unless empty.
-    fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
+    pub(in crate::presenter) fn access_label(&self, node: &NodeRef<'_>) -> Option<String> {
         let kernel = self.host.kernel();
         let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
             (refs.split_whitespace())
@@ -1314,7 +1314,14 @@ impl<D: DataSource> Presenter<D> {
         let Some(node) = self.access.nodes.iter().find(|n| n.id == id).cloned() else {
             return false;
         };
-        let live = |p: &Self| node.view != 0 && p.host.kernel().node(node.view).is_some();
+        let live = |p: &Self| {
+            node.view != 0
+                && (p.host.kernel().node(node.view).is_some()
+                    || node.view == super::top::EXIT
+                        && p.surface().is_some_and(|surface| {
+                            surface.targets.iter().any(|row| row.node == node.view)
+                        }))
+        };
         match (action, node.role) {
             (act::CLICK, role::UP) => self.system_back(now_ms),
             (act::CLICK, role::OPTION) => self.access_choose(node.view),

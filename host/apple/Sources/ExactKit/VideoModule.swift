@@ -8,8 +8,11 @@ import UIKit
 typealias MediaPlatformView = UIView
 #endif
 private typealias MediaCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+private typealias MediaConfiguring = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
 private final class VideoModule {
-    typealias Create = @convention(c) (UnsafeMutableRawPointer?, MediaCallback?) -> UnsafeMutableRawPointer?
+    typealias Create = @convention(c) (
+        UnsafeMutableRawPointer?, MediaCallback?, MediaConfiguring?, UnsafeMutablePointer<UnsafeMutableRawPointer?>?
+    ) -> UnsafeMutableRawPointer?
     typealias View = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
     typealias Update = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
     typealias Handle = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -89,6 +92,7 @@ final class VideoView {
     private var creationSeconds: TimeInterval?
     #endif
     private var handle: UnsafeMutableRawPointer?
+    private(set) weak var platform: AnyObject?
     private var platformView: MediaPlatformView?
     private var last: [String: String] = [:]
     private var observed: [String: Any] = ["unavailable": true]
@@ -170,12 +174,19 @@ final class VideoView {
         self.owner = owner
         guard let module = VideoModule.shared else { return }
         let context = Unmanaged.passUnretained(self).toOpaque()
+        var player: UnsafeMutableRawPointer?
         handle = module.create(context, { context, bytes, length in
             guard let context, let bytes else { return }
             let video = Unmanaged<VideoView>.fromOpaque(context).takeUnretainedValue()
             guard let message = try? JSONSerialization.jsonObject(with: Data(bytes: bytes, count: length)) as? [String: Any] else { return }
             video.receive(message)
-        })
+        }, { context, raw in
+            guard let context, let raw else { return }
+            let video = Unmanaged<VideoView>.fromOpaque(context).takeUnretainedValue()
+            guard let owner = video.owner else { return }
+            owner.presenter?.elements.configuring(owner, Unmanaged<AnyObject>.fromOpaque(raw).takeUnretainedValue())
+        }, &player)
+        if let player { platform = Unmanaged<AnyObject>.fromOpaque(player).takeUnretainedValue() }
         #if os(iOS) || os(tvOS)
         if handle != nil, !ExactEnv.agentMode { AudioSession.playerCame(ObjectIdentifier(self)) }
         #endif
@@ -195,6 +206,7 @@ final class VideoView {
             return
         }
         self.handle = nil
+        platform = nil
         VideoModule.shared?.destroy(handle)
         platformView?.removeFromSuperview()
         platformView = nil
@@ -229,7 +241,8 @@ final class VideoView {
         // Radius, borders and padding are style, not player props. Refresh
         // their geometry even when the AVKit update below is deduplicated.
         layout()
-        guard let owner, let module = VideoModule.shared, let handle else { return }
+        guard let owner, let module = VideoModule.shared, let handle,
+              owner.presenter?.elements.waits(owner) != true else { return }
         var props = owner.props
         if props["src"] != autoplaySource {
             autoplaySource = props["src"]

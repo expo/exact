@@ -134,7 +134,8 @@ again (`lower-title-twice`), a tab bar of one tab (`lower-single-tab`), a
 `button` with no words and no `aria-label` (`lower-button-unlabelled`), a dialog's
 role on a box (`lower-dialog-role`), an `aria-level` with no `role="heading"`
 (`lower-level-without-heading`), a content-box `width="100%"` with padding, wider than
-its parent by the padding (`lower-width-padding`), a box whose fixed width ceiling cannot grow
+its parent by the padding (`lower-width-padding`), a positive written border width without
+a written line style (`lower-border-unstyled`), a box whose fixed width ceiling cannot grow
 with its text at accessibility sizes (`lower-text-px-width`; use `rem` for the width and its bounds), a bare
 `line-height=28`, which is 28 times the font size, not 28 points (`lower-line-height-multiplier`),
 screens swapped by an `if` over a state, at the top of the view or inside a route (`lower-screen-by-state`), a
@@ -3063,6 +3064,60 @@ natural size (300×150 until the metadata arrives), even when it is absolutely
 positioned with `inset=0`, since opposing insets do not stretch a replaced element
 (CSS 2.1 §10.3.8, §10.6.5), and an adaptive stream's box changes with each
 rendition. To fill a box, write `width="100%" height="100%"` with `object-fit`.
+
+On Apple, the player normally caps HLS renditions to the video's box.
+`preferredMaximumResolution="640x360"` sets an author bound below that.
+`startsOnFirstEligibleVariant=true` starts from the first eligible variant in
+playlist order, bounded by what the box needs and the author bound; a playlist
+without rendition sizes uses AVFoundation's normal selection. Playlist order
+plus this flag is the start control; Exact does not reorder variants or offer
+a `start-quality` attribute. See Apple's
+[`startsOnFirstEligibleVariant`](https://developer.apple.com/documentation/avfoundation/avplayeritem/startsonfirsteligiblevariant).
+
+For custom loading on Apple, mark the video `hatch="clip"` and declare that
+element hatch for `ios` and `macos` in `app.json`. The app's Swift in
+`modules/apple/` receives `elementConfiguration(_:_:)` synchronously before
+each item is made, including source changes and `load(id)`, in list rows too.
+The configuration is an `NSMutableDictionary`: `url` is the resolved source
+`URL`; set `asset` to an `AVURLAsset` with your options or resource loader.
+Leaving `asset` unset keeps normal loading. A cold launch waits for hatch
+registration. The supplied asset goes through the same rendition bounds and
+start preference. Do not load its tracks to warm it: that can select a rendition
+before the item exists. At `built`, or `changed` if the player was deferred,
+`element.platform` is the `AVPlayer`. Exact owns its item, playback and authored
+preferences; configure loading here and add observations afterward.
+
+For example, an app that implements a `PlaylistLoader` delegate can fetch a
+multivariant playlist, put its chosen start first, make the remaining URIs
+absolute, and serve it under its own scheme:
+
+```swift
+import AVFoundation
+
+// In the app's ExactModule subclass; PlaylistLoader is the app's delegate.
+private var loaders: [ObjectIdentifier: PlaylistLoader] = [:]
+
+override func elementConfiguration(_ element: ExactElement, _ configuration: AnyObject) {
+    guard element.hatch == .clip, let config = configuration as? NSMutableDictionary,
+          let source = config["url"] as? URL else { return }
+    let loader = PlaylistLoader(source: source)
+    let asset = AVURLAsset(url: loader.url)
+    asset.resourceLoader.setDelegate(loader, queue: loader.queue)
+    loaders[ObjectIdentifier(element)] = loader
+    config["asset"] = asset
+}
+
+override func elementEnded(_ element: ExactElement) {
+    loaders.removeValue(forKey: ObjectIdentifier(element))
+}
+```
+
+Keep the delegate alive while its asset is in use: the resource loader holds it
+[weakly](https://developer.apple.com/documentation/avfoundation/avassetresourceloader/delegate).
+A private scheme changes AirPlay and FairPlay loading behaviour; the app must
+test those paths with its loader. This video hook is Apple only. Android has no
+video player hook yet; the web uses its own media element.
+
 `audio` stays HTML's player for long media
 (a song, a podcast: `video`'s props and events with no picture, LLP 1042 §8).
 
@@ -3421,6 +3476,17 @@ writes the line, the build signs the row's entitlements, and `exact deploy`'s re
 it. `device.shareplay`, added for such a package, signs Group Activities'
 `com.apple.developer.group-session` on iOS and, under a provisioning profile that allows it,
 on the Mac; not on tvOS. A Mac build without such a profile signs none and still ships.
+`device.cloudkit` names no purpose and derives the container `iCloud.<bundle id>`;
+`device.cloudkit iCloud.<name>` selects another container. A second container is refused.
+On iOS and iPadOS, and under a provisioning profile on the Mac, it signs
+`com.apple.developer.icloud-services = ["CloudKit"]`,
+`com.apple.developer.icloud-container-identifiers = [<container>]` and
+`com.apple.developer.icloud-container-environment`: `Development` under a development
+signature, `Production` under a distribution signature, including an archive.
+The profile must allow CloudKit and the selected container by value. It grants no push,
+background notification mode or iCloud Documents entitlement. tvOS, App Clips and extensions
+sign none. A Mac release without a suitable profile ships with CloudKit unavailable and
+claims no shares. A package receiving shares declares the host event below.
 `device.icloud-kv`, for an app module that uses `NSUbiquitousKeyValueStore`, names no purpose
 and signs `com.apple.developer.ubiquity-kvstore-identifier` with the app's application
 identifier (`<team prefix>.<bundle id>`, `SIMULATORX.<bundle id>` on a simulator) on iOS and
@@ -3441,7 +3507,7 @@ that takes it drains it, even when it came before the package's module loaded. T
 
 | Event | Platforms | Delivered by | Needs | Writes |
 | --- | --- | --- | --- | --- |
-| `cloudkit-share` | iOS, macOS | iOS: the scene delegate's `windowScene(_:userDidAcceptCloudKitShareWith:)`, or the connection options' `cloudKitShareMetadata` when it launched the app; macOS: the application delegate's `application(_:userDidAcceptCloudKitShareWith:)` | `device.cloudkit`, not yet a row: no build takes it | `CKSharingSupported` |
+| `cloudkit-share` | iOS, macOS | iOS: the scene delegate's `windowScene(_:userDidAcceptCloudKitShareWith:)`, or the connection options' `cloudKitShareMetadata` when it launched the app; macOS: the application delegate's `application(_:userDidAcceptCloudKitShareWith:)` | `device.cloudkit`, signed in this build | `CKSharingSupported` |
 
 The Apple implementation declares what it takes, `"hostEvents": ["cloudkit-share"]`, and its
 interface `"start": "load"`, so an instance exists once the module loads. The build refuses,
@@ -3556,9 +3622,16 @@ viewport, which an unpresented route has when the navigation root scrolls or nat
 chrome uses `interactive-widget="resizes-visual"`; else nil. A native list's scroll
 view is its collection view. UIKit's
 `contentScrollView(for: .top)` reports Exact's scroller only while it sits under the
-bar. A top-edge selection or nil reaches the hatch when Exact next prepares the
-route, at the next authored update (after a nil, possibly within the call), and the
-hatch is called again then.
+bar. UIKit's bar follows a selection at once. Exact's own layout of the route follows
+it (the scroller its title collapses with, the scroll views UIKit insets, and the
+route's clearance) at the route's next layout or as the route appears. A selection made
+during a push or a pop on screen, a presentation or a dismissal, on a route that does not
+appear in it, follows when it ends, unless a batch meanwhile prepares the route's stack; a
+transition that a stack off screen keeps until its tab shows again does not hold it.
+Until then, after a nil, `contentScrollView(for:)` returns nil. A top-edge
+selection or nil reaches the hatch when the hatch next runs, which Exact does as it
+prepares the route with a changed projection: once the runtime's answer to a changed
+clearance is applied, or else at the next authored update.
 
 The containing navigation controller still owns one shared navigation bar. UIKit
 decides where its large title and each pane's edge effect appear; the panes keep
@@ -4006,6 +4079,9 @@ JSON-LD. A page's own title and metas stay its `head` element's.
   stay and do not run again, so an analytics tag counts that change only if it watches the
   browser history. A page that loads no runtime (an `interaction` page with no handlers)
   follows a link as a new document, which runs them again.
+- A script does not write inside `#exact-root`: the runtime owns that tree, and the page's
+  sheet keeps the rules there only for what Exact writes (LLP 1047.003 D1). What a script
+  adds elsewhere, such as a banner on `body`, meets every rule of the sheet.
 - The dev loop and `serve` send them too, so a tag there reports local visits. `serve` and a
   static host send no Content-Security-Policy, so the scripts run as on any page. The Rust
   render server (`<app>-render --serve`) sends one. It admits each inline script here by its
@@ -4212,6 +4288,18 @@ which require optional capabilities. `-exact-spring(…)` (a `transition` timing
 function), `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines have
 specific documented behavior;
 they do not admit arbitrary frame callbacks or a second app-state graph.
+
+macOS and iOS play eligible box `translate`, `scale`, `rotate` and `opacity`
+animations and transitions in Core Animation. A transform stays sampled when
+the box takes input, contains an interactive view, uses a noncentral origin,
+is sticky or has a layout transition. Filtered pictures also need sampling.
+Mounting an interactive descendant returns a running transform to sampling.
+On macOS, a box with `backdrop-filter` keeps its transform sampled so the
+blur's sampling region follows it. Rounded background colours stay sampled
+because AppKit can paint their fill on a separate layer or into an image.
+The agent's clock still seeks these animations; taking the clock returns
+transitions to the engine.
+
 As in CSS, a `transition` or `animation` value's units, keywords and function
 names read in any ASCII case (`0.3S EASE` is `0.3s ease`), its numbers are CSS's
 (`1.s` and `infs` are no times), and a keyframes name keeps its case: in
@@ -4492,6 +4580,12 @@ click outside dismisses; iOS keeps the alert, since an action sheet drops a
 lone Cancel in an iPad's popover. The action that learns of the failure sets the state its `text`
 reads and calls `showModal("<id>")` ([tell the person something failed](recipes/error-alert.md)).
 
+An alert's own `font-family`, written on the `dialog` or its class, applies to
+its title, message and button labels on web, Linux, Android and Windows.
+Android and Windows keep the platform face when the family is only inherited.
+iOS and macOS keep the system face: `UIAlertController` and `NSAlert` have no
+public font API, so the compiler warns when an alert requests a family there.
+
 A prompt (a rename's, `Alert.prompt`) is the alert with a text field: an
 `input` among its rows, which counts as its message when it has no `text`:
 
@@ -4547,9 +4641,9 @@ accessible label or text titles it, and `disabled` disables it. An item in the
 app menu or Help is the app's, so it stays enabled while no window is key and
 under a sheet or a Contract modal dialog. Keep the button reachable: the agent taps it,
 and other hosts show that ordinary button, with no application menu.
-On the root, `-exact-menu-remove="show-tab-bar autofill close-all"` removes
+On the root, `-exact-menu-remove="show-tab-bar close-all"` removes
 selected standard items. Its whitespace-separated list must be literal; unknown
-ids and non-root use are refused. The fixed ids are `close-all`, `autofill`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
+ids and non-root use are refused. The fixed ids are `close-all`, `show-tab-bar`, `show-all-tabs`, `enter-full-screen`,
 `minimize`, `zoom`, `bring-all-to-front`, `show-previous-tab`, `show-next-tab`,
 `move-tab-to-new-window`, `merge-all-windows`, `back` (Go ▸ Back), `forward` (Go ▸ Forward), `develop` (the
 Develop menu; its chords stay), `paste-and-match-style`, `find`,
@@ -4572,9 +4666,12 @@ id, or alone, also files the button in the app's Dock menu:
 `-exact-menu="status"`, alone, makes the button the app's status item: a menu
 bar item on macOS, a notification-area icon on Windows. Its text or
 `aria-label` is the item's title and tooltip, one `img` or `svg` child its
-image (a template image on macOS; on Windows a `symbol:` image or an `svg`,
-in the taskbar's colours, and the app's icon otherwise), and its
-`popovertarget` menu the item's menu. On macOS a click opens that menu, or
+image, and its `popovertarget` menu the item's menu. On macOS the image is
+a template. On Windows a `symbol:` uses the taskbar's text colour, an `svg`
+is drawn as authored, and a file-backed `img` is contained at the current
+display's small-icon size and reloaded when its DPI changes. The app's icon
+is the fallback when the image is absent, still loading or fails to load.
+On macOS a click opens that menu, or
 runs `press` when there is none; on Windows a left click runs `press`, or
 opens the menu when there is none, and a right click opens the menu. On both
 the button takes no room in the page; elsewhere it is an ordinary button. An
@@ -4670,6 +4767,19 @@ the name is a known attribute. Declaring a layout attribute as a view prop is
 the box and set no view props; write `object-fit` on the camera tag to configure its
 viewfinder. A renamed spelling (`fontSize`) is refused whatever is declared. Do not
 turn a missing widget or canvas operation into invented Contract syntax.
+
+Under the agent, `@exact/camera` accepts
+`prefer extension camera.picture={"path":"assets/test/card.jpg"}` for a still,
+or `prefer extension camera.clip={"path":"assets/test/walk.mp4"}` for a clip.
+Both name app assets. A clip is decoded once and loops on the session clock,
+from the track's start: `clock +100` advances its frame by 100 ms. The
+viewfinder, a package reading the track's picture and `takePhoto` receive
+the same frame. A screenshot sequence follows that clock too. The journal
+records the clip's SHA-256, not its frames. Clear either preference with
+`=clear` before setting the other; setting both is refused in the journal.
+This works on Android, iOS, macOS and web; Linux has no camera substitute.
+For a fixture shared across these hosts use H.264 MP4 and a web browser with
+H.264 WebCodecs support. See the [camera package's guide](../packages/camera/test/checklist.md#agent-pictures-and-clips).
 
 On Apple, each package's Swift library loads at its first call, view, picture,
 authentication or wake. Permission, preference and foreground updates are kept
@@ -4967,7 +5077,8 @@ component App
     canvas surface=world
 ```
 
-A canvas without a metrics resource does no reporting work. Snapshots arrive at most
+A canvas without an active metrics resource does no HUD reporting work. A resource
+whose `when` condition is false collects nothing. Snapshots arrive at most
 once per second while the canvas is visible, including while it is idle. Before
 its first snapshot, after disposal, and for unsupported measurements, fields are `none`. Values
 never enter kept answers, world saves, replay or simulation hashes.
@@ -5116,12 +5227,14 @@ setting calls `setLocale("de")` (`setLocale("")` for System) in its action; the
 choice is kept across launches and read before the first frame. Formatting
 functions accept a narrow set of literal formats; app wording is an app `fn`.
 On Apple platforms the tables are the bundle's localizations, base first, so the
-system's own words and the direction of the chrome it draws (bars, the Mac's
-split view, sidebar and toolbar) follow the table it picks. AppKit mirrors a
-window only on a Mac whose system language is right to left, as it does for any
-hand-built app, and on the Mac a direction you leave unsaid is the window's: an
-Arabic table on an English Mac is left to right throughout, and `state` reports
-`language.dir` as `ltr`. Elsewhere it is the table's. A `direction` you write
+system's own words follow the table it picks. On the Mac a direction you leave
+unsaid is AppKit's process direction: an Arabic table on an English Mac leaves
+the window and panes left to right, and `state` reports `language.dir` as `ltr`.
+Set `host.macos.layoutDirection: "rtl"` in `app.json` to mirror the whole window,
+including the split view, toolbar and sidebar, even with an English table.
+Omission or `"auto"` keeps AppKit's direction; a launch argument naming either
+`AppleTextDirection` or `NSForceRightToLeftWritingDirection` takes precedence.
+Elsewhere the direction is the table's. A `direction` you write
 wins on every host. `language.dir` is the layout direction: on the Mac, text
 under no written `direction` takes each paragraph's base direction from its
 first letter, as an `NSTextField` does, so an Arabic sentence in a left-to-right
@@ -5150,6 +5263,13 @@ A route moved off a window edge is still padded as if it reached it: its top on 
 laptop fold, its right on a book fold's segment 0.
 
 ## Inspection and testing
+
+The native agent's `tree` includes declared SVG geometry in each shape's
+`props`: a circle's `cx`, `cy` and `r`, an ellipse's radii, and a rectangle's
+position, size and radii. These are model values, not animation samples.
+Lengths in user units are numbers, including resolved font-relative lengths.
+Percentages, viewport lengths and unresolved `calc()` and `env()` values
+remain CSS text. `layout <target>` includes the same properties.
 
 On Apple development builds, an `iframe`'s web content is inspectable from
 Safari's Develop menu. Enable Safari's web developer features, launch the app,
@@ -5812,7 +5932,9 @@ until it equals the JSON literal; a miss fails naming the last value.
 `clock settle` also runs the clock to where the last running finite, unpaused
 transition or animation ends, firing the timers due on the way, so a test on a timer's grid moves with it,
 and on past a task due a commit later (`after(1, …)`, which an input or an answer armed) until none is.
-`clock data` lands it without moving the clock: the data module's activation and
+`clock data` takes clock ownership, including after `--timing platform`: it freezes
+platform timing at the current instant and leaves the clock held after the reply.
+It lands data without moving that clock: the data module's activation and
 every request in flight, each answer's `then` with it, no timer fired (its reply names a task
 due a commit later, which a tap next would come before: `clock settle` runs it). A CLI drive's
 first operation runs at boot and may come before that has landed (an authored test
@@ -6028,7 +6150,9 @@ a sheet's dismissal, the pushed route popped; a refusal is a note, nothing to
 go back from fails),
 `screenshot "file"`, `expect tree has|missing "id"`, `expect disabled|enabled "id"` (a control's
 `disabled`; a `tap` on a disabled one fails its step on every host), `expect focused "id"` (the
-node holding the keyboard focus), `expect text "id" == "…"`
+node holding the keyboard focus), `expect layout "id" width|height ==|<=|>= n` (its laid-out
+size in points, from the box `layout <target>` prints: `expect layout "status-mark" height <= 24`
+fails for a glyph a column stretched), `expect text "id" == "…"`
 (the node's text; a control's value, so a `select` reads its chosen value, not its
 options, and a checkbox with a `checked` binding `true` or `false`; else its descendants' — a button's label — else a field's value), and
 `expect state name == <number|string|bool|none|[]>`, where `name` may go on into
@@ -6103,6 +6227,7 @@ that restates a constant is weaker evidence than the user's actual sequence.
 | A heading at the top of a route's content that says its `header` heading again, which shows twice under the iOS bar (`lower-title-twice`) | Drop it; the bar's title names the screen. A heading below names a section: `text "Results" role="heading" aria-level=2` |
 | An SVG `use` whose literal `href="#id"` targets a `foreignObject` or a subtree containing one (`lower-svg-use-foreign-object`). Only unconditional literal SVG ids from one source definition resolve. Repeated copies must all contain a `foreignObject`; a conditional copy, a copy without one, ids from different source definitions, dynamic hrefs and dynamic ids stay quiet. References inside the target are not followed | A `foreignObject` draws nothing through `use`. Place it directly in the SVG for the web; native hosts refuse it. For content on every host, position an ordinary box over the SVG |
 | A list and its detail (or a form) swapped by `if showingDetail` / `else` or complementary sibling `if`s (also with the same viewport-only `or` term), each with its heading, at the top of the view or inside a route; or pages named by one state, `page == "detail"`, in three arms or sibling `if`s or more, with or without headings (`lower-screen-by-state`). A tab bar's state, a radio group's, and a slot component's choice of how to wrap its `children` (the same content in a canvas or a plain scroll) stay quiet | Each screen a route: `routes`, a row that `push`es its detail, `back` to return; the web gets Back, reload and links, a wide window the split (`contract vocab screen`) |
+| A box's border side with a positive written width and no written line style, including an affected arm of a class choice (`lower-border-unstyled`); CSS draws no line. A shorthand that omits its style resets it to `none`; an omitted width resets to 3px, so `border="#ccc"` also warns. Colour longhands alone, zero widths, deliberate styles (including `none` and `hidden`) and native controls stay quiet; bare buttons and fields are checked | Add `border-style="solid"` for all four sides, or the affected side's `border-top-style="solid"` (and likewise right, bottom or left). For a width from a conditional class, add the style inside the class named by the warning, preserving the other arm. A shorthand can say both: `border="1px solid"` before the colour |
 | `column padding=24 width="100%"`, as wide as its parent's content plus the padding: it runs past the screen's right side (`lower-width-padding`) | Drop the width (a block or a stretched flex item fills its parent), or `box-sizing="border-box"` |
 | An absolute width ceiling containing scalable text stays bounded at accessibility sizes (`lower-text-px-width`). The lint follows `width` and `max-width` through their bounds: a fixed maximum alone caps growth; a minimum alone does not. A fixed minimum can override a smaller cap, but a growing or unknown minimum makes the lint stay silent. Absolute lengths include numbers, px, pt and absolute `calc()`; `em` is fixed against an authored absolute font. Flex can supersede width on a row’s main axis; zero grow with an auto basis keeps its ceiling, and flex does not size a column child’s width. Effective classes, declaration order and parent direction count. Unresolved classes and uncertain sizing stay silent. A computed display leaves the node uncertain but its children are still checked; known-hidden subtrees are skipped. Text in absolute positioning, popovers and dialogs is checked inside that subtree, without counting against enclosing boxes. Text inherits the platform root font. Native Apple controls use the Apple control font, which can scale with Dynamic Type; web controls inherit, and Linux control defaults are fixed. An absolute font size stops scaling within that boundary; `inherit` and `unset` use the parent font even on controls. The warning reads lowering’s grouped-list typography and checks layout boxes containing text runs or text fields, including HTML inside SVG `foreignObject`; an inline run’s own width does not constrain its paragraph | Express the width and its bounds in `rem`, such as `width="3rem"` or `max-width="3rem"`, so they follow the root font, or let the content determine the width |
 | `text "Results" aria-level=2`, a level with no role, which is no heading to a screen reader on any platform, gets no heading style and is not the iOS bar's title (`lower-level-without-heading`) | `text "Results" role="heading" aria-level=2`; `role="heading"` alone is level 2 |
@@ -7053,7 +7178,10 @@ presentation to land. The status bar hides and shows at once unless the
 winning declaration has `status-bar-animation="fade"` (when none wins any more,
 the one that went); a style change still fades by its own winner's. On a phone with no notch or Dynamic Island the status bar's 20 pt
 leave the safe area, so the content of a route moves up to the screen's top;
-elsewhere the top inset stays and nothing moves. On Android it hides the
+elsewhere the top inset stays, as the home indicator's does at the bottom, and
+nothing moves: a route whose content must reach the screen's edges (the game's
+canvas) takes `-exact-safe-area="none"` and places its controls with
+`var(--exact-safe-area-inset-*)`. On Android it hides the
 status and navigation bars (immersive mode): a swipe from the screen's edge
 shows them over the page for a moment, and the safe area loses the bars'
 insets (the display cutout's stay), so content laid out against it moves into

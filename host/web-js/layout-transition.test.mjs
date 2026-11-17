@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { withLook } from '../web/look.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 const SOURCE = `component App
   state calm = false
@@ -89,6 +92,64 @@ component App
     });
     console.log(mode, 'quiet presence operations:', JSON.stringify(observed));
     expect(observed).toEqual({ first: [0, 0], cleared: [0, 0], disposed: [0, 0], remounted: [0, 0], styles: 1000, count: '4' });
+  } finally { await app.close(); }
+}, 30000);
+
+// GitHub #747: presence places a view by its computed style and bounding rect. A commit that updates no tree reads
+// neither (a write of the value a slot holds, and one that leaves the derive a binding reads as it was), and the next
+// one that moves the rows, through a derive that changes, plays them from where they were.
+test('a commit that updates no tree measures no layout transition', async () => {
+  const rows = Array.from({ length: 20 }, (_, i) => i + 1).join(', ');
+  const app = await exitApp('chromium', `component App
+  state n = 0
+  state shown = true
+  derive label = n >= 0 ? "yes" : "no"
+  derive first = shown and n >= 0
+  action same
+    n = n
+  action more
+    n = n + 1
+  action drop
+    shown = not shown
+  view
+    column
+      button "Same" press=same testId="same"
+      button "More" press=more testId="more"
+      button "Drop" press=drop testId="drop"
+      text label testId="label"
+      if first
+        text "First" height=40
+      for i in [${rows}] key=i
+        view height=20 -exact-layout-transition="2000ms linear"
+          text \`\${i}\`
+`);
+  try {
+    const observed = await app.page.evaluate(() => {
+      const reads = { rect: 0, style: 0 };
+      const rect = Element.prototype.getBoundingClientRect, style = globalThis.getComputedStyle;
+      Element.prototype.getBoundingClientRect = function () { reads.rect++; return rect.call(this); };
+      globalThis.getComputedStyle = function (...args) { reads.style++; return style.apply(this, args); };
+      const press = id => {
+        reads.rect = reads.style = 0;
+        document.querySelector(`[data-testid="${id}"]`).click();
+        return { ...reads };
+      };
+      try {
+        const rows = [...document.querySelectorAll('[style*="--exact-layout-transition"]')];
+        const tops = () => rows.map(row => rect.call(row).top);
+        const still = press('same'), derived = press('more'), before = tops(), moved = press('drop');
+        const animations = rows.flatMap(row => row.getAnimations());
+        for (const animation of animations) { animation.pause(); animation.currentTime = 0; }
+        const start = tops();
+        for (const animation of animations) animation.finish();
+        const end = tops();
+        return { still, derived, moved, rows: rows.length, animations: animations.length,
+          held: start.every((top, i) => Math.abs(top - before[i]) < 0.1), slid: end.every((top, i) => Math.abs(before[i] - top - 40) < 0.1) };
+      } finally { Element.prototype.getBoundingClientRect = rect; globalThis.getComputedStyle = style; }
+    });
+    console.log('layout reads around a commit:', JSON.stringify({ still: observed.still, derived: observed.derived, moved: observed.moved }));
+    expect(observed).toMatchObject({ still: { rect: 0, style: 0 }, derived: { rect: 0, style: 0 }, rows: 20, animations: 20, held: true, slid: true });
+    expect(observed.moved.rect).toBeGreaterThan(0);
   } finally { await app.close(); }
 }, 30000);
 
@@ -289,7 +350,7 @@ test('removed motion views leave the registry after their exit and keep identity
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
 
-test.each(['chromium', 'webkit'])('computed exit animations follow reduced motion beside fixed and computed press scales on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`computed exit animations follow reduced motion beside fixed and computed press scales on ${engine}`, async () => {
   const app = await exitApp(engine, `shape Media
   prefersReducedMotion: bool
 
@@ -327,7 +388,7 @@ component App
 }, 60000);
 
 // The runner ends an arm without updating its bindings, so a removed node plays the exit it had when the commit began
-test.each(['chromium', 'webkit'])('a removal plays the exit its commit began with, whichever write comes first, on %s', async engine => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`a removal plays the exit its commit began with, whichever write comes first, on ${engine}`, async () => {
   const app = await exitApp(engine, `keyframes leave
   to opacity=0
 

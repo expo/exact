@@ -331,10 +331,18 @@ extension CanvasesHost {
         publishers.removeValue(forKey: e.name)
         updatePerformanceTimer()
         surfaceRecord(e.name, nil)
-        if e.performance { session?.canvasPerformanceRecord(e.name, nil) }
+        session?.canvasPerformanceRecord(e.name, nil)
     }
 
     func updatePerformanceTimer() {
+        for e in entries.values where e.id != 0 {
+            guard let m = e.module else { continue }
+            let enabled = publishers[e.name] === e && session?.canvasPerformanceRequested(e.name) == true
+            if enabled != e.performance {
+                e.performance = enabled
+                _ = m.performanceReporting?(e.id, enabled)
+            }
+        }
         guard visible, session?.clock == nil, publishers.values.contains(where: { $0.performance && $0.id != 0 }) else {
             performanceTimer?.invalidate(); performanceTimer = nil; return
         }

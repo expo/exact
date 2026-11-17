@@ -176,8 +176,8 @@ fn validate(schema: &Schema) {
         }
     }
     assert!(
-        schema.styles.len() <= 64 * 4,
-        "schema: more style rows than the mask can carry"
+        schema.styles.len() <= 1 << 16,
+        "schema: more style rows than a style id (u16) can name"
     );
     for row in &schema.styles {
         match parse_codec(&row.codec) {

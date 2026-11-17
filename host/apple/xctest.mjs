@@ -54,6 +54,10 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   }
   contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/shop-scroll.contract'), '-o', env[`${prefix}_SHOP_SCROLL_PLAN`] = resolve(dir, 'shop-scroll.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), '-o', env[`${prefix}_QUIET_SCROLL_PLAN`] = resolve(dir, 'quiet-scroll.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/quiet-edge.contract'), '-o', env[`${prefix}_QUIET_EDGE_PLAN`] = resolve(dir, 'quiet-edge.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/scroll-facts.contract'), '-o', env[`${prefix}_SCROLL_FACTS_PLAN`] = resolve(dir, 'scroll-facts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fixed-page.contract'), '-o', env[`${prefix}_FIXED_PAGE_PLAN`] = resolve(dir, 'fixed-page.plan')]);
   contract([resolve(root, 'scripts/fixtures/collection-fixed-chat.contract'), '-o', env[`${prefix}_COLLECTION_FIXED_PLAN`] = resolve(dir, 'collection-fixed.plan')]);

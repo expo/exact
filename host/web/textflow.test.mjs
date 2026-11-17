@@ -612,7 +612,7 @@ async function inChrome(fixture, modules = ['/textflow-glue.js', '/timer-glue.js
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
     const path = new URL(req.url).pathname;
     if (path === '/wasm-input.js') return new Response(glueDeclarations(wasmSource, ['attach']), { headers: { 'content-type': 'text/javascript' } });
-    if (files[path]) return new Response(hostFixtureFile(files[path]), { headers: { 'content-type': 'text/javascript' } });
+    if (files[path]) return new Response(hostFixtureFile(files[path]), { headers: { 'content-type': path.endsWith('.wasm') ? 'application/wasm' : 'text/javascript' } });
     if (path === '/timer-observations.js') return new Response(Bun.file(new URL('./timer-observations.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
     if (runtime && path === '/names.js') return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
     if (runtime && path.endsWith('.js')) {
@@ -1247,6 +1247,82 @@ browserTest('a flowed paragraph is measured and painted at the width CSS gives i
   expect(between.skipped).toContain('font-stretch cannot be measured by canvas');
   expect([got.pre.whiteSpace, got.preWrap.whiteSpace, got.normal.whiteSpace]).toEqual(['pre', 'pre', 'normal']);
 }, 20000);
+
+// The walker itself in Chrome, in the 48px beside an exclusion, against Chrome's own lines for the same
+// text in a 48px box: each line's letters, the width the walker measured and the width the fragment paints.
+async function controlLinesFixture() {
+  const { createTextFlow, createFlowRequest } = await import('/textflow-glue.js');
+  const request = await createFlowRequest(), root = document.getElementById('root'), out = [];
+  const texts = ['aaaaaa\rbbbbbb', 'aaaaaa\fbbbbbb', 'aaaaaa \r bbbbbb', 'aaaaaa\f bbbbbb', 'aaaaaa\u2028bbbbbb', 'aaaaaa \u2029bbbbbb',
+    'aaaaaa\nbbbbbb', 'aaaaaa bbbbbb', 'aaaaaa \r\u0301bbbbbb'];
+  for (const whiteSpace of ['pre-wrap', 'pre']) for (const text of texts) {
+    const style = `font:10px/18px monospace;white-space:${whiteSpace}`;
+    root.innerHTML = `<div id="plain" style="${style};width:48px"></div><div id="context" style="position:relative;width:88px"><div id="paragraph" style="${style}"></div><div id="ball" style="position:absolute;left:0;top:0;width:40px;height:200px"></div></div>`;
+    const [plain, context, paragraph, ball] = ['plain', 'context', 'paragraph', 'ball'].map(id => document.getElementById(id));
+    // Not markup: the parser would make each carriage return a line feed.
+    plain.textContent = paragraph.textContent = text;
+    const css = [], range = document.createRange();
+    for (let i = 0; i < text.length; i++) {
+      range.setStart(plain.firstChild, i); range.setEnd(plain.firstChild, i + 1);
+      const r = range.getBoundingClientRect(), line = css.find(l => l.top === r.top);
+      // A line's ink: its letters and whatever advance the font gives a separator, not the spaces it hangs.
+      if (/\s/.test(text[i]) && !/[\u2028\u2029]/.test(text[i]) || !r.width) continue;
+      const letter = /\w/.test(text[i]) ? text[i] : '';
+      if (line) { line.letters += letter; line.right = r.right; } else css.push({ top: r.top, letters: letter, left: r.left, right: r.right });
+    }
+    const flow = createTextFlow({ views: new Map([[1, context], [2, paragraph], [3, ball]]), request, agentMode: true, advance() {}, log() {} });
+    flow.afterBatch({ ops: [{ op: 'textflow', contexts: [{ id: 1, exclusions: [3], paragraphs: [{ id: 2, definite: false, refusal: null }] }] }], timers: false });
+    await flow.settle();
+    const measured = flow.facts(2)?.fragments ?? [];
+    out.push({ whiteSpace, text, css: css.map(l => [l.letters, Math.round(l.right - l.left)]),
+      flowed: [...document.querySelectorAll('[data-flow-fragment]')].map((f, i) =>
+        [f.textContent.replace(/\W/g, ''), Math.round(measured[i]?.width), Math.round(f.getBoundingClientRect().width)]) });
+    flow.dispose();
+  }
+  return out;
+}
+
+// Chrome forces a break only at a line feed. Preserved, a lone carriage return or form feed has no advance and no
+// break beside it, though a canvas measures each as a space; U+2028 and U+2029 are text a line may wrap after.
+browserTest('preserved flowed text breaks and measures around break controls as CSS lays it out', async () => {
+  const got = await inChrome(controlLinesFixture, ['/textflow-glue.js', '/timer-glue.js'], { '/textflow.wasm': await buildFlow() });
+  expect(got.map(({ whiteSpace, text, flowed }) => [whiteSpace, text, flowed]))
+    .toEqual(got.map(({ whiteSpace, text, css }) => [whiteSpace, text, css.map(([letters, width]) => [letters, width, width])]));
+  const lines = (whiteSpace, text) => got.find(g => g.whiteSpace === whiteSpace && g.text === text).css.map(l => l[0]);
+  expect(lines('pre-wrap', 'aaaaaa\rbbbbbb')).toEqual(['aaaaaabbbbbb']);
+  expect(lines('pre-wrap', 'aaaaaa\fbbbbbb')).toEqual(['aaaaaabbbbbb']);
+  expect(lines('pre-wrap', 'aaaaaa\u2028bbbbbb')).toEqual(['aaaaaa', 'bbbbbb']);
+  expect(lines('pre', 'aaaaaa\nbbbbbb')).toEqual(['aaaaaa', 'bbbbbb']);
+  // A line starts before a carriage return that a space precedes and a combining mark follows.
+  expect(lines('pre-wrap', 'aaaaaa \r\u0301bbbbbb')).toEqual(['aaaaaa', 'bbbbbb']);
+}, 60000);
+
+// A clamped line's prefixes are measured as the walker measures the line: preserved, a carriage return or form
+// feed has no advance, though a canvas gives each a space's. Here the whole line and its ellipsis fit by half a space.
+browserTest('a clamped preserved line gives a carriage return or form feed no advance', async () => {
+  const got = await inChrome(async () => {
+    const { createTextFlow, createFlowRequest } = await import('/textflow-glue.js');
+    const request = await createFlowRequest(), root = document.getElementById('root'), out = [];
+    const canvas = document.createElement('canvas').getContext('2d'); canvas.font = '10px monospace';
+    const available = canvas.measureText('aaaabbbb…').width + canvas.measureText(' ').width / 2;
+    for (const whiteSpace of ['pre-wrap', 'pre']) for (const control of '\r\f') {
+      root.innerHTML = `<div id="context" style="position:relative;width:${40 + available}px"><div id="paragraph" style="font:10px/18px monospace;white-space:${whiteSpace};-webkit-line-clamp:1"></div><div id="ball" style="position:absolute;left:0;top:0;width:40px;height:200px"></div></div>`;
+      const paragraph = document.getElementById('paragraph'); paragraph.textContent = `aaaa${control}bbbb\nnext`;
+      const flow = createTextFlow({ views: new Map([[1, root.firstElementChild], [2, paragraph], [3, document.getElementById('ball')]]), request, agentMode: true, advance() {}, log() {} });
+      flow.afterBatch({ ops: [{ op: 'textflow', contexts: [{ id: 1, exclusions: [3], paragraphs: [{ id: 2, definite: false, refusal: null }] }] }], timers: false });
+      await flow.settle();
+      const span = paragraph.querySelector('[data-flow-fragment]');
+      out.push({ text: span.textContent, painted: span.getBoundingClientRect().width, measured: flow.facts(2).fragments[0].width, available });
+      flow.dispose();
+    }
+    return out;
+  }, ['/textflow-glue.js', '/timer-glue.js'], { '/textflow.wasm': await buildFlow() });
+  expect(got.map(g => g.text)).toEqual(['aaaa\rbbbb…', 'aaaa\fbbbb…', 'aaaa\rbbbb…', 'aaaa\fbbbb…']);
+  for (const g of got) {
+    expect(Math.abs(g.painted - g.measured)).toBeLessThan(0.1);
+    expect(g.painted).toBeLessThanOrEqual(g.available);
+  }
+}, 60000);
 
 browserTest('a clamped pre line includes painted trailing spaces in its measured width', async () => {
   const got = await inChrome(async () => {

@@ -587,11 +587,11 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.dispatch(view, kind, len, now_ms), |n| n)
         }
 
-        /// A scroller (or, nonzero `page`, the page) now stands at `left`,
-        /// `top` CSS px: what `frame` subtracts (LLP 1051.000 D1). No batch.
+        /// A scroller (`page` 0) or the page (1) stands at `left`, `top`
+        /// CSS px (LLP 1051.000 D1); 2 consumes collection mailbox words. No batch.
         #[no_mangle]
         pub extern "C" fn exact_scrolled(rt: u32, page: u32, view: u32, left: f64, top: f64) {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.scrolled(page != 0, view, left, top), |_| ())
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.scrolled(page, view, left, top), |_| ())
         }
 
         /// The presenter's synchronous viewport union for an inline run.
@@ -1234,7 +1234,7 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.layout_stamp(), |_| 0)
         }
 
-        /// Common LE collection feedback from the input buffer; returns batch length.
+        /// Common LE collection feedback; returns batch length.
         #[no_mangle]
         pub extern "C" fn exact_collection_feedback(rt: u32, len: usize, now_ms: f64) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_feedback(len, now_ms), |n| n)

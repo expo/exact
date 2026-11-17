@@ -8,6 +8,10 @@ function group(family, protocol, lifetime, kind, evidence, sites, durableWhen) {
 }
 
 export const classifications = [
+  group("desktop stills", ["one-shot"], "pending send until cancellation or session destruction", "UI-owned",
+    "Captures checks its held request before renaming any staged files. Cancellation and Drop retire that authority; the process worker owns no independent publication.", [
+    ["painted:host/painted/src/screen_capture.rs", "Captures::start Captures::cancel"],
+  ]),
   group("background transfers", ["durable operation"], "registration generation and cancellable attempt handle", "durable",
     "The import-selected bridge runs file I/O without a session. Closing its handle aborts live I/O; the package owns durable records and admits publication against the current registration generation.", [
     ["painted:host/painted/src/transfer.rs", "dispatch"],
@@ -67,11 +71,13 @@ export const classifications = [
     ["painted:host/painted/src/presenter/palette.rs", "Presenter::set_palette"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::set_pointer_kind"],
     ["painted:host/painted/src/presenter/preferences.rs",
-      "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::restore_time Presenter::set_modes Presenter::set_page " +
+      "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::refresh_place Presenter::refresh_windows_place " +
+      "Presenter::restore_time Presenter::set_modes Presenter::set_page " +
       "Presenter::set_place Presenter::set_preferences Presenter::set_root_font_size Presenter::set_safe_area Presenter::set_segments Presenter::set_system_scheme " +
       "Presenter::set_time Presenter::set_view_scheme"],
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::set_scrollbars"],
     ["painted:host/painted/src/presenter/top.rs", "Presenter::present"],
+    ["painted:host/painted/src/presenter/top/status.rs", "Presenter::sync_status_images"],
     ["painted:host/painted/src/presenter/window.rs", "Presenter::chrome Presenter::set_window"],
     ["painted:host/painted/src/scale.rs", "Host::apply_live Host::set_display_scale Host::set_modes Host::set_root_font_size Host::set_view"],
     ["painted:host/painted/src/surfaces.rs", "Presenter::sync_surfaces_with_canvas_tick"],
@@ -187,7 +193,7 @@ export const classifications = [
     "runner/src/runner/canvas2d.rs binds a subscription in the existing canvas record at its first draw in a backing-store generation. Async draw replies carry that authority through deliver; integer canvas_reply recovers the same binding. Generation changes reset it. Existing lifetime/generation/sequence and structural checks remain. Capture and presentation callbacks retain their existing paths.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_canvas_defer exact_canvas_display exact_canvas_draw exact_canvas_held exact_canvas_performance_record exact_canvas_performance_requested exact_canvas_snapshotted exact_set_canvas_text"],
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_canvasBuffer Java_dev_exact_canvas_Native_canvasFrame"],
-    ["painted:host/painted/src/host.rs", "Host::canvas_wants_frame"],
+    ["painted:host/painted/src/host_canvas.rs", "Host::canvas_wants_frame"],
     ["painted:host/painted/src/scale.rs", "Host::canvas_performance_record"],
     ["painted:host/painted/src/surfaces/capture.rs", "Presenter::draw_and_capture_canvases"],
     ["runner:runner/src/runner.rs", "Runner::take_surface_updates"],
@@ -205,7 +211,7 @@ export const classifications = [
   group("canvas images", ["one-shot"], "image source and the canvas lifetimes that requested it", "UI-owned",
     "runner/src/runner/canvas2d.rs:1360-1380 updates only canvases still held by this runner; image source strings themselves carry no session capability.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_canvas_image exact_canvas_image_released"],
-    ["painted:host/painted/src/host.rs", "Host::sync_canvases"],
+    ["painted:host/painted/src/host_canvas.rs", "Host::sync_canvases"],
     ["runner:runner/src/runner/canvas2d.rs", "Runner::canvas_fonts_loaded Runner::canvas_image Runner::canvas_image_released Runner::canvas_images_pending Runner::take_canvas_image_requests"],
     ["web:host/web/src/canvas2d.rs", "exact_canvas_image"],
   ]),
@@ -251,9 +257,10 @@ export const classifications = [
     ["runner:runner/src/instance/collection/index.rs", "SizeIndex::invalidate_row#generation:1 SizeIndex::invalidate_row#next_generation:1 SizeIndex::replace_keys_indexed#next_generation:1 SizeIndex::splice_keys#next_generation:1"],
     ["runner:runner/src/instance/collection/into_view.rs", "Collection::begin_into_view#request:1"],
     ["runner:runner/src/instance/collection/mod.rs", "Collection::feedback#scroll_sequence:1 Collection::update_data#data_generation:1 Collection::update_data#scroll_sequence:1"],
+    ["runner:runner/src/instance/collection/traversal.rs", "Tree::collection_travel#scroll_sequence:1 Tree::update_collection#scroll_sequence:1"],
     ["runner:runner/src/instance/collection/nest.rs", "PinEpoch::bump#PIN_EPOCH.fetch_add:1"],
     ["runner:runner/src/runner/collection.rs",
-      "Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
+      "Runner::collection_travel Runner::collection Runner::collection_data Runner::collection_feedback Runner::collection_feedback_bytes Runner::collection_feedback_filled " +
       "Runner::collection_mounted Runner::collection_shown Runner::collections Runner::collections_bounded Runner::collections_json Runner::collections_shallow " +
       "Runner::kept_positions_json"],
     ["runner:runner/src/runner/gates.rs", "Runner::collection_reply_key"],
@@ -572,6 +579,8 @@ export const classifications = [
     ["apple:host/apple/src/svg_image.rs", "exact_svg_image_free exact_svg_image_header exact_svg_image_scene"],
     ["apple:host/apple/src/textflow.rs", "exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
     ["painted:host/painted/src/lower.rs", "Host::play_transitions"],
+    ["painted:host/painted/src/desktop.rs", "Screen::json"],
+    ["painted:host/painted/src/screen_capture.rs", "fixtures sizes"],
     ["painted:host/painted/src/paint_motion.rs", "Host::paint_color Host::paint_over Host::present_paint"],
     ["painted:host/painted/src/presenter/painter.rs", "Presenter::poll_apple_painter Presenter::repeat_apple_frame"],
     ["painted:host/painted/src/press.rs", "Host::look_motion Host::retire_presses"],
@@ -648,7 +657,7 @@ export const classifications = [
     ["painted:host/painted/src/canvas/boot.rs", "CanvasHost::boot"],
     ["painted:host/painted/src/canvas/jni.rs",
       "Java_dev_exact_canvas_Native_attachBuffers Java_dev_exact_canvas_Native_attachSurface Java_dev_exact_canvas_Native_configure " +
-      "Java_dev_exact_canvas_Native_detachSurface Java_dev_exact_canvas_Native_window"],
+      "Java_dev_exact_canvas_Native_detachSurface Java_dev_exact_canvas_Native_environment Java_dev_exact_canvas_Native_window"],
     ["painted:host/painted/src/canvas/reader.rs", "CanvasHost::adopt CanvasHost::attach_window CanvasHost::detach_window"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::boot_with_content_region"],
     ["painted:host/painted/src/host.rs", "Host::boot Host::boot_at Host::boot_at_with_region Host::boot_with Host::runner_mut"],
@@ -842,6 +851,8 @@ export const classifications = [
       "Images::assets Images::diagnostics Images::fit Images::has_refusals Images::new Images::paint_with Images::pending Images::poll Images::renew Images::reset " +
       "Images::resolve Images::retry_due_in Images::stats Images::sync Images::wait"],
     ["painted:host/painted/src/image/assets.rs", "Assets::embedded Assets::path Assets::read Assets::read_asset Assets::root Assets::selected Assets::take_refusal"],
+    ["painted:host/painted/src/host_canvas.rs", "Host::load_canvas_picture"],
+    ["painted:host/painted/src/package.rs", "Notifier::picture_changed"],
     ["painted:host/painted/src/image/bitmap.rs", "Bitmap::animation_file Bitmap::bytes Bitmap::crop Bitmap::hardware Bitmap::height Bitmap::natural Bitmap::pixels Bitmap::placed Bitmap::shared Bitmap::width"],
     ["painted:host/painted/src/image/hardware.rs", "hardware_pictures"],
     ["painted:host/painted/src/image/jpeg.rs", "decoder"],
@@ -849,7 +860,7 @@ export const classifications = [
     ["painted:host/painted/src/image/png.rs", "DecodePlan::full DecodePlan::natural DecodePlan::new DecodePlan::of_key DecodePlan::part DecodePlan::peak_bytes"],
     ["painted:host/painted/src/image/remote.rs", "Downloads::cached_bytes Downloads::forget Downloads::load Downloads::new Downloads::process Downloads::promote Load::outcome Load::release Load::settled"],
     ["painted:host/painted/src/image/workers.rs",
-      "Backend::cancel Backend::drain_wake Backend::evict Backend::finish_pictures Backend::forget Backend::generation Backend::message Backend::new " +
+      "Backend::cancel Backend::drain_wake Backend::evict Backend::finish_pictures Backend::forget Backend::forget_source Backend::generation Backend::message Backend::new " +
       "Backend::note_scale Backend::prepared Backend::promote Backend::request Backend::retire Backend::source Backend::sources Backend::transient Backend::wake_fd"],
   ]),
   group("UI facts", ["subscription"], "current reader/session, device facts, field or window configuration", "UI-owned",
@@ -1231,7 +1242,10 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
     ["painted:host/painted/src/presenter/picker.rs",
       "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
-      "Presenter::finish_portal_picks Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
+      "Presenter::finish_portal_picks Presenter::is_file_input Presenter::picked_targets Presenter::save_chosen Presenter::start_folder"],
+    ["painted:host/painted/src/presenter/file_dialog.rs",
+      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::finish_file_dialog Presenter::queue_file_dialog " +
+      "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/picker/shared.rs:596-630 updates only a token accepted by router.share. Copied files can survive, but this completion targets the current router token.", [

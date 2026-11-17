@@ -77,6 +77,23 @@ final class Canvas2DImageTests: XCTestCase {
         XCTAssertNotNil(host.canvasImage("b"))
     }
 
+    func testReplacedImageHandlesDrawThePublishedPixels() throws {
+        let host = Canvas2DHost()
+        var bytes = Data()
+        host.assetBytes = { _ in bytes }
+        for color: [UInt8] in [[255, 0, 0, 255], [0, 255, 0, 255]] {
+            let image = try XCTUnwrap(Canvas2DSpace.srgb8.image(color, width: 1, height: 1))
+            bytes = try XCTUnwrap(canvas2DEncode(image, type: "image/png", quality: nil))
+            let loaded = expectation(description: "published pixels decoded")
+            host.onImage = { _, _ in loaded.fulfill() }
+            if host.canvasImage("p") == nil { host.load(["p"]) }
+            else { host.pictureChanged("p") }
+            wait(for: [loaded], timeout: 10)
+            let canvas = try draw(host, XCTUnwrap(host.canvasImage("p")))
+            XCTAssertEqual(try pixel(canvas, x: 0, y: 0), color)
+        }
+    }
+
     func testImageHandlesReportAndDrawAllExifOrientationsAtFullSize() throws {
         let quadrants = [[0, 1, 2, 3], [0, 1, 2, 3], [1, 0, 3, 2], [3, 2, 1, 0], [2, 3, 0, 1],
                          [0, 2, 1, 3], [2, 0, 3, 1], [3, 1, 2, 0], [1, 3, 0, 2]]

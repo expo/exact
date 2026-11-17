@@ -179,9 +179,9 @@ extension NavigationHost {
         retiringRoots.contains { node === $0 || node.isDescendant(of: $0) }
     }
 
-    /// Run the sync a transition held, now that it has ended.
+    /// Run the sync a transition held, now that it has ended, or else the edge passes that an app's selection owes.
     func runHeldSync() {
-        guard pendingSync || tabsHeld else { return }
+        guard pendingSync || tabsHeld else { return settleScrollEdges() }
         pendingSync = false
         tabsHeld = false
         resync()

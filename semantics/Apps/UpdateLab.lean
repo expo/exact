@@ -9,7 +9,7 @@ def updateLab : Contract.Program := {
     { name := "note", ty := .string, init := (.str "Keep this note through a reload"), owner := .none, late := false },
     { name := "live", ty := .bool, init := (.bool true), owner := .none, late := false }],
   derives := [],
-  resources := [{ name := "rustConstants", ty := (.record "Constants"), source := "rustConstants", args := [] }],
+  resources := [{ name := "rustConstants", ty := (.record "Constants"), source := "rustConstants", args := [], placeholder := .some (.record "Constants" [(.str ""), (.num (Contract.F64.ofBits 0x0000000000000000))]) }],
   mutations := [{ name := "tsResult", ty := (.record "Probe"), refreshes := [], andThen := .none },
     { name := "rustResult", ty := (.record "Probe"), refreshes := [], andThen := .none },
     { name := "rustExecutorResult", ty := (.record "Executor"), refreshes := [], andThen := .none }],

@@ -330,6 +330,21 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// `expect layout "testId" width|height ==|<=|>= n`: the node's laid-out size, the
+    /// width or height of the box the agent's `layout <target>` reports (LLP 1012:
+    /// viewport points, two decimals, presentation transforms folded in).
+    ExpectLayout {
+        /// The node, by `testId`.
+        target: String,
+        /// `width` or `height`.
+        dimension: String,
+        /// `Equal`, `AtLeast` or `AtMost`.
+        comparison: StateComparison,
+        /// The size, in points.
+        value: f64,
+        /// Where.
+        span: Span,
+    },
     /// `expect text "testId" == "value"`: the node's text — its `text` prop,
     /// else its descendants' text in order (the web's `textContent`), else a
     /// field's value.

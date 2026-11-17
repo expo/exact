@@ -1,4 +1,4 @@
-//! Keep scheduled work alive in Windows' menu and move/resize loops.
+//! Keep scheduled work alive in Windows' native modal loops.
 #![allow(unsafe_code)]
 use std::{cell::Cell, rc::Rc, time::Instant};
 use windows_sys::Win32::{
@@ -15,8 +15,20 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::accessibility::Event;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Schedule(Option<Rc<State>>);
+
+pub(super) struct Entered(Option<Rc<State>>);
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        if let Some(state) = &self.0 {
+            state.depth.set(state.depth.get().saturating_sub(1));
+            state.arm();
+            state.wake();
+        }
+    }
+}
 
 struct State {
     window: Cell<HWND>,
@@ -27,6 +39,14 @@ struct State {
 }
 
 impl Schedule {
+    /// Common item dialogs do not emit WM_ENTERMENULOOP or WM_ENTERSIZEMOVE.
+    pub fn enter(&self) -> Entered {
+        if let Some(state) = &self.0 {
+            state.depth.set(state.depth.get().saturating_add(1));
+            state.arm();
+        }
+        Entered(self.0.clone())
+    }
     pub fn install(&mut self, window: isize, proxy: EventLoopProxy<Event>) {
         let state = Rc::new(State {
             window: Cell::new(window as HWND),
@@ -207,6 +227,16 @@ mod tests {
             let future = Instant::now() + Duration::from_secs(3600);
             let timer = Rc::as_ptr(state) as usize;
             schedule.wait_until(Some(future));
+            assert!(!schedule.active());
+            assert_eq!(state.armed.get(), None);
+            {
+                let _dialog = schedule.enter();
+                assert!(schedule.active());
+                assert_eq!(state.armed.get(), Some(future));
+                let nested = schedule.enter();
+                drop(nested);
+                assert!(schedule.active());
+            }
             assert!(!schedule.active());
             assert_eq!(state.armed.get(), None);
             SendMessageW(window, WM_ENTERMENULOOP, 0, 0);

@@ -27,15 +27,18 @@ export async function closeStdio(child, closed, cleanup) {
 }
 
 /** The command that builds what an Android drive runs: the APK (`reader`), else the Linux host for Android. */
-const androidRebuild = (a, reader) => ownVerb(a, reader ? 'android' : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ' --apk' : ''}`;
-/** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): the library's
+export function androidRebuild(a, reader) {
+  const selected = reader && apkRecord(a)?.abis, abis = selected?.length ? ` --abis ${selected.join(',')}` : '';
+  return ownVerb(a, reader ? `android${abis}` : 'android --headless') ?? `bun scripts/agent-android.mjs build ${a.name}${reader ? ` --apk${abis}` : ''}`;
+}
+/** What changed since the APK was built, by the record its build left (agent-android.mjs `apkRecord`): each library's
  * inputs by its Cargo dep-info (the Rust, and the plan's and the module's sources the bake watched), the Kotlin by
  * time, and the icons by digest, so a deleted icon is a change too. */
 export function apkChanges(a, apk) {
   const record = apkRecord(a, apk);
-  if (!record) return [`${apk} (no build record beside it: built before drives checked one)`];
+  if (!record?.libraries?.length) return [`${apk} (no complete ABI build record beside it: build it again)`];
   const since = Date.parse(record.started), digest = (file) => { try { return createHash('sha256').update(readFileSync(file)).digest('hex'); } catch { return null; } };
-  return [...depInfoNewer(since, record.library, record.library.replace(/\.so$/, '.d'), record.workspace),
+  return [...new Set(record.libraries.flatMap(library => depInfoNewer(since, library, library.replace(/\.so$/, '.d'), record.workspace))),
     ...newerThan(since, record.sources.filter((root) => !root.sha256)),
     ...record.sources.filter((root) => root.sha256 && digest(root.file) !== root.sha256).map((root) => shown(root.file))];
 }

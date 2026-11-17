@@ -252,7 +252,7 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 p
     mkdirSync(bin); mkdirSync(app);
     writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\nprintf 'aarch64-apple-ios\\n'\n`, { mode: 0o755 });
     // Every compiler the build could start records that it was started, and compiles nothing; the SDK is new enough.
-    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
+    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--version*) echo "Apple Swift version 6.4"; exit 0;; *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
     mkdirSync(resolve(app, 'assets'));
     writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));
@@ -685,6 +685,17 @@ test('`userInterfaceStyle` writes UIUserInterfaceStyle on iOS and tvOS and Exact
   }
   for (const manifest of [{}, { userInterfaceStyle: 'automatic' }]) {
     for (const plist of [infoPlist(app(manifest), false), macInfoPlist(app(manifest))]) assert.doesNotMatch(plist, /UserInterfaceStyle/);
+  }
+});
+
+test('host.macos.layoutDirection writes ExactLayoutDirection only for a Mac rtl request', () => {
+  const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest });
+  const rtl = app({ host: { macos: { layoutDirection: 'rtl' } } });
+  assert.match(macInfoPlist(rtl), /<key>ExactLayoutDirection<\/key><string>rtl<\/string>/);
+  for (const plist of [infoPlist(rtl, false), infoPlist(rtl, false, { tv: true })])
+    assert.doesNotMatch(plist, /ExactLayoutDirection/);
+  for (const manifest of [{}, { host: {} }, { host: { macos: {} } }, { host: { macos: { layoutDirection: 'auto' } } }, { dir: 'rtl' }]) {
+    assert.doesNotMatch(macInfoPlist(app(manifest)), /ExactLayoutDirection/);
   }
 });
 

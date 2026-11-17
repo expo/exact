@@ -19,6 +19,7 @@
 //! field (`dev.mjs`, `exact deploy`), and a field that has no value yet is
 //! `null`, so the id is stable until the thing exists.
 
+use crate::path_crates::path_crates;
 use contract::Manifest;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -1128,18 +1129,34 @@ fn data_crate(app_dir: &Path, named: Option<&str>) -> Result<serde_json::Value, 
     if !dir.join("Cargo.toml").is_file() {
         return Ok(serde_json::Value::Null);
     }
+    // Cargo may create a lockfile that the source digest must already include.
+    let dependencies = path_crates(&dir)?;
     let (tree, files) = tree_digest(&dir)?;
     let watch = std::env::var_os("OUT_DIR").is_some();
     if watch {
         println!("cargo:rerun-if-changed={}", dir.display());
     }
-    let mut crates = serde_json::Map::new();
-    for (name, path) in path_crates(&dir)? {
+    let mut trees = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for (name, path) in dependencies {
         if watch {
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        crates.insert(name, serde_json::Value::String(tree_digest(&path)?.0));
+        trees.entry(name).or_default().push(tree_digest(&path)?.0);
     }
+    // Two path crates can share a package name (two versions; one Cargo
+    // left out of the resolve). Each tree counts, in digest order, so the id
+    // does not depend on where the crates are.
+    let crates: serde_json::Map<_, _> = trees
+        .into_iter()
+        .map(|(name, mut trees)| {
+            trees.sort();
+            let value = match trees.as_slice() {
+                [tree] => serde_json::Value::from(tree.as_str()),
+                _ => serde_json::Value::from(trees),
+            };
+            (name, value)
+        })
+        .collect();
     let lockfile = lockfile(app_dir).map(|p| {
         std::fs::read(&p)
             .map(|b| hex(&Sha256::digest(&b)))
@@ -1178,109 +1195,6 @@ fn tree_identity(dir: &Path) -> Result<(String, Vec<PathBuf>), String> {
         h.update(&bytes);
     }
     Ok((hex(&h.finalize()), files))
-}
-
-/// The path crates the data crate at `dir` is built from, by package name
-/// and directory: the closure of its normal and build path dependencies as
-/// `cargo metadata` declares them, less exact2's own crates (everything in
-/// this checkout outside `apps/`), whose changes the id's other inputs name.
-/// Registry and git dependencies are pinned by the lockfile. `--no-deps`
-/// lists only workspace members; a closure that leaves the workspace asks
-/// Cargo again with the full graph.
-fn path_crates(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
-    let exact = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .canonicalize()
-        .map_err(|e| format!("exact2 checkout: {e}"))?;
-    let own = |path: &Path| path.starts_with(&exact) && !path.starts_with(exact.join("apps"));
-    let start = dir
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
-    for members_only in [true, false] {
-        let packages = metadata(dir, members_only)?;
-        let mut found = std::collections::BTreeMap::new();
-        let mut queue = vec![start.clone()];
-        let mut complete = true;
-        while let Some(at) = queue.pop() {
-            let Some((_, deps)) = packages.get(&at) else {
-                complete = false;
-                break;
-            };
-            for dep in deps {
-                if dep == &start || own(dep) || found.contains_key(dep) {
-                    continue;
-                }
-                let name = packages
-                    .get(dep)
-                    .map_or_else(String::new, |(n, _)| n.clone());
-                found.insert(dep.clone(), name);
-                queue.push(dep.clone());
-            }
-        }
-        if complete {
-            let mut out: Vec<(String, PathBuf)> = found.into_iter().map(|(p, n)| (n, p)).collect();
-            out.sort();
-            return Ok(out);
-        }
-    }
-    Err(format!(
-        "cargo metadata does not list the path dependencies of {}",
-        dir.display()
-    ))
-}
-
-/// `cargo metadata`'s packages, by canonical directory: each one's name and
-/// the directories of its normal and build path dependencies.
-type Packages = std::collections::HashMap<PathBuf, (String, Vec<PathBuf>)>;
-
-fn metadata(dir: &Path, members_only: bool) -> Result<Packages, String> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = std::process::Command::new(cargo);
-    command
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--offline",
-            "--manifest-path",
-        ])
-        .arg(dir.join("Cargo.toml"));
-    if members_only {
-        command.arg("--no-deps");
-    }
-    let output = command
-        .output()
-        .map_err(|e| format!("cargo metadata: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata for {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let meta: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("cargo metadata: {e}"))?;
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut packages = Packages::new();
-    for package in meta["packages"].as_array().into_iter().flatten() {
-        let Some(manifest) = package["manifest_path"].as_str() else {
-            continue;
-        };
-        let Some(at) = Path::new(manifest).parent() else {
-            continue;
-        };
-        let deps = package["dependencies"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|d| d["kind"].as_str() != Some("dev"))
-            .filter_map(|d| d["path"].as_str())
-            .map(|p| canonical(Path::new(p)))
-            .collect();
-        let name = package["name"].as_str().unwrap_or_default().to_string();
-        packages.insert(canonical(at), (name, deps));
-    }
-    Ok(packages)
 }
 
 /// The toolchain's version line (`$RUSTC --version`), asked once per process and per

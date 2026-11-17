@@ -1,15 +1,18 @@
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { withLook } from '../look.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const sheet = withLook(readFileSync(new URL('../index.html', import.meta.url), 'utf8')).match(/<style>([\s\S]*?)<\/style>/)[1];
 const latin = readFileSync(new URL('../../../scripts/fixtures/fonts/assets/DejaVuSans.ttf', import.meta.url)).toString('base64');
 const font = readFileSync(new URL('../../painted/tests/fonts/NotoNastaliqUrdu.ttf', import.meta.url)).toString('base64');
 
 for (const engine of ['chromium', 'firefox', 'webkit']) {
-  test(`${engine}: a sheet action's generated title keeps the font line and ink margin`, async () => {
+  engineTest[engine](`${engine}: a sheet action's generated title keeps the font line and ink margin`, async () => {
     const browser = await suiteBrowser(engine), page = await browser.newPage();
     try {
       await page.setContent(`<!doctype html><style>${sheet}
@@ -37,7 +40,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
     } finally { await page.close(); await browser.close(); }
   }, 60000);
 
-  test(`${engine}: a long sheet action paints an ellipsis at the end of its generated title`, async () => {
+  engineTest[engine](`${engine}: a long sheet action paints an ellipsis at the end of its generated title`, async () => {
     const browser = await suiteBrowser(engine), page = await browser.newPage();
     try {
       await page.setContent(`<!doctype html><style>${sheet}

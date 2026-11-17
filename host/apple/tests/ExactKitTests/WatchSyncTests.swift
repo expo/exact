@@ -32,6 +32,8 @@ final class WatchSyncTests: XCTestCase {
         var retained: Data?
         /// Nil while WCSession has yet to answer.
         var activation: WatchReceive.Event? = .activated
+        var retainedReads = 0
+        var keyLoads = 0
         var opened: [Bool] = []
         var refreshes = 0
         /// Each publication's outcome, in order; past its end, WCSession takes the key.
@@ -43,8 +45,8 @@ final class WatchSyncTests: XCTestCase {
         var refresh: () -> Void = {}
         func receiver(_ store: WatchStore) -> WatchReceiver {
             WatchReceiver(ports: .init(
-                activate: { self.activation }, retained: { self.retained }, store: { store },
-                key: { WatchKey(installation: "watch", key: self.key) },
+                activate: { self.activation }, retained: { self.retainedReads += 1; return self.retained }, store: { store },
+                key: { self.keyLoads += 1; return WatchKey(installation: "watch", key: self.key) },
                 open: { result in
                     if case .success = result { self.opened.append(true); self.boot() } else { self.opened.append(false) }
                 },
@@ -103,29 +105,60 @@ final class WatchSyncTests: XCTestCase {
         }
     }
 
-    /// The scene is active before WCSession's activation completes, and the retained
-    /// context is unreadable until then: the session boots on the imported values.
-    func testReadersOpenOnlyAfterActivationImportsTheRetainedContext() throws {
+    /// Activation may never complete. Both a first launch and an offline restart
+    /// boot on the local store; a later context replaces it in the live session.
+    func testReadersOpenWithoutActivationThenImportTheRetainedContext() throws {
         // The scene's first phase and the boot's request arrive in either order.
         for early in [[WatchReceive.Event.launch, .scene(active: true)], [.scene(active: true), .launch]] {
-            try withStore { store, plan, _ in
-                _ = try store.request("apply", fields: ["snapshot": ["sender": "phone", "revision": 1, "values": ["seed": "seed", "exact.state.favourite": "false"]]])
-                let wire = Wire(), receiver = wire.receiver(store)
-                wire.activation = nil
-                var booted = false
-                wire.boot = {
-                    do {
-                        let session = try HeadlessSession(plan: plan, size: CGSize(width: 200, height: 200))
-                        XCTAssertEqual(try self.favourite(session), true, "the session booted on the store the retained context replaces")
-                        booted = true
-                    } catch { XCTFail("\(error)") }
+            for stored in [false, true] {
+                try withStore { store, plan, _ in
+                    if stored {
+                        _ = try store.request("apply", fields: ["snapshot": ["sender": "phone", "revision": 1, "values": ["seed": "seed", "exact.state.favourite": "true"]]])
+                    }
+                    let wire = Wire(), receiver = wire.receiver(store)
+                    wire.activation = nil
+                    try wire.hold("phone", 2, seed: NSNull(), favourite: false)
+                    func seed() throws -> String? {
+                        let envelope = try store.request("snapshot", fields: ["sender": "watch", "recipient": "watch",
+                            "publicKey": wire.key.publicKey.rawRepresentation.base64EncodedString()])
+                        let bytes = try JSONSerialization.data(withJSONObject: envelope)
+                        let sealed = try JSONDecoder().decode(WatchEnvelope.self, from: bytes)
+                        let values = try XCTUnwrap(try sealed.open(recipient: "watch", key: wire.key)["values"] as? [String: Any])
+                        return values["seed"] as? String
+                    }
+                    var session: HeadlessSession?
+                    wire.boot = {
+                        do {
+                            session = try HeadlessSession(plan: plan, size: CGSize(width: 200, height: 200))
+                        } catch { XCTFail("\(error)") }
+                    }
+                    for event in early + [.scene(active: false), .scene(active: true), .retry] { receiver.feed(event) }
+                    XCTAssertEqual(wire.opened, [true], "activation kept the local store closed")
+                    let live = try XCTUnwrap(session)
+                    XCTAssertEqual(try self.favourite(live), stored)
+                    XCTAssertEqual(try seed(), stored ? "seed" : nil)
+                    XCTAssertEqual(wire.retainedReads, 0, "the retained context is unavailable before activation")
+                    XCTAssertEqual(wire.keyLoads, 0, "local readers do not need the transport's key")
+                    try live.refresh()
+                    wire.refresh = {
+                        do { _ = try live.storeChanged() } catch { XCTFail("\(error)") }
+                    }
+                    receiver.feed(.subscribed)
+                    receiver.feed(.activated)
+                    XCTAssertEqual(wire.opened, [true], "activation reopened the readers")
+                    XCTAssertEqual(wire.refreshes, 1)
+                    XCTAssertEqual(try self.favourite(live), false)
+                    XCTAssertNil(try seed(), "the applied removal left the old secret readable")
+                    receiver.feed(.context)
+                    XCTAssertEqual(wire.refreshes, 1, "the same context refreshed twice")
+                    let offline = Wire()
+                    offline.activation = nil
+                    offline.receiver(store).feed(.launch)
+                    XCTAssertEqual(offline.opened, [true])
+                    let restarted = try HeadlessSession(plan: plan, size: CGSize(width: 200, height: 200))
+                    XCTAssertEqual(try self.favourite(restarted), false)
+                    XCTAssertNil(try seed(), "an offline restart restored a removed secret")
                 }
-                for event in early + [.scene(active: false), .scene(active: true), .retry] { receiver.feed(event) }
-                XCTAssertEqual(wire.opened, [], "readers opened before activation completed")
-                try wire.hold("phone", 2, favourite: true)
-                receiver.feed(.activated)
-                XCTAssertEqual(wire.opened, [true])
-                XCTAssertTrue(booted)
             }
         }
     }

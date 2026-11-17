@@ -2,7 +2,9 @@ import { beforeAll, test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
+import { analyze } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
+import { drivable } from '../../scripts/coverage.mjs';
 import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { renderedPages, warmRustRenderer } from './rendered-pages.mjs';
 import { builtFile } from './content-names.mjs';
@@ -740,7 +742,7 @@ component Tabs
     // Whether the tab's scroller has scrolled, the document's offset, and the tab bar's box.
     const scroll = tab => [document.querySelector(`[data-testid="content-${tab}"]`).scrollTop > 0, document.scrollingElement.scrollTop,
       Object.values(document.querySelector('[role=tablist]').getBoundingClientRect().toJSON()).slice(0, 4)];
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const suite = await suiteBrowser(engine, { timeout: 10000 });
       try {
         for (const how of ['js', 'rust']) for (const [path, tab] of [['', 'first'], ['/second', 'second']]) {
@@ -797,7 +799,7 @@ component Sheets
     });
     const expected = [['old', 'hidden', true], ['base', 'visible', true], ['lower', 'visible', true], ['top', 'visible', false]];
     try {
-      for (const engine of ['chromium', 'firefox', 'webkit']) {
+      for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
         const suite = await suiteBrowser(engine);
         try {
           const before = await suite.newPage({ javaScriptEnabled: false });
@@ -834,7 +836,7 @@ component Page
       }
       const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(Bun.file(resolve(dist, 'index.html'))) });
       try {
-        for (const engine of ['chromium', 'firefox', 'webkit']) {
+        for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
           const browser = await suiteBrowser(engine);
           try {
             const page = await browser.newPage({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
@@ -1096,7 +1098,9 @@ component Pages
 
 // LLP 1048.007 D4: a rendered page carries only the rules its document can match, and the runtime puts the whole sheet
 // back before its first render, so what it then shows is styled as on the shell.
-test('both document renderers give a page its own rules, and the runtime restores the whole sheet', async () => {
+// The sheet the runtime restores is the plan's (LLP 1047.003 D1): the rules its elements can match, so the `select` a
+// press shows is styled, and no rule that needs a `dialog` or a `progress` inside the root, which the plan has none of.
+test("both document renderers give a page its own rules, and the runtime restores the plan's sheet", async () => {
   for (const how of ['js', 'rust']) await renderedPages(`routes nav
   home "/" render=build
 
@@ -1117,7 +1121,9 @@ component Page
 `, async (_, html, dist) => {
     const page = html(''), sheet = builtFile(dist, 'style.css'), full = readFileSync(resolve(dist, sheet), 'utf8');
     const own = /<style data-exact-page>([\s\S]*?)<\/style>/.exec(page)?.[1];
-    expect([how, own?.length < full.length / 2, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
+    expect([how, own?.length < full.length, page.match(/<style[ >]/g)?.length, own?.includes('select:not([multiple])')]).toEqual([how, true, 1, false]);
+    const rules = analyze(full), only = tag => rules.filter(([, , , within]) => within?.every(a => a.includes(`t:${tag}`))).length;
+    expect([how, only('select') > 0, only('dialog'), only('progress')]).toEqual([how, true, 0, 0]);
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: req => {
       const path = new URL(req.url).pathname;
       return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));

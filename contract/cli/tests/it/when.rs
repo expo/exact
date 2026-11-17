@@ -177,7 +177,7 @@ fn lean_carries_the_gate_and_current() {
     let emitted = contract::lean::lean(SRC, "gate").unwrap();
     assert!(
         emitted.contains(
-            "{ name := \"results\", ty := .string, source := \"search\", args := [(.var \"query\")], gate := .some ((.var \"open\")) }"
+            "{ name := \"results\", ty := .string, source := \"search\", args := [(.var \"query\")], placeholder := .some (.str \"\"), gate := .some ((.var \"open\")) }"
         ),
         "{emitted}"
     );

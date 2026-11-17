@@ -1,13 +1,16 @@
 import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // The press paint's background colour in a real browser (LLP 1061 D7): the shell's CSS and the input glue, in
 // every engine.
-import { test, expect, beforeAll, afterAll } from 'bun:test';
+import { expect, beforeAll, afterAll } from 'bun:test';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { decodePng } from '../../../scripts/png.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { fileURLToPath } from 'node:url';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const sheet = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<style>[\s\S]*?<\/style>/)[0];
@@ -34,7 +37,7 @@ afterAll(() => server?.close());
 // (expo/exact#530), with a declared transition of it and without: held, a box whose pressed colour equals its own
 // paints the same pixels, and one with another shows that colour over the page, not over its own; the declared
 // transition never starts.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a translucent pressed colour stands in for the node's own`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a translucent pressed colour stands in for the node's own`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage({ viewport: { width: 300, height: 200 } });
   try {

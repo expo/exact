@@ -2,6 +2,7 @@ import { beforeAll, afterAll, test, expect } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { drivable } from '../../scripts/coverage.mjs';
 
 const rendered = new Map();
 beforeAll(async () => {
@@ -49,7 +50,7 @@ test.each(['js', 'rust'])('%s-rendered list items keep their links through adopt
   } });
   let browser;
   try {
-    for (const engine of ['chromium', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'webkit'])) {
       browser = await suiteBrowser(engine);
       const before = await browser.newPage({ javaScriptEnabled: false });
       await before.goto(server.url.href);

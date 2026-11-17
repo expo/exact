@@ -35,6 +35,13 @@ class HeadlessLaunchTest {
         companion object {
             /** What the host was told of its boot, its locations and its frames, in order. */
             val told = CopyOnWriteArrayList<String>()
+            val environment = HashMap<String, String>()
+            @JvmStatic @Implementation fun environment(bytes: ByteArray) {
+                String(bytes, Charsets.UTF_8).split('\u0000').filter { '=' in it }.forEach {
+                    environment[it.substringBefore('=')] = it.substringAfter('=')
+                }
+                turns += "environment"
+            }
             /** The host's boot, what it was told of the page, its turns with no reader and its data module's
              * activation, in the order its thread made them. */
             val turns = CopyOnWriteArrayList<String>()
@@ -61,6 +68,7 @@ class HeadlessLaunchTest {
     class Environment {
         companion object {
             val values = HashMap<String, String?>()
+            @JvmStatic @Implementation fun environ(): Array<String> = values.map { "${it.key}=${it.value}" }.toTypedArray()
             @JvmStatic @Implementation fun setenv(name: String, value: String?, overwrite: Boolean) {
                 if (overwrite || name !in values) values[name] = value
             }
@@ -77,7 +85,7 @@ class HeadlessLaunchTest {
     private val made = ArrayList<org.robolectric.android.controller.ActivityController<Reader>>()
 
     @Before fun setup() {
-        Host.told.clear(); Host.turns.clear(); Environment.values.clear()
+        Host.told.clear(); Host.turns.clear(); Host.environment.clear(); Environment.values.clear()
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
     }
 
@@ -116,6 +124,33 @@ class HeadlessLaunchTest {
     private fun beforeTheFirstFrame(): List<String> {
         assertEquals(listOf("start", "start"), Host.told.take(2))
         return Host.told.drop(2).takeWhile { it != "frame" }
+    }
+
+    @Test fun theNativeEnvironmentIsTransferredBeforeAHeadlessBoot() {
+        headless()
+        assertEquals(Environment.values["XDG_CACHE_HOME"], Host.environment["XDG_CACHE_HOME"])
+        assertEquals(Environment.values["TMPDIR"], Host.environment["TMPDIR"])
+        assertTrue(Host.turns.indexOf("environment") in 0 until Host.turns.indexOf("start"))
+    }
+
+    @Test fun aDriverLaunchTransfersItsEnvironmentBeforeBoot() {
+        val app = RuntimeEnvironment.getApplication()
+        app.applicationInfo.metaData = Bundle().apply { putBoolean("dev.exact.development", true) }
+        activity(Intent(Intent.ACTION_MAIN).putExtra("x_agent", "1")
+            .putExtra("x_agent_storage", "a=b é").putExtra("x_agent_epoch", "1234"))
+        assertEquals("1", Host.environment["EXACT_AGENT"])
+        assertEquals("a=b é", Host.environment["EXACT_AGENT_STORAGE"])
+        assertEquals("1234", Host.environment["EXACT_AGENT_EPOCH"])
+        assertTrue(Host.turns.indexOf("environment") in 0 until Host.turns.indexOf("start"))
+    }
+
+    @Test fun aProductionLaunchDoesNotTransferDriverExtras() {
+        val app = RuntimeEnvironment.getApplication()
+        app.applicationInfo.metaData = Bundle().apply { putBoolean("dev.exact.development", false) }
+        activity(Intent(Intent.ACTION_MAIN).putExtra("x_agent", "1").putExtra("x_agent_storage", "private"))
+        assertFalse(Host.environment.containsKey("EXACT_AGENT"))
+        assertFalse(Host.environment.containsKey("EXACT_AGENT_STORAGE"))
+        assertEquals(Environment.values["XDG_CACHE_HOME"], Host.environment["XDG_CACHE_HOME"])
     }
 
     @Test fun aHostBootedWithNoActivityIsHiddenBeforeItsFirstTurnAndItsDataModule() {

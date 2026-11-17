@@ -102,7 +102,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex-basis` of 0 is never smaller than the border), so a calendar's today with
   `border-width=(isToday ? 2 : 0)` is wider and taller than its neighbours and
   the days after it sit off the columns above. Fix: give every cell the border and vary
-  its colour, `border-width=2 border-color=(isToday ? "-exact-label" : "transparent")`.
+  its colour, `border="2px solid" border-color=(isToday ? "-exact-label" : "transparent")`.
   (Bake-off round 28, mood journal: 50.9 points against 47.4 on iOS; Chrome alike, with
   `border-box` too.)
 
@@ -614,14 +614,23 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   inside a route draws under the native bars. Fix: render full-screen overlays
   (menus, action sheets) as root children after the tab container, or as a
   `navigationPresentation="fullscreen"` route. (Signal Clone, build 10.)
-- **A full-screen route on iOS shows white bands above and below its content.**
+- **A full-screen route on iOS shows bands above and below its content.**
   Cause: the host keeps the route's content clear of the status bar and the home
   indicator (LLP 1123 D3), so a child at `position="absolute" inset=0` starts
-  below the status bar, and where the route paints nothing its controller shows
-  the system background. Fix: give the route's own column the background
+  below the status bar and ends above the home indicator. Where the route paints
+  nothing, the bands show the nearest ancestor that paints a background, else
+  the platform background (the theme's page ground when set).
+  `system-bars-hidden=true` leaves them on a phone with a notch
+  or Dynamic Island, whose insets stay when the bars hide. Fix, where the
+  content needs only a backdrop: give the route's own column the background
   (`background-color`, with `color-scheme="dark"` for a photo viewer): it fills
   the screen to its edges, and where it is translucent, or fades out, the page
-  the route covers shows through. (Excord's image viewer, 2026-10-27.)
+  the route covers shows through. Fix, where the content itself must reach the
+  screen's edges (a full-screen canvas, a camera, a map): put
+  `-exact-safe-area="none"` on the route and place its controls
+  with `var(--exact-safe-area-inset-*)`, which still reads the route's insets.
+  (Excord's image viewer, 2026-10-27; #759, iPhone 12 and iPhone 17 Pro
+  simulators, iOS 27.0, 2026-11-16.)
 - **A Mac glass panel shows sharp content behind a wrapper.** AppKit's
   `backdrop-filter` samples only the parent's subtree, even when every wrapper
   is transparent. Make the glass a direct sibling of what it covers; put a
@@ -769,6 +778,7 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `transform="rotate(-2deg)"` | `lower-attr-tag` | `rotate="-2deg"`, `translate="0px 25px"`, `scale=0.8` |
 | Expo's `NativeTabs.Trigger role="search"`, SwiftUI's `Tab(role: .search)` | `lower-attr-value` on `role="search"` | `rel="search"` on the root tab, written last; `autofocus` on its root's header search field sets it apart on iOS 26 (`contract vocab search`) |
 | a `ScrollView` in a `flex: 1` `View`: `column flex=1` › `scroll flex=1` | `lower-scroll-grows` (warning) | `min-height=0` on the column; the scroller alone needs none |
+| `borderWidth` and `borderColor` without a style (solid in RN) | `lower-border-unstyled` (warning) | `border="1px solid" border-color="…"`, or add `border-style="solid"` to the written width; for one edge use `border-top-style="solid"` so the other sides stay absent |
 | `alignItems`, `justifyContent`, `gap` on a `View` (a flex column in RN) | `lower-flex-on-block` (warning) | `column` or `row`: a `view` is `display: block`, as a `<div>` is |
 | `flexDirection="row"` on a `Pressable` with content | `lower-flex-on-block` (warning) | `button display="flex"`, and `text-align="left"` where its text is not centred: a `button` is a block with centred text, as `<button>` is |
 | `<SFSymbol name="x" size={N}>`, expo-symbols `SymbolView` | nothing; hand-drawn as an `svg`, or as `font-size=N`, the glyph comes out smaller | `image "symbol:sf/x" width=N height=N object-fit="contain"`, its tint as `color` ("Values beside an SF Symbol", below) |

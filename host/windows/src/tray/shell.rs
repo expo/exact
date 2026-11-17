@@ -1,31 +1,33 @@
 //! The icons' hidden window and what `Shell_NotifyIconW` is told.
 #![allow(unsafe_code)]
-use super::{Callback, Icon, CALLBACK};
+use super::{placement::Rect, Callback, Icon, CALLBACK};
 use std::{cell::RefCell, rc::Rc};
 use windows_sys::{
     core::GUID,
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, RECT},
         Graphics::Gdi::{
             CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush,
-            SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP,
+            MonitorFromRect, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+            HBITMAP, MONITOR_DEFAULTTONEAREST,
         },
         System::{
             LibraryLoader::GetModuleHandleW,
             Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD},
         },
         UI::{
-            HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi},
+            HiDpi::{GetDpiForMonitor, GetDpiForSystem, GetSystemMetricsForDpi, MDT_EFFECTIVE_DPI},
             Shell::{
-                DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconW,
-                NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE,
-                NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
+                DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass, Shell_NotifyIconGetRect,
+                Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD,
+                NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER,
+                NOTIFYICON_VERSION_4,
             },
             WindowsAndMessaging::{
                 CreateIconIndirect, CreateWindowExW, DestroyIcon, DestroyWindow, DrawIconEx,
                 LoadIconW, LoadImageW, RegisterWindowMessageW, DI_NORMAL, HICON, ICONINFO,
-                IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXSMICON, WM_NCDESTROY,
-                WM_SETTINGCHANGE, WS_EX_TOOLWINDOW, WS_POPUP,
+                IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXSMICON, WM_DISPLAYCHANGE,
+                WM_DPICHANGED, WM_NCDESTROY, WM_SETTINGCHANGE, WS_EX_TOOLWINDOW, WS_POPUP,
             },
         },
     },
@@ -43,6 +45,8 @@ pub(crate) enum Heard {
     TaskbarCreated,
     /// The system's light or dark mode changed, which the taskbar follows.
     Theme,
+    /// Display scale or taskbar geometry changed.
+    Dpi,
 }
 
 #[derive(Default)]
@@ -138,6 +142,22 @@ impl Shell {
 
     pub(crate) fn take(&self) -> Vec<Heard> {
         std::mem::take(&mut *self.state.heard.borrow_mut())
+    }
+
+    /// The icon's current screen rectangle, using the identity the shell accepted.
+    pub(crate) fn rect(&self, id: u16) -> Option<Rect> {
+        let placed = self.icons.iter().find(|p| p.icon.id == id)?;
+        let identifier = NOTIFYICONIDENTIFIER {
+            cbSize: std::mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+            hWnd: self.window,
+            uID: u32::from(id),
+            guidItem: GUID::from_u128(placed.icon.guid.filter(|_| placed.by_guid).unwrap_or(0)),
+        };
+        let mut rect = RECT::default();
+        (unsafe { Shell_NotifyIconGetRect(&identifier, &mut rect) } == 0
+            && rect.right > rect.left
+            && rect.bottom > rect.top)
+            .then_some(Rect::from(rect))
     }
 
     /// The structure that names icon `id`, by `guid` when given.
@@ -243,11 +263,25 @@ impl Drop for Shell {
 }
 
 /// The side of a notification icon in pixels, and the scale it is drawn
-/// at: the small icon of the system DPI, which the notification area uses.
-pub(crate) fn icon_side() -> (u32, f32) {
-    let dpi = unsafe { GetDpiForSystem() }.max(96);
+/// at: the small icon at its monitor's DPI, or the system DPI before placement.
+pub(crate) fn icon_side(rect: Option<Rect>) -> (u32, f32) {
+    let mut dpi = unsafe { GetDpiForSystem() };
+    if let Some(rect) = rect {
+        let rect = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) };
+        let mut y = dpi;
+        unsafe {
+            GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut y);
+        }
+    }
+    let dpi = dpi.max(96);
     let side = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, dpi) }.max(16) as u32;
-    (side, dpi as f32 / 96.)
+    super::icon_metrics(side, dpi)
 }
 
 /// Whether the taskbar is dark now (`super::taskbar_dark`).
@@ -392,6 +426,7 @@ unsafe extern "system" fn receive(
         let heard = match message {
             _ if callback.is_some() => callback.map(Heard::Callback),
             m if m == state.taskbar_created && m != 0 => Some(Heard::TaskbarCreated),
+            WM_DPICHANGED | WM_DISPLAYCHANGE => Some(Heard::Dpi),
             WM_SETTINGCHANGE if lparam != 0 => {
                 let name: Vec<u16> = (0..)
                     .map(|i| *(lparam as *const u16).add(i))
@@ -399,7 +434,9 @@ unsafe extern "system" fn receive(
                     .collect();
                 (name == "ImmersiveColorSet".encode_utf16().collect::<Vec<_>>())
                     .then_some(Heard::Theme)
+                    .or(Some(Heard::Dpi))
             }
+            WM_SETTINGCHANGE => Some(Heard::Dpi),
             WM_NCDESTROY => {
                 RemoveWindowSubclass(window, Some(receive), subclass);
                 drop(Rc::from_raw(data as *const State));

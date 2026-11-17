@@ -34,6 +34,7 @@ mod source;
 mod streams;
 mod transport;
 mod tree;
+use tree::props_json;
 
 /// Answer one request: `{"op":"tree"}`, `{"op":"state"}`,
 /// `{"op":"logs","since":N}`, `{"op":"node","id":V}` — the runner's half
@@ -488,31 +489,6 @@ fn masked<D: DataSource>(runner: &Runner<D>, mut s: String) -> String {
         }
     }
     s
-}
-
-/// A node's own props by their schema names, as JSON object members; a
-/// password field's value is [`shown_value`]'s.
-fn props_json(node: &NodeRef<'_>, s: &mut String) {
-    for (i, (id, value)) in node.props.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        quote(id.name(), s);
-        s.push(':');
-        match value {
-            PropValue::Str(t) if id == exact_kernel::PropId::Value => {
-                quote(shown_value(node.props, t), s)
-            }
-            PropValue::Str(t) => quote(t, s),
-            PropValue::Bool(b) => s.push_str(if *b { "true" } else { "false" }),
-            PropValue::Int(i) => {
-                let _ = write!(s, "{i}");
-            }
-            PropValue::Float(f) => {
-                let _ = write!(s, "{}", num(*f));
-            }
-        }
-    }
 }
 
 /// A row's token, when it read one (LLP 1121 D7's index): `"token":{"names":

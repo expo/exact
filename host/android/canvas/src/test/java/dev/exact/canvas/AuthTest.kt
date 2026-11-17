@@ -51,6 +51,7 @@ class AuthTest {
     class Environment {
         companion object {
             val values = HashMap<String, String?>()
+            @JvmStatic @Implementation fun environ(): Array<String> = values.map { "${it.key}=${it.value}" }.toTypedArray()
             @JvmStatic @Implementation fun setenv(name: String, value: String?, overwrite: Boolean) {
                 if (overwrite || name !in values) values[name] = value
             }

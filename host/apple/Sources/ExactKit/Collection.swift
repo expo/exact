@@ -31,6 +31,9 @@ package struct CollectionFacts: Equatable {
     /// the room `offset` counts past (LLP 1010 §6.9).
     var paddingStart = 0.0
     var paddingEnd = 0.0
+    #if DEBUG
+    static var encodedReports = 0
+    #endif
 
     /// Wire version 4: `velocity` (points/s, positive toward the end),
     /// `limit`, the rows past what it owes this report may build (nil: any),
@@ -40,6 +43,9 @@ package struct CollectionFacts: Equatable {
     /// `glimpse`: `limit` bounds the rows of what shows it builds too.
     /// `reading`: flag bits 5 to 7 (`Reading`).
     func encode(view: UInt32, revision: UInt64, sequence: UInt64, velocity: Double = 0, limit: UInt32? = nil, ancestorMoving: Bool = false, createOnly: Bool = false, noBuild: Bool = false, glimpse: Bool = false, reading: Reading = Reading()) -> Data {
+        #if DEBUG
+        Self.encodedReports += 1
+        #endif
         var bytes = Data(count: 100 + measurements.count * 20)
         bytes.withUnsafeMutableBytes { buffer in
             var cursor = 0
@@ -141,6 +147,9 @@ package final class CollectionHost {
         /// A report the runner turned away (a revision it had moved past) carried measurements its newer snapshot
         /// doesn't acknowledge: they're owed again, whether or not the port moves (`update`).
         var owed = false
+        #if os(iOS) || os(tvOS)
+        var travelled = false
+        #endif
         var port: [Double]?
         /// The offset when the batch began: where the reader is. Rows that
         /// leave above a deep offset shrink the document first, and the
@@ -201,10 +210,11 @@ package final class CollectionHost {
     private var gestureContact: UInt64?
     private var lastVisited: UInt32 = 0
     private var refreshPins = false
+    private(set) var resting = Set<UInt32>()
     #if os(iOS) || os(tvOS)
-    /// `focusedView()` walks every node; a report asks each frame. UIKit's
-    /// responder changes all reach `pinsChanged` (a node's become and
-    /// resign, an input's begin and end editing), which forgets it.
+    /// `focusedView()` walks every node. UIKit's responder changes all
+    /// reach `pinsChanged` (a node's become and resign, an input's begin and
+    /// end editing), which forgets it.
     private var focusFound: UInt32??
     #else
     /// The phase of the last scroll event of a trackpad gesture, and when its
@@ -351,13 +361,13 @@ package final class CollectionHost {
     private(set) var fillPending = Set<UInt32>()
     private var sliceLimits: [UInt32: UInt32] = [:]
     /// @ref LLP 1072 §3, §5 — a moving list's slice is built off main. The
-    /// session sends it (`onFill`), says whether one is in flight (`filling`,
-    /// when every report waits), and lands it (`drain`: wait and apply).
+    /// session sends it (`onFill`), holds reports behind earlier owner work
+    /// (`filling`), and lands that work (`drain`: wait and apply).
     var onFill: ((UInt32, Data) -> Void)?
     var filling: (() -> Bool)?
     var drain: (() -> Void)?
-    /// The slice a report sends off main, and the retire-only report a
-    /// landed one owes, each with its limit.
+    /// The slice sent off main, and any retire-only report its landing owes,
+    /// each with its limit.
     private var building: (view: UInt32, limit: UInt32)?
     private var retireOwed: [UInt32: UInt32] = [:]
     private var fillLimits: [UInt32: UInt32] = [:]
@@ -393,6 +403,7 @@ package final class CollectionHost {
         building = nil; retireOwed.removeAll(); fillLimits.removeAll(); fillSent.removeAll()
         budget = CollectionTurnBudget(); rescuing.removeAll()
         refreshPins = false; lastVisited = 0
+        resting.removeAll()
         #if os(iOS) || os(tvOS)
         focusFound = nil
         #endif
@@ -410,6 +421,7 @@ package final class CollectionHost {
             for view in animating.subtracting(live) { stopAnimation(view) }
             retireOwed = retireOwed.filter { live.contains($0.key) }
             dirty.formIntersection(live)
+            resting.formIntersection(live)
             fillPending.formIntersection(live)
             glimpses.formIntersection(live)
             for snapshot in snapshots {
@@ -585,7 +597,55 @@ package final class CollectionHost {
             view = current.superview
         }
     }
-    func changed(_ view: UInt32, user: Bool = false) {
+    #if os(iOS) || os(tvOS)
+    private func quiet(_ id: UInt32, ignoringDirty: Bool = false, requiringLead: Bool = true) -> Bool {
+        guard !ExactEnv.agentFreezes, !resting.contains(id),
+              ignoringDirty || !dirty.contains(id),
+              sliceLimits[id] == nil, !refreshPins,
+              let entry = entries[id], !entry.owed, !entry.gesture,
+              entry.travelled || !entry.snapshot.pending,
+              !animating.contains(id), !ancestorMoving(id),
+              let window = entry.snapshot.window, let previous = entry.lastFacts,
+              let facts = geometry(id), !entry.records.changed,
+              entry.records.unacknowledged.isEmpty,
+              (facts.portMain, facts.portCross, facts.cross, facts.paddingStart, facts.paddingEnd)
+                == (previous.portMain, previous.portCross, previous.cross, previous.paddingStart, previous.paddingEnd)
+        else { return false }
+        let focus = focusFound ?? focusedView()
+        focusFound = focus
+        guard (owningCollection(focus) == id ? focus : nil) == previous.focus,
+              (owningCollection(interaction) == id ? interaction : nil) == previous.interaction else { return false }
+        let speed = motion?(id) ?? 0
+        let ahead = speed * (presenter?.scrollPump.leadTime(id) ?? 0)
+        let top = max(0, facts.offset), end = min(entry.snapshot.extent, top + facts.portMain)
+        guard !requiringLead || (max(0, top + min(0, ahead)) >= window.built[0]
+              && min(entry.snapshot.extent, end + max(0, ahead)) <= window.built[1]),
+              !window.owesReveal(offset: top, port: facts.portMain),
+              !window.owesEdge(offset: top, port: facts.portMain, velocity: speed),
+              !window.owesRetirement(offset: top, port: facts.portMain, moving: entry.travelled)
+        else { return false }
+        // A reversal can bring an owed retirement back inside its band.
+        retireOwed[id] = nil
+        return true
+    }
+    /// Rest asks the pump to restore the ordinary window in bounded slices.
+    func rested(_ id: UInt32) {
+        guard let entry = entries[id], entry.travelled else { return }
+        entry.travelled = false
+        presenter?.scrollPump.forgetTravel(id)
+        resting.insert(id)
+        retireOwed[id] = nil
+        fillPending.insert(id)
+        dirty.insert(id)
+        requestFill?()
+    }
+    #endif
+    /// Record the reader's move before draining corrections planned on an older frame.
+    func advanceScrollSequence(_ view: UInt32) {
+        guard let entry = entries[view], !correcting, batchDepth == 0, !animating.contains(view) else { return }
+        entry.cursor.advance()
+    }
+    func changed(_ view: UInt32, user: Bool = false, sequenceAdvanced: Bool = false) {
         guard let entry = entries[view], !correcting else { return }
         // The host's own animation, not the reader: reported as where it
         // is headed (`geometry`), and the sequence stays.
@@ -600,7 +660,35 @@ package final class CollectionHost {
             readerMoved(view)
         }
         #endif
-        if user && batchDepth == 0 { entry.cursor.advance() }
+        if user && !sequenceAdvanced { advanceScrollSequence(view) }
+        #if os(iOS) || os(tvOS)
+        if user && batchDepth == 0 {
+            entry.travelled = true
+            if let facts = geometry(view) {
+                presenter?.session?.runtime.noteCollectionScroll(view, revision: entry.snapshot.revision,
+                    sequence: entry.cursor.sequence, offset: facts.offset)
+            }
+            if quiet(view) { return }
+            if covers(view), let facts = geometry(view), let window = entry.snapshot.window {
+                let speed = motion?(view) ?? 0
+                if window.owesReveal(offset: facts.offset, port: facts.portMain)
+                    || window.owesEdge(offset: facts.offset, port: facts.portMain, velocity: speed) {
+                    // Entering an edge or revealing a row cannot wait for a
+                    // later offset. Land earlier work before gathering facts.
+                    drain?()
+                    dirty.insert(view)
+                    retireOwed[view] = 0
+                    rescuing.insert(view)
+                    flushIfNeeded()
+                    rescuing.remove(view)
+                    return
+                }
+                if window.owesRetirement(offset: facts.offset, port: facts.portMain, moving: entry.travelled) {
+                    retireOwed[view] = 0
+                }
+            }
+        }
+        #endif
         dirty.insert(view)
         guard batchDepth == 0 else { return }
         if !user { schedule(); return }
@@ -622,7 +710,7 @@ package final class CollectionHost {
             if filling?() == true { drain?() }
             let before = entry.rowsAdded, started = ProcessInfo.processInfo.systemUptime
             rescuing.insert(view)
-            flush()
+            flushIfNeeded()
             rescuing.remove(view)
             sliceLimits[view] = nil
             if bounded != nil {
@@ -641,12 +729,12 @@ package final class CollectionHost {
         #if DEBUG
         slices += 1
         #endif
-        // One slice in flight at a time, and none before the last one's
-        // retirement: this one stays owed (LLP 1072 §3.1, §5).
+        // One slice in flight at a time. Any owed retirement runs first,
+        // from main's fresh facts (LLP 1072 §3.1, §5).
         if filling?() == true { return 0 }
         if !retireOwed.isEmpty {
             dirty.formUnion(retireOwed.keys)
-            flush()
+            flushIfNeeded()
             return 0
         }
         fillPending.remove(view)
@@ -658,21 +746,38 @@ package final class CollectionHost {
         // The slice's own list first: the round-robin would visit it last.
         lastVisited = view &- 1
         if glimpse { glimpsing.insert(view) } else if onFill != nil { building = (view, limit) }
-        flush()
+        flushIfNeeded()
         building = nil
         glimpsing.remove(view)
         sliceLimits[view] = nil
         return entries[view]?.added(since: before) ?? 0
     }
-    /// A slice built off main has been applied (LLP 1072 §5): what it left
-    /// owed (rows past the window, an edge) is settled now, on main, by a
-    /// retire-only report from fresh facts and the pins that hold now.
+    /// A landed build may leave rows past the retirement bound or an edge
+    /// owed. Main reports those from its current offset and pins (LLP 1072 §5).
     func landed(_ view: UInt32, at now: Double) {
         if let sent = fillSent.removeValue(forKey: view) { fillLatency[view] = now - sent }
-        // The reports the slice held run in the next main-queue turn.
-        if !dirty.isEmpty { schedule() }
+        defer { if !dirty.isEmpty { schedule() } }
         guard let limit = fillLimits.removeValue(forKey: view), entries[view] != nil else { return }
+        #if os(iOS) || os(tvOS)
+        if let entry = entries[view], let facts = geometry(view) {
+            // Travel while this build was unpublished named the old
+            // revision. Refresh it after the applied corrections.
+            presenter?.session?.runtime.noteCollectionScroll(view, revision: entry.snapshot.revision,
+                sequence: entry.cursor.sequence, offset: facts.offset)
+        }
+        // Missing lead asks for a build, not a retire-only round trip. The
+        // retirement band leaves two ports of hysteresis behind travel.
+        if quiet(view, ignoringDirty: true, requiringLead: false) {
+            let built = quiet(view, ignoringDirty: true)
+            dirty.remove(view)
+            fillPending.remove(view)
+            if !built { fillPending.insert(view); requestFill?() }
+            return
+        }
+        retireOwed[view] = entries[view]?.travelled != true || entries[view]?.snapshot.window == nil ? limit : 0
+        #else
         retireOwed[view] = limit
+        #endif
         // The pump's next frame: the slice's apply and its retirement are
         // two frames' work, not one (LLP 1072 §5).
         fillPending.insert(view)
@@ -700,10 +805,14 @@ package final class CollectionHost {
     /// or moves them, as a turn of the main queue would do between a
     /// reader's frames. Bounded.
     func settle() {
+        #if os(iOS) || os(tvOS)
+        for (id, entry) in entries where entry.travelled { rested(id) }
+        for id in resting { sliceLimits[id] = UInt32.max - 1; dirty.insert(id) }
+        #endif
         for _ in 0..<8 {
             guard !dirty.isEmpty, batchDepth == 0 else { return }
             budget.nextTurn()
-            flush()
+            flushIfNeeded()
         }
     }
     func dataReady() {
@@ -723,7 +832,7 @@ package final class CollectionHost {
         // first responder. Recheck once after that native event completes.
         refreshPins = true
         schedule()
-        if batchDepth == 0 { flush() }
+        if batchDepth == 0 { flushIfNeeded() }
     }
     func pointer(_ view: UInt32?) {
         gestureContact = nil
@@ -749,19 +858,35 @@ package final class CollectionHost {
         }
     }
 
-    func flush() {
+    func flushIfNeeded() {
+        guard batchDepth == 0, onFeedback != nil, !dirty.isEmpty, filling?() != true else { return }
+        #if os(iOS) || os(tvOS)
+        // A queued measurement turn can precede the rest slice. Leave its
+        // forced report to the pump, which supplies the retirement limit.
+        for id in dirty where resting.contains(id) && sliceLimits[id] == nil && retireOwed[id] == nil {
+            dirty.remove(id)
+            fillPending.insert(id)
+            requestFill?()
+        }
+        for id in dirty where quiet(id, ignoringDirty: true) {
+            dirty.remove(id)
+            fillPending.remove(id)
+        }
+        #endif
+        if !dirty.isEmpty { flush() }
+    }
+
+    private func flush() {
         #if DEBUG
         flushes += 1
         #endif
         guard batchDepth == 0, let onFeedback, !dirty.isEmpty else { return }
-        // A slice in flight holds every report until it lands (T4), and its
-        // landing flushes again (`landed`). A continuation now would find it
-        // still in flight and queue another, every main-queue turn until it
-        // lands (LLP 1072 §3.2).
+        // A fill lands before a report gathers fresh facts (T4).
+        // Its landing releases the reports; a continuation here would
+        // retry on every main-queue turn until then (LLP 1072 §3.2).
         if filling?() == true { return }
         observeTurns()
-        // Reserve the continuation before calling Rust: its batch can reenter us.
-        schedule()
+        defer { if !dirty.isEmpty && filling?() != true { schedule() } }
         // Each list once per flush, at most, without a report (bounded
         // even if a visit re-dirties its list).
         var free = entries.count
@@ -770,7 +895,7 @@ package final class CollectionHost {
         var unmeasured = Set<UInt32>()
         defer { dirty.formUnion(unmeasured) }
         while !dirty.isEmpty {
-            // A slice in flight holds every report until it lands (T4).
+            // A fill holds every report until it lands (T4).
             if filling?() == true { return }
             let rescue = !rescuing.isDisjoint(with: dirty)
             guard budget.begin(rescue: rescue) else { return }
@@ -800,6 +925,7 @@ package final class CollectionHost {
             lastVisited = id
             dirty.remove(id)
             let retireLimit = retireOwed.removeValue(forKey: id)
+            let atRest = resting.remove(id) != nil
             // Cached geometry permits a hidden previous owner to release its
             // pin. Measurements below still come only from visible live rows.
             var reported = false
@@ -841,12 +967,17 @@ package final class CollectionHost {
                 if !fixedSizes.isEmpty { facts.measurements += fixedSizes }
                 // A slice builds its limit once; later passes and every
                 // report while moving or owed a continuation only measure
-                // and rescue what shows. At rest a report is unlimited.
+                // and rescue what shows. Rest uses the pump's slice limit.
                 // Not while a request's corrections are the app's: neither their
                 // moves nor what was sampled before it are the reader's travel.
                 let velocity = entry.authored ? nil : motion?(id)
+                #if os(iOS) || os(tvOS)
+                let defaultLimit: UInt32? = motion == nil ? nil : 0
+                #else
+                let defaultLimit: UInt32? = motion != nil && (entry.lastFacts == nil || velocity != nil || entry.snapshot.pending) ? 0 : nil
+                #endif
                 let limit: UInt32? = retireLimit ?? sliceLimits.removeValue(forKey: id)
-                    ?? (motion != nil && (entry.lastFacts == nil || velocity != nil || entry.snapshot.pending) ? 0 : nil)
+                    ?? defaultLimit
                 let further = limit.map { $0 > 0 && $0 > (entry.lastLimit ?? .max) } ?? false
                 // Off main only when the report keeps the port, the width and
                 // the pins: a report that changes them may retire (§5).
@@ -856,7 +987,7 @@ package final class CollectionHost {
                 let offMain = building?.view == id && same && retireLimit == nil && !glimpse ? building : nil
                 let reading = Reading(scrolling: readerScrolling(id), gesture: entry.gesture, animating: animating.contains(id))
                 if entry.lastFacts != facts || entry.lastSequence != entry.cursor.sequence || entry.lastReading != reading
-                    || (entry.snapshot.pending && limit != 0) || further || retireLimit != nil || entry.owed {
+                    || (entry.snapshot.pending && limit != 0) || further || retireLimit != nil || entry.owed || atRest {
                     var report = facts
                     // A sent report may be rejected atomically. Only the
                     // runner's measured snapshot acknowledges a height;
@@ -887,7 +1018,7 @@ package final class CollectionHost {
                         fillLimits[id] = offMain.limit
                         fillSent[id] = ProcessInfo.processInfo.systemUptime
                         onFill(id, report.encode(view: id, revision: entry.snapshot.revision, sequence: entry.cursor.sequence,
-                            velocity: velocity ?? 0, limit: limit, ancestorMoving: ancestorMoving, createOnly: true, reading: reading))
+                            velocity: velocity ?? 0, limit: limit == UInt32.max - 1 ? nil : limit, ancestorMoving: ancestorMoving, createOnly: true, reading: reading))
                         budget.end()
                         return
                     }
@@ -918,7 +1049,7 @@ package final class CollectionHost {
                 focusFound = nil
                 #endif
             }
-            flush()
+            flushIfNeeded()
         }
     }
 }

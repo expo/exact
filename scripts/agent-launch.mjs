@@ -787,8 +787,7 @@ const listed = changed => changed.slice(0, 3).join(', ') + (changed.length > 3 ?
 
 /** Throws when `changed` names anything: what, since which build, and the command that rebuilds it. */
 export function refuseStale(what, built, changed, command) {
-  // A file no build reads belongs in the app's `.exact/` (Depot: evidence JSON beside the app refused every drive).
-  const hint = changed.some(p => /\.json$/.test(p) && !/(^|\/)(app|package|tsconfig)\.json$/.test(p)) ? '; a file no build reads (evidence, logs, runtime state) belongs in the app\'s `.exact/`, which no build, watcher or freshness check reads' : '';
+  const hint = '; if a changed file is evidence, logs or runtime state that no build reads, put it in the app\'s `.exact/`, which no build, watcher or freshness check reads';
   const progress = process.env.EXACT_APP_DIR ? formatStatus(readStatus(process.env.EXACT_APP_DIR).filter(r => r.state === 'running')) : '';
   if (changed.length) throw staleError(`${what} build is stale: ${listed(changed)} changed since ${shown(built)} was built; run ${command}${hint}${progress && !progress.startsWith('No ') ? `; ${progress}` : ''}`);
 }
@@ -1010,7 +1009,7 @@ export function gitIgnored(dir, keep = []) {
 // rule names the outputs and leaves everything else an input. A local server's
 // database and its journal are written as the app runs (round 4's book-club: a
 // write-ahead log made every native drive stale; LLP 1116.002 D4).
-export const OUTPUT = /\.(png|jpe?g|gif|webp|apng|avif|bmp|log|txt|mov|mp4|webm|pdf|trace|world|csv|tsv|db|sqlite3?)(-(wal|shm|journal))?$/i;
+export const OUTPUT = /\.(png|jpe?g|gif|webp|apng|avif|bmp|log|out|err|txt|mov|mp4|webm|pdf|trace|world|csv|tsv|db|sqlite3?)(-(wal|shm|journal))?$/i;
 export const INPUT_TREE = /^(assets|deck|gpu|art|modules|fonts|strings|logic|data|web|apple|ios|macos|linux)(\/|$)/;
 // An agent's own tree (notes: shots/, tools/; platformer: drive.sh, tools/*.ops)
 // and a test file are never inputs, even when the name looks like a source.

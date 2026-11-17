@@ -242,7 +242,9 @@ pub(super) fn roots() -> [PathBuf; 3] {
     let mut held = ROOTS.lock().unwrap_or_else(|e| e.into_inner());
     held.get_or_insert_with(|| {
         let base = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
-        // The process's own directory goes at its exit.
+        // The process's own directory goes at its exit. `ibex2::process` is
+        // Unix's: on Windows this crate is compiled (a default member), never run.
+        #[cfg(unix)]
         ibex2::process::wait_at_exit(|| {
             let dir = std::env::temp_dir().join(format!("exact-agent-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(dir);

@@ -32,6 +32,21 @@ fn focus_event(context: &Arc<Context>, node_id: FullNodeId) -> QueuedEvent {
     }
 }
 
+fn menu_event(context: &Arc<Context>, node: &NodeRef, opened: bool) -> Option<QueuedEvent> {
+    (node.role() == Role::Menu && filter(node) == FilterResult::Include).then(|| {
+        QueuedEvent::Simple {
+            element: context
+                .get_or_create_platform_node(node.id())
+                .into_interface(),
+            event_id: if opened {
+                UIA_MenuOpenedEventId
+            } else {
+                UIA_MenuClosedEventId
+            },
+        }
+    })
+}
+
 struct AdapterChangeHandler<'a> {
     context: &'a Arc<Context>,
     queue: Vec<QueuedEvent>,
@@ -236,6 +251,7 @@ struct SelectionChanges {
 
 impl TreeChangeHandler for AdapterChangeHandler<'_> {
     fn node_added(&mut self, node: &NodeRef) {
+        self.queue.extend(menu_event(self.context, node, true));
         self.insert_text_change_if_needed(node);
         if filter(node) != FilterResult::Include {
             return;
@@ -267,6 +283,15 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
     }
 
     fn node_updated(&mut self, old_node: &NodeRef, new_node: &NodeRef) {
+        let was_menu = old_node.role() == Role::Menu && filter(old_node) == FilterResult::Include;
+        let is_menu = new_node.role() == Role::Menu && filter(new_node) == FilterResult::Include;
+        if was_menu != is_menu {
+            self.queue.extend(menu_event(
+                self.context,
+                if is_menu { new_node } else { old_node },
+                is_menu,
+            ));
+        }
         if old_node.raw_value() != new_node.raw_value() {
             self.insert_text_change_if_needed(new_node);
         }
@@ -345,6 +370,7 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
     }
 
     fn node_removed(&mut self, node: &NodeRef) {
+        self.queue.extend(menu_event(self.context, node, false));
         self.insert_text_change_if_needed(node);
         self.context.remove_platform_node(node.id());
         if filter(node) != FilterResult::Include {
@@ -478,11 +504,20 @@ impl Adapter {
                 let tree = Tree::new(update_factory(), is_window_focused);
                 *context.tree.write().unwrap() = tree;
                 context.is_placeholder.store(false, Ordering::SeqCst);
-                let result = context
-                    .read_tree()
-                    .state()
-                    .focus()
-                    .map(|node| QueuedEvents(vec![focus_event(context, node.id())]));
+                let tree = context.read_tree();
+                let mut queue = Vec::new();
+                fn menus(context: &Arc<Context>, node: NodeRef, queue: &mut Vec<QueuedEvent>) {
+                    queue.extend(menu_event(context, &node, true));
+                    for child in node.children() {
+                        menus(context, child, queue);
+                    }
+                }
+                menus(context, tree.state().root(), &mut queue);
+                if let Some(node) = tree.state().focus() {
+                    queue.push(focus_event(context, node.id()));
+                }
+                drop(tree);
+                let result = Some(QueuedEvents(queue));
                 self.state = State::Active(Arc::clone(context));
                 result
             }
@@ -678,3 +713,71 @@ impl QueuedEvents {
 // so implement Send even though windows-rs doesn't implement it for all
 // contained types. This is safe because we're not using COM threading.
 unsafe impl Send for QueuedEvents {}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+    use accesskit::{Action, ActionRequest, Toggled};
+
+    struct Ignore;
+    impl ActionHandler for Ignore {
+        fn do_action(&mut self, _: ActionRequest) {}
+    }
+
+    fn update(menu: bool) -> TreeUpdate {
+        let mut root = Node::new(Role::Window);
+        let mut nodes = Vec::new();
+        if menu {
+            root.set_children([NodeId(1)]);
+            let mut menu = Node::new(Role::Menu);
+            menu.set_label("Ember");
+            menu.set_children([NodeId(2)]);
+            let mut item = Node::new(Role::MenuItem);
+            item.set_label("Start at Login");
+            item.set_toggled(Toggled::False);
+            item.add_action(Action::Click);
+            item.add_action(Action::Focus);
+            nodes.extend([(NodeId(1), menu), (NodeId(2), item)]);
+        }
+        nodes.push((NodeId(0), root));
+        TreeUpdate {
+            nodes,
+            tree: Some(TreeInfo::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: if menu { NodeId(2) } else { NodeId(0) },
+        }
+    }
+
+    #[test]
+    fn menu_lifetime_and_focus_use_the_same_provider_tree() {
+        let context = Context::new(
+            HWND::default().into(),
+            Tree::new(update(false), true),
+            Arc::new(ActionHandlerWrapper::new(Ignore)),
+            false,
+        );
+        let mut handler = AdapterChangeHandler::new(&context);
+        context
+            .tree
+            .write()
+            .unwrap()
+            .update_and_process_changes(update(true), &mut handler);
+        let events: Vec<_> = handler
+            .queue
+            .iter()
+            .filter_map(|event| match event {
+                QueuedEvent::Simple { event_id, .. } => Some(*event_id),
+                _ => None,
+            })
+            .collect();
+        assert!(events.contains(&UIA_MenuOpenedEventId));
+        assert!(events.contains(&UIA_AutomationFocusChangedEventId));
+        handler.queue.clear();
+        context
+            .tree
+            .write()
+            .unwrap()
+            .update_and_process_changes(update(false), &mut handler);
+        assert!(handler.queue.iter().any(|event| matches!(event, QueuedEvent::Simple { event_id, .. } if *event_id == UIA_MenuClosedEventId)));
+    }
+}

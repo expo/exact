@@ -65,3 +65,9 @@ Remove this vendor override when a pinned published release supplies that
 behavior and these four tests, the upstream suite and Shelf's native UIA
 journey pass. On a version bump, reapply each numbered hunk by behavior and
 rerun those tests; the upstream suite alone does not cover the patch.
+
+8. **`adapter.rs`, menu lifetime events.** A Menu added to or removed from
+   the exposed tree raises UIA MenuOpened or MenuClosed. Visibility and role
+   changes do the same; activation from a placeholder announces the menus
+   before their focused item. The Windows status popup uses this adapter,
+   including while the app's main window is hidden.

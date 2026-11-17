@@ -24,7 +24,8 @@ import javax.net.ssl.X509TrustManager
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserException
 
-// JNI companion for rustls-platform-verifier 0.7.0.
+// JNI companion for rustls-platform-verifier 0.7 (Android artifact 0.2.0).
+// 0.7.1 keeps the 0.7.0 interface; CertificateVerifierTest checks the method and result fields.
 internal object CertificateVerifier {
     private fun manager(store: KeyStore?): X509TrustManagerExtensions {
         val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())

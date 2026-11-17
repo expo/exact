@@ -719,7 +719,11 @@ internal object Exact {
      * thread of its own (not with owner=0, the benchmark's compare switch). */
     fun agent(line: String): String {
         val o = owner ?: return "{\"error\":\"the reader carries a driver only with exact2 on its own thread (owner=0 is set)\"}"
-        return o.sync { o.drainWindow(); String(Native.agent(line.toByteArray(Charsets.UTF_8)), Charsets.UTF_8) }
+        val result = o.sync { o.drainWindow(); String(Native.agent(line.toByteArray(Charsets.UTF_8)), Charsets.UTF_8) }
+        val refresh = FutureTask { Extensions.clock() }
+        Handler(Looper.getMainLooper()).post(refresh)
+        refresh.get()
+        return result
     }
 
     /** The waiting agent's request/answer turn, called by JNI on the exact thread. */

@@ -215,6 +215,7 @@ final class CanvasesHost {
     /// Load the module — once, after the first painted frame, only when a
     /// canvas exists. Returns whether a frame source is now wanted.
     func loadIfNeeded() {
+        updatePerformanceTimer()
         guard !entries.isEmpty, session?.firstDrawMs != nil else { return }
         // Each artifact the first time one of its canvases exists (LLP 1009
         // D6). A declared module loads on the next turn, after the frame that
@@ -265,8 +266,7 @@ final class CanvasesHost {
         e.id = bytes.withUnsafeBufferPointer { m.create($0.baseAddress, bytes.count, ptr, w, h) }
         e.presentable = e.id != 0
         if e.id == 0 { FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8)); return }
-        e.performance = publishers[e.name] === e && session?.canvasPerformanceRequested(e.name) == true
-        if e.performance { _ = m.performanceReporting?(e.id, true) }
+        e.performance = false
         e.module = m
         updatePerformanceTimer()
         lifecycle.deliver(e.id, module: m)

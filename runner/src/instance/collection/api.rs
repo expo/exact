@@ -187,6 +187,27 @@ impl ListAxis {
         }
     }
 }
+/// Measured coverage and edge bands for quiet host travel (LLP 1171 D21).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollectionWindow {
+    /// Contiguous measured coverage containing the last reported port.
+    pub built: [f64; 2],
+    /// End of the earliest unpinned row and start of the latest.
+    pub retire: [f64; 2],
+    /// A port crossing these bounds overlaps a row awaiting first reveal.
+    pub reveal: [f64; 2],
+    /// End of the first item and start of the last, including item gaps.
+    pub edges: [f64; 2],
+    /// Resolved reach margins, before the velocity lead.
+    pub margin: [f64; 2],
+    /// Handler bits 0/1 and armed bits 2/3, start then end.
+    pub mask: u8,
+    /// Seconds of travel added to the edge band.
+    pub lead_seconds: f64,
+    /// Maximum additional edge lead, in points.
+    pub max_lead: f64,
+}
+
 /// Current O(mounted rows) host metadata, separate from the ordinary kernel ops.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CollectionSnapshot {
@@ -235,6 +256,8 @@ pub struct CollectionSnapshot {
     /// A limited report left window rows unbuilt or rows past the window
     /// mounted: the host owes another report, even with unchanged facts.
     pub pending: bool,
+    /// None while geometry or an unmeasured row prevents quiet travel.
+    pub window: Option<CollectionWindow>,
 }
 /// Malformed or nonfinite host feedback. Stale valid feedback is ignored instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -459,6 +482,15 @@ pub fn snapshots_json(snapshots: &[CollectionSnapshot]) -> String {
         if c.request > 0 {
             write!(out, "\"lastRequest\":{},", c.request).unwrap();
         }
+        if let Some(w) = &c.window {
+            write!(out, "\"window\":{{\"built\":[{},{}],\"retire\":[{},{}],\"reveal\":[{},{}],\"edges\":[{},{}],\"margin\":[{},{}],\"mask\":{},\"leadSeconds\":{},\"maxLead\":{}}},",
+                exact_num::Shortest(w.built[0]), exact_num::Shortest(w.built[1]),
+                exact_num::Shortest(w.retire[0]), exact_num::Shortest(w.retire[1]),
+                exact_num::Shortest(w.reveal[0]), exact_num::Shortest(w.reveal[1]),
+                exact_num::Shortest(w.edges[0]), exact_num::Shortest(w.edges[1]),
+                exact_num::Shortest(w.margin[0]), exact_num::Shortest(w.margin[1]),
+                w.mask, exact_num::Shortest(w.lead_seconds), exact_num::Shortest(w.max_lead)).unwrap();
+        }
         if !c.fixed.is_empty() {
             out.push_str("\"fixed\":[");
             for (i, fixed) in c.fixed.iter().enumerate() {
@@ -557,6 +589,7 @@ impl super::Collection {
                 .collect(),
             correction: self.correction,
             pending: self.asks_report(),
+            window: self.built_window(),
         }
     }
 }

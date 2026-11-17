@@ -273,17 +273,35 @@ fn the_long_list_recipe_appends_pages_and_stops_at_the_last() {
 #[test]
 fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
     let dir = Scratch::new(format!("exact-docs-{}", std::process::id()));
-    let package = dir.join("node_modules/@exact/in-app-browser");
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/in-app-browser");
-    for file in [
-        "package.json",
-        "exact.json",
-        "apple/exact.json",
-        "android/exact.json",
-        "web/exact.json",
+    let packages = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages");
+    for (name, from, files) in [
+        (
+            "@exact/in-app-browser",
+            "in-app-browser",
+            &[
+                "package.json",
+                "exact.json",
+                "apple/exact.json",
+                "android/exact.json",
+                "web/exact.json",
+            ][..],
+        ),
+        (
+            "@fixture/camera-calibration",
+            "fixtures/camera-calibration",
+            &[
+                "package.json",
+                "exact.json",
+                "apple/exact.json",
+                "android/exact.json",
+            ][..],
+        ),
     ] {
-        std::fs::create_dir_all(package.join(file).parent().unwrap()).unwrap();
-        std::fs::copy(source.join(file), package.join(file)).unwrap();
+        let package = dir.join("node_modules").join(name);
+        for file in files {
+            std::fs::create_dir_all(package.join(file).parent().unwrap()).unwrap();
+            std::fs::copy(packages.join(from).join(file), package.join(file)).unwrap();
+        }
     }
     let path = dir.join("app.contract");
     let (mut compiled, mut parsed) = (0, 0);

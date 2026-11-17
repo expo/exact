@@ -737,3 +737,37 @@ component App
         assert!(contract::bake(p, NoData).is_err());
     }
 }
+
+#[test]
+fn canvas_performance_follows_live_readers_and_their_when_conditions() {
+    let source = r#"shape Metrics
+  frames: option<number>
+component App
+  state perfHud = false
+  state secondHud = false
+  action toggle
+    perfHud = not perfHud
+  action second
+    secondHud = not secondHud
+  resource metrics = exactCanvasPerformance("world") when perfHud as shape Metrics
+  resource other = exactCanvasPerformance("world") when secondHud as shape Metrics
+  view
+    canvas surface=world
+"#;
+    let p = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
+    let mut r = Runner::boot(p, NoData, Kernel::with_monospace(), Default::default(), "/").unwrap();
+    assert!(
+        !r.wants_canvas_performance("world"),
+        "idle readers collect nothing"
+    );
+    r.act("toggle", vec![]).unwrap();
+    assert!(r.wants_canvas_performance("world"));
+    r.act("second", vec![]).unwrap();
+    r.act("toggle", vec![]).unwrap();
+    assert!(
+        r.wants_canvas_performance("world"),
+        "the other reader is still active"
+    );
+    r.act("second", vec![]).unwrap();
+    assert!(!r.wants_canvas_performance("world"));
+}

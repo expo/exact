@@ -73,13 +73,13 @@ export const SERVICE_BINDS = new Map([
 export const LIBRARY_SERVICES = new Map([['com.google.firebase.MESSAGING_EVENT', ['com.google.firebase.provider.FirebaseInitProvider']]]);
 
 /** The `<meta-data>` a package may declare, by name, with its one value or resource (LLP 1133.034 D13: Google Pay's
- * switch; LLP 1133.004.000 D6, D7: Firebase's messaging client off at launch and addressed by installation ID, and
+ * switch; Firebase's messaging client off at launch and using registration tokens for Expo's push service, and
  * the channel and small icon it gives a notification message shown while the app is in the background, which are the
  * app's default channel and its `exact_notification` drawable, `android-channels.mjs`'). */
 export const METADATA = new Map([
   ['com.google.android.gms.wallet.api.enabled', { value: 'true' }],
   ['firebase_messaging_auto_init_enabled', { value: 'false' }],
-  ['firebase_messaging_installation_id_enabled', { value: 'true' }],
+  ['firebase_messaging_installation_id_enabled', { value: 'false' }],
   ['com.google.firebase.messaging.default_notification_channel_id', { value: 'default' }],
   ['com.google.firebase.messaging.default_notification_icon', { resource: '@drawable/exact_notification' }],
 ]);

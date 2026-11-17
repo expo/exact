@@ -2,7 +2,7 @@
 
 The Kotlin side of Android's Canvas host (LLP 1076 §3.3), in the repository by LLP 1115.001 D2 (Charlie, 2026-10-11).
 
-An app on Android is its Rust, built for `aarch64-linux-android` (`host/painted`: the runner, the kernel, layout, text
+An app on Android is its Rust, built for `aarch64-linux-android` or `x86_64-linux-android` (`host/painted`: the runner, the kernel, layout, text
 and the paint walk), and this. The Rust records what it paints as an op stream (`host/painted/src/canvas.rs`). The
 reader replays that stream onto Android's own Canvas: a `RenderNode` for each row, scroller and animated layer,
 hardware bitmaps for pictures, `drawGlyphs` for text the Rust has shaped (below Android 12, the glyphs' outlines:
@@ -20,7 +20,7 @@ one line in the log, `exact canvas: unknown op …; the frame stops here`.
 | `gradlew`, `gradle/` | the Gradle wrapper (9.8.0), committed. Its jar is Gradle's own (sha256 `238e777f…`, as services.gradle.org publishes it) and the distribution's sha256 is pinned in `gradle-wrapper.properties` |
 
 minSdk the app's manifest's `host.android.minimumOS` gives: 31 (Android 12) without one, 29 at `"10"` ("Android 10
-and 11", below). targetSdk 36, compileSdk 37.2, AGP 9.4.1, Kotlin 2.4.10, `arm64-v8a` only. Views, with no Compose,
+and 11", below). targetSdk 36, compileSdk 37.2, AGP 9.4.1, Kotlin 2.4.10, `arm64-v8a` by default. Views, with no Compose,
 AppCompat or Material library.
 
 An `iframe` with `sandbox`, including `sandbox=""`, is refused before a WebView is created or navigated. The log
@@ -85,6 +85,16 @@ and the build warns before Gradle starts. Set `JAVA_HOME` to a fixed JDK: 17.0.1
 The warning does not change JVM options or disappear when you set a JIT workaround. After Gradle fails, a matching
 `hs_err_pid*.log` in its working directory is named; check its date, since it may belong to an earlier run.
 
+`--abis x86_64` builds for an Intel emulator; `--abis arm64-v8a,x86_64`
+packages both architectures. The default remains `arm64-v8a`, including release
+builds. Install the selected Rust targets for the pinned toolchain first.
+Each ABI gets its own app library, GPU modules and sound arm, with 16 KB alignment.
+TypeScript apps support only arm64: the vendored Hermes resolver does not support
+Android x86_64 ICU, and the pinned release has no x86_64 Android bundle. A bundle
+override does not enable this target. Use an ARM device or emulator, or an x86_64
+image with ARM translation, with the default arm64 APK. Native x86_64 builds are
+available for apps whose Android dependencies do not link Hermes.
+
 The build:
 
 1. writes the app's launcher icon and TV banner, from its manifest's `icons` (LLP 1163 D6), as resources under
@@ -93,7 +103,7 @@ The build:
    slot refuses (smaller than the slot, or a glyph with no transparent pixels) fails the build here, before anything
    compiles; and the launch theme in its `background_color` and with its `host.android.launchImage`, where it names
    either, under `app/build/<app>/launch/res/` ([the launch window](#the-devices-colours-llp-1115001-d4));
-2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
+2. builds the app's `android/` crate for each selected ABI (arm64 by default) at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_painted::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
@@ -104,7 +114,7 @@ The build:
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module and each of
+3. copies the library to `app/build/<app>/rust/jniLibs/<abi>/libexactcanvas.so`, the GPU module and each of
    `gpu.modules` beside it under its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
@@ -126,8 +136,9 @@ shell's build directory (`-PappBuildDir`), the reader's (`-PcanvasBuildDir`), Gr
 (`--project-cache-dir`) and Kotlin's session files, under `app/build/<app>`, `canvas/build/<app>`, `.gradle/apps/<app>`
 and `.kotlin/apps/<app>` for an app of this repository and under the app's own `target/android/` for one outside it, so
 builds of two apps at once do not wait on each other or mix outputs. The library is stripped with the NDK it was linked
-with (`-PndkPath`). Beside the APK, `exact-build.json` records when the build began, the library and the Kotlin it
-compiled: a drive refuses an APK older than its sources by it. `--install` then installs the APK on the device a drive
+with (`-PndkPath`). Beside the APK, `exact-build.json` records when the build began, the selected ABIs, every app library and the Kotlin it
+compiled: a drive checks every ABI’s inputs and refuses an APK older than its sources. Automatic verification rebuilds and
+suggested rebuild commands preserve those ABIs. `--install` then installs the APK on the device a drive
 would use (`--run`: and launches it). The package id and the label are the app's
 `app.json` (`host.android.id`, defaulting to `app.id` with `-` as `_`; `app.name`), which the build passes to
 Gradle as `-PapplicationId` and `-PappName`; the app module requires both. `--variant <name>` builds
@@ -344,6 +355,11 @@ as one phone only when all report the same nonempty `ro.serialno` and secure `an
 Not built: a drive leaves the phone's night mode, font scale and locale as they are
 (`prefer` tells the app, not the phone); and a touch through Android's own input (`adb shell input`, or a
 `UiAutomation`) is still the only way to test what the reader does with a finger.
+
+The reader transfers the launch environment through JNI before booting Rust.
+This also reaches the library's libc on an emulator using ARM translation,
+where Android's `Os.setenv` can update a separate environment. Production builds
+ignore driver extras as before.
 
 ## Attaching a driver
 

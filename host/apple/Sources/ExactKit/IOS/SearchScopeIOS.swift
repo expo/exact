@@ -9,6 +9,7 @@ extension NavigationHost {
     /// Whether the search bar draws `tablist` (`SegmentHost` steps aside).
     func scopes(tablist: NodeView) -> Bool { controllers.values.contains { $0.scoped === tablist } }
 
+    #if EXACT_INSPECT
     /// A route's title, subtitle or search scope control and the segment drawn for `tab`.
     func barSegment(_ tab: NodeView) -> (control: UIControl, segment: CGRect)? {
         #if os(iOS)
@@ -27,6 +28,7 @@ extension NavigationHost {
         return nil
         #endif
     }
+    #endif
 }
 #endif
 
@@ -163,15 +165,17 @@ extension HeaderSearch {
         if controller.scopeBarActivation != .manual { controller.scopeBarActivation = .manual }
     }
 
-    /// Its segments carry their tabs' test ids, on the segment views UIKit
-    /// makes at layout, as `LabelledSegmentedControl` writes them: again
-    /// as the route lays out (`RouteController.viewDidLayoutSubviews`).
+    /// Writes its tabs' test ids on the segments an assistive client reads
+    /// (`accessibilitySegments`), as the route lays out
+    /// (`RouteController.viewDidLayoutSubviews`). The control is UIKit's and
+    /// gives no read to hook, so a client that starts reading after the
+    /// route's last layout finds the ids at its next one.
     func labelScopes() {
         guard let control = scopeControl else { return }
         control.layoutIfNeeded()
-        let views = control.segmentViews
-        guard views.count == scopeIDs.count else { return }
-        for (view, id) in zip(views, scopeIDs) where view.accessibilityIdentifier != id { view.accessibilityIdentifier = id }
+        let elements = control.accessibilitySegments
+        guard elements.count == scopeIDs.count else { return }
+        for (element, id) in zip(elements, scopeIDs) { UISegmentedControl.identify(element, as: id) }
     }
 
     /// The scope bar's segmented control: in the search bar where the field

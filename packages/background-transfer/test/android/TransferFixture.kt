@@ -59,7 +59,7 @@ internal class FakeTransport(private val files: File) {
 
 /** A platform that holds every job it is asked for and remembers what it was told. */
 internal class FakePlatform : Platform {
-    override var conditions = Conditions(api = 35, visible = false, notifications = true)
+    override var conditions = Conditions(api = 35, visible = false)
     var stopped = false
     /** Where the answers to schedules wait for the test to give them; given at once when null. */
     var answers: MutableList<(Boolean) -> Unit>? = null

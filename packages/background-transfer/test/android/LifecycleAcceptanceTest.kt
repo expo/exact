@@ -705,10 +705,10 @@ abstract class LifecycleAcceptance(private val adapted: Boolean) {
     }
 
     @Test fun aProgramsStartWhileTheAppShowsIsOrdinaryWork() {
-        val shown = Conditions(api = 35, visible = true, notifications = true)
+        val shown = Conditions(api = 35, visible = true)
         assertEquals(Intent.Ordinary, Lifecycle.intent(person = false, shown))
         assertEquals(Intent.Person, Lifecycle.intent(person = true, shown))
-        assertEquals(Intent.Ordinary, Lifecycle.intent(person = true, shown.copy(notifications = false)))
+        assertEquals(Intent.Ordinary, Lifecycle.intent(person = true, shown.copy(visible = false)))
         assertEquals(Intent.Ordinary, Lifecycle.intent(person = true, shown.copy(api = 30)))
         val s = Scene()
         s.open(); s.start(); s.kept()
@@ -726,7 +726,7 @@ abstract class LifecycleAcceptance(private val adapted: Boolean) {
         s.committed(); s.run(); s.leave(); s.effects()
         s.attach()
         assertTrue(s.effects().of<Promote>().isEmpty())
-        val shown = Conditions(api = 35, visible = true, notifications = true)
+        val shown = Conditions(api = 35, visible = true)
         assertFalse(Lifecycle.promotes(Intent.Person, shown))
         assertTrue(Lifecycle.promotes(Intent.Person, shown.copy(api = 34)))
         assertTrue(Lifecycle.promotes(Intent.Person, shown.copy(api = 31)))

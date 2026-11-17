@@ -2,9 +2,10 @@
   "name": "@exact/push",
   "version": "1.0.0",
   "private": true,
-  "description": "A visible push from the app's own server: the platform's push credential as a live value, by the Push API's names (LLP 1133.004 §9).",
+  "description": "Push from the app's own server: live platform credentials, Android data-message wakes and Expo token exchange, by the Push API's names.",
   "exports": {
     ".": "./exact.json",
+    "./expo": { "types": "./expo.d.ts", "default": "./expo.ts" },
     "./apple": "./apple/exact.json",
     "./android": "./android/exact.json"
   }

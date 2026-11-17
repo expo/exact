@@ -8,6 +8,16 @@
     "app"
   ],
   "properties": {
+    "extra": {
+      "type": "object",
+      "description": "App configuration imported by app.ts. extra.eas.projectId is the EAS project used by @exact/push/expo.",
+      "properties": {
+        "eas": {
+          "type": "object",
+          "properties": { "projectId": { "type": "string", "minLength": 1 } }
+        }
+      }
+    },
     "frame_health": {
       "type": "object",
       "description": "Frame callback timing: core collects bounded counters on existing app clocks from launch, off never collects. Without a mode, a development build collects from launch and a production build only while the frame-health card shows. Presentation remains unobserved.",
@@ -980,6 +990,11 @@
             "activationPolicy": {
               "enum": ["regular", "accessory"],
               "description": "\"accessory\": a menu-bar app (LLP 1133.025 D6), written as LSUIElement: no Dock tile and no menu bar of its own, and every launch opens no window; a `-exact-menu=\"status\"` button is how the person reaches it, and `focus()` shows its window. Absent: regular."
+            },
+            "layoutDirection": {
+              "enum": ["auto", "rtl"],
+              "default": "auto",
+              "description": "Mac-only: rtl mirrors the window, split view, toolbar and sidebar, even with an English strings table. auto or omission keeps AppKit's process direction. Applied before NSApplication starts; a launch argument naming AppleTextDirection or NSForceRightToLeftWritingDirection takes precedence."
             },
             "optimize": {
               "enum": ["speed", "size", "balanced"],

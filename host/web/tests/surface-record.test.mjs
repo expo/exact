@@ -914,3 +914,29 @@ test('canvas metrics opt in only the named first publisher and clear on disposal
   assert.equal(on.metricTimers.size, 0);
   const disposed = reads; on.pollMetrics(); assert.equal(reads, disposed);
 });
+
+test('canvas metrics start and stop after a commit without rebinding the canvas', async () => {
+  const options = { metricsName: null, snapshot: () => '{"frames":1}' };
+  const f = await fixture(options);
+  f.create(1);
+  assert.deepEqual(f.reporting, []);
+  assert.equal(f.metricTimers.size, 0);
+  for (let i = 0; i < 3; i++) {
+    options.metricsName = 'world';
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, true]);
+    assert.equal(f.metricTimers.size, 1);
+    f.pollMetrics();
+    assert.equal(f.metrics.at(-1), 'world\0{"frames":1}');
+    options.metricsName = null;
+    f.applyBatch({ ops: [] });
+    assert.deepEqual(f.reporting.at(-1), [1, false]);
+    assert.equal(f.metricTimers.size, 0);
+    const before = f.metrics.length;
+    f.frame(); f.pollMetrics();
+    assert.equal(f.metrics.length, before);
+  }
+  assert.equal(f.reporting.length, 6);
+  f.destroy(1);
+  assert.equal(f.metrics.at(-1), 'world');
+});

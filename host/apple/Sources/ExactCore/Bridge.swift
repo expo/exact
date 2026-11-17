@@ -537,13 +537,38 @@ package final class Runtime {
     package func panSample(first: Bool, x: Double, y: Double, t: Double) { on { () -> Void in _ = exact_pan_sample(rt, first ? 1 : 0, x, y, t) } }
     package func panVelocity(at t: Double) -> (Double, Double) { on(busy: (0, 0)) { (exact_pan_velocity(rt, 0, t), exact_pan_velocity(rt, 1, t)) } }
     /// A scroller (nil: the page) now stands at `left`, `top` (LLP 1051.000
-    /// D1): posted, never waited for, since AppKit calls from inside its
-    /// scroll synchronizer.
-    package func scrolled(_ view: UInt32?, left: Double, top: Double) {
+    /// D1). UIKit may leave the latest offset for the owner's next job
+    /// when it has no intersection observers. AppKit posts from inside
+    /// its scroll synchronizer.
+    package func scrolled(_ view: UInt32?, left: Double, top: Double, observing: Bool = true) {
         if holds() { return }
+        #if os(iOS) || os(tvOS)
+        let lease = completionLease, rt = rt
+        let note = lease.session.scroll(lease, view: view ?? 0) {
+            exact_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)
+        }
+        if observing { Owner.shared.notify(note) }
+        else { Owner.shared.noteScroll(runtime: rt, view: view ?? 0, note) }
+        #else
         Owner.shared.notify { [self] in
             guard !destroyed else { return }
             exact_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)
+        }
+        #endif
+    }
+    #if DEBUG
+    package private(set) var collectionFeedbackEntries = 0
+    #endif
+    /// Replace numeric travel facts in the mailbox; no encoding or owner job.
+    package func noteCollectionScroll(_ view: UInt32, revision: UInt64, sequence: UInt64, offset: Double) {
+        guard !holds() else { return }
+        let lease = completionLease, rt = rt
+        Owner.shared.noteScroll(runtime: rt, view: view, collection: true) {
+            guard lease.session.accepts(lease) else { return }
+            guard let bytes = exact_in(rt, 16) else { return }
+            UnsafeMutableRawPointer(bytes).storeBytes(of: revision.littleEndian, as: UInt64.self)
+            UnsafeMutableRawPointer(bytes).storeBytes(of: sequence.littleEndian, toByteOffset: 8, as: UInt64.self)
+            exact_scrolled(rt, 2, view, 0, offset)
         }
     }
     /// A scroll event: left, top, then the scroller's `scrollWidth`,
@@ -587,6 +612,9 @@ package final class Runtime {
     package func collectionFeedbackAsync(_ bytes: Data, now: Double, done: @escaping (RuntimeCompletion) -> Void) {
         post(done: done) { [self] _ in
             let n = write(bytes)
+            #if DEBUG
+            self.collectionFeedbackEntries += 1
+            #endif
             return read(exact_collection_feedback(rt, n, now))
         }
     }
@@ -619,6 +647,9 @@ package final class Runtime {
     package func collectionFeedback(_ bytes: Data, now: Double) -> Batch {
         return on {
             let n = write(bytes)
+            #if DEBUG
+            self.collectionFeedbackEntries += 1
+            #endif
             return read(exact_collection_feedback(rt, n, now))
         }
     }

@@ -29,7 +29,7 @@ Before readiness, hold a refused seed instead of consuming it: if the resource's
 
 ## Landed; remaining
 
-The LLP 1027.005 D3 and D5 amendment (2026-11-13) is built: a kept answer whose differing identifying arguments are all `""`, `none` or read a store reader still on its fallback waits, and their first known match admits it, before or after readiness. The journal says it is waiting, and a known mismatch names each differing argument and the state or resource it reads (`runner/src/runner/kept_wait.rs`, tests in `kept_identity_tests.rs`). Two reviews (Grok 4.7, GPT-6.1 Sol) found these gaps in what landed:
+The LLP 1027.005 D3 and D5 amendment (2026-11-13) is built: a kept answer whose differing identifying arguments are all `""`, `none` or read a store reader still on its fallback waits, and their first known match admits it, before or after readiness. The journal says it is waiting, and a known mismatch names each differing argument and the state or resource it reads (`runner/src/runner/kept_wait.rs`, tests in `kept_identity_tests.rs`).
 
 The journal's safety rule is also built. Before this change on `ecdaf06fb`, a
 runner test with a password control's value as the identifying argument found
@@ -46,14 +46,15 @@ replaced the seed; an admitted seed rejected with unchanged invalid arguments
 says its request arguments are invalid. Neither case is mislabeled as an
 argument-count mismatch.
 
-- **A kept module whose source is ready at boot is not held.** Its seed is compared once and refused or shown; it never enters the wait, so an empty identity at boot still refuses it for the launch.
-- **A reload loses a waiting entry's sleep history.** The new boot plants a fresh seed (`seed_at_boot`) before the carried waiting entries are restored, and the restore skips a row that already holds a seed, so the carried `slept` bit is dropped. When the identity then matches, the kept value is admitted as `current()` without a fresh answer after the wake (LLP 1161.001 D1). The existing reload test uses a store reader whose source is already ready, which plants no seed.
-- **The refusal line mislabels a fresh answer** as "no admitted device answer".
+Six review rounds (Grok 4.7, GPT-6.1 Sol) found gaps in it, now fixed (tests in `kept_identity_tests.rs`):
 
-A fix for all three is on branch `fix/kept-answer-waits-for-identity` (`77f28f3cc`), held back because its third review round found problems of its own, which a finished fix has to avoid:
+- A kept module whose source is ready at boot is compared and waits for an unknown identity; admitted, it stands over the bake's answer while it is asked, and its show line is journaled once the commit stands and only if it still shows.
+- A store reader on its compiled answer whose first answer is still out (`origin` 0) is an unknown identity, so a module kept signed out is not admitted while the account is unknown.
+- A kept answer no fresh one has replaced is not carried as an answer, and a refusal names it as an admitted kept answer, not a fresh one.
+- A reload keeps a waiting entry's sleep history, also when the new boot plants the same entry as a seed; it carries an admitted kept answer that slept as a waiting entry; and it keeps the stored entry of a kept module that waited without reading the store.
 
-- A store-reading account ready at boot whose ask is still pending shows its compiled `""` with `placeholder` and `stale` both false, so it counts as known, and a module kept for `""` (signed out) is admitted while the real account is unknown.
-- The ready-at-boot admission sets `kept_admitted` without `stale`; if the module's request then fails, `carry()` exports the kept seed as an ordinary answer and the next runner skips the module's launch request (D5).
-- The same admission leaves `kept_seed` false, so `journal_kept_seeds` never records that the kept answer is shown.
-- Its new label calls an admitted kept answer whose ask is still in flight "holding a fresh answer"; `kept_admitted && stale` off the fallback is the standing kept answer.
-- Reload with the replacement source unready still loses the sleep bit: restoring the waiting entry has to win over planting the seed.
+Remaining, from the last Sol round (each looks present before these fixes too):
+
+- **A reload forgets an admitted kept module's entry that has neither slept nor asked.** An ungated kept module admitted before readiness, `reader` false: `carry()` exports no answer, waiting entry or store-reader record for it, so `compatible_on_reload` forgets its stored entry and the replacement shows the placeholder.
+- **A wait that starts awake does not learn a later sleep.** Open gate, unknown identity, no compiled answer: the entry waits with `slept` false. Closing and reopening the gate while the identity is still unknown never sets `waiting.slept`, so the identity's match admits the kept value as `current()` with no fresh answer since the wake (LLP 1161.001 D1).
+- **An admitted kept answer whose resource has `with` context is never current.** A seed stores only its identifying arguments, and `is_current` (`in_flight.rs`) subtracts the context count from them again, so `current(r)` stays false until a fresh answer lands.

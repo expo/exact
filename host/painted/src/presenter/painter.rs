@@ -439,7 +439,11 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         } else {
-            self.brush.repeat_apple_frame().map(|_| true)
+            let repeated = self.brush.repeat_apple_frame()?;
+            if !repeated {
+                self.repaint();
+            }
+            Ok(repeated)
         }
     }
     pub(crate) fn painter_state(&self) -> serde_json::Value {
@@ -618,11 +622,14 @@ impl<D: DataSource> Presenter<D> {
         std::fs::write(path, png).map_err(|e| format!("write {path}: {e}"))?;
         let mut s = String::from("{\"screenshot\":");
         quote(path, &mut s);
+        let rotation = self.brush.output_rotation();
+        let [w, h] = rotation.size([self.viewport.0, self.viewport.1]);
         let _ = write!(
             s,
-            ",\"w\":{},\"h\":{}}}",
-            num(r2(self.viewport.0)),
-            num(r2(self.viewport.1))
+            ",\"w\":{},\"h\":{},\"rotation\":{}}}",
+            num(r2(w)),
+            num(r2(h)),
+            rotation.degrees()
         );
         Ok(s)
     }
@@ -863,6 +870,7 @@ mod tests {
         ] {
             OPENED.with(|n| n.set(0));
             let mut config = crate::app::Config {
+                output_rotation: Default::default(),
                 #[cfg(target_os = "macos")]
                 painted_boot: None,
                 content_region: None,

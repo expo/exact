@@ -67,14 +67,12 @@ final class WatchSyncProtocolTests: XCTestCase {
         var s = WatchReceive.State()
         var activating = false
         var activated = false
-        /// The last activation failed and none has begun since.
-        var refused = false
         /// The newest context WCSession holds, by number.
         var retained: Int?
         var contexts = 0
         /// Contexts this watch can never open (another installation's key).
         var unopenable: Set<Int> = []
-        /// The context the store holds whole.
+        /// The context the store holds whole, including that snapshot's removals.
         var imported: Int?
         /// An import began and did not finish.
         var journal = false
@@ -104,7 +102,15 @@ final class WatchSyncProtocolTests: XCTestCase {
                 switch effect {
                 case .activate:
                     require(!activating, "activated twice at once")
-                    activating = true; refused = false
+                    switch chooser.pick(faults < Self.faultLimit ? 3 : 2) {
+                    case 0: activating = true
+                    case 1:
+                        activated = true
+                        return .activated
+                    default:
+                        faults += 1
+                        return .activationFailed
+                    }
                 case let .reconcile(context):
                     require(activated || !context, "the retained context was read before activation completed")
                     let fault = faults < Self.faultLimit
@@ -136,8 +142,6 @@ final class WatchSyncProtocolTests: XCTestCase {
                 case .open:
                     require(!opened, "readers opened twice")
                     require(!journal, "readers opened over an unfinished import")
-                    require(activated ? !importable : refused,
-                            "readers opened before the retained context was reconciled or known absent")
                     opened = true
                 case .fail: require(!opened, "an open store was reported unreadable")
                 case .refresh:
@@ -167,7 +171,7 @@ final class WatchSyncProtocolTests: XCTestCase {
             if activating {
                 move { w, c in w.activating = false; w.activated = true; w.feed(.activated, &c) }
                 if faults < Self.faultLimit {
-                    move { w, c in w.activating = false; w.refused = true; w.faults += 1; w.feed(.activationFailed, &c) }
+                    move { w, c in w.activating = false; w.faults += 1; w.feed(.activationFailed, &c) }
                 }
             }
             if contexts < Self.contextLimit {
@@ -200,8 +204,32 @@ final class WatchSyncProtocolTests: XCTestCase {
             require(opened == (s.readers == .open), "readers disagree with the boot")
             require(!s.sceneActive || !WatchReceive.owed(s) || s.timer, "owed work has no retry scheduled")
             require(!activated || !importable || s.held, "a delivered context was forgotten before it was imported")
-            require(!subscribed || journal || session == .store(imported), "the live session shows a store older than the last import")
+            require(journal || session == .nothing || session == .store(imported) || (!subscribed && s.refreshOwed),
+                    "readers older than the last applied snapshot, including its removals, were not invalidated")
             require(!activated || published || s.keyOwed, "a refused publication of the key was forgotten")
+        }
+
+        /// Local readers make progress even if activation never answers. Before
+        /// activation they see only what the last applied context left in the store.
+        mutating func settleOffline() {
+            guard !activated else { return }
+            var chooser = Chooser(script: Array(repeating: 0, count: 64))
+            let before = opened
+            faults = Self.faultLimit
+            for _ in 0..<8 {
+                if !launched { launched = true; feed(.launch, &chooser) }
+                else if !s.sceneActive { feed(.scene(active: true), &chooser) }
+                else if s.timer { feed(.retry, &chooser) }
+                else { break }
+            }
+            if journal {
+                require(opened == before, "offline readers opened over an unfinished import")
+            } else {
+                require(opened, "local readers waited for activation")
+                if session == .nothing { session = read }
+                if !subscribed { subscribed = true; feed(.subscribed, &chooser) }
+                require(session == .store(imported), "offline readers did not read the last applied snapshot")
+            }
         }
 
         /// With no more faults and no new context, everything owed finishes.
@@ -232,10 +260,13 @@ final class WatchSyncProtocolTests: XCTestCase {
         }
     }
 
-    func testEveryOrderOfWatchEventsKeepsReadersBehindTheRetainedContext() {
+    func testEveryOrderOfWatchEventsKeepsReadersOnTheLastAppliedSnapshot() {
         let found = Self.search(from: Watch(), limit: 2_000_000, moves: { $0.moves() }) { world in
             var world = world
             world.check()
+            var offline = world
+            if offline.violation == nil { offline.settleOffline() }
+            if let violation = offline.violation { return violation }
             if world.violation == nil { world.settle() }
             return world.violation
         }
@@ -248,19 +279,57 @@ final class WatchSyncProtocolTests: XCTestCase {
         events.flatMap { WatchReceive.step(&s, $0) }
     }
 
-    /// The scene is active before WCSession's activation completes, and the retained
-    /// context is not readable until then.
-    func testReadersWaitForActivationAndTheRetainedContext() {
+    /// The local store is readable before activation, even if WCSession never answers.
+    /// Only the retained context waits for activation.
+    func testReadersOpenOnTheLocalStoreBeforeActivation() {
         var s = WatchReceive.State()
-        XCTAssertEqual(step(&s, .launch), [.activate])
-        XCTAssertEqual(step(&s, .scene(active: true), .subscribed, .retry), [], "an active scene opened readers before activation")
+        XCTAssertEqual(step(&s, .launch), [.reconcile(context: false), .activate])
+        XCTAssertEqual(step(&s, .reconciled(.settled, ready: true)), [.open])
+        XCTAssertEqual(step(&s, .scene(active: true), .subscribed, .retry), [])
         XCTAssertEqual(step(&s, .activated), [.publishKey, .reconcile(context: true)])
-        XCTAssertEqual(step(&s, .reconciled(.applied, ready: true)), [.reloadComplications, .open])
+        XCTAssertEqual(step(&s, .reconciled(.applied, ready: true)), [.reloadComplications, .refresh])
         XCTAssertEqual(s.readers, .open)
         // The scene's event may also arrive first.
         s = WatchReceive.State()
-        XCTAssertEqual(step(&s, .scene(active: true), .launch), [.activate])
+        XCTAssertEqual(step(&s, .scene(active: true), .launch), [.activate, .reconcile(context: false)])
+        XCTAssertEqual(step(&s, .reconciled(.settled, ready: true)), [.open])
         XCTAssertEqual(step(&s, .activated), [.publishKey, .reconcile(context: true)])
+    }
+
+    func testLocalReadinessIsRetriedWhileActivationIsPending() {
+        var s = WatchReceive.State()
+        _ = step(&s, .scene(active: true), .launch)
+        XCTAssertEqual(step(&s, .reconciled(.failed, ready: false)), [.fail, .schedule(seconds: 1)])
+        XCTAssertEqual(step(&s, .retry), [.reconcile(context: false)])
+        XCTAssertEqual(step(&s, .reconciled(.settled, ready: true)), [.open])
+        XCTAssertEqual(s.link, .activating)
+        XCTAssertFalse(s.timer || WatchReceive.owed(s))
+    }
+
+    /// Activation can answer synchronously on a retry or foreground. A local
+    /// readiness reply must be consumed before activation starts a retained import.
+    func testSynchronousReactivationKeepsAFailedImportOwed() {
+        var failed = Watch()
+        failed.launched = true
+        failed.retained = 1
+        failed.contexts = 1
+        failed.s.link = .failed
+        failed.s.readers = .waiting
+        failed.s.sceneActive = true
+        failed.s.timer = true
+        for event in [WatchReceive.Event.retry, .scene(active: true)] {
+            let outcomes = Self.branches(failed) { world, chooser in world.feed(event, &chooser) }
+            let unfinished = outcomes.filter { $0.activated && $0.journal }
+            XCTAssertFalse(unfinished.isEmpty, "the search did not exercise a partial import")
+            for var world in unfinished {
+                world.check()
+                XCTAssertNil(world.violation)
+                XCTAssertTrue(world.s.held, "an unfinished import was forgotten")
+                XCTAssertTrue(world.s.timer, "the unfinished import has no retry")
+                world.settle()
+                XCTAssertNil(world.violation)
+            }
+        }
     }
 
     /// An import that fails at launch does not strand the process, and one that fails
@@ -270,9 +339,9 @@ final class WatchSyncProtocolTests: XCTestCase {
         _ = step(&s, .scene(active: true), .launch, .activated)
         XCTAssertEqual(step(&s, .reconciled(.failed, ready: false)), [.fail, .schedule(seconds: 1)])
         XCTAssertEqual(step(&s, .retry), [.reconcile(context: true)])
-        XCTAssertEqual(step(&s, .reconciled(.failed, ready: true)), [.fail, .schedule(seconds: 2)],
-                       "a store that is whole does not open while a context is owed")
-        XCTAssertEqual(step(&s, .retry, .reconciled(.applied, ready: true)), [.reconcile(context: true), .reloadComplications, .open])
+        XCTAssertEqual(step(&s, .reconciled(.failed, ready: true)), [.open, .schedule(seconds: 2)],
+                       "a failed delivery does not hide the last applied store")
+        XCTAssertEqual(step(&s, .retry, .reconciled(.applied, ready: true)), [.reconcile(context: true), .reloadComplications])
         XCTAssertFalse(s.timer)
 
         // After boot: the journal stands, so the session keeps what it read.

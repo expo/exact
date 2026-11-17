@@ -33,6 +33,14 @@ fn portable_host() -> ibex2::host::Host {
 impl Executor {
     /// Start native transport owners from the app's grants.
     pub fn start(grants: &str) -> Self {
+        Self::start_notifying(grants, || ())
+    }
+
+    /// Observe wake delivery in tests without replacing the host's signal.
+    pub(crate) fn start_notifying(
+        grants: &str,
+        notified: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
         #[cfg(unix)]
         exact_executor::listen::install(listen_module());
         let (wake, signal) = UnixStream::pair().expect("executor socketpair");
@@ -71,6 +79,7 @@ impl Executor {
                 // EAGAIN means a wake is already pending. Never block the worker
                 // (or retirement) because the presenter hasn't drained a pipe.
                 let _ = (&signal).write(&[1]);
+                notified();
             }),
             if portable {
                 std::sync::Arc::new(portable_host)

@@ -1,0 +1,4 @@
+test "loop keeps playing round, again and again"
+  clock data
+  clock until state loops == 2 within 60000
+  expect state paused == false

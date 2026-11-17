@@ -94,6 +94,7 @@ open class ExactActivity : Activity() {
         val arrived = Shares.arrived(intent, state != null)
         if (!again) {
             environment(arrived)
+            Setup.nativeEnvironment()
             try { FilePicker.start(applicationContext) }
             catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
         }

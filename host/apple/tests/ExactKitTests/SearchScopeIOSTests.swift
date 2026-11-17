@@ -66,8 +66,7 @@ final class SearchScopeIOSTests: XCTestCase {
         XCTAssertFalse(p.segments.projects(filter.id), "no segmented control of its own")
         XCTAssertTrue(route.collapseScroll === list, "the list after it is the bar's collapse scroller")
         until("it takes no room: the list starts where the tablist did") { abs(list.frame.minY - filter.frame.minY) < 0.5 }
-        // D4: each segment carries its tab's test id; the agent aims at it.
-        until("the segments carry the tabs' test ids") { search.scopeControl?.segmentViews.map(\.accessibilityIdentifier) == ["filter-all", "filter-mine", "filter-done"] }
+        // D4: the agent aims at a scope segment (its test id, read with accessibility on, below).
         XCTAssertNotNil(p.segments.drawn(try node(session, "filter-done")), "a tap aims at the scope segment")
         let tab = try node(session, "filter-done"), agent = Agent(session: session)
         let row = try XCTUnwrap((agent.layout()["nodes"] as? [[String: Any]])?.first { $0["id"] as? Int == Int(tab.id) })
@@ -119,12 +118,12 @@ final class SearchScopeIOSTests: XCTestCase {
         guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the scope bar is the iPhone's (D5)") }
         let (session, route) = try fixture()
         let search = try XCTUnwrap(route.search)
-        until("the scope segments carry their tabs' identifiers") { search.scopeControl?.segmentViews.map(\.accessibilityIdentifier) == ["filter-all", "filter-mine", "filter-done"] }
+        until("the scope segments carry their tabs' identifiers") { search.scopeControl?.accessibilitySegments.map(\.readIdentifier) == ["filter-all", "filter-mine", "filter-done"] }
         let control = try XCTUnwrap(search.scopeControl)
-        for (segment, name) in zip(control.segmentViews, ["All", "Mine", "Done"]) {
+        for (segment, name) in zip(control.accessibilitySegments, ["All", "Mine", "Done"]) {
             XCTAssertTrue(segment.isAccessibilityElement)
             XCTAssertEqual(segment.accessibilityLabel, name)
-            let testId = try XCTUnwrap(segment.accessibilityIdentifier)
+            let testId = try XCTUnwrap(segment.readIdentifier)
             let tab = try node(session, testId)
             let reply = Agent(session: session).accessibilityElementsTree(["target": testId])
             let ax = try XCTUnwrap(reply["ax"] as? [String: Any])

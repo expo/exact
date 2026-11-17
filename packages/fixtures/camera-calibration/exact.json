@@ -1,0 +1,44 @@
+{
+  "kind": "interface",
+  "name": "@fixture/camera-calibration",
+  "version": "1.0.0",
+  "uses": "@exact/media-capture@1.0.0",
+  "substitute": "implementation",
+  "shapes": {
+    "CameraCalibration": {
+      "intrinsicMatrix": "number[]",
+      "distortion": "number[]",
+      "focalLengths": "number[]",
+      "sensorSize": "number[]",
+      "pixelArraySize": "number[]",
+      "preCorrectionActiveArray": "number[]",
+      "referenceDimensions": "number[]",
+      "reason": "string",
+      "referenceFrame": "string",
+      "deviceId": "string"
+    }
+  },
+  "names": [
+    {
+      "source": "getCameraCalibration",
+      "options": {
+        "track": "handle<track>"
+      },
+      "answers": "CameraCalibration",
+      "substitute": {
+        "default": {
+          "intrinsicMatrix": [],
+          "distortion": [],
+          "focalLengths": [],
+          "sensorSize": [],
+          "pixelArraySize": [],
+          "preCorrectionActiveArray": [],
+          "referenceDimensions": [],
+          "reason": "agent",
+          "referenceFrame": "",
+          "deviceId": ""
+        }
+      }
+    }
+  ]
+}

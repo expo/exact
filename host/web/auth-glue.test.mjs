@@ -2,6 +2,9 @@
 // when the test advances a later-task scheduler.
 import { afterAll, afterEach, expect, test } from 'bun:test';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { engineTests } from '../../scripts/coverage.mjs';
+
+const engineTest = await engineTests(['chromium', 'webkit']);
 
 const saved = [
   'BroadcastChannel', 'window', 'location', 'navigator', 'localStorage',
@@ -623,7 +626,7 @@ test("a logout without a prepared id never adopts the sign-in button's window", 
 });
 
 // Real browsing-context separation, with the app's clock controlled independently of the provider.
-for (const engine of ['chromium', 'webkit']) test(`${engine}: auth waits through COOP, closure and focus return until a callback, supersession or the bound`, async () => {
+for (const engine of ['chromium', 'webkit']) engineTest[engine](`${engine}: auth waits through COOP, closure and focus return until a callback, supersession or the bound`, async () => {
   const html = body => new Response(body, { headers: { 'content-type': 'text/html' } });
   const provider = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
     const url = new URL(request.url), callback = url.searchParams.get('callback');

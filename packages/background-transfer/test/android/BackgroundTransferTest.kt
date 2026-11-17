@@ -45,9 +45,14 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** The module over [Transfers], with [Sessions] as the host: the package's calls, its session's life and its wakes. */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], manifest = Config.NONE, shadows = [BackgroundTransferTest.Session::class, BackgroundTransferTest.Transport::class])
+@Config(sdk = [35], manifest = Config.NONE, shadows = [BackgroundTransferTest.Session::class, BackgroundTransferTest.Transport::class, BackgroundTransferTest.Environment::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class BackgroundTransferTest {
+    @Implements(android.system.Os::class)
+    class Environment {
+        companion object { @JvmStatic @Implementation fun environ(): Array<String> = emptyArray() }
+    }
+
     @Implements(Native::class, isInAndroidSdk = false)
     class Session {
         companion object {
@@ -240,7 +245,7 @@ class BackgroundTransferTest {
     private fun run(key: Key, id: Int) { transfers.feed(JobStarted(key, Run(id, Job.Work), transfers.conditions)); main.idle() }
     /** The runner tells the wake's end. */
     private fun end(wake: JSONObject, outcome: String) { host(JSONObject().put("woke", wake.getString("id")).put("outcome", outcome)) }
-    private fun shown(api: Int, visible: Boolean = true) { platform.conditions = Conditions(api, visible, notifications = true) }
+    private fun shown(api: Int, visible: Boolean = true) { platform.conditions = Conditions(api, visible) }
 
     @Test fun aStartCapturesItsAuthorityAndKeepsCredentialsOffDisk() {
         open()

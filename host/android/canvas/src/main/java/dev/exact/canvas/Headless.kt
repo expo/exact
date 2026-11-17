@@ -21,14 +21,19 @@ internal object Headless {
      * launch extras a development build reads, and no launch URL or share, which the first activity made over the
      * host gives it from its own intent ([ExactActivity.onCreate], [Exact.launch]).
      */
-    fun session(context: Context, ready: (Boolean) -> Unit) {
+    fun session(context: Context, active: () -> Boolean = { true }, ready: (Boolean) -> Unit) {
         main.post {
+            if (!active()) return@post ready(false)
             if (!Exact.live) start(context.applicationContext)
             val owner = Exact.owner
             // owner=0: the host is an activity's, on the main thread.
             if (owner == null) ready(false)
             // Behind the boot, this one's or an activity's, and the data module's activation.
-            else owner.active { ok -> if (ok) Extensions.firstFrame(); ready(ok) }
+            else owner.active { ok ->
+                val available = ok && active()
+                if (available) Extensions.firstFrame()
+                ready(available)
+            }
         }
     }
 
@@ -36,6 +41,7 @@ internal object Headless {
         Exact.live = true
         Exact.unshown = true
         Setup.environment(app)
+        Setup.nativeEnvironment()
         try { FilePicker.start(app) }
         catch (e: Exception) { android.util.Log.w("exact", "file picker: startup cleanup failed", e) }
         val owner = Owner(hwbuf = true, fast = true, android.os.Process.THREAD_PRIORITY_DEFAULT) { null }.also { Exact.owner = it }
@@ -76,6 +82,9 @@ internal object Setup {
         android.system.Os.setenv("EXACT_PACKAGE", app.packageName, true)
         return meta
     }
+
+    /** Called once, after the launch extras and before the library's first host thread. */
+    fun nativeEnvironment() = Native.environment(android.system.Os.environ().joinToString("\u0000").toByteArray(Charsets.UTF_8))
 
     /** The APK's `app/` assets (the plan names `assets/…` under it, a GPU module's shaders `shaders/`), copied once
      * per install into the app's files, replacing the last install's: exact2 reads files. */

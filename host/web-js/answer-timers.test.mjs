@@ -196,7 +196,7 @@ export const answer = resume(function* () {
       const now = performance.now.bind(performance), at = now();
       performance.now = () => now() - at;
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const source = await import('/source.js');
       install(rt.data);
       rt.mount(root => {

@@ -142,6 +142,7 @@ package protocol Canvas2DCanvases: AnyObject {
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize])
     func forget(_ id: UInt32)
     func load(_ srcs: [String])
+    func pictureChanged(_ src: String)
     func waitForReplays(timeout: TimeInterval)
     /// The kept bitmap of canvas `id` encoded as `type` at `quality`, or as a
     /// PNG where ImageIO cannot write that type; nil when it cannot be encoded
@@ -268,6 +269,7 @@ final class NoCanvas2D: Canvas2DCanvases {
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize]) {}
     func forget(_ id: UInt32) {}
     func load(_ srcs: [String]) {}
+    func pictureChanged(_ src: String) {}
     func waitForReplays(timeout: TimeInterval) {}
     func capture(_ id: UInt32, lifetime: UInt64, generation: UInt32, sequence: UInt64, width: Int, height: Int, type: String, quality: Double?, snapshot: @escaping (() -> Bool) -> Bool, done: @escaping (Data?) -> Void) { done(nil) }
 }

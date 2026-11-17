@@ -270,13 +270,29 @@ class JobsTest {
 
     @Test fun conditionsAreReadFromThePlatform() {
         jobs = Jobs(app)
-        assertEquals(Lifecycle.Conditions(34, visible = false, notifications = true), jobs.conditions)
+        assertEquals(Lifecycle.Conditions(34, visible = false), jobs.conditions)
         Jobs.visible = { true }
         shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
-        assertEquals(Lifecycle.Conditions(34, visible = true, notifications = false), jobs.conditions)
+        assertEquals(Lifecycle.Conditions(34, visible = true), jobs.conditions)
         // With no module loaded nothing shows.
         Jobs.visible = null
         assertFalse(jobs.conditions.visible)
+    }
+
+    @Test @Config(sdk = [33, 34, 35])
+    fun aPersonsTransferDoesNotRequireNotificationPermission() {
+        jobs = Jobs(app)
+        Jobs.visible = { true }
+        shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
+        val conditions = jobs.conditions
+        val intent = Lifecycle.intent(person = true, conditions)
+        assertEquals(Lifecycle.Intent.Person, intent)
+        assertEquals(if (conditions.api >= 34) Job.UserJob else Job.Work, Lifecycle.entitled(intent, conditions))
+        assertEquals(conditions.api < 35, Lifecycle.promotes(intent, conditions))
+        assertEquals(Lifecycle.Intent.Ordinary, Lifecycle.intent(person = false, conditions))
+        Jobs.visible = { false }
+        assertEquals(Lifecycle.Intent.Ordinary, Lifecycle.intent(person = true, jobs.conditions))
+        assertEquals(Job.Work, Lifecycle.entitled(intent, jobs.conditions))
     }
 
     @Test fun aCancelledCustodyTokenIsAForceStopUntilItIsAcknowledged() {

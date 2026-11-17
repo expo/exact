@@ -21,6 +21,7 @@ use tiny_skia::{Pixmap, Point, Transform};
 mod backend;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 mod presentation;
+mod rotation;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "android", test))]
 pub(crate) use presentation::Presentation;
 pub mod border;
@@ -357,6 +358,7 @@ pub struct Scene<'a> {
 
 mod frame;
 pub use backend::{Backend, FrameTarget, WindowLayer};
+pub use exact_ink::Rotation;
 pub use frame::Frame;
 
 /// The painter: the walk over one backend.
@@ -379,6 +381,7 @@ pub struct Painter {
     /// How the device writes dates, where its shell told it: what a date
     /// control shows (`dates.rs`).
     pub(crate) dates: Option<dates::Dates>,
+    output: rotation::Output,
     backend: Box<dyn Backend>,
     #[cfg(test)]
     pub(crate) rank_passes: usize,
@@ -524,6 +527,7 @@ impl Painter {
             dark: false,
             dates: None,
             backend,
+            output: Default::default(),
             #[cfg(test)]
             rank_passes: 0,
             alert: None,
@@ -753,7 +757,8 @@ impl Painter {
         self.viewport = viewport;
         self.backend.page(page_color(self.dark));
         let partial = if let Some(previous) = self.damage.pixels.as_ref().filter(|_| {
-            !self.damage.next.is_empty()
+            self.output.rotation == exact_ink::Rotation::R0
+                && !self.damage.next.is_empty()
                 && self.top_surface.is_none()
                 && (!self.scrollbars.enabled || self.split.is_some())
         }) {
@@ -819,13 +824,16 @@ impl Painter {
         self.boxes_hint = walk.boxes.len();
         #[cfg(target_os = "macos")]
         drop(_trace);
-        let finished = self.backend.finish_for(target).and_then(|pixels| {
-            if target == FrameTarget::Pixels && pixels.is_none() {
-                Err("paint backend returned no pixels for capture".into())
-            } else {
-                Ok(pixels)
-            }
-        });
+        let finished = self
+            .output
+            .finish(self.backend.as_mut(), target)
+            .and_then(|pixels| {
+                if target == FrameTarget::Pixels && pixels.is_none() {
+                    Err("paint backend returned no pixels for capture".into())
+                } else {
+                    Ok(pixels)
+                }
+            });
         if self.backend.name() == "cpu" {
             self.cpu_ms = Some(started.elapsed().as_secs_f64() * 1000.);
         }
@@ -846,11 +854,12 @@ impl Painter {
         self.text.borrow_mut().finish_text_frame();
         let pixmap = finished?.map(Arc::new);
         self.damage.pixels = pixmap.clone().filter(|_| {
-            self.split.is_some()
-                || self
-                    .accepted_text
-                    .values()
-                    .any(|p| !p.fragments().is_empty())
+            self.output.rotation == exact_ink::Rotation::R0
+                && (self.split.is_some()
+                    || self
+                        .accepted_text
+                        .values()
+                        .any(|p| !p.fragments().is_empty()))
         });
         self.damage.dark = self.dark;
         self.damage.scrollbars = self.scrollbars.ink();

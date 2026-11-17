@@ -92,6 +92,21 @@ export function focusedExpectation(nodes, target) {
   return { message: `expected "${target}" focused, ${was}` };
 }
 
+/** `expect layout <target> width|height ==|<=|>= <points>`: null when the size holds, else `{ message }`. The
+ * size is the box `layout <target>` reports, `node.space.viewport` (LLP 1012: viewport points, presentation transforms
+ * folded in), at the reply's two decimals. A node the shipped app does not show fails as `expect text` has it; a host
+ * with no box for the node says why (`space.unavailable`: an iOS swipe action not revealed). */
+export async function layoutExpectation(s, nodes, st) {
+  const n = targetNode(nodes, st.target), said = `${st.dimension} of "${st.target}"`;
+  if (!n) return { message: `${said} is absent (no view carries that testId${unopenedHint(nodes)})` };
+  if (n.unshown) return { message: `testId "${st.target}" is in the tree, but ${n.unshown}`, unshown: true };
+  const space = (await s.layout(n.id)).node?.space, box = space?.viewport;
+  if (!box) return { message: `${said} is unknown: ${space?.unavailable ?? 'the host reports no box for it'}` };
+  const r2 = (v) => Math.round(v * 100) / 100, w = r2(box.w), h = r2(box.h), got = st.dimension === 'width' ? w : h;
+  if (stateHolds(got, st)) return null;
+  return { message: `${said} is ${got}, expected ${{ equal: '', 'at-least': '>= ', 'at-most': '<= ' }[st.comparison]}${st.value} (its box is ${w}×${h})` };
+}
+
 /** A press on a disabled control does nothing, and each host said so its own way (the web's silently, a native one in the words of the view
  * that took the touch), so a step that presses one fails the same on every host (LLP 1116.010 D3): the test of a refusal is `expect disabled`.
  * Context requests ignore disabled on containers and links, as HTML does; other non-press forms below bypass this guard. */
@@ -1019,6 +1034,12 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           case 'expect-focused': {
             const f = focusedExpectation((await s.tree()).nodes, st.target);
             if (f) await fail(`${at}: ${f.message}`);
+            break;
+          }
+          case 'expect-layout': {
+            const f = await layoutExpectation(s, (await s.tree()).nodes, st);
+            if (f?.unshown) failures.push(`${at}: ${f.message}`);
+            else if (f) await fail(`${at}: ${f.message}`);
             break;
           }
           case 'expect-text': {

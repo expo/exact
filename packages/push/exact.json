@@ -2,6 +2,7 @@
   "kind": "interface",
   "name": "@exact/push",
   "version": "1.0.0",
+  "start": "load",
   "grants": [
     "device.push"
   ],
@@ -21,7 +22,12 @@
       "deviceToken": "string"
     },
     "AndroidPushSubscription": {
-      "installationId": "string"
+      "installationId": "string",
+      "token": "string",
+      "appId": "string"
+    },
+    "PushEvent": {
+      "data": "string"
     },
     "PushSubscription": {
       "apple": "option<ApplePushSubscription>",
@@ -33,6 +39,7 @@
     }
   },
   "names": [
+    { "event": "push", "on": "root", "raised": "wake", "args": ["PushEvent"], "hold": 16, "budget": 10000 },
     {
       "send": "subscribePush",
       "request": true,

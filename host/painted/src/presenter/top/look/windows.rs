@@ -2,6 +2,10 @@
 //! https://github.com/microsoft/microsoft-ui-xaml/blob/winui3/main/controls/dev/CommonStyles/ContentDialog_themeresources.xaml
 use super::*;
 
+#[cfg(test)]
+#[path = "typography_tests.rs"]
+mod typography_tests;
+
 pub(super) struct Content {
     texts: Vec<Item>,
     viewport: Rect4,
@@ -139,6 +143,7 @@ impl Content {
 pub(super) fn alert(
     engine: &mut TextEngine,
     (title, message): (Option<&str>, Option<&str>),
+    font_family: Option<u16>,
     rows: &[Row],
     pop: ViewId,
     inputs: &Inputs,
@@ -149,7 +154,11 @@ pub(super) fn alert(
     let room = (inputs.window.0 - 48.).max(1.);
     let desired = [(title, heading), (message, body)]
         .into_iter()
-        .filter_map(|(text, style)| text.map(|t| paragraph(engine, t, style, scale, None).width))
+        .filter_map(|(text, style)| {
+            text.map(|t| {
+                family_paragraph(engine, t, style, scale, None, Direction::Ltr, font_family).width
+            })
+        })
         .fold(272., f32::max)
         + 48.;
     let width = desired.min(548.).min(room);
@@ -175,7 +184,15 @@ pub(super) fn alert(
     let mut y = 24.;
     for (text, style, gap) in [(title, heading, 12.), (message, body, 0.)] {
         if let Some(text) = text {
-            let p = paragraph(engine, text, style, scale, Some(inner));
+            let p = family_paragraph(
+                engine,
+                text,
+                style,
+                scale,
+                Some(inner),
+                Direction::Ltr,
+                font_family,
+            );
             y += p.height + gap;
             texts.push(Item::Text(p.clone(), (24., y - p.height - gap), ink, pop));
         }
@@ -186,7 +203,15 @@ pub(super) fn alert(
     let labels: Vec<_> = rows
         .iter()
         .map(|row| {
-            let p = paragraph(engine, &row.title, body, scale, None);
+            let p = family_paragraph(
+                engine,
+                &row.title,
+                body,
+                scale,
+                None,
+                Direction::Ltr,
+                font_family,
+            );
             p.ellipsized((button_width - 24.).max(1.)).unwrap_or(p)
         })
         .collect();
@@ -306,6 +331,7 @@ mod tests {
 
     fn plan(message: String, count: usize) -> Plan {
         Plan::Alert {
+            font_family: None,
             title: Some("Delete message?".into()),
             title_direction: Direction::Ltr,
             message_directions: message.split('\n').map(|_| Direction::Ltr).collect(),

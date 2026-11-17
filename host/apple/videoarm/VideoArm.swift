@@ -13,6 +13,7 @@ private typealias PlatformView = UIView
 private typealias PlatformImageView = UIImageView
 #endif
 public typealias VideoCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+public typealias VideoConfiguring = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
 
 private final class VideoContainer: PlatformView {
     weak var arm: VideoArm?
@@ -124,7 +125,10 @@ private enum SharedAssets {
 }
 
 private final class VideoArm: NSObject, NowPlayingPlayer {
-    let player = AVPlayer()
+    /// A queue player: with loop it runs on into a copy of the item queued
+    /// behind it (`queueLoop`).
+    let player = AVQueuePlayer()
+    var configuringHook: VideoConfiguring?
     let container = VideoContainer(frame: .zero)
     let poster = PlatformImageView(frame: .zero)
     #if os(macOS)
@@ -153,6 +157,9 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var lastError: String?
     var invalidated = false
     var generation = 0
+    /// The item followed (`follow`). When the player's current item is
+    /// another, the queue has moved on to a loop's copy.
+    var watched: AVPlayerItem?
     var posterGeneration = 0
     /// HTML's show-poster flag, cleared: playback or a seek has begun since
     /// the source loaded. The poster still shows until the presentation has
@@ -161,7 +168,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var displayObservations: [NSKeyValueObservation] = []
     var pendingSeek: Double?
     /// A source waiting for the box to have a size (`loadSource`).
-    var sizedLoad: URL?
+    var sizedLoad: (asset: AVURLAsset, url: URL)?
     /// The new item's bound until its first variant is chosen, and the read
     /// of the playlist's variants it comes from (`makeItem`).
     var startBound: CGSize?
@@ -228,7 +235,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             },
             player.observe(\.rate, options: [.new]) { [weak self] _, _ in self?.rateChanged() },
             player.observe(\.volume, options: [.new]) { [weak self] _, _ in self?.volumeChanged() },
-            player.observe(\.isMuted, options: [.new]) { [weak self] _, _ in self?.volumeChanged() }
+            player.observe(\.isMuted, options: [.new]) { [weak self] _, _ in self?.volumeChanged() },
+            // A loop comes round when the queue moves on to the copy.
+            player.observe(\.currentItem, options: [.new]) { [weak self] _, _ in
+                DispatchQueue.main.async { [weak self] in self?.advanced() }
+            }
         ]
         NowPlaying.shared.joined(self)
     }
@@ -346,7 +357,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         guard !invalidated else { return }
         send(["remote": "play"])
         wantsPlay = true
-        if player.currentItem == nil, lastError == nil { loadSource() }
+        loadIfNeeded()
         if lastError == nil { play() }
     }
     func sessionPause() { guard !invalidated else { return }; wantsPlay = false; player.pause() }
@@ -473,8 +484,10 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         set(\.allowsExternalPlayback, !bool("disableremoteplayback") && !(props["controlslist"] ?? "").split(separator: " ").contains("noremoteplayback"))
         set(\.automaticallyWaitsToMinimizeStalling, bool("automaticallyWaitsToMinimizeStalling", true))
         set(\.preventsDisplaySleepDuringVideoPlayback, bool("preventsDisplaySleepDuringVideoPlayback", true))
-        // HTML's loop seeks to the start at the end without pausing (no pause, play or ended).
-        set(\.actionAtItemEnd, bool("loop") ? .none : .pause)
+        // HTML's loop starts over at the end without pausing (no pause, play
+        // or ended). The queue advances into the item's copy; a seek to the
+        // start instead leaves an audible gap.
+        set(\.actionAtItemEnd, bool("loop") ? .advance : .pause)
         if changed("poster") { loadPoster() }
         if changed("dynamicRangeLimit") { applyDynamicRange() }
         if changed("src") {
@@ -484,7 +497,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if changed("paused"), let value = props["paused"] {
             wantsPlay = value == "false"
             if wantsPlay {
-                if player.currentItem == nil, lastError == nil { loadSource() }
+                loadIfNeeded()
                 if lastError == nil { play() }
             } else { player.pause() }
         }
@@ -505,6 +518,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             if request.isFinite, request >= 0 { seek(request) } else { fail("invalid-value", "Invalid fastSeek") }
         }
         configureItem()
+        queueLoop()
         if let error = props["sourceError"], error != old["sourceError"] { fail("src-not-supported", error) }
         layout()
         NowPlaying.shared.updated(self)
@@ -526,21 +540,26 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         }
         emit()
     }
-    func set<Value: Equatable>(_ key: ReferenceWritableKeyPath<AVPlayer, Value>, _ value: Value) {
+    func set<Value: Equatable>(_ key: ReferenceWritableKeyPath<AVQueuePlayer, Value>, _ value: Value) {
         if player[keyPath: key] != value { player[keyPath: key] = value }
     }
+    /// The props' item settings, on `next` before the player has it, else on
+    /// every item in the queue: a loop's waiting copy plays with them too.
+    /// Only a changed value is set, as setting one on an item that is
+    /// playing interrupts its sound.
     func configureItem(_ next: AVPlayerItem? = nil) {
-        guard let item = next ?? player.currentItem else { return }
         let peak = number("preferredPeakBitRate", 0), buffer = number("preferredForwardBufferDuration", 0)
         let pitch: AVAudioTimePitchAlgorithm = bool("preservesPitch", true) ? .spectral : .varispeed
-        if item.preferredPeakBitRate != peak { item.preferredPeakBitRate = peak }
-        if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
         // @ref LLP 1042.000 D1, D2 — unset, AVFoundation's own cap by the
         // presenter's size applies; the author's bound is under it.
         // The start bound is a variant within the author's bound (`boundedItem`).
         let resolution = startBound ?? props["preferredMaximumResolution"].flatMap(Self.resolution) ?? .zero
-        if item.preferredMaximumResolution != resolution { item.preferredMaximumResolution = resolution }
-        if item.audioTimePitchAlgorithm != pitch { item.audioTimePitchAlgorithm = pitch }
+        for item in next.map({ [$0] }) ?? player.items() {
+            if item.preferredPeakBitRate != peak { item.preferredPeakBitRate = peak }
+            if item.preferredForwardBufferDuration != buffer { item.preferredForwardBufferDuration = buffer }
+            if item.preferredMaximumResolution != resolution { item.preferredMaximumResolution = resolution }
+            if item.audioTimePitchAlgorithm != pitch { item.audioTimePitchAlgorithm = pitch }
+        }
     }
     /// HLS's `<width>x<height>` (RFC 8216 §4.3.4.2), as the compiler checks a literal.
     static func resolution(_ text: String) -> CGSize? {
@@ -548,6 +567,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) }),
               let width = UInt32(parts[0]), let height = UInt32(parts[1]), width > 0, height > 0 else { return nil }
         return CGSize(width: Int(width), height: Int(height))
+    }
+    func loadIfNeeded() {
+        // A first-variant read or the first layout already owns the next
+        // item. A simultaneous play request must keep its configured asset.
+        if player.currentItem == nil, sizedLoad == nil, variantRead == nil, lastError == nil { loadSource() }
     }
     func loadSource() {
         generation += 1
@@ -560,37 +584,46 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         observations.removeAll()
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications.removeAll()
-        player.replaceCurrentItem(with: nil)
+        player.removeAllItems()
+        watched = nil
         naturalSize = .zero
         itemReady = false; seekTarget = nil; atEnd = false
         posterDismissed = false; showPoster()
         pendingSeek = props["currentTime"].flatMap(Double.init)
         guard let source = props["src"], !source.isEmpty, let url = URL(string: source) else { return }
+        makeItem(url)
+    }
+    /// The source's item, given to the player. The hatch runs before any
+    /// asset properties are loaded, which can choose an HLS rendition.
+    func makeItem(_ url: URL) {
+        let asset: AVURLAsset
+        if props["hatch"] != nil, let configuringHook {
+            let configuration: NSMutableDictionary = ["url": url]
+            configuringHook(context, Unmanaged.passUnretained(configuration).toOpaque())
+            asset = configuration["asset"] as? AVURLAsset ?? SharedAssets.asset(url)
+        } else {
+            asset = SharedAssets.asset(url)
+        }
         // AVFoundation leaves local HLS items unknown without reporting an error;
         // isPlayable also returns true for them on iOS.
-        if url.isFileURL, ["m3u8", "m3u"].contains(url.pathExtension.lowercased()) {
+        if asset.url.isFileURL, ["m3u8", "m3u"].contains(asset.url.pathExtension.lowercased()) {
             fail("src-not-supported", "Local HLS playlists are not supported; use MP4 or an HTTP(S) playlist URL")
             return
         }
-        makeItem(url)
-    }
-    /// The source's item, given to the player.
-    func makeItem(_ url: URL) {
-        let asset = SharedAssets.asset(url)
-        guard bool("startsOnFirstEligibleVariant"), props["semanticTag"] != "audio" else { return giveItem(asset, url) }
+        guard bool("startsOnFirstEligibleVariant"), props["semanticTag"] != "audio" else { return giveItem(asset) }
         guard !container.bounds.isEmpty else {
             // The box has no size until the node is laid out. Past that turn
             // the start is AVFoundation's (a video with no box loads, as
             // HTML's does).
-            sizedLoad = url
+            sizedLoad = (asset, url)
             let token = generation
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.invalidated, self.generation == token, self.sizedLoad == url else { return }
-                self.sizedLoad = nil; self.giveItem(asset, url)
+                guard let self, !self.invalidated, self.generation == token, self.sizedLoad?.asset === asset else { return }
+                self.sizedLoad = nil; self.giveItem(asset)
             }
             return
         }
-        boundedItem(asset, url)
+        boundedItem(asset)
     }
     /// @ref LLP 1042.000 D3 — AVFoundation's first eligible variant does not
     /// weigh the view (measured, §2), so the listed
@@ -598,7 +631,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     /// variants on the asset the player then plays, until the first choice.
     /// No bound, no flag: a playlist that cannot be read or lists no sizes,
     /// or `object-fit: none`, starts where AVFoundation starts it.
-    func boundedItem(_ asset: AVURLAsset, _ url: URL) {
+    func boundedItem(_ asset: AVURLAsset) {
         let token = generation
         variantRead = Task { @MainActor [weak self] in
             let variants = (try? await asset.load(.variants)) ?? []
@@ -608,7 +641,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             let sizes = variants.compactMap { $0.videoAttributes?.presentationSize }
                 .filter { size in author.map { size.width <= $0.width && size.height <= $0.height } ?? true }
             let bound = self.neededVariant(sizes)
-            self.giveItem(asset, url, bound: bound, first: bound != nil)
+            self.giveItem(asset, bound: bound, first: bound != nil)
         }
     }
     /// The smallest of `sizes` that is at least the picture `object-fit`
@@ -635,7 +668,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         }
         return usable.first(where: fills) ?? usable.last
     }
-    func giveItem(_ asset: AVURLAsset, _ url: URL, bound: CGSize? = nil, first: Bool = false) {
+    func giveItem(_ asset: AVURLAsset, bound: CGSize? = nil, first: Bool = false) {
         // preload is a hint: AVKit may prepare an item so its native Play control works.
         let item = AVPlayerItem(asset: asset)
         // Read only before the item's first variant choice.
@@ -643,30 +676,40 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         startBound = bound
         configureItem(item)
         player.replaceCurrentItem(with: item)
+        follow(item)
+        if wantsPlay { play() }
+    }
+    /// Follows the item the player now plays, the source's own or a loop's
+    /// copy: its status, size, end and clock. What the source reports once
+    /// (its metadata, `canplay`, HDR) comes from its first item's readiness.
+    func follow(_ item: AVPlayerItem) {
         let token = generation
+        watched = item
         observations = [item.observe(\.status, options: [.initial, .new]) { [weak self, weak item] _, _ in
             DispatchQueue.main.async {
-                guard let self, let item, !self.invalidated, self.generation == token else { return }
+                guard let self, let item, !self.invalidated, self.generation == token, self.watched === item else { return }
                 if item.status == .failed {
                     self.clearPlaybackClock()
-                    SharedAssets.forget(url)
+                    if let url = (item.asset as? AVURLAsset)?.url { SharedAssets.forget(url) }
                     self.fail(Self.code(item.error, ready: self.itemReady), item.error?.localizedDescription ?? "Media could not be loaded")
                 }
-                if item.status == .readyToPlay {
+                guard item.status == .readyToPlay else { return }
+                self.naturalSize = item.presentationSize
+                if !self.itemReady {
+                    self.itemReady = true
                     // The first variant is chosen: after it, AVFoundation's own.
                     if self.startBound != nil { self.startBound = nil; self.configureItem() }
-                    if !self.itemReady { self.loadHDR(item, generation: token) }
-                    self.itemReady = true
-                    self.naturalSize = item.presentationSize
+                    self.loadHDR(item, generation: token)
                     self.emit(self.listeners.contains("loadedmetadata") ? "loadedmetadata" : "snapshot")
                     if item.duration.seconds.isFinite { self.emit("durationchange", payload: String(item.duration.seconds)) }
                     self.emit("canplay")
-                    if let time = self.pendingSeek { self.pendingSeek = nil; self.seek(time) }
-                    if self.wantsPlay { self.play() }
-                    self.observePlaybackClock()
-                    self.playbackClockChanged()
-                    self.layout()
                 }
+                if let time = self.pendingSeek { self.pendingSeek = nil; self.seek(time) }
+                if self.wantsPlay { self.play() }
+                self.observePlaybackClock()
+                self.playbackClockChanged()
+                self.queueLoop()
+                self.layout()
             }
         }, item.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async { [weak self] in
@@ -674,18 +717,47 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
                 self.naturalSize = item.presentationSize; self.layout(); self.emit()
             }
         }]
-        notifications.append(NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
-            guard let self, !self.invalidated, self.generation == token else { return }
-            // The player keeps its rate at the end (`actionAtItemEnd` is none);
-            // the seek reports seeking, seeked and timeupdate, as Chrome does.
+        notifications.forEach(NotificationCenter.default.removeObserver)
+        notifications = [NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self, weak item] _ in
+            guard let self, let item, !self.invalidated, self.generation == token else { return }
+            // With loop the queue has moved on to the copy (`advanced`).
+            guard !self.bool("loop"), self.player.currentItem === item else { return }
             // HTML's end without loop: `pause`, then `ended` (AVPlayer's
             // own pause arrives after this notification; it is the same one).
-            guard !self.bool("loop") else { self.seek(0); return }
             self.wantsPlay = false; self.atEnd = true
             if !self.lastPaused { self.lastPaused = true; self.emit("pause") }
             self.emit("ended")
-        })
-        if wantsPlay { play() }
+        }]
+        observePlaybackClock()
+    }
+    /// The player's current item changed. When the queue has moved on to a
+    /// loop's copy, which already plays from the start, this follows it and
+    /// reports the jump to the start as a seek, as Chrome reports a loop. It
+    /// follows the copy even when `loop` was switched off since, so the
+    /// copy's end is reported. A queue that ran dry at the end (no copy was
+    /// ready) starts the source over.
+    func advanced() {
+        guard !invalidated, watched != nil else { return }
+        guard let current = player.currentItem else {
+            if !(props["src"] ?? "").isEmpty { loadSource() }
+            return
+        }
+        guard current !== watched else { return }
+        follow(current)
+        queueLoop()
+        emit("seeking"); emit("seeked"); emit("timeupdate", payload: String(seconds))
+    }
+    /// With loop, keeps one copy of the current item queued behind it, so
+    /// the queue (`actionAtItemEnd` `.advance`) runs on into it with no gap.
+    /// The copy is made once the item is ready, when its start bound is
+    /// gone. Without loop, removes any copy.
+    func queueLoop() {
+        let waiting = player.items().dropFirst()
+        guard let current = player.currentItem, bool("loop") else { waiting.forEach(player.remove); return }
+        guard waiting.isEmpty, current.status == .readyToPlay, startBound == nil else { return }
+        let copy = AVPlayerItem(asset: current.asset)
+        configureItem(copy)
+        player.insert(copy, after: current)
     }
     func play() {
         player.defaultRate = rate
@@ -989,7 +1061,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             frame = CGRect(x: (frame.width - naturalSize.width * scale) / 2, y: (frame.height - naturalSize.height * scale) / 2, width: naturalSize.width * scale, height: naturalSize.height * scale)
         }
         if presentation.superview === container { presentation.frame = frame }
-        if let url = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(SharedAssets.asset(url), url) }
+        if let pending = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(pending.asset) }
         #if os(iOS)
         audioControls?.refresh()
         #endif
@@ -1006,7 +1078,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if let tick { player.removeTimeObserver(tick) }; tick = nil
         observations.removeAll(); playerObservations.removeAll(); displayObservations.removeAll()
         notifications.forEach(NotificationCenter.default.removeObserver); notifications.removeAll()
-        player.replaceCurrentItem(with: nil)
+        player.removeAllItems(); watched = nil
         #if os(iOS) || os(tvOS)
         fullscreen?.left = nil; fullscreen?.dismiss(animated: false); fullscreen = nil
         detach()
@@ -1188,9 +1260,14 @@ extension VideoArm {
 #endif
 
 @_cdecl("exact_video_create")
-public func videoCreate(_ context: UnsafeMutableRawPointer?, _ callback: VideoCallback?) -> UnsafeMutableRawPointer? {
+public func videoCreate(_ context: UnsafeMutableRawPointer?, _ callback: VideoCallback?, _ configuring: VideoConfiguring?,
+                        _ player: UnsafeMutablePointer<UnsafeMutableRawPointer?>?) -> UnsafeMutableRawPointer? {
     guard let callback else { return nil }
-    return Unmanaged.passRetained(VideoArm(context: context, callback: callback)).toOpaque()
+    let object = VideoArm(context: context, callback: callback)
+    object.configuringHook = configuring
+    // Borrowed for the arm's lifetime, as exact_video_view's view is.
+    player?.pointee = Unmanaged.passUnretained(object.player).toOpaque()
+    return Unmanaged.passRetained(object).toOpaque()
 }
 private func arm(_ raw: UnsafeMutableRawPointer?) -> VideoArm? { raw.map { Unmanaged<VideoArm>.fromOpaque($0).takeUnretainedValue() } }
 @_cdecl("exact_video_view")

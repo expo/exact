@@ -32,12 +32,16 @@ const TRAY: &str = r#"component App
 "#;
 
 fn boot(source: &str) -> Presenter<()> {
+    boot_at(source, PathBuf::new())
+}
+
+fn boot_at(source: &str, assets: PathBuf) -> Presenter<()> {
     let (mut p, error) = Presenter::boot_with(
         &crate::test_plan(source),
         (),
         (300., 400.),
         1.,
-        PathBuf::new(),
+        assets,
         PainterChoice::Cpu,
     )
     .unwrap();
@@ -218,6 +222,73 @@ fn a_status_buttons_press_runs_without_a_menu() {
 }
 
 #[test]
+fn a_status_menu_exposes_unchecked_items_and_keyboard_focus() {
+    use crate::presenter::access::flag;
+    let mut p = boot(TRAY);
+    let tray = named(&p, "tray");
+    assert!(p.open_status_menu(tray, (800., 600.), true, true, 0.));
+    p.reader_access(1., true);
+    let toggle = p
+        .access_told()
+        .iter()
+        .find(|n| n.name == "Start at Login")
+        .unwrap();
+    assert_ne!(toggle.flags & flag::CHECKABLE, 0);
+    assert_eq!(toggle.flags & flag::CHECKED, 0);
+    let toggle_id = toggle.id;
+    let first = p
+        .access_told()
+        .iter()
+        .find(|n| n.name == "Open Snap")
+        .unwrap()
+        .id;
+    assert_eq!(p.access_focus(), Some(first));
+    p.status_menu_key("s", 0.5);
+    p.reader_access(1., true);
+    assert_eq!(p.access_focus(), Some(toggle_id));
+    p.status_menu_key("ArrowUp", 0.75);
+    p.status_menu_key("ArrowDown", 1.);
+    p.reader_access(1., true);
+    let toggle = p
+        .access_told()
+        .iter()
+        .find(|n| n.name == "Start at Login")
+        .unwrap()
+        .id;
+    assert_eq!(p.access_focus(), Some(toggle));
+    assert!(p.access_act(toggle, crate::presenter::access::act::CLICK, 0., 2.));
+    assert!(p.status_menu().is_none());
+    assert_eq!(slot(&p, "on"), exact_plan::Value::Bool(true));
+}
+
+#[test]
+fn a_status_img_uses_its_decoded_pixels_at_the_requested_icon_size() {
+    let mut p = boot(&TRAY.replace("symbol:star", "status.png"));
+    let image = p.status_items()[0].image.unwrap();
+    let mut pixels = Pixmap::new(8, 4).unwrap();
+    pixels.fill(tiny_skia::Color::from_rgba8(220, 40, 20, 255));
+    let gate = exact_raster::Gate::new();
+    let charge = gate
+        .session()
+        .reserve_allocation(8 * 4 * 4)
+        .unwrap()
+        .charge();
+    p.images.bitmaps.insert(
+        image,
+        std::sync::Arc::new(crate::image::Bitmap::new(pixels, (8, 4), charge)),
+    );
+    for (side, scale) in [(16, 1.), (20, 1.25)] {
+        let icon = p
+            .status_icon(image, side, scale, false)
+            .expect("img supplies the icon")
+            .unwrap();
+        assert_eq!((icon.width(), icon.height()), (side, side));
+        assert!(icon.pixel(side / 2, side / 2).unwrap().red() > 200);
+        assert_eq!(icon.pixel(0, 0).unwrap().alpha(), 0, "aspect ratio is kept");
+    }
+}
+
+#[test]
 fn a_status_items_symbol_is_drawn_in_the_taskbars_text_colour() {
     let svg = r#"component App
   view
@@ -246,4 +317,76 @@ fn a_status_items_symbol_is_drawn_in_the_taskbars_text_colour() {
             );
         }
     }
+}
+
+#[test]
+fn a_placed_status_img_loads_without_a_box_and_reloads_at_the_new_dpi() {
+    let assets = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join(format!("exact-status-img-{}", std::process::id()));
+    std::fs::create_dir_all(&assets).unwrap();
+    let mut png = Pixmap::new(64, 32).unwrap();
+    png.fill(tiny_skia::Color::from_rgba8(20, 220, 40, 255));
+    png.save_png(assets.join("status.png")).unwrap();
+    let mut p = boot_at(&TRAY.replace("symbol:star", "status.png"), assets.clone());
+    p.place_status_items();
+    p.frame();
+    let image = p.status_items()[0].image.unwrap();
+    for (side, scale) in [(20, 1.25), (16, 1.)] {
+        p.sync_status_images(&[(image, side)]);
+        p.wait_images(std::time::Duration::from_secs(10));
+        let icon = p.status_icon(image, side, scale, false).unwrap().unwrap();
+        assert_eq!((icon.width(), icon.height()), (side, side));
+        assert!(icon.pixel(side / 2, side / 2).unwrap().green() > 200);
+    }
+    std::fs::remove_dir_all(assets).unwrap();
+}
+
+#[test]
+fn status_submenus_expose_expansion_and_return_to_their_parent() {
+    use crate::presenter::access::{act, flag};
+    let source = TRAY.replace("        hr", "        button testId=\"more\" popovertarget=\"more-menu\"\n          text \"More\"\n        hr")
+        .replace("      text testId=\"after\" \"after\"", "      column id=\"more-menu\" popover=\"auto\" role=\"menu\" aria-label=\"More\"\n        button press=ping\n          text \"Ping\"");
+    let mut p = boot(&source);
+    let tray = named(&p, "tray");
+    for (forward, back) in [("ArrowRight", "ArrowLeft"), ("Enter", "Escape")] {
+        assert!(p.open_status_menu(tray, (800., 600.), true, true, 0.));
+        p.reader_access(1., true);
+        let more = p.access_told().iter().find(|n| n.name == "More").unwrap();
+        assert_ne!(more.flags & flag::EXPANDABLE, 0);
+        let more_id = more.id;
+        assert!(p.access_focus_node(more_id, 0.));
+        p.status_menu_key(forward, 1.);
+        assert_eq!(titles(&p), ["Ping"]);
+        p.reader_access(1., true);
+        let expanded = p.access_told().iter().find(|n| n.id == more_id);
+        assert!(expanded.is_some(), "the expanded item's provider survives");
+        assert_ne!(expanded.unwrap().flags & flag::EXPANDED, 0);
+        let ping = p.access_told().iter().find(|n| n.name == "Ping").unwrap();
+        assert_eq!(ping.parent, more_id);
+        assert_eq!(
+            p.access_focus(),
+            Some(ping.id),
+            "{forward} focuses the submenu"
+        );
+        p.status_menu_key(back, 2.);
+        p.reader_access(1., true);
+        assert_eq!(p.access_focus(), Some(more_id));
+        assert!(p.access_told().iter().any(|n| n.name == "Exit"));
+        let exit = p
+            .access_told()
+            .iter()
+            .find(|n| n.name == "Exit")
+            .unwrap()
+            .id;
+        assert!(p.access_act(exit, act::CLICK, 0., 3.));
+        assert!(p.take_status_exit());
+    }
+    assert!(p.open_status_menu(tray, (800., 600.), true, true, 4.));
+    p.status_menu_key("m", 5.);
+    p.status_menu_key("Enter", 6.);
+    p.status_menu_key("Enter", 7.);
+    assert!(p.status_menu().is_none());
+    assert_eq!(slot(&p, "log"), exact_plan::Value::from("ping "));
 }

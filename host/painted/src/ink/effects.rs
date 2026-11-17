@@ -59,6 +59,13 @@ fn sampling_reach(filter: &exact_kernel::style::BackdropFilter, scale: f32) -> f
 }
 
 impl Ink {
+    pub(super) fn end_frame(&mut self) -> Result<TextureId> {
+        let target = self.flush()?;
+        self.images.end(&mut self.device)?;
+        self.pool.end(&mut self.device)?;
+        Ok(target)
+    }
+
     pub(super) fn flush(&mut self) -> Result<TextureId> {
         if let Some(e) = &self.error {
             return Err(Error::Device(e.clone()));

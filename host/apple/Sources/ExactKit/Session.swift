@@ -350,6 +350,7 @@ public final class ExactSession {
     var pendingActivation: (generation: Int, token: UInt64)? // retried on the session's wake
     /// The generation whose data source `prepareData` or `evaluateFromDraw` activated on the owner, and whether it still runs there.
     var preparedGeneration: Int?, dataPreparing = false
+    var canvasesHeld = false // a canvas start held for what follows the draw's evaluation (`loadCanvases`)
     var nativesOpened: Int? // the generation whose native views may attach (LLP 1024 D3)
     private(set) var updateToken: UInt64 = 0; private var receipt: DrawReceipt?
     package let core: SessionCore
@@ -441,14 +442,21 @@ public final class ExactSession {
     /// The ids the batch being applied asks `scrollIntoView` of (LLP 1070.000 §15: they win over the end-follow).
     var pendingElementScrolls: [String] { pendingCommands.compactMap { $0.0 == "scrollIntoView" ? $0.1.first as? String : nil } }
     private(set) var applying = false
+    /// The chain of covers corrections the work running belongs to (`CoversChain`): work asked in one
+    /// runs in it, at once or queued; a batch the owner publishes lands in none
+    private(set) var coversCause: AnyObject?
     // @ref LLP 1072 §3 — a collection slice built on the owner thread. While
     // one is in flight, work that would wait behind it on the owner (a
     // frame's tick, a timer, a reply, an intrinsic size, a report) waits on
     // main instead, and runs after the slice lands, in order.
     private(set) var fillInFlight = false
-    private typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?)
-    private var afterFill: [IdleWork] = []
-    private var viewsEpoch = 0
+    typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
+    /// The work waiting, in the order asked (work asked while a slice lands, while work waits or while it runs joins the
+    /// end, so nothing runs ahead of work asked before it), and whether a drain of it runs (`runWaitingWork`)
+    var afterFill: [IdleWork] = [], draining = false
+    /// A slice's batch is applying, ahead of the work that waited for it
+    var fillLanding = false
+    private(set) var viewsEpoch = 0
     /// Native work that still prevents this session from settling
     var hostOutstanding: [String] {
         var out: [String] = []
@@ -465,7 +473,7 @@ public final class ExactSession {
     enum Published { case fill(UInt32), tick, advance, canvas, notice, reply }
     /// Batches the owner committed without main waiting, in its order: a
     /// slice's (with its list), a frame's tick's and a canvas draw's.
-    private let published = PublishedBatches()
+    let published = PublishedBatches()
     /// A frame's tick is on the owner (LLP 1072 §7.1): the next one waits.
     var tickInFlight = false
     /// A timer advance is on the owner (LLP 1072.000): the next one waits.
@@ -627,16 +635,6 @@ public final class ExactSession {
     /// The app's clock: what events, timers, motion, and canvases see.
     public func now() -> Double { clock ?? ExactEnv.wall() }
 
-    /// View reports expire after reset; executor work survives a plan commit.
-    package func whenIdle(bound: Bool = false, _ work: @escaping () -> Void, cancelled: (() -> Void)? = nil) {
-        idle((bound ? viewsEpoch : nil, work, cancelled))
-    }
-    private func idle(_ item: IdleWork) {
-        if state == .destroyed || (item.views != nil && item.views != viewsEpoch) { item.cancelled?() }
-        else if fillInFlight { afterFill.append(item) }
-        else { item.work() }
-    }
-
     /// Send a build-only slice to the owner; its batch comes back published.
     private func sendFill(_ view: UInt32, _ bytes: Data) {
         fillInFlight = true
@@ -661,28 +659,14 @@ public final class ExactSession {
         }
     }
 
-    /// On the owner: queue a batch for main, in the owner's order.
-    func publish(_ kind: Published, _ completion: RuntimeCompletion) {
-        guard published.append((kind, completion)) else { return }
-        DispatchQueue.main.async { [weak self] in self?.landPublished() }
-    }
-    private func landPublished() {
-        if landing { published.yieldDrain(); return }
-        landFill()
-        if published.finishDrain() { DispatchQueue.main.async { [weak self] in self?.landPublished() } }
-    }
-
-    /// A published batch waits to land: any, or one that `which` picks.
-    private func hasPublished(_ which: (Batch) -> Bool = { _ in true }) -> Bool {
-        published.contains(which)
-    }
-
     /// Apply the slice the owner published, then what it owes and what
     /// waited for it. Before any other batch applies, so batches apply in
     /// the owner's order (T4).
     func landFill() {
         guard !landing else { return }
         landing = true
+        // A slice, tick or reply the owner published is no part of the covers correction that lands it
+        let cause = coversCause; coversCause = nil; defer { coversCause = cause }
         // A reply the slices released (`afterFill`) may have left a deadline
         // due: it advances once they have landed, unless a batch waits on them.
         // Sizes measured as they applied are reported as it ends, whether its last batch applied or was skipped (`reportMeasured`).
@@ -693,7 +677,7 @@ public final class ExactSession {
             let began = CACurrentMediaTime()
             var submitted = 0.0
             switch next.kind {
-            case .fill: fillInFlight = false
+            case .fill: fillInFlight = false; fillLanding = true
             case .tick: tickInFlight = false
             case .advance: advanceInFlight = false
             case .canvas: canvasInFlight = false
@@ -729,15 +713,12 @@ public final class ExactSession {
         }
     }
 
-    /// A stale slice can land inside a commit, before its replacement tree.
+    /// A stale slice can land inside a commit, before its replacement tree, so the work that waited runs after it.
     private func landedFill(_ view: UInt32, stale: Bool = false) {
-        let waiting = afterFill; afterFill.removeAll()
+        fillLanding = false
         if state != .destroyed { presenter.collections.landed(view, at: ProcessInfo.processInfo.systemUptime) }
-        guard stale else { for item in waiting { idle(item) }; return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { waiting.forEach { $0.cancelled?() }; return }
-            for item in waiting { idle(item) }
-        }
+        guard stale else { return runWaitingWork() }
+        DispatchQueue.main.async { [weak self] in self?.runWaitingWork() }
     }
 
     /// Land every session's slice in flight.
@@ -845,7 +826,11 @@ public final class ExactSession {
         presenter.onScrollend = { [unowned self] id in applyUnlessEmpty(runtime.scrollend(id, now: now())) }
         presenter.onScrollDrag = { [unowned self] id, end in applyUnlessEmpty(end.map { runtime.scrolldragend(id, velocity: $0.velocity, target: $0.target, now: now()) } ?? runtime.scrolldragstart(id, now: now())) }
         presenter.onScrolled = { [unowned self] id, left, top in
+            #if os(iOS) || os(tvOS)
+            runtime.scrolled(id, left: left, top: top, observing: presenter.intersectHandlerCount > 0)
+            #else
             runtime.scrolled(id, left: left, top: top)
+            #endif
             timelineScrolled(id, left: left, top: top)
         }
         #if canImport(AppKit)
@@ -1070,6 +1055,9 @@ public final class ExactSession {
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
 
+    /// Run `work` in the chain of covers corrections `cause` (`coversCause`)
+    func inCoversChain(_ cause: AnyObject?, _ work: () -> Void) { let outer = coversCause; coversCause = cause; defer { coversCause = outer }; work() }
+
     /// A batch from a timer, a scroll event or a host's measurement: one that
     /// changes nothing skips the presentation pass. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
@@ -1148,6 +1136,8 @@ public final class ExactSession {
 
     /// Batches that reached `apply` (`IdleTickTests` read it, and painted popovers keep their measures for one: `PositionArea.MeasureCache`).
     private(set) var appliedBatches = 0
+    var missingCapabilities: Set<String> = []
+
     package func apply(_ batch: Batch) {
         guard state != .destroyed, !batch.busy, !batch.held else { return }
         #if os(iOS) || os(tvOS)
@@ -1176,6 +1166,7 @@ public final class ExactSession {
         // Each batch says what its turn left owed; batches apply in the owner's order, so the last one applied is the runner's now.
         canvasOwed = batch.canvasOwed
         if canvasOwed { askCanvasDraw() }
+        HostLog.capabilities(self, batch)
         let outputs = SessionBatchOps(batch.ops)
         for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
         // @ref LLP 1048.003 D1 — the head's title, for the app that owns the chrome.
@@ -1217,12 +1208,12 @@ public final class ExactSession {
         if firstDrawMs != nil {
             afterBootOwner { [weak self] in
                 guard let self, state != .destroyed else { return }
-                canvases.loadIfNeeded(); natives.loadIfNeeded(); drainSurfaceWork()
+                loadCanvases(); natives.loadIfNeeded(); drainSurfaceWork()
             }
         } else {
             DispatchQueue.main.async { [weak self] in self?.afterBootOwner { [weak self] in
                 guard let self, state != .destroyed else { return }
-                canvases.loadIfNeeded(); drainSurfaceWork(); frames.run(frames.hasWork)
+                loadCanvases(); drainSurfaceWork(); frames.run(frames.hasWork)
             } }
         }
         timerDue = batch.timerDueMs; timerLanding = batch.landing
@@ -1233,7 +1224,7 @@ public final class ExactSession {
                 apply(performance ? runtime.canvasPerformanceRecord(name, json) : runtime.surfaceRecord(name, json))
             }
             drainReports()
-            presenter.collections.flush()
+            presenter.collections.flushIfNeeded()
             for hold in inputHolds.allObjects { hold.cancelIfInputIneligible() }
             heightInputHold?.cancelIfInputIneligible()
             transformInputHold?.cancelIfInputIneligible()
@@ -1331,7 +1322,8 @@ public final class ExactSession {
     package func drainSurfaceWorkNow() { if !applying { drainSurfaceWork() } }
 
     private func drainSurfaceWork() {
-        guard canvases.ready || canvases.failed != nil || canvases.isEmpty,
+        // A held canvas load (`loadCanvases`) drains when it is released.
+        guard !canvasesHeld, canvases.ready || canvases.failed != nil || canvases.isEmpty,
               !pendingSurfaceWork.isEmpty else { return }
         let work = pendingSurfaceWork.filter { $0.0["mode"] as? String != "canvas" }
         pendingSurfaceWork.removeAll { $0.0["mode"] as? String != "canvas" }
@@ -1379,16 +1371,6 @@ public final class ExactSession {
         applyUnlessEmpty(batch, scrolled: true, resized: change.size != nil)
     }
     private(set) var screenSize: CGSize? // the screen last told, for the agent's synthetic segments
-    /// The device's posture and the viewport segments a fold makes (LLP 1078 D4, D5): the view's reading,
-    /// kept for the agent's `layout.env` and told to the kernel and the runner in one batch.
-    /// Returns the batch's error, when the runtime refused the grid; the fold is kept only when it took it.
-    @discardableResult func segments(_ fold: ViewportFold) -> String? {
-        guard booted, state != .destroyed else { return nil }
-        let batch = runtime.segments(fold)
-        if batch.error == nil { presenter.fold = fold }
-        apply(batch)
-        return batch.error
-    }
     /// The view's appearance, for paint motion's `light-dark()` (LLP 1062).
     /// The platform's colours are reported first: before the first scheme
     /// that fills the kernel's table without motion, so nothing eases from a

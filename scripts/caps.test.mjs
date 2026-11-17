@@ -21,7 +21,7 @@ import { runInNewContext } from 'node:vm';
 import { captureAssets, applyStaticChange, applyStaticTreeChange, appManifestDigest, builtAppMatches, copyStaticTree, copyStaticTreeIfPresent, installStaticCandidate, listAssets, listPublicFiles, publicFileCards, readDevGeneration, retainDevGeneration, shaderInterfaceDigests, staticFile, readStaticFile, serveStatic, syncStaticTree, watchStaticTrees, webEnvelope, devGenerationDigest, assetCards } from '../host/web/serve.mjs';
 import { assertWebDistApp, jsonLines } from './agent.mjs';
 import { verifyBakeFiles, pendingBuildInputs } from './app.mjs';
-import { appDigest, driveStore, newerThan, notBuildInput, receiptChanges, webStore } from './agent-launch.mjs';
+import { appDigest, driveStore, newerThan, notBuildInput, receiptChanges, refuseStale, webStore } from './agent-launch.mjs';
 import { storeBase, sweepTestStores } from './agent-test.mjs';
 import { copyAppleStaticTrees, rebuildArgs } from '../host/apple/build.mjs';
 import { developmentLaunchEnvironment, deviceLaunchArgs } from '../host/apple/devices.mjs';
@@ -813,17 +813,26 @@ for (const [name, html, files, expectCode, expect] of [
   // (scratch/), a saved world and a local server's database are not. A helper script
   // (drive.sh) is not.
   const dir=realpathSync(mkdtempSync(join(tmpdir(),'exact-build-inputs-')));
-  for(const sub of ['shots','tools','repros','gen','shader-gen','data','modules/web','art','scratch','logic/src','assets','presentation','server']) mkdirSync(join(dir,sub),{recursive:true});
-  for(const [name,text] of [['.gitignore','/local.ts\n/gen/\n/shader-gen/\n/notes/\n/modules/\n/art/\n/icon.png\n/data/table.bin\n/scratch/\n'],['Cargo.toml','[workspace]'],['app.json','{"icons":[{"src":"icon.png"}]}'],['icon.png','png'],['app.contract','view'],['local.ts','key'],['run.log','log'],['shots/one.png','png'],['shots/notes.txt','notes'],['shots/exported.json','{}'],['tools/probe.mjs','mjs'],['tools/levels.ops','ops'],['repros/bug.contract','view'],['app.test.ts','test'],['app.test.contract','test'],['drive.sh','sh'],['export.csv','a,b'],['logic/build.mjs','mjs'],['logic/src/foo.test.rs','rs'],['assets/x.js','js'],['presentation/view.mjs','mjs'],['data/ledger.csv','a,b'],['gen/made.rs','fn f() {}'],['shader-gen/paint.wgsl','fn main() {}'],['shader-gen/table.bin','bytes'],['data/Cargo.toml','[package]'],['data/table.bin','bytes'],['modules/web/index.js','js'],['art/strip.png','png'],['art/fox.glb','glb'],['run.world','world'],['data.db','db'],['data.db-wal','wal'],['server/club.sqlite-shm','shm'],['scratch/out.bin','bytes']]) writeFileSync(join(dir,name),text);
+  for(const sub of ['shots','tools','repros','gen','shader-gen','data','modules/web','art','scratch','logic/src','assets','presentation','server','local-crate']) mkdirSync(join(dir,sub),{recursive:true});
+  for(const [name,text] of [['.gitignore','/local.ts\n/gen/\n/shader-gen/\n/notes/\n/modules/\n/art/\n/icon.png\n/data/table.bin\n/scratch/\n'],['Cargo.toml','[workspace]'],['app.json','{"icons":[{"src":"icon.png"}],"host":{"macos":{"resources":[{"from":"declared.out"}]}}}'],['icon.png','png'],['app.contract','view'],['local.ts','key'],['run.log','log'],['macos.out','stdout'],['macos.err','stderr'],['other.OUT','stdout'],['declared.out','resource'],['assets/captured.err','asset'],['shader-gen/captured.out','shader input'],['local-crate/Cargo.toml','[package]'],['local-crate/captured.err','include_bytes input'],['shots/one.png','png'],['shots/notes.txt','notes'],['shots/exported.json','{}'],['tools/probe.mjs','mjs'],['tools/levels.ops','ops'],['repros/bug.contract','view'],['app.test.ts','test'],['app.test.contract','test'],['drive.sh','sh'],['export.csv','a,b'],['logic/build.mjs','mjs'],['logic/src/foo.test.rs','rs'],['assets/x.js','js'],['presentation/view.mjs','mjs'],['data/ledger.csv','a,b'],['gen/made.rs','fn f() {}'],['shader-gen/paint.wgsl','fn main() {}'],['shader-gen/table.bin','bytes'],['data/Cargo.toml','[package]'],['data/table.bin','bytes'],['modules/web/index.js','js'],['art/strip.png','png'],['art/fox.glb','glb'],['run.world','world'],['data.db','db'],['data.db-wal','wal'],['server/club.sqlite-shm','shm'],['scratch/out.bin','bytes']]) writeFileSync(join(dir,name),text);
   const walk=()=>newerThan(0,[dir],notBuildInput(dir,[join(dir,'shader-gen')])).map(p=>relative(dir,p)).sort();
   const outside=walk();
   spawnSync('git',['init','-q'],{cwd:dir});
-  const inside=walk(),want='["Cargo.toml","app.contract","app.json","art/fox.glb","art/strip.png","assets/x.js","data/Cargo.toml","data/ledger.csv","data/table.bin","gen/made.rs","icon.png","local.ts","logic/build.mjs","modules/web/index.js","presentation/view.mjs","shader-gen/paint.wgsl","shader-gen/table.bin"]';
+  const inside=walk(),want='["Cargo.toml","app.contract","app.json","art/fox.glb","art/strip.png","assets/captured.err","assets/x.js","data/Cargo.toml","data/ledger.csv","data/table.bin","declared.out","gen/made.rs","icon.png","local-crate/Cargo.toml","local-crate/captured.err","local.ts","logic/build.mjs","modules/web/index.js","presentation/view.mjs","shader-gen/captured.out","shader-gen/paint.wgsl","shader-gen/table.bin"]';
   result('the staleness walk skips what an agent leaves in an app, never what a build reads',
     JSON.stringify(inside)===want&&JSON.stringify(outside)===want.replace('"presentation/view.mjs",','"presentation/view.mjs","scratch/out.bin",'),JSON.stringify({inside,outside}));
   const receipt=join(dir,'receipt.json');
   writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin'}));
   writeFileSync(join(dir,'pins.json'),'{}');
+  const fresh=new Date(Date.now()+5000);
+  utimesSync(receipt,fresh,fresh);
+  const app={dir,target:join(dir,'missing-target'),manifest:{},crate:()=>'fixture-macos'};
+  for(const name of ['macos.out','macos.err','other.OUT']) utimesSync(join(dir,name),new Date(+fresh+1000),new Date(+fresh+1000));
+  result('redirected stdout and stderr leave an Apple receipt fresh',receiptChanges(receipt,app).length===0,JSON.stringify(receiptChanges(receipt,app)));
+  for(const name of ['evidence.json','macos.out','macos.err','app.contract','app.json','capture.bin']) {
+    let refusal; try { refuseStale('macos',receipt,[join(dir,name)],'rebuild'); } catch(error) { refusal=error; }
+    result(`a stale refusal explains .exact/ for ${name}`,refusal?.stale===true&&/if .*no build reads.*app's `\.exact\/`/.test(refusal.message),refusal?.message);
+  }
   const built=new Date(Date.now()+10000),edited=new Date(+built+10000);
   utimesSync(receipt,built,built);
   for(const name of ['pins.json','app.contract','drive.sh','tools/probe.mjs','shots/exported.json']) utimesSync(join(dir,name),edited,edited);

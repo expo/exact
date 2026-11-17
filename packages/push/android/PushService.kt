@@ -7,19 +7,21 @@
 // - In front Firebase hands the message to [onMessageReceived] instead, which shows it the same way: the channel if
 //   the app declares it, the tag (Firebase's key: the tag, id 0, so a local post and `closeNotification` meet it), and
 //   a tap through the app's alias that opens `data.navigate`, or the app.
-// - A data message (no `notification`) is journaled and raises nothing: a server's wake needs its own ruling (D8).
+// - A data-only message raises `push` through the headless session (LLP 1133.017 D7–D9). The callback keeps FCM's
+//   process custody until the handler settles or ten seconds pass, including boot and time queued behind a wake.
 package exact.push
 
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.graphics.drawable.Icon
-import android.util.Log
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import dev.exact.canvas.Channels
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class PushService : FirebaseMessagingService() {
     override fun onCreate() {
@@ -30,19 +32,20 @@ class PushService : FirebaseMessagingService() {
         Channels.ensure(applicationContext)
     }
 
-    override fun onRegistered(installationId: String) {
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onNewToken(token: String) {
         val app = applicationContext
-        android.os.Handler(android.os.Looper.getMainLooper()).post { PushModule.registered(app, installationId) }
-    }
-
-    override fun onUnregistered(installationId: String) {
-        val app = applicationContext
-        android.os.Handler(android.os.Looper.getMainLooper()).post { PushModule.unregistered(app) }
+        android.os.Handler(android.os.Looper.getMainLooper()).post { PushModule.rotated(app, token) }
     }
 
     override fun onMessageReceived(message: RemoteMessage) {
         val shown = message.notification ?: run {
-            Log.i("exact", "push: a data message raises nothing on Android")
+            val ended = CountDownLatch(1)
+            val delivery = PushMessage(applicationContext, message.data) { ended.countDown() }
+            delivery.start()
+            try { ended.await(10, TimeUnit.SECONDS) }
+            catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            finally { delivery.expire() }
             return
         }
         val app = applicationContext

@@ -25,7 +25,7 @@
     ],
     "metadata": [
       { "name": "firebase_messaging_auto_init_enabled", "value": "false" },
-      { "name": "firebase_messaging_installation_id_enabled", "value": "true" },
+      { "name": "firebase_messaging_installation_id_enabled", "value": "false" },
       { "name": "com.google.firebase.messaging.default_notification_channel_id", "value": "default" },
       { "name": "com.google.firebase.messaging.default_notification_icon", "resource": "@drawable/exact_notification" }
     ]

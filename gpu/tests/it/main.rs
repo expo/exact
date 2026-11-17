@@ -8,6 +8,7 @@ mod frame;
 mod idle;
 mod module;
 mod presented;
+mod readback;
 mod shaders;
 mod uniform;
 mod validation;

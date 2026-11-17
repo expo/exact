@@ -33,8 +33,9 @@ manager again after `KeyChain.ACTION_TRUST_STORE_CHANGED`, because a manager
 over an explicit keystore copies its anchors once. With that declaration,
 it initializes the default trust manager with a null keystore to honor the app's
 anchors and exclusions. Both paths pass the hostname to
-`X509TrustManagerExtensions`. The Rust crate is pinned to the companion's JNI
-interface. The Canvas reader compiles these
+`X509TrustManagerExtensions`. The companion implements the 0.7 JNI interface,
+unchanged in 0.7.1 (Android artifact 0.2.0); `CertificateVerifierTest` checks its
+static method, result fields and status codes. The Canvas reader compiles these
 classes and keeps them through R8. Other Android consumers must compile these
 classes instead of the published Android AAR and call
 `transport::initialize_android` before TLS; an uninitialized consumer receives

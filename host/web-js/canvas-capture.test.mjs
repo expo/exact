@@ -65,7 +65,7 @@ test('a capture in a drawing turn includes its new arguments and size', async ()
   try {
     const observed = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       install(rt.data);
       const canvas = document.createElement('canvas');
       let step, size, mutation, captured;
@@ -145,7 +145,7 @@ test('a mutation mounts and captures the first canvas in the same action', async
   try {
     const result = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem } = await import('/host/web/storage-fs.js');
       install(rt.data);
@@ -198,7 +198,7 @@ for (const language of ['TypeScript', 'Rust']) {
       try {
         await page.evaluate(async ({ grants, language, scenario }) => {
           const rt = await import('/host/web-js/rt.js');
-          const { install } = await import('/host/web-js/ts-data.js');
+          const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
           const { createRequestExecutor, createGrantSet } = await import('/host/web-js/admission.js');
           const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
           const fs = createFileSystem('test.canvas', createGrantSet(grants));
@@ -266,7 +266,7 @@ test('an overlay cannot start a canvas capture', async () => {
   try {
     const result = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { overlaying, createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem } = await import('/host/web/storage-fs.js');
       const fs = createFileSystem('test.canvas', createGrantSet(grants));
@@ -292,7 +292,7 @@ export const answer = () => Promise.resolve().then(() => captureCanvas('ink', 'a
   try {
     await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
       install(rt.data);
@@ -369,7 +369,7 @@ export function streamed(req, grants, message, controller) {
   try {
     await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
       const { open } = await import('/host/web-js/ts-stream.js');

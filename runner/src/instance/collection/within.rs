@@ -3,6 +3,85 @@
 use super::*;
 
 impl Collection {
+    /// A host may travel inside measured coverage without asking the owner.
+    /// Pins across a gap do not extend that coverage (LLP 1171 D21).
+    pub(super) fn built_window(&self) -> Option<CollectionWindow> {
+        let g = self.geometry.as_ref()?;
+        if self.fixed.is_some()
+            || self.restored_at.is_some()
+            || self.at_end
+            || self.follow_end
+            || self.target.is_some()
+            || self.port_unknown
+            || self.preview.is_some()
+            || self.incoming.is_some()
+            || self.hidden.is_some()
+            || g.port_main <= 0.0
+            || self.index.len() == 0
+        {
+            return None;
+        }
+        let offset = g.offset.min(self.index.max_offset(g.port_main)).max(0.0);
+        let end = (offset + g.port_main).min(self.index.total_height());
+        let keeping = self.kept_rows();
+        let pins = self.pins().map(|p| self.pin(p));
+        let mut runs: Vec<[f64; 2]> = Vec::new();
+        let mut retire = [self.index.total_height(), 0.0_f64];
+        let mut reveal = [0.0, self.index.total_height()];
+        for row in &self.mounted {
+            if !self.index.is_measured_at(row.position) {
+                return None;
+            }
+            let start = self.index.prefix(row.position)?;
+            let finish = start + self.index.height(row.position)?;
+            if let Some(last) = runs.last_mut().filter(|r| r[1] >= start) {
+                last[1] = finish;
+            } else {
+                runs.push([start, finish]);
+            }
+            if row.awaiting {
+                if finish <= offset {
+                    reveal[0] = reveal[0].max(finish);
+                } else if start >= end {
+                    reveal[1] = reveal[1].min(start);
+                } else {
+                    return None;
+                }
+            }
+            let key = self.index.key(row.position)?;
+            if !keeping.contains(&row.position) && !pins.iter().any(|p| p.as_deref() == Some(key)) {
+                retire[0] = retire[0].min(finish);
+                retire[1] = retire[1].max(start);
+            }
+        }
+        let built = runs.into_iter().find(|r| r[0] <= offset && r[1] >= end)?;
+        let last = self.index.len() - 1;
+        if [0, last].into_iter().enumerate().any(|(side, row)| {
+            self.edge_handlers[side]
+                && !self.edge_armed[side]
+                && self.edge_fired[side].as_deref() != self.index.key(row)
+        }) {
+            return None;
+        }
+        // Zero-height edge items need the index's positive-range rules.
+        if self.index.height(0)? == 0.0 || self.index.height(last)? == 0.0 || self.start_owed {
+            return None;
+        }
+        Some(CollectionWindow {
+            built,
+            retire,
+            reveal,
+            edges: [self.index.height(0)?, self.index.prefix(last)?],
+            margin: self.reach.resolve(g.port_main),
+            mask: u8::from(self.edge_handlers[0])
+                | u8::from(self.edge_handlers[1]) << 1
+                | u8::from(self.edge_armed[0]) << 2
+                | u8::from(self.edge_armed[1]) << 3,
+            lead_seconds: LEAD_SECONDS,
+            max_lead: g.port_main * 2.0,
+        })
+    }
+
     /// The travel path needs no action frames. Try it before walking the
     /// instance tree; a pin transfer still takes the ordered full walk.
     pub(super) fn feedback_within(

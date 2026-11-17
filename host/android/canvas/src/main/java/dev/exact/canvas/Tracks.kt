@@ -50,12 +50,17 @@ class TrackEntry(val id: String, val kind: String, val tracks: List<String> = em
     /** A video track's running capture while its lease is held (LLP 1133.008 D3, D8 item 3); null otherwise. */
     var video: (() -> VideoSource?)? = null
 
+    /** The session clock when getUserMedia opened this track. */
+    var startedAt: Double? = null
+
     /** The agent picture drawn by a viewfinder, unmirrored; null while none is shown (LLP 1133.027 D17). */
     var picture: android.graphics.Bitmap? = null
         set(value) {
             if (field === value) return
             field = value
-            pictureObservers.toList().forEach { it() }
+            pictureObservers.toList().forEach {
+                try { it() } catch (e: Exception) { android.util.Log.w("exact", "track $id picture observer: $e", e) }
+            }
         }
     private val pictureObservers = LinkedHashSet<() -> Unit>()
     fun observePicture(changed: () -> Unit): () -> Unit {

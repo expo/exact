@@ -4,6 +4,9 @@
 //!
 //! - The Linux host's one display is its KMS connector, or the headless
 //!   buffer, at the host's scale; the pointer is the one the host draws.
+//! - The Windows host's are its monitors, laid out into CSS pixels, and
+//!   the system's pointer (`host/windows/src/displays.rs`), or with no
+//!   window the headless buffer; its `windows/exact.json` names this file.
 //! - Natively no permission guards the displays: the status is `granted`
 //!   wherever the host reports them, and `available: false` elsewhere.
 //! - The source watches the host's displays while this session reads it,
@@ -16,24 +19,7 @@ const TOPIC: &str = "window-management.getScreenDetails";
 
 /// A `ScreenDetailed`, and with `client` its `clientRect`.
 fn screen(s: &Screen, client: bool) -> Json {
-    let [left, top, width, height] = s.rect;
-    let [avail_left, avail_top, avail_width, avail_height] = s.avail;
-    let mut out = json!({
-        "left": left, "top": top, "width": width, "height": height,
-        "availLeft": avail_left, "availTop": avail_top,
-        "availWidth": avail_width, "availHeight": avail_height,
-        "devicePixelRatio": s.scale, "isPrimary": s.primary,
-        "isInternal": s.internal, "label": s.label,
-    });
-    if client {
-        out["clientRect"] = s
-            .client
-            .map(
-                |[x, y, width, height]| json!({ "x": x, "y": y, "width": width, "height": height }),
-            )
-            .unwrap_or(Json::Null);
-    }
-    out
+    s.json(client)
 }
 
 /// `ScreenDetails`.

@@ -23,8 +23,8 @@ pub struct Carried {
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
     /// Kept entries waiting for their identifying arguments (LLP 1027.005
     /// D3, 2026-11-13): (resource name, source name, identifying arguments,
-    /// digest of the stored entry).
-    pub waiting: Vec<(String, String, Vec<Value>, u64)>,
+    /// digest of the stored entry, whether its seed slept while idle).
+    pub waiting: Vec<(String, String, Vec<Value>, u64, bool)>,
     /// The resources whose answer came from a stream still open: a
     /// replacement that takes the answer shows it and asks again, opening
     /// the stream anew, since the old one ends with the runner that had it.
@@ -85,7 +85,12 @@ impl<D: super::DataSource> super::Runner<D> {
                 .filter(|(i, _)| {
                     !self.resources[*i].pending && !self.resources[*i].stale && !self.written(*i)
                 })
-                .filter(|(_, (_, s))| s.as_ref().is_none_or(|s| !s.placeholder))
+                // Nor is a kept answer no fresh one has replaced (D5): the
+                // replacement shows it from the store and asks again.
+                .filter(|(i, (_, s))| {
+                    s.as_ref()
+                        .is_none_or(|s| !s.placeholder && !self.holds_kept(*i, s))
+                })
                 .filter_map(|(_, (r, s))| {
                     s.as_ref().map(|s| {
                         (

@@ -147,8 +147,7 @@ internal class Jobs(private val app: Context) : Platform {
     private fun key(job: JobInfo, namespace: Namespace): Key? =
         key(namespace.name, namespace.agent, job.extras.getString("id"), job.extras.getString("generation"))
 
-    override val conditions: Conditions get() = Conditions(Build.VERSION.SDK_INT, visible?.invoke() ?: false,
-        app.getSystemService(NotificationManager::class.java).areNotificationsEnabled())
+    override val conditions: Conditions get() = Conditions(Build.VERSION.SDK_INT, visible?.invoke() ?: false)
 
     /**
      * From API 35 the platform says which process starts followed a force-stop. Below it, a

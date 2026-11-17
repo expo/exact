@@ -255,7 +255,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// The reader shell already stamps its accepted sample for prefetching.
     /// Keep that stamp without advancing the Host or sampling its clock again.
-    #[cfg(any(target_os = "android", all(test, not(windows))))]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) fn scroll_end_reader_sampled(&mut self, view: ViewId, at: f64) {
         if let Some(previous) = self.scroll_end.reader_previous.remove(&view) {
             if previous.due <= at {

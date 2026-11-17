@@ -226,6 +226,24 @@ export function createFileStore(appId) {
       if (!previous) changes.touch(parentOf(path));
     }, [path, parentOf(path)]);
   }
+  function putBlobs(entries, refusal = () => undefined) {
+    entries = entries.map(({ path, blob }) => {
+      path = normalizePath(path);
+      requireBelowRoot(path);
+      return { path, blob };
+    });
+    if (!entries.length) return Promise.resolve();
+    return run(true, (records, changes) => {
+      const refused = refusal(); if (refused) throw refused;
+      for (const { path, blob } of entries) {
+        directory(records, parentOf(path));
+        const previous = records.get(path);
+        if (previous && previous.kind !== 'file') throw failure('write needs a regular file', 'EISDIR');
+        changes.put({ path, kind: 'file', contents: blob, modifiedMs: now() });
+        if (!previous) changes.touch(parentOf(path));
+      }
+    }, entries.flatMap(({ path }) => [path, parentOf(path)]));
+  }
   return Object.freeze({
     directories: roots,
     async readFile(path) {
@@ -250,18 +268,8 @@ export function createFileStore(appId) {
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).
-    putBlob(path, blob, refusal = () => undefined) {
-      path = normalizePath(path);
-      requireBelowRoot(path);
-      return run(true, (records, changes) => {
-        const refused = refusal(); if (refused) throw refused;
-        directory(records, parentOf(path));
-        const previous = records.get(path);
-        if (previous && previous.kind !== 'file') throw failure('write needs a regular file', 'EISDIR');
-        changes.put({ path, kind: 'file', contents: blob, modifiedMs: now() });
-        if (!previous) changes.touch(parentOf(path));
-      }, [path, parentOf(path)]);
-    },
+    putBlob: (path, blob, refusal) => putBlobs([{ path, blob }], refusal),
+    putBlobs,
     writeFile(path, data) { return write(path, data, false); },
     atomicWriteFile(path, data) { return write(path, data, false); },
     // Trusted host only: takes an ArrayBuffer and detaches it from its caller.

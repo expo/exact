@@ -1247,6 +1247,45 @@ test('a crate beside app.json joins the generated workspace by naming it, and on
   }
 }, 120_000);
 
+test('host data and GPU lock refreshes preserve compatible captured versions', async () => {
+  const { GPU_LOCK, lockShells, staleLock } = await import('./app-shells.mjs');
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/lock-refresh-'))));
+  try {
+    for (const [kind, file] of [['data', 'Cargo.lock'], ['gpu', GPU_LOCK]]) {
+      const workspace = resolve(dir, kind), member = resolve(workspace, 'member'), captured = resolve(dir, file);
+      mkdirSync(resolve(member, 'src'), { recursive: true });
+      writeFileSync(resolve(member, 'src/lib.rs'), '');
+      writeFileSync(resolve(workspace, 'Cargo.toml'), '[workspace]\nmembers = ["member"]\nresolver = "2"\n');
+      const manifest = (json, width) => writeFileSync(resolve(member, 'Cargo.toml'), `[package]\nname = "fixture-${kind}"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde_json = "${json}"\nunicode-width = "${width}"\n`);
+      manifest('=1.0.154', '=0.2.2');
+      lockShells(dir, workspace, captured);
+      // Keep a captured lock even when the SDK eventually holds these versions too.
+      writeFileSync(captured, readFileSync(resolve(workspace, 'Cargo.lock')));
+      const before = readFileSync(captured, 'utf8');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // Both the SDK's serde_json 1.0.151 and unicode-width 0.1.14 fit these ranges.
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), before);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), before);
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // A changed requirement still lets Cargo update a captured version.
+      manifest('=1.0.151', '=0.1.14');
+      assert.match(lockShells(dir, workspace, captured), /resolved\n/);
+      const packages = Bun.TOML.parse(readFileSync(captured, 'utf8')).package;
+      for (const [name, version] of [['serde_json', '1.0.151'], ['unicode-width', '0.1.14']])
+        assert.deepEqual(packages.filter(p => p.name === name).map(p => p.version), [version]);
+      const older = readFileSync(captured, 'utf8');
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), older);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.ok(staleLock('error: cannot update the lock file /app/Cargo.lock because --locked was passed to prevent this'));
+  assert.ok(staleLock('error: the lock file /app/Cargo.lock needs to be updated but --locked was passed to prevent this'));
+  assert.ok(!staleLock('error: failed to download `rustix v1.1.5`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified'));
+}, 120_000);
+
 // LLP 1153.003 D1.4, a game's rule (LLP 1046.011 D2): an app captures a lock only when its crates leave exact2's.
 test('a generated workspace captures no lock until a dependency leaves exact2\'s, and keeps a captured one across a rewrite', async () => {
   const { createApp } = await import('../game/new.mjs');
@@ -1270,21 +1309,26 @@ test('a generated workspace captures no lock until a dependency leaves exact2\'s
     settleLock(dir, workspace);
     assert.match(lockShells(dir, workspace), /resolves against exact2's lock; the app's crates there add nothing, so it commits no Cargo\.lock of its own/);
     assert.equal(existsSync(resolve(dir, 'Cargo.lock')), false);
-    if (!other) return; // no second itoa in this machine's cache to leave exact2's lock with
-    data(`itoa = "=${other}"\n`);
-    assert.throws(() => settleLock(dir, workspace), new RegExp(`the app's crates need versions exact2's lock does not hold \\(itoa ${other.replaceAll('.', '\\.')} [^)]*\\)\\. An app whose crates add dependencies commits a lock of its own: \`bun exact\\.mjs lock\``));
-    assert.match(lockShells(dir, workspace), /Cargo\.lock: captured \(\d+ packages\); commit it/);
-    const captured = readFileSync(resolve(dir, 'Cargo.lock'), 'utf8');
-    assert.match(captured, new RegExp(`name = "itoa"\nversion = "${other.replaceAll('.', '\\.')}"`));
-    settleLock(dir, workspace);
-    // A rewrite of the shell (here, its stamp as a moved checkout leaves it) keeps the captured lock.
-    writeFileSync(resolve(workspace, '.stamp.json'), '{}\n');
-    assert.equal(ensureShells(dir).wrote, true);
-    assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), captured);
-    // A dependency changed since the capture is the lock's to settle, never a build's.
-    data(`itoa = "=${held}"\n`);
-    assert.throws(() => settleLock(dir, workspace), /Cargo\.lock does not match the app's crates [^]*`bun exact\.mjs lock` in /);
-    assert.match(lockShells(dir, workspace), new RegExp(`Cargo\\.lock: resolved\nitoa ${other.replaceAll('.', '\\.')} → ${held.replaceAll('.', '\\.')}`));
+    if (other) {
+      data(`itoa = "=${other}"\n`);
+      assert.throws(() => settleLock(dir, workspace), new RegExp(`the app's crates need versions exact2's lock does not hold \\(itoa ${other.replaceAll('.', '\\.')} [^)]*\\)\\. An app whose crates add dependencies commits a lock of its own: \`bun exact\\.mjs lock\``));
+      assert.match(lockShells(dir, workspace), /Cargo\.lock: captured \(\d+ packages\); commit it/);
+      const captured = readFileSync(resolve(dir, 'Cargo.lock'), 'utf8');
+      assert.match(captured, new RegExp(`name = "itoa"\nversion = "${other.replaceAll('.', '\\.')}"`));
+      settleLock(dir, workspace);
+      // A rewrite of the shell (here, its stamp as a moved checkout leaves it) keeps the captured lock.
+      writeFileSync(resolve(workspace, '.stamp.json'), '{}\n');
+      assert.equal(ensureShells(dir).wrote, true);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), captured);
+      // A dependency changed since the capture is the lock's to settle, never a build's.
+      data(`itoa = "=${held}"\n`);
+      assert.throws(() => settleLock(dir, workspace), /Cargo\.lock does not match the app's crates [^]*`bun exact\.mjs lock` in /);
+      assert.match(lockShells(dir, workspace), new RegExp(`Cargo\\.lock: resolved\nitoa ${other.replaceAll('.', '\\.')} → ${held.replaceAll('.', '\\.')}`));
+    }
+    data('rustls-platform-verifier = "=0.7.1"\n');
+    assert.match(lockShells(dir, workspace), /Cargo\.lock: (?:resolved|captured)|resolves against exact2's lock/);
+    const locked = Bun.TOML.parse(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8')).package;
+    assert.deepEqual(locked.filter(p => p.name === 'rustls-platform-verifier').map(p => p.version), ['0.7.1']);
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }, 180_000);
 
@@ -1380,6 +1424,13 @@ test('a GPU crate builds in .exact/gpu, apart from the host\'s graph, and captur
     assert.equal(names(workspace).some(name => name === 'field-log-gpu' || name === 'exact-gpu' || name === 'wgpu'), false);
     assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /resolves against exact2's lock; the app's crates there add nothing, so it commits no Cargo\.gpu\.lock of its own/);
     assert.equal(existsSync(resolve(dir, GPU_LOCK)), false);
+    // mln-rs 0.0.11 needs these versions in the same GPU graph (#426).
+    gpu('rustls-platform-verifier = "=0.7.1"\nwasm-bindgen = "=0.2.130"\n');
+    assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /resolves against exact2's lock|Cargo\.gpu\.lock: captured/);
+    const locked = Bun.TOML.parse(readFileSync(resolve(own, 'Cargo.lock'), 'utf8')).package;
+    for (const [name, version] of [['rustls-platform-verifier', '0.7.1'], ['wasm-bindgen', '0.2.130']]) {
+      assert.deepEqual(locked.filter(p => p.name === name).map(p => p.version), [version]);
+    }
     if (other) {
       gpu(`itoa = "=${other}"\n`);
       assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /Cargo\.gpu\.lock: captured \(\d+ packages\); commit it/);

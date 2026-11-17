@@ -36,7 +36,7 @@ impl Canvases {
 }
 
 /// `pixmap` as `encoding` asks where this host writes that type, else as PNG.
-fn encode(
+pub(crate) fn encode(
     pixmap: &tiny_skia::Pixmap,
     encoding: &Encoding,
 ) -> Result<(Vec<u8>, &'static str), String> {

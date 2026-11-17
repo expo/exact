@@ -284,6 +284,12 @@ final class CanvasPointerMacTests: XCTestCase {
         guard input.locked else {
             throw XCTSkip("no window server connection: CGAssociateMouseAndMouseCursorPosition refused")
         }
+        // An agent's NSEvent.mouseEvent carries no device delta. In a locked
+        // canvas its moved location is the only available synthetic motion.
+        let synthetic = mouse(.leftMouseDragged, window, at: at(canvas, window, 60, 50))
+        XCTAssertTrue(input.pointer(synthetic, phase: "move"))
+        XCTAssertEqual(rows.last?.2 ?? .nan, 10, accuracy: 0.001, "zero-delta synthetic motion follows its requested point")
+        XCTAssertEqual(rows.last?.3 ?? .nan, 0, accuracy: 0.001)
         let cg = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: .zero, mouseButton: .left)!
         cg.setIntegerValueField(.mouseEventDeltaX, value: 25)
         cg.setIntegerValueField(.mouseEventDeltaY, value: -4)

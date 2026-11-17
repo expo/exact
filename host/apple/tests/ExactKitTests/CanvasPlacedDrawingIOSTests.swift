@@ -451,6 +451,70 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
         XCTAssertEqual(d.host.captures, 1)
     }
 
+    /// A capture made inside an open transaction (a UIKit animation block, a
+    /// host's transaction around a batch) uploads each child's own pixels.
+    /// Core Animation commits nothing until that transaction ends, and the
+    /// GPU capture's renderer draws only what is committed: drawn there, a
+    /// child is blank, or the last child of its size (#425).
+    func testChildrenCapturedInsideAnOpenTransactionAreTheirOwn() throws {
+        let d = try deck("canvas-capture-in-transaction")
+        defer { d.session.destroy() }
+        try XCTUnwrap(d.host.entries[100]).through = true
+        let p = d.session.presenter
+        // Two of one size, which one renderer draws in turn, and one of another.
+        let frames = [CGRect(x: 0, y: 0, width: 100, height: 100), CGRect(x: 0, y: 100, width: 100, height: 100), CGRect(x: 0, y: 200, width: 60, height: 40)]
+        for (i, colour) in [UIColor.red, .green, .blue].enumerated() {
+            paint(colour, into: node(UInt32(101 + i), p, frames[i], in: d.overlay))
+        }
+        let own: [[UInt8]] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]]
+        func captured() -> [[UInt8]]? {
+            capturedChildPixels = []
+            d.canvas.needsCapture = true
+            d.host.captureIfNeeded()
+            return capturedChildPixels
+        }
+        CATransaction.begin()
+        XCTAssertEqual(captured(), own, "inside a transaction")
+        CATransaction.commit()
+        XCTAssertEqual(captured(), own, "and after it")
+
+        // The hand-over gives the module no texture it could not draw into.
+        let shadow = try XCTUnwrap(Shadow.shared, "no Metal capture here: the hand-over is not checked")
+        CATransaction.begin()
+        XCTAssertNil(shadow.renderTexture(d.overlay, scale: 1), "inside a transaction")
+        CATransaction.commit()
+        XCTAssertNotNil(shadow.renderTexture(d.overlay, scale: 1), "and after it")
+    }
+
+    /// A rounded box is captured with its own corner curve on the GPU. Just
+    /// before a circular corner's arc ends, the top edge is covered, as the
+    /// CPU capture draws it; a continuous corner is still curving in there.
+    /// The capture's own layer starts with a new layer's curve, which on
+    /// iOS 27 is continuous, whatever the box's is.
+    func testARoundedChildKeepsItsCornerCurveOnTheGPU() throws {
+        let d = try deck("canvas-corner-curve")
+        defer { d.session.destroy() }
+        let child = node(101, d.session.presenter, CGRect(x: 0, y: 0, width: 300, height: 300), in: d.overlay)
+        paint(.red, into: child)
+        let fill = try XCTUnwrap(child.subviews.first)
+        fill.layer.cornerRadius = 72
+        func alpha(_ bitmap: Bitmap) throws -> Int {
+            Int(try XCTUnwrap(bitmap.bytes).assumingMemoryBound(to: UInt8.self)[69 * 4 + 3])
+        }
+        let shadow = try XCTUnwrap(Shadow.shared, "no Metal capture here: the GPU's capture is not compared")
+        func gpu(_ curve: CALayerCornerCurve) throws -> Int {
+            fill.layer.cornerCurve = curve
+            let bitmap = try XCTUnwrap(Bitmap.blank(width: 300, height: 300))
+            XCTAssertTrue(shadow.render(child, scale: 1, into: bitmap), "the GPU's capture rendered")
+            return try alpha(bitmap)
+        }
+        let circular = try gpu(.circular)
+        let cpu = try XCTUnwrap(Bitmap.blank(width: 300, height: 300))
+        Capture.draw(child, scale: 1, into: cpu)
+        XCTAssertEqual(circular, try alpha(cpu), accuracy: 32, "circular, as the CPU draws it")
+        XCTAssertLessThan(try gpu(.continuous), circular - 64, "continuous, still curving in")
+    }
+
     func testANestedCanvasHasItsChildrenInTheAncestorsFirstFrame() throws {
         for captureBeforeTick in [true, false] {
             let d = try deck("canvas-nested-first-frame")

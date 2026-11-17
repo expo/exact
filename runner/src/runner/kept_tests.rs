@@ -970,7 +970,7 @@ fn an_admitted_seed_with_invalid_unchanged_arguments_says_why() {
         .keeping
         .refused
         .iter()
-        .find_map(|(i, line)| (*i == 0).then_some(line))
+        .find_map(|(i, line, _)| (*i == 0).then_some(line))
         .unwrap();
     assert!(line.ends_with("a did not use its kept answer: its request arguments are invalid"));
 }

@@ -127,6 +127,46 @@ final class DataFromFirstDrawTests: XCTestCase {
         XCTAssertEqual(session.dataGeneration, session.generation)
     }
 
+    /// The GPU module's load, asked for while the evaluation runs (the first
+    /// apply posts it before the draw), is held, and released once the rest
+    /// has run, after the data's first requests. The fixture has no canvas,
+    /// so this pins the hold and its release, not a world's start.
+    func testTheCanvasLoadWaitsForTheRest() throws {
+        let session = try booted()
+        let held = DispatchSemaphore(value: 0)
+        var released = false
+        defer { if !released { held.signal() } }
+        Owner.shared.post { _ = held.wait(timeout: .now() + 10) }
+        session.drawReceipt().drawn()
+        session.loadCanvases()
+        XCTAssertTrue(session.canvasesHeld, "held while the evaluation runs")
+        held.signal()
+        released = true
+        waitFor("the data's activation") { session.dataActivated }
+        XCTAssertFalse(session.canvasesHeld, "loaded once the rest has run")
+        session.loadCanvases()
+        XCTAssertFalse(session.canvasesHeld, "a later load is not held")
+    }
+
+    /// A source the draw does not evaluate keeps its order: the load is never held.
+    func testTheCanvasLoadOfASourceTheDrawDoesNotEvaluateIsNotHeld() throws {
+        let session = try booted(evaluatesFromDraw: false)
+        let held = DispatchSemaphore(value: 0)
+        var released = false
+        defer { if !released { held.signal() } }
+        Owner.shared.post { _ = held.wait(timeout: .now() + 10) }
+        session.drawReceipt().drawn()
+        waitFor("the source's preparation") {
+            session.dataPreparing && session.preparedGeneration == session.generation
+        }
+        session.loadCanvases()
+        XCTAssertFalse(session.canvasesHeld, "not held while its source is prepared")
+        held.signal()
+        released = true
+        waitForActivation(session)
+        XCTAssertFalse(session.canvasesHeld)
+    }
+
     /// D3: a source the draw does not evaluate (a Rust source, a module on a
     /// worker, a Mac module that keeps documents) is prepared after the main
     /// thread's first turn, as before.

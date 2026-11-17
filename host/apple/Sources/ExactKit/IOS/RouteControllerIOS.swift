@@ -112,6 +112,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         host?.followSelection(showing: self)
         // UIKit sized its block (LLP 1123 D2); a deferred boot already published from its holder.
         host?.presenter.owners.publish()
+        // Run the edge passes that an app's selection owes it, whatever is under way, before the transition's first frame;
+        // the covers follow below
+        host?.runOwedScrollEdges(of: self)
         // Finish the destination's content and focus before UIKit displays it.
         host?.presenter.afterBatch { [weak self] in
             guard let host = self?.host else { return }
@@ -129,6 +132,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidLayoutSubviews()
         fitContentViewport()
         host?.presenter.owners.publish()
+        if scrollEdgesOwed { host?.settleScrollEdges() }
         #if os(iOS)
         search?.labelScopes()
         #endif
@@ -350,6 +354,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
 
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
+    /// An app changed the top or bottom selection, and the edge passes and covers that follow are owed
+    /// (`NavigationHost.scrollEdgesChanged`)
+    var scrollEdgesOwed = false
     var nativeContentScroller: NodeView? {
         guard let selected = contentScrollView(for: .top) else { return nil }
         var owner = (selected as? Viewport)?.documentNode
@@ -380,10 +387,15 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
 
     /// An app's selection; Exact's own goes through `projectContentScrollView`.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
+        let edges = edge.intersection([.top, .bottom])
         if let scrollView {
+            let changed = !nativeContentScrollEdges.isSuperset(of: edges)
+                || (edges.contains(.top) && contentScrollView(for: .top) !== scrollView)
+                || (edges.contains(.bottom) && contentScrollView(for: .bottom) !== scrollView)
             // Record only the top and bottom edges: UIKit takes no other
-            nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
+            nativeContentScrollEdges.formUnion(edges)
             select(scrollView, for: edge)
+            if changed { host?.scrollEdgesChanged(self) }
         } else {
             // An app's nil makes the edges it selected automatic again, and the navigation host
             // selects them as for a route no app touched. UIKit gets the nil first: the passes take
@@ -392,7 +404,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             guard !released.isEmpty else { return }
             nativeContentScrollEdges.subtract(released)
             select(nil, for: released)
-            host?.selectScrollEdges(of: self)
+            host?.scrollEdgesChanged(self)
         }
         #if os(iOS)
         if edge.contains(.top) { host?.presenter.syncScrollsToTop() }

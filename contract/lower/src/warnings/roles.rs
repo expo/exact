@@ -6,7 +6,7 @@
 use super::{computed, has, literal, BOXES};
 use crate::LowerError;
 use contract_checking::{Structure, View, Visit};
-use contract_syntax::{Attr, Expr, Span, VisitSpans};
+use contract_syntax::{Attr, Expr, Span, StyleDecl, VisitSpans};
 use std::collections::BTreeSet;
 
 /// The `aria-controls` the program writes (LLP 1166.000 D5), over the
@@ -386,5 +386,34 @@ pub(super) fn level_without_heading(tag: &str, attrs: &[Attr], span: Span) -> Op
             "`aria-level` on a `{tag}` with no `role=\"heading\"` does not make a heading: a screen reader is not told it is one on any platform, it gets no heading style, and the iOS navigation bar does not take it for the screen's title. Write the role beside it: `text \"Results\" role=\"heading\" aria-level=2`"
         ),
         span,
+    })
+}
+
+pub(super) fn alert_font(tag: &str, attrs: &[Attr], styles: &[StyleDecl]) -> Option<LowerError> {
+    if literal(attrs, "role") != Some("alertdialog") || !(tag == "dialog" || has(attrs, "popover"))
+    {
+        return None;
+    }
+    let class = crate::class::rows(
+        attrs,
+        &|name| {
+            styles
+                .iter()
+                .find(|s| s.name == name)
+                .map(|s| s.attrs.as_slice())
+        },
+        &[],
+    )
+    .ok()
+    .flatten()
+    .map_or_else(Vec::new, |(_, rows)| rows);
+    let family = attrs
+        .iter()
+        .chain(&class)
+        .find(|a| a.written && a.name == "font-family")?;
+    Some(LowerError {
+        id: "lower-alert-font",
+        message: "this alert's `font-family` applies on web, Linux, Android and Windows; iOS and macOS keep the system face because their native alerts have no public font API. Omit `font-family` here if the alert need not request a face".into(),
+        span: family.span,
     })
 }

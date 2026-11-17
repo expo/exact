@@ -8,13 +8,103 @@
 //   (the app built for that host first: host/web/build.mjs photo-editor, or
 //   host/apple/build.mjs [--ios] photo-editor-apple)
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, cpSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checker } from './fixture.mjs';
+import { checker, makeFixture, run } from './fixture.mjs';
 
 const here = import.meta.dir, root = resolve(here, '../../..');
 const host = process.argv[2] ?? 'web', extra = process.argv.slice(3);
+if (extra.includes('--clip')) {
+  const { app } = makeFixture();
+  try {
+    mkdirSync(resolve(app, 'assets'), { recursive: true });
+    cpSync(resolve(here, '../fixture/frames.mp4'), resolve(app, 'assets/frames.mp4'));
+    clipReader(app);
+    const ops = ['clock settle', 'prefer extension camera.clip={"path":"assets/frames.mp4"}', 'clock settle',
+      'tap open', 'clock settle', 'tap keep', 'clock settle', 'clock +100', 'tap keep', 'clock settle',
+      'clock +200', 'tap keep', 'clock settle', 'clock +300', 'clock data', 'state sampled', 'state extensions', 'logs'];
+    const out = run('bun', ['exact.mjs', 'agent', host, '--json', '--storage', `clip-${process.pid}`, '--permission', 'camera=granted',
+      ...extra.filter(arg => arg !== '--clip'), ...ops], app);
+    const replies = out.split('\n').filter(l => l.startsWith('{')).map(l => JSON.parse(l));
+    const state = replies.find(r => r.camera?.implementation?.photos?.length === 3);
+    const photos = state?.camera?.implementation?.photos;
+    if (!photos || photos[0].sha256 === photos[1].sha256 || photos[0].sha256 !== photos[2].sha256)
+      throw new Error(`clock-driven photos differ or fail to loop: ${out}`);
+    const samples = replies.find(r => Array.isArray(r.samples))?.samples;
+    if (JSON.stringify(samples) !== JSON.stringify(['100:1', '200:2', '300:0', '400:1', '500:2', '600:0']))
+      throw new Error(`polling must read the frame at each instant, including inside clock +300: ${out}`);
+    console.log(`PASS ${host} camera.clip: photos loop; a polling package reads each frame during clock +300`);
+  } finally { rmSync(resolve(app, '..'), { recursive: true, force: true }); }
+  process.exit(0);
+}
+
+/** A package reads the track, as an analyzer does, at each poll within a seek. */
+function clipReader(app) {
+  const dir = resolve(app, 'reader');
+  const files = {
+    'package.json': { name: '@fixture/frames', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json', './web': './web/exact.json' } },
+    'exact.json': { kind: 'interface', name: '@fixture/frames', version: '1.0.0', substitute: 'implementation',
+      shapes: { Samples: { samples: 'string[]' } }, names: [{ source: 'sample', live: true,
+        options: { track: 'handle<track>' }, answers: 'Samples' }] },
+    'apple/exact.json': { kind: 'implementation', implements: '@fixture/frames@^1.0', platform: 'apple', targets: ['macos', 'ios'],
+      sources: { swift: ['Reader.swift'] }, class: 'Reader' },
+    'apple/Reader.swift': `import CoreGraphics
+import ExactPackage
+public final class Reader: ExactPackage {
+  let context: ExactPackageContext
+  var samples: [String] = []
+  public init(context: ExactPackageContext) { self.context = context }
+  public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
+    if let track = args["track"] as? String, let entry = context.tracks.lookup(track),
+       let start = entry.startedAt, context.now() > start, let image = entry.picture {
+      var pixel = [UInt8](repeating: 0, count: 4)
+      pixel.withUnsafeMutableBytes { bytes in
+        let canvas = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+          space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        canvas.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+      }
+      let color = (0..<3).max { pixel[$0] < pixel[$1] }!
+      samples.append("\\(Int(context.now() - start)):\\(color)")
+    }
+    reply(["samples": samples])
+  }
+}`,
+    'web/exact.json': { kind: 'implementation', implements: '@fixture/frames@^1.0', platform: 'web', targets: ['web'], sources: { javascript: ['index.js'] } },
+    'web/index.js': `export function implementation({ tracks, now }) {
+  const samples = [];
+  return { async sample({ track }) {
+    const entry = tracks.lookup(track);
+    if (entry && now() > entry.startedAt) {
+      const image = await entry.frame();
+      const ctx = new OffscreenCanvas(1, 1).getContext('2d');
+      ctx.drawImage(image, 0, 0, 1, 1);
+      const rgb = [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
+      samples.push((now() - entry.startedAt) + ':' + rgb.indexOf(Math.max(...rgb)));
+    }
+    return { samples: [...samples] };
+  } };
+}`,
+  };
+  for (const [file, value] of Object.entries(files)) {
+    const path = resolve(dir, file);
+    mkdirSync(resolve(path, '..'), { recursive: true });
+    writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value));
+  }
+  const manifest = JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8'));
+  manifest.dependencies['@fixture/frames'] = 'file:./reader';
+  writeFileSync(resolve(app, 'package.json'), JSON.stringify(manifest));
+  const contract = readFileSync(resolve(app, 'app.contract'), 'utf8')
+    .replace('component Fixture', 'use sample, Samples from "@fixture/frames"\n\ncomponent Fixture')
+    .replace('  state track = ""', `  state track = ""
+  resource sampled = sample(track=track) as shape Samples else empty()
+  task pollFrames mount
+    every(100, readFrame)
+  action readFrame
+    refresh sampled`);
+  writeFileSync(resolve(app, 'app.contract'), contract);
+  run('bun', ['install'], app);
+}
 const sha = file => createHash('sha256').update(readFileSync(file)).digest('hex');
 const CARD = sha(resolve(here, '../fixture/card.jpg')), SAMPLE = sha(resolve(root, 'apps/photo-editor/assets/sample.jpg'));
 const { check, failed } = checker();

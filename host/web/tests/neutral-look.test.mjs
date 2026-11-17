@@ -1,16 +1,18 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // LLP 1115.000 D4 part B: one neutral web presentation in Chrome, Firefox and WebKit.
 // The role and metric censuses hold the sheet to the schema; the browser oracle
 // keeps the same geometry, colours and author precedence in all three engines.
 import { test, expect } from 'bun:test';
 import { withLook, appleColors } from '../look.mjs';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
-import { glueDeclarations, glueCase } from './glue-fixture.mjs';
+import { glueCase, glueDeclarations, hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 import { readdirSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const shell = read('../index.html'), neutral = read('../neutral.css');
@@ -266,7 +268,7 @@ const checkLook = async (page, ids, inset = 0) => {
   await page.evaluate(() => document.querySelector('head > style:last-of-type').remove());
   return Object.fromEntries(rows.map(({ id, ...row }) => [id, row]));
 };
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a menu whose rows can be checked marks the checked ones in a column of its own`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a menu whose rows can be checked marks the checked ones in a column of its own`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -343,7 +345,7 @@ const rasterMenus = `
     ${rasterRow('rd-on', 'aria-checked="true"', 'display:flex;flex-direction:row;align-items:center;gap:8px;padding-left:4px;padding-right:12px;--exact-padding-left:4px;--exact-padding-right:12px;')}${rasterRow('rd-off', 'aria-checked="false"')}${radio('rd-native', 'Cancel', '')}
   </div>
 </div>`;
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: checked raster menu faces keep a leading mark beside native faces`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: checked raster menu faces keep a leading mark beside native faces`, async () => {
   const browser = await launch(engine);
   try {
     for (const mode of ['light', 'dark', ...(engine === 'chromium' ? ['forced'] : [])]) for (const dir of ['ltr', 'rtl']) {
@@ -457,7 +459,6 @@ const helpers = `
   window.contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return Math.round((x + 0.05) / (y + 0.05) * 100) / 100; };
 `;
 const launch = async (engine) => {
-  const playwright = await import('playwright-core');
   return suiteBrowser(engine);
 };
 
@@ -465,7 +466,7 @@ const launch = async (engine) => {
 const INK = { light: [0, 0, 0, 1], dark: [255, 255, 255, 1] }, GROUND = { light: [255, 255, 255, 1], dark: [18, 18, 18, 1] };
 const SURFACE = { light: [255, 255, 255, 1], dark: [30, 30, 30, 1] }, LINE = { light: [0, 0, 0, 0.45], dark: [255, 255, 255, 0.45] };
 const SECONDARY = { light: [71, 71, 71, 1], dark: [189, 189, 189, 1] }, RED = { light: [201, 15, 26, 1], dark: [254, 115, 103, 1] };
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: the neutral look draws what the author left unsaid, by one set of numbers`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: the neutral look draws what the author left unsaid, by one set of numbers`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -874,7 +875,7 @@ test('chromium: authored popovers pad unsaid edges by the root font', async () =
   } finally { await page.close(); }
 });
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet in a narrow window rises from the bottom edge`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet in a narrow window rises from the bottom edge`, async () => {
   const browser = await launch(engine);
   try {
     for (const reducedMotion of ['no-preference', 'reduce']) {
@@ -919,7 +920,7 @@ const closing = `<div id="exact-root"><main id="nav" navigationKey="1" navigatio
   <div navigationKey="1" id="under"><header><h1>Inbox</h1></header></div>
   <div navigationKey="2" navigationPresentation="modal" id="leaving" style="position:absolute;inset:0"><header><h2>New</h2></header><button type="button" id="inside">Add</button><svg><defs><linearGradient id="shade"><stop offset="0" stop-color="red"/></linearGradient></defs><rect id="swatch" width="10" height="10" fill="url(#shade)"/><use id="again" href="#swatch"/></svg></div>
 </main></div>`;
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet slides back down as it closes`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet slides back down as it closes`, async () => {
   const browser = await launch(engine);
   try {
     for (const reducedMotion of ['no-preference', 'reduce']) {
@@ -1138,7 +1139,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
 // A bar's level-1 title takes at least the large title's line, 33 px at 1.2 (neutral.css): the bar keeps that height
 // with a smaller title, a tighter line or no text, and the title stays centred beside a button. The sheet reads the
 // role and level, not the tag: the JS target makes a level chosen between literals an `h2`.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar's level-1 title keeps the large title's line`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a bar's level-1 title keeps the large title's line`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 600, height: 2400 }, colorScheme: 'light' });
@@ -1191,7 +1192,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar's
   } finally { await browser.close(); }
 }, 90000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a bar uses each runtime's large-title line at the current root`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a bar uses each runtime's large-title line at the current root`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 600, height: 2400 } });
@@ -1316,7 +1317,7 @@ test('chromium: painted route titles match the web at several root sizes', async
 // class (the JS target's); an outline stays drawn around the padding. A face whose own line is 2em (`Tall`) grows the
 // button past its floor, as a tall font grows a UIKit button, and its title's ink is drawn where it overhangs the
 // title's box (WebKit has no `overflow-clip-margin`).
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a size or a padding the author wrote on a platform button is its box, and an unsaid one keeps the look's floor`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a size or a padding the author wrote on a platform button is its box, and an unsaid one keeps the look's floor`, async () => {
   const browser = await launch(engine);
   try {
     for (const touch of [false, true]) {
@@ -1355,7 +1356,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a size 
 // the symbol, inline (the wasm runtime) or in a class (the JS target), leaves the word its padding and its wash, as
 // UIKit sizes a bar item to its title: 16 px either side of the word, inside the bar, in either direction. Two long
 // names in a narrow bar both stay in it, each word ending in an ellipsis.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet's bar word keeps its padding whatever width its author wrote`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a sheet's bar word keeps its padding whatever width its author wrote`, async () => {
   const browser = await launch(engine);
   try {
     const page = await browser.newPage({ viewport: { width: 400, height: 300 }, colorScheme: 'light' });
@@ -1400,7 +1401,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a sheet
 }, 90000);
 
 // A part colour's alpha is its only opacity. Removing it restores the look's default.
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: authored placeholder colour and reset in both schemes`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: authored placeholder colour and reset in both schemes`, async () => {
   const browser = await launch(engine);
   try {
     for (const scheme of ['light', 'dark']) {
@@ -1435,8 +1436,7 @@ for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: authore
   } finally { await browser.close(); }
 }, 90000);
 
-
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a primary row press fills the cell and hides only platform separators`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a primary row press fills the cell and hides only platform separators`, async () => {
   const browser = await suiteBrowser(engine);
   const page = await browser.newPage();
   try {
