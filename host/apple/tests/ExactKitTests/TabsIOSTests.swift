@@ -255,6 +255,104 @@ final class TabsIOSTests: XCTestCase {
         XCTAssertTrue(session.presenter.navigation.builtTabs.isEmpty)
     }
 
+    /// The tabs of a container built from `UITab`s are Exact's (LLP 1075.003
+    /// §3.7): the development check journals a change made outside Exact
+    /// once, by the next batch.
+    func testTabsChangedOutsideExactAreJournaledOnce() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("UITab is iOS 18") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let line = "tabs: tabs changed outside Exact, which owns it"
+        try journaledOnce(session, line, tabs) {
+            tabs.tabs = tabs.tabs + [UITab(title: "Extra", image: nil, identifier: "extra") { _ in UIViewController() }]
+        }
+    }
+
+    /// The same for a container built from controllers: its
+    /// `viewControllers` are Exact's.
+    func testATabControllerAddedOutsideExactIsJournaledOnce() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPad builds UITabs for its sidebar") }
+        let session = try fixture("EXACT_TAB_EDGE_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        XCTAssertTrue(session.presenter.navigation.builtTabs.isEmpty)
+        let line = "tabs: viewControllers changed outside Exact, which owns it"
+        try journaledOnce(session, line, tabs) { tabs.viewControllers = (tabs.viewControllers ?? []) + [UIViewController()] }
+    }
+
+    /// A container's controllers are compared as members: a reorder, as
+    /// More's Edit makes, is no change, and a controller put in place of one
+    /// of Exact's is.
+    func testTabControllersAreComparedAsMembers() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPad builds UITabs for its sidebar") }
+        let session = try fixture("EXACT_TAB_EDGE_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let line = "tabs: viewControllers changed outside Exact, which owns it"
+        let count = { session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1 }
+        var shown = try XCTUnwrap(tabs.viewControllers)
+        tabs.viewControllers = shown.reversed()
+        tapTab(tabs, of: try XCTUnwrap(session.presenter.navigation.tabStack(1)))
+        until("a selection after the reorder") { !Agent(session: session).nativeInFlight() && session.presenter.navigation.routerTab == 1 }
+        XCTAssertEqual(count(), 0, "a reorder is no change")
+        shown = try XCTUnwrap(tabs.viewControllers)
+        let kept = try XCTUnwrap(tabs.selectedViewController)
+        let index = try XCTUnwrap(shown.firstIndex { $0 !== kept })
+        shown[index] = UIViewController()
+        tabs.viewControllers = shown
+        tapTab(tabs, of: kept)
+        until("journaled by the next batch") { count() == 1 }
+    }
+
+    /// A container built from controllers whose `viewControllers` the app
+    /// clears holds none of Exact's: the check names it at the next batch.
+    func testTabControllersClearedOutsideExactAreJournaled() throws {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPad builds UITabs for its sidebar") }
+        let session = try fixture("EXACT_TAB_EDGE_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let line = "tabs: viewControllers changed outside Exact, which owns it"
+        let count = { session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1 }
+        XCTAssertEqual(count(), 0)
+        tabs.viewControllers = nil
+        XCTAssertEqual(tabs.viewControllers?.count, 0, "UIKit reads no controllers back, not nil")
+        session.presenter.apply(wireBatch([]))
+        XCTAssertEqual(count(), 1, "journaled at the next batch")
+    }
+
+    /// A container built from controllers on which the app sets `tabs`
+    /// holds `UITab`s, and its `viewControllers` reads nil: the check names
+    /// `tabs` at the next batch.
+    func testTabsSetOnAContainerBuiltFromControllersAreJournaled() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("UITab is iOS 18") }
+        guard UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("an iPad builds UITabs for its sidebar") }
+        let session = try fixture("EXACT_TAB_EDGE_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        XCTAssertTrue(session.presenter.navigation.builtTabs.isEmpty)
+        let logs = { session.agent(#"{"op":"logs","since":0}"#) }
+        let line = "tabs: tabs changed outside Exact, which owns it"
+        XCTAssertFalse(logs().contains(line))
+        // The app's own tabs, which hand back Exact's controllers
+        let controllers = try XCTUnwrap(tabs.viewControllers)
+        tabs.tabs = controllers.enumerated().map { index, controller in UITab(title: "Tab \(index)", image: nil, identifier: "app-\(index)") { _ in controller } }
+        XCTAssertNil(tabs.viewControllers, "a container that holds UITabs reads no controllers")
+        session.presenter.apply(wireBatch([]))
+        XCTAssertEqual(logs().components(separatedBy: line).count - 1, 1, "journaled at the next batch")
+        XCTAssertFalse(logs().contains("tabs: viewControllers changed outside Exact"), "named by the property the app set")
+    }
+
+    /// `line` is journaled by no selection before `change`, once by the
+    /// selection after it, and not again at the next.
+    private func journaledOnce(_ session: ExactSession, _ line: String, _ tabs: UITabBarController, change: () -> Void) throws {
+        let count = { session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1 }
+        tapTab(tabs, 1)
+        until("the second tab selected") { session.presenter.navigation.routerTab == 1 && !Agent(session: session).nativeInFlight() }
+        XCTAssertEqual(count(), 0, "a selection changes nothing Exact owns")
+        change()
+        tapTab(tabs, 0)
+        until("journaled at the next batch") { count() == 1 }
+        tapTab(tabs, 1)
+        until("the second tab selected again") { session.presenter.navigation.routerTab == 1 && !Agent(session: session).nativeInFlight() }
+        XCTAssertEqual(count(), 1, "once")
+    }
+
     /// LLP 1083.000 D4: a column the author placed beside routes offset past it paints
     /// over the native container, whose box is the page's, and takes the
     /// touches there, as the web shows it. A box a route's box meets keeps
