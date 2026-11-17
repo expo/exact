@@ -1,4 +1,5 @@
 #if os(iOS)
+import ExactCore
 import UIKit
 import XCTest
 @testable import ExactKit
@@ -80,6 +81,10 @@ final class ListRowsIOSTests: XCTestCase {
             XCTAssertFalse(p.onlyListRows(wireBatch(ops)), "\(ops)")
         }
         XCTAssertTrue(p.onlyListRows(wireBatch([])), "an empty batch changes no projection input")
+        // A batch that says the root tabs, with no op: a placement change the views do not carry
+        var said = wireBatch([])
+        said.rootTabs = [RootTabs(root: 30, tablist: 61, tabs: [11], panels: [40], unsaid: false)]
+        XCTAssertFalse(p.onlyListRows(said), "the projection reads the root tabs")
     }
 
     /// Whether a header button opens a popover is the header rule's to read

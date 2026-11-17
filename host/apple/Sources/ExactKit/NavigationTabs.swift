@@ -1,44 +1,13 @@
-// @ref LLP 1075.003 §3.7 — a navigation root's tabs, as the web finds them
-// (`host/web/navigation.js` `panelsOf`): the tabpanels its own tablist's
-// tabs name with `aria-controls`, in tab order. Each panel holds one tab's
-// stack — its route rows — and every tab's stack stays mounted. A tablist or
-// a panel inside a route is that route's, never the root's. Shared by the AppKit
-// presenter (hidden and inert, LLP 1038 D6's rule) and the UIKit one (a
-// tab bar controller, one controller per tab).
+// @ref LLP 1075.003 §3.7 — a navigation root's tabs as the kernel finds them
+// (`Kernel::root_tabs`, LLP 1115.001 D11; the web's `panelsOf`,
+// `host/web/navigation.js`): the tabpanels its own tablist's tabs name with
+// `aria-controls`, in tab order, the first tablist in tree order that names
+// one. Each panel holds one tab's stack — its route rows — and every tab's
+// stack stays mounted. A tablist or a panel inside a route is that route's,
+// never the root's. Shared by the AppKit presenter (hidden and inert, LLP 1038
+// D6's rule) and the UIKit one (a tab bar controller, one controller per tab).
+import ExactCore
 import Foundation
-
-/// A navigation root's tabs as the kernel finds them (`exact_root_tabs`;
-/// `Kernel::root_tabs`, LLP 1115.001 D11): the rule every host with a tab
-/// bar reads, over the kernel's own tree in tree order. The Mac's sidebar
-/// reads it (LLP 1115.002 D3); UIKit's tab bar still reads `NavigationTabs`
-/// below, over its views.
-struct RootTabs: Equatable {
-    let tablist: UInt32, tabs: [UInt32], panels: [UInt32]
-    /// Whether each panel's tab needs a navigation controller, read from the
-    /// plan, so known for a tab not built yet (`Runner::panels_need_navigation`,
-    /// LLP 1075.003 §3.7): its panel can hold more than one route, or its
-    /// route can show a header, which the platform shows as its navigation
-    /// bar. One fixed route with no header is a plain view controller.
-    let navigation: [Bool]
-    /// The app left the bar's placement unsaid, by the web's rule for its
-    /// own sidebar (LLP 1116.004 D1.1; `host/web/navigation.js` `unsaidBar`):
-    /// read from the kernel's layout rows, which do not cross to the views.
-    let unsaid: Bool
-    /// The kernel lays the tablist out as `display: none`: the boot covered
-    /// it for the tab bar that takes its place (host/apple/src/closed.rs).
-    let covered: Bool
-
-    init(tablist: UInt32, tabs: [UInt32], panels: [UInt32], navigation: [Bool] = [], unsaid: Bool, covered: Bool = false) {
-        (self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (tablist, tabs, panels, navigation, unsaid, covered)
-    }
-
-    init?(json: Data) {
-        guard let o = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let tablist = o["tablist"] as? Int, let tabs = o["tabs"] as? [Int], let panels = o["panels"] as? [Int] else { return nil }
-        self.init(tablist: UInt32(tablist), tabs: tabs.map { UInt32($0) }, panels: panels.map { UInt32($0) }, navigation: o["navigation"] as? [Bool] ?? [],
-                  unsaid: o["unsaid"] as? Bool ?? false, covered: o["covered"] as? Bool ?? false)
-    }
-}
 
 struct NavigationTabs {
     let tablist: NodeView
@@ -51,36 +20,36 @@ struct NavigationTabs {
         node.container.subviews.compactMap { $0 as? NodeView }.filter { $0.props["navigationKey"] != nil }
     }
 
-    /// The root's tabs, or nil when it has none (one stack).
+    /// The root's tabs, or nil when it has none (one stack): the kernel's,
+    /// as the last batch to say them gave them (`Presenter.rootTabs`),
+    /// resolved to the presenter's views. A tab whose tab or panel has no
+    /// view is left out.
     static func of(_ root: NodeView, _ presenter: Presenter) -> NavigationTabs? {
-        for list in presenter.carrying("role:tablist") where list.isDescendant(of: root) && owner(of: list) === root {
-            var tabs: [NodeView] = [], panels: [NodeView] = []
-            for case let tab as NodeView in list.container.subviews where tab.props["accessibilityRole"] == "tab" {
-                guard let name = tab.props["accessibilityControls"],
-                      let panel = presenter.carrying("id").first(where: {
-                          $0.props["id"] == name && $0.props["accessibilityRole"] == "tabpanel" && owner(of: $0) === root
-                      }) else { continue }
-                tabs.append(tab)
-                panels.append(panel)
-            }
-            if !panels.isEmpty { return NavigationTabs(tablist: list, tabs: tabs, panels: panels) }
+        guard let kernel = presenter.rootTabs[root.id], let tablist = presenter.views[kernel.tablist] else { return nil }
+        var tabs: [NodeView] = [], panels: [NodeView] = []
+        for (tab, panel) in zip(kernel.tabs, kernel.panels) {
+            guard let tab = presenter.views[tab], let panel = presenter.views[panel] else { continue }
+            tabs.append(tab)
+            panels.append(panel)
         }
-        return nil
-    }
-
-    /// The nearest ancestor of a node that is a route or a navigation root.
-    private static func owner(of node: NodeView) -> NodeView? {
-        var at = node.superview
-        while let view = at {
-            if let n = view as? NodeView, n.props["navigationKey"] != nil { return n }
-            at = view.superview
-        }
-        return nil
+        return panels.isEmpty ? nil : NavigationTabs(tablist: tablist, tabs: tabs, panels: panels)
     }
 
     /// Which stack holds the route the root names, and each stack's routes.
     func stacks(selecting key: String) -> (at: Int?, stacks: [[NodeView]]) {
         let stacks = panels.map(NavigationTabs.routes(in:))
         return (stacks.firstIndex { $0.contains { $0.props["navigationKey"] == key } }, stacks)
+    }
+}
+
+extension Presenter {
+    /// Hold each navigation root's tabs a batch says (`Batch.rootTabs`), before
+    /// its ops apply. They are the tree's once the batch is applied, and a
+    /// read resolves them to the views the presenter has then (`of`), so a read
+    /// while the ops apply (the first batch mounts the native owner at the
+    /// root's first frame) has them.
+    func takeRootTabs(_ batch: Batch) {
+        guard let said = batch.rootTabs else { return }
+        rootTabs = Dictionary(said.map { ($0.root, $0) }, uniquingKeysWith: { first, _ in first })
     }
 }

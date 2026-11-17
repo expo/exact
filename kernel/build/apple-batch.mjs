@@ -33,6 +33,7 @@ const codecs = {
   modes: ['[String: String]?', 'nil', 'batchModes()'],
   stringValue: ['String?', 'nil', 'value().string'],
   orientation: ['OrientationRequest?', 'nil', 'batchOrientation()'],
+  rootTabs: ['[RootTabs]?', 'nil', 'batchRootTabs()'],
   sequence: ['(UInt64, UInt64)?', 'nil', 'batchSequence()'],
   collectionSnapshots: ['[CollectionSnapshot]?', 'nil', 'collectionSnapshots()'],
 };

@@ -1380,13 +1380,6 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.role_keys(view, focused, len), |n| n)
         }
 
-        /// A navigation root's tabs by the kernel's rule (LLP 1115.001
-        /// D11), JSON; returns its length.
-        #[no_mangle]
-        pub extern "C" fn exact_root_tabs(rt: u32, view: u32) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.root_tabs(view), |n| n)
-        }
-
         /// Whether a stack splits, by the runner's rule (LLP 1115.002 D4),
         /// JSON; returns its length.
         #[no_mangle]

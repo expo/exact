@@ -94,6 +94,8 @@ pub struct NodeArena {
     pub(crate) bar_symbols: Vec<(u32, f32)>,
     /// Slots that are `position: sticky` (LLP 1083 D3).
     pub(crate) sticky_slots: SlotSet,
+    /// Slots whose node carries `navigationBack`, attached or not (bars.rs).
+    pub(crate) navigation_slots: SlotSet,
     /// Slots in HTML's top layer: popovers, unless their author made them
     /// sticky (`top_layer::lifted`). Each is laid out in the viewport, a
     /// block the kernel implies (`Kernel::imply_blocks`).
@@ -207,6 +209,7 @@ impl Clone for NodeArena {
             mark_reports: self.mark_reports.clone(),
             bar_symbols: self.bar_symbols.clone(),
             sticky_slots: self.sticky_slots.clone(),
+            navigation_slots: self.navigation_slots.clone(),
             top_layer_slots: self.top_layer_slots.clone(),
             timelines: self.timelines.clone(),
             root_font_size_next: self.root_font_size_next,
@@ -306,6 +309,7 @@ impl NodeArena {
         self.bar_symbols.clear();
         self.sticky_slots.clear();
         self.top_layer_slots.clear();
+        self.navigation_slots.clear();
         self.timelines = Default::default();
         for slot in 0..self.live.len() {
             self.live[slot] = false;
@@ -1086,6 +1090,7 @@ impl NodeArena {
         let old = self.props[slot as usize].set(id, value);
         if old.is_none() {
             bump(&mut self.prop_counts, id as usize, true);
+            self.note_navigation(slot, id, true);
         }
         old
     }
@@ -1095,6 +1100,7 @@ impl NodeArena {
         let old = self.props[slot as usize].remove(id);
         if old.is_some() {
             bump(&mut self.prop_counts, id as usize, false);
+            self.note_navigation(slot, id, false);
         }
         old
     }
@@ -1103,6 +1109,7 @@ impl NodeArena {
         for (id, _) in self.props[slot as usize].iter() {
             bump(&mut self.prop_counts, id as usize, false);
         }
+        self.navigation_slots.remove(slot);
     }
 
     /// Whether any live node (attached or not) has prop `id`.

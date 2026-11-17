@@ -141,13 +141,6 @@ extension Runtime {
             return RoleKeys(json: Data(bytes: exact_out(rt), count: Int(len)))
         }
     }
-    /// A navigation root's tabs by the kernel's rule (LLP 1115.001 D11); nil for one stack.
-    func rootTabs(_ view: UInt32) -> RootTabs? {
-        return on(busy: nil) {
-            let len = exact_root_tabs(rt, view)
-            return RootTabs(json: Data(bytes: exact_out(rt), count: Int(len)))
-        }
-    }
     /// What native containers cover of boxes (LLP 1075.003 §3.5), under one
     /// layout: `edges` add to a box's padding; `whole` lays it out as
     /// `display: none`; nil clears.

@@ -1,0 +1,33 @@
+// The root's tabs are the first tablist in tree order whose tabs name a panel
+// (LLP 1115.001 D11): Show adds a tablist ahead of the one the root booted
+// with, so the root's tablist is the one made later, whose view id is the higher.
+routes nav
+  tab home "/"
+  tab other "/other"
+
+component RootTabsOrder
+  state later = false
+  action pick(name: string)
+    nav = select(nav, name)
+  action show
+    later = true
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" testId="app" width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0
+                button press=show testId=`show-${e.name}`
+                  text "Show"
+      if later
+        row role="tablist" testId="later-tabs"
+          button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+            text "Home"
+          button role="tab" aria-controls="panel-other" aria-selected=(nav.tab == "other") press=pick("other")
+            text "Other"
+      row role="tablist" testId="first-tabs"
+        button role="tab" aria-controls="panel-other" aria-selected=(nav.tab == "other") press=pick("other")
+          text "Other"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+          text "Home"

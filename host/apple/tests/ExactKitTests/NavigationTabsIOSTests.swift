@@ -181,7 +181,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let navigation = session.presenter.navigation
         let covered = { () throws -> Bool in
             let root = try XCTUnwrap(session.presenter.root.subviews.first as? NodeView)
-            return try XCTUnwrap(session.runtime.rootTabs(root.id)).covered
+            return try XCTUnwrap(session.presenter.rootTabs[root.id]).covered
         }
         var list = try node(session, "tabs")
         XCTAssertTrue(try covered())

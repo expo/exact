@@ -353,6 +353,20 @@ final class TabsIOSTests: XCTestCase {
         XCTAssertEqual(count(), 1, "once")
     }
 
+    /// LLP 1115.001 D11: the root's tabs are the first tablist in tree order
+    /// whose tabs name a panel, as the kernel and every other host take them,
+    /// though one made later than another has the higher view id.
+    func testTheRootsTabsAreTheFirstTablistInTreeOrder() throws {
+        let session = try fixture("EXACT_ROOT_TABS_ORDER_PLAN")
+        let navigation = session.presenter.navigation
+        let panels = { (names: [String]) in names.compactMap { name in session.presenter.views.values.first { $0.props["id"] == "panel-\(name)" }?.id } }
+        XCTAssertEqual(navigation.tabPanels, panels(["other", "home"]), "the one tablist's order")
+        try tapNode(session, "show-home")
+        until("the tablist added ahead is the root's") {
+            navigation.tabPanels == panels(["home", "other"]) && !Agent(session: session).nativeInFlight()
+        }
+    }
+
     /// LLP 1083.000 D4: a column the author placed beside routes offset past it paints
     /// over the native container, whose box is the page's, and takes the
     /// touches there, as the web shows it. A box a route's box meets keeps

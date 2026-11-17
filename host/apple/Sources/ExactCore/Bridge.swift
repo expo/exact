@@ -76,6 +76,8 @@ public struct Batch {
     public var orientation: OrientationRequest? = nil
     /// Whether the app must finish work an answer started, when that changed (`ExactKit/Holds.swift`).
     public var mustFinish: Bool? = nil
+    /// Every navigation root's tabs, when they changed (LLP 1115.001 D11).
+    public var rootTabs: [RootTabs]? = nil
     /// The kernel transactions it carries, while the runner measures (LLP 1079 D3).
     public var seq: (UInt64, UInt64)?
     /// When `ExactSession.applyInput` marked it as a person's input: on iOS
@@ -87,8 +89,9 @@ public struct Batch {
     public var journal: [String] = []
     package var frameWorkTiming: FrameWorkTiming?
     /// It may change the screen when it applies: it has ops, a control's
-    /// viewless contents or page facts. The presenter resolves an orientation request separately.
-    package var changesScreen: Bool { !ops.isEmpty || controls || facts }
+    /// viewless contents, page facts or the navigation roots' tabs, whose
+    /// placement the views may not carry. The presenter resolves an orientation request separately.
+    package var changesScreen: Bool { !ops.isEmpty || controls || facts || rootTabs != nil }
     package init(ops: [BatchOp], timers: Bool, motion: Bool, clock: Double?, error: String?, timerDueMs: Double? = nil, pending: Bool = false, busy: Bool = false) {
         self.ops = ops; self.timers = timers; self.motion = motion; self.clock = clock
         self.error = error; self.timerDueMs = timerDueMs; self.pending = pending
@@ -1157,6 +1160,42 @@ public struct OrientationRequest: Equatable {
             guard let p = pair.array, p.count == 2, let view = p[0].number, let word = p[1].string else { return nil }
             return "view \(Int(view)) \"\(word)\""
         }
+    }
+}
+
+/// A navigation root's tabs as the kernel finds them (`Kernel::root_tabs`,
+/// LLP 1115.001 D11), the rule every host with a tab bar reads, over the
+/// kernel's tree in tree order, as a batch carries them with the ops it
+/// applies (host/apple/src/root_tabs.rs).
+public struct RootTabs: Equatable {
+    public let root: UInt32, tablist: UInt32
+    /// The tabs that name a panel, and those panels, in tab order.
+    public let tabs: [UInt32], panels: [UInt32]
+    /// Whether each panel's tab needs a navigation controller, read from the
+    /// plan, so known for a tab not built yet (`Runner::panels_need_navigation`,
+    /// LLP 1075.003 §3.7): its panel can hold more than one route, or its
+    /// route can show a header, which the platform shows as its navigation
+    /// bar. One fixed route with no header is a plain view controller.
+    public let navigation: [Bool]
+    /// The app left the bar's placement unsaid, by the web's rule for its
+    /// own sidebar (LLP 1116.004 D1.1; `host/web/navigation.js` `unsaidBar`):
+    /// read from the kernel's layout rows, which do not cross to the views.
+    public let unsaid: Bool
+    /// The tablist is covered whole as the batch ends, so the kernel lays it
+    /// out as `display: none`, as the boot covers one a tab bar replaces
+    /// (host/apple/src/closed.rs); the first install reads it (`adoptBootCover`).
+    public let covered: Bool
+
+    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], navigation: [Bool] = [], unsaid: Bool, covered: Bool = false) {
+        (self.root, self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (root, tablist, tabs, panels, navigation, unsaid, covered)
+    }
+
+    init?(_ o: [String: BatchValue]) {
+        guard let root = o["root"]?.number, let tablist = o["tablist"]?.number else { return nil }
+        let ids = { (key: String) in (o[key]?.array ?? []).compactMap { $0.number.map { UInt32($0) } } }
+        self.init(root: UInt32(root), tablist: UInt32(tablist), tabs: ids("tabs"), panels: ids("panels"),
+                  navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
+                  unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true))
     }
 }
 

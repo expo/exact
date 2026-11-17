@@ -4,6 +4,7 @@
 // web views, and menus through it.
 #if os(macOS)
 import AppKit
+import ExactCore
 import CoreText
 import os
 
@@ -142,9 +143,10 @@ package final class Presenter {
     var onCovers: (([(UInt32, HostCover?)]) -> Void)?
     /// The border box a person dragged a box's `resize` grip to; nil keeps an axis (ResizeGrip.swift).
     var onResizeBox: ((UInt32, CGFloat?, CGFloat?) -> Void)?
-    /// The root tab bar as the window's sidebar (LLP 1115.002 D3), and the kernel's rule for a root's tabs.
+    /// The root tab bar as the window's sidebar (LLP 1115.002 D3).
     lazy var sidebar = SidebarHost(self)
-    var rootTabs: ((UInt32) -> RootTabs?)?
+    /// Each navigation root's tabs, as the last batch to say them gave them (`takeRootTabs`).
+    var rootTabs: [UInt32: RootTabs] = [:]
     /// The head's title goes to the window the app attached, through the
     /// toolbar host that already owns its title (LLP 1048.003 D1).
     func headTitle(_ title: String?) { toolbar.headTitle(title) }
@@ -642,7 +644,7 @@ package final class Presenter {
         resetting = true // (from its first teardown: a view it removes may end an edit)
         defer { resetting = false }
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
-        WakeLock.hold(self, false); releaseOrientationLock() // the new host's first batch says them again
+        WakeLock.hold(self, false); releaseOrientationLock(); rootTabs = [:] // the new host's first batch says them again
         cancelPageElementScroll(viewport.contentView)
         resetFragments()
         focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
@@ -1069,6 +1071,7 @@ package final class Presenter {
         defer { CATransaction.commit() }
         session?.fieldChrome.presented(batch.layoutProvisional)
         defer { applyLanguage(batch); toolbar.languageApplied(batch); applyWakeLock(batch); applyOrientationLock(batch) }
+        takeRootTabs(batch)
         PaintOrder.begin()
         let post = Self.signposts.beginInterval("apply", "\(batch.ops.count) ops"), phase = HostPhases.shared.begin(.apply)
         defer { Self.signposts.endInterval("apply", post); HostPhases.shared.end(phase) }

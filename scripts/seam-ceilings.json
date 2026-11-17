@@ -19,7 +19,7 @@
   },
   "counts": {
     "nodeViewCasts": {
-      "ceiling": 656,
+      "ceiling": 654,
       "sites": [
         "host/apple/Sources/ExactDrag/MouseHeightDragMac.swift: current as? NodeView",
         "host/apple/Sources/ExactDrag/MouseReorderMac.swift: current as? NodeView",
@@ -561,7 +561,6 @@
         "host/apple/Sources/ExactKit/Mac/ShortcutsMac.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactKit/Mac/ShortcutsMac.swift: $0 as? NodeView",
         "host/apple/Sources/ExactKit/Mac/ShortcutsMac.swift: parent as? NodeView",
-        "host/apple/Sources/ExactKit/Mac/SidebarMac.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactKit/Mac/SidebarMac.swift: view as? NodeView",
         "host/apple/Sources/ExactKit/Mac/SplitMac.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactKit/Mac/SplitMac.swift: $0 as? NodeView",
@@ -610,7 +609,6 @@
         "host/apple/Sources/ExactKit/NativeModule.swift: if (view as? NodeView",
         "host/apple/Sources/ExactKit/NativeModule.swift: next as? NodeView",
         "host/apple/Sources/ExactKit/NavigationTabs.swift: $0 as? NodeView",
-        "host/apple/Sources/ExactKit/NavigationTabs.swift: view as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: return at as? NodeView",
         "host/apple/Sources/ExactKit/NodeText.swift: view as? NodeView",
         "host/apple/Sources/ExactKit/PaintCapture.swift: owner as? NodeView",
@@ -680,7 +678,7 @@
       ]
     },
     "treeWalks": {
-      "ceiling": 651,
+      "ceiling": 649,
       "sites": [
         "host/apple/Sources/ExactDrag/MouseHeightDragMac.swift: ancestor = current.superview",
         "host/apple/Sources/ExactDrag/MouseReorderMac.swift: ancestor = current.superview",
@@ -1269,9 +1267,7 @@
         "host/apple/Sources/ExactKit/NativeHatches.swift: while let v = at, !(v is NodeView) { at = v.superview }",
         "host/apple/Sources/ExactKit/NativeModule.swift: entry.handle != nil, let root = entry.view, root.superview === owner,",
         "host/apple/Sources/ExactKit/NativeModule.swift: next = view.superview",
-        "host/apple/Sources/ExactKit/NavigationTabs.swift: at = view.superview",
         "host/apple/Sources/ExactKit/NavigationTabs.swift: node.container.subviews.compactMap { $0 as? NodeView }.filter { $0.props[\"navigationKey\"] != nil }",
-        "host/apple/Sources/ExactKit/NavigationTabs.swift: var at = node.superview",
         "host/apple/Sources/ExactKit/NodeText.swift: stack.append(contentsOf: view.subviews)",
         "host/apple/Sources/ExactKit/NodeText.swift: var at = superview",
         "host/apple/Sources/ExactKit/NodeText.swift: while let v = at, !(v is NodeView) { at = v.superview }",
@@ -1560,7 +1556,7 @@
       ]
     },
     "appleAbiExports": {
-      "ceiling": 316,
+      "ceiling": 315,
       "sites": [
         "host/apple/activityarm/ActivityArm.swift: exact_activity_close",
         "host/apple/activityarm/ActivityArm.swift: exact_activity_open",
@@ -1725,7 +1721,6 @@
         "host/apple/src/abi/exports.rs: exact_request_active",
         "host/apple/src/abi/exports.rs: exact_resize",
         "host/apple/src/abi/exports.rs: exact_role_keys",
-        "host/apple/src/abi/exports.rs: exact_root_tabs",
         "host/apple/src/abi/exports.rs: exact_route_bar",
         "host/apple/src/abi/exports.rs: exact_route_matches",
         "host/apple/src/abi/exports.rs: exact_route_one_location",

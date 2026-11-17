@@ -5,6 +5,7 @@
 // for it, and what the split view does on a narrow window.
 #if os(macOS)
 import AppKit
+import ExactCore
 import XCTest
 @testable import ExactKit
 
@@ -533,9 +534,11 @@ final class SidebarMacTests: XCTestCase {
         XCTAssertEqual(changes, 0)
 
         // A tablist the app places itself (a row beside the panels) is the app's: no sidebar, and its box comes back.
-        // The placement is the kernel's to read, asked again when the root's level moves, as a window's resize
-        // moves it (what turns a responsive app's bar into its own rail).
+        // The host reads the placement from the kernel's layout rows at each batch, so the batch that places it is
+        // followed, with nothing moving while the sidebar covers the tablist; then a resize, as a responsive app's
+        // rail would have it.
         try press("placed-today")
+        XCTAssertFalse(view.wantsWindowSidebar, "followed in the batch that places it")
         window.setContentSize(NSSize(width: 760, height: 500))
         window.layoutIfNeeded()
         XCTAssertFalse(view.wantsWindowSidebar)
@@ -610,9 +613,9 @@ final class SidebarMacTests: XCTestCase {
         XCTAssertEqual(split.sidebarWidth, first + 76, accuracy: 1, "the next window's sidebar opens at the width the person left")
     }
 
-    /// The kernel names the root's tabs: a presenter with no kernel behind
-    /// it has no sidebar, and where the kernel and the views disagree the
-    /// tablist stays as authored.
+    /// The root's tabs are the kernel's, as a batch says them: with none
+    /// said there is no sidebar, whatever the views hold, and the sidebar
+    /// follows the placement the batch says.
     func testTheKernelsRootTabsDecide() throws {
         _ = NSApplication.shared
         let p = Presenter()
@@ -627,22 +630,36 @@ final class SidebarMacTests: XCTestCase {
             ["op": "children", "id": 1, "ids": [2, 4]],
             ["op": "roots", "ids": [1]],
         ]))
-        XCTAssertNotNil(p.navigation.root?.tabs, "the views name a root tab")
-        XCTAssertFalse(p.sidebar.wanted, "no kernel to ask")
-        let touch = { p.apply(wireBatch([["op": "props", "id": 4, "set": ["accessibilityLabel": "Tabs"]]])) }
-        p.rootTabs = { _ in RootTabs(tablist: 4, tabs: [5], panels: [2], unsaid: true) }
-        touch()
+        XCTAssertNil(p.navigation.root?.tabs, "no batch said the root's tabs")
+        XCTAssertFalse(p.sidebar.wanted)
+        let touch = { (said: [RootTabs]) in
+            var batch = wireBatch([["op": "props", "id": 4, "set": ["accessibilityLabel": "Tabs"]]])
+            batch.rootTabs = said
+            p.apply(batch)
+        }
+        touch([RootTabs(root: 1, tablist: 4, tabs: [5], panels: [2], unsaid: true)])
         XCTAssertTrue(p.sidebar.wanted)
         XCTAssertEqual(p.sidebar.shown?.rows.map(\.face.title), ["One"])
-        p.rootTabs = { _ in RootTabs(tablist: 4, tabs: [5], panels: [2], unsaid: false) }
-        touch()
+        touch([RootTabs(root: 1, tablist: 4, tabs: [5], panels: [2], unsaid: false)])
         XCTAssertFalse(p.sidebar.wanted, "placed by the app")
-        p.rootTabs = { _ in RootTabs(tablist: 9, tabs: [5], panels: [2], unsaid: true) }
-        touch()
-        XCTAssertFalse(p.sidebar.wanted, "the kernel's tablist is not the views'")
-        p.rootTabs = { _ in nil }
-        touch()
-        XCTAssertFalse(p.sidebar.wanted, "the views name tabs the kernel does not")
+        touch([RootTabs(root: 1, tablist: 4, tabs: [5], panels: [2], unsaid: true)])
+        XCTAssertTrue(p.sidebar.wanted)
+        touch([])
+        XCTAssertNil(p.navigation.root?.tabs, "a batch that says no root tabs clears them")
+        XCTAssertFalse(p.sidebar.wanted, "the kernel names no root tabs")
+    }
+
+    /// The root's tabs are the first tablist in tree order whose tabs name a
+    /// panel (LLP 1115.001 D11): the sidebar's rows follow a tablist added
+    /// ahead of the one the root booted with, though its view id is the higher.
+    func testTheSidebarFollowsTheFirstTablistInTreeOrder() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "sidebar-order-" + UUID().uuidString)
+        self.session = session
+        XCTAssertNil(session.boot(plan: try fixturePlan("ROOT_TABS_ORDER"), size: CGSize(width: 700, height: 500)).error)
+        XCTAssertEqual(session.presenter.sidebar.shown?.rows.map(\.face.title), ["Other", "Home"], "the one tablist's order")
+        try press("show-home")
+        XCTAssertEqual(session.presenter.sidebar.shown?.rows.map(\.face.title), ["Home", "Other"], "the tablist added ahead")
     }
 }
 #endif

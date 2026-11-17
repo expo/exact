@@ -576,7 +576,51 @@ pub fn rel_has(rel: &str, token: &str) -> bool {
         .any(|t| t.eq_ignore_ascii_case(token))
 }
 
+impl crate::arena::NodeArena {
+    /// Keep the index of the slots whose node carries `navigationBack` as
+    /// `id` is set (`present`) or removed on `slot`: the navigation roots a
+    /// batch says the tabs of are found without a walk of the tree.
+    pub(crate) fn note_navigation(&mut self, slot: u32, id: PropId, present: bool) {
+        if id != PropId::NavigationBack {
+            return;
+        }
+        if present {
+            self.navigation_slots.insert(slot);
+        } else {
+            self.navigation_slots.remove(slot);
+        }
+    }
+
+    /// The slots whose node carries `navigationBack`, attached or not, in
+    /// ascending order.
+    pub fn navigation_slots(&self) -> impl Iterator<Item = u32> + '_ {
+        self.navigation_slots.iter()
+    }
+}
+
 impl Kernel {
+    /// The attached nodes that carry `navigationBack`, the navigation roots,
+    /// from the arena's index rather than a walk of the tree; in no order a
+    /// host should rely on.
+    pub fn navigation_roots(&self) -> Vec<ViewId> {
+        let arena = self.arena();
+        let attached = |slot: u32| {
+            let mut at = Some(slot);
+            while let Some(s) = at {
+                if arena.is_root(s) {
+                    return true;
+                }
+                at = arena.parent(s);
+            }
+            false
+        };
+        arena
+            .navigation_slots()
+            .filter(|s| attached(*s))
+            .map(|s| arena.local_id(s))
+            .collect()
+    }
+
     /// The header of `route` as its bar is projected from it
     /// ([`header_bar`]), read from the tree as it now stands. `back` is the
     /// `id` the navigation root names as its Back control; `pressed` says

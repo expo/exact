@@ -243,7 +243,7 @@ public final class ExactLaunch: NSObject {
     /// A batch's op kinds and a few of the views it touched (test ID, else
     /// kind), or what it changed with no ops, for the TTI trace.
     private static func summary(_ batch: Batch, _ presenter: Presenter) -> String {
-        if batch.ops.isEmpty { return [batch.controls ? "controls" : nil, batch.facts ? "facts" : nil, batch.orientation != nil ? "orientation" : nil].compactMap { $0 }.joined(separator: " ") }
+        if batch.ops.isEmpty { return [batch.controls ? "controls" : nil, batch.facts ? "facts" : nil, batch.rootTabs != nil ? "rootTabs" : nil, batch.orientation != nil ? "orientation" : nil].compactMap { $0 }.joined(separator: " ") }
         var kinds: [String: Int] = [:], names: [String] = []
         for op in batch.ops {
             kinds[op.op.rawValue, default: 0] += 1

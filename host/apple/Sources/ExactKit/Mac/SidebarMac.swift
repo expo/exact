@@ -63,11 +63,6 @@ final class SidebarHost {
     private weak var projected: NodeView?
     private var savedAccessibilityHidden = false
     private var syncing = false
-    /// What the kernel was last asked of, and its answer: asked again only
-    /// when the root's tabs as the views name them, or the tablists
-    /// mounted, change — never on a batch that only scrolls.
-    private var asked: [UInt32]?
-    private var kernel: RootTabs?
     /// The tablist's subtree: a batch that touches none of it leaves the rows.
     private var watched: Set<UInt32> = []
     private var decision: String?
@@ -114,7 +109,7 @@ final class SidebarHost {
     /// (`HostCovers.reset`), so nothing is told to the runner that is leaving.
     func reset() {
         projected = nil
-        shown = nil; asked = nil; kernel = nil; watched = []; decision = nil
+        shown = nil; watched = []; decision = nil
     }
 
     /// Each batch, after the navigation's pass; and when a controller comes
@@ -140,44 +135,11 @@ final class SidebarHost {
 
     private func read(_ batch: Batch?) {
         guard !ExactEnv.authoredChrome, let root = presenter.navigation.root else { shown = nil; return }
-        let host = root.tabs
-        // What the kernel is asked by: the root, its tabs as the views name
-        // them, else the tablists mounted (the kernel may find one of them).
-        let signature = [root.node.id] + (host.map { [$0.tablist.id] + $0.tabs.map(\.id) + [0] + $0.panels.map(\.id) }
-            ?? [0] + presenter.carrying("role:tablist").map(\.id))
-        // The placement is read from the root's and the tablist's layout
-        // rows, which do not cross: a batch that writes either one's props
-        // or style, or that moves the root or a child of it (what a change
-        // of the root's direction does, and a resize), asks again. A list
-        // scrolling inside a tab does neither.
-        let level = Set(root.node.container.subviews.compactMap { ($0 as? NodeView)?.id } + [root.node.id])
-        let placed = batch?.ops.contains { op in
-            guard let id = op.nodeID else { return false }
-            switch op.op {
-            case .style, .props: return id == root.node.id || id == host?.tablist.id
-            case .frame: return level.contains(id)
-            default: return false
-            }
-        } ?? false
-        if signature != asked || placed {
-            // Other tabs: their rows are read again.
-            if signature != asked { watched = [] }
-            asked = signature
-            kernel = presenter.rootTabs?(root.node.id)
-        }
-        let names = { (ids: [UInt32]) in ids.map { "#\($0)" }.joined(separator: " ") }
-        guard let host, let kernel = self.kernel else {
+        // The root's tabs as the last batch to say them gave them (`NavigationTabs.of`), with what only the
+        // kernel's layout rows tell: whether the app left the bar's placement unsaid
+        guard let host = root.tabs, let kernel = presenter.rootTabs[root.node.id] else {
             shown = nil
-            // One names root tabs and the other none: said, never guessed
-            // past. A presenter fed by hand has no kernel to ask.
-            if let kernel = self.kernel { decide("kept as authored: the kernel names root tabs (tablist #\(kernel.tablist): \(names(kernel.tabs))) that this host's views do not") }
-            else if host != nil, presenter.rootTabs != nil { decide("kept as authored: this host's views name root tabs the kernel does not") }
-            else { decide(nil) }
-            return
-        }
-        guard kernel.tablist == host.tablist.id, kernel.tabs == host.tabs.map(\.id), kernel.panels == host.panels.map(\.id) else {
-            shown = nil
-            decide("kept as authored: the kernel's root tabs (tablist #\(kernel.tablist): \(names(kernel.tabs)); panels \(names(kernel.panels))) are not this host's (tablist #\(host.tablist.id): \(names(host.tabs.map(\.id))); panels \(names(host.panels.map(\.id))))")
+            decide(nil)
             return
         }
         // An explicit opt-out keeps the bar authored, including when the

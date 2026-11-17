@@ -365,6 +365,8 @@ pub struct Runner<D: DataSource> {
     strings: vm::Strings,
     sites: crate::instance::SiteIndex,
     inspection_digest: std::cell::OnceCell<String>,
+    /// The plan's tab panel sites and whether each needs a navigation controller (`Runner::panels_need_navigation`).
+    panel_navigation: std::cell::OnceCell<(Vec<NodesId>, Vec<bool>)>,
     /// [`Runner::keeps_midi`], made at the first agent read.
     keeps_midi: std::cell::OnceCell<bool>,
     action_binding_origin: std::rc::Rc<()>,
@@ -848,6 +850,7 @@ impl<D: DataSource> Runner<D> {
             midi: crate::runner::midi::queue(&plan, &data),
             plan,
             inspection_digest: std::cell::OnceCell::new(),
+            panel_navigation: std::cell::OnceCell::new(),
             keeps_midi: std::cell::OnceCell::new(),
             action_binding_origin: std::rc::Rc::new(()),
             completion_identity: Default::default(),

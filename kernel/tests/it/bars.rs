@@ -989,6 +989,64 @@ fn a_roots_tabs_are_the_panels_its_own_tablist_names() {
     assert_eq!(kernel.root_tabs(99), None);
 }
 
+/// The navigation roots a host says the tabs of (`Kernel::navigation_roots`)
+/// are the attached nodes that carry `navigationBack`, as a node gains or
+/// loses it, leaves the tree, or goes and its slot is used again.
+#[test]
+fn the_navigation_roots_are_the_attached_nodes_that_carry_navigation_back() {
+    const ROOT: &[(PropId, &str)] = &[(PropId::NavigationBack, "back")];
+    let mut kernel = kernel(view(
+        1,
+        vec![
+            Node(2, NodeType::View, ROOT, vec![view(3, vec![])]),
+            Node(4, NodeType::View, ROOT, vec![]),
+        ],
+    ));
+    let roots = |k: &Kernel| {
+        let mut roots = k.navigation_roots();
+        roots.sort_unstable();
+        roots
+    };
+    assert_eq!(roots(&kernel), vec![2, 4]);
+    let back = PropValue::Str("back".into());
+    let (prop, none) = (PropId::NavigationBack, Vec::<u32>::new());
+    kernel
+        .apply(
+            0,
+            2,
+            &[Op::SetProp {
+                id: 3,
+                prop,
+                value: back,
+            }],
+        )
+        .unwrap();
+    assert_eq!(roots(&kernel), vec![2, 3, 4], "a node that gains it");
+    kernel
+        .apply(0, 3, &[Op::ClearProp { id: 4, prop }])
+        .unwrap();
+    assert_eq!(roots(&kernel), vec![2, 3], "a node that loses it");
+    let children = vec![4];
+    kernel
+        .apply(0, 4, &[Op::SetChildren { id: 1, children }])
+        .unwrap();
+    assert_eq!(roots(&kernel), none, "nodes that left the tree");
+    let made = [
+        Op::DestroyView { id: 3 },
+        Op::DestroyView { id: 2 },
+        Op::CreateView {
+            id: 5,
+            node_type: NodeType::View,
+        },
+        Op::SetChildren {
+            id: 1,
+            children: vec![4, 5],
+        },
+    ];
+    kernel.apply(0, 5, &made).unwrap();
+    assert_eq!(roots(&kernel), none, "a node made in a freed slot");
+}
+
 /// LLP 1141.002 D1: the first root tab whose `rel` holds the token
 /// `search`, ASCII case-insensitively, is the app's search tab, known
 /// before its panel holds anything; a `rel` without the token is not.

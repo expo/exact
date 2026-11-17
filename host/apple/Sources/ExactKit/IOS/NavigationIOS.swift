@@ -414,7 +414,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         guard !bootCoverSeen else { return false }
         bootCoverSeen = true
         guard let root = presenter.root.subviews.first as? NodeView,
-              let tabs = presenter.session?.runtime.rootTabs(root.id), tabs.covered, covers[tabs.tablist] == nil else { return false }
+              let tabs = presenter.rootTabs[root.id], tabs.covered, covers[tabs.tablist] == nil else { return false }
         covers[tabs.tablist] = .whole
         delivered[tabs.tablist] = .whole
         return true

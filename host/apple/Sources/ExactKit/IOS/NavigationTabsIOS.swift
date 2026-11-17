@@ -83,7 +83,7 @@ extension NavigationHost {
         routerTab = p.at
         // Read from the plan which tabs need a navigation controller, so a tab not built yet gets its controller;
         // assume one where the plan gives no answer
-        let kernel = presenter.session?.runtime.rootTabs(p.root.id)
+        let kernel = presenter.rootTabs[p.root.id]
         let needsNavigation = Dictionary(zip(kernel?.panels ?? [], kernel?.navigation ?? []), uniquingKeysWith: { $1 })
         let navs = tabs.panels.enumerated().map { index, panel in
             makeTabStack(panel.id, index == p.at ? first : base(p.wanted[index]), navigation: needsNavigation[panel.id] ?? true)

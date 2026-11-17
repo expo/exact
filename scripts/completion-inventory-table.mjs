@@ -351,7 +351,7 @@ export const classifications = [
       "exact_host_covers exact_intrinsics exact_layout_stamp exact_link_activities exact_list_covered exact_log exact_measure_block exact_measure_work " +
       "exact_measure_work_later exact_placement_box exact_plan_covers_viewport exact_plan_digest exact_preloads_begin exact_preloads_count exact_preloads_launched " +
       "exact_preloads_mark exact_preloads_name exact_preloads_opened exact_press_face exact_protocol_location_of exact_radio_group exact_reads_on_line " +
-      "exact_refresh_entry exact_region_request exact_regions exact_role_keys exact_root_tabs exact_row_reuse exact_scheme exact_screen exact_select_options " +
+      "exact_refresh_entry exact_region_request exact_regions exact_role_keys exact_row_reuse exact_scheme exact_screen exact_select_options " +
       "exact_stack_split exact_svg_islands exact_forma exact_titlebar_area exact_trim exact_view exact_view_scheme"],
     ["apple:runner/src/frame_health.rs",
       "exact_frame_health_applied exact_frame_health_capture exact_frame_health_context exact_frame_health_create exact_frame_health_destroy " +

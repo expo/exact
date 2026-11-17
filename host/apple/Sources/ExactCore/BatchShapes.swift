@@ -25,6 +25,14 @@ extension BatchReader {
         return nil
     }
 
+    package mutating func batchRootTabs() throws -> [RootTabs]? {
+        guard case .array(let roots) = try value() else { return nil }
+        return roots.compactMap { root in
+            guard case .object(let o) = root else { return nil }
+            return RootTabs(o)
+        }
+    }
+
     package mutating func batchSequence() throws -> (UInt64, UInt64)? {
         let range = try array { try $0.number() }
         if range.count == 2, range.allSatisfy({ $0 >= 0 && $0 == $0.rounded() }) { return (UInt64(range[0]), UInt64(range[1])) }

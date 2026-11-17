@@ -95,10 +95,11 @@ extension Presenter {
     /// projection names that port. A node on the way up that the projection reads
     /// (a header, a tab, tablist or tabpanel, a route, the stack's Back
     /// control), a list that is a route or a routes' owner, or one inside a
-    /// header, a tab or the Back control makes the op count. Read before the batch applies,
+    /// header, a tab or the Back control makes the op count, and so does a batch that says the
+    /// root tabs (`rootTabs`), which the projection reads. Read before the batch applies,
     /// while its destroys still have views.
     func onlyListRows(_ batch: Batch) -> Bool {
-        guard !batch.controls else { return false }
+        guard !batch.controls, batch.rootTabs == nil else { return false }
         if batch.ops.isEmpty { return true }
         let dependencies = listRowDependencies ?? ListRowDependencies(self, scrolls: Set(
             navigation.controllers.values.compactMap { $0.node.props["navigationScroll"] }))

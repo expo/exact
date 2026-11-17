@@ -143,7 +143,7 @@ extension NavigationHost {
     func followSidebar(_ p: Projection) {
         #if os(iOS)
         guard #available(iOS 18.0, tvOS 18.0, *), !builtTabs.isEmpty, UIDevice.current.userInterfaceIdiom == .pad, let container = tabController,
-              tabOwner === container, let tabs = p.tabs, let kernel = presenter.session?.runtime.rootTabs(p.root.id) else { return }
+              tabOwner === container, let tabs = p.tabs, let kernel = presenter.rootTabs[p.root.id] else { return }
         let mode: UITabBarController.Mode = sidebarAdapts(tabs, unsaid: kernel.unsaid) ? .tabSidebar : .tabBar
         guard container.mode != mode else { return }
         container.mode = mode

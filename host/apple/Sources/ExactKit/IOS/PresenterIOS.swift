@@ -2,6 +2,7 @@
 // document, with eligible list-row wrappers omitted, host batches, keyboard insets and
 // field reveal, owned by one session (LLP 1031 D1).
 #if os(iOS) || os(tvOS)
+import ExactCore
 import UIKit
 import CoreText
 import os
@@ -153,6 +154,8 @@ package final class Presenter {
     /// Nodes marked `hatch="word"` (LLP 1075.003.000).
     lazy var elements: any ElementHatching = NativeModuleLink.makeElements?(self) ?? NoElementHatches()
     lazy var navigation = NavigationHost(presenter: self)
+    /// Each navigation root's tabs, as the last batch to say them gave them (`takeRootTabs`).
+    var rootTabs: [UInt32: RootTabs] = [:]
     #if os(tvOS)
     lazy var menuKey = MenuKey(presenter: self)
     lazy var focusGuides = FocusGuides(presenter: self)
@@ -350,6 +353,7 @@ package final class Presenter {
         resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
         WakeLock.hold(self, false) // the new host's first batch says it again
+        rootTabs = [:] // the new host's first batch says them again
         releaseOrientationLock()
         focusEvents.reset(); TipLink.installed?.withdraw(owner: self)
         // Every hatched node ends first, its view and platform object there.
@@ -826,7 +830,7 @@ package final class Presenter {
     /// and makes its correction without the presenter's whole finalization
     /// pass, unless work waits on a batch (a focus, a callback, a scroll).
     private func applySnapshots(_ batch: Batch) -> Bool {
-        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
+        guard !applying, !pageGeometryOwed, batch.error == nil, !batch.controls, batch.rootTabs == nil, !batch.ops.isEmpty, batch.ops.allSatisfy({ $0.op == .collections }),
               waiting.isEmpty, pendingScrolls.isEmpty, pendingFocus == nil else { return false }
         collections.beginBatch(batch)
         collections.endBatch()
@@ -853,6 +857,7 @@ package final class Presenter {
         defer { inputStarted = outerInput }
         defer { applyLanguage(batch); applyWakeLock(batch); applyOrientationLock(batch) }
         if applySnapshots(batch) { return }
+        takeRootTabs(batch)
         PaintOrder.begin(); let schemes = ColorSchemes.begin(); defer { schemes.end() }
         let post = Self.signpostLog.signpostsEnabled ? Self.signposts.beginInterval("apply") : nil
         let phase = HostPhases.shared.begin(.apply)

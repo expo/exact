@@ -49,8 +49,12 @@ impl<D: DataSource> Runner<D> {
     /// panel whose `role` is computed): a navigation controller can show any
     /// of its routes.
     pub fn panels_need_navigation(&self, panels: &[ViewId]) -> Vec<bool> {
-        let sites = crate::instance::tabs::panel_sites(&self.plan);
-        let navigation = crate::instance::tabs::sites_need_navigation(&self.plan, &sites);
+        // Read from the plan once: a runner's plan is fixed, and a host asks at every batch's end
+        let (sites, navigation) = self.panel_navigation.get_or_init(|| {
+            let sites = crate::instance::tabs::panel_sites(&self.plan);
+            let navigation = crate::instance::tabs::sites_need_navigation(&self.plan, &sites);
+            (sites, navigation)
+        });
         panels
             .iter()
             .map(|p| {

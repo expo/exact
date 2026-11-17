@@ -513,54 +513,6 @@ impl<D: DataSource> Bridge<D> {
         self.output.len() as u32
     }
 
-    /// A navigation root's tabs (`exact_root_tabs`; `Kernel::root_tabs`, LLP
-    /// 1115.001 D11), as JSON in the output buffer: `{"tablist":view,
-    /// "tabs":[view...],"panels":[view...],"navigation":[bool...],
-    /// "unsaid":bool,"covered":bool}`, the tabs that name a panel and those
-    /// panels in tab order, or `null` for a root with one stack. `navigation`:
-    /// whether each panel's tab needs a navigation controller
-    /// (`Runner::panels_need_navigation`), read from the plan, so it is known
-    /// for a tab not built yet. `unsaid`: the app left the bar's placement
-    /// unsaid, by the web's rule for its own sidebar (`host/web/navigation.js`
-    /// `unsaidBar`, LLP 1116.004 D1.1): the tablist is a direct child of the
-    /// root, not vertical, in flow in the root's flex column, and itself a
-    /// row. It is read here because the layout rows it asks of never cross to
-    /// the presenter (`style::presenter_ignores`). `covered`: the tablist is
-    /// covered whole, as the boot covers one a tab bar replaces
-    /// (`closed.rs`). Not a batch: nothing changes.
-    pub fn root_tabs(&mut self, view: u32) -> u32 {
-        use exact_kernel::{Display, FlexDirection, PositionType, PropId};
-        let list = |ids: &[u32]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-        let json = self.host.as_ref().and_then(|h| {
-            let kernel = h.runner().kernel();
-            let tabs = kernel.root_tabs(view)?;
-            let (root, bar) = (kernel.node(view)?, kernel.node(tabs.tablist)?);
-            let column = |d| matches!(d, FlexDirection::Column | FlexDirection::ColumnReverse);
-            let unsaid = root.children().contains(&tabs.tablist)
-                && bar.props.str(PropId::AccessibilityOrientation) != Some("vertical")
-                && root.style.display == Display::Flex
-                && column(root.style.flex_direction)
-                && matches!(
-                    bar.layout_position(),
-                    PositionType::Static | PositionType::Relative
-                )
-                && !column(bar.style.flex_direction);
-            let arena = kernel.arena();
-            let covered = arena.slot_of(tabs.tablist).and_then(|s| arena.cover(s))
-                == Some(exact_kernel::HostCover::Whole);
-            let navigation = h.runner().panels_need_navigation(&tabs.panels);
-            let navigation = navigation.iter().map(bool::to_string).collect::<Vec<_>>().join(",");
-            Some(format!(
-                "{{\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}}}",
-                tabs.tablist,
-                list(&tabs.tabs),
-                list(&tabs.panels)
-            ))
-        });
-        self.output = json.unwrap_or_else(|| "null".into()).into_bytes();
-        self.output.len() as u32
-    }
-
     /// Whether the stack whose root route is `view` splits (`exact_stack_split`;
     /// `Runner::stack_split`, LLP 1115.002 D4), as JSON in the output buffer:
     /// `{"list":view|null,"width":number|null,"rows":[[route,row]...],

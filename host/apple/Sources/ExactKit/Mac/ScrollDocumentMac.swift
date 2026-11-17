@@ -51,7 +51,7 @@ extension Presenter {
     /// the snapshot places.
     static func onlySnapshots(_ batch: Batch) -> Bool {
         !batch.ops.isEmpty && batch.ops.allSatisfy { $0.op == .collections } && batch.error == nil && batch.wakelock == nil
-            && batch.orientation == nil && !batch.layoutProvisional && !batch.controls
+            && batch.orientation == nil && batch.rootTabs == nil && !batch.layoutProvisional && !batch.controls
     }
 
     /// Charge the report (decode, layout and apply) to the

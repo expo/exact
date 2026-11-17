@@ -2,6 +2,7 @@
 import UIKit
 import XCTest
 import ObjectiveC
+import ExactCore
 @testable import ExactKit
 
 final class NavigationBootIOSTests: XCTestCase {
@@ -322,7 +323,10 @@ final class NavigationBootIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
         let session = try deferredTabs(), p = session.presenter, nav = p.navigation
         let root = try XCTUnwrap(nav.container), route = try XCTUnwrap(nav.bootOwner?.route)
-        p.apply(wireBatch([["op": "children", "id": root.id, "ids": [route.node.id]]]))
+        // The root left with one route has no tabs, as the kernel says with the ops
+        var dropped = wireBatch([["op": "children", "id": root.id, "ids": [route.node.id]]])
+        dropped.rootTabs = []
+        p.apply(dropped)
         // A structural change must complete ownership synchronously.
         XCTAssertNil(nav.bootOwner)
         let owner = try XCTUnwrap(nav.primaryNavigation)
@@ -342,7 +346,12 @@ final class NavigationBootIOSTests: XCTestCase {
         let session = try deferredTabs(), p = session.presenter, nav = p.navigation
         let root = try XCTUnwrap(nav.container), tabs = try XCTUnwrap(NavigationTabs.of(root, p))
         let reversed = Array(tabs.tabs.reversed())
-        p.apply(wireBatch([["op": "children", "id": tabs.tablist.id, "ids": reversed.map(\.id)]]))
+        // The tabs in their new order, as the kernel says them with the ops
+        let said = try XCTUnwrap(p.rootTabs[root.id])
+        var reordered = wireBatch([["op": "children", "id": tabs.tablist.id, "ids": reversed.map(\.id)]])
+        reordered.rootTabs = [RootTabs(root: said.root, tablist: said.tablist, tabs: said.tabs.reversed(), panels: said.panels.reversed(),
+                                       navigation: said.navigation.reversed(), unsaid: said.unsaid, covered: said.covered)]
+        p.apply(reordered)
         XCTAssertNil(nav.bootOwner)
         XCTAssertEqual(nav.tabPanels, tabs.panels.reversed().map(\.id))
         let owner = try XCTUnwrap(nav.primaryOwner), stack = try XCTUnwrap(nav.primaryNavigation)
