@@ -77,7 +77,7 @@ fn usage() -> String {
   contract migrate <file.contract>
   contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
   contract sources <file.contract>
-  contract fmt [--check | --stdout] <file.contract>
+  contract fmt [--check | --stdout | --stdin] <file.contract>
   contract fmt --uses <file.contract>
   contract types <file.contract> [-o <app.d.ts>] [--check]
   contract rust <file.contract> [-o <shapes.rs>]
@@ -522,10 +522,14 @@ fn tests(args: &[String]) -> ExitCode {
     }
 }
 
-/// Explicit formatting, with read-only preview and check modes; `--uses`
-/// writes the `use` lines each file of the program lacks (LLP 1091 D1).
+/// Explicit formatting, with read-only preview and check modes, and one for
+/// an editor's unsaved text; `--uses` writes the `use` lines each file of the
+/// program lacks (LLP 1091 D1).
 fn fmt(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: contract fmt [--check | --stdout] <file.contract>\n       contract fmt --uses <file.contract>";
+    const USAGE: &str = "usage: contract fmt [--check | --stdout | --stdin] <file.contract>
+       contract fmt --uses <file.contract>
+  --stdin: stdin's text, formatted to stdout; <file.contract> names it and is not read";
+    const MODES: [&str; 3] = ["--check", "--stdout", "--stdin"];
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -538,13 +542,8 @@ fn fmt(args: &[String]) -> ExitCode {
     }
     let (input, mode) = match args {
         [input] if !input.starts_with('-') => (input, ""),
-        [flag, input]
-            if matches!(flag.as_str(), "--check" | "--stdout") && !input.starts_with('-') =>
-        {
-            (input, flag.as_str())
-        }
-        [input, flag]
-            if matches!(flag.as_str(), "--check" | "--stdout") && !input.starts_with('-') =>
+        [flag, input] | [input, flag]
+            if MODES.contains(&flag.as_str()) && !input.starts_with('-') =>
         {
             (input, flag.as_str())
         }
@@ -553,15 +552,17 @@ fn fmt(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let result = std::fs::read_to_string(input)
-        .map_err(|e| e.to_string())
-        .and_then(|before| {
-            let after = contract_syntax::fmt::format(&before).map_err(|e| e.to_string())?;
-            Ok((before, after))
-        });
+    let before = match mode {
+        "--stdin" => std::io::read_to_string(std::io::stdin()),
+        _ => std::fs::read_to_string(input),
+    };
+    let result = before.map_err(|e| e.to_string()).and_then(|before| {
+        let after = contract_syntax::fmt::format(&before).map_err(|e| e.to_string())?;
+        Ok((before, after))
+    });
     match result {
         Ok((before, after)) => match mode {
-            "--stdout" => {
+            "--stdout" | "--stdin" => {
                 print!("{after}");
                 ExitCode::SUCCESS
             }

@@ -1,6 +1,6 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, SETTLE_DEADLINE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { startClock } from "./flow.js";
 import { waitForInflight } from "./agent.js";
@@ -200,7 +200,9 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
       return null;
     }
   }
-  const launch = encoder.encode(launchLocation());
+  // After a reload, the visits Back returns to come first, one a line, so the runner launches with them beneath (#527).
+  // A rendered document's checkpoint is matched against the location alone (`page_launch`), so it launches without them.
+  const launch = encoder.encode([...(host.page?.checkpoint ? [] : launchVisits()), launchLocation()].join("\n"));
   if (host.wasm.exact_set_launch) {
     const [epoch, offset] = reportTime(now());
     host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()));

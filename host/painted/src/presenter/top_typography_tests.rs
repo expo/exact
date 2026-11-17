@@ -130,6 +130,7 @@ fn the_dialog_and_the_menu_keep_materials_metrics() {
         opens: None,
     };
     let alert = |rows: Vec<Row>| Plan::Alert {
+        font_family: None,
         title: Some("Title".into()),
         title_direction: exact_kernel::Direction::Ltr,
         message: Some("Message".into()),

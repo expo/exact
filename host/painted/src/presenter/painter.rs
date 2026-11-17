@@ -439,7 +439,11 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         } else {
-            self.brush.repeat_apple_frame().map(|_| true)
+            let repeated = self.brush.repeat_apple_frame()?;
+            if !repeated {
+                self.repaint();
+            }
+            Ok(repeated)
         }
     }
     pub(crate) fn painter_state(&self) -> serde_json::Value {

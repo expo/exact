@@ -798,6 +798,10 @@ impl Module {
         if self.host.native.is_none() && self.native_slot.hosted() {
             self.host.hosted = true;
             self.host.later = true;
+        }
+        // packages live in the host's app module: their synchronous calls reach
+        // it even when the app links a native module of its own (the door)
+        if self.native_slot.hosted() {
             self.host.hosted_call = self.native_slot.hosted_call();
         }
         engine

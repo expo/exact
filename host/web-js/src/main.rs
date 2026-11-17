@@ -39,6 +39,8 @@ mod modes_tests;
 #[cfg(test)]
 mod module_tests;
 #[cfg(test)]
+mod navigation_tests;
+#[cfg(test)]
 mod owned_tests;
 mod paint;
 #[cfg(test)]
@@ -649,6 +651,8 @@ fn main() -> ExitCode {
             if out_files.flow {
                 let _ = std::fs::write(dir.join("flow.flag"), "");
             }
+            // The navigation behaviours the page leaves out (navigation.rs).
+            let _ = std::fs::write(dir.join("navigation.flag"), out_files.navigation.join("\n"));
             if !out_files.preloads.is_empty() {
                 let _ = std::fs::write(dir.join("preloads.html"), &out_files.preloads);
             }

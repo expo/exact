@@ -5,7 +5,7 @@ import { MalformedOperation, keyArguments } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentPage, faultSpec, backLayer, builtSettingLines, chromium, launchFacts, listenOn, netOptions, refuseStale, staleError, suiteBrowser, warnStale, webChanges, withEpoch, withFaults } from './agent-launch.mjs';
@@ -53,6 +53,10 @@ export async function browserMissing(name) {
     if (libraries.length) return `${label} at ${executable} lacks system libraries ${libraries.join(', ')}; ${PLAYWRIGHT} install-deps ${name} installs them`;
     // The browser's own error lines, its headless notice aside, else Playwright's first line
     const said = new Set([...message.matchAll(/\[err\] (.+)/g)].map(m => m[1].trim().replace(/\.$/, '')).filter(line => !/running in headless mode/.test(line)));
+    // macOS 27 reserves Firefox's app-data folder for Mozilla's signed Firefox, and Playwright's needs it to exist
+    const appData = resolve(homedir(), 'Library/Application Support/Firefox');
+    if (process.platform === 'darwin' && said.has('Could not find profile folder') && !existsSync(appData))
+      return `${label} at ${executable} does not launch: it needs ${appData}, which macOS lets only Mozilla's Firefox create; install Firefox from https://www.mozilla.org/firefox/ and open it once`;
     return `${label} at ${executable} does not launch: ${[...said].join(' ') || message.split('\n')[0]}; ${PLAYWRIGHT} install --force ${name} reinstalls it`;
   }
 }

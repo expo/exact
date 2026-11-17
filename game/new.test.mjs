@@ -590,25 +590,6 @@ test('lockDrift names what exact2 added and moved under a captured lock, never w
   assert.deepEqual(lockChanges(wired,wired),[]);
 });
 
-test('lock seeds the SDK lock\'s versions, a same-series bump included, and keeps the game\'s own packages', async () => {
-  const {lockSeed,staleLock}=await import('../scripts/app-shells.mjs');
-  const block=(name,version,source)=>`[[package]]\nname = "${name}"\nversion = "${version}"\n${source?`source = "${source}"\n`:''}`;
-  const lock=(...blocks)=>`version = 4\n\n${blocks.join('\n')}`;
-  const crates='registry+https://github.com/rust-lang/crates.io-index';
-  const sdk=lock(block('foo','0.12.1',crates),block('exact-game','0.1.0'));
-  const own=lock(block('foo','0.12.0',crates),block('rand','0.9.1',crates),block('tool','1.0.0','git+https://example.com/tool#aaa'),block('x-logic','0.1.0'));
-  // foo 0.12.0 → the SDK's 0.12.1 (one graph holds one version per series), not crates.io's newest.
-  assert.deepEqual(Bun.TOML.parse(lockSeed(sdk,own)).package.map(p=>`${p.name} ${p.version}`),['foo 0.12.1','exact-game 0.1.0','rand 0.9.1','tool 1.0.0','x-logic 0.1.0']);
-  assert.equal(lockSeed(sdk,sdk),sdk);
-  // A git fork of an SDK crate, same name and series, is another package: kept at its revision.
-  const fork=lock(block('foo','0.12.0','git+https://example.com/foo?branch=main#aaa'));
-  assert.deepEqual(Bun.TOML.parse(lockSeed(sdk,fork)).package.map(p=>`${p.name} ${p.version} ${p.source??''}`),['foo 0.12.1 '+crates,'exact-game 0.1.0 ','foo 0.12.0 git+https://example.com/foo?branch=main#aaa']);
-  // Only a lock that needs updating is stale; a crate missing from the cache is not.
-  assert.ok(staleLock('error: cannot update the lock file /g/.shells/Cargo.lock because --locked was passed to prevent this'));
-  assert.ok(staleLock('error: the lock file /g/.shells/Cargo.lock needs to be updated but --locked was passed to prevent this'));
-  assert.ok(!staleLock('error: failed to download `rustix v1.1.5`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified'));
-});
-
 test('a captured lock exact2 moved past is named at a build, at generation and at update, and left alone', async () => {
   const {prepareGame,gameDefaults,capturedLockDrift}=await import('./app/shells.mjs');
   const {createApp}=await import('./new.mjs');

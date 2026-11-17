@@ -208,3 +208,41 @@ fn native_calls_receive_the_modules_numbers_exactly() {
         assert_eq!(later, expected, "native.later of {n:e}");
     }
 }
+
+/// A package's synchronous call (`{"extension", "sync", "args"}`) reaches the
+/// host's app module, where packages live, even when the app links a native
+/// module of its own; the module's own `native.call` stays with the module,
+/// one with an `extension` field included.
+#[test]
+fn a_packages_call_reaches_the_host_beside_a_native_module() {
+    struct Native;
+    impl exact_js::NativeModule for Native {
+        fn configure_storage(&mut self, _: exact_js::NativeStorage) -> Result<(), String> {
+            Ok(())
+        }
+        fn call(&mut self, request: &serde_json::Value) -> Result<serde_json::Value, String> {
+            Ok(serde_json::json!({"text": format!("module:{}", request["value"])}))
+        }
+    }
+    let root = Root::new();
+    let mut m = root.module().with_native(|_| Box::new(Native));
+    let slot = m.native().expect("a module offers its native handle");
+    slot.host(Some(std::sync::Arc::new(|_body, _reply| {})));
+    slot.host_call(Some(std::sync::Arc::new(|body: &[u8]| {
+        let request: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        let text = format!("host:{}", request["args"]["value"].as_str().unwrap_or(""));
+        Ok(serde_json::json!({ "text": text }).to_string().into_bytes())
+    })));
+    slot.sync([("pkg.echo".to_string(), None)].into_iter().collect());
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    m.activate().unwrap();
+    for (op, expected) in [
+        ("native-extension", "host:hi"),
+        ("native-direct", "module:\"hi\""),
+        ("native-extension-field", "module:\"hi\""),
+    ] {
+        let a = args(op, "hi");
+        let answer = m.answer(&mut s, "work", &a).unwrap();
+        assert_eq!(finish(&mut m, &mut s, &a, answer), expected, "{op}");
+    }
+}

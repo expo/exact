@@ -345,7 +345,8 @@ public final class ExactPackageContext {
     public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, false, body) }
 
     /// Coalesce a refresh across an agent seek: run at the next clock instant
-    /// at or past the deadline, without adding a stop or advancing settlement.
+    /// at or past the deadline, before pending package reads are dispatched,
+    /// without adding a stop or advancing settlement.
     /// On the live clock this waits as `after` does. Main thread.
     @discardableResult
     public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, coalescing, body) }
@@ -868,10 +869,22 @@ public final class ExactTrackEntry {
     /// A video track's running capture, while its lease is held (LLP
     /// 1133.008 D3, D8 item 3); nil otherwise and under the agent.
     public var video: (() -> ExactVideoSource?)?
+    /// The session clock when getUserMedia opened this track.
+    public var startedAt: Double?
     /// Under the agent, where no capture exists: the picture a viewfinder of
     /// the track draws, upright and unmirrored, which an observer analyses as
     /// each frame (LLP 1133.027 D17 item 2). The camera package sets it.
-    public var picture: CGImage?
+    public var picture: CGImage? {
+        didSet {
+            if oldValue !== picture { for notify in Array(pictureObservers.values) { notify() } }
+        }
+    }
+    private var pictureObservers: [UUID: () -> Void] = [:]
+    public func observePicture(_ changed: @escaping () -> Void) -> ExactSubscription {
+        let id = UUID()
+        pictureObservers[id] = changed
+        return ExactSubscription { [weak self] in self?.pictureObservers[id] = nil }
+    }
     public init(id: String, kind: String, tracks: [String] = [], owner: ExactTrackOwner? = nil) {
         self.id = id; self.kind = kind; self.tracks = tracks; self.owner = owner
     }

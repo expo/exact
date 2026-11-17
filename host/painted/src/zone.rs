@@ -1,6 +1,9 @@
 //! Locale, IANA zone, launch seed and UTC offset (LLP 1027.000.000).
 #![allow(unsafe_code)]
 
+#[cfg(windows)]
+mod windows;
+
 /// The local zone's current UTC offset in minutes east, from the C
 /// library's zone database (`TZ`, else `/etc/localtime`); zero without one.
 #[cfg(unix)]
@@ -77,7 +80,7 @@ pub(crate) fn offset_minutes_at(zone: &str, epoch_ms: f64) -> f64 {
         .map_or(0.0, |at| at.offset().fix().local_minus_utc() as f64 / 60.0)
 }
 
-/// Place and entropy are sampled once at launch. Agent mode bypasses every
+/// Place and entropy are sampled at launch. Agent mode bypasses every
 /// platform input, including the system's entropy source.
 pub fn launch_place(
     env: impl Fn(&str) -> Option<String>,
@@ -92,24 +95,36 @@ pub fn launch_place(
     } else {
         #[cfg(windows)]
         crate::com::ensure_mta().map_err(|error| format!("launch COM: {error}"))?;
-        let (locale, format_locale) = exact_runner::time::posix_locales(&env);
         // Below 2^32 (LLP 1116.005 D5): four bytes of entropy.
         let mut bytes = [0; 4];
         getrandom::fill(&mut bytes).map_err(|e| format!("launch seed: {e}"))?;
-        exact_runner::time::Place {
-            locale,
-            time_zone: env("TZ")
-                .and_then(|zone| zone_name(&zone))
-                .or_else(|| iana_time_zone::get_timezone().ok())
-                .unwrap_or_else(|| "UTC".into()),
-            seed: f64::from(u32::from_ne_bytes(bytes)),
-            format_locale,
-        }
+        system_place(env, f64::from(u32::from_ne_bytes(bytes)))
     };
     place
         .validate()
         .map_err(|e| format!("launch place: {e:?}"))?;
     Ok(place)
+}
+
+fn system_place(env: impl Fn(&str) -> Option<String>, seed: f64) -> exact_runner::time::Place {
+    #[cfg(windows)]
+    let (locale, format_locale) = windows::locales();
+    #[cfg(not(windows))]
+    let (locale, format_locale) = exact_runner::time::posix_locales(&env);
+    exact_runner::time::Place {
+        locale,
+        format_locale,
+        time_zone: env("TZ")
+            .and_then(|zone| zone_name(&zone))
+            .or_else(|| iana_time_zone::get_timezone().ok())
+            .unwrap_or_else(|| "UTC".into()),
+        seed,
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn current_place(seed: f64) -> exact_runner::time::Place {
+    system_place(|key| std::env::var(key).ok(), seed)
 }
 
 fn zone_name(value: &str) -> Option<String> {
@@ -139,6 +154,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn the_format_locale_is_lc_time() {
         let place = launch_place(|key| match key {
             "LC_MESSAGES" | "LANG" => Some("en_US.UTF-8".into()),
@@ -241,7 +257,13 @@ mod tests {
         };
         let a = launch_place(env).unwrap();
         let b = launch_place(env).unwrap();
+        #[cfg(unix)]
         assert_eq!(a.locale, "fr-FR");
+        #[cfg(windows)]
+        assert_eq!(
+            (a.locale.clone(), a.format_locale.clone()),
+            windows::locales()
+        );
         assert_eq!(a.time_zone, "Europe/Paris");
         assert_ne!(a.seed, b.seed);
         assert!(a.validate().is_ok() && b.validate().is_ok());

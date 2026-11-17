@@ -572,7 +572,8 @@ export const macReleaseEntitlements = (compat, widgets = {}) => {
 export const PROFILE_KEYS = ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups',
   'com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment', 'com.apple.developer.declared-age-range',
   'com.apple.developer.associated-domains', 'com.apple.developer.group-session', 'com.apple.developer.applesignin',
-  'com.apple.developer.in-app-payments', 'com.apple.developer.ubiquity-kvstore-identifier', 'com.apple.developer.sensitivecontentanalysis.client'];
+  'com.apple.developer.in-app-payments', 'com.apple.developer.ubiquity-kvstore-identifier', 'com.apple.developer.sensitivecontentanalysis.client',
+  'com.apple.developer.icloud-services', 'com.apple.developer.icloud-container-identifiers', 'com.apple.developer.icloud-container-environment'];
 
 /** Of `bundle`'s signed entitlements, those a profile authorizes; `signed`: its entitlements as a plist (a test's). */
 export function profileEntitlements(bundle, signed = run('codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', stdio: 'pipe' }).stdout) {

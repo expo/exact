@@ -24,7 +24,10 @@ extension AVPlayerItem {
 
 final class VideoPlayingTests: XCTestCase {
     private typealias Callback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
-    private typealias Create = @convention(c) (UnsafeMutableRawPointer?, Callback?) -> UnsafeMutableRawPointer?
+    private typealias Configuring = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
+    private typealias Create = @convention(c) (
+        UnsafeMutableRawPointer?, Callback?, Configuring?, UnsafeMutablePointer<UnsafeMutableRawPointer?>?
+    ) -> UnsafeMutableRawPointer?
     private typealias View = @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer?
     private typealias Update = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
     private typealias Destroy = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -46,7 +49,7 @@ final class VideoPlayingTests: XCTestCase {
             let handle = try XCTUnwrap(create(Unmanaged.passUnretained(self).toOpaque(), { context, bytes, count in
                 let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
                 test.messages.append(try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any])
-            }))
+            }, nil, nil))
             defer { destroy(handle) }
             messages = []
             var props = ["src": source, "muted": "true", "playsinline": "true", "exactListeners": "error"]
@@ -94,7 +97,7 @@ final class VideoPlayingTests: XCTestCase {
         let handle = try XCTUnwrap(create(Unmanaged.passUnretained(self).toOpaque(), { context, bytes, count in
             let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
             test.messages.append(try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any])
-        }))
+        }, nil, nil))
         defer { destroy(handle) }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("local-playlist-\(UUID())", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -156,7 +159,7 @@ final class VideoPlayingTests: XCTestCase {
             if event == "playing", let state = message["state"] as? [String: Any] {
                 test.playingTimes.append(state["currentTime"] as! Double)
             }
-        }))
+        }, nil, nil))
         defer { destroy(handle) }
         let source = Bundle.module.url(forResource: "ColorFixtures", withExtension: nil)!.appendingPathComponent("sdr.mp4").absoluteString
         var props = ["src": source, "paused": "false", "muted": "true", "playsinline": "true",
@@ -192,7 +195,7 @@ final class VideoPlayingTests: XCTestCase {
             let test = Unmanaged<VideoPlayingTests>.fromOpaque(context!).takeUnretainedValue()
             let message = try! JSONSerialization.jsonObject(with: Data(bytes: bytes!, count: count)) as! [String: Any]
             test.events.append(message["event"] as! String)
-        }))
+        }, nil, nil))
         var destroyed = false
         defer { if !destroyed { destroy(handle) } }
         let rawView = try XCTUnwrap(view(handle))

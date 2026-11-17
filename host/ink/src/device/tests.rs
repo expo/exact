@@ -53,10 +53,6 @@ impl Device for Delayed {
         Ok(self.submitted)
     }
     fn resize_target(&mut self, id: TextureId, width: u32, height: u32) -> Result<TextureId> {
-        assert!(
-            self.textures[&id] <= self.done,
-            "resized an in-flight target"
-        );
         let next = self.create_target(width, height)?;
         self.retire_texture(id)?;
         Ok(next)
@@ -127,7 +123,7 @@ fn atlas_appends_ordered_uploads_without_waiting_for_completion() {
 }
 
 #[test]
-fn a_delayed_device_keeps_pool_targets_and_atlas_uploads_separate() {
+fn a_delayed_device_orders_target_reuse_but_keeps_cpu_atlas_uploads_separate() {
     let mut d = Delayed::default();
     let mut pool = Pool::default();
     pool.begin(&mut d, [8, 8]).unwrap();
@@ -135,12 +131,18 @@ fn a_delayed_device_keeps_pool_targets_and_atlas_uploads_separate() {
     let submitted = d.render(&Frame::default(), first, Some([0.; 4])).unwrap();
     pool.begin(&mut d, [8, 8]).unwrap();
     let second = pool.take(&mut d).unwrap();
-    assert_ne!(first, second, "unfinished pool target must not be reused");
+    assert_eq!(
+        first, second,
+        "GPU writes follow the previous frame on the queue"
+    );
     d.done = submitted;
     pool.begin(&mut d, [8, 8]).unwrap();
-    let mut reused = [pool.take(&mut d).unwrap().0, pool.take(&mut d).unwrap().0];
-    reused.sort();
-    assert_eq!(reused, [first.0, second.0]);
+    assert_eq!(pool.take(&mut d).unwrap(), first);
+    assert_ne!(
+        pool.take(&mut d).unwrap(),
+        first,
+        "a frame reserves distinct targets"
+    );
     let mut atlas = Atlas::paths();
     atlas.begin(&mut d).unwrap();
     let a = atlas.insert(&mut d, vec![1], [8, 8], &[127; 64]).unwrap();
@@ -170,7 +172,7 @@ fn a_delayed_device_keeps_pool_targets_and_atlas_uploads_separate() {
 }
 
 #[test]
-fn pool_resizes_only_completed_unreserved_targets_and_prefers_exact_sizes() {
+fn pool_replaces_unreserved_targets_and_prefers_exact_sizes() {
     let mut d = Delayed::default();
     let mut pool = Pool::default();
     pool.begin(&mut d, [32, 32]).unwrap();
@@ -182,19 +184,68 @@ fn pool_resizes_only_completed_unreserved_targets_and_prefers_exact_sizes() {
     pool.begin(&mut d, [32, 32]).unwrap();
     assert_eq!(pool.take_sized(&mut d, [16, 16]).unwrap(), second);
     let third = pool.take_sized(&mut d, [24, 24]).unwrap();
-    assert_ne!(third, first, "the first target is still in flight");
+    assert_ne!(third, first, "a size change needs new storage");
     assert_ne!(third, second, "this frame reserves the second target");
-    assert!(d.retired.is_empty());
+    assert_eq!(d.retired, [(first, d.submitted)]);
+    assert!(
+        d.textures.contains_key(&first),
+        "replacement keeps unfinished storage"
+    );
 
     d.done = d.submitted;
+    d.completed().unwrap();
     pool.begin(&mut d, [32, 32]).unwrap();
     assert_eq!(pool.take_sized(&mut d, [24, 24]).unwrap(), third);
     let resized = pool.take_sized(&mut d, [12, 12]).unwrap();
     assert!(![first, second, third].contains(&resized));
     assert_eq!(d.retired, [(second, Submission(0))]);
-    assert_eq!(pool.take_sized(&mut d, [8, 8]).unwrap(), first);
+    assert_ne!(pool.take_sized(&mut d, [8, 8]).unwrap(), first);
     assert_eq!(pool.retained(), 3);
     assert_eq!(pool.bytes(), (24 * 24 + 12 * 12 + 8 * 8) * 4);
+}
+
+#[test]
+fn a_large_scene_does_not_duplicate_targets_when_completion_is_delayed() {
+    let mut d = Delayed::default();
+    let mut pool = Pool::default();
+    for _ in 0..3 {
+        pool.begin(&mut d, [6000, 1440]).unwrap();
+        for _ in 0..6 {
+            let target = pool.take(&mut d).unwrap();
+            d.render(&Frame::default(), target, Some([0.; 4])).unwrap();
+        }
+        println!(
+            "six layers: {} targets, {} bytes",
+            pool.retained(),
+            pool.bytes()
+        );
+    }
+    assert_eq!(pool.bytes(), 6 * 6000 * 1440 * 4);
+    pool.begin(&mut d, [6000, 1440]).unwrap();
+    pool.end(&mut d).unwrap();
+    assert_eq!(
+        pool.bytes(),
+        0,
+        "unused full-window targets exceed the spare budget"
+    );
+    assert_eq!(
+        d.textures.len(),
+        6,
+        "retired targets survive until completion"
+    );
+    d.done = d.submitted;
+    d.completed().unwrap();
+    assert!(d.textures.is_empty());
+    for _ in 0..5 {
+        pool.take_sized(&mut d, [1024, 1024]).unwrap();
+    }
+    pool.begin(&mut d, [6000, 1440]).unwrap();
+    pool.end(&mut d).unwrap();
+    assert_eq!(
+        pool.bytes(),
+        16 * 1024 * 1024,
+        "unused small targets have one budget"
+    );
 }
 
 #[test]

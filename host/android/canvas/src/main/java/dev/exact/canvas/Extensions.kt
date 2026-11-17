@@ -37,6 +37,9 @@ abstract class ExactExtension(val context: ExtensionContext) {
      */
     open fun preferred(values: JSONObject) {}
 
+    /** Refresh a substitute at the session clock before a drive reads its frames. */
+    open fun clock() {}
+
     /** Handles a reply carried that the runner dropped, never the app's (LLP 1133.009 D10 item 10). */
     open fun dispose(ids: List<String>) {}
 
@@ -580,7 +583,10 @@ internal object Extensions {
      * pixels ([Exact.picture]), `{"extension", "cancel"}` (a send let go, LLP 1133.016 D15 item 2), or `{"extension",
      * "woke", "outcome"}` (a wake [ExtensionContext.wake] raised ended, LLP 1133.017 D8).
      */
+    fun clock() { for (extension in made.values.toList()) extension.clock() }
+
     fun call(id: Int, body: String) {
+        clock()
         var answered = false
         // A list answer comes as `{"exact:answer": [...]}`, since a reply is an object (as on Apple).
         val reply = { answer: JSONObject ->

@@ -629,7 +629,7 @@ final class NativeViews {
     }
 
     private var pendingHatches: (() -> Void)?
-    /// Whether this session's hatches may still connect with `word` handled (a hatched frame waits, ElementHatches.swift).
+    /// Whether this session's hatches may still connect with `word` handled (frames and videos wait, ElementHatches.swift).
     func hatchesMayConnect(_ word: String) -> Bool {
         guard hasAppModule, !hatchesConnected, !Self.hatchesOff, instanceFailure == nil, instance == nil || pendingHatches != nil else { return false }
         switch NativeProcess.table { case .success(let t)?: return t.connect != nil && t.elementHatch != nil && t.hatchWords?.contains(word) != false; case .failure?: return false; case nil: return true }
@@ -706,7 +706,7 @@ final class NativeViews {
     /// (LLP 1067.000.001).
     func prepareAppModule() {
         activateHatches()
-        defer { if !hatchesConnected, pendingHatches == nil { session?.presenter.elements.releaseFrames() } } // they never will
+        defer { if !hatchesConnected, pendingHatches == nil { session?.presenter.elements.releaseConfigurations() } } // they never will
         guard hasAppModule, instance == nil, case .success(let table) = self.table() else { return }
         _ = module(table)
         // Its extensions answer their names from now on, outside the agent.

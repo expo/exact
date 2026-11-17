@@ -215,7 +215,7 @@ impl<D: DataSource> Runner<D> {
             },
             body["origin"].as_str().unwrap_or_default()
         ));
-        if let Some(handler) = self.native_slot().handler() {
+        if let Some(handler) = self.native_slot().extension_handler() {
             handler(body.to_string().into_bytes(), Reply::new(|_| {}));
         }
     }

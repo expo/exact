@@ -24,6 +24,23 @@ function camera() {
 }
 const settle = () => new Promise(r => setTimeout(r, 0));
 
+test('an agent track keeps its start time and announces a new picture to frame observers', async () => {
+  let entry;
+  const camera = video({ agent: true, changed() {}, now: () => 500,
+    tracks: { add: t => { entry = t; } }, nextId: () => 1, shown: () => true });
+  const { id } = await camera.open({}, 'stream');
+  expect(entry.startedAt).toBe(500);
+  const frames = [], first = {}, second = {};
+  const leave = entry.observePicture(() => frames.push(entry.frame()));
+  entry.owner.picture(id, first);
+  entry.owner.picture(id, first);
+  entry.owner.picture(id, second);
+  expect(frames).toEqual([first, second]);
+  leave();
+  entry.owner.picture(id, null);
+  expect(frames).toHaveLength(2);
+});
+
 for (const first of ['move', 'activation']) {
   for (const before of [true, false]) {
     test(`a move and an activation that opened ${before ? 'before' : 'after'} it, the ${first} finishing first, leave only the track's source running`, async () => {

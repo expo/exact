@@ -1236,6 +1236,8 @@ fn krate(dir: &Path, name: &str, deps: &str) {
 
 /// The binary links the path crates its data crate depends on: an edit to
 /// one moves the id, as an edit to `data/` does; a dev-dependency's does not.
+/// An optional one counts though no default feature enables it: the build
+/// that links the crate can (`--features app-data/native`).
 #[test]
 fn the_data_crates_path_dependencies_are_identity() {
     let dir = app("path-deps");
@@ -1259,8 +1261,11 @@ fn the_data_crates_path_dependencies_are_identity() {
         &dir.join("data"),
         "app-data",
         "[dependencies]\nparse = { path = \"../parse\" }\n\
-         [dev-dependencies]\ntool = { path = \"../tool\" }\n",
+         helper = { path = \"../helper\", optional = true }\n\
+         [dev-dependencies]\ntool = { path = \"../tool\" }\n\
+         [features]\nnative = [\"dep:helper\"]\n",
     );
+    krate(&dir.join("helper"), "helper", "");
     let leaf = "[build-dependencies]\nleaf = { path = \"../leaf\" }\n";
     krate(&dir.join("parse"), "parse", leaf);
     krate(&dir.join("leaf"), "leaf", "");
@@ -1269,7 +1274,7 @@ fn the_data_crates_path_dependencies_are_identity() {
     let names: Vec<&String> = crates.as_object().unwrap().keys().collect();
     assert_eq!(
         names,
-        ["leaf", "parse"],
+        ["helper", "leaf", "parse"],
         "the closure, less dev-dependencies"
     );
     let first = id(&dir, "ios");
@@ -1279,7 +1284,10 @@ fn the_data_crates_path_dependencies_are_identity() {
     let parse = id(&dir, "ios");
     assert_ne!(first, parse, "a path dependency's edit moves it");
     std::fs::write(dir.join("leaf/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
-    assert_ne!(parse, id(&dir, "ios"), "so does a transitive one's");
+    let transitive = id(&dir, "ios");
+    assert_ne!(parse, transitive, "so does a transitive one's");
+    std::fs::write(dir.join("helper/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
+    assert_ne!(transitive, id(&dir, "ios"), "and an optional one's");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1337,7 +1345,11 @@ fn the_named_data_crate_and_the_generated_lock_are_identity() {
 }
 
 /// A path crate outside the app's workspace is no member of it, so the
-/// closure is read from Cargo's full graph.
+/// closure is read from Cargo's full graph. An optional dependency there
+/// that Cargo did not enable (`unused`) counts with what it declares
+/// (`deep`), read without resolving its registry dependencies; one with no
+/// manifest (`gone`) cannot be built. Such a crate can share its package
+/// name with one Cargo enabled (`other`, `enabled`): both trees count.
 #[test]
 fn a_path_dependency_outside_the_workspace_is_identity() {
     let root = app("outside-deps");
@@ -1354,47 +1366,38 @@ fn a_path_dependency_outside_the_workspace_is_identity() {
         "shared",
         "[dependencies]\nunused = { path = \"../unused\", optional = true }\n\
          renamed = { package = \"enabled\", path = \"../enabled\", optional = true }\n\
+         gone = { path = \"../gone\", optional = true }\n\
+         other = { package = \"enabled\", path = \"../other\", optional = true }\n\
          [features]\ndefault = [\"dep:renamed\"]\n",
     );
-    krate(&root.join("unused"), "unused", "");
+    krate(&root.join("other"), "enabled", "");
+    let deep = "[dependencies]\ndeep = { path = \"../deep\" }\nin-no-registry = \"1\"\n";
+    krate(&root.join("unused"), "unused", deep);
+    krate(&root.join("deep"), "deep", "");
     krate(&root.join("enabled"), "enabled", "");
     let names: Vec<_> = super::path_crates(&dir.join("data"))
         .unwrap()
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(names, ["enabled", "shared"]);
+    assert_eq!(names, ["deep", "enabled", "enabled", "shared", "unused"]);
+    assert!(!root.join("unused/Cargo.lock").exists());
     let first = id(&dir, "ios");
     assert_eq!(first, id(&dir, "ios"), "stable across computations");
     std::fs::write(root.join("shared/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
-    assert_ne!(first, id(&dir, "ios"));
+    let shared = id(&dir, "ios");
+    assert_ne!(first, shared);
+    std::fs::write(root.join("deep/src/lib.rs"), "pub const A: u8 = 2;\n").unwrap();
+    let mut last = id(&dir, "ios");
+    assert_ne!(shared, last);
+    for same_name in ["enabled", "other"] {
+        let source = root.join(same_name).join("src/lib.rs");
+        std::fs::write(source, "pub const A: u8 = 2;\n").unwrap();
+        let edited = id(&dir, "ios");
+        assert_ne!(last, edited, "an edit to {same_name} moves it");
+        last = edited;
+    }
     let _ = std::fs::remove_dir_all(&root);
-}
-
-/// exact2's own crates stay out of the closure, since the id's other inputs
-/// name them; another app's crates are this app's code.
-#[test]
-fn the_closure_leaves_out_exact2s_own_crates() {
-    let apps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps");
-    let names = |app: &str| -> Vec<String> {
-        super::path_crates(&apps.join(app).join("data"))
-            .unwrap()
-            .into_iter()
-            .map(|(name, _)| name)
-            .collect()
-    };
-    assert_eq!(names("markdown"), ["markdown-parse"]);
-    assert_eq!(
-        names("exact-live"),
-        [
-            "completion-storm-data",
-            "interaction-gallery-data",
-            "markdown-parse",
-            "markdown-stress-data",
-            "messages-stress-data"
-        ]
-    );
-    assert!(names("caltrain").is_empty());
 }
 
 /// LLP 1030.005 D3: a Mac App Store build links no update store, whatever

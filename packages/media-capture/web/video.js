@@ -44,7 +44,7 @@ function written(c) {
   return out;
 }
 
-export function video({ changed, agent, log, tracks, nextId, media, shown }) {
+export function video({ changed, agent, log, tracks, nextId, media, shown, now = () => 0 }) {
   const own = new Map(), origins = new WeakMap();
   let overlay = null, opened = false, devices = null;
   const say = line => log?.(`media-capture: ${line}`);
@@ -189,7 +189,10 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
     /** Under the agent: the picture a viewfinder of track `id` draws, a promise of an `ImageBitmap` or null (D17 item 2). */
     picture(id, frame) {
       const t = own.get(id);
-      if (t) t.picture = frame;
+      if (t && t.picture !== frame) {
+        t.picture = frame;
+        for (const changed of [...t.pictureObservers]) changed();
+      }
     },
   };
 
@@ -210,7 +213,7 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
       opened = true;
       const t = {
         id: `track-${nextId()}`, stream, kind: 'video', label: '', enabled: true, muted: true, muteReason: 'idle', readyState: 'live',
-        settings: {}, capabilities: null, constraints, consumers: new Set(), observers: new Set(), active: false, source: null, grace: null, picture: null,
+        settings: {}, capabilities: null, constraints, consumers: new Set(), observers: new Set(), active: false, source: null, grace: null, picture: null, pictureObservers: new Set(),
         overlayMuted: overlay?.muted ? overlay.muteReason ?? 'interrupted' : null,
       };
       if (agent) Object.assign(t, agentCamera(constraints.facingMode === 'user' ? 'user' : 'environment'));
@@ -219,7 +222,8 @@ export function video({ changed, agent, log, tracks, nextId, media, shown }) {
         t.grace = setTimeout(() => { if (!t.active) { say(`${t.id}: no consumer joined; the browser's track stops`); stopSource(t); } }, GRACE);
       }
       own.set(t.id, t);
-      tracks.add({ id: t.id, kind: 'video', owner, extension: 'media-capture', state: () => shape(t), source: () => t.source, frame: () => t.picture });
+      tracks.add({ id: t.id, kind: 'video', startedAt: now(), owner, extension: 'media-capture', state: () => shape(t), source: () => t.source, frame: () => t.picture,
+        observePicture(changed) { t.pictureObservers.add(changed); return () => t.pictureObservers.delete(changed); } });
       say(`${stream}: opened with ${t.id} (${t.label})`);
       announce();
       changed('media-capture.enumerateDevices');

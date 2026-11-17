@@ -152,7 +152,7 @@ pub(super) fn status_owners(owners: &[u32]) -> String {
     )
 }
 
-fn property(plan: &Plan, node: u32, id: PropId) -> Option<exact_plan::BindingsRow> {
+pub(super) fn property(plan: &Plan, node: u32, id: PropId) -> Option<exact_plan::BindingsRow> {
     plan.node(exact_plan::NodesId(node))
         .bindings
         .iter()
@@ -166,11 +166,16 @@ fn text(plan: &Plan, node: u32, id: PropId) -> Option<String> {
         .and_then(|v| v.as_str().map(str::to_owned))
 }
 
-fn role_can(plan: &Plan, node: u32, roles: &[&str]) -> bool {
-    property(plan, node, PropId::AccessibilityRole).is_some()
-        && text(plan, node, PropId::AccessibilityRole)
+/// Whether `node` binds `prop` to one of `words`, or to a value that may be one.
+pub(super) fn may_say(plan: &Plan, node: u32, prop: PropId, words: &[&str]) -> bool {
+    property(plan, node, prop).is_some()
+        && text(plan, node, prop)
             .as_deref()
-            .is_none_or(|r| roles.contains(&r))
+            .is_none_or(|w| words.contains(&w))
+}
+
+fn role_can(plan: &Plan, node: u32, roles: &[&str]) -> bool {
+    may_say(plan, node, PropId::AccessibilityRole, roles)
 }
 
 fn parent_site(plan: &Plan, site: super::Site) -> Option<super::Site> {

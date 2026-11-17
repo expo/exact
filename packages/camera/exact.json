@@ -7,6 +7,7 @@
     "device.camera"
   ],
   "substitute": "implementation",
+  "agent": { "picture": "CameraPicture", "clip": "CameraPicture" },
   "shapes": {
     "Photo": {
       "path": "string",

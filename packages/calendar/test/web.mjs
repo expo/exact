@@ -13,7 +13,7 @@
 // engine, since only Chrome on Android has the picker.
 //
 // usage: bun packages/calendar/test/web.mjs [chromium] [firefox] [webkit]
-//   (every engine by default; `bunx playwright@1.64.1 install firefox webkit` first)
+//   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { mkdirSync, readFileSync } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { checker, root, run } from '../../contacts/test/fixture.mjs';

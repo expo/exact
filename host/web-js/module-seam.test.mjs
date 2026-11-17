@@ -89,6 +89,55 @@ test.each([false, true])('a view validates and delivers its agent vocabulary (su
   } finally { await browser?.close(); server.stop(true); }
 });
 
+test.each(['cleared', 'conflicting'])('%s preferences cancel the camera clip during module initialization', async change => {
+  const server = moduleServer(), browser = await suiteBrowser('chromium', { needs: ['hevc'] });
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async change => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      const camera = await import('/packages/camera/web/index.js');
+      rt.clock.agent = true;
+      const logs = [], written = new Map();
+      const entry = { kind: 'video', state: () => ({ readyState: 'live', enabled: true, muted: false }) };
+      modules({}, { camera: async () => ({
+        implementation: context => camera.implementation({ ...context, log: line => logs.push(line),
+          tracks: { lookup: () => entry }, files: { write: async (path, bytes) => written.set(path, bytes) } }),
+        roster: { 'exact-camera': { view: class { constructor({ implementation }) { this.impl = implementation; } } } },
+      }) }, { 'exact-camera': ['camera', false, [], { clip: 'record', picture: 'record' }] });
+      const prefer = extension => {
+        const result = exact.extensions.prefer({ extension });
+        if (result.error) throw new Error(result.error);
+      };
+      const fetch = window.fetch;
+      let release, started;
+      const held = new Promise(resolve => { release = resolve; });
+      const fetching = new Promise(resolve => { started = resolve; });
+      window.fetch = async (...args) => { started(); await held; return fetch(...args); };
+      prefer({ 'camera.clip': { path: 'packages/camera/fixture/frames.mp4' } });
+      let made = false;
+      const loading = exact.packageViews.make('exact-camera', {}).then(view => { made = true; return view; });
+      await fetching;
+      prefer(change === 'cleared' ? { 'camera.clip': 'clear' }
+        : { 'camera.picture': { path: 'packages/camera/fixture/card.jpg' } });
+      const initializing = !made;
+      release();
+      const { impl } = await loading;
+      window.fetch = fetch;
+      const photo = await impl.takePhoto({ track: 't' });
+      const { card } = await import('/packages/camera/web/card.js');
+      const expected = Uint8Array.from(atob(card), c => c.charCodeAt(0)), bytes = written.get(photo.path);
+      impl.destroy();
+      return { initializing, same: bytes.length === expected.length && bytes.every((b, i) => b === expected[i]), logs };
+    }, change);
+    expect(result.initializing).toBe(true);
+    expect(result.same).toBe(true);
+    expect(result.logs.some(line => line.includes('clip') && line.includes('sha256'))).toBe(false);
+    if (change === 'conflicting') expect(result.logs.some(line => line.includes('cannot both be set'))).toBe(true);
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 test.each([false, true])('implementation live readers refresh and share their provider lifetime (data code: %p)', async wrapper => {
   const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
@@ -545,3 +594,29 @@ test.each(['send', 'extension', 'key', 'frame'])('an app list is current where %
     }
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
+
+test('a clock move runs what an implementation registered, never its own names', async () => {
+  const server = moduleServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
+      const { modules } = await import('/host/web-js/modules.js');
+      const { advance } = await import('/host/web-js/clock.js');
+      rt.clock.agent = true;
+      install(rt.data);
+      const seen = [], own = { implementation: true, owner: '@fixture/sensor/own', implementationTargets: ['web'] };
+      modules({ owned: ['sensor.reading', false, own, 'n', 'never', { track: 's' }, true] },
+        { sensor: async () => ({ implementation: ({ clocked }) => {
+          clocked(() => seen.push('clocked'));
+          return { reading: () => 1, clock: args => args.offset + 1 };
+        } }) });
+      let read;
+      rt.mount(() => { read = rt.res('own', 'wrapped', () => [], undefined, undefined, 'n', 0); rt.effect(() => read()); });
+      globalThis.fixture = { read, seen, advance };
+    });
+    await page.waitForFunction(() => fixture.read() === 1);
+    expect(await page.evaluate(() => { fixture.advance(100); return fixture.seen; })).toEqual(['clocked']);
+  } finally { await browser.close(); server.stop(true); }
+});

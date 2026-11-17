@@ -41,12 +41,13 @@ const { check, failed } = checker();
     resolve(root, 'host/apple/modules/ExactPackage.swift'), '-o', join(out, 'libExactPackage.a')], out);
   const tests = {
     interruptions: ['media-capture/apple/MediaCapture.swift', 'media-capture/apple/VideoCapture.swift'],
-    'photo-failure': ['camera/apple/Camera.swift', 'camera/apple/Viewfinder.swift'],
+    'agent-clip': ['camera/apple/Camera.swift', 'camera/apple/Viewfinder.swift', 'camera/apple/AgentClip.swift'],
+    'photo-failure': ['camera/apple/Camera.swift', 'camera/apple/Viewfinder.swift', 'camera/apple/AgentClip.swift'],
   };
   for (const [test, sources] of Object.entries(tests)) {
     run('xcrun', ['swiftc', '-parse-as-library', '-swift-version', '5', '-I', out, '-L', out, '-lExactPackage', ...sources.map((f) => join(packages, f)),
       join(here, `${test}.swift`), '-o', join(out, test)], out);
-    const r = spawnSync(join(out, test), [], { cwd: out, encoding: 'utf8' }), lines = r.stdout.trim().split('\n');
+    const r = spawnSync(join(out, test), test === 'agent-clip' ? [join(out, 'photo.jpg')] : [], { cwd: out, encoding: 'utf8' }), lines = r.stdout.trim().split('\n');
     for (const line of lines) {
       const [verdict, where, ...name] = line.split(' ');
       if (verdict === 'PASS' || verdict === 'FAIL') check(where, name.join(' '), verdict === 'PASS', line);
@@ -64,7 +65,7 @@ if (hosts.length === 0 || hosts.includes('ios')) {
   const swiftc = (...args) => run('xcrun', ['-sdk', 'iphonesimulator', 'swiftc', '-target', target, '-parse-as-library', ...args], out);
   swiftc('-emit-library', '-static', '-module-name', 'ExactPackage', '-emit-module', '-emit-module-path', join(out, 'ExactPackage.swiftmodule'),
     resolve(root, 'host/apple/modules/ExactPackage.swift'), '-o', join(out, 'libExactPackage.a'));
-  swiftc('-swift-version', '5', '-I', out, '-L', out, '-lExactPackage', join(packages, 'camera/apple/Camera.swift'), join(packages, 'camera/apple/Viewfinder.swift'),
+  swiftc('-swift-version', '5', '-I', out, '-L', out, '-lExactPackage', join(packages, 'camera/apple/Camera.swift'), join(packages, 'camera/apple/Viewfinder.swift'), join(packages, 'camera/apple/AgentClip.swift'),
     join(here, 'camera-app.swift'), '-o', join(out, 'camera-app'));
   // The simulator the drive uses, booted and waited for (host/apple/devices.mjs, as build.mjs chooses it).
   const { simulator } = await import(resolve(root, 'host/apple/devices.mjs'));

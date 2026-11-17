@@ -100,6 +100,7 @@ final class VideoTracks: ExactTrackOwner {
             tracks[t.id] = t
             opened = true
             let entry = ExactTrackEntry(id: t.id, kind: "video", owner: self)
+            entry.startedAt = context.now()
             entry.state = { [weak self, weak t] in t.flatMap { self?.shape($0) } ?? [:] }
             entry.video = { [weak t] in t?.capture }
             context.tracks.add(entry)

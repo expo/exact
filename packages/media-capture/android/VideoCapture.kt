@@ -91,6 +91,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
             tracks[t.id] = t
             opened = true
             val entry = TrackEntry(t.id, "video", owner = this)
+            entry.startedAt = context.now()
             entry.state = { shape(t) }
             entry.video = { if (t.leased && !context.agent) CameraCapture else null }
             context.tracks.add(entry)

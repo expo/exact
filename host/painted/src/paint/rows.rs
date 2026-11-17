@@ -171,10 +171,12 @@ fn within(a: Option<Rect4>, outer: Option<Rect4>) -> Option<Rect4> {
 
 impl Painter {
     pub(super) fn discard_rows(&mut self) {
-        for row in self.rows.kept.values() {
-            self.backend.row_free(row.id);
+        let rows = std::mem::take(&mut self.rows);
+        // The reader can still hold these IDs until it receives their deletions.
+        self.rows.next = rows.next;
+        for id in rows.kept.into_values().map(|r| r.id).chain(rows.freed) {
+            self.backend.row_free(id);
         }
-        self.forget_rows();
     }
 
     /// Before a frame: drop the rows the host's changes reach.

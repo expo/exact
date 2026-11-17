@@ -111,7 +111,7 @@ exact-listen = { path = "../listen" }
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Controls_RichEdit", "Win32_UI_WindowsAndMessaging", "UI_ViewManagement"] }
 chrono = "0.4"
 chrono-tz = "0.10"
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com", "Win32_Globalization", "Win32_System_SystemServices"] }
 
 [features]
 # Integration tests only: each test thread owns its executor worker budget.

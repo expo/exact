@@ -98,6 +98,7 @@ pub(crate) fn with_text_styles(
             }
             out.extend(roles::button(tag, attrs, visit, span).filter(|_| fresh));
             out.extend(roles::dialog_role(tag, attrs, span).filter(|_| fresh));
+            out.extend(roles::alert_font(tag, attrs, &checked.file.styles).filter(|_| fresh));
             out.extend(roles::level_without_heading(tag, attrs, span).filter(|_| fresh));
             out.extend(roles::keys(attrs, visit, span, &controlled).filter(|_| fresh));
             if fresh {

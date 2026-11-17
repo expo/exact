@@ -23,6 +23,8 @@ pub use stats::{counter_state, Statistics, StatisticsReader};
 mod gradient;
 mod images;
 #[cfg(all(test, not(windows)))]
+mod memory_tests;
+#[cfg(all(test, not(windows)))]
 mod ordered_tests;
 mod rows;
 mod svg;
@@ -327,13 +329,15 @@ impl Backend for Ink {
         Ok(self.info().clone())
     }
     #[cfg(target_os = "macos")]
-    fn repeat_apple_frame(&mut self) -> std::result::Result<(), String> {
-        let target = self.target.ok_or("no retained compose target")?;
+    fn repeat_apple_frame(&mut self) -> std::result::Result<bool, String> {
+        let Some(target) = self.target else {
+            return Ok(false);
+        };
         let result = self.device.present(target);
         self.last_ms.1 = self
             .accept(result)
             .ok_or_else(|| self.error.clone().unwrap())?;
-        Ok(())
+        Ok(true)
     }
     #[cfg(windows)]
     fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
@@ -409,8 +413,21 @@ impl Backend for Ink {
     fn needs_geometry_paint(&self) -> bool {
         true
     }
-    fn trim(&mut self) {
-        let result = self.pool.trim(&mut self.device);
+    fn trim(&mut self, hidden: bool) {
+        self.encoder = Encoder::new(self.size[0], self.size[1]);
+        self.groups.clear();
+        self.clips.clear();
+        self.draw_target = None;
+        let result = (|| {
+            // A visible window may still owe the compositor its first frame.
+            if hidden {
+                if let Some(target) = self.target.take() {
+                    self.device.retire_texture(target)?;
+                }
+            }
+            self.images.trim(&mut self.device)?;
+            self.pool.trim(&mut self.device)
+        })();
         self.accept(result);
     }
     fn page(&mut self, color: [u8; 4]) {
@@ -756,7 +773,7 @@ impl Backend for Ink {
             while !self.groups.is_empty() {
                 self.close_group()?;
             }
-            let target = self.flush()?;
+            let target = self.end_frame()?;
             readback = Instant::now();
             self.device.readback(target)
         })();
@@ -793,7 +810,7 @@ impl Backend for Ink {
                     while !self.groups.is_empty() {
                         self.close_group()?;
                     }
-                    let texture = self.flush()?;
+                    let texture = self.end_frame()?;
                     self.last_ms = (self.layer_ms, self.device.present(texture)?);
                     Ok(())
                 })();
@@ -815,7 +832,7 @@ impl Backend for Ink {
                     while !self.groups.is_empty() {
                         self.close_group()?;
                     }
-                    let texture = self.flush()?;
+                    let texture = self.end_frame()?;
                     if let Selected::D3d11(device) = &mut self.device {
                         self.last_ms = (self.layer_ms, device.present(texture)?);
                     }

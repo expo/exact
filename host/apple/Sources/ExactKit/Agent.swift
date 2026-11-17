@@ -1173,6 +1173,9 @@ public final class Agent {
             let batch = session.runtime.advance(now: to, untilRequest: held)
             session.apply(batch)
             session.clock = max(floor, batch.clock ?? to)
+            if batch.error == nil, let limit = session.natives.hatchClock.refresh(at: session.clock ?? to) {
+                return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
+            }
             // A stop at `to` may leave a timer due there: only a plain advance ends.
             if batch.error != nil || !held { return batch }
             steps += 1

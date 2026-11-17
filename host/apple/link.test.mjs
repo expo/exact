@@ -1019,6 +1019,7 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
   const { assembleIOS } = await import('./bundle.mjs');
   const { stripProductionExecutable } = await import('./link.mjs');
   const { shippedReceipt, copyAppleGpuProducts } = await import('./build.mjs');
+  const { entitlements } = await import('./build.mjs');
   const { wrapFramework, signedGpuProduct, codeDigest, plistFile } = await import('./assets.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-package-'));
   const run = (cmd, args) => {
@@ -1049,6 +1050,9 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
     const library = { placed: resolve(libraries, 'FixtureLibrary.framework'), link: 'FixtureLibrary' };
     const plan = Buffer.from('fixture'), compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
     const pairs = [['libweb.dylib', 'ExactWeb'], ['libmodules.dylib', 'ExactModules'], ['libsvg.dylib', 'ExactSvg'], ['libcanvas.dylib', 'ExactCanvasGpu'], ['libservice.dylib', 'ExactService']];
+    const cloudkitEnvironment = 'com.apple.developer.icloud-container-environment';
+    const appleReach = { entitlements: ['com.apple.developer.icloud-services', 'com.apple.developer.icloud-container-identifiers', cloudkitEnvironment],
+      entitlementValues: { 'com.apple.developer.icloud-services': ['CloudKit'] } };
     const build = { trust: 'production', linkedPlan: '/private/plan', binary: { sha256: 'binary', inputs: [{ path: '/private/source' }], metadata: {}, privacyManifests: [capturePrivacyManifest(resolve(dir, 'PrivacyInfo.xcprivacy'))] }, products: [{ path: '/private/product' }], graph: { artifacts: [], extensions: {}, contractSources: [] } };
     writeFileSync(resolve(dir, 'PrivacyInfo.xcprivacy'), plistFile({ NSPrivacyTracking: false }));
     for (const [production, device, archived] of [[true, true, false], [true, true, true], [true, false, false], [false, true, false]]) {
@@ -1077,11 +1081,11 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
         canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: service, load: pairs[4][0], framework: pairs[4][1] }],
-        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' };
+        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos', appleReach };
       const helpers = {
         runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
-        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
+        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements, appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
       };
       if (!production) {
         // Inspect the app after AlarmKit's plist writes, before compiling its separate extension.
@@ -1105,6 +1109,13 @@ test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsy
         finally { probe.mockRestore(); }
       }
       const result = assembleIOS(options, helpers);
+      const signed = device ? run('codesign', ['-d', '--entitlements', '-', '--xml', bundle]).stdout : readFileSync(resolve(binDir, 'entitlements.plist'), 'utf8');
+      assert.match(signed, new RegExp(`<key>${cloudkitEnvironment}</key>\\s*<string>Production</string>`),
+        'a distribution archive needs Production, including when a recipient will re-sign it (ITMS-90046)');
+      assert.match(signed, /<key>com.apple.developer.icloud-services<\/key>\s*<array>\s*<string>CloudKit<\/string>/);
+      assert.match(signed, new RegExp(`<string>iCloud\\.${app.id}</string>`));
+      assert.doesNotMatch(signed, /aps-environment|ubiquity-/);
+      assert.doesNotMatch(run('codesign', ['-d', '--entitlements', '-', '--xml', resolve(bundle, 'AppClips/Clip.app')]).stdout, /com.apple.developer.icloud-/);
       for (const owner of [bundle, resolve(bundle, 'AppClips/Clip.app'), ...(production ? [...pairs, [null, 'ExactGpu']].map(([, name]) => resolve(bundle, 'Frameworks', `${name}.framework`)) : [])]) {
         const privacy = resolve(owner, 'PrivacyInfo.xcprivacy'); assert.equal(run('plutil', ['-lint', privacy]).status, 0);
         const usesDisk = diskService && (owner.endsWith('/ExactService.framework') || (!production && owner.endsWith('.app')));

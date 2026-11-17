@@ -36,11 +36,11 @@ function constraints(args) {
 
 const failure = e => ({ error: typeof e?.name === 'string' && /Error$/.test(e.name) ? e.name : 'NotReadableError' });
 
-export function implementation({ changed, agent, log, tracks, audioSession, foreground: shown = () => true }) {
+export function implementation({ changed, agent, log, tracks, audioSession, now, foreground: shown = () => true }) {
   const media = typeof navigator === 'object' ? navigator.mediaDevices : undefined;
   let next = 0, opened = false, overlay = null, devices = null;
   // The cameras (video.js, LLP 1133.008).
-  const cameras = video({ changed, agent, log, tracks, nextId: () => ++next, media, shown });
+  const cameras = video({ changed, agent, log, tracks, nextId: () => ++next, media, shown, now });
   /** Each track this implementation opened: its record. */
   const own = new Map();
   const say = line => log?.(`media-capture: ${line}`);
