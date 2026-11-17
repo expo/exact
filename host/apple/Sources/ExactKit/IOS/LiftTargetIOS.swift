@@ -36,13 +36,29 @@ enum LiftTarget {
         return sequence(first: parent, next: { $0.superview }).first(where: { $0.next is UIViewController }) ?? parent
     }
 
+    /// Where a pull-down's preview stands: the invoker's parent, as UIKit's
+    /// own for a stock button's menu, so what UIKit draws there (the stand-in
+    /// it keeps for about a second after the menu has gone) scrolls with its
+    /// content. A pull-down's preview does not grow (the menu grows in UIKit's
+    /// own layer), so a box that clips cuts it only where the invoker is
+    /// already cut: then `container(of:)`, above it.
+    static func pullDownContainer(of view: UIView) -> UIView? {
+        guard let parent = view.superview, let root = container(of: view) else { return nil }
+        for ancestor in sequence(first: parent, next: { $0.superview }) {
+            if ancestor === root { break }
+            let clips = ancestor.layer.masksToBounds || ancestor.layer.mask != nil || (ancestor as? NodeView)?.overflowClips == true
+            if clips, !ancestor.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.bounds, to: ancestor)) { return root }
+        }
+        return parent
+    }
+
     /// Where UIKit highlights, lifts and returns `view` itself: over
     /// `container(of:)`, centered on the view, with the view's transform, as
     /// UIKit's own target for a view carries it (`UITargetedPreview(view:parameters:)`),
     /// and each ancestor's scale and rotation; converting the center takes the
     /// translations.
-    static func target(_ view: UIView) -> UIPreviewTarget? {
-        guard let container = container(of: view), let parent = view.superview else { return nil }
+    static func target(_ view: UIView, pullDown: Bool = false) -> UIPreviewTarget? {
+        guard let container = pullDown ? pullDownContainer(of: view) : container(of: view), let parent = view.superview else { return nil }
         var transform = view.transform
         for ancestor in sequence(first: parent, next: { $0.superview }) {
             if ancestor === container { break }
@@ -57,8 +73,8 @@ enum LiftTarget {
     /// `view` as its own preview, clipped to its corners, over nothing (a
     /// glass face is see-through); nil (UIKit's default) once it has left
     /// the window or is hidden.
-    static func preview(of view: UIView) -> UITargetedPreview? {
-        guard !view.isHidden, let target = target(view) else { return nil }
+    static func preview(of view: UIView, pullDown: Bool = false) -> UITargetedPreview? {
+        guard !view.isHidden, let target = target(view, pullDown: pullDown) else { return nil }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = rounded(view)
         parameters.backgroundColor = .clear
