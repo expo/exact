@@ -239,8 +239,8 @@ pub struct Paragraph {
     /// CSS whitespace preservation/collapsing.
     pub white_space: crate::WhiteSpace,
     /// CSS `text-wrap-style`: `balance` breaks the lines before the first
-    /// forced break at the narrowest width that keeps their count
-    /// ([`exact_textflow::balanced_width`]), up to six lines.
+    /// forced break, up to six, where Blink does
+    /// ([`exact_textflow::balanced_breaks`], [`exact_textflow::balanced_width`]).
     pub text_wrap_style: crate::TextWrapStyle,
     /// CSS `text-indent` in points: the first line starts this far in from
     /// the start edge (right under `rtl`) and has that much less room.

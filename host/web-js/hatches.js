@@ -375,7 +375,7 @@ function instant() {
   arm();
   return true;
 }
-const hatchClock = {
+export const hatchClock = {
   frames(f) {
     if (typeof f !== "function") return () => {};
     time();

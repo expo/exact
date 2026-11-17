@@ -243,11 +243,11 @@ export function androidDeploy(app, bin, env) {
 }
 
 /** The app's `kind` crate's Cargo.toml, beside app.json or in the workspace generated for it (scripts/app-shells.mjs). */
-const crateManifest = (app, kind) => [resolve(app.dir, kind, 'Cargo.toml'), resolve(app.workspace, kind, 'Cargo.toml')].find(existsSync);
+export const crateManifest = (app, kind) => [resolve(app.dir, kind, 'Cargo.toml'), resolve(app.workspace, kind, 'Cargo.toml')].find(existsSync);
 
-/** Only the selected package's Android runtime graph links Hermes. Other workspace members and host
- * procedural macros must not raise this binary's minimum API or require an Android bundle. */
-export function androidUsesHermes(app, kind, target = ANDROID_TARGET) {
+/** Only the selected package's runtime graph for `target` links Hermes. Other workspace members and host
+ * procedural macros must not raise this binary's minimum API or require a bundle. */
+export function usesHermes(app, kind, target = ANDROID_TARGET) {
   const env = cargoEnvironment();
   const options = { cwd: app.workspace, env, encoding: 'utf8', maxBuffer: 1 << 26 };
   let fetched = false;
@@ -268,7 +268,7 @@ export function androidUsesHermes(app, kind, target = ANDROID_TARGET) {
     '--prefix', 'none', '--format', '{p}', '--locked', '--offline'];
   let result = spawnSync('cargo', args, options);
   if (result.status !== 0 && fetchMissing(result.stderr)) result = spawnSync('cargo', args, options);
-  if (result.status !== 0) throw new Error(`cargo tree for Android: ${result.stderr || result.error?.message}`);
+  if (result.status !== 0) throw new Error(`cargo tree for ${target}: ${result.stderr || result.error?.message}`);
   return /^exact-js v/m.test(result.stdout);
 }
 
@@ -1418,7 +1418,7 @@ if (import.meta.main && process.argv[2] === 'reverse') {
   }
   const app = resolveApp(name);
   // A TypeScript app's library links the Android Hermes bundle: said before minutes of compiling, not at the link.
-  const typescript = new Map(targets.map(target => [target, androidUsesHermes(app, apkWanted ? 'android' : 'linux', target)]));
+  const typescript = new Map(targets.map(target => [target, usesHermes(app, apkWanted ? 'android' : 'linux', target)]));
   for (const [target, needed] of typescript) if (needed && target !== ANDROID_TARGET) {
     console.error(`${app.name}'s TypeScript cannot build for ${target}: the vendored Hermes resolver does not support Android x86_64 ICU, and the pinned release has no bundle. Use --abis arm64-v8a on an ARM device or an emulator with ARM translation.`);
     process.exit(1);

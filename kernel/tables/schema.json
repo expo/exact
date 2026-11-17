@@ -4801,7 +4801,7 @@
       "inherited": true,
       "text": true,
       "layout": true,
-      "_comment": "@ref LLP 1001 §6: CSS text-wrap-style: balance, also the admitted text-wrap shorthand. Every host balances the lines before the first forced break, up to six, as Chromium does: the web's browser, Apple's and Linux's breakers over their own opportunities (exact_textflow::balanced_width)."
+      "_comment": "@ref LLP 1001 §6: CSS text-wrap-style: balance, also the admitted text-wrap shorthand. Every host balances the lines before the first forced break, up to six, as Chromium does: the web's browser, Apple's and Linux's breakers over their own opportunities (exact_textflow::balanced_breaks, balanced_width)."
     },
     {
       "bit": 205,

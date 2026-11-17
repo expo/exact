@@ -2,7 +2,7 @@
   "name": "@exact/recording",
   "version": "1.0.0",
   "private": true,
-  "description": "MediaStream Recording's names: the microphone recorded to a file, and its level (LLP 1133.009).",
+  "description": "MediaStream Recording's names: camera and microphone streams recorded to files, and audio levels.",
   "exports": {
     ".": "./exact.json",
     "./apple": "./apple/exact.json",

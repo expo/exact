@@ -1277,7 +1277,13 @@ fn first_frame<D: DataSource>(
     fact_shape(
         plan,
         "exactActivities",
-        &["activities", "frequentPushesEnabled", "linked"],
+        &[
+            "activities",
+            "frequentPushesEnabled",
+            "linked",
+            "pushToStartToken",
+            "pushToStartActivities",
+        ],
         "bake-activities-field",
     )?;
     activities::shape(plan)?;

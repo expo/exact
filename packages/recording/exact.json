@@ -23,7 +23,7 @@
       "audioBitsPerSecond": "option<number>",
       "path": "string",
       "duration": "number",
-      "reason": "option<enum<requested|interrupted|media-reset|background|track-ended|error|session-ended>>",
+      "reason": "option<enum<requested|interrupted|media-reset|background|track-ended|error|session-ended|max-duration>>",
       "error": "option<string>",
       "result": "option<RecordedMedia>"
     },
@@ -31,7 +31,10 @@
       "path": "string",
       "mimeType": "string",
       "duration": "number",
-      "size": "number"
+      "size": "number",
+      "width": "option<number>",
+      "height": "option<number>",
+      "frameRate": "option<number>"
     },
     "AudioLevel": {
       "audioLevel": "number",
@@ -47,9 +50,7 @@
   "names": [
     {
       "send": "startMediaRecorder",
-      "grants": [
-        "device.microphone"
-      ],
+      "grants": [],
       "origin": "app",
       "foreground": true,
       "inCall": true,
@@ -62,7 +63,8 @@
           "type": "path",
           "access": "write",
           "for": "recorder"
-        }
+        },
+        "maxDuration": "option<number>"
       },
       "answers": "MediaRecorderInfo",
       "handles": {
@@ -71,9 +73,7 @@
     },
     {
       "send": "pauseMediaRecorder",
-      "grants": [
-        "device.microphone"
-      ],
+      "grants": [],
       "options": {
         "recorder": "handle<recorder>"
       },
@@ -81,9 +81,7 @@
     },
     {
       "send": "resumeMediaRecorder",
-      "grants": [
-        "device.microphone"
-      ],
+      "grants": [],
       "origin": "app",
       "foreground": true,
       "options": {
@@ -93,9 +91,7 @@
     },
     {
       "send": "stopMediaRecorder",
-      "grants": [
-        "device.microphone"
-      ],
+      "grants": [],
       "options": {
         "recorder": "handle<recorder>"
       },
@@ -103,11 +99,9 @@
     },
     {
       "source": "mediaRecorderState",
+      "grants": [],
       "live": true,
       "poll": "interval",
-      "grants": [
-        "device.microphone"
-      ],
       "options": {
         "recorder": "handle<recorder>",
         "interval": "option<number>"
@@ -116,6 +110,7 @@
     },
     {
       "source": "isTypeSupported",
+      "grants": [],
       "options": {
         "type": "string"
       },

@@ -882,7 +882,8 @@ names no take; `:focus-within` remains out.
   runs when an update arrives (the system replaces the activity's state and
   the extension redraws it). Consumer: Interview's AI answer being written,
   which only its server can advance. Unblocks a Live Activity that stays true
-  while its app is suspended. Still refused: push-to-start, remote
+  while its app is suspended. Still refused: push-to-start (admitted
+  2026-11-17, below), remote
   notifications (a visible push admitted 2026-11-11, and a data-only push as a
   wake's trigger 2026-11-14, both below), and everything the click ruling left refused. Take: none
   named; the ruling stands as its own waiver.
@@ -928,7 +929,8 @@ names no take; `:focus-within` remains out.
   Notifications, and a production build (`packages/push/test/checklist.md`);
   nothing is claimed for a device until that run. Not built: push on macOS (the
   row is omitted there) and on the web
-  (Declarative Web Push or a host worker). Still refused: push-to-start; a
+  (Declarative Web Push or a host worker). Still refused: push-to-start
+  (admitted 2026-11-17, below); a
   notification service extension except for the app-owned Swift form admitted
   below; an event raised by a push, except Android data-only pushes and a declared
   action the person chose (below).
@@ -981,10 +983,24 @@ names no take; `:focus-within` remains out.
   event. Consumer: the builder whose ordinary build replaced the extension.
   Unblocks decryption, downloaded media and rewritten alert text without a
   post-build patch. Take: waived under the delegation. Still refused:
-  push-to-start; an event raised by a visible push except for the person's
+  push-to-start (admitted 2026-11-17, below); an event raised by a visible push except for the person's
   declared action above; a notification content extension; Contract or
   TypeScript on a visible-alert arrival; filtering and critical-alert
   entitlements; and payload keys Exact reads beyond `navigate`.
+  **Expanded (Charlie, 2026-11-17, "Admit; we rewrite", on expo/exact#742;
+  LLP 1126 D9 and LLP 1133.004 §9 P8, amended):** ActivityKit push-to-start
+  for an app's own Live Activities on iOS 17.2 and later. `exactActivities()`
+  answers the push-to-start token, read only when an entry declares
+  `push: true`, and the entries a server may start, each with the generation
+  the app runs and its shape digest; the app gives them to its own backend,
+  which sends the start to APNs, and exact2 sends nothing and relays nothing
+  (LLP 1030.000 D6). No app code runs when a start arrives, and the host boots
+  no session for the launch iOS may make for it: the activity and its update
+  token reach the app at its next read of the source. Consumer: expo/exact#742's
+  author, whose backend starts an activity the app did not. Unblocks a Live
+  Activity that begins while its app is not running. Take: none named; the
+  ruling stands as its own waiver. Built; owed on a device: a start delivered
+  through APNs. Still refused: a session booted for a push-to-start's launch.
 
 **Components** — roughly 15 built-in tags, not 40; roughly 12 Facet components, not 47.
 
@@ -1186,7 +1202,7 @@ reading. Nothing that isn't HTML is added by it.
   Maven libraries need (LLP 1133.008 D8). Consumer: the photo editor, which
   takes a photo and then edits it. Unblocks a photo in an app without app
   Swift. Take: the photo editor's Android port moves to later. Still out,
-  each until a consumer asks (LLP 1133.008 §12): video recording, a camera
+  each until a consumer asks (LLP 1133.008 §12): a camera
   track in `video srcObject=` and frames to code, two cameras at once on
   iOS, document scanning (narrowed from "barcode and document scanning" by
   LLP 1133.027's record below), constraint dictionaries, zoom on the
@@ -1215,8 +1231,15 @@ reading. Nothing that isn't HTML is added by it.
   access-control app, whose guards record a short video and upload it
   (`exactBodyFrom`, now streamed from disk with no size bound where it is
   streamed). Unblocks that without app Kotlin or Swift. Take: none
-  offered; waived by the same ask. Still out: video recording in the app,
-  and the macOS, Windows, Linux, tvOS, visionOS and watchOS cells.
+  offered; waived by the same ask. Still out for the system camera UI: the
+  macOS, Windows, Linux, tvOS, visionOS and watchOS cells.
+- **Expanded (Charlie, 2026-11-16, expo/exact#748; consumer trigger met):**
+  in-app video recording through `startMediaRecorder` in `@exact/recording`,
+  over a camera stream sharing the preview and frame analysis session, to an
+  `app:/` file. Unblocks a guided clip with the app's overlay and countdown.
+  Android and the web first, then Apple; `maxDuration` bounds the clip and
+  the track's `frameRate` constraint sets its ideal rate. The result names
+  its MIME type, byte size, duration, pixel size and frame rate.
 - **Expanded (Charlie, 2026-10-23, "Expand, no take", on LLP 1133.009 §15
   question 6):** recording the microphone to a file and reading its level,
   by Media Capture's and MediaStream Recording's names (`getUserMedia(audio=)`

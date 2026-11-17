@@ -939,10 +939,15 @@ test('activity refusals allow native APNs without activities and still scan ever
         if (symbol === 'registerForRemoteNotifications') for (const app of [plain, empty]) {
           assert.equal(assertActivityRefusals(dir, runApple, app), 0);
         }
-        assert.throws(() => assertActivityRefusals(dir, runApple, activity), new RegExp(symbol));
-        // With `device.push`, the app registers beside its activities; push-to-start stays refused (LLP 1133.004 §9 P8).
-        if (symbol === 'registerForRemoteNotifications') assert.equal(assertActivityRefusals(dir, runApple, activity, granted), binaries.length);
-        else assert.throws(() => assertActivityRefusals(dir, runApple, activity, granted), new RegExp(symbol));
+        if (symbol === 'registerForRemoteNotifications') {
+          assert.throws(() => assertActivityRefusals(dir, runApple, activity), new RegExp(symbol));
+          // With `device.push`, the app registers beside its activities.
+          assert.equal(assertActivityRefusals(dir, runApple, activity, granted), binaries.length);
+        } else {
+          // Push-to-start is admitted (LLP 1126 D9, amended 2026-11-17).
+          assert.equal(assertActivityRefusals(dir, runApple, activity), binaries.length);
+          assert.equal(assertActivityRefusals(dir, runApple, activity, granted), binaries.length);
+        }
       }
       writeFileSync(binary, bytes);
     }
@@ -958,7 +963,7 @@ test('activity refusals allow native APNs without activities and still scan ever
 });
 
 // The async iOS step supplies its just-built bundle. Glue has no assembled iOS fixture yet.
-test.skipIf(!process.env.EXACT_ACTIVITY_APP)('the assembled app and extension refuse push-to-start symbols, remote registration without device.push, and its background mode (LLP 1126.001 WP9; LLP 1133.004 §9 P8)', async () => {
+test.skipIf(!process.env.EXACT_ACTIVITY_APP)('the assembled app and extension admit push-to-start symbols, refuse remote registration without device.push, and refuse its background mode (LLP 1126.001 WP9; LLP 1133.004 §9 P8)', async () => {
   const { cpSync, readFileSync, readdirSync } = await import('node:fs');
   const { spawnSync } = await import('node:child_process');
   const { resolve } = await import('node:path');
@@ -983,10 +988,13 @@ test.skipIf(!process.env.EXACT_ACTIVITY_APP)('the assembled app and extension re
       const granted = 'device.notifications purpose.notifications\ndevice.push';
       for (const symbol of ['pushToStartTokenUpdates', 'registerForRemoteNotifications']) {
         writeFileSync(binary, Buffer.concat([bytes, Buffer.from(`\0${symbol}\0`)]));
-        assert.throws(() => assertActivityRefusals(dir, runApple, declaration), new RegExp(symbol));
-        // `device.push` admits registration beside the activities, never push-to-start (LLP 1133.004 §9 P8).
-        if (symbol === 'pushToStartTokenUpdates') assert.throws(() => assertActivityRefusals(dir, runApple, declaration, granted), new RegExp(symbol));
-        else assert.ok(assertActivityRefusals(dir, runApple, declaration, granted) >= 3);
+        if (symbol === 'pushToStartTokenUpdates') {
+          assert.ok(assertActivityRefusals(dir, runApple, declaration) >= 3);
+          assert.ok(assertActivityRefusals(dir, runApple, declaration, granted) >= 3);
+        } else {
+          assert.throws(() => assertActivityRefusals(dir, runApple, declaration), new RegExp(symbol));
+          assert.ok(assertActivityRefusals(dir, runApple, declaration, granted) >= 3);
+        }
       }
       writeFileSync(binary, bytes);
     }

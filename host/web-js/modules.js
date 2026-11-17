@@ -45,6 +45,7 @@ import { setSpaceState } from "../web/address-space.js";
 import { members } from "./members.js";
 import { sheets } from "./sheets.js";
 import { errorCode, object, complete, handlesAt, overlay, partial, equalJson, serdeJson, fill, value } from "./declared-values.js";
+import { hatchClock } from "./hatches.js";
 
 // `rows`: source → [extension.name, send, substitute, type, request, options' type, live];
 // `bound`: extension → a loader of its web implementation, where the app binds one
@@ -497,6 +498,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (!bound[extension]) return null;
     if (!loaded.has(extension)) loaded.set(extension, chunk(extension).then(async m => {
       const context = { changed: key => reask([...byKey.values()].filter(r => r.key.split("#")[0] === key && route(r) !== "substitute").map(r => r.key)), agent: clock.agent, config: m.config ?? {}, now: () => { time(); return clock.now; }, clocked: fn => { Clocked.push(fn); }, foreground: shown, log: say, tracks, files, audioSession,
+        after: (ms, body) => hatchClock.after(ms, body),
         // The app's grant lines, and the host's auth session for an implementation (LLP 1133.014 D10 item 3).
         grants: data.grants ?? "", get authSession() { return globalThis.exact?.authSession; },
         revokePicture: source => pictures?.revokePicture(source), pictureChanged: source => pictures?.pictureChanged(source), invoke: invoker(extension),

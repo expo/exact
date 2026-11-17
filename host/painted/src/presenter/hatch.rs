@@ -39,6 +39,27 @@ fn words(dataset: &str) -> BTreeMap<String, String> {
 }
 
 impl<D: DataSource> Presenter<D> {
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn reader_hatch_act(&mut self, node: u32, kind: i32, text: Option<&str>) -> i64 {
+        if node == 0 && kind == 6 && self.hatches.install.is_none() {
+            // Package timers use the session clock even when the app declares no hatches.
+            self.hatches.install = Some(crate::hatches::install_with_reader::<()>(&[]));
+            self.hatches.asked = true;
+            let production = exact_runner::delivery::production(&self.compat);
+            let app_id = self.host.runner().data_ref().app_id().to_owned();
+            self.hatches.connect(!production, self.agent, &app_id);
+            self.hatch_moments();
+        }
+        let answer = crate::hatches::reader::act(node, kind, text);
+        if answer >= 0 {
+            self.hatch_turn();
+            if matches!(kind, 13 | 14) {
+                self.hatch_views_changed();
+            }
+        }
+        answer
+    }
+
     /// The app's hatches, from its entry: connected after first pixel.
     pub fn set_hatches(&mut self, install: Option<crate::hatches::Install>) {
         self.hatches.install = install;

@@ -55,6 +55,7 @@ exact-executor = { path = "../executor" }
 # conformance's network runs this host over (src/executor.rs).
 ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false, features = ["websocket", "portable-http"] }
 sha2 = "0.10"
+same-file = "1"
 # The freedesktop recent-files store a kept document is noted in (src/kept.rs);
 # fontconfig-parser already links it.
 roxmltree = "0.20"

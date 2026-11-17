@@ -21,7 +21,13 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
         ("exactCanvasPerformance", &[][..], "canvasPerformance"),
         (
             "exactActivities",
-            &["activities", "frequentPushesEnabled", "linked"][..],
+            &[
+                "activities",
+                "frequentPushesEnabled",
+                "linked",
+                "pushToStartToken",
+                "pushToStartActivities",
+            ][..],
             "activities",
         ),
     ] {

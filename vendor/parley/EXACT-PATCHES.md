@@ -133,6 +133,22 @@ named here pass.
     a text index (`shape_text`), so a ligature or kerning pair never joins
     characters a box's room separates. Nothing changes for a layout that
     calls none of the three.
+19. **Chosen breaks.** `BreakLines::opportunities` lists where a line may
+    end as `break_next` marks it (a wrapping text boundary outside a
+    ligature, before and after an in-flow inline box), each with the advance
+    a line ending there reaches (hanging white space left out, a soft
+    hyphen's hyphen included) and the advance the next line starts at. The
+    list stops at the first forced break (a newline cluster, U+2028 in a
+    host's hard line), its last entry that break or the layout's end.
+    `BreakLines::break_next_at` ends the next line at one of them whatever
+    the width, as Blink's `LineBreaker::SetBreakAt` does; a forced break
+    still ends the line first. The host scores the breaks of a
+    `text-wrap-style: balance` paragraph's lines before its first forced
+    break as Blink does, breaks them there, and breaks the rest with
+    `break_next` (expo/exact#437). Nothing changes for a layout that calls
+    neither. Tests: `balance_tests.rs`
+    (`the_reports_headings_break_where_chromes_scorer_breaks_them`,
+    `a_line_separator_ends_the_balanced_lines`).
 
 `Cargo.toml` also carries the empty `[workspace]` boundary described below;
 retain it when updating. All remaining archive files are byte-for-byte upstream.

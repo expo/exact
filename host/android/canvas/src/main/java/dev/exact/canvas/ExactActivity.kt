@@ -48,8 +48,9 @@ open class ExactActivity : Activity() {
 
     /** The app's Kotlin hatches (LLP 1115.001.000 D4), made the first time exact2 tells a moment, which is after
      * first pixel; one for the process, as exact2's host is, and given each activity made again. */
-    internal fun hatches(): HatchReader? {
+    internal fun hatches(required: Boolean = false): HatchReader? {
         if (!hatchesLooked) { hatchesLooked = true; hatchReader = HatchReader.make(this) }
+        if (required && hatchReader == null) hatchReader = HatchReader(this, object : ExactHatches() {})
         return hatchReader
     }
 

@@ -594,6 +594,17 @@ impl NodeArena {
         copy
     }
 
+    /// Take as spent the text revisions a trial copied from this arena gave
+    /// (`trial_copy`), so that no later revision here gives one again. A
+    /// trial that renewed its namespace leaves this arena to renew its own
+    /// at its next revision.
+    pub(crate) fn spend_text_revisions(&mut self, trial: &Self) {
+        self.text_serial = match trial.text_domain == self.text_domain {
+            true => self.text_serial.max(trial.text_serial),
+            false => u64::MAX,
+        };
+    }
+
     pub(crate) fn renew_text_namespace(&mut self) {
         self.text_domain = TextDomain::default();
         self.text_serial = 0;

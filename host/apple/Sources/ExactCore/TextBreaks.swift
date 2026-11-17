@@ -15,6 +15,13 @@ package struct LineBreakPlan {
     private var ordinary: [Int] = [], ordinaryContent: [Int] = []
     private var ordinaryIndex = 0
 
+    /// The opportunities a line ends at by choice, each with its content
+    /// end: all of them less the emergency hyphens, which only a word too
+    /// wide for its line breaks at (`suggest`).
+    private var chosen: (boundaries: [Int], contentEnds: [Int]) {
+        ordinary.isEmpty ? (boundaries, contentEnds) : (ordinary, ordinaryContent)
+    }
+
     package init() {}
 
     package mutating func prepare(_ text: NSString, length: Int, emergency: [Int] = []) {
@@ -73,58 +80,128 @@ package struct LineBreakPlan {
                                           hard: hardIndex < hardEnds.count ? hardEnds[hardIndex] : length)
     }
 
-    /// CSS `text-wrap-style: balance` (LLP 1001 §6, as Chrome does it): the
-    /// lines before the first forced break (`until`) take the narrowest room,
-    /// `room`, that keeps the count they have at `limit`, when that is two to
-    /// six (`TextEngine.balancedLimit`); the rest break at `limit`. `widest`
-    /// is those lines' widest broken greedily, which is still the box's
-    /// measure: balancing moves breaks, never the box. Call before the
-    /// layout advances this plan; `next` is the layout's own break, and
-    /// `removed` the trailing spaces it leaves out of a line's width, given
-    /// the line's room.
-    package func balance(_ limit: Double, length: Int, inset: (Int) -> Double, removed: (CTLine, CGFloat) -> CGFloat,
-                 next: (inout LineBreakPlan, Int, Double) -> Int,
-                 typesetter: CTTypesetter, source: NSAttributedString) -> (until: Int, room: Double, widest: CGFloat)? {
-        let until = hardEnds.first ?? length
-        func lines(_ limit: Double, widest: (Int, Int) -> Void = { _, _ in }) -> Int {
-            var plan = self, start = 0, n = 0
-            while start < until && n <= TextEngine.balanceMaxLines {
-                var count = next(&plan, start, limit - inset(start))
+    /// CSS `text-wrap-style: balance` (LLP 1001 §6) as Blink does it
+    /// (`exact_textflow`'s balance): the lengths of the lines before the first
+    /// forced break, when those are two to six at `limit` and none overflows.
+    /// They break where Blink's scorer puts them; where it gives nothing and
+    /// the text has no forced break, at its bisection's width
+    /// (`TextEngine.balancedLimit`); nil keeps the greedy lines. `widest` is
+    /// those lines' widest broken greedily, which is still the box's measure:
+    /// balancing moves breaks, never the box. `fontSize` is the paragraph's
+    /// own. Call before the layout advances this plan; `next` is the layout's
+    /// own break, and `removed` the trailing spaces it leaves out of a line's
+    /// width, given the line's room.
+    package func balance(_ limit: Double, length: Int, fontSize: CGFloat, justified: Bool, insets: LineInsets,
+                 removed: (CTLine, CGFloat) -> CGFloat, next: (inout LineBreakPlan, Int, Double) -> Int,
+                 typesetter: CTTypesetter, source: NSAttributedString) -> (counts: [Int], widest: CGFloat)? {
+        let until = hardEnds.first ?? length, ends = Set(chosen.boundaries)
+        func inset(_ start: Int) -> Double { Double(insets.at(start).width) }
+        // The greedy lines' lengths at `limit`, with their widths' sum and
+        // widest, or nil for more than six or one that overflows its room.
+        func greedy(_ limit: Double) -> (counts: [Int], total: CGFloat, widest: CGFloat)? {
+            var plan = self, start = 0, counts: [Int] = [], total: CGFloat = 0, widest: CGFloat = 0
+            while start < until {
+                guard counts.count < TextEngine.balanceMaxLines else { return nil }
+                let room = limit - inset(start)
+                var count = next(&plan, start, room)
                 if count <= 0 { count = length - start }
-                widest(start, count)
-                start += count; n += 1
+                let range = CFRangeMake(start, count)
+                let line = TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: source, range: range)
+                let content = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - removed(line, CGFloat(room))
+                // A word wider than its room, or one broken inside (`break-word`, at an emergency hyphen too).
+                let end = start + count
+                if content > CGFloat(room) + 1.0 / 64 || (end < until && !ends.contains(end)) { return nil }
+                total += content + CGFloat(inset(start)); widest = max(widest, content + CGFloat(inset(start)))
+                counts.append(count); start = end
             }
-            return n
+            return (counts, total, widest)
         }
-        guard let room = TextEngine.balancedLimit(limit, lines: { lines($0) }) else { return nil }
-        var widest: CGFloat = 0
-        _ = lines(limit) { start, count in
-            let range = CFRangeMake(start, count)
-            let line = TextEngine.inkedSoftHyphen(CTTypesetterCreateLine(typesetter, range), source: source, range: range)
-            widest = max(widest, CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - removed(line, CGFloat(limit - inset(start))) + CGFloat(inset(start)))
+        guard limit.isFinite, limit > 0, let lines = greedy(limit), lines.counts.count >= 2 else { return nil }
+        if let counts = scored(limit, lines: lines.counts.count, until: until, fontSize: fontSize, justified: justified, insets: insets,
+                               typesetter: typesetter, source: source) {
+            return (counts, lines.widest)
         }
-        return (until, room, widest)
+        guard hardEnds.isEmpty,
+              let room = TextEngine.balancedLimit(limit, count: lines.counts.count, total: Double(lines.total), fits: {
+                  greedy($0).map { $0.counts.count <= lines.counts.count } ?? false
+              }), let narrow = greedy(room) else { return nil }
+        return (narrow.counts, lines.widest)
+    }
+
+    /// The lengths of the `lines` lines Blink's scorer breaks the text before
+    /// `until` into (`exact_text_balanced_breaks`), over this plan's
+    /// opportunities, the emergency hyphens left out, and the typesetter's
+    /// advances; nil where it gives nothing. A tab keeps it out, as in Blink.
+    /// A later run's start room (`LineInsets.edgeStarts`) is kerned on the
+    /// character before the run and belongs to the line the run is on: a
+    /// line that starts with the run starts before the room, and one that
+    /// ends before the run ends before it.
+    private func scored(_ limit: Double, lines: Int, until: Int, fontSize: CGFloat, justified: Bool, insets: LineInsets,
+                        typesetter: CTTypesetter, source: NSAttributedString) -> [Int]? {
+        let text = source.string as NSString
+        guard until > 0, text.range(of: "\t", range: NSRange(location: 0, length: until)).location == NSNotFound else { return nil }
+        // Each UTF-16 unit's place from the start: its glyphs' advances, in logical order.
+        var place = [CGFloat](repeating: 0, count: until + 1)
+        for run in CTLineGetGlyphRuns(CTTypesetterCreateLine(typesetter, CFRangeMake(0, until))) as! [CTRun] {
+            let count = CTRunGetGlyphCount(run)
+            var advances = [CGSize](repeating: .zero, count: count), indices = [CFIndex](repeating: 0, count: count)
+            CTRunGetAdvances(run, CFRangeMake(0, 0), &advances)
+            CTRunGetStringIndices(run, CFRangeMake(0, 0), &indices)
+            for (advance, index) in zip(advances, indices) where index < until { place[index + 1] += advance.width }
+        }
+        for i in 1...until { place[i] += place[i - 1] }
+        var ends: [Float] = [], nexts: [Float] = [], hyphens: [UInt8] = [], offsets: [Int] = []
+        var rest: Double?
+        for (boundary, content) in zip(chosen.boundaries, chosen.contentEnds) where boundary <= until {
+            var end = place[min(content, until)], next = place[boundary]
+            let hyphenated = boundary < until && content == boundary && text.character(at: boundary - 1) == 0xAD
+            if hyphenated {
+                // The hyphen a break here shows, part of its line (`inkedSoftHyphen`).
+                let range = CFRangeMake(boundary - 1, 1), plain = CTTypesetterCreateLine(typesetter, range)
+                end += CGFloat(CTLineGetTypographicBounds(TextEngine.inkedSoftHyphen(plain, source: source, range: range), nil, nil, nil)
+                               - CTLineGetTypographicBounds(plain, nil, nil, nil))
+            }
+            if boundary < until {
+                // The start room of a run that begins here. Kerned on a space it hangs with the space; after
+                // any other character a line that ends here leaves it out (`exactBreakRoom`).
+                let room = insets.edgeStarts[boundary] ?? 0
+                end -= TextEngine.breakRoom(endingAt: boundary, in: source)
+                next -= room
+                // The rest of the inset is the same at every break: a list item's indent.
+                rest = Double(insets.at(boundary).width - room)
+            }
+            ends.append(Float(end)); nexts.append(Float(next)); hyphens.append(hyphenated ? 1 : 0); offsets.append(boundary)
+        }
+        guard offsets.last == until, let rest else { return nil }
+        var breaks = [UInt32](repeating: 0, count: TextEngine.balanceMaxLines)
+        let count = exact_text_balanced_breaks(Float(limit - rest), Float(Double(insets.at(0).width) - rest), Float(fontSize), justified ? 1 : 0,
+                                               ends, nexts, hyphens, offsets.count, lines, &breaks, breaks.count)
+        guard count > 0 else { return nil }
+        var counts: [Int] = [], start = 0
+        for at in breaks.prefix(count) { counts.append(offsets[Int(at)] - start); start = offsets[Int(at)] }
+        return counts + [until - start]
     }
 }
 
 extension TextEngine {
     /// The most lines `balance` balances; more break greedily, as in Chromium.
     package static let balanceMaxLines = 6
-    /// `exact_textflow::balanced_width` over a paragraph's own breaker: the
-    /// narrowest limit, to 1/64 pt (a browser layout unit), at which
-    /// `lines` (which may stop counting past `balanceMaxLines`) is still what
-    /// it is at `limit`; nil for one line or more than `balanceMaxLines`.
-    package static func balancedLimit(_ limit: Double, lines: (Double) -> Int) -> Double? {
-        guard limit.isFinite, limit > 0 else { return nil }
-        let count = lines(limit)
-        guard (2...balanceMaxLines).contains(count) else { return nil }
-        var lo = 0, hi = Int((limit * 64).rounded(.down))
-        if lines(Double(hi) / 64) > count { return limit }
-        while hi - lo > 1 {
-            let mid = lo + (hi - lo) / 2
-            if lines(Double(mid) / 64) > count { lo = mid } else { hi = mid }
+    /// `exact_textflow::balanced_width` over a paragraph's own breaker,
+    /// Blink's bisection: the limit, within 1 pt of the narrowest, at which
+    /// a paragraph of `count` greedy lines at `limit`, their widths summing to
+    /// `total`, still `fits` (breaks into no more lines, none overflowing).
+    /// The search runs in 1/64 pt (a browser layout unit) from 0.8 of the
+    /// average line. nil for one line, more than `balanceMaxLines`, or no
+    /// narrower limit that fits.
+    package static func balancedLimit(_ limit: Double, count: Int, total: Double, fits: (Double) -> Bool) -> Double? {
+        guard limit.isFinite, limit > 0, (2...balanceMaxLines).contains(count) else { return nil }
+        let box = Int((limit * 64).rounded(.down))
+        var lower = Int((Float(Int((max(0, total) * 64).rounded(.down)) / count) * 0.8).rounded()), upper = box
+        while lower + 64 < upper {
+            let middle = (upper + lower) / 2
+            if fits(Double(middle) / 64) { upper = middle } else { lower = middle }
         }
-        return Double(hi) / 64
+        return upper < box ? Double(upper) / 64 : nil
     }
     /// Each opportunity's content end, and the ends of the forced breaks
     /// (CR LF one), in one forward pass. A boundary's own forced break is no

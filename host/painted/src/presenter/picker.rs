@@ -310,10 +310,14 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let sources: Vec<_> = paths
             .iter()
-            .map(|path| {
-                serde_json::json!({
-                    "path": path, "name": path.file_name().unwrap_or_default().to_string_lossy(),
-                })
+            .filter_map(|path| {
+                let Some(path) = path.to_str() else {
+                    self.host.log("picker: refused: a chosen path is not Unicode");
+                    return None;
+                };
+                Some(serde_json::json!({
+                    "path": path, "name": std::path::Path::new(path).file_name().unwrap_or_default().to_str().unwrap(),
+                }))
             })
             .collect();
         self.import_files(
@@ -565,17 +569,16 @@ impl<D: DataSource> Presenter<D> {
         from: &str,
         text: Option<&str>,
     ) {
-        let copied = match text {
-            Some(text) => std::fs::write(to, text).map_err(|e| e.to_string()),
-            None => crate::picker::open(from)
-                .ok_or_else(|| "no app file to copy".to_owned())
-                .and_then(|mut from| {
-                    let mut to = std::fs::File::create(to).map_err(|e| e.to_string())?;
-                    std::io::copy(&mut from, &mut to)
-                        .map(drop)
-                        .map_err(|e| e.to_string())
-                }),
-        };
+        let copied = file_dialog::Export::open(from, text).and_then(|source| source.write(to));
+        self.finish_save(view, to, copied);
+    }
+
+    pub(super) fn finish_save(
+        &mut self,
+        view: ViewId,
+        to: &std::path::Path,
+        copied: Result<(), String>,
+    ) {
         match copied {
             Ok(_) => {
                 self.host.log("saveFile: saved");
@@ -779,6 +782,11 @@ impl<D: DataSource> Presenter<D> {
     ) {
         let docs: Vec<String> = paths
             .filter_map(|p| {
+                if p.file_name().is_some_and(|file| file.to_str().is_none()) {
+                    self.host
+                        .log(format!("{name}: refused: a chosen filename is not Unicode"));
+                    return None;
+                }
                 // Kept across launches where the app keeps documents (LLP 1069.010.000 D3).
                 crate::kept::chosen(0, p).or_else(|| exact_data::documents::mint(p, 0))
             })

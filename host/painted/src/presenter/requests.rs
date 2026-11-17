@@ -214,7 +214,7 @@ impl Haptic {
 }
 
 /// A request the shell took and has not answered.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(super) enum Waiting {
     /// The share sheet: its outcome is a journal line (LLP 1069.003 D2).
     Share,
@@ -231,6 +231,7 @@ pub(super) enum Waiting {
     /// shell's copies, but never deliver them to the new input.
     Files(Option<ViewId>),
     FileDialog(super::file_dialog::Waiting),
+    Export(Option<ViewId>),
 }
 
 /// Module calls' bodies and replies, handed over from the native slot's
@@ -250,6 +251,8 @@ pub(super) struct State {
     pub(super) waiting: BTreeMap<u32, Waiting>,
     pub(super) importing: std::collections::BTreeSet<u32>,
     pub(super) files: super::picker::Inbox,
+    pub(super) exports: super::file_dialog::Inbox,
+    pub(super) export_workers: BTreeMap<u32, std::thread::JoinHandle<()>>,
     /// What the shell was last told of Back, the kernel epoch that was read
     /// at, and what it was last told of the keyboard.
     back: Option<bool>,
@@ -417,7 +420,7 @@ impl<D: DataSource> Presenter<D> {
             .requests
             .waiting
             .values()
-            .any(|w| *w == Waiting::Files(Some(view)))
+            .any(|w| matches!(w, Waiting::Files(Some(v)) if *v == view))
         {
             let id = self
                 .host
@@ -931,7 +934,9 @@ impl<D: DataSource> Presenter<D> {
                 return true;
             }
         }
-        if self.requests.importing.contains(&id) {
+        if self.requests.importing.contains(&id)
+            || matches!(self.requests.waiting.get(&id), Some(Waiting::Export(_)))
+        {
             return false;
         }
         if matches!(self.requests.waiting.get(&id), Some(Waiting::Files(_)))
@@ -981,6 +986,7 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
             Waiting::Files(view) => self.files_chosen(id, view, answer),
+            Waiting::Export(_) => unreachable!("exports complete on their worker"),
             Waiting::FileDialog(waiting) => {
                 self.finish_file_dialog(id, waiting, super::file_dialog::Outcome::Cancelled)
             }
@@ -1005,7 +1011,10 @@ impl<D: DataSource> Presenter<D> {
             .filter(|(_, w)| {
                 !matches!(
                     w,
-                    Waiting::Pick(_) | Waiting::Files(_) | Waiting::Auth { opened: true, .. }
+                    Waiting::Pick(_)
+                        | Waiting::Files(_)
+                        | Waiting::Export(_)
+                        | Waiting::Auth { opened: true, .. }
                 )
             })
             .map(|(id, _)| *id)
@@ -1036,18 +1045,17 @@ impl<D: DataSource> Presenter<D> {
     }
 
     fn drop_picks(&mut self, stale: impl Fn(ViewId) -> bool) {
-        for waiting in self.requests.waiting.values_mut() {
+        self.requests.waiting.retain(|_, waiting| {
             if let Waiting::FileDialog(waiting) = waiting {
-                if waiting.view.is_some_and(&stale) {
-                    waiting.view = None;
-                }
+                return !waiting.view.is_some_and(&stale);
             }
-            if let Waiting::Files(view) = waiting {
+            if let Waiting::Files(view) | Waiting::Export(view) = waiting {
                 if view.is_some_and(&stale) {
                     *view = None;
                 }
             }
-        }
+            true
+        });
         let picks: Vec<(u32, ViewId)> = (self.requests.waiting.iter())
             .filter_map(|(id, w)| match w {
                 Waiting::Pick(node) if stale(*node) => Some((*id, *node)),

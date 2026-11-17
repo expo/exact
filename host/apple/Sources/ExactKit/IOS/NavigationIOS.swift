@@ -322,6 +322,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func fitOwner() {
         presenter.hostDocument(fixed: wantsWholeView)
         guard let owner = primaryOwner ?? bootOwner, let view = owner.viewIfLoaded, let root = container else { return }
+        presenter.turnChrome(owner)
         let mount = ownerMount(root)
         if view.superview !== mount {
             mount.addSubview(view)
@@ -671,6 +672,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// The controller Exact installed under the root: the tab container, or
     /// the one stack.
     var primaryOwner: UIViewController? { tabOwner ?? primaryNavigation }
+    /// The controllers whose chrome takes the document's direction (`Presenter.turnChrome`).
+    var chromeOwners: [UIViewController] { [primaryOwner, bootOwner, transferringBootOwner].compactMap { $0 } }
 
     func willMount() { mounting = true }
 

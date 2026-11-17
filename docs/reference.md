@@ -45,8 +45,11 @@ same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
 --platform ios --device` checks the archive's prerequisites; `--platform
 android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
 actual compiler paths. A scoped check fails when a prerequisite is missing
-and does not check unrelated web tools. Native `--platform` scopes are check-only;
-install commands are in the platform's CI recipe. `setup --platform web` installs
+and does not check unrelated web tools. Run from an app's directory, a check
+requires a Hermes bundle only when the app links Hermes, as that platform's build
+decides: iOS by `app.ts`, Android, macOS and Linux by the cargo graph of the app's
+crate. Elsewhere it reports the bundles as needed for TypeScript apps.
+Native `--platform` scopes are check-only; install commands are in the platform's CI recipe. `setup --platform web` installs
 [web prerequisites](#web-ci-preparation). The general check still reports
 optional tools separately (LLP 1086 D6).
 
@@ -3405,8 +3408,12 @@ bundle id), APNs's own `aps` dictionary and one key of Exact's:
 
 The system shows it, with the app in front too. Its tap opens the top-level
 `navigate` string, warm or at launch, as a local notification's `navigate=`
-opens: reduced by `location_of` to the app's own location whatever its scheme
-or origin, never through the app's `protocol_handlers`. Nothing else of the
+opens. A push sent through the Expo push service (its payload has Expo's
+`experienceId` or `scopeKey`) carries the message's `data` in a `body` object,
+so there a `navigate` in `data` is opened; a top-level one comes first. Another
+sender's `body` is not read. Either way `location_of` reduces the location to one of the
+app's own, whatever its scheme or origin, never through the app's
+`protocol_handlers`. Nothing else of the
 payload is read and no event is raised; without `navigate` the app only comes
 forward. A server writes that string, so a route must not act on being opened.
 On Apple, Exact runs no Contract or TypeScript when a push arrives: `content-available`

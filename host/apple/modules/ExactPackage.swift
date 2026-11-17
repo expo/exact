@@ -953,8 +953,9 @@ public protocol ExactVideoSource: AnyObject {
     /// A package's process object for this capture, made by `make` on first
     /// ask and kept while the capture lives (the camera's photo output).
     func shared<T: AnyObject>(_ key: String, _ make: () -> T) -> T
-    /// Constraints that keep the camera (`zoom`, `torch`), applied to the
-    /// device and reported by the tracks on it, as `applyConstraints` would.
+    /// Constraints that keep the camera (`frameRate`, `zoom`, `torch`), applied
+    /// on the capture queue and reported by its tracks. Called inside `run`,
+    /// completes before returning; elsewhere, queues the change.
     func apply(_ constraints: [String: Any])
     /// Focus and expose at `point`, in the device's unit square.
     func focus(at point: CGPoint)

@@ -1,5 +1,5 @@
 // The conformance fixture (LLP 1133.001 D7), as every platform's suite makes
-// it: an app `exact new` made outside the repo, its files replaced by
+// it: an app `exact new` made, its files replaced by
 // `fixture/`'s, depending on both packages by `file:` and installed.
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,8 +19,8 @@ export const run = (cmd, args, cwd, env = process.env) => {
 /** The fixture app's directory and its bundle id. `recording` and
  * `mediaCapture` are the two dependencies (`file:` the packages here by
  * default); `dependencies` are added beside them. */
-export function makeFixture({ recording = `file:${pkg}`, mediaCapture = `file:${capture}`, dependencies = {} } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-recording-')), app = join(dir, 'recfixture');
+export function makeFixture({ recording = `file:${pkg}`, mediaCapture = `file:${capture}`, dependencies = {}, directory = tmpdir() } = {}) {
+  const dir = mkdtempSync(join(directory, 'exact-recording-')), app = join(dir, 'recfixture');
   run('bun', [resolve(root, 'scripts/exact.mjs'), 'new', app, '--with', 'ios,mac'], root);
   for (const f of ['app.contract', 'app.ts', 'strings']) cpSync(join(here, 'fixture', f), join(app, f), { recursive: true });
   rmSync(join(app, 'app.test.contract'), { force: true });

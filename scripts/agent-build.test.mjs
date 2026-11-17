@@ -1445,8 +1445,8 @@ else console.log(JSON.stringify({ packages: [{ id: 'app', name: 'fixture-android
     expect(existsSync(shells)).toBe(cold);
     const child = spawnSync(process.execPath, ['--eval', `
       import { mkdirSync } from 'node:fs';
-      import { androidUsesHermes } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
-      console.log(androidUsesHermes({ workspace: ${JSON.stringify(shells)}, crate: () => 'fixture-android',
+      import { usesHermes } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
+      console.log(usesHermes({ workspace: ${JSON.stringify(shells)}, crate: () => 'fixture-android',
         prepare: () => mkdirSync(${JSON.stringify(shells)}, { recursive: true }) }, 'android'));
     `], { encoding: 'utf8', env: { ...process.env, PATH: dir + delimiter + process.env.PATH } });
     expect(child.status).toBe(0);
@@ -1481,8 +1481,8 @@ else if (args[0] === 'metadata') {
 `, { mode: 0o755 });
     const child = spawnSync(process.execPath, ['--eval', `
       import { resolveApp } from ${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))};
-      import { androidUsesHermes } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
-      console.log(androidUsesHermes(resolveApp(${JSON.stringify(dir)}), 'android'));
+      import { usesHermes } from ${JSON.stringify(resolve(import.meta.dir, 'agent-android.mjs'))};
+      console.log(usesHermes(resolveApp(${JSON.stringify(dir)}), 'android'));
     `], { encoding: 'utf8', env: { ...process.env, PATH: dir + delimiter + process.env.PATH } });
     expect(child.status).toBe(failure === 'cold' ? 0 : 1);
     if (failure === 'cold') expect(child.stdout.trim()).toBe('false');

@@ -261,6 +261,13 @@ class ExtensionContext internal constructor(val application: Context, private va
     /** The session's clock, ms: the agent's under the agent (LLP 1133.009 D10 item 2). */
     fun now(): Double = Native.now()
 
+    /** Run once on the session clock, including a drive's virtual clock. The returned function cancels it. */
+    fun after(ms: Double, body: () -> Unit): () -> Unit {
+        val reader = (activity as? ExactActivity)?.hatches(required = true) ?: throw TrackError("InvalidStateError")
+        val ticket = reader.register(0, 6, ms.toString(), Call.Fired(body))
+        return { ticket.stop() }
+    }
+
     /** The page's canvases, whose input an extension may feed (LLP 1133.013 D6). */
     val surfaces = ExtensionSurfaces()
 

@@ -311,7 +311,9 @@ fn a_measure_reads_whether_it_shows_now() {
 
 /// A measurer that keeps paragraphs by stamp, as the Mac's reader does: the
 /// stamps it is asked with.
-struct Stamps(std::rc::Rc<std::cell::RefCell<Vec<crate::text::ParagraphStamp>>>);
+pub(super) struct Stamps(
+    pub(super) std::rc::Rc<std::cell::RefCell<Vec<crate::text::ParagraphStamp>>>,
+);
 impl TextMeasurer for Stamps {
     fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics {
         MonospaceMeasurer::default().measure(request)
@@ -340,6 +342,36 @@ fn a_measure_asks_with_the_paragraphs_own_stamps() {
     let asked = seen.borrow();
     assert!(!asked.is_empty(), "the paragraph measured at a new width");
     assert!(asked.iter().all(|s| *s == live), "{asked:?} {live:?}");
+}
+
+/// A measurer whose heights are nonfinite while `failing` is set.
+struct Failing(std::rc::Rc<std::cell::Cell<bool>>);
+impl TextMeasurer for Failing {
+    fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics {
+        let metrics = MonospaceMeasurer::default().measure(request);
+        match self.0.get() {
+            true => TextMetrics {
+                height: f32::NAN,
+                ..metrics
+            },
+            false => metrics,
+        }
+    }
+}
+
+/// A trial that fails leaves the kernel as it was: its own arena, engine
+/// tree and content region are back before the error returns.
+#[test]
+fn a_failed_measure_changes_nothing() {
+    let failing = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut k = page(&[], "one two three").rehydrate(Box::new(Failing(failing.clone())));
+    k.compute_layout(1, OFFER).unwrap();
+    let before = digest(&k, true);
+    failing.set(true);
+    assert!(k.measure_block(3, region(60.0, 50.0)).is_err());
+    failing.set(false);
+    assert_eq!(digest(&k, true), before);
+    assert!(k.measure_block(3, region(60.0, 50.0)).is_ok());
 }
 
 /// What only the next layout prepares is refused, not guessed: a box that

@@ -1,0 +1,37 @@
+use getUserMedia, MediaStream from "@exact/media-capture"
+use startMediaRecorder, mediaRecorderState, MediaRecorderInfo from "@exact/recording"
+
+component Fixture
+  state streamId = ""
+  state trackId = ""
+  state recorderId = ""
+  mutation opened as shape MediaStream then arm
+  mutation started as shape MediaRecorderInfo then begun
+  resource recording = mediaRecorderState(recorder=recorderId) as shape MediaRecorderInfo else empty()
+  action open
+    send opened = getUserMedia(video=true)
+  action arm
+    match opened
+      case some(s)
+        streamId = s.id
+        trackId = match s.tracks.at(0) { case some(t) => t.id, case none => "" }
+      case none
+        streamId = ""
+  action record
+    send started = startMediaRecorder(stream=streamId, path="app:/data/takes/clip", maxDuration=5000)
+  action begun
+    recorderId = match started { case some(r) => r.id, case none => "" }
+  view
+    column gap=8
+      button press=open testId="open"
+        text "Open camera"
+      exact-camera srcObject=trackId width=320 height=240
+      text "Keep your shoulders level"
+      button press=record testId="record"
+        text "Record five seconds"
+      text `${recording.state}` testId="state"
+      match recording.result
+        case some(file)
+          text `${file.path} ${file.mimeType} ${file.size}` testId="file"
+        case none
+          text "No clip" testId="file"

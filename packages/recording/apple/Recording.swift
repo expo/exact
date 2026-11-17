@@ -2,7 +2,7 @@
 // `@exact/media-capture` opened, reached through the session's track table,
 // recorded to a file and metered.
 //
-// - A recorder is a consumer of its stream's audio track, so it holds the
+// - An audio recorder is a consumer of its stream's track, so it holds the
 //   track's lease while it is not `inactive`; its start is a start (D6). A
 //   level reader is a consumer too, and never a start.
 // - `audio/mp4` (the unsaid default, D2) is AAC in a fragmented MP4
@@ -22,7 +22,7 @@
 //   a meter of its own, so no level crosses into Contract. A bar's height is
 //   the level in decibels, as a recorder's meter shows it (`WaveformBars`).
 // - Under the agent (§10) no engine runs: the level is the synthetic signal
-//   on the session clock, and a stopped recorder's file is WAV of a tone that
+//   on the session clock, and a stopped audio recorder's file is WAV of a tone that
 //   follows it, answered as `audio/wav`.
 // - At the session's end every recorder stops and its file is finished
 //   (`destroy`, D10 item 1).
@@ -37,7 +37,7 @@ import UIKit
 
 public final class RecordingModule: ExactPackage {
     private let context: ExactPackageContext
-    private var recorders: [String: Recorder] = [:]
+    private var recorders: [String: MediaTake] = [:]
     private var meters: [String: Meter] = [:]
     private var next = 0
 
@@ -56,6 +56,7 @@ public final class RecordingModule: ExactPackage {
         case "pauseMediaRecorder", "resumeMediaRecorder":
             guard let r = recorder else { return reply(["error": "NotFoundError"]) }
             guard r.state != "inactive" else { return reply(["error": "InvalidStateError"]) }
+            if name == "pauseMediaRecorder", let video = r as? VideoTake, !video.supportsPause { return reply(["error": "NotSupportedError"]) }
             if name == "pauseMediaRecorder" { r.pause("requested") } else if r.state == "paused" { r.resume() }
             reply(r.info())
         case "stopMediaRecorder":
@@ -67,7 +68,7 @@ public final class RecordingModule: ExactPackage {
             reply(recorder?.info() ?? ["error": "NotFoundError"])
         case "isTypeSupported":
             let type = args["type"] as? String ?? ""
-            reply(["type": type, "supported": context.agent ? type == "audio/wav" : ["audio/mp4", "audio/wav"].contains(type)])
+            reply(["type": type, "supported": context.agent ? ["audio/wav", "video/mp4"].contains(type) : ["audio/mp4", "audio/wav", "video/mp4"].contains(type)])
         case "audioLevel": reply(level(args))
         default: reply(["error": "NotSupportedError"])
         }
@@ -100,6 +101,24 @@ public final class RecordingModule: ExactPackage {
 
     private func start(_ args: [String: Any]) -> [String: Any] {
         guard let stream = args["stream"] as? String, let entry = context.tracks.lookup(stream), entry.kind == "stream" else { return ["error": "NotFoundError"] }
+        let maxDuration = args["maxDuration"] as? Double ?? 0
+        if args["maxDuration"] != nil && (!maxDuration.isFinite || maxDuration <= 0) { return ["error": "TypeError"] }
+        if let video = entry.tracks.first(where: { context.tracks.lookup($0)?.kind == "video" }) {
+            guard entry.tracks.count == 1 else { return ["error": "NotSupportedError"] }
+            let type = args["mimeType"] as? String ?? "video/mp4"
+            guard context.agent || type == "video/mp4",
+                  let path = Recorder.path(args["path"] as? String ?? "", "video/mp4"), let url = context.file(path) else { return ["error": "NotSupportedError"] }
+            next += 1
+            let r = VideoTake(id: "recorder-\(context.session)-\(next)", path: path, url: url, context: context, maxDuration: maxDuration,
+                              changed: { [weak self] in self?.announce() })
+            do {
+                r.subscription = try context.tracks.subscribe(video, r, start: true, origin: context.origin)
+                r.arm()
+            } catch { return ["error": (error as? ExactTrackError)?.code ?? "NotReadableError"] }
+            recorders[r.id] = r
+            announce()
+            return r.info()
+        }
         guard let track = entry.tracks.first(where: { context.tracks.lookup($0)?.kind == "audio" }) else { return ["error": "NotSupportedError"] }
         let asked = args["mimeType"] as? String
         let type = context.agent ? "audio/wav" : asked ?? "audio/mp4"
@@ -110,10 +129,11 @@ public final class RecordingModule: ExactPackage {
         guard let path = Recorder.path(args["path"] as? String ?? "", type), let url = context.file(path) else { return ["error": "NotSupportedError"] }
         next += 1
         let r = Recorder(id: "recorder-\(context.session)-\(next)", track: track, type: type, path: path, url: url, context: context,
-                         bitRate: args["audioBitsPerSecond"] as? Double,
+                         maxDuration: maxDuration, bitRate: args["audioBitsPerSecond"] as? Double,
                          bitRateMode: args["audioBitrateMode"] as? String, apple: args["apple"] as? [String: Any] ?? [:], changed: { [weak self] in self?.announce() })
         do {
             r.subscription = try context.tracks.subscribe(track, r, start: true, origin: context.origin)
+            r.arm()
         } catch {
             return ["error": (error as? ExactTrackError)?.code ?? "NotFoundError"]
         }
@@ -165,7 +185,7 @@ public final class RecordingModule: ExactPackage {
     public func destroy(_ done: @escaping () -> Void) {
         for m in meters.values { m.stop() }
         let group = DispatchGroup()
-        for r in recorders.values where r.state != "inactive" {
+        for r in recorders.values {
             group.enter()
             r.finish("session-ended") { _ in group.leave() }
         }
@@ -174,11 +194,19 @@ public final class RecordingModule: ExactPackage {
 }
 
 /// One recorder: a consumer of its track, writing on its own queue.
-final class Recorder: ExactTrackConsumer {
+final class Recorder: ExactTrackConsumer, MediaTake {
     let id: String, type: String, path: String, url: URL
     private let track: String
     private(set) var state = "recording", reason: String?, error: String?
     private var result: [String: Any]?
+    private var limit: (() -> Void)?
+    private let maxDuration: Double
+    func arm() {
+        limit?(); limit = nil
+        if maxDuration > 0, state == "recording" {
+            limit = context.after(max(0, maxDuration - duration)) { [weak self] in self?.finish("max-duration") { _ in } }
+        }
+    }
     private var recorded = 0.0, since: Double?
     private let context: ExactPackageContext, changed: () -> Void
     private let bitRate: Double?, bitRateMode: String?, apple: [String: Any]
@@ -193,9 +221,10 @@ final class Recorder: ExactTrackConsumer {
     /// Frames handed to the queue and not yet written: the bound (D6).
     private let pending = Pending()
 
-    init(id: String, track: String, type: String, path: String, url: URL, context: ExactPackageContext, bitRate: Double?, bitRateMode: String?, apple: [String: Any], changed: @escaping () -> Void) {
+    init(id: String, track: String, type: String, path: String, url: URL, context: ExactPackageContext, maxDuration: Double, bitRate: Double?, bitRateMode: String?, apple: [String: Any], changed: @escaping () -> Void) {
         self.id = id; self.type = type; self.path = path; self.url = url; self.context = context
         self.track = track
+        self.maxDuration = maxDuration
         self.bitRate = bitRate; self.bitRateMode = bitRateMode; self.apple = apple; self.changed = changed
         queue = DispatchQueue(label: "exact.recording.\(id)")
         since = context.now()
@@ -204,7 +233,7 @@ final class Recorder: ExactTrackConsumer {
 
     /// The path with its container's extension: added when the app wrote none, nil when it disagrees.
     static func path(_ path: String, _ type: String) -> String? {
-        let ext = ["audio/mp4": ".m4a", "audio/wav": ".wav"][type] ?? ""
+        let ext = ["audio/mp4": ".m4a", "audio/wav": ".wav", "video/mp4": ".mp4"][type] ?? ""
         let name = path.split(separator: "/").last.map(String.init) ?? ""
         guard let dot = name.lastIndex(of: "."), dot != name.startIndex else { return path + ext }
         return String(name[dot...]) == ext ? path : nil
@@ -226,6 +255,7 @@ final class Recorder: ExactTrackConsumer {
         recorded = duration; since = nil
         if context.agent, let last = spans.indices.last { spans[last].1 = context.now() }
         state = "paused"; reason = why; recordingFlag.value = false
+        limit?(); limit = nil
         context.log("recording: \(id) paused (\(why))")
         changed()
     }
@@ -233,6 +263,7 @@ final class Recorder: ExactTrackConsumer {
     func resume() {
         state = "recording"; reason = nil; since = context.now(); recordingFlag.value = true
         if context.agent { spans.append((context.now(), nil)) }
+        arm()
         // A reset or a failed foreground activation can leave the track without a capture.
         subscription?.cancel(); subscription = nil
         do {
@@ -295,6 +326,7 @@ final class Recorder: ExactTrackConsumer {
         recorded = duration; since = nil
         if context.agent, let last = spans.indices.last, spans[last].1 == nil { spans[last].1 = context.now() }
         state = "inactive"; reason = why; self.error = error
+        limit?(); limit = nil
         recordingFlag.value = false
         tap?.cancel(); tap = nil
         changed()

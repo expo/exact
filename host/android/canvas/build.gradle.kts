@@ -60,6 +60,7 @@ dependencies {
     testImplementation("androidx.camera:camera-camera2:1.6.2")
     testImplementation("androidx.camera:camera-lifecycle:1.6.2")
     testImplementation("androidx.camera:camera-view:1.6.2")
+    testImplementation("androidx.camera:camera-video:1.6.2")
     testImplementation("androidx.lifecycle:lifecycle-runtime:2.9.4")
     testImplementation("androidx.credentials:credentials:1.6.0")
     testImplementation("com.google.android.gms:play-services-wallet:20.0.0")

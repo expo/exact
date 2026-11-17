@@ -27,8 +27,8 @@ async function fixtureDrive(browser, {
   const deps = {
     ...comparisons, crossBrowser: browser, crossBrowsers: browser?.split(',') ?? [],
     readyBrowsers: browser?.split(',') ?? [], maxSteps: 3,
-    // The JS page's sheet cut for `cut`, which a stand-in page holds at every step.
-    sheetCut: () => new Set(cut), uncut: async (_evaluate, tokens) => [...tokens],
+    // What the JS page's build cut that a stand-in page holds at every step: `cut`, as `uncut` says each.
+    pageCut: () => cut, uncut: async (_evaluate, held) => held,
     STATE_KEYS: ['slots'], LINUX_APART: {}, LINUX_OPS: [], linuxFor: () => null, linuxRef: false,
     root: '/checkout', here: '/checkout/host/web-js', resolve, parseStep, clockOnAll, failedTests,
     resolveApp: () => ({ dir: '/fixture' }),
@@ -141,9 +141,9 @@ test('the wasm and JS drive still delivers every step to its two Chrome pages', 
   expect(run.report.failures).toEqual([]);
   expect(run.report.steps.map(s => s.step)).toEqual(['boot', 'tap scripted', 'refused tap refused', 'reload', 'wheel auto 12', 'clock +5', 'tap auto', 'clock +60000']);
   expect(run.report.steps.every(s => !s.browser && s.differences === 0)).toBe(true);
-  // A JS page holding a token its sheet was cut for fails each step it is seen at (LLP 1047.003 D1).
-  const cut = await fixtureDrive(null, { cut: ['t:dialog'] });
-  expect(cut.report.failures.filter(f => /^sheet: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
+  // A JS page holding what its build cut (LLP 1047.003 D1, LLP 1047.002 D2.1, D4.2) fails each step it is seen at.
+  const cut = await fixtureDrive(null, { cut: ['t:dialog, which its sheet was cut for'] });
+  expect(cut.report.failures.filter(f => /^cut: .* has t:dialog, which its sheet was cut for$/.test(f.what)).map(f => f.step))
     .toEqual(cut.report.steps.map(s => s.step));
 });
 

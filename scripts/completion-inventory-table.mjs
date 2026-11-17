@@ -286,7 +286,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/hatch.rs",
       "Presenter::connect_hatches Presenter::end_hatches Presenter::hatch_built Presenter::hatch_command Presenter::hatch_fire Presenter::hatch_in_flight " +
       "Presenter::hatch_instant Presenter::hatch_moments Presenter::hatch_perf Presenter::hatch_progress Presenter::hatch_scopes Presenter::hatch_sites " +
-      "Presenter::hatch_state Presenter::hatch_ticks Presenter::hatch_trace_asked Presenter::hatch_turn Presenter::set_hatches"],
+      "Presenter::hatch_state Presenter::hatch_ticks Presenter::hatch_trace_asked Presenter::hatch_turn Presenter::reader_hatch_act Presenter::set_hatches"],
   ]),
   group("holds", ["one-shot"], "held request/node until answer, cancellation or node retirement", "UI-owned",
     "runner/src/runner/device.rs:1-12 retires holds with the requesting node or ticket and refuses duplicate answers; the agent hold is not an executor request.", [
@@ -577,7 +577,7 @@ export const classifications = [
     ["apple:host/apple/src/material.rs", "exact_material_platform"],
     ["apple:host/apple/src/pan_velocity.rs", "exact_pan_sample exact_pan_velocity exact_velocity"],
     ["apple:host/apple/src/svg_image.rs", "exact_svg_image_free exact_svg_image_header exact_svg_image_scene"],
-    ["apple:host/apple/src/textflow.rs", "exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
+    ["apple:host/apple/src/textflow.rs", "exact_text_balanced_breaks exact_text_line_breaks exact_textflow_flow exact_textflow_free exact_textflow_prepare"],
     ["painted:host/painted/src/lower.rs", "Host::play_transitions"],
     ["painted:host/painted/src/desktop.rs", "Screen::json"],
     ["painted:host/painted/src/screen_capture.rs", "fixtures sizes"],
@@ -1241,10 +1241,10 @@ export const classifications = [
   group("picker results", ["one-shot"], "current picker/share request and its app file roots", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. host/painted/src/picker.rs configures app file roots and copies/selects paths for the current picker/share. Persistent copies are separate from the UI continuation receiving them.", [
     ["painted:host/painted/src/presenter/picker.rs",
-      "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
-      "Presenter::finish_portal_picks Presenter::is_file_input Presenter::picked_targets Presenter::save_chosen Presenter::start_folder"],
+      "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
+      "Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::finish_file_dialog Presenter::queue_file_dialog " +
+      "FileDialog::start_folder Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",
