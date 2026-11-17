@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 /** The only blocking verification command (LLP 1172.010 E13; Charlie's 30 s gate). */
 import { spawn } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+export const formatPart = ['fmt', process.execPath, ['scripts/gate.mjs', '--fmt']];
 export const gateParts = [
-  ['fmt', 'cargo', ['fmt', '--all', '--', '--check']],
+  formatPart,
   ['caps', process.execPath, ['scripts/caps.mjs']],
   ['boot', process.execPath, ['scripts/boot.mjs']],
   ['seams', process.execPath, ['scripts/seam-ratchets.mjs']],
@@ -23,12 +25,61 @@ export function gateMetric(seconds, budget, failed = []) {
 function command(command, args, cwd) {
   return new Promise(done => {
     const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    let log = '';
-    child.stdout.on('data', data => { log += data; });
+    let log = '', stdout = '';
+    child.stdout.on('data', data => { log += data; stdout += data; });
     child.stderr.on('data', data => { log += data; });
     child.on('error', error => done({ status: 127, log: `${log}${error.message}\n` }));
-    child.on('close', status => done({ status: status ?? 127, log }));
+    child.on('close', status => done({ status: status ?? 127, log, stdout }));
   });
+}
+
+/** Cargo fmt gives rustfmt every target of an edition in one command, exceeding Windows' 32,767 UTF-16 limit. */
+export async function checkFormat({ root = process.cwd(), platform = process.platform, run = command } = {}) {
+  if (platform !== 'win32') return run('cargo', ['fmt', '--all', '--', '--check'], root);
+  const canonical = path => { try { return realpathSync(path); } catch { return resolve(path); } };
+  const visited = new Set(), targets = new Map();
+  // Match cargo fmt --all: workspace targets and recursively discovered local path dependencies, including tests and examples.
+  const collect = async manifest => {
+    manifest = canonical(manifest);
+    if (visited.has(manifest)) return;
+    visited.add(manifest);
+    const args = ['metadata', '--format-version', '1', '--no-deps', '--manifest-path', manifest];
+    let result = await run('cargo', [...args, '--offline'], root);
+    if (result.status !== 0) result = await run('cargo', args, root);
+    if (result.status !== 0) throw new Error(result.log || 'cargo metadata failed');
+    const { packages } = JSON.parse(result.stdout);
+    for (const pkg of packages) visited.add(canonical(pkg.manifest_path));
+    for (const pkg of packages) {
+      for (const target of pkg.targets) targets.set(canonical(target.src_path), target.edition);
+      for (const dep of pkg.dependencies) {
+        if (dep.path && existsSync(resolve(dep.path, 'Cargo.toml'))) await collect(resolve(dep.path, 'Cargo.toml'));
+      }
+    }
+  };
+  await collect(resolve(root, 'Cargo.toml'));
+  if (!targets.size) return { status: 1, log: 'cargo fmt found no targets' };
+  const editions = new Map();
+  for (const [path, edition] of [...targets].sort(([a], [b]) => a.localeCompare(b))) {
+    if (!editions.has(edition)) editions.set(edition, []);
+    editions.get(edition).push(path);
+  }
+  let status = 0, log = '';
+  const flush = async (edition, files) => {
+    const result = await run(process.env.RUSTFMT || 'rustfmt', [...files, '--edition', edition, '--check'], root);
+    if (result.status !== 0) status ||= result.status;
+    log += result.log || '';
+  };
+  for (const [edition, files] of editions) {
+    let batch = [], length = 0;
+    for (const file of files) {
+      // Allow twice each path's length for Windows argument quoting, plus room for the executable and flags.
+      const size = file.length * 2 + 3;
+      if (batch.length && length + size > 24000) { await flush(edition, batch); batch = []; length = 0; }
+      batch.push(file); length += size;
+    }
+    if (batch.length) await flush(edition, batch);
+  }
+  return { status, log };
 }
 
 export async function runGate({ root = fileURLToPath(new URL('..', import.meta.url)), parts = gateParts,
@@ -57,11 +108,15 @@ export async function runGate({ root = fileURLToPath(new URL('..', import.meta.u
 }
 
 if (import.meta.main) {
-  if (process.argv.includes('--help')) console.log('Usage: bun scripts/gate.mjs\nThe blocking gate. Prints each part and the total; runs every part after failures.');
+  if (process.argv.includes('--help')) console.log('Usage: bun scripts/gate.mjs [--fmt]\nThe blocking gate. Prints each part and the total; runs every part after failures.\n  --fmt  Check Rust formatting only, batching targets on Windows.');
   else {
     const root = fileURLToPath(new URL('..', import.meta.url));
     const { ensureBun } = await import('./bun.mjs');
     ensureBun(JSON.parse(readFileSync(`${root}/package.json`, 'utf8')).packageManager.replace(/^bun@/, ''));
-    process.exitCode = (await runGate()).status;
+    if (process.argv.includes('--fmt')) {
+      const result = await checkFormat({ root });
+      if (result.log) process.stdout.write(result.log);
+      process.exitCode = result.status;
+    } else process.exitCode = (await runGate()).status;
   }
 }
