@@ -13,6 +13,7 @@ private typealias PlatformView = UIView
 private typealias PlatformImageView = UIImageView
 #endif
 public typealias VideoCallback = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, Int) -> Void
+public typealias VideoConfiguring = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
 
 private final class VideoContainer: PlatformView {
     weak var arm: VideoArm?
@@ -125,6 +126,7 @@ private enum SharedAssets {
 
 private final class VideoArm: NSObject, NowPlayingPlayer {
     let player = AVPlayer()
+    var configuringHook: VideoConfiguring?
     let container = VideoContainer(frame: .zero)
     let poster = PlatformImageView(frame: .zero)
     #if os(macOS)
@@ -161,7 +163,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
     var displayObservations: [NSKeyValueObservation] = []
     var pendingSeek: Double?
     /// A source waiting for the box to have a size (`loadSource`).
-    var sizedLoad: URL?
+    var sizedLoad: (asset: AVURLAsset, url: URL)?
     /// The new item's bound until its first variant is chosen, and the read
     /// of the playlist's variants it comes from (`makeItem`).
     var startBound: CGSize?
@@ -346,7 +348,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         guard !invalidated else { return }
         send(["remote": "play"])
         wantsPlay = true
-        if player.currentItem == nil, lastError == nil { loadSource() }
+        loadIfNeeded()
         if lastError == nil { play() }
     }
     func sessionPause() { guard !invalidated else { return }; wantsPlay = false; player.pause() }
@@ -484,7 +486,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         if changed("paused"), let value = props["paused"] {
             wantsPlay = value == "false"
             if wantsPlay {
-                if player.currentItem == nil, lastError == nil { loadSource() }
+                loadIfNeeded()
                 if lastError == nil { play() }
             } else { player.pause() }
         }
@@ -549,6 +551,11 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
               let width = UInt32(parts[0]), let height = UInt32(parts[1]), width > 0, height > 0 else { return nil }
         return CGSize(width: Int(width), height: Int(height))
     }
+    func loadIfNeeded() {
+        // A first-variant read or the first layout already owns the next
+        // item. A simultaneous play request must keep its configured asset.
+        if player.currentItem == nil, sizedLoad == nil, variantRead == nil, lastError == nil { loadSource() }
+    }
     func loadSource() {
         generation += 1
         sizedLoad = nil; startBound = nil
@@ -566,26 +573,34 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
         posterDismissed = false; showPoster()
         pendingSeek = props["currentTime"].flatMap(Double.init)
         guard let source = props["src"], !source.isEmpty, let url = URL(string: source) else { return }
+        makeItem(url)
+    }
+    /// The source's item, given to the player. The hatch runs before any
+    /// asset properties are loaded, which can choose an HLS rendition.
+    func makeItem(_ url: URL) {
+        let asset: AVURLAsset
+        if props["hatch"] != nil, let configuringHook {
+            let configuration: NSMutableDictionary = ["url": url]
+            configuringHook(context, Unmanaged.passUnretained(configuration).toOpaque())
+            asset = configuration["asset"] as? AVURLAsset ?? SharedAssets.asset(url)
+        } else {
+            asset = SharedAssets.asset(url)
+        }
         // AVFoundation leaves local HLS items unknown without reporting an error;
         // isPlayable also returns true for them on iOS.
-        if url.isFileURL, ["m3u8", "m3u"].contains(url.pathExtension.lowercased()) {
+        if asset.url.isFileURL, ["m3u8", "m3u"].contains(asset.url.pathExtension.lowercased()) {
             fail("src-not-supported", "Local HLS playlists are not supported; use MP4 or an HTTP(S) playlist URL")
             return
         }
-        makeItem(url)
-    }
-    /// The source's item, given to the player.
-    func makeItem(_ url: URL) {
-        let asset = SharedAssets.asset(url)
         guard bool("startsOnFirstEligibleVariant"), props["semanticTag"] != "audio" else { return giveItem(asset, url) }
         guard !container.bounds.isEmpty else {
             // The box has no size until the node is laid out. Past that turn
             // the start is AVFoundation's (a video with no box loads, as
             // HTML's does).
-            sizedLoad = url
+            sizedLoad = (asset, url)
             let token = generation
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.invalidated, self.generation == token, self.sizedLoad == url else { return }
+                guard let self, !self.invalidated, self.generation == token, self.sizedLoad?.asset === asset else { return }
                 self.sizedLoad = nil; self.giveItem(asset, url)
             }
             return
@@ -989,7 +1004,7 @@ private final class VideoArm: NSObject, NowPlayingPlayer {
             frame = CGRect(x: (frame.width - naturalSize.width * scale) / 2, y: (frame.height - naturalSize.height * scale) / 2, width: naturalSize.width * scale, height: naturalSize.height * scale)
         }
         if presentation.superview === container { presentation.frame = frame }
-        if let url = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(SharedAssets.asset(url), url) }
+        if let pending = sizedLoad, !container.bounds.isEmpty { sizedLoad = nil; boundedItem(pending.asset, pending.url) }
         #if os(iOS)
         audioControls?.refresh()
         #endif
@@ -1188,9 +1203,14 @@ extension VideoArm {
 #endif
 
 @_cdecl("exact_video_create")
-public func videoCreate(_ context: UnsafeMutableRawPointer?, _ callback: VideoCallback?) -> UnsafeMutableRawPointer? {
+public func videoCreate(_ context: UnsafeMutableRawPointer?, _ callback: VideoCallback?, _ configuring: VideoConfiguring?,
+                        _ player: UnsafeMutablePointer<UnsafeMutableRawPointer?>?) -> UnsafeMutableRawPointer? {
     guard let callback else { return nil }
-    return Unmanaged.passRetained(VideoArm(context: context, callback: callback)).toOpaque()
+    let object = VideoArm(context: context, callback: callback)
+    object.configuringHook = configuring
+    // Borrowed for the arm's lifetime, as exact_video_view's view is.
+    player?.pointee = Unmanaged.passUnretained(object.player).toOpaque()
+    return Unmanaged.passRetained(object).toOpaque()
 }
 private func arm(_ raw: UnsafeMutableRawPointer?) -> VideoArm? { raw.map { Unmanaged<VideoArm>.fromOpaque($0).takeUnretainedValue() } }
 @_cdecl("exact_video_view")

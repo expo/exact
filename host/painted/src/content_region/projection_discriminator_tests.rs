@@ -513,12 +513,13 @@ fn projection_discriminator_retained_a_moves_while_b_is_pending() {
         .is_none());
     assert!(region.after_commit().is_none());
     gate.entered();
+    region.memory_warning();
     assert!(ordinary
         .host
         .dispatch_at(id(&ordinary, "move"), Event::Press, 1.)
         .is_none());
     assert!(ordinary.after_commit().is_none());
-    let failures = compare(
+    let mut failures = compare(
         "retained-A/new-origin",
         &mut ordinary,
         &mut region,
@@ -549,6 +550,22 @@ fn projection_discriminator_retained_a_moves_while_b_is_pending() {
         old.runs[0].link.as_ref().unwrap().1.as_ref(),
         "https://source-a.example/"
     );
+    assert!(region.brush.region_blocks_action(id(&region, "paragraph")));
+    for p in [&mut ordinary, &mut region] {
+        let port = id(p, "port");
+        let at = natural_point(p, port);
+        let before = p.scroll_of(port).1;
+        p.wheel_at(at.0, at.1, 0., 30.);
+        assert_eq!(p.scroll_of(port).1, before + 30.);
+    }
+    failures.extend(compare(
+        "retained-A/scroll-after-trim",
+        &mut ordinary,
+        &mut region,
+        &a,
+        &b,
+        true,
+    ));
     drop(gate);
     ready(&mut region);
     region.frame();

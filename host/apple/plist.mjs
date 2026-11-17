@@ -242,8 +242,7 @@ export function packageKeys(bound, target) {
  * list. */
 export const HOST_EVENTS = new Map([
   // An iCloud share accepted: the system opens the app from a share link only when its Info.plist says it supports
-  // sharing (Apple, "CKSharingSupported"). `device.cloudkit` is not yet a row (LLP 1133.001.000 D3), so no build
-  // takes this event.
+  // sharing (Apple, "CKSharingSupported"). The bound package takes it only under a signed device.cloudkit grant.
   ['cloudkit-share', { platforms: ['ios', 'macos'], needs: 'device.cloudkit', writes: { CKSharingSupported: true } }],
 ]);
 
@@ -299,10 +298,12 @@ export const modulePlist = (app, reach, target, extensions, contractSources = []
   return packages.length ? { ...reach, packages } : reach;
 };
 
-/** `dict`, the plist the build wrote, with `reach.packages` (from [modulePlist]) added. Throws, naming the package,
- * for a key the build already wrote. */
-export function withPackageKeys(dict, reach) {
+/** Add `reach.packages` to the build's plist; omit event keys in a bundle that takes no events (`events: false`).
+ * Refuse, naming the package, a key the build already wrote. */
+export function withPackageKeys(dict, reach, { events = true } = {}) {
+  const eventKeys = events ? [] : ['ExactHostEvents', ...[...HOST_EVENTS.values()].flatMap(({ writes }) => Object.keys(writes))];
   for (const { extension, key, value } of reach?.packages ?? []) {
+    if (eventKeys.includes(key)) continue;
     if (Object.hasOwn(dict, key)) throw new Error(`${extension}'s Apple implementation declares the Info.plist key ${key}, which the build writes`);
     dict[key] = value;
   }

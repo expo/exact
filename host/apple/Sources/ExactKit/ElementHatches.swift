@@ -36,9 +36,9 @@ final class ElementHatches {
     private var unhandledByPlan: Set<String> = []
     /// What hatches told the agent of what they made (HatchRegions.swift).
     lazy var regions = HatchRegions(presenter)
-    /// Hatched frames whose web view waits for the module's hatches, and
+    /// Hatched frames and videos waiting for the module's hatches, and
     /// nodes that heard `configuring` before their `built`.
-    private var waitingFrames: [UInt32: () -> NodeView?] = [:]
+    private var waiting: [UInt32: () -> NodeView?] = [:]
     private var configured: Set<UInt32> = []
 
     init(_ presenter: Presenter) { self.presenter = presenter }
@@ -109,8 +109,8 @@ final class ElementHatches {
         say(word, node: node, inList: entry.inList, reusable: reusable)
     }
 
-    /// A hatched frame's arm is about to make its web view: its hatch hears
-    /// `configuring` with the `WKWebViewConfiguration` (LLP 1020.002 §9).
+    /// A frame's web view or a video's item is about to be made: its hatch
+    /// hears `configuring` synchronously, before construction (LLP 1133 D3).
     /// Within a batch or a held leaf's release, so the node may not be in
     /// `presenter.views` yet, nor have a superview.
     func configuring(_ node: NodeView, _ configuration: AnyObject) {
@@ -122,22 +122,24 @@ final class ElementHatches {
         natives.elementHatch(node, event: RouteHatchEvent.configuring.rawValue, platform: configuration, quiet: count > 1 && Self.inList(node, presenter))
     }
 
-    /// Whether a hatched frame's web view waits: until the module's hatches
-    /// connect, so its hatch hears `configuring` before the first one, on a
+    /// Whether a hatched frame's web view or video's item waits for the module
+    /// to connect, so its hatch hears `configuring` before the first one, on a
     /// cold launch's first screen too. A word the module does not handle,
     /// or a module that will not connect, waits for nothing.
     func waits(_ node: NodeView) -> Bool {
         guard let word = node.props["hatch"], presenter.session?.natives.hatchesMayConnect(word) == true else { return false }
-        waitingFrames[node.id] = { [weak node] in node }
+        waiting[node.id] = { [weak node] in node }
         return true
     }
 
-    /// The hatches connected, or never will: the waiting frames are made.
-    func releaseFrames() {
-        let waiting = waitingFrames
-        waitingFrames = [:]
+    /// The hatches connected, or never will: the waiting objects are made.
+    func releaseConfigurations() {
+        let waiting = waiting
+        self.waiting = [:]
         for id in waiting.keys.sorted() {
-            if let node = waiting[id]?(), presenter.views[id] === node { node.embedFrame(presenter) }
+            if let node = waiting[id]?(), presenter.views[id] === node {
+                if node.kind == "video" { node.video?.update() } else { node.embedFrame(presenter) }
+            }
         }
         // Outside a batch: a held frame outside a list's rows is made now, as
         // at a batch's end, not by the tick, which makes only the near ones.
@@ -157,7 +159,7 @@ final class ElementHatches {
     /// A node the batch destroys: its hatch hears `ended` while its view is
     /// still there.
     func destroyed(_ id: UInt32) {
-        waitingFrames[id] = nil
+        waiting[id] = nil
         // Configured and not yet built: its element ends too.
         guard let entry = nodes.removeValue(forKey: id), configured.remove(id) != nil || entry.told else { return }
         call(.ended, entry)
@@ -167,7 +169,7 @@ final class ElementHatches {
     func reset() {
         for id in nodes.keys.sorted() { destroyed(id) }
         nodes = [:]
-        waitingFrames = [:]
+        waiting = [:]
         configured = []
         regions.reset()
         // The window and the app end with them, and are built again after a reload (ScopeHatches.swift).
@@ -176,7 +178,7 @@ final class ElementHatches {
 
     /// The module connected after these were built (LLP 1075.003 Q3 (c)).
     func replay() {
-        releaseFrames()
+        releaseConfigurations()
         for id in nodes.keys.sorted() { if let entry = nodes[id], !entry.told { build(entry.node) } }
     }
 
@@ -303,12 +305,13 @@ final class ElementHatches {
 
     /// The platform object of the node's kind, or nil: a text field or view,
     /// a control (a switch, slider, date picker…), an iframe's `WKWebView` or
-    /// a local PDF's `PDFView` (LLP 1020.002 §9), a scroll view.
+    /// a local PDF's `PDFView` (LLP 1020.002 §9), a video's `AVPlayer`, a scroll view.
     static func platform(of node: NodeView, _ presenter: Presenter) -> AnyObject? {
+        if node.kind == "video" { return node.video?.platform }
         #if os(iOS) || os(tvOS)
-        node.field ?? node.textArea ?? presenter.controls.controls[node.id] ?? presenter.segments.control(of: node.id) ?? node.web ?? node.scrollView
+        return node.field ?? node.textArea ?? presenter.controls.controls[node.id] ?? presenter.segments.control(of: node.id) ?? node.web ?? node.scrollView
         #else
-        node.field ?? node.textArea ?? presenter.controls.controls[node.id] ?? presenter.segments.control(of: node.id) ?? node.web ?? node.scroll
+        return node.field ?? node.textArea ?? presenter.controls.controls[node.id] ?? presenter.segments.control(of: node.id) ?? node.web ?? node.scroll
         #endif
     }
 

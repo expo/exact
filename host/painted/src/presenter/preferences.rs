@@ -101,13 +101,22 @@ impl<D: DataSource> Presenter<D> {
     /// `visibilityState`, `onLine`, `canShare`, `canOpenFiles` and
     /// `hasFocus`, as `exactPage()` answers them: re-answered in one commit.
     pub fn set_page(&mut self, page: exact_runner::Page) -> Option<String> {
+        let was_hidden = self.host.runner().page().hidden;
         let error = self.host.set_page(page);
         // Hidden or frozen, nothing presents what a commit begins (LLP 1003.001 D9).
         self.refresh_presentable();
         if error.is_some() {
             return error;
         }
-        self.after_commit()
+        let error = self.after_commit();
+        if page.hidden != was_hidden {
+            if page.hidden {
+                self.brush.trim(true);
+            } else {
+                self.repaint();
+            }
+        }
+        error
     }
 
     /// Android's reader composes Activity and promoted service ownership in `Exact.executionEligible`.
@@ -429,6 +438,96 @@ pub(crate) fn app_dark(scheme: Option<&exact_plan::Value>) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hiding_an_inactive_window_trims_without_waiting_for_another_frame() {
+        use crate::paint::{Backend, GradientPaint, Rect4, Shape};
+        use crate::text::RunPaint;
+        use std::{cell::RefCell, rc::Rc, sync::Arc};
+        use tiny_skia::{Pixmap, Transform};
+        struct Observed(Rc<RefCell<Vec<bool>>>);
+        impl Backend for Observed {
+            crate::paints_nothing!();
+            fn name(&self) -> &'static str {
+                "observed"
+            }
+            fn begin(&mut self, _: f32, _: f32, _: f32) {}
+            fn fill(&mut self, _: &Shape, _: [u8; 4], _: Transform) {}
+            fn fill_gradient(&mut self, _: &Shape, _: &GradientPaint, _: Transform) {}
+            fn fill_border(&mut self, _: &crate::paint::border::BorderFill, _: Transform) {}
+            fn image(
+                &mut self,
+                _: &Arc<crate::image::Bitmap>,
+                _: Rect4,
+                _: &[Shape],
+                _: Transform,
+                _: Option<[u8; 4]>,
+                _: exact_kernel::ImageRendering,
+            ) {
+            }
+            fn text(
+                &mut self,
+                _: &mut crate::text::TextEngine,
+                _: &crate::text::Paragraph,
+                _: &[RunPaint],
+                _: (f32, f32),
+                _: Transform,
+            ) {
+            }
+            fn push_clip(&mut self, _: &Shape, _: Transform) {}
+            fn pop_clip(&mut self) {}
+            fn push_opacity(&mut self, _: f32) {}
+            fn pop_opacity(&mut self) {}
+            fn pointer(&mut self, _: f32, _: f32) {}
+            fn finish(&mut self) -> Result<Pixmap, String> {
+                unreachable!()
+            }
+            fn trim(&mut self, hidden: bool) {
+                self.0.borrow_mut().push(hidden);
+            }
+        }
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan("component App\n  view\n    box\n"),
+            (),
+            (300., 300.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let trims = Rc::new(RefCell::new(Vec::new()));
+        p.brush.replace_backend(Box::new(Observed(trims.clone())));
+        p.memory_warning();
+        p.set_window_active(false);
+        assert_eq!(*trims.borrow(), [false, false]);
+        assert!(!p.dirty(), "trimming a visible window need not repaint");
+        let page = exact_runner::Page {
+            hidden: true,
+            ..p.host.runner().page()
+        };
+        assert!(p.set_page(page).is_none());
+        assert_eq!(
+            *trims.borrow(),
+            [false, false, true],
+            "hide releases storage even after focus was lost"
+        );
+        assert!(p.set_page(page).is_none());
+        assert_eq!(
+            *trims.borrow(),
+            [false, false, true],
+            "an unchanged hidden page does not trim again"
+        );
+        p.dirty = false;
+        assert!(p
+            .set_page(exact_runner::Page {
+                hidden: false,
+                ..page
+            })
+            .is_none());
+        assert!(p.dirty, "showing the window redraws released storage");
+    }
 
     #[test]
     fn activity_and_service_execution_edges_update_the_page_together() {

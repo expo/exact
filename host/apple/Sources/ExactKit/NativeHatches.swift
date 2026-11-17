@@ -434,8 +434,8 @@ private let hatchHostTable: UnsafeRawPointer = {
     return UnsafeRawPointer(t)
 }()
 
-/// A route or element hatch's moment; `configuring` is a hatched frame's
-/// before its web view is made (LLP 1020.002 §9).
+/// A route or element hatch's moment; `configuring` precedes a frame's web
+/// view or a video's item (LLP 1133 D3).
 enum RouteHatchEvent: UInt32 {
     case built = 0, changed = 1, ended = 2, configuring = 3
     var name: String { switch self { case .built: "built"; case .changed: "changed"; case .ended: "ended"; case .configuring: "configuring" } }
@@ -502,10 +502,10 @@ extension NativeViews {
         return owned
     }
 
-    /// `element` (built, changed), `elementEnded` or, for a frame before its
-    /// web view is made, `elementConfiguration` for a hatched node (LLP
+    /// `element` (built, changed), `elementEnded` or, before a frame's web
+    /// view or video's item is made, `elementConfiguration` (LLP
     /// 1075.003.000, LLP 1020.002 §9): its view, its kind's platform object
-    /// (the `WKWebViewConfiguration` for `configuring`), and
+    /// (a `WKWebViewConfiguration` or video's `NSMutableDictionary` at `configuring`), and
     /// `{"hatch", "node", "id", "kind", "data"}`. `quiet` leaves the call out
     /// of the journal (a list row's after the first; `state` counts them).
     /// True when the hatch set `reusable` (LLP 1075.003.000.000 §8).

@@ -296,6 +296,14 @@ open class ExactModule {
     /// is made after the batch, as macOS and an iOS list row usually make
     /// it), the `changed` after this call hands it. `isNew` is true at
     /// `built`.
+    /// A hatched video calls this synchronously before each item, including
+    /// source changes and `load(id)`, with an `NSMutableDictionary`: `url`
+    /// is the resolved source URL; set `asset` to an `AVURLAsset` to supply
+    /// its loading options or resource loader. Retain any loader delegate
+    /// yourself. No asset property has been loaded yet. The arm still owns
+    /// the item, playback and authored preferences; `element(_:)` receives
+    /// its `AVPlayer` at `built` or `changed`. A list row may hear `built`
+    /// before its player exists. Change only the configuration here.
     open func elementConfiguration(_ element: ExactElement, _ configuration: AnyObject) {}
     #if os(macOS)
     /// The window toolbar Exact installed for the Contract's commands (LLP
@@ -875,7 +883,7 @@ public final class ExactElement {
     /// Nil once `elementEnded` has returned: the view may be another row's.
     public internal(set) weak var view: ExactNativeView?
     /// The platform object of a hatched node's kind, or nil: a text field or
-    /// text view, a control (a segmented control too), a web view, a scroll
+    /// text view, a control (a segmented control too), a web view, an `AVPlayer`, a scroll
     /// view. What an authored row or attribute writes on it is Exact's; the
     /// rest is yours. A video, frame or native view in a list row, and on
     /// macOS any frame, may be made after `built`: the hatch hears `changed`
@@ -1246,10 +1254,9 @@ private let moduleTabContainer: @convention(c) (UnsafeMutableRawPointer?, Unsafe
 }
 
 /// `element(module, event, view, platform, json, len) → flags`
-/// (LLP 1075.003.000): event 0 built, 1 changed, 2 ended, 3 a frame's
-/// configuration before its web view (the platform object, LLP 1020.002
-/// §9); json {"hatch", "node", "id", "kind", "data"}; bit 0 of the flags:
-/// `reusable`.
+/// (LLP 1075.003.000): event 0 built, 1 changed, 2 ended, 3 configuring
+/// before a frame's web view or a video's item (LLP 1133 D3).
+/// json {"hatch", "node", "id", "kind", "data"}; bit 0 of the flags: `reusable`.
 private let moduleElement: @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> UInt32 = { raw, event, view, platform, json, length in
     guard let m = module(raw), let hatches = m.hatches, let json, length > 0,
           let object = try? JSONSerialization.jsonObject(with: Data(bytes: json, count: Int(length))) as? [String: Any],

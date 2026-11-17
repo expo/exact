@@ -16,6 +16,7 @@ pub mod host;
 mod icon_rules;
 mod link;
 mod links;
+mod path_crates;
 mod preload;
 mod reach;
 mod receipt;

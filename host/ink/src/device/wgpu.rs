@@ -1010,6 +1010,8 @@ impl Device for Wgpu {
     }
 
     fn trim(&mut self) -> Result<()> {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.wait(self.submitted)?;
         self.completed()?;
         for slot in &mut self.buffers {
             if slot.capacity > 192 {
@@ -1025,6 +1027,7 @@ impl Device for Wgpu {
                     .push((Submission(old.last.load(Ordering::Acquire)), old.raw));
             }
         }
+        self.completed()?;
         Ok(())
     }
 }

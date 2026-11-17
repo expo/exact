@@ -415,7 +415,14 @@ extension NodeView {
         let bg = onLayer && !away && !cssVisibilityHidden && (vibrancyView == nil || isParagraph) ? fill : nil
         applyCornerFill(shapedRadii ? bg : nil)
         let layerFill = shapedRadii ? nil : bg
-        if layer.backgroundColor != layerFill { layer.backgroundColor = layerFill }
+        if let lent = extras?.lentFill {
+            // Lent to a menu's stand-in: the current fill and outline go on
+            // the sublayer it draws, the layer's own stays clear.
+            if layer.backgroundColor != nil { layer.backgroundColor = nil }
+            lent.frame = layer.bounds
+            lent.path = (LiftTarget.rounded(self) ?? UIBezierPath(rect: bounds)).cgPath
+            if lent.fillColor != layerFill { lent.fillColor = layerFill }
+        } else if layer.backgroundColor != layerFill { layer.backgroundColor = layerFill }
         // A flight interpolates the radius itself (LLP 1013.000 D4).
         if flightLook == nil, layer.cornerRadius != cornerRadius { layer.cornerRadius = cornerRadius }
         if let v = vibrancyView, !isParagraph {
@@ -471,10 +478,11 @@ extension NodeView {
 }
 extension NodeView {
     /// The box's sublayers keep CSS's paint order, all under the children:
+    /// a fill lent to a menu's stand-in (where the layer's own fill paints),
     /// shadow, gradient, inset shadow, image, border, text — whichever of
     /// them joins first (as `Mac/BoxLayerMac.swift`).
     func insertBoxSublayer(_ l: CALayer) {
-        let order: [CALayer?] = [shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder, textBoxLayer]
+        let order: [CALayer?] = [extras?.lentFill, shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder, textBoxLayer]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }
         if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
             layer.insertSublayer(l, above: below)

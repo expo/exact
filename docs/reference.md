@@ -1426,7 +1426,9 @@ Some entitlements hold on a Mac only under a provisioning profile that
 authorizes them (Apple TN3125), and the Mac build signs them from one (LLP
 1133.010 D7): push's `com.apple.developer.aps-environment` (`device.push`), App
 Attest's environment (`device.attestation`), the Declared Age Range
-(`device.age-range`), Group Activities (`device.shareplay`), the iCloud key-value store (`device.icloud-kv`), Sensitive Content Analysis (`device.sensitive-content-analysis`), the keychain group a locked secret is kept in
+(`device.age-range`), Group Activities (`device.shareplay`), CloudKit
+(`device.cloudkit`), the iCloud key-value store (`device.icloud-kv`), Sensitive
+Content Analysis (`device.sensitive-content-analysis`), the keychain group a locked secret is kept in
 (`secret.keep` with a presence policy), and a passkey's associated domains
 (`auth.passkey`). An app whose grants need any of them is built from the
 newest installed macOS profile for its id (or the team's wildcard) that allows
@@ -1443,7 +1445,8 @@ With a profile, the build signs with its team's identity (Apple Development, or 
 release; one `EXACT_IDENTITY` or `EXACT_DEVELOPER_ID` names must be of that
 kind and team, or the build is refused), writes the application identifier,
 the team and each entitlement (an environment `development` under a
-development profile, `production` otherwise), embeds the profile as
+development profile, `production` otherwise; CloudKit uses `Development` and
+`Production`), embeds the profile as
 `Contents/embedded.provisionprofile`, and always assembles the `.app`, where
 the profile holds.
 
@@ -1452,12 +1455,27 @@ for each grant, what the app then reports (`available: false`,
 `NotSupportedError`). A release build is refused (`grant-needs-profile`) for
 App Attest, the age range, the iCloud key-value store, Sensitive Content
 Analysis, a passkey or a locked secret that is not `optional`; one granting
-push or SharePlay ships without it, the package reporting it unavailable.
+push, SharePlay or CloudKit ships without it, the package reporting it unavailable.
 An app with Mac widgets signs both under one profile, of the widgets' team,
 chosen among the profiles that grant the widgets' App Group and shared
 Keychain group and the grants' entitlements; with none that grants both, the
 grants sign nothing. An ad hoc build (`EXACT_IDENTITY=-`) signs no profile's
 entitlements.
+
+`device.cloudkit` derives one container, `iCloud.<bundle id>`, or selects the one
+written as `device.cloudkit iCloud.<name>`; it takes no purpose. A second container
+is refused. On iOS and iPadOS, and under a Mac profile, it signs
+`com.apple.developer.icloud-services = ["CloudKit"]`,
+`com.apple.developer.icloud-container-identifiers = [<container>]` and
+`com.apple.developer.icloud-container-environment = "Development"` or `"Production"`
+by the signature's kind. A distribution archive uses `Production` (ITMS-90046).
+The profile's services must include CloudKit and its containers must allow the
+selected identifier; a profile for another container is refused. No push or
+`remote-notification` mode is derived, and no `ubiquity-*` entitlement. tvOS,
+App Clips and extensions sign none. A bound package declaring
+`"hostEvents": ["cloudkit-share"]` receives shares and gets `CKSharingSupported`
+and `ExactHostEvents` only where the grant is signed; a Mac build without a
+profile claims neither.
 
 ### Web CI preparation
 
@@ -4975,7 +4993,7 @@ below any later popover, without exposing the page or a lower modal.
 
 | Scope | Swift (`ExactModule`) | Page module (`modules/web/index.js`) |
 |---|---|---|
-| A node marked `hatch="word"` | `element(_:)`, `elementEnded(_:)`; a frame's `elementConfiguration(_:_:)` | `element(e)`, `elementEnded(e)` |
+| A node marked `hatch="word"` | `element(_:)`, `elementEnded(_:)`; a frame or video's `elementConfiguration(_:_:)` | `element(e)`, `elementEnded(e)` |
 | A route, a navigation stack, tabs (iOS; the web's elements) | `route`, `routeEnded`, `navigation`, `tabs`, `tabContainer` | `route`, `routeEnded`, `navigation`, `tabs` |
 | The window toolbar (macOS) | `toolbar(_:)` | none |
 | The app: its facts, by the web's names, and the root node's `data-*` words as `data` (each in `app.json` `data`, which `hatch --app` adds; Swift reads `data-booted` as `app.data[.booted]`) | `app(_:)`, `appEnded(_:)` | `app(a)`, `appEnded(a)` |
@@ -5010,6 +5028,16 @@ there: the node may not be in the tree yet. A hatched frame's first web view
 waits for the module to connect, so this call comes before the web view is
 made. The web view then arrives at `built`; if `built` has no `platform` (as
 on macOS or in an iOS list row), the `changed` after this call hands it.
+
+A hatched `video` on Apple calls `elementConfiguration(_:_:)` synchronously
+before each item, including a changed source or `load(id)`. It hands an
+`NSMutableDictionary`: `url` is the resolved source `URL`; set `asset` to an
+`AVURLAsset` for custom loading. The arm applies the authored playback and
+rendition preferences to that asset's item. `element.platform` then hands the
+`AVPlayer` at `built`, or `changed` for a deferred player. The arm owns the item,
+playback and authored preferences; retain any resource-loader delegate yourself.
+See [video loading](contract-for-agents.md#sound-midi-and-media) for an example
+and AirPlay/FairPlay limits. Android has no video player hook yet.
 
 **Linux, Windows and Android paint their own pixels**, so there is no platform
 object to hand over. A hatch there is Rust: one type that implements
@@ -5493,6 +5521,14 @@ crate: the source digest reads every arm, so an edit to any of them moves it
 `target_arch = "wasm32"` arms, never one for the device's `target_os`. A crate
 whose module can be replaced should branch on nothing else
 ([pitfall](agent-pitfalls.md#actions)).
+
+The digest also covers the path crates the data crate is built from, and
+theirs in turn, including an optional one no default feature enables: the
+build that links the crate can enable it. One case is not covered. A path
+crate that `[patch]` puts in place of a registry or git dependency counts
+only where Cargo's default-feature resolve reaches it. When only an optional
+dependency that resolve leaves off reaches it, an edit to it does not move
+the id; declare that dependency with `path` to have it counted.
 
 The repository's app entries use `contract::rust_entry` to select a concrete
 factory at bake time. A custom host adapter must do the same (and depend on
