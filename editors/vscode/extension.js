@@ -102,7 +102,8 @@ function problems(vscode, state) {
   // One compile of a document at a time, and of its newest text only: a text typed over while it waited is skipped,
   // and one typed over while it compiled is not shown. Its places are read in the text that was compiled.
   const check = document => {
-    if (document.languageId !== LANGUAGE) return;
+    // A file or an unsaved editor's: not a diff's or another provider's copy of a contract.
+    if (document.languageId !== LANGUAGE || !['file', 'untitled'].includes(document.uri.scheme)) return;
     const key = String(document.uri), turn = {};
     latest.set(key, turn);
     const done = (compiling.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {

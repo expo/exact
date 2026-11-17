@@ -2,7 +2,7 @@
 
 Syntax highlighting and editing defaults for the current `.contract` language,
 and `$exact-contract`, a problem matcher for the Contract compiler's
-diagnostics. Its only runtime code, `extension.js`, does two things, each only
+diagnostics. Its only runtime code, `extension.js`, does three things, each only
 when a setting turns it on, and nothing without them. It has no dependencies.
 
 - It registers `.contract` with the TypeScript 7 extension when that is
@@ -13,6 +13,9 @@ when a setting turns it on, and nothing without them. It has no dependencies.
   Contract compiler's path: **Format Document** runs `contract fmt --stdin` on
   the editor's text, saved or not. Text the compiler refuses is left as it is.
   Formatting is asked for: the extension turns nothing on to run it on save.
+- With the same setting, it shows each open contract's warnings as problems,
+  which the content mapper cannot report: the compiler checks the editor's text
+  as it changes, saved or not.
 
 To package and install from the repository root:
 

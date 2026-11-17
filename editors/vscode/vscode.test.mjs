@@ -178,16 +178,16 @@ test('the compiler\'s warnings on an open contract are problems of warning sever
     },
     languages: {
       registerDocumentFormattingEditProvider: () => ({ dispose() {} }),
-      createDiagnosticCollection: () => ({ set: (uri, problems) => shown.set(uri, problems), delete: uri => shown.delete(uri), dispose: () => shown.clear() }),
+      createDiagnosticCollection: () => ({ set: (uri, problems) => shown.set(String(uri), problems), delete: uri => shown.delete(String(uri)), dispose: () => shown.clear() }),
     },
     window: { showWarningMessage() {} },
     Range: function (startLine, start, endLine, end) { return [startLine, start, endLine, end]; },
     Diagnostic: function (range, message, severity) { return { range, message, severity }; },
     DiagnosticSeverity: { Warning: 'warning' },
   };
-  const document = (name, text) => ({ languageId: 'exact-contract', uri: name, fileName: resolve(dir, name), getText: () => text, lineAt: line => ({ text: text.split('\n')[line] }) });
+  const document = (name, text, scheme = 'file') => ({ languageId: 'exact-contract', uri: { scheme, toString: () => name }, fileName: resolve(dir, name), getText: () => text, lineAt: line => ({ text: text.split('\n')[line] }) });
   /** What the editor shows for a document once the compiler has answered: each problem's range, code and severity. */
-  const problems = async (kind, doc) => { await Promise.all(listeners[kind].map(l => l(kind === 'change' ? { document: doc } : doc))); return (shown.get(doc.uri) ?? []).map(p => [p.range, p.code, p.severity, p.source]); };
+  const problems = async (kind, doc) => { await Promise.all(listeners[kind].map(l => l(kind === 'change' ? { document: doc } : doc))); return (shown.get(String(doc.uri)) ?? []).map(p => [p.range, p.code, p.severity, p.source]); };
   try {
     // No compiler named: nothing listens for a document, so nothing is run.
     await activate(context, vscode);
@@ -200,6 +200,8 @@ test('the compiler\'s warnings on an open contract are problems of warning sever
     // A file its app uses is built with that app, and has its own warnings only. Its place counts UTF-16 units, the compiler's UTF-8 bytes.
     const used = `      text "é" + label\n      button press=bump width=20 height=20\n`;
     assert.deepEqual(await problems('open', document('lib/row.contract', row(used))), [[[10, 6, 10, 12], 'lower-button-unlabelled', 'warning', 'contract']]);
+    // A diff's copy of a contract is not checked: its problems would stand beside the file's.
+    assert.deepEqual(await problems('open', document('old.contract', app(blank), 'git')), []);
     // A refusal is no warning: the compiler's errors are the content mapper's to show.
     assert.deepEqual(await problems('change', document('app.contract', app('      nope\n'))), []);
     // Lines deleted while the compiler ran: the answer for the older text is dropped, and the newer text is still checked.

@@ -42,7 +42,7 @@
         "exactContract.compiler": {
           "type": "string",
           "scope": "machine-overridable",
-          "markdownDescription": "The Contract compiler, `contract`, by its path. When set, **Format Document** on a `.contract` file runs `contract fmt --stdin` on the editor's text. Unset, no formatter is registered and nothing is run."
+          "markdownDescription": "The Contract compiler, `contract`, by its path. When set, **Format Document** on a `.contract` file runs `contract fmt --stdin` on the editor's text, and each open contract's warnings show as problems, compiled again as it changes. Unset, no formatter is registered and nothing is run."
         }
       }
     },
