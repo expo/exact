@@ -108,12 +108,39 @@ impl<D: DataSource> Presenter<D> {
                 continue;
             }
             self.autofocus_processed.insert(id);
-            if self.focus.is_none() || self.focus == self.autofocus_from {
+            // A `focus()` waiting for its node to land holds the focus it will
+            // take: on the web that node has it, and an `autofocus` yields.
+            let waiting = self.host.flights.focus.is_some();
+            if !waiting && (self.focus.is_none() || self.focus == self.autofocus_from) {
                 return self.set_focus(Some(id), self.host.now());
             }
             break;
         }
         None
+    }
+
+    /// A flight ended: the node a `focus()` named in the air takes the focus
+    /// once it flies no longer, and an `autofocus` refused there is offered.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn focus_landed(&mut self) {
+        if !std::mem::take(&mut self.host.flights.landed) {
+            return;
+        }
+        let kernel = self.host.kernel();
+        let asked = (self.host.flights.focus)
+            .and_then(|key| kernel.node_by_key(key))
+            .map(|n| n.id);
+        if asked.is_none_or(|id| !self.host.flying(id)) {
+            self.host.flights.focus = None;
+        }
+        let error = match asked.filter(|&id| self.focusable(id) && self.focus_refusal(id).is_none())
+        {
+            Some(id) => self.set_focus(Some(id), self.host.now()),
+            None => self.autofocus(),
+        };
+        if let Some(error) = error {
+            self.host.log(error);
+        }
     }
 
     /// Whether `id` is what a press presses: a button, a link or a tab

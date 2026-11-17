@@ -21,10 +21,13 @@
 (function (global) {
   "use strict";
   // What the runtime itself says (js/src/console.js). This file is the
-  // prelude's last, so console.js's hand-offs go here, before the app loads.
+  // prelude's last, so console.js's hand-off goes here, before the app loads,
+  // and so do the two names Ibex's events binding adds that a data module has
+  // on no host (LLP 1175 D1): libraries read them to decide they run in a browser.
   var runtimeLine = global.__exact_runtime_line;
   delete global.__exact_runtime_line;
-  delete global.reportError;
+  delete global.self;
+  delete global.navigator;
   // The cache key of an Intl formatter's arguments when they read the same
   // whenever they are read: locales as a string or strings, and options as a
   // plain object of finite primitives in own enumerable data properties;

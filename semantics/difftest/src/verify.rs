@@ -1103,9 +1103,29 @@ fn print_property(
 mod tests {
     use super::test_files;
 
+    /// Removes its directory when dropped, so a failing test leaves nothing behind.
+    struct TempDir(std::path::PathBuf);
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl AsRef<std::path::Path> for TempDir {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn an_app_runs_every_test_file_beside_it_and_another_program_its_own() {
-        let dir = std::env::temp_dir().join(format!("difftest-verify-{}", std::process::id()));
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("difftest-verify-{}", std::process::id())));
         std::fs::create_dir_all(&dir).unwrap();
         for f in [
             "app.contract",

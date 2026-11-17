@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseManifest, shaderFiles } from '../../scripts/app.mjs';
+import { lockBlocks, lockChanges, memberRefusal, outsideSdkLock, series, seriesId, staleLock } from '../../scripts/app-shells.mjs';
 
 // Resolve authored keys in memory; only the bake writes the resolved manifest.
 const merge = (base, overrides) => {
@@ -91,7 +92,8 @@ function renderDeclaration(dir, render) {
   if (!existsSync(manifest)) throw new Error(`game.render.crate ${render.crate} requires ${manifest}`);
   const declared = Bun.TOML.parse(readFileSync(manifest, 'utf8')).package;
   if (declared?.name !== render.crate) throw new Error(`game.render.crate ${render.crate} must name the package in ${folder}`);
-  if (declared.workspace !== '../.shells') throw new Error(`${manifest}: set package.workspace = "../.shells" so the app owns its render hooks`);
+  const refused = memberRefusal(manifest, declared, '../.shells', 'its render hooks');
+  if (refused) throw new Error(refused);
   return folder;
 }
 
@@ -124,7 +126,20 @@ export function renderGraph(metadata, game) {
   }
 }
 
-export function gameShells(dir, game, workspace) {
+/** Whether a game without a data crate bakes, for Apple, the entry `exact-game-apple` holds (`SHARED_ENTRY`,
+ * game/app/src/lib.rs), given the build's environment. The shared entry registers SQLite and names no preloads, native
+ * source or Rust bundle. An archive linked by plan (production, or `EXACT_APPLE_LINK=plan`: bake/src/link.rs) registers
+ * SQLite only if the plan uses it, which is unknown before the bake; `link` naming it settles it. */
+export function sharesAppleEntry(app, env = process.env) {
+  if (Object.keys(app.preload ?? {}).length || env.EXACT_NATIVE_SOURCE || env.EXACT_RUST_BUNDLE) return false;
+  const byPlan = env.EXACT_APPLE_LINK !== undefined ? env.EXACT_APPLE_LINK === 'plan' : env.EXACT_UPDATE_TRUST === 'production';
+  return !byPlan || (app.link ?? []).includes('sqlite');
+}
+
+/** `env` is the build's: whether the Apple shell shares `exact-game-apple` follows from it (`sharesAppleEntry`).
+ * `updateLock`: the workspace is generated for a lock refresh (`prepareGame`), which takes the shared Apple host
+ * whenever the game can have it. */
+export function gameShells(dir, game, workspace, {env = process.env, updateLock = false} = {}) {
   // Relative paths are written from the real directory: /tmp is a symlink on macOS.
   dir = realpathSync(dir);
   // Only this app is materialized. Each bake owns a generated Cargo workspace.
@@ -135,6 +150,12 @@ export function gameShells(dir, game, workspace) {
   // Reject authored declaration errors before touching even an old generated workspace.
   if (app.game.presentation !== undefined) {
     throw new Error('game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)');
+  }
+  // The shells below link no update store on any platform, so a game baked with a store level other than "0" would
+  // build and then refuse to boot (each native host checks the level against its linked delivery, LLP 1030 D4).
+  const stores = Object.entries(app.deploy?.store ?? {}).filter(([, level]) => level !== '0');
+  if (stores.length) {
+    throw new Error(`${resolve(dir, 'app.json')}: ${stores.map(([platform, level]) => `deploy.store.${platform} is ${JSON.stringify(level)}`).join(', ')}, but games take no over-the-air updates today: their hosts link no update store, and every change ships as a new binary. Set ${stores.length === 1 ? 'it' : 'each'} to "0" or remove ${stores.length === 1 ? 'it' : 'them'}.`);
   }
   const renderDir = renderDeclaration(dir, render);
   const root = resolve(dir, '.shells');
@@ -206,7 +227,8 @@ export function gameShells(dir, game, workspace) {
   if (authoredLogic) {
     const declared = Bun.TOML.parse(readFileSync(manifest, 'utf8')).package;
     if (declared?.name !== crate) throw new Error(`game.crate ${crate} must name the package in ${appDir}/logic`);
-    if (declared.workspace !== '../.shells') throw new Error(`${manifest}: set package.workspace = "../.shells" so the app owns its logic`);
+    const refused = memberRefusal(manifest, declared, '../.shells', 'its logic');
+    if (refused) throw new Error(refused);
     rmSync(resolve(root, 'logic'), {recursive:true, force:true});
   } else {
     mkdirSync(logicDir, {recursive:true});
@@ -256,9 +278,8 @@ fn main() {
     if (declared?.name !== data.crate) {
       throw new Error(`game.data.crate ${data.crate} must name the package in ${dataDir}`);
     }
-    if (declared.workspace !== '../.shells') {
-      throw new Error(`${dataManifest}: set package.workspace = "../.shells" so the app owns its data`);
-    }
+    const refused = memberRefusal(dataManifest, declared, '../.shells', 'its data');
+    if (refused) throw new Error(refused);
   }
   if (app.game.audio !== undefined && typeof app.game.audio !== "boolean") throw new Error("game.audio must be a boolean");
   if (app.game.assets !== undefined && typeof app.game.assets !== "boolean") throw new Error("game.assets must be a boolean");
@@ -270,10 +291,10 @@ fn main() {
   // The snapshot excludes this entire generated root, including its gitignore.
   if (!existsSync(resolve(root, '.gitignore'))) writeFileSync(resolve(root, '.gitignore'), '*\n!.gitignore\n');
   // A game without a data crate can take its Apple host from exact-game-apple, compiled once
-  // for every such game (exact_game_app::bake_shared_declaration decides). A lock captured
-  // before that crate existed would refuse it, so such a game keeps its own host. A lock
-  // captured since names it, so capturing one leaves the graph it was captured from.
-  const sharedApple = !data && (!existsSync(lock) || /^name = "exact-game-apple"$/m.test(readFileSync(lock, 'utf8')));
+  // for every such game, when its entry would be that crate's. A lock captured before that
+  // crate existed would refuse it under --locked, so a build keeps such a game on its own host;
+  // refreshing the lock resolves it with the shared host, which moves it there.
+  const sharedApple = !data && sharesAppleEntry(app, env) && (updateLock || !existsSync(lock) || /^name = "exact-game-apple"$/m.test(readFileSync(lock, 'utf8')));
   for (const kind of ['gpu', 'web', 'apple', 'linux', 'windows', 'android']) {
     const shell = resolve(root, kind), shared = kind === 'apple' && sharedApple;
     // A cached build script can run from either the game or its deeper proof copy.
@@ -385,11 +406,6 @@ const sdkLockFile = source => [resolve(source, 'app/shells.lock'), resolve(gameR
 // game resolves offline before anyone refreshes the SDK lock. A new root crate
 // (00d37ef9f: exact-svg-filter under the kernel) is one too: the root lock's
 // path packages, which carry no source or checksum, seed it the same way.
-// By name and semver series (Cargo's compatibility: 1.x, 0.37.x, 0.0.3): one
-// graph holds at most one version of a package per series.
-const series = version => { const [major, minor, patch] = String(version).split('.'); return major !== '0' ? major : minor !== '0' ? `0.${minor}` : `0.0.${patch}`; };
-const seriesId = block => `${/^name = "([^"]+)"/m.exec(block)?.[1]} ${series(/^version = "([^"]+)"/m.exec(block)?.[1])}`;
-const lockBlocks = text => text.split(/\n(?=\[\[package\]\]\n)/).slice(1).map(block => block.trimEnd());
 export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.lock')) ? readFileSync(resolve(gameRoot, '../Cargo.lock'), 'utf8') : '') {
   // A root's new major of a package the SDK lock holds is a pin too; a compatible one is not.
   const held = new Set((Bun.TOML.parse(sdk).package ?? []).map(pkg => `${pkg.name} ${series(pkg.version)}`));
@@ -397,29 +413,7 @@ export function withRootPins(sdk, root = existsSync(resolve(gameRoot, '../Cargo.
     .filter(block => (/^source = "registry\+/m.test(block) || !/^source = /m.test(block)) && !held.has(seriesId(block)));
   return pins.length ? `${sdk.trimEnd()}\n\n${pins.join('\n\n')}\n` : sdk;
 }
-/** `lock`'s starting point for a game with its own lock (LLP 1046.011 D2): the
- * SDK lock decides every name and series it holds, a same-series bump included,
- * and the game's lock keeps the rest (its own packages, git and path ones too),
- * so Cargo prefers exactly these versions and fetches only what they lack. */
-export function lockSeed(sdk, own) {
-  // The same crate from another source (a git fork, a path) is another package:
-  // the SDK's supersedes only its own source's, whatever the git revision.
-  const key = block => `${seriesId(block)} ${/^source = "([^"#]*)/m.exec(block)?.[1] ?? ''}`;
-  const held = new Set(lockBlocks(sdk).map(key));
-  const kept = lockBlocks(own).filter(block => !held.has(key(block)));
-  return kept.length ? `${sdk.trimEnd()}\n\n${kept.join('\n\n')}\n` : sdk;
-}
 const cargoMetadata = (cwd, flags, env) => spawnSync('cargo', ['metadata', ...flags, '--format-version', '1'], {cwd, env, encoding:'utf8', maxBuffer:64 * 1024 * 1024});
-// A lock's packages by identity. Dependency edges follow from the versions
-// and the activated features, so a game's subset keeps every version but may
-// drop edges; the versions and checksums are what the SDK lock decides.
-const lockIds = text => new Map((Bun.TOML.parse(text).package ?? []).map(pkg => [`${pkg.name} ${pkg.version} ${pkg.source ?? ''}`.trim(), pkg.checksum ?? null]));
-/** Packages of `derived` (members excepted) whose version the SDK lock does not hold.
- * A root path crate new since the SDK lock is held through `withRootPins`. */
-export function outsideSdkLock(derived, sdk, members) {
-  const known = lockIds(sdk);
-  return [...lockIds(derived)].filter(([id, checksum]) => !members.has(id.split(' ')[0]) && (!known.has(id) || known.get(id) !== checksum)).map(([id]) => id);
-}
 // A lock's versions by package name.
 const lockVersions = text => (text ? Bun.TOML.parse(text).package ?? [] : [])
   .reduce((map, pkg) => map.set(pkg.name, [...(map.get(pkg.name) ?? []), pkg.version].sort()), new Map());
@@ -472,32 +466,7 @@ export function lockDrift(captured, sdk) {
   const updated = [...moved];
   return {added:[...added].sort(), updated:updated.sort()};
 }
-/** What a lock refresh changed, by package name, for `lock` to print: the
- * versions (or a git or path package's source) that moved, then what was
- * added, then what was removed; with none of those, the dependencies a package
- * gained or lost (Cargo rewrites them when a manifest gains or drops a package the lock already holds). */
-export function lockChanges(before, after) {
-  // As an author reads a package: its version, and where it comes from unless crates.io.
-  const shown = pkg => `${pkg.version}${!pkg.source ? ' (path)' : pkg.source === CRATES_IO ? '' : ` (${pkg.source})`}`;
-  const read = text => (text ? Bun.TOML.parse(text).package ?? [] : []).reduce((map, pkg) => map.set(pkg.name, [...(map.get(pkg.name) ?? []), shown(pkg)].sort()), new Map());
-  const was = read(before), now = read(after), moved = [], added = [];
-  for (const [name, versions] of now) {
-    const old = was.get(name);
-    if (!old) added.push(`added ${name} ${versions.join(', ')}`);
-    else if (old.join() !== versions.join()) moved.push(`${name} ${old.join(', ')} → ${versions.join(', ')}`);
-  }
-  const changes = [...moved, ...added, ...[...was].filter(([name]) => !now.has(name)).map(([name, versions]) => `removed ${name} ${versions.join(', ')}`)];
-  if (changes.length) return changes;
-  const lists = text => new Map((text ? Bun.TOML.parse(text).package ?? [] : []).map(pkg => [`${pkg.name} ${shown(pkg)}`, pkg.dependencies ?? []]));
-  const had = lists(before);
-  return [...lists(after)].flatMap(([pkg, deps]) => [...deps.filter(dep => !had.get(pkg)?.includes(dep)).map(dep => `${pkg} now depends on ${dep}`),
-    ...(had.get(pkg) ?? []).filter(dep => !deps.includes(dep)).map(dep => `${pkg} no longer depends on ${dep}`)]);
-}
-const CRATES_IO = 'registry+https://github.com/rust-lang/crates.io-index';
 const listed = (items, most = 6) => items.length > most ? `${items.slice(0, most).join(', ')}, … (${items.length} in all)` : items.join(', ');
-/** Whether Cargo refused a locked graph because the lock no longer matches the
- * manifests, a lock to refresh, rather than for a crate missing from its cache. */
-export const staleLock = stderr => /cannot update the lock file|lock file \S+ needs to be updated/.test(stderr ?? '');
 // The refresh as an author runs it: the game's runner when it has the verb (a launcher
 // of exact2's app-cli.mjs has; one generated before either has not, and `update`
 // rewrites it), else this script from exact2.
@@ -556,15 +525,14 @@ export function prepareGame(dir, game, source = gameRoot, {updateLock = false, f
   // an app object from before app.json gained game.render.
   game = gameDefaults(dir)?.game ?? game;
   const root = resolve(dir, '.shells'), own = resolve(dir, 'Cargo.lock'), shell = resolve(root, 'Cargo.lock');
-  const name = gameShells(dir, game, source), members = shellMembers(game, name);
+  const name = gameShells(dir, game, source, {env, updateLock}), members = shellMembers(game, name);
   const metadata = locked => (locked ? lockedMetadata : cargoMetadata)(root, ['--offline', ...(locked ? ['--locked'] : []), ...(target ? ['--filter-platform', target] : [])], env);
   const refused = result => new Error(`game Cargo graph: ${result.stderr || result.error?.message || ''}${result.status === null ? ` (cargo metadata ended by ${result.signal})` : ''}\nCrates missing from Cargo's cache, the lock unchanged: cargo fetch --manifest-path ${JSON.stringify(resolve(root, 'Cargo.toml'))}\nA dependency change (or both): ${lockCommand(dir)} fetches, resolves again and captures this game's lock`);
   if (fetch) {
-    // `lock` (LLP 1046.011 D2): the SDK lock's versions seed the resolution (a game
-    // with its own lock keeps its own packages; one without starts from the SDK
-    // lock, as its build does), and the network brings only what they lack.
+    // A captured lock is already copied into the shell. Seed from the SDK only
+    // without one, so Cargo keeps compatible versions when refreshing a lock.
     const lockFile = sdkLockFile(source), sdk = lockFile && withRootPins(readFileSync(lockFile, 'utf8'));
-    if (sdk) writeFileSync(shell, updateLock && existsSync(shell) ? lockSeed(sdk, readFileSync(shell, 'utf8')) : sdk);
+    if (sdk && !(updateLock && existsSync(shell))) writeFileSync(shell, sdk);
     const fetched = spawnSync('cargo', ['fetch'], {cwd:root, env, stdio:['ignore', 'inherit', 'inherit']});
     if (fetched.error || fetched.status !== 0) throw new Error(`cargo fetch in ${root} failed${fetched.error ? `: ${fetched.error.message}` : ''}; it needs the network`);
   }
@@ -611,7 +579,7 @@ A partial offline Cargo cache: cargo fetch --manifest-path ${JSON.stringify(reso
 }
 
 /** `bun exact.mjs lock` (LLP 1046.011 D2): fetch what the game's graph needs,
- * resolve it again with the SDK lock's versions first, and say what moved. A
+ * keep captured versions unless the manifests require a change, and say what moved. A
  * game that adds no packages keeps resolving against the SDK lock: it gains
  * no lock of its own. Never run by a build. */
 export function refreshLock(dir, {source = gameRoot, env = process.env} = {}) {

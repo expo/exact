@@ -181,7 +181,7 @@ final class DimmedPixelsIOSTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first,
                                   "an alert presents only in a scene's window: run the hosted bundle")
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 400, height: 660)
+        window.frame = scene.screen.bounds
         window.overrideUserInterfaceStyle = .light
         let controller = UIViewController()
         controller.view.backgroundColor = .white
@@ -191,9 +191,10 @@ final class DimmedPixelsIOSTests: XCTestCase {
         ExactGroupedLists.install()
         let session = ExactApp.shared.makeSession(label: "dimmed-pixels")
         Self.session = session
-        session.presenter.viewport.frame = controller.view.bounds
+        // UIKit's status-bar edge blur must not cover the sampled colours.
+        session.presenter.viewport.frame = controller.view.safeAreaLayoutGuide.layoutFrame
         controller.view.addSubview(session.presenter.viewport)
-        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: controller.view.bounds.size).error)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: session.presenter.viewport.bounds.size).error)
         window.layoutIfNeeded()
         var views: [String: UIView] = [:]
         for node in session.presenter.views.values {

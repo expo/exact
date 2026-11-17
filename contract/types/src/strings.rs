@@ -20,10 +20,14 @@ impl Strings {
     }
 }
 
-/// Whether the call `name(…)` is the strings call: `t`, unless a scoped
-/// action or action prop of that name is being called.
-pub fn is_text_call(name: &str, scope: &Scope) -> bool {
-    name == "t" && !matches!(scope.lookup(name), Some((Ref::Action(_) | Ref::Prop(_), _)))
+/// Whether the call `name(…)` at `span` is the strings call: `t`, unless a
+/// scoped action or action prop of that name is being called.
+pub fn is_text_call(name: &str, span: Span, scope: &Scope, shapes: &Shapes) -> bool {
+    name == "t"
+        && !matches!(
+            crate::calls::callee(name, span, scope, shapes),
+            Some((Ref::Action(_) | Ref::Prop(_), _))
+        )
 }
 
 /// `setLocale(tag)`: one string, the BCP 47 tag of the language the strings

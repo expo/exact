@@ -314,3 +314,56 @@ test('an import renamed for meeting a local name is renamed where it is declared
     expect(errors(f)).toEqual([]);
   } finally { server.close(); p.end(); }
 }, 60_000);
+
+test('an unsaved edit above a declaration keeps its importer\'s uses and its rename', async () => {
+  if (!ready()) return;
+  const row = 'component Row\n  props\n    label: string\n  view\n    text label\n';
+  const main = 'use Row from "./row.contract"\ncomponent App\n  view\n    Row(label="a")\n';
+  const p = project({ 'app.contract': main, 'row.contract': row }), f = p.file('app.contract'), g = p.file('row.contract'), server = await open(tsc, p.dir);
+  try {
+    server.openFile(f); server.openFile(g);
+    // As the test's server sorts what it answers: by line, then column.
+    const placed = (a, b) => a[1] - b[1] || a[2] - b[2];
+    const imported = [f, 1, 5, 8], used = [f, 4, 5, 8], prop = [f, 4, 9, 14];
+    expect(await server.references(g, 1, 11)).toEqual([imported, used, [g, 1, 11, 14]].sort(placed));
+    // The editor holds a line the file on disk has not: the declaration is a line lower than the compiler reads it for the importer.
+    server.change(g, `shape Unsaved\n  id: string\n${row}`);
+    const declared = [g, 3, 11, 14];
+    expect(await server.references(g, 3, 11)).toEqual([imported, used, declared].sort(placed));
+    expect(await server.references(g, 5, 5)).toEqual([prop, [g, 5, 5, 10], [g, 7, 10, 15]].sort(placed));
+    expect(await server.definition(f, 4, 5)).toEqual([declared]);
+    expect((await server.rename(g, 3, 11, 'Line')).map(e => e.slice(0, 3))).toEqual([imported, used, declared].map(e => e.slice(0, 3)).sort(placed));
+  } finally { server.close(); p.end(); }
+}, 60_000);
+
+test('a field of an imported shape that meets a local shape\'s name keeps its uses in the importer', async () => {
+  if (!ready()) return;
+  const row = 'shape Item\n  id: string\nfn label(v: Item): string = v.id\n';
+  const main = 'use Item as OtherItem, label from "./row.contract"\nshape Item\n  name: string\nfn key(v: OtherItem): string = v.id\ncomponent App\n  state mine: Item = Item(name="a")\n  view\n    text mine.name\n';
+  const p = project({ 'app.contract': main, 'row.contract': row }), f = p.file('app.contract'), g = p.file('row.contract'), server = await open(tsc, p.dir);
+  try {
+    // The compiler names the imported shape `Item__row`, and its field's owner so; its own file writes `Item`.
+    expect(symbols(f).definitions.filter(d => d.kind === 'field').map(d => [d.name, d.owner])).toEqual([['name', 'Item'], ['id', 'Item__row']]);
+    server.openFile(f); server.openFile(g);
+    const placed = (a, b) => a[0].localeCompare(b[0]) || a[1] - b[1] || a[2] - b[2];
+    const declared = [g, 2, 3, 5], used = [[f, 4, 34, 36], [g, 3, 31, 33]];
+    expect(await server.definition(f, 4, 34)).toEqual([declared]);
+    expect((await server.references(g, 2, 3)).sort(placed)).toEqual([...used, declared].sort(placed));
+    expect((await server.rename(g, 2, 3, 'key')).map(e => e.slice(0, 3)).sort(placed)).toEqual([...used, declared].map(e => e.slice(0, 3)).sort(placed));
+  } finally { server.close(); p.end(); }
+}, 60_000);
+
+test('an id whose name ends as a counted key would is its own definition', async () => {
+  if (!ready()) return;
+  // Two ids `entry` in one component, then `entry#1`: the second `entry` must not be keyed as the third is.
+  const main = 'component App\n  state on = true\n  action go\n    focus("entry#1")\n  view\n    main\n      if on\n        input id="entry"\n      else\n        input id="entry"\n      input id="entry#1"\n      button "Go" press=go\n';
+  const p = project({ 'app.contract': main }), f = p.file('app.contract'), server = await open(tsc, p.dir);
+  try {
+    expect(symbols(f).definitions.filter(d => d.kind === 'id').map(d => [d.name, d.line])).toEqual([['entry', 8], ['entry', 10], ['entry#1', 11]]);
+    server.openFile(f);
+    expect((await server.definition(f, 4, 13)).map(e => e[1])).toEqual([11]);
+    expect((await server.references(f, 11, 18)).map(e => e[1])).toEqual([4, 11]);
+    expect((await server.references(f, 10, 20)).map(e => e[1])).toEqual([10]);
+    expect(await server.diagnostics(f)).toEqual([]);
+  } finally { server.close(); p.end(); }
+}, 60_000);

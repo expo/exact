@@ -49,8 +49,79 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// The first non-flag path or scheme argument. @ref LLP 1038 D8
-pub fn launch_location(args: impl IntoIterator<Item = String>) -> String {
-    launch_argument(args).map_or_else(|| "/".into(), |href| exact_route::location_of(&href))
+pub fn launch_location(args: impl IntoIterator<Item = String>, compat: &str) -> String {
+    launch_argument(args).map_or_else(|| "/".into(), |href| incoming_location(&href, compat))
+}
+
+/// A URL from outside the app as its location (LLP 1038 D8): at the
+/// template's `%s` of the `protocol_handlers` entry for its scheme, else its
+/// ordinary location. Only the Android reader registers handlers and names
+/// them here (`EXACT_PROTOCOL_HANDLERS`, from the APK's
+/// `dev.exact.protocol_handlers`), as an Apple bundle's
+/// `ExactProtocolHandlers`; a command-line URL on Linux or Windows has none.
+pub fn incoming_location(href: &str, compat: &str) -> String {
+    incoming_location_at(href, web_mount(compat).as_ref())
+}
+
+pub(crate) fn incoming_location_at(href: &str, mount: Option<&serde_json::Value>) -> String {
+    static HANDLERS: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    let handlers = HANDLERS.get_or_init(|| {
+        protocol_handlers(std::env::var("EXACT_PROTOCOL_HANDLERS").ok().as_deref())
+    });
+    location_through(href, handlers, mount)
+}
+
+pub(crate) fn web_mount(compat: &str) -> Option<serde_json::Value> {
+    serde_json::from_str::<serde_json::Value>(compat)
+        .ok()?
+        .pointer("/inputs/webMount")
+        .cloned()
+}
+
+/// The `[{"protocol", "url"}]` entries the reader registered; none when
+/// absent or malformed.
+fn protocol_handlers(json: Option<&str>) -> Vec<(String, String)> {
+    let Some(serde_json::Value::Array(entries)) = json.and_then(|j| serde_json::from_str(j).ok())
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|h| {
+            Some((
+                h.get("protocol")?.as_str()?.to_owned(),
+                h.get("url")?.as_str()?.to_owned(),
+            ))
+        })
+        .collect()
+}
+
+fn location_through(
+    href: &str,
+    handlers: &[(String, String)],
+    mount: Option<&serde_json::Value>,
+) -> String {
+    let local = mount.and_then(|mount| {
+        let mut url = url::Url::parse(href).ok()?;
+        let origin = url::Url::parse(mount.get("origin")?.as_str()?).ok()?;
+        if !matches!(url.scheme(), "http" | "https") || url.origin() != origin.origin() {
+            return None;
+        }
+        let base = mount.get("base")?.as_str()?;
+        let path = if url.path() == base.trim_end_matches('/') {
+            "/".to_owned()
+        } else {
+            format!("/{}", url.path().strip_prefix(base)?)
+        };
+        url.set_path(&path);
+        Some(url.to_string())
+    });
+    handlers
+        .iter()
+        .find_map(|(protocol, template)| {
+            exact_route::protocol_location_of(href, protocol, template)
+        })
+        .unwrap_or_else(|| exact_route::location_of(local.as_deref().unwrap_or(href)))
 }
 
 /// The first non-flag argument, as it was given, or `None`. The `hidden`
@@ -140,6 +211,8 @@ pub struct Config {
     pub entry: Option<String>,
     /// The selected generation's complete, lazily verified asset roster.
     pub selected_assets: Option<AssetResolver>,
+    /// The selected generation's verified asset directory.
+    pub selected_dir: Option<std::path::PathBuf>,
     /// Explicit development logic paired with the selected plan.
     pub module: Result<Option<crate::delivery::Module>, String>,
     /// The update store, opened before the boot it selects (`run`); the
@@ -329,7 +402,10 @@ impl Config {
             content_region: None,
             // An argument, else `EXACT_LAUNCH_URL`: the Android reader's launching intent's data has no
             // command line to arrive by (LLP 1133.023 D15 item 3).
-            launch: launch_location(std::env::args().skip(1).chain(env("EXACT_LAUNCH_URL"))),
+            launch: launch_location(
+                std::env::args().skip(1).chain(env("EXACT_LAUNCH_URL")),
+                compat,
+            ),
             plan,
             fallback_plan,
             assets: env("EXACT_ASSETS")
@@ -353,6 +429,7 @@ impl Config {
             explicit,
             entry: None,
             selected_assets: None,
+            selected_dir: None,
             module: exact_plan
                 .as_deref()
                 .or(exact_dev_plan.as_deref())
@@ -377,7 +454,13 @@ impl Config {
                 self.plan = prepared.plan.to_vec().into();
                 self.fallback_plan = Some(baked.to_vec());
                 self.entry = prepared.entry;
+                self.module = crate::delivery::Module::resolve(
+                    &prepared.assets,
+                    &prepared.names,
+                    &self.compat,
+                );
                 self.selected_assets = Some(prepared.assets);
+                self.selected_dir = prepared.dir;
             }
         }
         self.updates = Some(updates);
@@ -575,18 +658,26 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
         booted.0.said_at_boot(dev_said.clone());
         booted
     };
+    let module = config.module.clone();
+    // A selection that needs what the binary does not link is refused
+    // before its boot is counted (LLP 1030.006 D4a).
+    let linked = match (&config.entry, &module) {
+        (Some(_), Ok(module)) => crate::delivery::within_linked(
+            &config.plan,
+            module.as_ref().map(|m| m.receipt.as_str()),
+            &compat,
+        )
+        .map_err(crate::host::HostError::Unlinked),
+        _ => Ok(()),
+    };
     // The selected bytes passed verification. Record the attempt before
     // app construction or the painter can crash; a returned integrity
     // refusal below durably discards the selection and clears its count.
-    if !config.explicit && config.entry.is_some() {
+    if !config.explicit && config.entry.is_some() && linked.is_ok() {
         if let Some(updates) = updates.as_mut() {
             updates.boot_started();
         }
     }
-    let module = match &config.selected_assets {
-        Some(assets) => crate::delivery::Module::resolve(assets),
-        None => config.module.clone(),
-    };
     let admitted = crate::traced(c"boot data construction", D::default);
     let source = module
         .as_ref()
@@ -595,8 +686,8 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
             Some(module) => module.replacement(&config.plan, &admitted),
             None => Ok(admitted),
         });
-    let booted = source
-        .map_err(crate::host::HostError::Asset)
+    let booted = linked
+        .and_then(|()| source.map_err(crate::host::HostError::Asset))
         .and_then(|data| {
             let launch = exact_runner::time::Launch {
                 clock: clock(),
@@ -654,6 +745,7 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
             }
             config.entry = None;
             config.selected_assets = None;
+            config.selected_dir = None;
             let launch = exact_runner::time::Launch {
                 clock: clock(),
                 ..launch_facts
@@ -731,6 +823,8 @@ fn development_variable(name: &str) -> bool {
             | "EXACT_SMOKE"
             | "EXACT_SHOT"
             | "EXACT_DISPLAY"
+            | "EXACT_UPDATE_ORIGIN"
+            | "EXACT_UPDATE_DIR"
     ) || name.starts_with("EXACT_AGENT_")
 }
 
@@ -940,6 +1034,8 @@ mod scale_tests {
                 .env("EXACT_VNC", "1")
                 .env("EXACT_AGENT", "1")
                 .env("EXACT_AGENT_SHARE", "untrusted")
+                .env("EXACT_UPDATE_ORIGIN", "https://127.0.0.1/must-not-check")
+                .env("EXACT_UPDATE_DIR", "/must-not-open")
                 .output()
                 .unwrap();
             assert!(
@@ -958,6 +1054,8 @@ mod scale_tests {
             "EXACT_VNC",
             "EXACT_AGENT",
             "EXACT_AGENT_SHARE",
+            "EXACT_UPDATE_ORIGIN",
+            "EXACT_UPDATE_DIR",
         ] {
             assert!(std::env::var_os(name).is_none(), "{name}");
         }
@@ -1073,11 +1171,40 @@ mod tests {
             (vec!["hidden"], "/hidden"),
         ] {
             assert_eq!(
-                launch_location(args.into_iter().map(str::to_owned)),
+                launch_location(args.into_iter().map(str::to_owned), "{}"),
                 expected
             );
         }
     }
+    #[test]
+    fn a_registered_handler_puts_the_whole_url_at_its_template() {
+        let handlers = protocol_handlers(Some(
+            r#"[{"protocol":"sscontrol","url":"/open?u=%s"},{"protocol":"web+notes","url":"/n/%s"}]"#,
+        ));
+        for (href, expected) in [
+            (
+                "sscontrol://ficha/7?x=1#top",
+                "/open?u=sscontrol%3A%2F%2Fficha%2F7%3Fx%3D1%23top",
+            ),
+            ("SSCONTROL:/a", "/open?u=SSCONTROL%3A%2Fa"),
+            ("web+notes://n/1", "/n/web%2Bnotes%3A%2F%2Fn%2F1"),
+            // An App Link and an unregistered scheme keep their ordinary location.
+            ("https://links.example/ficha/7", "/ficha/7"),
+            ("other://post/42", "/post/42"),
+            ("/urgencies", "/urgencies"),
+        ] {
+            assert_eq!(location_through(href, &handlers, None), expected, "{href}");
+        }
+        for json in [None, Some(""), Some("{}"), Some(r#"[{"protocol":"x"}]"#)] {
+            assert!(protocol_handlers(json).is_empty(), "{json:?}");
+        }
+        // No reader named any: every host's ordinary conversion.
+        assert_eq!(
+            location_through("sscontrol://ficha/7", &[], None),
+            "/ficha/7"
+        );
+    }
+
     #[test]
     fn a_dev_plan_locator_stands_a_persisted_selection_aside() {
         assert!(has_explicit_locator(None, Some("not-produced-yet.plan")));

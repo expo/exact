@@ -306,6 +306,7 @@ impl<D: DataSource> Presenter<D> {
         }
         hit == Some(key)
             || (self.boxes.iter().find(|b| b.id == node.id)).is_some_and(|b| {
+                let b = b.for_hit();
                 b.flat()
                     && b.has_area()
                     && inside(crate::paint::material::touch_box(b.rect), x, y)

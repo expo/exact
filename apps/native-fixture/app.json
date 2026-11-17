@@ -27,5 +27,6 @@
   },
   "deploy": {
     "store": { "web": "0", "macos": "0", "ios": "0", "linux": "0" }
-  }
+  },
+  "rust": { "data": { "crate": "native-fixture-data", "type": "native_fixture_data::Fixture", "source": "native_fixture_data::Fixture" } }
 }

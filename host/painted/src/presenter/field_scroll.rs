@@ -83,7 +83,7 @@ mod tests {
 
     fn fixture(tag: &str, value: &str) -> (Presenter<()>, ViewId) {
         let source = format!("component App\n  view\n    {tag} testId=\"editor\" value={} width=200 height=64 padding=4 appearance=\"none\" outline=\"none\" font-size=16 line-height=\"24px\" caret-color=\"#ff0000\"\n", serde_json::to_string(value).unwrap());
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (300., 200.),
@@ -284,7 +284,7 @@ mod tests {
 "#,
             "אבגדהוזחטי ".repeat(12)
         );
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (300., 200.),

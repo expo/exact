@@ -37,7 +37,7 @@ bun exact.mjs add geolocation
 Observed, exit 2:
 
 ```
-Usage: bun exact.mjs <status|web|web-build|serve|test|agent|verify|ios|mac|share|linux|windows|android|update|lock|contract|tamber|hatch|snapback|backend|pattern|docs|feedback> [arguments for that script]
+Usage: bun exact.mjs <status|web|web-build|serve|test|agent|verify|ios|mac|share|linux|windows|android|update|lock|contract|forma|hatch|snapback|backend|pattern|docs|feedback> [arguments for that script]
 bun exact.mjs help says what each does.
 ```
 

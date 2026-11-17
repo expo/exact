@@ -546,6 +546,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.module_landed(store, token, outcome)
     }
 
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.source.take_reports()
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         let mut lines = std::mem::take(&mut self.logs);
         lines.extend(self.source.take_logs());

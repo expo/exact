@@ -123,3 +123,33 @@ in the manifest. JSON remains readable through agent asset state after delivery.
 The geometry allowlist accepts glTF `COLOR_0` (RGB becomes RGBA with alpha one).
 Colours remain linear multipliers through `MeshData.colors`; an empty array means
 white. Tangents and additional UV/colour sets retain their existing refusal rules.
+
+## Compressed and quantized glTF
+
+The bake accepts `EXT_meshopt_compression` and `KHR_mesh_quantization`, including
+GLBs written by glTF-Transform's default `optimize`. It decodes meshopt views before
+importing images or geometry, then reads signed/unsigned 8- and 16-bit attributes
+with their declared normalization and stride. Node and texture transforms retain
+their glTF meaning. Tangents remain omitted because the shader derives them.
+No decoder or additional asset format is linked into a game.
+
+Meshopt supports vertex codecs v0/v1, triangle and index-sequence codecs, and
+`OCTAHEDRAL`, `QUATERNION` and `EXPONENTIAL` filters. Invalid streams, unsupported
+modes or filters, and missing fallback data refuse with the extension and view
+named. A decoded view is limited to 256 MiB. The port retains meshoptimizer's
+[MIT notice](src/meshopt/LICENSE.md).
+
+`tests/fixtures/meshopt/optimized.glb` is the existing cube fixture, with its
+material removed, passed through `optimize`. `buffers.json` records compressed
+inputs and expected bytes from npm `meshoptimizer@0.25.0`; Rust tests read those
+committed bytes and need no JavaScript packages or network. They cover both vertex
+versions, all three filters, both index widths, block boundaries and malformed
+streams. Filter arithmetic matches npm's WASM SIMD decoder (`f32`, ties-to-even),
+which can differ by one integer from its JavaScript reference decoder.
+
+They were made once with glTF-Transform's CLI 4.2.1 (core, extensions and functions
+4.5.1, the version stamped in the GLB) and npm `meshoptimizer@0.25.0`: `optimize` on
+the cube, then each compressed view, and inputs encoded at both vertex versions and
+with each filter, decoded by npm's decoder. Regenerated expectations are reviewed
+independently of the Rust implementation, never regenerated to make a failing test
+pass.

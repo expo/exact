@@ -1,6 +1,8 @@
 // The File System Access API's pickers (LLP 1069.010 D2): each chosen file
 // or folder arrives as a `doc:` handle, `change` on the element the command
 // names (one per line under `multiple`); a dismissed picker is `cancel`.
+// `startIn=` names where one opens (LLP 1173 D2): a well-known folder, or
+// a `doc:` handle the person chose earlier.
 component App
   state opened = "none"
   state folder = "none"
@@ -14,6 +16,12 @@ component App
     showDirectoryPicker("folder")
   action saveAs
     showSaveFilePicker("saved", "notes.md")
+  action openPictures
+    showOpenFilePicker("opened", startIn="pictures")
+  action saveBeside
+    showSaveFilePicker("saved", "notes.md", startIn=folder)
+  action exportToDownloads
+    saveFile("saved", text=saved, suggestedName="notes.txt", startIn="downloads")
   action gotFile(value)
     opened = value
   action gotFolder(value)
@@ -35,6 +43,12 @@ component App
         text "Folder…"
       button press=saveAs testId="save-as"
         text "Save as…"
+      button press=openPictures testId="open-pictures"
+        text "Open from Pictures…"
+      button press=saveBeside testId="save-beside"
+        text "Save in the folder…"
+      button press=exportToDownloads testId="export-downloads"
+        text "Export to Downloads…"
       text opened testId="opened-value"
       text folder testId="folder-value"
       text saved testId="saved-value"

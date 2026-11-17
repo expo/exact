@@ -117,7 +117,12 @@ impl<D: DataSource> Runner<D> {
         args: &[Value],
         force: &mut Vec<usize>,
     ) -> Option<super::ResourceState> {
-        let family = self.member(i)?.family;
+        // A launch instance's request takes its page's answer as an element
+        // does (LLP 1035.005.004 D8).
+        let family = match self.owned_row(i) {
+            Some(o) => o.site,
+            None => self.member(i)?.family,
+        };
         let page = self.resources[family].page_answers.as_mut()?;
         let store_revision = page.store_revision;
         let answer = page.take(args)?;

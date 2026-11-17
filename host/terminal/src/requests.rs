@@ -104,10 +104,12 @@ impl<D: DataSource> Host<D> {
                 }
             }
             // (landing as any outcome does: this host settles no admission refusals of its own)
-            Dispatch::Host(_) | Dispatch::Missing => reply(Outcome::Failed {
-                kind: exact_runner::FailureKind::Refused,
-                message: "the terminal host runs only its data module's own work".into(),
-            }),
+            Dispatch::Run(Work::HttpResponse(_)) | Dispatch::Host(_) | Dispatch::Missing => {
+                reply(Outcome::Failed {
+                    kind: exact_runner::FailureKind::Refused,
+                    message: "the terminal host runs only its data module's own work".into(),
+                })
+            }
         }
     }
 

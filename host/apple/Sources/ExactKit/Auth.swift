@@ -75,7 +75,7 @@ extension ExactSession {
         // listener's receiver on macOS; iOS waits on a device measurement (§8).
         if let loopback = op["loopback"] as? [String: Any] {
             #if os(macOS)
-            let opened = authLoopback(ticket, url: url, state: op["state"] as? String ?? "", ephemeral: op["ephemeral"] as? Bool ?? false,
+            let opened = authLoopback(ticket, url: url, state: op["state"] as? String ?? "", logout: op["logout"] as? Bool ?? false, ephemeral: op["ephemeral"] as? Bool ?? false,
                                       loopback: loopback, done: { [weak self] in self?.authCompleted(ticket, $0) })
             switch opened {
             case .success(let sheet): authSessions.live[ticket] = sheet

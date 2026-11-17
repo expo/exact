@@ -476,6 +476,7 @@ fn data_call(r: &mut Runner<Granted>, body: Json) -> Json {
         panic!("a module call is work");
     };
     let outcome = match work {
+        Work::HttpResponse(_) => panic!("HTTP fixtures require the HTTP executor"),
         Work::Now(work) => work(),
         Work::Later(work) => {
             let (tx, rx) = std::sync::mpsc::channel();

@@ -1,6 +1,22 @@
 //! Inherited rows invalidate only the descendants they reach.
 use super::*;
 
+/// Of `slots`, read before they move, those whose base a `direction`
+/// written on them or above decides. Natural text turns on it, and a move
+/// can change it while the value stays (LLP 1060.000 D3); without natural
+/// text, none, and nothing is allocated.
+pub(super) fn written_direction(arena: &NodeArena, slots: impl Iterator<Item = u32>) -> Vec<u32> {
+    if !arena.natural_text {
+        return Vec::new();
+    }
+    let written = |s: &u32| {
+        arena
+            .inherited_source(*s, crate::StyleId::Direction)
+            .is_some()
+    };
+    slots.filter(written).collect()
+}
+
 /// CSS inheritance: an inherited row that changed on `slot` changes the
 /// computed value of every logical descendant that does not set the row
 /// itself. Mark and touch them, stopping under a descendant that overrides

@@ -34,20 +34,3 @@ extension Agent {
         #endif
     }
 }
-
-#if canImport(UIKit)
-extension UIScrollView {
-    /// The offset UIKit committed, along the axis it scrolls on (x for one
-    /// that scrolls only sideways, a row of cards), and what moves it: `b`
-    /// past its range, `t` a finger dragging it (`isDragging`: a finger only
-    /// touching it is not a drag, as Apple's scroll-dragging metric counts
-    /// it), `d` decelerating, `-` still. A held fling and a recording read it.
-    var scrollSample: (Double, String) {
-        let i = adjustedContentInset
-        let sideways = contentSize.width + i.left + i.right > bounds.width + 0.5 && contentSize.height + i.top + i.bottom <= bounds.height + 0.5
-        let at = sideways ? contentOffset.x : contentOffset.y, low = sideways ? -i.left : -i.top
-        let high = max(low, sideways ? contentSize.width + i.right - bounds.width : contentSize.height + i.bottom - bounds.height)
-        return (Double(at), at < low - 0.5 || at > high + 0.5 ? "b" : isTracking && isDragging ? "t" : isDecelerating ? "d" : "-")
-    }
-}
-#endif

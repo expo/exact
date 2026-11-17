@@ -325,11 +325,9 @@ extension NodeView {
         applyShadow(outline: roundedPath(in: bounds).cgPath)
     }
 
-    /// A capture (`cacheDisplay`, the agent's screenshot and a canvas's
-    /// surface) draws views, not sublayers: the shadow drawn as the caster
-    /// shows it, before the box. The casting shape is drawn far off to the
-    /// left and only its shadow lands here (`castShadow`), so a spread
-    /// ring is the shadow's colour, as the live caster's is.
+    /// The shadow for direct offscreen drawing, before the box. The casting
+    /// shape is drawn far off to the left and only its shadow lands here
+    /// (`castShadow`), so a spread ring has the shadow's colour.
     func drawCapturedShadow(_ ctx: CGContext) {
         guard Capture.capturing, shadowCaster != nil || insetCaster != nil else { return }
         let outline = roundedPath(in: bounds).cgPath
@@ -569,50 +567,15 @@ extension NodeView {
 }
 
 #if os(macOS)
-extension Capture {
-    /// A capture renders a box's sublayers over what its `draw(_:)` paints,
-    /// so a box with an inset shadow — drawn in `draw(_:)` over its fill —
-    /// has its fill and gradient sublayers hidden for the capture (its
-    /// `draw(_:)` paints both), and so does an image whose pixels are a
-    /// sublayer: while capturing, `draw(_:)` paints its bitmap (sRGB, as the
-    /// shot is), and a translucent image composited twice comes out darker.
-    /// Its fill and gradient sublayers go too, as `draw(_:)` paints them
-    /// under the bitmap; left showing, they covered it (podcast F7: a
-    /// rounded artwork with a placeholder colour shot as the colour alone).
-    /// `restore` shows them again.
-    static func hideBoxFills(in root: NSView) -> [CALayer] {
-        var out: [CALayer] = []
-        func walk(_ v: NSView) {
-            if let n = v as? NodeView, n.insetCaster != nil || n.capturesPixels {
-                for l in [n.boxFill, n.boxGradient, n.capturesPixels ? n.imageLayer : nil].compactMap({ $0 }) where !l.isHidden {
-                    l.isHidden = true
-                    out.append(l)
-                }
-            }
-            v.subviews.forEach(walk)
-        }
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        walk(root)
-        CATransaction.commit()
-        return out
-    }
-
-    static func restore(_ layers: [CALayer]) {
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        layers.forEach { $0.isHidden = false }
-        CATransaction.commit()
-    }
-}
-
 extension CGContext {
     /// Only the shadow of `path`, at CSS's offset and blur: the shape is
     /// filled far off to the left (outside any clip a caller set) and its
-    /// shadow is offset back. A capture's context takes a shadow's offset
-    /// and blur in its unflipped base space, in points, so `away` cancels.
-    func castShadow(_ path: CGPath, offset: CGSize, blur: CGFloat, color: CGColor, rule: CGPathFillRule) {
+    /// shadow is offset back. Shadow metrics use unflipped base space:
+    /// points in an AppKit draw context, pixels in a bitmap context.
+    func castShadow(_ path: CGPath, offset: CGSize, blur: CGFloat, color: CGColor, rule: CGPathFillRule, scale: CGFloat = 1) {
         let box = path.boundingBoxOfPath
         let away = 2 * (box.width + box.height) + 4 * blur + 1000
-        setShadow(offset: CGSize(width: offset.width + away, height: -offset.height), blur: blur, color: color)
+        setShadow(offset: CGSize(width: (offset.width + away) * scale, height: -offset.height * scale), blur: blur * scale, color: color)
         var shift = CGAffineTransform(translationX: -away, y: 0)
         if let far = path.copy(using: &shift) { addPath(far) }
         setFillColor(CGColor(gray: 0, alpha: 1))

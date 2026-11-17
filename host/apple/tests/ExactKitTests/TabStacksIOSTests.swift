@@ -14,6 +14,142 @@ final class TabStacksIOSTests: XCTestCase {
     private var sessions: [ExactSession] = []
     private var animationsWereEnabled = true
 
+    func testEmptyProjectedPanelsExposeNoContainer() throws {
+        let session = try fixture("panel-accessibility"), p = session.presenter
+        let panels = p.navigation.tabPanels.compactMap { p.views[$0] }
+        XCTAssertEqual(panels.count, 2)
+        XCTAssertEqual(panels.filter { !$0.accessibilityElementsHidden }.count, 0)
+        let route = try XCTUnwrap(p.navigation.activeRoute?.node)
+        XCTAssertFalse(route.accessibilityElementsHidden)
+        XCTAssertTrue(route.isDescendant(of: try XCTUnwrap(p.navigation.primaryOwner?.view)))
+        func spokenLabels() -> [String] {
+            let elements = p.axElements(roots: [p.documentHost])["elements"] as? [[String: Any]] ?? []
+            return elements.compactMap { $0["name"] as? String }.filter { !$0.isEmpty }
+        }
+        let spoken = spokenLabels()
+        XCTAssertFalse(spoken.isEmpty)
+        let panel = try XCTUnwrap(panels.first)
+        let extra = NodeView(id: 9000, kind: "button", presenter: p)
+        extra.applyProps(set: ["accessibilityLabel": "Extra panel content"], clear: [])
+        panel.container.addSubview(extra)
+        XCTAssertFalse(panel.accessibilityElementsHidden, "content that remains in the panel is still reachable")
+        extra.removeFromSuperview()
+        XCTAssertTrue(panel.accessibilityElementsHidden)
+        let virtual = ["First virtual element", "Second virtual element"].map { label in
+            let element = UIAccessibilityElement(accessibilityContainer: panel)
+            element.accessibilityLabel = label
+            element.accessibilityFrameInContainerSpace = CGRect(x: 0, y: 0, width: 100, height: 40)
+            return element
+        }
+        panel.accessibilityElements = virtual
+        XCTAssertTrue(panel.container.subviews.isEmpty)
+        XCTAssertFalse(panel.accessibilityElementsHidden, "virtual content needs no subviews")
+        XCTAssertEqual(spokenLabels().filter { $0.contains("virtual element") }, virtual.compactMap(\.accessibilityLabel))
+        panel.accessibilityElements = []
+        XCTAssertTrue(panel.accessibilityElementsHidden, "an explicitly empty list exposes no shell")
+        panel.accessibilityElements = nil
+        let ids = p.navigation.tabPanels
+        defer { p.navigation.tabPanels = ids }
+        p.navigation.tabPanels = []
+        XCTAssertFalse(panel.accessibilityElementsHidden, "an ordinary tabpanel keeps its accessibility")
+        XCTAssertEqual(spokenLabels(), spoken, "projecting away empty shells preserves spoken content and its order")
+    }
+
+    func testAHiddenNativeTabBarExposesNoElementsAndShowsAgain() throws {
+        let session = try fixture("tab-bar-accessibility"), p = session.presenter
+        let list = try XCTUnwrap(p.navigation.adoptedTablist.flatMap { p.views[$0] })
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        XCTAssertFalse(tabs.tabBar.accessibilityElementsHidden)
+        let style = list.style
+        p.apply(wireBatch([["op": "style", "id": Int(list.id), "style": ["appearance": "none", "written": ["appearance"]]]]))
+        XCTAssertFalse(tabs.tabBar.accessibilityElementsHidden, "suppression leaves the app's bar setting alone")
+        XCTAssertTrue(sequence(first: tabs.tabBar as UIView, next: \.superview)
+            .dropFirst().prefix(while: { $0 !== tabs.view }).contains { $0.accessibilityElementsHidden })
+        list.applyStyle(style)
+        p.navigation.sync(wireBatch([]))
+        XCTAssertFalse(tabs.tabBar.accessibilityElementsHidden, "the native tabs are reachable when shown again")
+    }
+
+    func testTabBarSuppressionPreservesAppAccessibilitySettings() throws {
+        let session = try fixture("tab-bar-app-accessibility"), p = session.presenter
+        let tabs = try XCTUnwrap(p.navigation.tabController as? TabController)
+        let bar = tabs.tabBar
+        bar.accessibilityElementsHidden = true
+        tabs.view.setNeedsLayout()
+        tabs.view.layoutIfNeeded()
+        XCTAssertTrue(bar.accessibilityElementsHidden, "layout preserves the app's visible-bar setting")
+        guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden requires iOS 18") }
+        for appHidden in [true, false] {
+            bar.accessibilityElementsHidden = appHidden
+            tabs.setTabBarHidden(true, animated: false)
+            tabs.syncBarAccessibility()
+            tabs.view.layoutIfNeeded()
+            tabs.syncBarAccessibility()
+            XCTAssertEqual(bar.accessibilityElementsHidden, appHidden)
+            tabs.setTabBarHidden(false, animated: false)
+            tabs.syncBarAccessibility()
+            tabs.view.layoutIfNeeded()
+            XCTAssertEqual(bar.accessibilityElementsHidden, appHidden, "showing restores the app's setting")
+            bar.accessibilityElementsHidden = !appHidden
+            tabs.syncBarAccessibility()
+            XCTAssertEqual(bar.accessibilityElementsHidden, !appHidden, "visible bars stay app-owned")
+        }
+        for appHidden in [true, false] {
+            bar.accessibilityElementsHidden = !appHidden
+            tabs.setTabBarHidden(true, animated: false)
+            tabs.syncBarAccessibility()
+            bar.accessibilityElementsHidden = appHidden
+            tabs.syncBarAccessibility()
+            tabs.view.setNeedsLayout()
+            tabs.view.layoutIfNeeded()
+            XCTAssertEqual(bar.accessibilityElementsHidden, appHidden, "an app write while hidden stays stored")
+            tabs.setTabBarHidden(false, animated: false)
+            tabs.syncBarAccessibility()
+            tabs.view.layoutIfNeeded()
+            XCTAssertEqual(bar.accessibilityElementsHidden, appHidden, "showing preserves an app write made while hidden")
+        }
+    }
+
+    func testAClippedProjectedPanelKeepsContentBesideItsContainer() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit derives a hatch label's name") }
+        let session = try fixture("clipped-panel-accessibility"), p = session.presenter
+        let panel = try XCTUnwrap(p.navigation.tabPanels.compactMap { p.views[$0] }.first)
+        panel.applyStyle(["overflow_x": .string("clip")])
+        XCTAssertFalse(panel.container === panel)
+        XCTAssertTrue(panel.container.subviews.isEmpty)
+        XCTAssertTrue(panel.accessibilityElementsHidden)
+        let label = UILabel(frame: CGRect(x: 0, y: 0, width: 120, height: 40))
+        label.text = "Hatch content"
+        label.isAccessibilityElement = true
+        panel.addSubview(label)
+        XCTAssertTrue(panel.container.subviews.isEmpty)
+        XCTAssertFalse(panel.accessibilityElementsHidden, "a hatch may put accessible content beside the clip")
+        let elements = p.axElements(roots: [panel])["elements"] as? [[String: Any]] ?? []
+        XCTAssertEqual(elements.compactMap { $0["name"] as? String }.filter { $0 == label.text }, ["Hatch content"])
+        label.removeFromSuperview()
+        XCTAssertTrue(panel.accessibilityElementsHidden, "removing the content leaves an empty shell again")
+    }
+
+    func testAnEmptyProjectedPanelStoresAuthoredAccessibilityHiding() {
+        for property in ["inert", "accessibilityElementsHidden"] {
+            for gainsContent in [true, false] {
+                let p = Presenter(), panel = NodeView(id: 1, kind: "view", presenter: p)
+                p.navigation.tabPanels = [panel.id]
+                panel.applyProps(set: ["accessibilityRole": "tabpanel"], clear: [])
+                XCTAssertTrue(panel.accessibilityElementsHidden)
+                panel.applyProps(set: [property: "true"], clear: [])
+                if gainsContent {
+                    panel.addSubview(UILabel())
+                } else {
+                    p.navigation.tabPanels = []
+                }
+                XCTAssertTrue(panel.accessibilityElementsHidden, "\(property) survives the end of placeholder suppression")
+                panel.applyProps(set: [:], clear: [property])
+                XCTAssertFalse(panel.accessibilityElementsHidden, "clearing \(property) exposes the content")
+            }
+        }
+    }
+
     override func setUp() {
         super.setUp()
         animationsWereEnabled = UIView.areAnimationsEnabled

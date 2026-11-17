@@ -91,11 +91,18 @@ final class NativeTaskTimers {
 
 extension ExactSession {
     /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no orientation
-    /// readback or diagnostics and moves no wake lock (LLP 1125 D11) or work the app must
-    /// finish (`Holds.swift`). Its timer deadline is the caller's to compare.
+    /// readback or error and moves no wake lock (LLP 1125 D11) or work the app must
+    /// finish (`Holds.swift`). Its timer deadline is the caller's to compare. Its alerts and
+    /// journal lines are no change: a caller that skips it logs them (`logSkipped`).
     func changesNothing(_ batch: Batch) -> Bool {
         showsNothing(batch) && batch.orientation == nil && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil
-            && batch.alerts.isEmpty && batch.journal.isEmpty
+    }
+    /// A skipped batch's alerts and journal lines, written as `apply` writes them (LLP 1171 D1: never dropped).
+    func logSkipped(_ batch: Batch) {
+        logAlerts(batch.alerts); logJournal(batch.journal)
+        #if DEBUG
+        onSkippedLogForTests?(batch.alerts, batch.journal)
+        #endif
     }
     /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
     /// viewless contents, LLP 1069.011 §9, page facts, or an orientation request that changes the lock or
@@ -114,14 +121,14 @@ extension ExactSession {
     func deliverNativeTimer() {
         guard state != .destroyed, clock == nil, !ExactEnv.agentFreezes, !applying, !ownerInFlight,
               let timer = taskTimers.take() else { return }
+        followOffset()
         if ExactSession.asyncFills {
             advanceInFlight = true
-            let captured = generation
-            runtime.fireNativeTimerAsync(timer.row, now: timer.cutoff) { [weak self] batch in
-                self?.publish(.advance, batch, captured)
+            runtime.fireNativeTimerAsync(timer.row, now: timer.cutoff) { [weak self] completion in
+                self?.publish(.advance, completion)
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.generation == captured else { return }
-                    taskTimers.complete(timer, retry: batch.busy || batch.held)
+                    guard let self, runtime.accepts(completion.lease) else { return }
+                    taskTimers.complete(timer, retry: completion.batch.busy || completion.batch.held)
                 }
             }
         } else {

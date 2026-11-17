@@ -31,6 +31,21 @@ Before readiness, hold a refused seed instead of consuming it: if the resource's
 
 The LLP 1027.005 D3 and D5 amendment (2026-11-13) is built: a kept answer whose differing identifying arguments are all `""`, `none` or read a store reader still on its fallback waits, and their first known match admits it, before or after readiness. The journal says it is waiting, and a known mismatch names each differing argument and the state or resource it reads (`runner/src/runner/kept_wait.rs`, tests in `kept_identity_tests.rs`). Two reviews (Grok 4.7, GPT-6.1 Sol) found these gaps in what landed:
 
+The journal's safety rule is also built. Before this change on `ecdaf06fb`, a
+runner test with a password control's value as the identifying argument found
+the full value in both `journal()` and agent `logs` at boot, before rendered
+control masking could apply. Shown, waiting and known-mismatch lines now name
+only the resource, differing argument positions, and the declared states or
+resources they read. They never render a kept, current or input identifying
+value (LLP 1027.005 D3). Admission and waiting behavior are unchanged.
+
+The same rule now covers eviction and exceptional refusal lines. Eviction names
+the declaration and fixed total bound, never the encoded entry length, because
+that length includes identifying arguments. A live surface publication says it
+replaced the seed; an admitted seed rejected with unchanged invalid arguments
+says its request arguments are invalid. Neither case is mislabeled as an
+argument-count mismatch.
+
 - **A kept module whose source is ready at boot is not held.** Its seed is compared once and refused or shown; it never enters the wait, so an empty identity at boot still refuses it for the launch.
 - **A reload loses a waiting entry's sleep history.** The new boot plants a fresh seed (`seed_at_boot`) before the carried waiting entries are restored, and the restore skips a row that already holds a seed, so the carried `slept` bit is dropped. When the identity then matches, the kept value is admitted as `current()` without a fresh answer after the wake (LLP 1161.001 D1). The existing reload test uses a store reader whose source is already ready, which plants no seed.
 - **The refusal line mislabels a fresh answer** as "no admitted device answer".

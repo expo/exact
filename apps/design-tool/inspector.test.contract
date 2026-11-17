@@ -1,8 +1,8 @@
-// The design tool's inspector against its stand-in Tamber server, as in
+// The design tool's inspector against its stand-in Forma server, as in
 // app.test.contract: a selection's source and rows, the chain above it, held
 // states, the edits a row offers, and library and gallery nodes.
 
-test "an inherited row names the node it comes from by its source; the chain's ancestors each select that ancestor (tamber/1.16)"
+test "an inherited row names the node it comes from by its source; the chain's ancestors each select that ancestor (forma/1.16)"
   type "name" "Ada"
   tap "save-name"
   clock data
@@ -464,8 +464,8 @@ test "the param rung: a row that reads a component param opens the param on the 
   expect state editValue == "14px"
   // Another param edited in the panel while Card.pad's branch is open: the
   // panel's draft, not a stale one of the branch.
-  type "dial-app.tamber#MapCard.zoom-stepper" "13"
-  expect state editTarget == "app.tamber#MapCard.zoom"
+  type "dial-app.forma#MapCard.zoom-stepper" "13"
+  expect state editTarget == "app.forma#MapCard.zoom"
   expect state editValue == "13"
   expect tree missing "draft-stale"
   // A grid cell pressed, then, before its branch is read, a token opened from the Inspector: no cell to give the focus
@@ -916,7 +916,7 @@ test "a cell the inspector opens after the design's axes were reordered is refus
   tap "save-name"
   clock data
   clock +1
-  type "file" "brand.tamber"
+  type "file" "brand.forma"
   clock data
   request POST "/__stub/event" {"event": "builds", "builds": [{"id": "web-1", "host": "web", "capabilities": ["pin", "inspect"], "status": {"scheme": "dark", "contrast": "no-preference", "mode": {"dark-style": "dim"}, "rootFontSize": 16, "revision": 0}, "pin": null, "pinRevision": 0}]} as ada
   clock +1
@@ -1053,16 +1053,16 @@ test "a library component's node: the part outline, its identity and part, its p
   expect text "library-part" == "Not one of its parts."
   expect text "library-part-header" == "header"
   // Another design file open: the app's describe still gives the parts, and the outline follows it (a part gone).
-  type "file" "brand.tamber"
+  type "file" "brand.forma"
   clock settle
   request POST "/__stub/library" {"@acme/cards/card.contract#Card": {"name": "Card", "parts": [{"name": "root", "groups": ["paint", "shape"], "slot": false}, {"name": "body", "groups": ["space"], "slot": true}], "variants": []}} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "files": {"app.tamber": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "brand.tamber": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "files": {"app.forma": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "brand.forma": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}} as ada
   clock +1
   clock data
   clock +1
   clock data
   clock settle
-  expect state file == "brand.tamber"
+  expect state file == "brand.forma"
   expect tree missing "library-part-header"
   expect text "library-part-body" == "body · its slot"
   // A node outside a library component (the app's own, or a slot's fill): no outline.
@@ -1306,7 +1306,7 @@ test "a selection made before another run's describe is read is placed once it i
   clock data
   expect text "selection-stale" == "No longer current: the app's design is not read yet. Select it again to edit from here."
   // Its describe answered (a file's change reads the design again): the same selection is placed, and edits.
-  request POST "/__stub/event" {"refuseDescribe": "", "events": [{"client": "agent:codex", "edited": ["app.tamber"], "changed": []}]} as ada
+  request POST "/__stub/event" {"refuseDescribe": "", "events": [{"client": "agent:codex", "edited": ["app.forma"], "changed": []}]} as ada
   clock +1
   clock data
   clock +1
@@ -1315,7 +1315,7 @@ test "a selection made before another run's describe is read is placed once it i
   expect text "selrow-edit-background-color" == "Edit surface.card"
   request POST "/__stub/restart" {} as ada
 
-test "a slot's host is its own chain line, named by its call, and a press of it lands there with no note (stage 15 D3, tamber/1.18)"
+test "a slot's host is its own chain line, named by its call, and a press of it lands there with no note (stage 15 D3, forma/1.18)"
   request POST "/__stub/restart" {} as ada
   type "name" "Ada"
   tap "save-name"

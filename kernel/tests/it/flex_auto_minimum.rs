@@ -69,8 +69,8 @@ fn padding_floors_an_item_whose_max_width_is_zero() {
                     height: length(10.0),
                 },
                 max_size: Size {
-                    width: LengthPercentageAuto::length(0.0),
-                    height: LengthPercentageAuto::auto(),
+                    width: Dimension::length(0.0),
+                    height: Dimension::auto(),
                 },
                 padding: Rect {
                     left: length(10.0),
@@ -140,8 +140,8 @@ fn max_width_caps_a_content_minimum_growing_and_shrinking() {
                 Style {
                     flex_grow: 1.0,
                     max_size: Size {
-                        width: LengthPercentageAuto::length(50.0),
-                        height: LengthPercentageAuto::auto(),
+                        width: Dimension::length(50.0),
+                        height: Dimension::auto(),
                     },
                     ..Style::default()
                 },

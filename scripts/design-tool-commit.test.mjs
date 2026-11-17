@@ -15,7 +15,7 @@ test('commit takes the session\'s writes, leaves other staging and never pushes;
   const { app, git } = repo('commit');
   // A past design commit to revert, other staging to leave alone, and a
   // remote that must not move.
-  writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('surface.inset = light-dark(#f8f9fa, #101214)', 'surface.inset = light-dark(#f8f9fb, #101214)'));
+  writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('surface.inset = light-dark(#f8f9fa, #101214)', 'surface.inset = light-dark(#f8f9fb, #101214)'));
   git('commit', '-q', '-am', 'a warmer inset');
   const past = git('rev-parse', 'HEAD').stdout.trim();
   writeFileSync(join(app, 'notes.txt'), 'one\n'); git('add', 'notes.txt'); git('commit', '-q', '-m', 'notes');
@@ -27,7 +27,7 @@ test('commit takes the session\'s writes, leaves other staging and never pushes;
   const pushed = spawnSync('git', ['ls-remote', remote], { encoding: 'utf8' }).stdout;
   // A hand edit, just before history is read: its row says what moved.
   const tool = await proxied(app, request => {
-    if (request.method === 'history') writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)'));
+    if (request.method === 'history') writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)'));
   });
   try {
     const replies = await drive(tool.url, `design-tool-commit-${process.pid}`, [
@@ -43,27 +43,27 @@ test('commit takes the session\'s writes, leaves other staging and never pushes;
     const states = replies.filter(r => r.resources);
     const entry = states[0].resources.changeset.entries[0];
     expect(entry).toMatchObject({ who: 'design-tool:Ada', mine: true, committed: false });
-    expect(entry.text).toMatch(/^app\.tamber: tone\.base oklch\(.+\) → oklch\(.+\) · design-tool:Ada$/);
+    expect(entry.text).toMatch(/^app\.forma: tone\.base oklch\(.+\) → oklch\(.+\) · design-tool:Ada$/);
     expect(entry.diff).toContain('+  hue: number = 210');
     const made = git('log', '-1', '--format=%H%n%B').stdout;
     expect(made).toContain('design: 1 change by design-tool:Ada');
     expect(made).toContain(entry.text);
-    expect(git('show', '--name-only', '--format=', 'HEAD').stdout.trim()).toBe('app.tamber');
+    expect(git('show', '--name-only', '--format=', 'HEAD').stdout.trim()).toBe('app.forma');
     expect(git('ls-files', '-s', 'notes.txt').stdout).toBe(staged);
     expect(spawnSync('git', ['ls-remote', remote], { encoding: 'utf8' }).stdout).toBe(pushed);
-    expect(states[1].slots.committed).toEqual({ ok: true, error: '', commit: made.slice(0, 12), files: ['app.tamber'], refused: [], edits: [{ n: 0, text: entry.text }] });
+    expect(states[1].slots.committed).toEqual({ ok: true, error: '', commit: made.slice(0, 12), files: ['app.forma'], refused: [], edits: [{ n: 0, text: entry.text }] });
     expect(states[1].resources.changeset.entries[0].committed).toBe(true);
     // Nothing left to commit: Commit is off.
     expect(states[1].resources.scope).toEqual({ open: 0, refused: false, unavailable: false });
     const history = states[2].resources.history;
-    expect(history.commits[0]).toMatchObject({ subject: 'design: 1 change by design-tool:Ada', files: [{ file: 'app.tamber', refused: '', edits: ['hue 200 → 210'] }] });
+    expect(history.commits[0]).toMatchObject({ subject: 'design: 1 change by design-tool:Ada', files: [{ file: 'app.forma', refused: '', edits: ['hue 200 → 210'] }] });
     expect(history.commits.find(c => c.commit === past).files[0].edits).toEqual(['surface.inset light-dark(#f8f9fa, #101214) → light-dark(#f8f9fb, #101214)']);
     expect(states[3].slots.reverted).toMatchObject({ ok: true, commit: past });
     // Held, not written: in the inbox, the file as it was.
     expect(states[3].resources.changes.held.map(h => h.proposal)).toContain(states[3].slots.reverted.proposal);
-    expect(readFileSync(join(app, 'app.tamber'), 'utf8')).toContain('surface.inset = light-dark(#f8f9fb, #101214)');
+    expect(readFileSync(join(app, 'app.forma'), 'utf8')).toContain('surface.inset = light-dark(#f8f9fb, #101214)');
     const hand = states[3].resources.changeset.entries.find(e => e.who === 'changed on disk');
-    expect(hand.text).toBe('app.tamber: tone.warm oklch(0.7 0.1 20) → oklch(0.71 0.1 20) · changed on disk');
+    expect(hand.text).toBe('app.forma: tone.warm oklch(0.7 0.1 20) → oklch(0.71 0.1 20) · changed on disk');
   } finally {
     await tool.close();
     rmSync(app, { recursive: true, force: true });
@@ -73,8 +73,8 @@ test('commit takes the session\'s writes, leaves other staging and never pushes;
 
 test('commit refuses a file dirty or staged at its baseline, or edited by hand between two writes, saying why', async () => {
   const cases = [
-    ['dirty', ({ app }) => writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)')), 'it differed from HEAD when the session first wrote it'],
-    ['staged', ({ app, git }) => { writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)')); git('add', 'app.tamber'); }, 'it was staged when the session first wrote it'],
+    ['dirty', ({ app }) => writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)')), 'it differed from HEAD when the session first wrote it'],
+    ['staged', ({ app, git }) => { writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)')); git('add', 'app.forma'); }, 'it was staged when the session first wrote it'],
     ['hand', () => {}, 'it was changed by someone other than this server'],
   ];
   for (const [name, before, why] of cases) {
@@ -84,7 +84,7 @@ test('commit refuses a file dirty or staged at its baseline, or edited by hand b
     // the second.
     let proposals = 0;
     const tool = await proxied(r.app, request => {
-      if (name === 'hand' && request.method === 'propose' && request.ops?.[0]?.op === 'set-token' && ++proposals === 1) writeFileSync(join(r.app, 'app.tamber'), readFileSync(join(r.app, 'app.tamber'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)'));
+      if (name === 'hand' && request.method === 'propose' && request.ops?.[0]?.op === 'set-token' && ++proposals === 1) writeFileSync(join(r.app, 'app.forma'), readFileSync(join(r.app, 'app.forma'), 'utf8').replace('tone.warm = oklch(0.7 0.1 warmth)', 'tone.warm = oklch(0.71 0.1 warmth)'));
     });
     try {
       const head = r.git('rev-parse', 'HEAD').stdout;
@@ -95,8 +95,8 @@ test('commit refuses a file dirty or staged at its baseline, or edited by hand b
         'tap commit', 'clock data', 'tree commit-refused', 'state',
       ]);
       expect(tool.writes.map(w => [w.method, w.ok]), name).toEqual([['transaction', true], ['transaction', true]]);
-      expect(replies.at(-1).slots.committed, name).toMatchObject({ ok: false, refused: [{ file: 'app.tamber', why }] });
-      expect(JSON.stringify(replies.at(-2)), name).toContain(`app.tamber: ${why}`);
+      expect(replies.at(-1).slots.committed, name).toMatchObject({ ok: false, refused: [{ file: 'app.forma', why }] });
+      expect(JSON.stringify(replies.at(-2)), name).toContain(`app.forma: ${why}`);
       expect(r.git('rev-parse', 'HEAD').stdout, name).toBe(head);
     } finally {
       await tool.close();

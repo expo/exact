@@ -540,7 +540,8 @@ fn a_removed_node_holds_no_property_and_one_removed_property_leaves_the_rest() {
     let mut engine = Engine::default();
     let every = Property::ALL
         .into_iter()
-        .chain([Property::Layout, Property::D]);
+        .chain([Property::Layout])
+        .chain(Property::TRANSITION_ONLY);
     let slots = Property::SLOTS;
     for (node, held) in [(1u64, 0..slots), (2, 0..4), (3, slots - 6..slots)] {
         for property in every.clone().skip(held.start).take(held.len()) {

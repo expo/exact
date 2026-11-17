@@ -2,7 +2,7 @@
 // Bluesky clone's own pieces): the Post button, a post's action row, the
 // composer's frame, an app's own bar's and header's buttons, and a person's
 // Follow button (LLP 1121 stage 15 B batch 2; its words the app's). Their look
-// is their params, whose defaults are the package's tokens (actions.tamber);
+// is their params, whose defaults are the package's tokens (actions.forma);
 // an app restyles it by setting a param or a token by full name, never by
 // editing this file.
 

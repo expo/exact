@@ -1,0 +1,107 @@
+// A child's resources (LLP 1035.005.004): each instance of a component
+// that declares one owns its request, asked in the render that makes or
+// updates the instance, with the instance's arguments, and let go with
+// it. A tab screen's request gated on its tab showing asks only then and
+// keeps its value while hidden; each pushed screen asks for itself, and a
+// refresh reaches only the instance whose action ran; a request whose
+// arguments read another's answer asks on that answer; a component used
+// outside every region asks with the root.
+routes nav
+  tab home "/"
+    book "/book/:id"
+  tab discover "/discover"
+
+shape Subject
+  ok: bool
+  works: string[]
+
+component App
+  action pick(name: string)
+    nav = select(nav, name)
+  action open(id: string)
+    nav = push(nav, path("book", id))
+  action back
+    nav = back(nav)
+  view
+    main
+      Feed(topic="t")
+      column
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` testId=`panel-${t.name}`
+            for e in t.stack key=e.id
+              column
+                if e.name == "discover"
+                  Discover(shown=(nav.tab == t.name))
+                else
+                  if e.name == "book"
+                    Book(id=e.params.id)
+                  else
+                    text "Home"
+      row role="tablist"
+        button "home" press=pick("home") testId="tab-home" role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home")
+        button "discover" press=pick("discover") testId="tab-discover" role="tab" aria-controls="panel-discover" aria-selected=(nav.tab == "discover")
+      button "1" press=open("1") testId="open-1"
+      button "2" press=open("2") testId="open-2"
+      button "back" press=back testId="back"
+
+component Discover
+  props
+    shown: bool
+  state subject = "sf"
+  resource works = subjectWorks(subject) when shown as shape Subject
+  action choose(s: string)
+    subject = s
+  action reload
+    refresh works
+  view
+    column
+      text `${works.works.length} ${current(works)}` testId="works"
+      button "fantasy" press=choose("fantasy") testId="fantasy"
+      button "reload" press=reload testId="reload"
+
+component Book
+  props
+    id: string
+  resource works = subjectWorks(id) as shape Subject
+  derive key = works.ok ? `${id}+` : `${id}-`
+  resource count = tally(key, works.works.length) as shape number
+  action reload
+    refresh works
+  view
+    column
+      text `${id}: ${works.works.length} ${count}` testId=`book-${id}`
+      button "reload" press=reload testId=`reload-${id}`
+
+component Feed
+  props
+    topic: string
+  state n = 1
+  resource got = now(`${topic}${n}`) as shape string
+  action more
+    n = n + 1
+  view
+    column
+      text got testId="got"
+      button "more" press=more testId="more"
+
+test "a tab screen asks while its tab shows"
+  tap "tab-discover"
+  tap "tab-home"
+  tap "fantasy"
+  tap "reload"
+  tap "tab-discover"
+  tap "reload"
+  tap "fantasy"
+
+test "each pushed screen asks for itself"
+  tap "open-1"
+  tap "open-2"
+  tap "reload-1"
+  tap "reload-2"
+  tap "back"
+  tap "back"
+  tap "open-1"
+
+test "a use outside every region asks with the root"
+  tap "more"
+  tap "more"

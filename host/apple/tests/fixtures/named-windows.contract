@@ -1,0 +1,37 @@
+// NamedWindowsTests (LLP 1030.004): links whose `target` names a window, in
+// every form a press reads it, the Settings… link, and the page's `name`.
+routes nav
+  tab inbox "/"
+    compose "/compose"
+  tab settings "/settings"
+
+shape Page
+  name: string
+
+component NamedWindows
+  state odd = "_inspector"
+  resource page = exactPage() as shape Page
+  action follow(url: string)
+    nav = go(nav, url)
+  view
+    main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` testId=`route-${e.name}`
+          text e.name
+      text page.name testId="name"
+      link href="/compose" target="compose" testId="named"
+        text "New Message"
+      link href="/compose" target="_blank" testId="blank"
+        text "New Window"
+      link href="/compose" target=odd testId="odd"
+        text "Unnamed"
+      link href="/compose" target="_TOP" testId="top"
+        text "Here"
+      link href="https://example.com/" target="compose" testId="out"
+        text "Out"
+      button href="/settings" target="settings" testId="button"
+        text "Settings"
+      link href="/settings" aria-keyshortcuts="Meta+," testId="settings-item"
+        text "Settings"
+      text
+        text "Compose " href="/compose" target="compose" testId="inline"

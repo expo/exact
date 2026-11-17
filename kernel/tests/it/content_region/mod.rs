@@ -304,6 +304,7 @@ fn immutable_request_round_trips_thread_and_all_offers_share_four_mib_source() {
                     _ => 800.,
                 },
                 height: 1200.,
+                pending: false,
                 first_baseline: Some(12.),
             });
             (request, metrics)
@@ -854,6 +855,7 @@ impl TextMeasurer for CatalogMetrics {
         TextMetrics {
             width: 32.,
             height: self.height.get(),
+            pending: false,
             first_baseline: Some(self.height.get() * 0.8),
         }
     }

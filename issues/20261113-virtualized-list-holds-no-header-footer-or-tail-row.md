@@ -9,27 +9,15 @@
 ## What is wrong
 
 `list virtualized=true` takes exactly one direct `for` and nothing beside it.
-`Lowerer` refuses any other child list in `contract/lower/src/collection.rs`
-(the `let [Node::Each { body, .. }] = children else` arm, about line 166):
+`Lowerer` refuses a header, footer or tail beside the loop:
 
 ```
 [lower-collection-template] a virtualized list initially supports exactly one direct `for`
 ```
 
-Confirmed at `49ae6357` with a list holding a `for` and a `text` after
-it. The limit is deliberate for now, and its remedy is recorded and not
-selected: LLP 1035.005.000 D11, "Fixed rows around a virtualized `each`",
-recommends fixed nodes before and after the `for`, designed under LLP 1070,
-and sits in that LLP's stage 4 (runtime designs, each with its consumer),
-which is unselected. These reports are new consumers for it.
-
-The cost is that every row that is not a record has to be invented as one.
-An app puts its header, footer, loading and end states into the list's data
-and dispatches them back out in the row view. A chat app streaming a reply
-cannot keep the reply in progress as a row of its own beside the settled
-transcript; it derives `bubbles.concat([tail])`, so each token that changes
-the tail recomputes a list as long as the transcript. That recomputation was
-reported, not measured here.
+The refusal forces headers, loading and end states into synthetic data rows.
+A streaming reply concatenated to the transcript through a derive recomputes
+that list on each token; that cost was reported, not measured.
 
 ## The failure
 
@@ -47,14 +35,14 @@ reported, not measured here.
 
 Select LLP 1035.005.000 D11 with these consumers: fixed nodes before and
 after the `for` in a virtualized list, as a scrolling container on the web
-holds them, laid out as rows that do not recycle. A streaming reply is then
-a footer row reading its own state, and a token rewrites only that row.
+holds them. Measure them as items in the height index, retaining authored
+padding and the children's formatting context.
 
-Until then, the chat-thread recipe should show the streaming case as it must
-be written today (the tail kept in its own state and appended by a derive)
-and name D11 as the coming form, and the refusal could point at that recipe.
+The approved chat recipe keeps a streaming reply as the keyed last data row
+so its focus, selection and state survive completion. A fixed trail serves
+loading and end notices.
 
-## Status (2026-11-13)
+## Implementation
 
 The refusal now says what to write today and names `docs/recipes/long-lists.md`,
 whose loading row is the pattern: a row of the `for`'s collection, appended by
@@ -71,3 +59,43 @@ build changes only the compiler: fixed nodes before and after the `for` lower to
 synthetic rows of the same collection with reserved keys. The trigger is a third
 diary hitting this, not a performance number. This issue stays open as that
 evidence.
+
+## Decision (2026-11-15)
+
+LLP 1035.005.000 D11 is selected and built as LLP 1070 §14's height-index
+model, superseding the decision of 2026-11-14 above (Charlie, who had
+approved the model on 2026-11-12, before that panel met). Fixed nodes are
+always-mounted items in the height index under their own identities, not
+synthetic data rows, so row counts, `aria-setsize`, `firstVisibleKey`, keyed
+`scrollIntoView`, reorder and the reach events name data rows alone.
+
+## Height-index build
+
+The compiler admits lead and trail nodes around one direct keyed `for` on a
+vertical list with `appearance="none"`. Cells lists, horizontal fixed content,
+a second direct `for` and a virtualized list inside fixed content remain
+refused by name.
+
+The runner and hosts measure fixed items separately from authored padding.
+Apple uses the shared kernel's occupied-flow measurement before pixel
+snapping, reports both fixed identities even without mounted data rows, and
+includes fixed regions in UIKit coverage and AppKit's prepared content.
+Anchors retain fixed-region offsets; a followed end follows a growing trail.
+Nested lists keep a visible data key with its signed offset, or a fixed
+identity when no data shows, across their outer row's retirement.
+
+The trail stays accessibility-hidden and inert until the geometric data window
+reaches the last data row, then restores both authored values. Whole-list
+copy on the wasm web target, the default JS web target and AppKit includes
+fixed text and every logical data row when tall fixed content leaves no
+mounted data rows. The JS target installs the selection controller after
+paint and evaluates compiled text expressions for unmounted rows; compiled-app
+clipboard tests cover both tall fixed sides, row scopes, selection exclusions
+and nested collection boundaries before and after retirement. AppKit keeps
+fixed-region and data endpoints when Select All becomes a range. The web observes layout
+boxes beneath contents shells, so intrinsic image growth needs no app-state
+commit. Display-hidden fixed children contribute no margins or extent.
+
+Still owed on a physical Apple device: momentum and rubber-banding while a
+followed trail grows, and VoiceOver navigation from the last data row into
+the trail. This issue remains open for those runs.

@@ -175,7 +175,7 @@ impl SvgState {
                 self.dirty.insert(id);
                 true
             }
-            Some(t) if t.is_svg_element() => self.presented(id),
+            Some(t) if t.is_svg_element() => self.presented(kernel, id),
             _ => false,
         }
     }
@@ -241,8 +241,20 @@ impl SvgState {
         }
     }
 
+    /// Whether `id` is an SVG element: its scene paints it, and it has no view.
+    pub(crate) fn is_element(&self, id: ViewId) -> bool {
+        self.elements.contains_key(&id)
+    }
+
     /// A presented value moved on an element: its scene is rebuilt.
-    pub(crate) fn presented(&mut self, id: ViewId) -> bool {
+    pub(crate) fn presented(&mut self, kernel: &Kernel, id: ViewId) -> bool {
+        if self.elements.contains_key(&id) {
+            for root in self.sent.keys() {
+                if exact_kernel::svg::scene_sources(kernel, *root).contains(&id) {
+                    self.dirty.insert(*root);
+                }
+            }
+        }
         match self.elements.get(&id) {
             Some(root) => {
                 self.dirty.insert(*root);
@@ -300,9 +312,13 @@ impl SvgState {
                 &Sampled(engine),
                 appearance.dark(node.key),
             );
-            if let Some(limit) = resolved.over {
+            let note = resolved
+                .over
+                .map(|limit| format!("{limit}; drawing nothing"))
+                .or_else(|| resolved.refused.map(str::to_string));
+            if let Some(note) = note {
                 if self.over_warned.insert(root) {
-                    notes.push(format!("svg #{root}: {limit}; drawing nothing"));
+                    notes.push(format!("svg #{root}: {note}"));
                 }
             }
             let scene = serialize(&resolved, engine, &self.pressable, bx);
@@ -456,8 +472,8 @@ fn serialize(
 }
 
 /// The engine's values as a scene presents them: a sampled animation's
-/// value now, and a path's `d` while a transition moves it (LLP 1055.000
-/// D15).
+/// value now, and a path's `d` (LLP 1055.000 D15) or a `filter` (LLP
+/// 1003.002) while a transition moves it.
 struct Sampled<'e>(&'e Engine);
 
 impl exact_kernel::svg::scene::Present for Sampled<'_> {
@@ -466,6 +482,9 @@ impl exact_kernel::svg::scene::Present for Sampled<'_> {
     }
     fn path(&self, key: NodeKey) -> Option<exact_motion::PathValue> {
         self.0.presented_path(motion_node(key))
+    }
+    fn filter(&self, key: NodeKey) -> Option<exact_motion::FilterValue> {
+        self.0.presented_filter(motion_node(key))
     }
 }
 
@@ -716,9 +735,12 @@ fn element(
                     Property::Translate => {
                         (Value::new(t.translate.0 as f64, t.translate.1 as f64), 1.0)
                     }
-                    Property::Rotate => {
-                        (Value::scalar(t.rotate as f64), std::f64::consts::PI / 180.0)
-                    }
+                    Property::Rotate => (
+                        engine
+                            .target(key, Property::Rotate)
+                            .unwrap_or(Value::scalar(t.rotate as f64)),
+                        std::f64::consts::PI / 180.0,
+                    ),
                     Property::Scale => (Value::scalar(t.scale as f64), 1.0),
                     _ => (Value::ZERO, 1.0),
                 };

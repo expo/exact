@@ -93,6 +93,7 @@ beforeAll(async () => {
   if (process.platform === 'darwin') {
     const stub = `struct Style { var string: String?; func length(basis: CGFloat) -> CGFloat? { nil } }
 class NodeView { var style: [String:Style] = [:]; func number(_ name: String) -> CGFloat { 0 } }
+enum HostBlock { struct Tactic: Hashable { var sides: UInt32 = 228; static let none = Tactic() } }
 `;
     // The page is 1200 tall when scrolled; the viewport is the layer.
     const calls = cases.map(([area, fallback, x, y, w, h, m = [0, 0, 0, 0], [bw, bh] = [320, 120], position = 'absolute', dir = 'ltr', scroll = 0]) => `do {
@@ -100,7 +101,13 @@ let page = CGRect(x:0,y:${-scroll},width:${w},height:${scroll ? 1200 : h})
 let p = PositionArea.origin(${JSON.stringify(area)}, anchor: CGRect(x:${x},y:${y - scroll},width:80,height:32), size:CGSize(width:${bw + 2},height:${bh + 2}), margins:.init(top:${m[0]},right:${m[1]},bottom:${m[2]},left:${m[3]}), fallbacks:${JSON.stringify(fallback)}, overflow:${position === 'absolute' ? '.absolute(page: page)' : '.fixed'}, rtl:${dir === 'rtl'}, in:CGRect(x:0,y:0,width:${w},height:${h}))
 print("\\(p.x),\\(p.y)")
 }`).join('\n');
-    const swift = spawnSync('xcrun', ['swift', '-'], { input: readFileSync(resolve(root, 'host/apple/Sources/ExactKit/PositionArea.swift'), 'utf8') + '\n' + stub + calls, encoding: 'utf8', timeout: 60000 });
+    // `swift` leaves a `TemporaryDirectory.*` in TMPDIR each time it hands a run to the frontend: this run's goes with its own TMPDIR.
+    const swiftTmp = mkdtempSync(resolve(tmpdir(), 'exact-swift-'));
+    let swift;
+    try {
+      swift = spawnSync('xcrun', ['swift', '-'], { input: readFileSync(resolve(root, 'host/apple/Sources/ExactKit/PositionArea.swift'), 'utf8') + '\n' + stub + calls,
+        encoding: 'utf8', timeout: 60000, env: { ...process.env, TMPDIR: swiftTmp } });
+    } finally { rmSync(swiftTmp, { recursive: true, force: true }); }
     expect(swift.status, swift.stderr).toBe(0);
     native = swift.stdout.trim().split('\n').map(s => s.split(',').map(Number));
   }

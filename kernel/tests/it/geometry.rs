@@ -85,6 +85,172 @@ fn key(k: &Kernel, id: u32) -> exact_kernel::NodeKey {
 }
 
 #[test]
+fn estimated_text_geometry_propagates_and_clears_without_a_size_change() {
+    use exact_kernel::{TextMeasureRequest, TextMeasurer, TextMetrics};
+    use std::{cell::Cell, rc::Rc};
+    struct Reader(Rc<Cell<bool>>);
+    impl TextMeasurer for Reader {
+        fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics {
+            let pending = self.0.get() && request.runs.iter().any(|r| r.text.contains("estimated"));
+            TextMetrics {
+                width: 80.0,
+                height: 100.0,
+                first_baseline: None,
+                pending,
+            }
+        }
+    }
+    let pending = Rc::new(Cell::new(true));
+    let mut k = Kernel::new(Box::new(Reader(pending.clone())));
+    k.apply(
+        0,
+        1,
+        &[
+            view(1, NodeType::View),
+            view(2, NodeType::View),
+            view(3, NodeType::Text),
+            view(4, NodeType::Text),
+            style(
+                4,
+                &[
+                    (StyleId::PositionType, StyleValue::Text("absolute".into())),
+                    (StyleId::Top, StyleValue::Number(0.0)),
+                    (StyleId::Left, StyleValue::Number(0.0)),
+                ],
+            ),
+            Op::SetProp {
+                id: 3,
+                prop: PropId::Text,
+                value: "estimated".into(),
+            },
+            Op::SetProp {
+                id: 4,
+                prop: PropId::Text,
+                value: "settled peer".into(),
+            },
+            Op::SetChildren {
+                id: 2,
+                children: vec![3],
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2, 4],
+            },
+            Op::AttachRoot { id: 1 },
+        ],
+    )
+    .unwrap();
+    let check = |k: &mut Kernel, pending: bool| {
+        for id in 1..=4 {
+            let expected = pending && id != 4;
+            let key = key(k, id);
+            assert_eq!(k.laid_out_frame(key).unwrap().1, expected, "frame {id}");
+            assert_eq!(
+                k.measure_auto_height(key).unwrap().1,
+                expected,
+                "measure {id}"
+            );
+        }
+    };
+    for width in [200.0, 120.0, 200.0] {
+        k.compute_layout(1, Offer::definite(width, 400.0)).unwrap();
+        check(&mut k, true);
+    }
+    let stamp = k.node(3).unwrap().paragraph_stamp().unwrap();
+    let before = k.laid_out_frame(key(&k, 3)).unwrap().0;
+    pending.set(false);
+    assert!(k.invalidate_text_metrics(stamp.owner(), stamp.metric_revision()));
+    assert!(
+        k.laid_out_frame(key(&k, 3)).unwrap().1,
+        "last published estimate"
+    );
+    k.compute_layout(1, Offer::definite(200.0, 400.0)).unwrap();
+    assert_eq!(k.laid_out_frame(key(&k, 3)).unwrap().0, before);
+    check(&mut k, false);
+    pending.set(true);
+    assert!(k.invalidate_text_metrics(stamp.owner(), stamp.metric_revision()));
+    k.compute_layout(1, Offer::definite(120.0, 400.0)).unwrap();
+    check(&mut k, true);
+    k.apply(
+        0,
+        2,
+        &[style(
+            2,
+            &[(StyleId::Display, StyleValue::Text("none".into()))],
+        )],
+    )
+    .unwrap();
+    k.compute_layout(1, Offer::definite(120.0, 400.0)).unwrap();
+    assert!(
+        !k.laid_out_frame(key(&k, 1)).unwrap().1,
+        "hidden estimates do not contribute"
+    );
+}
+
+#[test]
+fn a_height_auto_estimate_does_not_change_published_pending_flags() {
+    use std::{cell::Cell, rc::Rc};
+    struct Reader(Rc<Cell<bool>>);
+    impl exact_kernel::TextMeasurer for Reader {
+        fn measure(
+            &mut self,
+            _: &exact_kernel::TextMeasureRequest<'_>,
+        ) -> exact_kernel::TextMetrics {
+            exact_kernel::TextMetrics {
+                width: 80.0,
+                height: 100.0,
+                first_baseline: None,
+                pending: self.0.get(),
+            }
+        }
+    }
+    let pending = Rc::new(Cell::new(false));
+    let mut k = Kernel::new(Box::new(Reader(pending.clone())));
+    k.apply(
+        0,
+        1,
+        &[
+            view(1, NodeType::Text),
+            style(
+                1,
+                &[
+                    (StyleId::Width, StyleValue::Number(200.0)),
+                    (StyleId::Height, StyleValue::Number(40.0)),
+                ],
+            ),
+            Op::SetProp {
+                id: 1,
+                prop: PropId::Text,
+                value: "estimated".into(),
+            },
+            Op::AttachRoot { id: 1 },
+        ],
+    )
+    .unwrap();
+    let offer = Offer::definite(200.0, 400.0);
+    k.compute_layout(1, offer).unwrap();
+    let key = key(&k, 1);
+    assert!(
+        !k.laid_out_frame(key).unwrap().1,
+        "the published layout used settled metrics"
+    );
+    pending.set(true);
+    assert!(
+        k.measure_auto_height(key).unwrap().1,
+        "height-auto needs estimated text"
+    );
+    assert!(
+        !k.laid_out_frame(key).unwrap().1,
+        "a query publishes nothing"
+    );
+    k.compute_layout(1, offer).unwrap();
+    assert!(
+        !k.laid_out_frame(key).unwrap().1,
+        "a later publication retains committed flags"
+    );
+}
+
+#[test]
 fn a_frame_is_the_published_box_once_laid_out_and_nothing_before() {
     let mut k = tree();
     assert_eq!(k.laid_out_frame(key(&k, 2)), None, "not laid out yet");

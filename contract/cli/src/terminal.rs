@@ -78,30 +78,31 @@ fn refusal(id: &str, message: String, span: Span) -> CompileError {
     }
 }
 
-/// Whether one written length is a terminal length: a base scale name is,
-/// cells in the terminal's column (LLP 1121 stage 11 B2).
-fn cell_length(part: &str) -> bool {
+/// Whether one written length is a terminal length on `row`: a base scale
+/// name is, cells in the terminal's column (LLP 1121 stage 11 B2), and so is
+/// a size keyword the row takes (LLP 1001.001 D5): content sizes are whole
+/// cells.
+fn cell_length(part: &str, row: StyleId) -> bool {
     let part = part.trim();
-    matches!(
-        part,
-        "0" | "auto" | "none" | "min-content" | "max-content" | "fit-content"
-    ) || part.ends_with('%')
+    matches!(part, "0" | "auto" | "none")
+        || exact_kernel::SizeKeyword::parse(part).is_some_and(|k| row.admits_size_keyword(k))
+        || part.ends_with('%')
         || exact_kernel::style::cells::parse(part).is_some()
         || exact_kernel::style::scale::is_base(part)
 }
 
-/// The literal lengths in `value` that are not in cells.
-fn non_cells(value: &Expr, out: &mut Vec<String>) {
+/// The literal lengths in `value` that are not in cells on `row`.
+fn non_cells(value: &Expr, row: StyleId, out: &mut Vec<String>) {
     match value {
         Expr::Number(n, _) if *n != 0.0 => out.push(format!("{n}")),
         Expr::Str(text, _) => out.extend(
             text.split_whitespace()
-                .filter(|p| !cell_length(p))
+                .filter(|p| !cell_length(p, row))
                 .map(str::to_string),
         ),
         Expr::Ternary(_, yes, no, _) => {
-            non_cells(yes, out);
-            non_cells(no, out);
+            non_cells(yes, row, out);
+            non_cells(no, row, out);
         }
         _ => {}
     }
@@ -128,7 +129,7 @@ fn check_attrs(tag: &str, attrs: &[contract_syntax::Attr], errors: &mut Vec<Comp
                 }
                 Some(Admission::Cell) => {
                     let mut bad = Vec::new();
-                    non_cells(&a.value, &mut bad);
+                    non_cells(&a.value, *row, &mut bad);
                     if let Some(first) = bad.first() {
                         errors.push(refusal(
                             "terminal-length",

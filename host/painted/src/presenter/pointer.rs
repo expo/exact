@@ -375,7 +375,7 @@ mod touch_tests;
 /// primary 1 is 0, auxiliary 4 is 1, secondary 2 is 2, back 8 is 3 and
 /// forward 16 is 4.
 pub(crate) fn dom_button(buttons: u8) -> i8 {
-    match buttons & buttons.wrapping_neg() {
+    match buttons.isolate_lowest_one() {
         2 => 2,
         4 => 1,
         8 => 3,

@@ -1,0 +1,35 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/store-update@^1.0",
+  "platform": "apple",
+  "targets": [
+    "ios",
+    "macos"
+  ],
+  "shapes": {
+    "AppleStoreUpdateStatus": {
+      "lookup": "enum<found|not-found|failed>",
+      "version": "option<string>",
+      "minimumOsVersion": "option<string>",
+      "releaseNotes": "option<string>",
+      "currentVersionReleaseDate": "option<string>"
+    }
+  },
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "swift": [
+      "StoreUpdate.swift"
+    ]
+  },
+  "frameworks": {
+    "StoreKit": {
+      "ios": "17.0",
+      "macos": "14.0"
+    }
+  },
+  "artifacts": [],
+  "class": "StoreUpdateModule"
+}

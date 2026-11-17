@@ -1,0 +1,26 @@
+routes nav
+  tab first "/"
+  tab second "/second"
+
+component BootControlTab
+  state taps = 0
+  action tap
+    taps = taps + 1
+  view
+    main navigationKey=`${top(nav).id}` testId="app" width="100%" height="100%"
+      column position="relative" width="100%" height="100%"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` navigationBar="none" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+                row testId="controls" height=52 align-items="center"
+                  button press=tap
+                    text "Change"
+                scroll testId="list" flex=1 min-height=0
+                  text "First row"
+                  column height=1600
+      row role="tablist" appearance="none" position="absolute" bottom=0
+        button role="tab" aria-controls="panel-first" aria-selected=true
+          text "First"
+        button role="tab" aria-controls="panel-second" aria-selected=false
+          text "Second"

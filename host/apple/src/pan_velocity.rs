@@ -65,7 +65,7 @@ pub fn velocity(samples: &[f64], now: f64) -> Value {
         return Value::ZERO;
     }
     let mut tracker = VelocityTracker::new();
-    for sample in samples.chunks_exact(3) {
+    for sample in samples.as_chunks::<3>().0 {
         tracker.push(sample[0], Value::new(sample[1], sample[2]));
     }
     tracker.estimate(now)

@@ -19,6 +19,25 @@ final class NativeButtonsIOSTests: XCTestCase {
         return [r, g, b, a]
     }
 
+    func testHighlightedTranslationFollowsLayout() throws {
+        let p = presenter(box(1) + native(2) + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]], faces: [2: face("Go")])
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["press_translate_percent": [50, 25]]]]))
+        let owner = try XCTUnwrap(p.views[2])
+        let button = try XCTUnwrap(p.controls.controls[2] as? NativeButtonIOS)
+        button.isHighlighted = true; button.updateConfiguration()
+        for size in [CGSize(width: 100, height: 80), CGSize(width: 200, height: 160)] {
+            owner.frame.size = size
+            owner.layoutSubviews()
+            let animation = try XCTUnwrap(owner.layer.animation(forKey: "pressTranslation") as? CABasicAnimation)
+            let point = try XCTUnwrap(animation.toValue as? NSValue).cgPointValue
+            XCTAssertEqual(point, CGPoint(x: size.width / 2, y: size.height / 4))
+            XCTAssertTrue(animation.isAdditive)
+            XCTAssertEqual(animation.duration, .greatestFiniteMagnitude, "native highlighting adds no press ease")
+        }
+        button.isHighlighted = false; button.updateConfiguration()
+        XCTAssertNil(owner.layer.animation(forKey: "pressTranslation"))
+    }
+
     func testActivePropertiesKeepNativeCustomizationAndConfigurationCallbacks() throws {
         var base = face("Go"); base.ios = "filled"; base.iosBefore26 = "filled"
         let p = presenter(box(1) + native(2) + [["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]]], faces: [2: base])

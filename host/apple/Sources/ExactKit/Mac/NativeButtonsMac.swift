@@ -490,7 +490,7 @@ extension ControlHost {
                 "symbol": FaceSymbol.observed(face.symbol, icon: face.symbolIcon) as Any, "enabled": button.isEnabled,
                 "rows": rows, "standIns": standIns, "imagePosition": button.imagePosition.rawValue,
                 "pointerEvents": button.written?.interactive == false ? "none" : "auto",
-                "size": [Agent.r2(button.frame.width), Agent.r2(button.frame.height)]]
+                "size": [InspectionValue.r2(button.frame.width), InspectionValue.r2(button.frame.height)]]
     }
 }
 extension Presenter {

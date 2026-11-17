@@ -1,7 +1,7 @@
 //! Host-owned page answers; never baked or carried device data.
 //! @ref LLP 1069.000 D2
 use super::{DataError, DataSource, Runner, RunnerError};
-use crate::page::{Page, SOURCE};
+use crate::page::{Page, Presented, SOURCE};
 use exact_kernel::CommitReceipt;
 use exact_plan::{TypeKind, Value};
 
@@ -53,6 +53,66 @@ impl<D: DataSource> Runner<D> {
         )
     }
 
+    /// `exactPage().presented` as the app reads it.
+    pub fn presented(&self) -> Presented {
+        self.presented
+    }
+
+    /// The host heard the present of the page's first picture (LLP 1003.001
+    /// D9's table): `presented` is true from this commit, at the runner's
+    /// clock, for the rest of this runner's life. Once set, nothing; the
+    /// readers whose shape names `presented` are the only ones asked.
+    pub fn page_presented(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        let presented = Presented {
+            seen: true,
+            ..self.presented
+        };
+        self.set_presented(presented)
+    }
+
+    /// `prefer presented` (LLP 1069.000 D6): `Some` holds the fact at that
+    /// value whatever the host heard; `None` gives it back to the host.
+    pub fn prefer_presented(
+        &mut self,
+        preferred: Option<bool>,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let presented = Presented {
+            preferred,
+            ..self.presented
+        };
+        self.set_presented(presented)
+    }
+
+    fn set_presented(
+        &mut self,
+        presented: Presented,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let before = self.presented.value();
+        self.replace_fact(
+            |r| &mut r.presented,
+            presented,
+            SOURCE,
+            |r, _, mut readers| {
+                if r.presented.value() == before {
+                    return Ok(None);
+                }
+                readers.retain(|i| r.page_shape_names(*i, "presented"));
+                r.recommit(readers, "page")
+            },
+        )
+    }
+
+    /// Whether resource `i`'s shape names `field`; a shape that is no
+    /// record is asked again, to be refused.
+    fn page_shape_names(&self, i: usize, field: &str) -> bool {
+        let ty = self.plan.type_(self.resource_row(i).ty);
+        ty.kind != TypeKind::Record
+            || ty
+                .fields
+                .iter()
+                .any(|f| self.plan.str(self.plan.field(f).name) == field)
+    }
+
     /// Whether an `exactPage` resource reads `field`: one whose shape names
     /// it, or one that is no record (refused, but asked again on every
     /// change). A host watches what no resource reads only if it wants to.
@@ -96,6 +156,15 @@ impl<D: DataSource> Runner<D> {
         let mut fields = Vec::with_capacity(ty.fields.len as usize);
         for f in ty.fields.iter() {
             let name = self.plan.str(self.plan.field(f).name);
+            // `window.name`, the session's for its life (LLP 1030.004 D2).
+            if name == "name" {
+                fields.push(Value::str(&self.window_name));
+                continue;
+            }
+            if name == "presented" {
+                fields.push(Value::Bool(self.presented.value()));
+                continue;
+            }
             match self.page.field(name) {
                 Some(v) => fields.push(v),
                 None => {

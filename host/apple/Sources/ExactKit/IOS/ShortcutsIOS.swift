@@ -62,11 +62,13 @@ extension Presenter {
         (view.props["accessibilityKeyShortcuts"] ?? "").split(whereSeparator: \.isWhitespace).compactMap(ChordIOS.init)
     }
     /// The shown buttons that declare a chord: a disabled one takes its key
-    /// and presses nothing (`pressShortcut`), as on the web.
+    /// and presses nothing (`pressShortcut`), as on the web. A header control
+    /// a shown navigation bar draws as its item is hidden in the page, and
+    /// shown all the same while nothing is presented over its route.
     private var shortcutButtons: [NodeView] {
         chrome.ids("accessibilityKeyShortcuts").sorted().compactMap { views[$0] }
             .filter { $0.isButton && ($0.handlers.contains("press") || $0.isSurfaceControl || $0.isNativeButton && invocation(of: $0) != nil)
-                && $0.accessibilityVisible }
+                && ($0.accessibilityVisible || $0.accessibilityExposed && !$0.authoredInert && navigation.tipItem($0) != nil) }
     }
     var needsKeyboardFocus: Bool {
         shortcutButtons.contains { !chords($0).isEmpty }

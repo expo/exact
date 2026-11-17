@@ -498,8 +498,10 @@ impl CpuTextures {
         let slot = slot.as_mut().unwrap();
         for (src, dst) in pixels
             .data()
-            .chunks_exact(4)
-            .zip(slot.bytes.chunks_exact_mut(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(slot.bytes.as_chunks_mut::<4>().0)
         {
             dst.copy_from_slice(&[src[2], src[1], src[0], src[3]]);
         }
@@ -615,7 +617,13 @@ mod tests {
             return;
         };
         let mut pixels = tiny_skia::Pixmap::new(7, 5).unwrap();
-        for (i, pixel) in pixels.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, pixel) in pixels
+            .data_mut()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .enumerate()
+        {
             pixel.copy_from_slice(&[i as u8, 130, 250 - i as u8, 255]);
         }
         let mut ring = CpuTextures::default();
@@ -659,7 +667,7 @@ mod tests {
                 0,
             );
         }
-        for pixel in bytes.chunks_exact_mut(4) {
+        for pixel in bytes.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         assert_eq!(bytes, pixels.data());

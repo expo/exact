@@ -123,7 +123,7 @@ final class DialogSheetIOSTests: XCTestCase {
         let (p, controller, scene) = page(dialog: ["closedby": "none"], handlers: ["cancel"])
         guard scene else { throw missing("scene", "VoiceOver escape needs a presented sheet") }
         var cancelled: [UInt32] = []
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         p.dialogCommand("showModal", "form")
         settle { !p.menus.inTransition }
         let sheet = try sheet(controller)
@@ -1173,7 +1173,7 @@ final class DialogSheetIOSTests: XCTestCase {
     func testASwipeDownIsItsCancel() throws {
         let (p, controller, scene) = page(handlers: ["cancel"])
         var cancelled: [UInt32] = []
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         let dialog = try XCTUnwrap(p.views[2]), home = try XCTUnwrap(p.views[1]).container
         p.dialogCommand("showModal", "form")
         let sheet = try sheet(controller)
@@ -1193,7 +1193,7 @@ final class DialogSheetIOSTests: XCTestCase {
     func testATapOutsideIsItsCancel() throws {
         let (p, controller, _) = page(dialog: ["closedby": "any"], handlers: ["cancel"])
         var cancelled: [UInt32] = []
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         let dialog = try XCTUnwrap(p.views[2])
         p.dialogCommand("showModal", "form")
         p.menus.sheets.closeRequest(try sheet(controller))
@@ -1207,7 +1207,7 @@ final class DialogSheetIOSTests: XCTestCase {
         var closed: [UInt32] = []
         p.onClose = { closed.append($0) }
         var cancelled: [UInt32] = []
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         p.dialogCommand("showModal", "form")
         _ = try sheet(controller)
         p.dialogCommand("close", "form")

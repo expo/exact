@@ -451,20 +451,26 @@ fn validate(schema: &Schema) {
         for (t, param) in f.params.iter().map(|p| (p, true)).chain(returns) {
             // A parameter spelled as string literals, `"a" | "b"` (LLP
             // 1054.000.003 D9): a string the compiler requires written as one.
-            let literals = param
-                && t.split(" | ").all(|l| {
-                    l.len() > 2
-                        && l.starts_with('"')
-                        && l.ends_with('"')
-                        && !l[1..l.len() - 1].contains('"')
-                });
+            let literal = |l: &str| {
+                l.len() > 2
+                    && l.starts_with('"')
+                    && l.ends_with('"')
+                    && !l[1..l.len() - 1].contains('"')
+            };
             // A whole-number literal in a range, `0..=100` (LLP 1102 §3.2:
-            // `toFixed`'s digits), likewise written at the call.
-            let range = param
-                && t.split_once("..=").is_some_and(|(a, b)| {
+            // `toFixed`'s digits), likewise written at the call; it may close
+            // a list of string literals (`formatNumber`'s code or digits).
+            let range = |l: &str| {
+                l.split_once("..=").is_some_and(|(a, b)| {
                     a.parse::<u32>()
                         .is_ok_and(|a| b.parse::<u32>().is_ok_and(|b| a <= b))
-                });
+                })
+            };
+            let choices: Vec<&str> = t.split(" | ").collect();
+            let (last, first) = choices.split_last().expect("a type");
+            let literals =
+                param && first.iter().all(|l| literal(l)) && (literal(last) || range(last));
+            let range = param && range(t);
             assert!(
                 literals
                     || range

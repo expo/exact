@@ -615,7 +615,7 @@ fn named_node(model: &Model, name: &str) -> Option<u32> {
         .find(|&i| model.nodes[i as usize].name == name)
 }
 fn mix_pose(from: &[f32], to: &mut [f32], weight: f32) {
-    for (a, b) in from.chunks_exact(10).zip(to.chunks_exact_mut(10)) {
+    for (a, b) in std::iter::zip(from.as_chunks::<10>().0, to.as_chunks_mut::<10>().0) {
         let a = at(a);
         let t = at(b);
         put(

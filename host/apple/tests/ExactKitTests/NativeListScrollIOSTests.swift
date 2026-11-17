@@ -421,6 +421,10 @@ final class NativeListScrollIOSTests: GroupedListFixture {
         XCTAssertFalse(try XCTUnwrap(p.views[2]).hiddenByHost)
         XCTAssertFalse(try XCTUnwrap(p.views[3]).hiddenByHost)
         XCTAssertTrue(p.views[2]?.superview === plain)
+        owner.retainScrollPosition(from: plain)
+        XCTAssertNotNil(owner.pendingScrollTop)
+        _ = original.collection.accessibilityScroll(.down)
+        XCTAssertNotNil(owner.pendingScrollTop, "VoiceOver's scroll of the retired collection view leaves the position the node carries")
         p.apply(wireBatch([["op": "props", "id": 1, "set": ["listStyle": "inset-grouped"]]]))
         let native = try list(p)
         XCTAssertTrue(p.views[1] === owner)
@@ -521,6 +525,152 @@ final class NativeListScrollIOSTests: GroupedListFixture {
             let scroll = try XCTUnwrap(owner.scrollView)
             XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), top, accuracy: 0.5, message)
         }
+    }
+
+    func testAReaderDragKeepsItsPlaceOverAPositionExactCarries() throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        // Exact carries the position across a change of its own, for the next batch to write
+        owner.retainScrollPosition(from: scroll)
+        owner.scrollViewWillBeginDragging(scroll)
+        scroll.contentOffset.y = 300 - owner.scrollTopInset(scroll)
+        p.apply(wireBatch([]))
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 300, accuracy: 0.5, "the reader's drag keeps its place")
+        // A status-bar tap is the reader's move too
+        owner.retainScrollPosition(from: scroll)
+        XCTAssertTrue(owner.scrollViewShouldScrollToTop(scroll))
+        scroll.contentOffset.y = -scroll.adjustedContentInset.top
+        p.apply(wireBatch([]))
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 0, accuracy: 0.5, "the tap's scroll to the top keeps its place")
+        // So is VoiceOver's scroll: its action drops the carried position, whatever UIKit then moves (with no window and
+        // VoiceOver off, nothing)
+        owner.retainScrollPosition(from: scroll)
+        _ = scroll.accessibilityScroll(.down)
+        XCTAssertNil(owner.pendingScrollTop, "VoiceOver's scroll drops the carried position")
+        // And a scroll the scroll view animates, as a hardware keyboard's is: UIKit's first frame of it drops it, where
+        // UIKit says a scroll animates (iOS 17.4)
+        if #available(iOS 17.4, *) {
+            owner.retainScrollPosition(from: scroll)
+            scroll.setContentOffset(CGPoint(x: 0, y: 600 - owner.scrollTopInset(scroll)), animated: true)
+            XCTAssertTrue(scroll.isScrollAnimating, "UIKit animates the scroll")
+            owner.scrollViewDidScroll(scroll)
+            XCTAssertNil(owner.pendingScrollTop, "a scroll the scroll view animates drops the carried position")
+            scroll.stopScrollingAndZooming()
+        }
+    }
+
+    /// Covers and local insets that change nothing bring no answer, so a position Exact carries is written at once, and a
+    /// later scroll of the reader's keeps its place through the next batch
+    func testACarriedPositionIsWrittenAtOnceWhenNothingChanges() throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        var delivered = 0
+        p.onCovers = { _ in delivered += 1 }
+        owner.retainScrollPosition(from: scroll)
+        p.navigation.reportCovers()
+        XCTAssertEqual(delivered, 0, "nothing changed, so nothing is delivered")
+        XCTAssertNil(owner.pendingScrollTop, "and the carried position is written at once")
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 140, accuracy: 0.5)
+        scroll.contentOffset.y = 300 - owner.scrollTopInset(scroll)
+        p.apply(wireBatch([]))
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 300, accuracy: 0.5, "a later scroll keeps its place through the next batch")
+    }
+
+    /// The write that closes a delivery's pass runs in the delivery's chain of corrections, as the runtime's answer to it
+    /// does, so a report its scroll makes is told in that chain (`countReport`)
+    func testTheWriteThatClosesADeliveryRunsInItsChain() throws {
+        let session = ExactApp.shared.makeSession(label: "covers-closing-write")
+        defer { session.destroy() }
+        let p = presenter(height: 180, on: session.presenter) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        p.onCovers = { _ in }
+        owner.retainScrollPosition(from: scroll)
+        scroll.contentOffset.y = 0
+        var chain: AnyObject?
+        let observation = scroll.observe(\.contentOffset) { _, _ in chain = chain ?? session.coversCause }
+        defer { observation.invalidate() }
+        p.navigation.covers = [1: .whole]
+        p.navigation.countReport()
+        p.navigation.deliverCovers()
+        XCTAssertNil(owner.pendingScrollTop, "the pass's write takes the carried position")
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 140, accuracy: 0.5)
+        XCTAssertNotNil(chain as? CoversChain, "in the delivery's chain")
+    }
+
+    /// Covers and local insets that change nothing write a carried position at once while other work waits in the
+    /// session, so a scroll that work makes keeps its place
+    func testACarriedPositionIsWrittenAtOnceWhenNothingChangesWhileWorkWaits() throws {
+        let session = ExactApp.shared.makeSession(label: "covers-unchanged-while-work-waits")
+        defer { session.destroy() }
+        let p = presenter(height: 180, on: session.presenter) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        p.onCovers = { _ in }
+        session.holdFillForTests()
+        session.whenIdle {
+            owner.retainScrollPosition(from: scroll)
+            scroll.contentOffset.y = 0
+            p.navigation.reportCovers()
+        }
+        session.whenIdle { scroll.contentOffset.y = 300 - owner.scrollTopInset(scroll) }
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
+        session.landFill()
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), 300, accuracy: 0.5, "the later scroll keeps its place")
+    }
+
+    func testVoiceOverAStatusBarTapAndARevealOnANativeListDropAPositionExactCarries() throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        let collection = try list(p).collection
+        owner.retainScrollPosition(from: collection)
+        XCTAssertNotNil(owner.pendingScrollTop)
+        _ = collection.accessibilityScroll(.down)
+        XCTAssertNil(owner.pendingScrollTop, "VoiceOver's scroll of a native list drops the carried position")
+        owner.retainScrollPosition(from: collection)
+        XCTAssertEqual(collection.delegate?.scrollViewShouldScrollToTop?(collection), true)
+        XCTAssertNil(owner.pendingScrollTop, "a status-bar tap on a native list drops the carried position")
+        owner.retainScrollPosition(from: collection)
+        p.scrollIntoView(try XCTUnwrap(p.views[10]), ["row10", "start", "nearest", "instant"])
+        XCTAssertNil(owner.pendingScrollTop, "a reveal of a native list's row drops the carried position")
+    }
+
+    /// A position Exact carries waits for the runtime's answer to every report that changed the covers: over a batch
+    /// applied first (a fill's), an earlier report's answer and covers that changed nothing. The last answer's write
+    /// takes it.
+    func testACarriedPositionWaitsForEveryCoversAnswer() throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        p.apply(wireBatch([["op": "style", "id": 1, "style": ["overflow_y": "scroll"]], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 180.0], ["op": "content", "id": 1, "w": 402.0, "h": 9000.0],
+                           ["op": "props", "id": 1, "set": ["scrollTop": "140"]]]))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        owner.retainScrollPosition(from: scroll)
+        let navigation = p.navigation
+        navigation.coversReported += 2
+        p.apply(wireBatch([]))
+        XCTAssertNotNil(owner.pendingScrollTop, "a batch leaves the carried position")
+        navigation.writeCarriedScrollsWhenAnswered(through: navigation.coversReported - 1)
+        XCTAssertNotNil(owner.pendingScrollTop, "the first report's answer leaves it for the second's")
+        navigation.writeCarriedScrollsWhenAnswered()
+        XCTAssertNotNil(owner.pendingScrollTop, "covers that changed nothing leave it too")
+        navigation.writeCarriedScrollsWhenAnswered(through: navigation.coversReported)
+        XCTAssertNil(owner.pendingScrollTop, "the last answer's write takes it")
+        XCTAssertFalse(navigation.coversAnswerOwed)
     }
 
     func testRevealingACarriedRowDoesNotReserveContentPaddingForAKeyboard() throws {

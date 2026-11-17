@@ -102,11 +102,15 @@ orientation 6).
 
 ### Copies, adds and the app's own photos
 
-6. Tap a photo: `app:/tmp/photos/1.jpg image/jpeg WxH`. With
-   `ACCESS_MEDIA_LOCATION` refused, copy another app's photo with a
-   location: `adb shell run-as com.exact.photosfixture` and `exiftool` on the
-   copy show no GPS, and the reply's `android.locationRedacted` is true;
-   granted, the GPS is kept and it is false.
+6. Tap a photo: `app:/tmp/photos/<UUID>.jpg image/jpeg WxH`, a new name
+   at each tap. With `ACCESS_MEDIA_LOCATION` refused, copy another app's
+   photo with a location: the copy has no GPS, and the reply's
+   `android.locationRedacted` is true; granted, the GPS is kept and it is
+   false. The copy is in the app's private storage, which `adb shell run-as`
+   cannot open (the APK is not debuggable). To read it, tap Add the copy
+   (step 7), which writes the copy's bytes unchanged as
+   `Pictures/<UUID>.jpg`, then run `exiftool` on what `adb pull
+   /sdcard/Pictures/<UUID>.jpg` fetches.
 7. Tap Add the copy: a new photo under `Pictures/` (Files, Images), the
    grid's first; `adb shell content query --uri
    content://media/external/images/media --projection

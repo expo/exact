@@ -10,15 +10,27 @@ impl Engine {
         (self.links.next_change)(self)
     }
 
+    /// [`Engine::next_change`] with held curves left out: a host that waits
+    /// for the present of a picture carrying them needs no frame for them;
+    /// it wakes for them at [`Engine::held_deadline`] (LLP 1003.001 D9).
+    pub fn next_change_unheld(&self) -> Option<f64> {
+        self.next_change()?;
+        self.next_change_where(false)
+    }
+
     pub(super) fn next_change_full(&self) -> Option<f64> {
+        self.next_change_where(true)
+    }
+
+    fn next_change_where(&self, held: bool) -> Option<f64> {
         let now = self.sample_time();
-        if self.clock_pending() {
+        if held && self.clock_pending() {
             return Some(now);
         }
         let transitions = self.running.iter().filter_map(|key| {
             let run = self.slots.get(key)?.running()?;
             if run.pending.is_some() {
-                return Some(now);
+                return held.then_some(now);
             }
             if now < run.start {
                 return Some(run.start);
@@ -45,7 +57,7 @@ impl Engine {
                             return None;
                         }
                         if play.pending.is_some() {
-                            return Some(now);
+                            return held.then_some(now);
                         }
                         let underlying = self.target(*node, property).or_else(|| base(property))?;
                         play.animation

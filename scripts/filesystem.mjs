@@ -9,6 +9,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { RustMissing, fromSets, rustMissing } from './tools.mjs';
 
 // The macOS deployment target every cargo call on a Mac gives what it builds for the Mac
 // itself: build scripts, proc macros and the developer tools (the bake tool, the filesystem
@@ -33,7 +34,7 @@ export function freeSpace(path, places = [resolve(homedir(), '.cache/exact')]) {
 // write a dylib that dyld on macOS 27.0.1 refuses: "mis-aligned LINKEDIT string pool". rustc then fails
 // on the proc macro it cannot load, with that message or as "can't find crate for `zerofrom_derive`".
 // A deployment target is not in a proc macro's fingerprint, so a plain cargo call sharing the target
-// directory (caps' wasm check, a release build) takes such a dylib too. So the scripts' cargo calls run
+// directory (the hourly wasm check, a release build) takes such a dylib too. So the scripts' cargo calls run
 // rustc through `scripts/rustc/exact-rustc`, which links proc macros with `-no_fixup_chains`. Cargo
 // leaves RUSTC_WRAPPER out of its fingerprints, so plain and scripted calls still share every unit; it
 // is a name found on PATH so that kept modules' groups, which read it (scripts/kept.mjs), are the same
@@ -59,13 +60,16 @@ let binary;
 const HELPER = 'EXACT_FILESYSTEM_HELPER';
 /** The helper this process runs, checked current: the bake names it to the Bun processes it spawns. */
 export const filesystemHelper = () => executable();
-function executable() {
+/** The helper as Cargo builds it here, never a tool set's: what `tools.mjs keep` keeps, with the directory it built in. */
+export const builtFilesystemHelper = () => ({ path: executable(false), directory: helperDirectory() });
+// A deploy recreates its capture but keeps its Cargo cache. Separate each
+// checkout's bootstrap there, including when that cache holds several apps.
+const helperDirectory = () => process.env.CARGO_TARGET_DIR
+  ? resolve(process.env.CARGO_TARGET_DIR, 'exact-filesystem-tool', createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 24))
+  : resolve(root, 'target/exact-filesystem-tool');
+function executable(fromSet = true) {
   if (binary) return binary;
-  // A deploy recreates its capture but keeps its Cargo cache. Separate each
-  // checkout's bootstrap there, including when that cache holds several apps.
-  const directory = process.env.CARGO_TARGET_DIR
-    ? resolve(process.env.CARGO_TARGET_DIR, 'exact-filesystem-tool', createHash('sha256').update(realpathSync(root)).digest('hex').slice(0, 24))
-    : resolve(root, 'target/exact-filesystem-tool');
+  const directory = helperDirectory();
   const suffix = process.platform === 'win32' ? '.exe' : '';
   // A caller that checked the helper itself may name its captured copy in `EXACT_FILESYSTEM_HELPER`
   // for the processes it spawns (the bake does, once per process, for its many Bun calls). The copy
@@ -89,6 +93,12 @@ function executable() {
   // (`helperInputs`, never trusted by time), naming a capture whose bytes still have the digest its name gives.
   const checked = helperCapture(directory, suffix, helperInputs(env));
   if (checked) return binary = checked;
+  // Else a tool set's whose inputs are this checkout's, and Cargo only after it (LLP 1174 D5).
+  if (fromSet) {
+    const set = fromSets('exact-filesystem');
+    if (set) return binary = set.path;
+    if (rustMissing()) throw new RustMissing('exact-filesystem');
+  }
   const target = resolve(directory, `debug/exact-filesystem${suffix}`);
   // A separate tooling target also permits calls from an active app Cargo
   // build script: the helper has no compiler/app dependency and never waits

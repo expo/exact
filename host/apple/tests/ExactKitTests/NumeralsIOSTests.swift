@@ -409,6 +409,45 @@ final class NumeralsIOSTests: XCTestCase {
         XCTAssertTrue(node.rollsNumerals, "its line fits its box: it rolls")
     }
 
+    func testAColourOnlyUpdatePaintsTheCurrentSampleAndLeavesNoRasterWork() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "SwiftUI draws only in a scene's window") }
+        let (p, window) = hosted("numerals-colour", in: scene)
+        let style = { (colour: [Double]) -> [String: Any] in
+            ["font_size": 20.0, "content_transition": "numeric", "text_color": colour]
+        }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "text", "props": ["text": "12345"], "style": style([0, 0, 0, 255])],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "12345"], "style": style(red)],
+            ["op": "roots", "ids": [1, 2]],
+            ["op": "frame", "id": 1, "x": 20.0, "y": 20.0, "w": 360.0, "h": 40.0],
+            ["op": "frame", "id": 2, "x": 20.0, "y": 320.0, "w": 360.0, "h": 40.0],
+        ]))
+        let node = try XCTUnwrap(p.views[1]), twin = try XCTUnwrap(p.views[2])
+        paint(p, [node, twin])
+        XCTAssertTrue(node.rollsNumerals)
+        XCTAssertTrue(node.textLayoutValid)
+        waitFor("the mounted numeric paragraph") { capability(node) }
+        // Paint motion sends only a style, with no paragraph or frame op to clear text caches again.
+        for colour in [[128.0, 128.0, 128.0, 255.0], red] {
+            p.apply(wireBatch([["op": "style", "id": 1, "style": style(colour)]]))
+            XCTAssertEqual(node.paragraphSpec().runs.first?.color, colour)
+            paint(p, [node])
+        }
+        let top = CGRect(x: 0, y: 20, width: 400, height: 40), bottom = top.offsetBy(dx: 0, dy: 300)
+        let pixels = still(window, inked: [top, bottom], "the final colour sample")
+        same(ink(pixels, in: top), ink(pixels, in: bottom), "the final colour sample")
+        XCTAssertTrue(node.rollsNumerals)
+        XCTAssertNil(node.textRaster)
+        p.scrollPump.reset()
+        let surfaces = p.textSurfaceBuilds, visits = p.textIndex.visits
+        for _ in 0..<120 { p.scrollPump.scrolled(nil) }
+        XCTAssertTrue(p.owedText.isEmpty)
+        XCTAssertEqual(p.textSurfaceBuilds - surfaces, 0)
+        XCTAssertEqual(p.textIndex.visits - visits, 0)
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        print("J numeric frames=120 text_surfaces=\(p.textSurfaceBuilds - surfaces) text_index_walks=\(p.textIndex.visits - visits)")
+    }
+
     /// A batch that sets only a text's words shows the new words, in a
     /// paragraph that rolls and in one that does not (its line is cut).
     func testATextOnlyUpdateShowsTheNewWords() throws {

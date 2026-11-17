@@ -41,6 +41,43 @@ test('the render DOM reflects link relations and image alternatives in both dire
   }
 });
 
+test('the render DOM marks its hero first among its attributes and preloads it by the same request, past a hidden image', () => {
+  // `visibility` is inherited: the hidden class's image is skipped, and the image whose class sets it back to `visible` is
+  // the hero.
+  const doc = createDocument('<style>.c1{visibility:hidden}.c2{visibility:visible}</style>'), root = doc.getElementById('exact-root');
+  const hidden = doc.createElement('div'), unseen = doc.createElement('img'), hero = doc.createElement('img');
+  hidden.setAttribute('class', 'c1'); unseen.setAttribute('src', 'https://example.com/hidden.png');
+  hero.setAttribute('alt', 'Hero'); hero.setAttribute('class', 'c2'); hero.setAttribute('crossorigin', 'anonymous'); hero.setAttribute('src', 'https://example.com/hero.png?a=1&b=2');
+  hidden.append(unseen, hero); root.append(hidden);
+  expect(doc.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/hero.png?a=1&amp;b=2" crossorigin="anonymous" fetchpriority="high">');
+  expect(doc.rootHTML()).toContain('<img fetchpriority="high" alt="Hero" class="c2" crossorigin="anonymous" src="https://example.com/hero.png?a=1&amp;b=2">');
+  // Inline, `collapse` hides an image; `inert` and `display: none` hide even an image set `visible`; `inherit` takes a
+  // hidden parent's visibility; an inline `display` wins over a class's `none`, and an inline `unset` (a bound blank)
+  // over a hidden class, taking the parent's visibility.
+  const inline = createDocument('<style>.c1{visibility:hidden}.c2{display:none}</style>'), make = (src, style, attrs = {}) => {
+    const img = inline.createElement('img');
+    for (const [name, value] of Object.entries({ src, ...attrs })) img.setAttribute(name, value);
+    img.style.setProperty('visibility', style);
+    return img;
+  };
+  const [inert, gone, shut, shown] = [1, 2, 3, 4].map(() => inline.createElement('div'));
+  inert.setAttribute('inert', ''); inert.append(make('https://example.com/inert.png', 'visible'));
+  gone.style.setProperty('display', 'none'); gone.append(make('https://example.com/gone.png', 'visible'));
+  shut.setAttribute('class', 'c1'); shut.append(make('https://example.com/inherit.png', 'inherit'));
+  shown.setAttribute('class', 'c2'); shown.style.setProperty('display', 'flex');
+  shown.append(make('https://example.com/unset.png', 'unset', { class: 'c1' }));
+  inline.getElementById('exact-root').append(make('https://example.com/collapsed.png', 'collapse'), inert, gone, shut, shown);
+  expect(inline.heroPreload()).toBe('<link rel="preload" as="image" href="https://example.com/unset.png" fetchpriority="high">');
+});
+
+test('the render DOM refuses a NUL in text or an attribute', () => {
+  for (const write of [el => { el.textContent = 'a\0b'; }, el => el.setAttribute('title', 'a\0b')]) {
+    const doc = createDocument(), el = doc.createElement('p');
+    write(el); doc.getElementById('exact-root').append(el);
+    expect(() => doc.rootHTML()).toThrow('a NUL character, which the HTML parser does not keep');
+  }
+});
+
 test('the render DOM selects options by their value or label', () => {
   const doc = createDocument(), select = doc.createElement('select');
   const a = doc.createElement('option'), b = doc.createElement('option'), explicit = doc.createElement('option');
@@ -322,8 +359,7 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
 }, 60000);
 
 // An attribute's `<` and `>` are written as references (HTML, "Serializing HTML fragments", attribute mode), as
-// document.rs writes them, so the hero image scan, which ends a tag at its first `>` (render.mjs `heroImage`), reads
-// every attribute of an image and of a covered route: the page preloads the image it shows first.
+// document.rs writes them; and a page preloads the image it shows first, not a covered route's.
 test.each(['js', 'rust'])('%s-rendered pages escape a > in an attribute and preload the image shown first', async how => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/dom-escape-test-'));
@@ -353,8 +389,8 @@ component Pages
     expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
     const html = path => readFileSync(resolve(dist, path, 'index.html'), 'utf8');
     const preloads = path => html(path).match(/<link rel="preload" as="image"[^>]*>/g);
-    expect([preloads(''), preloads('detail')]).toEqual([['<link rel="preload" as="image" href="https://example.com/home.png">'],
-      ['<link rel="preload" as="image" href="https://example.com/one.png">']]);
+    expect([preloads(''), preloads('detail')]).toEqual([['<link rel="preload" as="image" href="https://example.com/home.png" fetchpriority="high">'],
+      ['<link rel="preload" as="image" href="https://example.com/one.png" fetchpriority="high">']]);
     expect([html('detail').includes('alt="1 &gt; 0"'), html('detail').includes('="1 > 0"')]).toEqual([true, false]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 180000);
@@ -378,7 +414,7 @@ component App
 `);
     const compiler = webCompiler();
     expect(compiler.cmd).not.toBe('cargo');
-    const built = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', dir], { cwd: root, encoding: 'utf8' });
+    const built = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', dir], { cwd: root, encoding: 'utf8', env: compiler.env });
     expect({ status: built.status, error: built.status ? built.stdout + built.stderr : '' }).toEqual({ status: 0, error: '' });
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js', 'rows.js', 'router.js', 'route-pattern.js', 'schedule.js'];
     for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));

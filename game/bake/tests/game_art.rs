@@ -2,13 +2,32 @@
 use exact_game::*;
 use std::{fs, path::PathBuf};
 
-fn temp(name: &str) -> PathBuf {
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!("game-art-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("logic/src")).unwrap();
     fs::write(dir.join("logic/src/lib.rs"), "").unwrap();
     fs::create_dir_all(dir.join("art")).unwrap();
-    dir
+    TempDir(dir)
 }
 /// One second of mono 16-bit PCM at 8 kHz holding `sample` throughout.
 fn wav(sample: i16) -> Vec<u8> {
@@ -45,10 +64,14 @@ fn both_manifest_layouts_find_the_game_and_nothing_else_does() {
     // The generated member, two levels below the game, and an authored one, one level.
     assert_eq!(
         exact_game_bake::game_dir(game.join(".shells/logic")).unwrap(),
-        game
+        *game
     );
-    assert_eq!(exact_game_bake::game_dir(game.join("logic")).unwrap(), game);
-    let outside = std::env::temp_dir().join(format!("game-art-none-{}", std::process::id()));
+    assert_eq!(
+        exact_game_bake::game_dir(game.join("logic")).unwrap(),
+        *game
+    );
+    let outside =
+        TempDir(std::env::temp_dir().join(format!("game-art-none-{}", std::process::id())));
     fs::create_dir_all(&outside).unwrap();
     let refused = exact_game_bake::game_dir(&outside).unwrap_err();
     assert!(refused.contains("logic/src/lib.rs"), "{refused}");

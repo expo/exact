@@ -8,7 +8,7 @@
   "theme_color": "#ffffff",
   "background_color": "#ffffff",
   "app": { "id": "dev.exact.heavybench.exact", "name": "Heavy list" },
-  "rust": { "mode": "off" },
+  "rust": { "mode": "off", "data": { "crate": "exact-heavylist-data", "type": "exact_heavylist_data::Heavy" } },
   "host": {
     "ios": { "minimumOS": "17.0", "deviceFamily": ["iphone", "ipad"] },
     "macos": { "minimumOS": "14.0" },

@@ -1,6 +1,6 @@
 # Recipe: a chat thread
 
-A transcript open at its newest message, over Messages' composer.
+A transcript open at its newest message, over a composer.
 
 ```contract
 routes nav
@@ -64,7 +64,7 @@ export const answer: Answer = (source, args, store, storage, native) => sources[
 ```
 
 ```contract-test
-test "a sent message lands; the composer clears"
+test "a send lands"
   type "composer" "Yes, at noon"
   tap "send"
   clock data
@@ -73,5 +73,5 @@ test "a sent message lands; the composer clears"
 ```
 
 - `interactive-widget` keeps the composer over the keyboard; Send keeps it up.
-- A send scrolls to the end; `scrollFollowEnd` follows only from there.
+- A send scrolls to the end; `scrollFollowEnd` follows only from there. Paging: `bun exact.mjs pattern chat`.
 - `pre-wrap` keeps line breaks; `break-word` breaks a URL. Yours: no name; groups name others'.

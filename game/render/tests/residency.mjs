@@ -126,7 +126,10 @@ export async function checkResidency(probe, session, check, say) {
   const samples = (restored.samples ?? []).sort((a,b)=>a-b);
   if (samples.length) say(`restore through first draw, browser performance trace: n=${samples.length}, p50=${samples[Math.floor(samples.length/2)].toFixed(3)} ms, p95=${samples[Math.ceil(samples.length*.95)-1].toFixed(3)} ms`);
   else say('restore timing samples: none recorded by this host');
-  const delta = (a,b,key) => b.gpu.afterReady[key]-a.gpu.afterReady[key];
+  // A new picture resets the readiness boundary; its uploads then belong to
+  // beforeReady. Compare lifetime totals across that boundary on this device.
+  const total = (world,key) => world.gpu.beforeReady[key]+world.gpu.afterReady[key];
+  const delta = (a,b,key) => total(b,key)-total(a,key);
   const changed = await probe.run(session, 'KeyC');
   if(changed.error) throw new Error(changed.error);
   // Declared assets (Game::ASSETS) stay resident while unshown, so swapping the

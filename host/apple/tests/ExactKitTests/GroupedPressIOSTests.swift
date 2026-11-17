@@ -34,6 +34,38 @@ final class GroupedPressIOSTests: GroupedListFixture {
         XCTAssertEqual(ink(), .blue)
     }
 
+    func testHighlightedTranslationFollowsBoundsIncludingAnInitiallyEmptyCell() throws {
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        for initialWidth in [CGFloat(0), 100] {
+            let cell = GroupedCell(frame: CGRect(x: 0, y: 0, width: initialWidth, height: 40))
+            window.addSubview(cell)
+            defer { cell.removeFromSuperview() }
+            cell.activePaint(["press_translate_percent": .array([.number(50), .number(0)])],
+                             content: .cell(), enabled: true, protected: (false, false, false))
+            var configured = false
+            let update = cell.configurationUpdateHandler
+            cell.configurationUpdateHandler = { cell, state in
+                update?(cell, state)
+                configured = true
+            }
+            cell.forcedPressed = true
+            waitFor("the initial highlighted configuration", late: 1, cap: 2) { configured }
+            XCTAssertEqual((cell.layer.animation(forKey: "pressTranslation") as? CABasicAnimation)?.toValue as? NSValue,
+                           initialWidth == 0 ? nil : NSValue(cgPoint: CGPoint(x: 50, y: 0)))
+            cell.bounds.size.width = 200
+            cell.layoutSubviews()
+            waitForMainQueue()
+            let animation = try XCTUnwrap(cell.layer.animation(forKey: "pressTranslation") as? CABasicAnimation)
+            XCTAssertEqual((animation.toValue as? NSValue)?.cgPointValue, CGPoint(x: 100, y: 0))
+            XCTAssertEqual(animation.duration, .greatestFiniteMagnitude, "native configuration adds no ease")
+            cell.forcedPressed = false
+            waitFor("the released configuration", late: 1, cap: 2) { cell.layer.animation(forKey: "pressTranslation") == nil }
+            XCTAssertNil(cell.layer.animation(forKey: "pressTranslation"))
+        }
+    }
+
     func testActiveScaleKeepsTheAuthoredOriginFixed() throws {
         let p = presenter { self.model() }
         let cell = try XCTUnwrap(try cell(p, 10) as? GroupedCell)

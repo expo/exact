@@ -1,6 +1,7 @@
 #if os(iOS)
 import UIKit
 import XCTest
+import ExactSurfaces
 @testable import ExactKit
 
 /// A scroll asks the pump for work only when work is owed: a paragraph
@@ -58,6 +59,215 @@ final class ScrollPumpIOSTests: XCTestCase {
         ]))
         window.layoutIfNeeded()
         for id in ids { p.views[UInt32(id)]?.layer.displayIfNeeded() }
+    }
+
+    func testUntracedScrollFramesCreateNoSignpostIntervals() throws {
+        guard !Presenter.signposts.isEnabled else { throw XCTSkip("Instruments enabled scroll tracing") }
+        let session = fixture("pump-no-signpost-state")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter, node = try XCTUnwrap(p.views[1])
+        node.applyStyle(["overflow_y": .string("scroll")])
+        let scroll = try XCTUnwrap(node.scrollView)
+        let intervals = p.scrollSignpostIntervals
+        for _ in 0..<120 { node.scrollViewDidScroll(scroll) }
+        XCTAssertEqual(p.scrollSignpostIntervals - intervals, 0)
+        print("J untraced scroll_frames=120 signpost_intervals=\(p.scrollSignpostIntervals - intervals)")
+    }
+
+    func testAPaintedScrollBuildsNoTextSurfacesAndWalksNoTextIndex() throws {
+        let session = fixture("pump-no-text-work")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        XCTAssertTrue(try XCTUnwrap(p.views[2]).textRasterSettled)
+        p.apply(wireBatch(belowThePort([3])))
+        p.apply(wireBatch([
+            ["op": "create", "id": 4, "kind": "text", "props": ["text": ""]],
+            ["op": "children", "id": 1, "ids": [2, 4]],
+        ]))
+        XCTAssertNil(p.views[3]?.window, "a pooled or detached paragraph stays in the text table")
+        p.scrollPump.reset()
+        XCTAssertTrue(p.owedText.isEmpty)
+        let surfaces = p.textSurfaceBuilds, visits = p.textIndex.visits
+        for _ in 0..<120 { p.scrollPump.scrolled(nil) }
+        XCTAssertEqual(p.textSurfaceBuilds - surfaces, 0)
+        XCTAssertEqual(p.textIndex.visits - visits, 0)
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertTrue(p.scrollPump.observingTurns)
+        print("J quiet frames=120 text_surfaces=\(p.textSurfaceBuilds - surfaces) text_index_walks=\(p.textIndex.visits - visits)")
+    }
+
+    func testAnUnpaintedParagraphEnteringTheWindowPaintsInThatScrollFrame() throws {
+        let session = fixture("pump-attached-text")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter
+        p.apply(wireBatch(belowThePort([3])))
+        let node = try XCTUnwrap(p.views[3])
+        node.frame.origin.y = 160
+        XCTAssertFalse(node.textRasterReady)
+        XCTAssertFalse(p.owedText.contains(3))
+        p.root.addSubview(node)
+        XCTAssertTrue(p.owedText.contains(3))
+        XCTAssertFalse(node.textRasterReady)
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(node.textRasterReady, "no run-loop turn between attachment, scroll and the pixels")
+        XCTAssertTrue(node.textRasterFrame.contains(p.textScrollportRect(node)))
+        node.removeFromSuperview()
+        node.dropTextRaster()
+        XCTAssertFalse(p.owedText.contains(3))
+        p.root.addSubview(node)
+        XCTAssertTrue(p.owedText.contains(3))
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(node.textRasterReady)
+        p.scrollPump.settle()
+        XCTAssertTrue(p.scrollPump.observingTurns)
+    }
+
+    func testFallbackTextSkipsTheRasterPassAndReturnsWhenItCanRasterAgain() throws {
+        let session = fixture("pump-fallback-text")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter, node = try XCTUnwrap(p.views[2])
+        var style = node.style
+        style["background_clip"] = .string("text")
+        style["background_color"] = .array([.number(255), .number(0), .number(0), .number(255)])
+        node.applyStyle(style)
+        node.layer.displayIfNeeded()
+        XCTAssertFalse(node.canRasterText)
+        XCTAssertNil(node.textRaster)
+        XCTAssertFalse(node.textRasterSettled)
+        XCTAssertNotNil(node.layer.contents, "UIKit's backing store holds the fallback glyphs")
+        let bitmap = try XCTUnwrap(Bitmap.blank(width: Int(node.bounds.width), height: Int(node.bounds.height)))
+        let bytes = try XCTUnwrap(bitmap.bytes)
+        func pixels() -> [UInt8] {
+            bitmap.context.clear(node.bounds)
+            node.layer.render(in: bitmap.context)
+            return Array(UnsafeBufferPointer(start: bytes.assumingMemoryBound(to: UInt8.self), count: bitmap.bytesPerRow * bitmap.height))
+        }
+        let before = pixels()
+        XCTAssertGreaterThan(stride(from: 3, to: before.count, by: 4).filter { before[$0] > 16 }.count, 50)
+        p.scrollPump.reset()
+        let surfaces = p.textSurfaceBuilds, visits = p.textIndex.visits
+        for _ in 0..<120 { p.scrollPump.scrolled(nil) }
+        XCTAssertEqual(p.textSurfaceBuilds - surfaces, 0)
+        XCTAssertEqual(p.textIndex.visits - visits, 0)
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertEqual(pixels(), before, "the scroll keeps the fallback glyphs")
+        print("J fallback frames=120 text_surfaces=\(p.textSurfaceBuilds - surfaces) text_index_walks=\(p.textIndex.visits - visits)")
+        node.applyStyle(["font_size": .number(16)])
+        XCTAssertTrue(node.canRasterText)
+        XCTAssertTrue(p.owedText.contains(node.id), "eligibility changes without a raster-ready transition")
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(node.textRasterReady, "the first eligible scroll frame paints the paragraph")
+    }
+
+    func testFillTurnsReuseOneBlockAndAResetWithdrawsTheOldTurn() {
+        let session = fixture("pump-stored-block")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter, pump = p.scrollPump
+        let made = pump.afterScrollBlocks
+        for _ in 0..<10 {
+            pump.requestFill()
+            waitForMainQueue("the scheduled pump")
+            pump.settle()
+            XCTAssertFalse(pump.asksForFrames, "the stored block executes on every turn")
+        }
+        XCTAssertEqual(pump.afterScrollBlocks - made, 1)
+        pump.requestFill()
+        pump.reset()
+        pump.requestFill()
+        waitForMainQueue("the replacement pump")
+        pump.settle()
+        XCTAssertEqual(pump.afterScrollBlocks - made, 2)
+        XCTAssertFalse(pump.asksForFrames)
+        XCTAssertTrue(pump.observingTurns)
+        print("J fill_turns=10 scheduled_blocks=1")
+    }
+
+    func testRasterMembershipFollowsFlowColumnsFailureCaptureAndCanvasAncestry() throws {
+        ExactSurfaces.install()
+        let session = fixture("pump-raster-eligibility")
+        defer { session.destroy(); window.isHidden = true }
+        let p = session.presenter, node = try XCTUnwrap(p.views[2])
+        node.applyFlow([["kind": "Circle", "cx": 0, "cy": 1000, "r": 10]])
+        XCTAssertFalse(node.usesTextRaster)
+        XCTAssertFalse(p.owedText.contains(2))
+        XCTAssertFalse(p.paintVisibleText())
+        node.applyFlow([])
+        XCTAssertTrue(p.owedText.contains(2))
+        node.applyColumns(["fragments": [[0, 0, 300, 40, 0, 1, 0, 0]]])
+        XCTAssertFalse(node.usesTextRaster)
+        XCTAssertFalse(p.owedText.contains(2))
+        XCTAssertFalse(p.paintVisibleText())
+        node.applyColumns([:])
+        XCTAssertTrue(p.owedText.contains(2))
+        p.paintVisibleText()
+        let key = try XCTUnwrap(node.textRasterKey)
+        node.dropTextRaster()
+        node.textRasterKey = key
+        node.textRasterFailed = true
+        XCTAssertFalse(p.owedText.contains(2), "allocation fallback draws through UIKit")
+        XCTAssertFalse(p.paintVisibleText())
+        node.textRasterFailed = false
+        XCTAssertTrue(p.owedText.contains(2))
+        Capture.capturing = true
+        node.setNeedsDisplay(); node.layer.displayIfNeeded()
+        Capture.capturing = false
+        XCTAssertTrue(p.owedText.contains(2), "a temporary capture cannot withdraw next frame's raster work")
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(node.textRasterReady)
+        let canvas = NodeView(id: 20, kind: "canvas", presenter: p)
+        let parent = NodeView(id: 21, kind: "view", presenter: p)
+        parent.frame = p.viewport.bounds
+        p.root.addSubview(canvas)
+        p.root.addSubview(parent)
+        parent.addSubview(node)
+        node.dropTextRaster()
+        XCTAssertTrue(p.owedText.contains(2))
+        try XCTUnwrap(canvas.overlay).addSubview(parent)
+        XCTAssertFalse(p.owedText.contains(2), "moving an ancestor changes how its text paints")
+        XCTAssertFalse(p.paintVisibleText())
+        p.root.addSubview(parent)
+        XCTAssertTrue(p.owedText.contains(2))
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(node.textRasterReady)
+    }
+
+    func testScrollerMembershipFollowsReparentingAndANewScrollContainer() throws {
+        let p = Presenter()
+        mount(p)
+        defer { p.reset(); window.isHidden = true }
+        let gradient: [String: Any] = ["linear": 180, "stops": [0, 255, 0, 0, 255, 1, 0, 0, 255, 255]]
+        p.apply(wireBatch([
+            ["op": "create", "id": 10, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 11, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 12, "kind": "view"],
+            ["op": "create", "id": 13, "kind": "view",
+             "style": ["background_image": gradient, "background_attachment": "fixed"]],
+            ["op": "children", "id": 12, "ids": [13]],
+            ["op": "children", "id": 10, "ids": [12]],
+            ["op": "roots", "ids": [10, 11]],
+            ["op": "frame", "id": 10, "x": 0, "y": 0, "w": 200, "h": 200],
+            ["op": "frame", "id": 11, "x": 200, "y": 0, "w": 200, "h": 200],
+            ["op": "frame", "id": 12, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "frame", "id": 13, "x": 0, "y": 0, "w": 100, "h": 50],
+        ]))
+        let a = try XCTUnwrap(p.views[10]?.scroll), b = try XCTUnwrap(p.views[11]?.scroll)
+        let parent = try XCTUnwrap(p.views[12]), member = try XCTUnwrap(p.views[13])
+        member.layer.displayIfNeeded()
+        XCTAssertNotNil(member.boxGradient)
+        XCTAssertTrue(p.gradientsMove(in: a))
+        XCTAssertFalse(p.gradientsMove(in: b))
+        b.addSubview(parent)
+        XCTAssertFalse(p.gradientsMove(in: a))
+        XCTAssertTrue(p.gradientsMove(in: b))
+        parent.applyStyle(["overflow_y": .string("scroll")])
+        let inner = try XCTUnwrap(parent.scroll)
+        XCTAssertTrue(p.gradientsMove(in: inner), "a container made after its children inherits their membership")
+        p.noteFixedGradient(member, fixed: false)
+        XCTAssertFalse(p.gradientsMove(in: inner))
+        p.noteFixedGradient(member, fixed: true)
+        XCTAssertTrue(p.gradientsMove(in: inner))
+        member.removeFromSuperview()
+        XCTAssertFalse(p.gradientsMove(in: inner))
     }
 
     func testFreedSlotsRefillBetweenFrameSlicesAndKeepScrollingFrames() throws {
@@ -151,6 +361,64 @@ final class ScrollPumpIOSTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(p.views[2]).textRasterSettled)
         for _ in 0..<10 { p.scrollPump.scrolled(nil) }
         XCTAssertFalse(p.scrollPump.asksForFrames, "no pass queued and no display link")
+    }
+
+    func testQuietFastTravelLimitsDecodesUntilItSlowsOrEnds() throws {
+        let p = Presenter()
+        mount(p)
+        defer { p.reset(); window.isHidden = true }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]],
+            ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0,
+                "count": 1000, "totalExtent": 100_000, "pending": false, "rows": []]]],
+            ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 400],
+            ["op": "content", "id": 1, "w": 400, "h": 100_000],
+        ]))
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scrollView)
+        p.scrollPump.reset()
+        node.scrollEnd = ScrollEnd(); node.scrollEnd?.live = true
+        var time = CACurrentMediaTime()
+        p.scrollPump.clock = { time }
+        p.scrollPump.sampleScroll(node)
+        time += 1.0 / 60
+        scroll.contentOffset.y = 360
+        XCTAssertGreaterThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertTrue(RasterWorkers.shared.single, "quiet frames still keep the second decoder idle")
+        p.scrollPump.pump()
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertTrue(RasterWorkers.shared.single, "giving up the display link does not end travel")
+        let fills = p.scrollPump.fillPasses, flushes = p.collections.flushes
+        time += 0.16
+        XCTAssertEqual(p.scrollPump.velocity(1), 0)
+        waitFor("the fast sample expires while the finger stays still") { !RasterWorkers.shared.single }
+        XCTAssertFalse(p.scrollPump.asksForFrames)
+        XCTAssertEqual(p.scrollPump.fillPasses, fills, "expiry needs no pump")
+        XCTAssertEqual(p.collections.flushes, flushes, "expiry sends no report")
+        for _ in 0..<6 {
+            time += 1.0 / 60
+            scroll.contentOffset.y += 360
+        }
+        XCTAssertTrue(RasterWorkers.shared.single, "fresh travel limits decodes again")
+        time += 1.0 / 60
+        scroll.contentOffset.y += 1
+        XCTAssertLessThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertFalse(RasterWorkers.shared.single)
+        for _ in 0..<3 {
+            time += 1.0 / 60
+            scroll.contentOffset.y += 360
+        }
+        XCTAssertGreaterThan(p.scrollPump.velocity(1), ScrollPump.fastTravel)
+        XCTAssertTrue(RasterWorkers.shared.single)
+        p.collections.rested(1)
+        XCTAssertFalse(RasterWorkers.shared.single, "rest clears the latch without another pump")
+        time += 1.0 / 60
+        scroll.contentOffset.y += 360
+        time += 1.0 / 60
+        scroll.contentOffset.y += 360
+        XCTAssertTrue(RasterWorkers.shared.single)
+        p.scrollPump.reset()
+        XCTAssertFalse(RasterWorkers.shared.single)
     }
 
     func testAScrollOverTextWithoutItsPixelsAsksForAPass() throws {

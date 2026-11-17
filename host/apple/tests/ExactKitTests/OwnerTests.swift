@@ -24,6 +24,18 @@ final class OwnerTests: XCTestCase {
         XCTAssertFalse(Owner.shared.isOwner)
     }
 
+    func testTravelMailboxCoalescesUntilTheNextOwnerJob() {
+        var seen: [Int] = []
+        Owner.shared.sync {
+            Owner.shared.callMain {
+                for n in 0..<120 { Owner.shared.noteScroll(runtime: UInt32.max, view: 1) { seen.append(n) } }
+                XCTAssertEqual(Owner.shared.pendingScrollsForTests, 1)
+            }
+            XCTAssertTrue(seen.isEmpty, "noting travel posts no owner job")
+        }
+        Owner.shared.sync { XCTAssertEqual(seen, [119], "the next job sees only the newest offset") }
+    }
+
     func testNestedSyncOnTheOwnerRunsInline() {
         let value = Owner.shared.sync { Owner.shared.sync { 7 } + 1 }
         XCTAssertEqual(value, 8)

@@ -161,6 +161,17 @@ check('down before the press, up wherever the button lifts, nothing when disable
     await mouse('mouseMoved', await centre('tapkid'), 'none', 0);
     await frame();
     expect(await log()).toEqual(['hoverbox move']);
+    // The first move in a frame goes out in its own event; later ones in that frame wait for the next, which sends
+    // the latest (#543). A move held a frame lands its action two frames after the event.
+    const moves = await evaluate(`new Promise(done => requestAnimationFrame(() => {
+      const box = document.getElementById('hoverbox'), r = box.getBoundingClientRect(), log = window.log;
+      log.length = 0;
+      const move = x => box.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, isPrimary: true, pointerId: 1, clientX: r.x + x, clientY: r.y + 5 }));
+      move(1); const first = log.length; move(2); move(3); const held = log.length;
+      requestAnimationFrame(() => done([first, held, log.length, +window.records.at(-1).split(",")[7] - r.x]));
+    }))`);
+    expect(moves).toEqual([1, 1, 2, 3]);
+    await log(); await records();
     // Held, the innermost holds the moves: its parent hears the down and
     // up, and none of the moves.
     await mouse('mousePressed', await centre('tapkid'));

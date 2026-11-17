@@ -1,23 +1,11 @@
-// The workspace crates a web app links for wasm32, checked for that target (`cargo check --target
-// wasm32-unknown-unknown`): caps.mjs runs `wasmCheck` before every push. A native build and its tests never compile
-// them for wasm, so a name only a `cfg(unix)` arm gives (G2's gallery, 5540abbfc0) broke every wasm web build for 70
-// minutes, until the lane's wasm loop saw it.
-//
-// When it runs: when the target directory already holds this check, always (Cargo's fingerprints then decide what
-// changed, `include_str!` inputs and build scripts' too, and a check with nothing to do takes under a second); in a
-// target directory with none yet, when a change since origin/main touches Rust, Cargo or the toolchain, or any file
-// but a test inside a checked crate's directory (cold, the check takes about a minute and 300 MB, so a push of
-// scripts or docs alone does not pay it; an `include_str!` input outside the crates, docs/recipes' say, waits for the
-// next check here or the lane's); with no origin/main, always. What it leaves out is the lane's: the app crates themselves (two minutes cold, Caltrain's data) and the
-// GPU leaves (wgpu, three). EXACT_CAPS_WASM=0 skips it (a test that runs caps on this checkout for something else).
+// The hourly lane checks the workspace libraries and leaves that web apps link for wasm32.
+// A native build cannot find cfg-only refusals on this target.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { assertOwnTarget } from './app.mjs';
 
 const TARGET = 'wasm32-unknown-unknown';
-// What a cold target directory waits for: Rust, a manifest, the lock, a build script, the toolchain, Cargo's config.
-const RUST = /(^|\/)(Cargo\.toml|Cargo\.lock|build\.rs|rust-toolchain(\.toml)?)$|\.rs$|(^|\/)\.cargo\//;
 // Leaves the JS target builds for wasm beside the apps' graph (host/web-js/module.mjs, build.mjs): the markdown
 // editor, the motion module and the text flow's binary. (A second on top of the apps' graph; the GPU leaves are not.)
 const LIBS = ['exact-markdown-editor', 'exact-web-js-motion'];
@@ -30,16 +18,6 @@ function run(root, cmd, args, { ok = [0] } = {}) {
   if (r.error) throw new Error(`${cmd} ${args[0]}: ${r.error.message}`);
   if (!ok.includes(r.status)) throw new Error(`${cmd} ${args[0]} exited ${r.status}: ${(r.stderr ?? '').trim().split('\n').slice(-3).join(' ')}`);
   return r;
-}
-
-/** The files changed since `base` (committed or not, and untracked; a rename as both its names), or null when there
- * is no `base` to compare. */
-export function changedSince(root, base = 'origin/main') {
-  let fork;
-  try { fork = run(root, 'git', ['merge-base', 'HEAD', base]).stdout.trim(); } catch { return null; }
-  const diff = run(root, 'git', ['diff', '--name-only', '--no-renames', '-z', fork]).stdout;
-  const untracked = run(root, 'git', ['ls-files', '--others', '--exclude-standard', '-z']).stdout;
-  return [...diff.split('\0'), ...untracked.split('\0')].filter(Boolean);
 }
 
 /** The workspace's library crates in the wasm32 graph of its web apps (`apps/<app>/web`, or `apps/<app>/app/web`
@@ -65,16 +43,8 @@ export function wasmCrates(root) {
   return { crates, bins, dirs, roots: apps.map(({ dir }) => dir), target: meta.target_directory };
 }
 
-/** Whether `build` (Cargo's build directory: the target directory, unless `CARGO_BUILD_BUILD_DIR` names another)
- * holds this check's output already: exact-web's own fingerprint for wasm32's debug profile. */
-export const warm = (build) => {
-  const prints = resolve(build, TARGET, 'debug', '.fingerprint');
-  return existsSync(prints) && readdirSync(prints).some((d) => /^exact-web-[0-9a-f]{16}$/.test(d));
-};
-
-/** `{ problems: [{ code, message, detail }], counted }`, as caps.mjs reports them. */
-export function wasmCheck(root, { env = process.env, changed, hot, dry = false, found: given } = {}) {
-  if (env.EXACT_CAPS_WASM === '0') return { problems: [], counted: 'wasm32: skipped (EXACT_CAPS_WASM=0)' };
+/** `{ problems: [{ code, message, detail }], counted }`, with every diagnostic and rerun. */
+export function wasmCheck(root, { env = process.env, found: given, execute = run } = {}) {
   const problem = (message, detail) => ({ problems: [{ code: 'wasm:check', message, detail }], counted: 'wasm32: not checked' });
   let found;
   try {
@@ -82,22 +52,15 @@ export function wasmCheck(root, { env = process.env, changed, hot, dry = false, 
     found.build = env.CARGO_BUILD_BUILD_DIR ? resolve(root, env.CARGO_BUILD_BUILD_DIR) : found.target; // (a config file's build-dir is unstable Cargo's)
     assertOwnTarget(found.target, root);
     if (found.build !== found.target) assertOwnTarget(found.build, root);
-    if (changed === undefined) changed = changedSince(root);
   } catch (e) { return problem(`the crates the web apps link could not be listed, so none was checked for wasm32: ${e.message}`); }
-  const rust = changed?.map((f) => f.replaceAll('\\', '/'))
-    .filter((f) => RUST.test(f) || found.dirs.some((d) => f.startsWith(d)) && !/(^|\/)tests\/|\.test\.[cm]?[jt]s$/.test(f));
-  hot ??= warm(found.build);
-  if (!hot && rust && !rust.length) return { problems: [], counted: 'wasm32: no Rust changed since origin/main and no earlier check in this target directory, not checked' };
-  const why = hot ? 'Cargo decides what changed' : rust ? `Rust or a crate's files changed since origin/main: ${rust.length}` : 'no origin/main to compare';
-  if (dry) return { problems: [], counted: `wasm32: would check (${why})` }; // a test's: when it runs, not the compile
   const checks = [['--lib', '--keep-going', ...found.crates.flatMap((c) => ['-p', c])], ...found.bins.map(([pkg, bin]) => ['-p', pkg, '--bin', bin])];
   const results = checks.map((args) => {
-    try { return { args, ...run(root, 'cargo', ['check', '--offline', '--locked', '--target', TARGET, '--message-format', 'short', ...args], { ok: [0, 101] }) }; } catch (e) { return { args, thrown: e.message }; }
+    try { return { args, ...execute(root, 'cargo', ['check', '--offline', '--locked', '--target', TARGET, '--message-format', 'short', ...args], { ok: [0, 101] }) }; } catch (e) { return { args, thrown: e.message }; }
   });
-  return report(results, found, why);
+  return report(results, found, 'Cargo decides what changed');
 }
 
-/** caps' report of the checks' `results` (`{ args, status, stderr }`, or `{ args, thrown }` for one that could not
+/** The report of the checks' `results` (`{ args, status, stderr }`, or `{ args, thrown }` for one that could not
  * run): every diagnostic, a build script's failure with its cause, and a rerun for each check that failed. */
 export function report(results, found, why) {
   const count = `${found.crates.length} crates and ${found.bins.length} binary the web apps link`;
@@ -128,4 +91,14 @@ export function report(results, found, why) {
       detail: `${errors.join('\n    ')}\n    Rerun: ${reruns.map((a) => `cargo check --target ${TARGET} ${a.join(' ')}`).join('; ')}` }],
     counted: `wasm32: ${count} checked (${why}), ${errors.length} error${errors.length === 1 ? '' : 's'}`,
   };
+}
+
+if (import.meta.main) {
+  if (process.argv.includes('--help')) console.log('Usage: bun scripts/wasm-check.mjs\nCheck the web libraries and wasm leaves; the hourly lane owns this compile.');
+  else {
+    const result = wasmCheck(resolve(fileURLToPath(new URL('..', import.meta.url))));
+    console.log(result.counted);
+    for (const p of result.problems) console.error(`${p.message}\n${p.detail ?? ''}`);
+    process.exitCode = result.problems.length ? 1 : 0;
+  }
 }

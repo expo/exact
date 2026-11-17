@@ -117,6 +117,7 @@ fn poll(ticket: u64, same_cursor_event: bool, ceiling: u32) -> RequestOut {
         p.same_cursor_event = same_cursor_event;
     }
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "live".into(),
@@ -373,6 +374,71 @@ fn a_network_failure_backs_off_from_a_second_shown_with_its_error() {
 }
 
 #[test]
+fn driver_faults_match_each_attempt_and_a_success_resets_the_backoff() {
+    let (core, script, _woke) = setup(vec![Reply::Is(200, vec![JSON], r#"{"seq":5}"#)]);
+    let mut builder = exact_plan::builder::PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    builder.node(
+        exact_kernel::NodeType::View as u8,
+        None,
+        None,
+        0,
+        &[],
+        &[],
+        None,
+    );
+    let mut runner = exact_runner::Runner::boot(
+        builder.finish().unwrap(),
+        (),
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    core.set_fetch_fault(runner.fetch_fault());
+    let first_url = "https://example.test/changes?since=0";
+    let next_url = "https://example.test/changes?since=5";
+    runner.faults().arm(first_url, Some(2)).unwrap();
+    runner.faults().arm(next_url, Some(1)).unwrap();
+    let out = poll(1, false, 4096);
+    assert!(
+        runner.fault_dispatch(&out).is_none(),
+        "a fault must not end the stream"
+    );
+    let (sent, scheduled) = channel();
+    *core.shared.retry_scheduled.lock().unwrap() = Some(sent);
+    core.run_owned(out, None).unwrap();
+    for (attempt, url, lower, upper) in [
+        (1, first_url, 800, 1200),
+        (2, first_url, 1600, 2400),
+        (1, next_url, 800, 1200),
+    ] {
+        let (got_attempt, wait, error) = scheduled
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the long poll scheduled its retry");
+        assert_eq!(got_attempt, attempt);
+        assert!(error.contains(url), "{error}");
+        assert!((lower..=upper).contains(&wait), "{wait}");
+    }
+    assert!(runner.faults().json().contains("\"left\":0,\"hits\":2"));
+    until_asked(&script, 2);
+    // Cancelling the held request consumes no count from a newly armed fault.
+    runner.faults().arm(next_url, None).unwrap();
+    core.forget(|_| false);
+    until_settled(&core);
+    assert!(core.retry_reader()(1).is_none());
+    assert!(runner.faults().json().contains("\"left\":null,\"hits\":0"));
+    assert_eq!(asked(&script), ["since=0&wait=25", "since=5&wait=25"]);
+    runner.take_requests();
+    assert_eq!(
+        runner
+            .journal()
+            .filter(|l| l.contains("fetch failed (driver fault)"))
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn what_is_not_a_poll_reply_ends_the_stream() {
     let cases: Vec<(Reply, &str)> = vec![
         (Reply::Is(404, vec![], "gone"), "response 404"),
@@ -438,6 +504,7 @@ fn a_long_poll_that_is_not_a_bodiless_http_get_is_refused() {
         // Refused at admission, before any path (the host settles it as an admission refusal).
         let refused = core.run_owned(
             RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "live".into(),
@@ -617,6 +684,7 @@ fn a_long_poll_on_other_work_is_refused_at_admission_and_fences_ordered_work() {
         let (core, script, _woke) = setup(vec![Reply::Is(200, vec![JSON], r#"{"other":1}"#)]);
         let ordered = request.is_ordered();
         let first = RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "live".into(),
@@ -633,6 +701,7 @@ fn a_long_poll_on_other_work_is_refused_at_admission_and_fences_ordered_work() {
         let next = Request::get("https://example.test/changes?since=0")
             .header("accept", "application/json");
         let second = RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 2,
             target: "read".into(),

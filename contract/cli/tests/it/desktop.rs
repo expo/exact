@@ -312,6 +312,14 @@ fn the_desktop_modules_are_absent_on_the_other_targets() {
 #[test]
 fn the_agent_lists_the_status_item_and_the_dock_menu() {
     let app = App::new("presented");
+    for target in ["macos", "windows"] {
+        let r = boot(&app, target);
+        let tree = agent::handle(&r, r#"{"op":"tree"}"#);
+        assert!(
+            tree.contains("\"presented\":\"status\""),
+            "{target}: {tree}"
+        );
+    }
     let r = boot(&app, "macos");
     let s = state(&r);
     let items = s["statusItems"].as_array().unwrap();
@@ -331,15 +339,12 @@ fn the_agent_lists_the_status_item_and_the_dock_menu() {
     assert_eq!(dock.len(), 1);
     assert_eq!(dock[0]["label"], "New Conversation");
     assert!(tree.contains("\"presented\":\"status\""), "{tree}");
-    // Where no host places it, the button is ordinary; the lists stay.
-    // Windows' notification-area icon is not built, so Windows is such a host.
-    for target in ["web", "windows"] {
-        let r = boot(&app, target);
-        let tree = agent::handle(&r, r#"{"op":"tree"}"#);
-        assert!(!tree.contains("\"presented\""), "{target}: {tree}");
-        let items = state(&r)["statusItems"].as_array().map(Vec::len);
-        assert_eq!(items, Some(1), "{target}");
-    }
+    // Where no host places it, the button is ordinary; the list stays.
+    let r = boot(&app, "web");
+    let tree = agent::handle(&r, r#"{"op":"tree"}"#);
+    assert!(!tree.contains("\"presented\""), "{tree}");
+    let items = state(&r)["statusItems"].as_array().map(Vec::len);
+    assert_eq!(items, Some(1));
 }
 
 /// D5: a request for attention is the agent's to read, critical or not.

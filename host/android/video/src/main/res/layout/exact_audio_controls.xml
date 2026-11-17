@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- An `audio` with `controls` (LLP 1042.001 D12): Media3's player view in its audio configuration, with no surface and
+     no artwork, its controller always shown. -->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="none"
+    app:use_artwork="false"
+    app:show_timeout="0"
+    app:hide_on_touch="false"
+    app:show_buffering="never"
+    app:shutter_background_color="@android:color/transparent" />

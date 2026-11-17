@@ -125,7 +125,7 @@ export function judge(obs, png, { host = 'web', nodes = new Map() } = {}) {
       if (bg) {
         const ink = over(it.fg, bg), got = ratio(ink, bg);
         if (got < need - 0.005) add('contrast', it, { got: Math.floor(got * 10) / 10, need, fg: hex(ink), bg: hex(bg), ...(it.bg ? { on: it.on ?? 'page' } : {}) },
-          it.onAccent || it.onAccentFill ? 'the platform draws a filled button\'s label white on the accent: leave the accent unsaid (the platform\'s blue; a brand is an `app.tamber`)'
+          it.onAccent || it.onAccentFill ? 'the platform draws a filled button\'s label white on the accent: leave the accent unsaid (the platform\'s blue; a brand is an `app.forma`)'
             : it.label ? 'name a `color` for the label, or a fill it reads on in this scheme' : role(it.fgRole) ? `-exact-${role(it.fgRole)} is too light for text on this: use -exact-label or -exact-secondary-label, or keep the colour for a fill or a symbol` : 'use a role (`-exact-label`, `-exact-secondary-label`) or a colour that changes with the scheme');
       }
     }
@@ -246,9 +246,11 @@ export function line(f, nodes) {
   return `  ${f.kind.padEnd(8)} ${who(f, nodes)} ${box}: ${what}${f.hint ? `; ${f.hint}` : ''}`;
 }
 
-/** An advisory line (LLP 1116.004 D1.3): a phone's layout at a desktop width, which a composed page may mean. Never a finding. */
+/** An advisory line, never a finding: a phone's layout at a desktop width, which a composed page may mean (LLP 1116.004 D1.3), or an
+ *  open menu the platform presents and the driver paints (`menu`, iOS). */
 function advise(a, width, nodes) {
   const who = named(a.id, nodes);
+  if (a.kind === 'menu') return `  advice   ${who}: a person sees this open menu as UIKit's ${a.context ? 'context menu' : 'pull-down'}, which the system places, sizes and scrolls to fit the screen; the driver paints it in the page to drive it, so its rows are not judged (\`--touch platform\` presents UIKit's)`;
   return `  advice   ${who}: ${a.kind === 'tabbar'
     ? `a bottom tab bar ${r0(a.w)} px wide along a ${width}-px window; placed as docs/recipes/tabs.md places it (the last child of the root's flex column, unpositioned) a wide window draws it as a sidebar, or lay out a rail of your own when the window is wide`
     : `the list beneath pushed this detail over the whole ${width}-px window where they would fit side by side; a row that pushes draws the disclosure (\`image "symbol:forward-chevron"\`, last in the row) and a wide window shows the list beside its detail, or set \`navigationSplit\` on the list's route (contract vocab navigationSplit)`}`;
@@ -288,7 +290,15 @@ export async function checkOp(s, args = [], { shots, accept = [] } = {}) {
       let obs = first;
       if (scheme !== first.scheme || preferred) { await s.prefer({ 'prefers-color-scheme': scheme }); preferred = scheme; obs = await s.op({ op: 'check' }); }
       const path = shots?.(obs.viewport, scheme) ?? resolve(dir, `${scheme}.png`);
-      const taken = await s.carrier.screenshot(path, obs.capture?.window === true); // iOS observes in the window's points: a sheet is not in the viewport's picture
+      // Keep UIKit's menu substitutes hidden through the carrier's display composition.
+      const held = s.host !== 'web';
+      let taken;
+      try {
+        if (held) obs = await s.op({ op: 'check', capture: true });
+        taken = await s.carrier.screenshot(path, obs.capture?.window === true);
+      } finally {
+        if (held) await s.op({ op: 'check', release: true });
+      }
       const png = decodePng(readFileSync(path));
       // The tree as this scheme shows it: a view only one scheme shows is named, and accepted, by its own testId.
       const nodes = new Map(((await s.op({ op: 'tree' })).nodes ?? []).map((n) => [n.id, n]));

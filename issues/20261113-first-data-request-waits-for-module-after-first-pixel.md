@@ -75,3 +75,11 @@ for a slice). One made while the evaluation runs waits for it. Before Part 1 the
 same call waited one turn later, so nothing waits longer than it did, but a large
 module's overlap with the main thread's first turn is lost whenever that turn
 makes such a call.
+
+## The canvas's pipeline was compiled at every launch
+
+Part of the main thread's hold after the first frame was not the chain's. On Apple the GPU module keeps a Metal binary archive of its pipelines, but nothing wrote it to disk for a canvas, so every launch logged `GPU module pipeline cache: miss` and compiled the canvas's pipelines again when its world started. The module now writes the archive itself after the frames it submits (`gpu/src/pipeline_cache.rs`, `Shared::save_metal`).
+
+Weatherlight (one render pipeline) on an M5 Mac, six launches each way. Before, `create_render_pipeline` took 50 to 54 ms on every launch of a development build and 50 to 58 ms of a release build, whose shaders ship compiled. With the archive written, the first launch takes the same and each launch after it 0.66 to 0.76 ms. Writing the archive holds its lock for about 10 ms on a worker thread, once, on a launch that compiled something.
+
+Not measured on an iPhone. The measurements above have the world's start holding the main thread for about 45 ms there, with the chain waiting behind it in 21 launches of 25 (93 ms or more against 53 to 59). If that hold is this compile, a launch after the first should lose most of it; the paired run on a phone that Part 1 is owed would show it.

@@ -15,7 +15,7 @@ use crate::util::{MaybeMath, MaybeResolve, ResolveOrZero};
 #[cfg(feature = "content_size")]
 use crate::compute::common::scrollable_overflow::{compute_scrollable_overflow_contribution, margin_box_contribution};
 use crate::compute::ratio::{floors_height, resolve_through, Ratio};
-use crate::compute::common::sizing_keyword::{resolve_sizing_keyword, SizingKeywordResolution};
+use crate::compute::common::sizing_keyword::{keyword_bounds, measure_keyword_width, resolve_sizing_keyword, SizingKeywordResolution};
 use crate::{AbsoluteAxis, BoxSizing, Direction, LayoutGridContainer};
 
 /// Align the grid tracks within the grid according to the align-content (rows) or
@@ -203,6 +203,15 @@ pub(super) fn align_and_position_item(
         width: grid_area_size.width.maybe_sub(margin.left).maybe_sub(margin.right),
         height: grid_area_size.height.maybe_sub(margin.top).maybe_sub(margin.bottom) - baseline_shim,
     };
+    // EXACT PATCH 78: keyword bounds, which resolve to none as lengths.
+    let (keyword_min, keyword_max) = keyword_bounds(
+        tree,
+        node,
+        grid_area_size.map(Some),
+        inherent_size,
+        AvailableSpace::Definite(grid_area_minus_item_margins_size.width),
+    );
+    let (min_size, max_size) = (min_size.or(keyword_min), max_size.or(keyword_max));
 
     // A size that is a sizing keyword (min-content, max-content, fit-content,
     // fit-content(...), stretch) either resolves to an exact size or is resolved
@@ -220,6 +229,7 @@ pub(super) fn align_and_position_item(
             Some(grid_area_minus_item_margins_size.height),
             Some(grid_area_size.height),
         )
+        .map(SizingKeywordResolution::block_axis)
     });
 
     // If both axes need to be measured then resolve them with a single measure call
@@ -252,23 +262,18 @@ pub(super) fn align_and_position_item(
         }
 
         if let Some(Some(resolution)) = keyword_width {
-            return Some(match resolution {
-                SizingKeywordResolution::Exact(width) => width,
-                SizingKeywordResolution::Measure(available_width) => keyword_measured_size.width.unwrap_or_else(|| {
-                    tree.measure_child_size(
-                        node,
-                        Size::NONE,
-                        grid_area_size.map(Option::Some),
-                        Size {
-                            width: available_width,
-                            height: AvailableSpace::Definite(grid_area_minus_item_margins_size.height),
-                        },
-                        SizingMode::InherentSize,
-                        AbsoluteAxis::Horizontal,
-                        Line::FALSE,
-                    )
-                }),
-            });
+            return Some(keyword_measured_size.width.unwrap_or_else(|| {
+                measure_keyword_width(
+                    tree,
+                    node,
+                    resolution,
+                    Size::NONE,
+                    grid_area_size.map(Option::Some),
+                    AvailableSpace::Definite(grid_area_minus_item_margins_size.height),
+                    SizingMode::InherentSize,
+                    Line::FALSE,
+                )
+            }));
         }
 
         // Apply width based on stretch alignment if:
@@ -307,7 +312,7 @@ pub(super) fn align_and_position_item(
 
         if let Some(Some(resolution)) = keyword_height {
             return Some(match resolution {
-                SizingKeywordResolution::Exact(height) => height,
+                SizingKeywordResolution::Exact(height) | SizingKeywordResolution::Fit(height) => height,
                 SizingKeywordResolution::Measure(available_height) => {
                     keyword_measured_size.height.unwrap_or_else(|| {
                         tree.measure_child_size(
@@ -375,13 +380,21 @@ pub(super) fn align_and_position_item(
     // max-width; keep it above max-height's transfer in the final clamp too.
     let min_size = min_size.map_width(|width| width.maybe_max(ratio_min));
     let size = size.map_width(|width| width.maybe_max(ratio_min));
-    let layout_output = tree.perform_child_layout(
+    // EXACT PATCH 78: a keyword height is the content's, so a child's percentage height
+    // under it is indefinite (CSS 2.2 §10.5), as under `auto`.
+    let height_is_keyword = matches!(keyword_height, Some(Some(SizingKeywordResolution::Measure(_))));
+    let layout_output = tree.compute_child_layout(
         node,
-        size,
-        grid_area_size.map(Option::Some),
-        grid_area_minus_item_margins_size.map(AvailableSpace::Definite),
-        SizingMode::InherentSize,
-        Line::FALSE,
+        crate::tree::LayoutInput {
+            known_dimensions: size,
+            known_dimensions_are_definite: Size { width: true, height: !height_is_keyword },
+            parent_size: grid_area_size.map(Option::Some),
+            available_space: grid_area_minus_item_margins_size.map(AvailableSpace::Definite),
+            sizing_mode: SizingMode::InherentSize,
+            axis: crate::tree::RequestedAxis::Both,
+            run_mode: crate::tree::RunMode::PerformLayout,
+            vertical_margins_are_collapsible: Line::FALSE,
+        },
     );
 
     // Resolve final size

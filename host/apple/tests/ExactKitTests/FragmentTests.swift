@@ -150,7 +150,7 @@ final class FragmentTests: XCTestCase {
         XCTAssertNotNil(p.fragmentHeld)
         XCTAssertEqual(offset, chosen, accuracy: 1)
         let applied = session.appliedBatches
-        session.publishFillForTests(try node("port").id, wireBatch([]), generation: session.generation)
+        session.publishFillForTests(try node("port").id, wireBatch([]), lease: session.runtime.completionLease)
         session.landFill()
         XCTAssertFalse(session.fillInFlight)
         XCTAssertEqual(session.appliedBatches, applied, "an unchanged fill skips the presenter apply pass")
@@ -188,6 +188,36 @@ final class FragmentTests: XCTestCase {
         XCTAssertEqual(gap("other"), 0, accuracy: 1)
         try releasePicture()
         XCTAssertEqual(gap("other"), 0, accuracy: 1)
+    }
+
+    func testARebootStartsFragmentActivationsAgain() throws {
+        try fixture()
+        XCTAssertTrue(session.navigate("/item/7#other"))
+        XCTAssertTrue(session.navigate("/item/7#moves"))
+        let p = session.presenter
+        XCTAssertGreaterThan(p.fragmentSeen, 1)
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_FRAGMENT_PLAN"])))
+        XCTAssertNil(session.boot(plan: bytes, size: p.viewport.frame.size).error)
+        session.apply(session.runtime.dataReady())
+        XCTAssertEqual(p.fragmentSeen, 1)
+        waitFor("the reboot's fragment") { p.fragmentArm == nil && self.offset > 100 }
+        try releasePicture()
+        XCTAssertEqual(gap("moves"), 0, accuracy: 1)
+    }
+
+    func testAResetArmsTheNewRunnersActivationAtThePersonsScrollCount() throws {
+        try fixture()
+        let p = session.presenter, chosen = offset
+        let visit = try XCTUnwrap(Int(try XCTUnwrap(node("port").props["navigationKey"])))
+        p.resetFragments()
+        p.armFragment(1)
+        XCTAssertEqual(p.fragmentSeen, 1)
+        XCTAssertEqual(p.fragmentArm?.activation, 1)
+        p.personScrolls += 1
+        p.scrollToFragment([visit, "other", 1])
+        XCTAssertNil(p.fragmentArm)
+        XCTAssertNil(p.fragmentHeld, "a scroll since the new runner's activation cancels it")
+        XCTAssertEqual(offset, chosen, accuracy: 1)
     }
 
     func testAnActivationAlreadyTakenOrSupersededScrollsNothing() throws {
@@ -298,6 +328,18 @@ final class FragmentTests: XCTestCase {
         XCTAssertEqual(offset, 0, accuracy: 1)
     }
     #else
+    func testSupersedingNavigationDropsThePreviousFragmentsQueuedScroll() throws {
+        try fixture()
+        let p = session.presenter
+        p.elementScrolls.hold(try node("moves"), "moves", ["moves", "start"])
+        XCTAssertTrue(session.navigate("/item/7#other"))
+        XCTAssertFalse(p.elementScrolls.names.contains("moves"))
+        p.elementScrolls.hold(try node("other"), "other", ["other", "start"])
+        XCTAssertTrue(session.navigate("/"))
+        XCTAssertNil(p.fragmentHeld)
+        XCTAssertTrue(p.elementScrolls.names.isEmpty)
+    }
+
     func testFragmentResumesWhenItsTargetMountsAfterTheQueuedRetry() throws {
         let p = Presenter()
         p.viewport.frame = CGRect(x: 0, y: 0, width: 320, height: 400)

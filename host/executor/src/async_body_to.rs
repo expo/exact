@@ -72,6 +72,7 @@ impl Machine {
                         file.fetch,
                         None,
                         destination,
+                        file.fixture,
                     );
                 })
             };

@@ -97,6 +97,10 @@ impl DataSource for Module {
         Module::take_aborted(self)
     }
 
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        Module::take_reports(self)
+    }
+
     fn background(&mut self, store: &Store) -> Option<Request> {
         let _ = store;
         self.background_request()

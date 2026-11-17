@@ -399,7 +399,7 @@ impl Painter {
         };
         let (w, h) = (pixels.width() as usize, pixels.height() as usize);
         exact_svg_raster::backdrop_blur(pixels.data_mut(), w, h, sigma * self.scale);
-        for pixel in pixels.data_mut().chunks_exact_mut(4) {
+        for pixel in pixels.data_mut().as_chunks_mut::<4>().0 {
             let alpha = (pixel[3] as u32 * color[3] as u32 + 127) / 255;
             for i in 0..3 {
                 pixel[i] = ((color[i] as u32 * alpha + 127) / 255) as u8;

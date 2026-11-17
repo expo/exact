@@ -67,6 +67,7 @@ impl<D: DataSource> Presenter<D> {
                     num(r2(rx)),
                     num(r2(ry))
                 );
+                self.zoom_layout(b.id, &mut s);
             }
             s.push('}');
         }

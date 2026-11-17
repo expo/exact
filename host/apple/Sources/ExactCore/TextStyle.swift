@@ -2,6 +2,11 @@ import Foundation
 
 /// The metric half of a node's paragraph, shared by every Apple presentation.
 package enum TextStyle {
+    /// Natural text (LLP 1060.000 D3): the kernel says so beside the style.
+    package static func isNatural(_ style: NodeStyle) -> Bool {
+        if case .bool(true)? = style["direction_natural"] { return true }
+        return false
+    }
     package static func alignment(_ style: NodeStyle) -> Int {
         let rtl = style["direction"]?.string == "rtl"
         switch style["text_align"]?.string {
@@ -49,6 +54,7 @@ package enum TextStyle {
                         color: color,
                         overflowWrap: style["overflow_wrap"]?.string == "anywhere" ? 2 : style["overflow_wrap"]?.string == "break-word" ? 1 : 0, direction: rtl ? 1 : 0, whiteSpace: whiteSpace, strut: strut.scaled(fit))
         spec.ellipsis = lineClamp == 0 && clips && style["text_overflow"]?.string == "ellipsis"
+        spec.natural = isNatural(style) && props["markup"] != "markdown" // its source is not what it shows, as the kernel measures it
         spec.source = source
         spec.textIndent = CGFloat(Float(number("text_indent")))
         spec.hyphens = ["none": 1, "auto": 2][style["hyphens"]?.string ?? ""] ?? 0

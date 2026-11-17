@@ -1,6 +1,6 @@
 // The file's names: every definition the Contract compiler reports (`contract symbols`) with each use of it, so
 // TypeScript answers definition, references, highlights and rename exactly as the compiler resolved them.
-// The file exports `the`: a property per definition, keyed by where and what it is, holding a property of the
+// The file exports `the`: a property per definition, keyed by what it is and what it belongs to, holding a property of the
 // definition's own name, typed as the compiler writes its type in TypeScript. A use reads that name through `the`, or
 // through the `the` of the `.contract` file that defines it, so two definitions of one name never meet and any name can
 // be a property.
@@ -11,7 +11,6 @@ const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
 /** What a definition is, for its hover. */
 const about = d => `${d.kind} \`${d.name}\`${d.owner ? ` of ${d.owner}` : ''}${d.component ? ` in component ${d.component}` : ''}${d.writes?.length ? `; writes ${d.writes.map(w => `\`${w}\``).join(', ')}` : ''}`;
-const key = d => JSON.stringify(`${d.line}:${d.col}:${d.kind}:${d.name}`);
 
 /** The compiler's span of a symbol in `text`, as `[start, length, quoted]`, when its text is the name and TypeScript
  * can hold it as an identifier, or is the name as a string literal. */
@@ -38,6 +37,24 @@ export function names(ctx) {
     return authored && IDENTIFIER.test(authored) && d.name.startsWith(`${authored}__`) ? authored : d.name;
   };
   const definitions = (symbols.definitions ?? []).map(d => ({ ...d, name: written(d), compiled: d.name }));
+  /** Each definition's key in its file's `the`: what it is and what it belongs to, as its file writes them, and which
+   * of several such it is in that file. Not where it is: an importer is given the file as saved, and the editor may
+   * hold lines above the declaration that the saved file has not. The parts are kept apart, so no name can be read
+   * as another part. */
+  const keys = (() => {
+    // The compiler names what a definition belongs to as it names that itself: `Item__row` for an import that met a
+    // local name, which its own file writes `Item`.
+    const authored = new Map(definitions.filter(d => d.compiled !== d.name).map(d => [`${d.file}\n${d.compiled}`, d.name]));
+    const belongs = (d, to) => authored.get(`${d.file}\n${to}`) ?? to ?? null;
+    const seen = new Map(), keys = [];
+    for (const i of definitions.map((_, i) => i).sort((a, b) => definitions[a].line - definitions[b].line || definitions[a].col - definitions[b].col)) {
+      const d = definitions[i], what = [belongs(d, d.component), belongs(d, d.owner), d.kind, d.name];
+      const among = JSON.stringify([d.file, ...what]), nth = seen.get(among) ?? 0;
+      seen.set(among, nth + 1);
+      keys[i] = JSON.stringify(JSON.stringify([...what, nth]));
+    }
+    return keys;
+  })();
   // Another file is as the compiler read it, from disk; its own mapping places its names.
   const placed = d => { if (ctx.here(d)) return spelling(ctx, d); const other = elsewhere(d) ? text(d.file) : null; return other === null ? null : spelling(ctx, d, other); };
   // A source's name is also the key of the function in app.ts that answers it, which a rename here would not reach.
@@ -61,7 +78,7 @@ export function names(ctx) {
   const features = of => of.every(i => renamable[i]) ? ctx.FEATURES : ctx.FEATURES & ~ctx.FEATURE.RENAME;
   const name = (at, of) => ctx.name(ctx.content.slice(at[0], at[0] + at[1]), at, features(of));
 
-  const from = new Map(), entry = i => `${elsewhere(definitions[i]) ? from.get(definitions[i].file) : 'the'}[${key(definitions[i])}]`;
+  const from = new Map(), entry = i => `${elsewhere(definitions[i]) ? from.get(definitions[i].file) : 'the'}[${keys[i]}]`;
   definitions.forEach((d, i) => {
     if (!used[i] || !elsewhere(d) || from.has(d.file)) return;
     // The compiler names the other file with links resolved; the import is from this file's own directory, as TypeScript knows it.
@@ -84,7 +101,7 @@ export function names(ctx) {
   ctx.write('export declare const the: {\n');
   definitions.forEach((d, i) => {
     if (!ctx.here(d) && !(used[i] && !elsewhere(d))) return;
-    ctx.write(`${key(d)}: {\n/** ${about(d).replace(/\*\//g, '* /')} */\n`);
+    ctx.write(`${keys[i]}: {\n/** ${about(d).replace(/\*\//g, '* /')} */\n`);
     const at = ctx.here(d) ? spelling(ctx, d) : null;
     if (at) name(at, [i]); else ctx.write(JSON.stringify(d.name));
     ctx.write(`: ${d.type ?? untyped(d)} };\n`);

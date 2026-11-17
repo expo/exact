@@ -252,6 +252,88 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertEqual(home.scrollOrigin, 0, "CSS scrollTop 0 is the top edge")
     }
 
+    func testATransparentBarsEmptyBandLeavesTouchesToThePage() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-bar-touch", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let bar = nav.navigationBar
+        let control = try node(session, "hero-control")
+        let point = CGPoint(x: 50, y: bar.bounds.midY)
+        control.frame = try XCTUnwrap(control.superview).convert(CGRect(x: 20, y: point.y - 10, width: 60, height: 20), from: bar)
+        XCTAssertNil(bar.hitTest(point, with: nil), "the clear band leaves the touch to the page")
+
+        func labels(_ view: UIView) -> [UILabel] { ((view as? UILabel).map { [$0] } ?? []) + view.subviews.flatMap(labels) }
+        let title = try XCTUnwrap(labels(bar).first { $0.text == "Product" && !$0.isHidden })
+        let titlePoint = title.convert(CGPoint(x: title.bounds.midX, y: title.bounds.midY), to: bar)
+        XCTAssertNotNil(bar.hitTest(titlePoint, with: nil), "the bar keeps its title")
+
+        let scroll = try XCTUnwrap(try node(session, "home-scroll").scroll)
+        scroll.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the scrolled bar keeps its material's band")
+    }
+
+    func testATransparentBarsTouchesFollowTheNativeSelectedScroller() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-native-scroll", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let automatic = try XCTUnwrap(route.collapseScrollView)
+        let native = UIScrollView(frame: route.view.bounds)
+        native.contentInsetAdjustmentBehavior = .never
+        native.contentSize = CGSize(width: native.bounds.width, height: 3000)
+        route.view.addSubview(native)
+        route.setContentScrollView(native, for: .top)
+        XCTAssertTrue(route.contentScrollView(for: .top) === native)
+        let bar = nav.navigationBar, point = CGPoint(x: 50, y: nav.navigationBar.bounds.midY)
+
+        automatic.contentOffset.y = 0
+        native.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the selected scroller's material keeps the touch")
+
+        automatic.contentOffset.y = 100
+        native.contentOffset.y = -native.adjustedContentInset.top
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "the selected scroller's clear edge leaves the touch to the page")
+
+        route.collapseScrollView = nil
+        native.contentOffset.y = 100
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "a native selection needs no collapse scroller")
+    }
+
+    func testATransparentBarKeepsTouchesOnNativeBackgroundOverrides() throws {
+        let session = try booted("EXACT_TRANSPARENT_BAR_PLAN", label: "transparent-native-appearance", beforeItsWindow: true)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let bar = nav.navigationBar, point = CGPoint(x: 50, y: nav.navigationBar.bounds.midY)
+        let opaque = UINavigationBarAppearance()
+        opaque.configureWithOpaqueBackground()
+        route.navigationItem.scrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "an opaque route hatch background keeps the touch")
+
+        route.navigationItem.scrollEdgeAppearance = nil
+        bar.scrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the bar's fallback background keeps the touch")
+
+        let clear = UINavigationBarAppearance()
+        clear.configureWithTransparentBackground()
+        bar.scrollEdgeAppearance = clear
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "a native clear background leaves the touch to the page")
+
+        nav.traitOverrides.verticalSizeClass = .compact
+        route.navigationItem.compactScrollEdgeAppearance = opaque
+        nav.view.layoutIfNeeded()
+        XCTAssertEqual(bar.traitCollection.verticalSizeClass, .compact)
+        XCTAssertNotNil(bar.hitTest(point, with: nil), "the compact edge's opaque background keeps the touch")
+        route.navigationItem.compactScrollEdgeAppearance = nil
+        bar.compactScrollEdgeAppearance = clear
+        nav.view.layoutIfNeeded()
+        XCTAssertNil(bar.hitTest(point, with: nil), "the compact edge's clear background leaves the touch to the page")
+    }
+
     /// LLP 1115.000 D11.1 over `scripts/fixtures/large-title.contract`: one
     /// stack with no tabs, the shape `exact new` makes, whose first screen
     /// names no scroller. Its large title opens expanded, its content below

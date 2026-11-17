@@ -13,7 +13,8 @@
 // sheet's dismissal, as a modal route's is (ModalIOS.swift): `none` refuses
 // the swipe down; `closerequest`, HTML's default, permits it; `any` also
 // takes a tap on the dimmed page. A dismissal the person made fires HTML's
-// `cancel` at the dialog.
+// `cancel` at the dialog. An authored `::backdrop` colour takes the place of
+// UIKit's dimming (LLP 1035.001 D11), fading with the sheet.
 //
 // A dialog whose author painted its surface (a `background-color` or a
 // `background-image` on the dialog) is the author's box, not the
@@ -32,6 +33,13 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     /// What the top layer lays over the page beneath: UIKit's dimming under a
     /// page or form sheet (`UIDimmingView`, black at 20%, read on an iOS 27 simulator).
     static let dimming = UIColor.black.withAlphaComponent(0.2)
+    /// How long the top layer's dim takes to fade in or out, which UIKit's
+    /// transition does not time: Core Animation's default duration.
+    static let backdropFade: TimeInterval = 0.25
+    /// The dim beneath the dialog (LLP 1035.001 D11): the author's
+    /// `::backdrop` colour, else the top layer's dimming. A sheet keeps
+    /// UIKit's own dimming unless its author wrote one.
+    let backdrop = UIView()
     fileprivate weak var host: DialogSheets?
     /// The author's box in the top layer, not a sheet.
     let topLayer: Bool
@@ -106,7 +114,10 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             ThemeRoles.adopt(view, from: host?.root)
             if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
             #endif
-            view.backgroundColor = DialogSheetController.dimming
+            backdrop.frame = view.bounds
+            backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            backdrop.isUserInteractionEnabled = false
+            view.addSubview(backdrop)
             scroller.backgroundColor = .clear
             scroller.contentInsetAdjustmentBehavior = .never
             #if os(iOS)
@@ -161,6 +172,74 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     }
     @objc private func escape() { host?.closeRequest(self) }
     override func accessibilityPerformEscape() -> Bool { host?.closeRequest(self) ?? false }
+    /// The dialog this presents, once it is in the scroller.
+    fileprivate var dialog: NodeView? { scroller.subviews.lazy.compactMap { $0 as? NodeView }.first }
+    /// The author's `::backdrop` colour, nil where none is written.
+    private var authoredBackdrop: UIColor? { dialog?.uiColor("backdrop_color") }
+    /// The dim's colour, again after a batch or a theme edit: the top layer's
+    /// is the author's or the dimming; a sheet with an authored one lays it
+    /// in place of UIKit's dimming, which it then turns off.
+    func paintBackdrop() {
+        let authored = authoredBackdrop
+        if topLayer {
+            backdrop.backgroundColor = authored ?? Self.dimming
+            return
+        }
+        #if !os(tvOS)
+        let undimmed: UISheetPresentationController.Detent.Identifier? = authored == nil ? nil : .init("exact.dialog")
+        if let sheet = sheetPresentationController, sheet.largestUndimmedDetentIdentifier != undimmed {
+            if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.largestUndimmedDetentIdentifier = undimmed } }
+            else { sheet.largestUndimmedDetentIdentifier = undimmed }
+        }
+        backdrop.backgroundColor = authored ?? .clear
+        // An undimmed sheet lets touches and VoiceOver reach the page beneath.
+        // The dialog is modal: the backdrop takes the touches, and the
+        // container hides the page from VoiceOver as the dimming did.
+        presentationController?.containerView?.accessibilityViewIsModal = authored != nil
+        #endif
+    }
+    /// The dim fades in with the presentation: a sheet's in UIKit's
+    /// transition, the top layer's, which UIKit does not animate, over
+    /// `backdropFade`.
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        paintBackdrop()
+        if !topLayer {
+            guard let container = presentationController?.containerView, backdrop.superview !== container else { return }
+            backdrop.frame = container.bounds
+            backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            container.insertSubview(backdrop, at: 0)
+        }
+        backdrop.alpha = 0
+        fadeBackdrop(to: 1)
+    }
+    /// Any dismissal (the app's, a swipe, UIKit's of a stack) or a cover
+    /// begins while its container is still in the window. The dim fades out
+    /// with it: a sheet's in UIKit's transition (reversed when a swipe gives
+    /// it up). The top layer leaves at once, so what its dim still showed
+    /// fades out in the window over `backdropFade`.
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        host?.disappearing(self)
+        guard topLayer else { return fadeBackdrop(to: 0) }
+        guard !ExactEnv.agentFreezes, backdrop.alpha > 0, let window = view.window else { return }
+        let fading = UIView(frame: window.bounds)
+        fading.backgroundColor = backdrop.backgroundColor
+        fading.alpha = backdrop.alpha
+        fading.isUserInteractionEnabled = false
+        window.addSubview(fading)
+        UIView.animate(withDuration: Self.backdropFade, animations: { fading.alpha = 0 }, completion: { _ in fading.removeFromSuperview() })
+    }
+    /// The dim to `alpha`: alongside UIKit's transition where there is one,
+    /// else over `backdropFade`, and at once under the agent's clock.
+    func fadeBackdrop(to alpha: CGFloat) {
+        if ExactEnv.agentFreezes { backdrop.alpha = alpha; return }
+        if let coordinator = transitionCoordinator, coordinator.isAnimated {
+            coordinator.animate(alongsideTransition: { [backdrop] _ in backdrop.alpha = alpha })
+        } else {
+            UIView.animate(withDuration: Self.backdropFade, delay: 0, options: .beginFromCurrentState) { [backdrop] in backdrop.alpha = alpha }
+        }
+    }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         host?.appeared(self)
@@ -170,12 +249,6 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         tap.delegate = self
         container.addGestureRecognizer(tap)
         backdropTap = tap
-    }
-    /// Any dismissal (the app's, a swipe, UIKit's of a stack) or a cover
-    /// begins while its container is still in the window.
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-        host?.disappearing(self)
     }
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
@@ -311,6 +384,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         /// Going off screen (`viewWillDisappear`): it hosts no popover meanwhile.
         var leaving = false
         var notifyClose = false
+        /// Its dim has begun to fade out with its exit animation.
+        var backdropLeaving = false
         /// The dismissal of a sheet closed while UIKit was still presenting
         /// it, which UIKit would drop: run when the presentation ends.
         var afterPresenting: (() -> Void)?
@@ -325,9 +400,6 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
     private var entries: [Entry] = []
     /// Still open in the document, waiting for a retiring route's UIKit stack.
     private var resuming: [Entry] = []
-    /// HTML's `cancel` at a dialog a close request closed. Unset, it goes to
-    /// the session's runner; a test without a session sets it.
-    var onCancel: ((UInt32) -> Void)?
 
     init(presenter: Presenter) { self.presenter = presenter }
     fileprivate func geometryChanged() { presenter?.nativeGeometry.changed() }
@@ -477,6 +549,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         controller.relay = MountRelay(presenter, mount: controller.view)
         #endif
         controller.scroller.addSubview(dialog)
+        controller.paintBackdrop()
         dialog.isHidden = false
         controller.isModalInPresentation = refuses(dialog)
         controller.fit(dialog.bounds.size)
@@ -601,10 +674,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
             UIAccessibility.post(notification: .screenChanged, argument: element)
         }
         if cancelled || entry.notifyClose { dialog.queueDialogClose() }
-        if cancelled, live(dialog), dialog.handlers.contains("cancel") {
-            if let onCancel { onCancel(dialog.id) }
-            else if let session = presenter.session { session.applyInput(session.runtime.pickerCancel(dialog.id, now: session.now())) }
-        }
+        if cancelled, live(dialog), dialog.handlers.contains("cancel") { presenter.onCancel?(dialog.id) }
     }
 
     /// A tap on the dimmed page closes only a `closedby="any"` dialog.
@@ -734,12 +804,17 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
             let dialog = entry.dialog
             let parent = entry.parent
             let shown = parent?.window != nil && parent.map { !presenter.navigation.isInactiveRoute(containing: $0) } == true
-            // A top-layer dialog leaving with its exit stays until the exit ends.
-            if exiting(entry) { continue }
+            // A top-layer dialog leaving with its exit stays until the exit
+            // ends; its dim fades out as the exit begins.
+            if exiting(entry) {
+                if !entry.backdropLeaving { entry.backdropLeaving = true; entry.controller.fadeBackdrop(to: 0) }
+                continue
+            }
             if !live(dialog) || dialog.props["semanticTag"] != "dialog" || dialog.props["popover"] != nil || !shown {
                 dismiss(entry, animated: false, cancelled: false)
             } else {
                 assign(entry.controller, \.isModalInPresentation, refuses(dialog))
+                entry.controller.paintBackdrop()
                 // Its children's frames came after its own: the overflow the sheet scrolls.
                 entry.controller.place()
             }
@@ -787,12 +862,14 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
 #if os(iOS)
 extension DialogSheetController: PaintsSheetSurface {
     /// Its surface, which a live theme edit paints again
-    /// (`Presenter.applyThemeTint`): the top layer's dimming, else the
-    /// sheet's ground where the dialog painted none, the platform's (LLP
-    /// 1115 D2), which UIKit elevates in dark mode.
+    /// (`Presenter.applyThemeTint`): its dim, and a sheet's ground where the
+    /// dialog painted none, the platform's (LLP 1115 D2), which UIKit
+    /// elevates in dark mode.
     func paintSurface() {
         guard let view = viewIfLoaded else { return }
-        view.backgroundColor = topLayer ? Self.dimming : ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view, or: .systemBackground)
+        paintBackdrop()
+        if topLayer { return }
+        view.backgroundColor = ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view, or: .systemBackground)
     }
 }
 #endif

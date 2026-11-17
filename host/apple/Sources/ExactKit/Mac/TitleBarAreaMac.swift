@@ -71,11 +71,16 @@ enum TitleBarAreaMac {
     /// public call for it, and zooming a window with no maximum size fills the
     /// screen too.
     static func action(_ defaults: UserDefaults) -> Action {
-        switch defaults.string(forKey: "AppleActionOnDoubleClick") {
+        action(actionOnDoubleClick: defaults.string(forKey: "AppleActionOnDoubleClick"),
+               miniaturizeOnDoubleClick: defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick"))
+    }
+    /// The two settings' values, read by `action(_:)`.
+    static func action(actionOnDoubleClick: String?, miniaturizeOnDoubleClick: Bool) -> Action {
+        switch actionOnDoubleClick {
         case "Minimize": return .minimize
         case "None": return .none
         case .some: return .zoom
-        case nil: return defaults.bool(forKey: "AppleMiniaturizeOnDoubleClick") ? .minimize : .zoom
+        case nil: return miniaturizeOnDoubleClick ? .minimize : .zoom
         }
     }
 }

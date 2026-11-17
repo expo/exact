@@ -1,6 +1,6 @@
 // The design tool paired with a design server on another machine (LLP 1122
 // T6, LLP 1121 stage 10): driven as a person would, through the server's
-// trusted-tunnel door, which serves the tool itself, against a real `tamber
+// trusted-tunnel door, which serves the tool itself, against a real `forma
 // serve`. Its stub-server tests are apps/design-tool/*.test.contract.
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -9,35 +9,35 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DRIVEN, drive, lines, ROOT, stop, STUB_APP, TOOL_ORIGIN, toolTurns } from './design-tool-harness.mjs';
 import { spawnOwned } from './test-children.mjs';
-import { upstream } from './tamber-request.mjs';
+import { upstream } from './forma-request.mjs';
 
 toolTurns();
 
 test('T6: a tool on another machine pairs through the trusted-tunnel door with a code, at propose: its edit is held for review, nothing above its scope goes through, the code and token are in no URL, log, state, browser profile or server output; revoked while it runs, it says so and sends no more', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-pair-'));
-  writeFileSync(join(app, 'app.tamber'), readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.tamber'), 'utf8'));
+  writeFileSync(join(app, 'app.forma'), readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.forma'), 'utf8'));
   writeFileSync(join(app, 'app.contract'), STUB_APP);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
   git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'design');
-  // The tool built for this port (as `tamber tool` builds it), then nothing at its origin: this browser is
+  // The tool built for this port (as `forma tool` builds it), then nothing at its origin: this browser is
   // the other machine's, which has no server of its own.
   // (Its own server, not --via, whose 2 s probe of a dev loop can time out under load.)
-  const build = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-  await lines(build).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000);
+  const build = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  await lines(build).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000);
   await stop(build);
   // The server's trusted-tunnel door (stage 10 B2: routed as a remote one, its Origin check, its paths), on a
   // free loopback port.
   const free = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('') }), tunnel = free.port;
   free.stop(true);
-  const serve = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'serve', app, '--trust-tunnel', String(tunnel)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const serve = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'serve', app, '--trust-tunnel', String(tunnel)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   let said = '';
   serve.stderr.on('data', d => { said += d; });
   const storage = `design-tool-pair-${process.pid}`;
   let door;
   try {
-    const out = lines(serve), origin = new URL(await out.until(l => /^http:\/\/127\.0\.0\.1:\d+\/__tamber$/.test(l), 600_000)).origin;
-    const local = (await (await fetch(`${origin}/__tamber/token`)).json()).token;
-    const ask = async body => (await fetch(`${origin}/__tamber`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-tamber-token': local }, body: JSON.stringify(body) })).json();
+    const out = lines(serve), origin = new URL(await out.until(l => /^http:\/\/127\.0\.0\.1:\d+\/__forma$/.test(l), 600_000)).origin;
+    const local = (await (await fetch(`${origin}/__forma/token`)).json()).token;
+    const ask = async body => (await fetch(`${origin}/__forma`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-exact-forma-token': local }, body: JSON.stringify(body) })).json();
     // The other end of the tunnel, as ssh -L puts it on the client's loopback: everything passes as sent
     // (Origin included), recorded, with the token pairing hands out. Once the edit is held for review, the
     // developer revokes the client while its tool runs.
@@ -51,9 +51,9 @@ test('T6: a tool on another machine pairs through the trusted-tunnel door with a
       const res = await upstream(`http://127.0.0.1:${tunnel}${url.pathname}${url.search}`, { method: req.method, headers, body, redirect: 'manual' });
       const bytes = await res.arrayBuffer();
       let request = {};
-      try { request = url.pathname === '/__tamber' && body ? JSON.parse(body) : {}; } catch { /* not the wire */ }
+      try { request = url.pathname === '/__forma' && body ? JSON.parse(body) : {}; } catch { /* not the wire */ }
       seen.push({ path: `${url.pathname}${url.search}`, method: request.method ?? null, refresh: request.refresh === true, status: res.status, revoked: seen.some(s => s.revoke) });
-      if (url.pathname === '/__tamber/pair' && res.ok) token = JSON.parse(new TextDecoder().decode(bytes)).ok.token;
+      if (url.pathname === '/__forma/pair' && res.ok) token = JSON.parse(new TextDecoder().decode(bytes)).ok.token;
       if (request.method === 'propose' && request.hold && res.ok) { await ask({ method: 'revoke', client: 'remote:Ada#1' }); seen.push({ revoke: true }); }
       const back = new Headers(res.headers);
       back.delete('content-encoding'); back.delete('content-length');
@@ -61,7 +61,7 @@ test('T6: a tool on another machine pairs through the trusted-tunnel door with a
     } });
     const { code } = (await ask({ method: 'pair-code', scope: 'propose', name: 'laptop' })).ok;
     const at = `http://127.0.0.1:${door.port}`;
-    const replies = await drive(`${at}/__tamber/tool/`, storage, [
+    const replies = await drive(`${at}/__forma/tool/`, storage, [
       'type name Ada', 'tap save-name', 'clock data',
       `type remote-at ${at}`, `type remote-code ${code}`, 'tap remote-pair', 'clock data', 'clock +3000', 'clock data',
       'type dial-hue-stepper 210', 'clock data', 'state', 'tap apply', 'clock data', 'state',
@@ -76,11 +76,11 @@ test('T6: a tool on another machine pairs through the trusted-tunnel door with a
     expect((await ask({ method: 'clients' })).ok.clients.map(c => c.client)).toEqual(['local']);
     // What went through the door: the pairing once; then only what a propose client may send (read, propose,
     // a read-only inspect refresh); after the revoke, only refusals, and soon nothing.
-    const wire = seen.filter(s => s.path === '/__tamber');
-    expect(seen.filter(s => s.path === '/__tamber/pair')).toHaveLength(1);
+    const wire = seen.filter(s => s.path === '/__forma');
+    expect(seen.filter(s => s.path === '/__forma/pair')).toHaveLength(1);
     expect(wire.map(s => s.method)).toContain('propose');
     for (const s of wire) expect([s.method, ['hello', 'describe', 'resolve', 'explain', 'uses', 'history', 'export', 'canvas', 'propose', 'import', 'revert'].includes(s.method) || (s.method === 'inspect' && s.refresh)]).toEqual([s.method, true]);
-    const after = seen.filter(s => s.revoked && !s.revoke && s.path.startsWith('/__tamber') && !s.path.startsWith('/__tamber/tool'));
+    const after = seen.filter(s => s.revoked && !s.revoke && s.path.startsWith('/__forma') && !s.path.startsWith('/__forma/tool'));
     for (const s of after) expect([s.path, s.status]).toEqual([s.path, 401]);
     // (The requests in flight when the revoke lands, a poll and a read, and none after: three 3 s retries passed.)
     expect(after.length).toBeLessThanOrEqual(2);

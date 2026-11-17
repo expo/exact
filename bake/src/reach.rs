@@ -22,6 +22,13 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "reach_bluetooth_tests.rs"]
+mod bluetooth_tests;
+#[cfg(test)]
+#[path = "reach_entitlement_tests.rs"]
+mod entitlement_tests;
+
 /// Fill `compat.reach` and, for an app with device grants, the
 /// `grantPurposes` input (moving the id). Refuses a malformed device line and
 /// a purpose key the base strings table lacks, each reported.
@@ -55,11 +62,10 @@ pub(crate) fn derive(
     {
         return Err("grant-device: `device.calls` stays out of production builds until exact2 has a call transport: a call is a test call until then (LLP 1133.033 §13 question 4); begin the line in app.ts with `development` (`development device.calls purpose.calls`), which a production bake leaves out".into());
     }
-    let strings = if devices.iter().all(|g| !g.device.purpose) {
-        None
-    } else {
-        contract::strings_tables(app_dir)?
-    };
+    // The tables give a grant's purpose and are the Apple bundle's localizations (#486).
+    let read = devices.iter().any(|g| g.device.purpose) || app_dir.join("strings").is_dir();
+    let tables = read.then(|| contract::strings_tables(app_dir));
+    let strings = tables.transpose()?.flatten();
     let mut errors = Vec::new();
     // Key → locale → text, a translation lacking a key falling back to the
     // base as `t` does.
@@ -212,11 +218,18 @@ pub(crate) fn derive(
             "macos" => {
                 entitlements.extend(grant.device.hardened);
                 profile_entitlements.extend(grant.device.macos_profile);
+                for (name, value) in grant.device.entitlement_values {
+                    if grant.device.macos_profile.contains(name) {
+                        values.insert((*name).into(), json!(value));
+                    }
+                }
             }
             "ios" => {
                 entitlements.extend(grant.device.ios_entitlements);
-                for (name, value) in grant.device.ios_entitlement_values {
-                    values.insert((*name).into(), json!(value));
+                for (name, value) in grant.device.entitlement_values {
+                    if grant.device.ios_entitlements.contains(name) {
+                        values.insert((*name).into(), json!(value));
+                    }
                 }
                 flags.extend(grant.device.ios_flags);
                 modes.extend(grant.device.ios_modes);
@@ -237,6 +250,14 @@ pub(crate) fn derive(
                 }
             }
             _ => {}
+        }
+        if matches!(platform, "ios" | "macos") {
+            if let Some(container) = grant.container {
+                values.insert(
+                    "com.apple.developer.icloud-container-identifiers".into(),
+                    json!([container]),
+                );
+            }
         }
     }
     // A key a granted row needs beside its own, written with that row's text
@@ -807,14 +828,9 @@ mod tests {
         Compat {
             id: "old".into(),
             inputs: json!({"grantCeiling": grants, "javascriptGrants": grants, "rustGrants": ""}),
-            channel: String::new(),
-            origin: None,
             activate: "next-launch".into(),
             target: "t".into(),
-            embedded: Value::Null,
-            reach: Value::Null,
-            painter: None,
-            game: false,
+            ..Compat::default()
         }
     }
 
@@ -949,6 +965,8 @@ mod tests {
         assert_eq!(c.id, "old");
         assert!(c.inputs.get("grantPurposes").is_none());
         assert_eq!(c.reach["usage"], json!({}));
+        derive(&app(&[("en", "{}"), ("fr", "{}")]).0, "macos", None, &mut c).unwrap();
+        assert_eq!(c.reach["locales"], json!(["en", "fr"]));
         let mut ios = compat("device.speech-recognition p");
         let dir = app(&[("en", r#"{"p": "Transcribes."}"#)]);
         derive(&dir.0, "ios", None, &mut ios).unwrap();
@@ -1245,37 +1263,6 @@ mod tests {
             assert_eq!(c.reach["usage"], json!({}));
             assert_eq!(c.reach["android"], json!([]));
         }
-    }
-
-    #[test]
-    fn nfc_signs_its_formats_array_on_ios_and_leaves_tvos_out() {
-        // LLP 1133.035 D15, D16 item 2.
-        let dir = app(&[("en", r#"{"nfc": "Reads the tags on your books."}"#)]);
-        let derive_for = |platform: &str| {
-            let mut c = compat("device.nfc nfc");
-            derive(&dir.0, platform, None, &mut c).unwrap();
-            c.reach
-        };
-        let formats = "com.apple.developer.nfc.readersession.formats";
-        let ios = derive_for("ios");
-        assert_eq!(
-            ios["usage"],
-            json!({"NFCReaderUsageDescription": {"en": "Reads the tags on your books."}})
-        );
-        assert_eq!(ios["entitlements"], json!([formats]));
-        assert_eq!(ios["entitlementValues"], json!({formats: ["TAG"]}));
-        assert_eq!(
-            ios["tvOmits"],
-            json!(["NFCReaderUsageDescription", formats])
-        );
-        // Android's bake derives as `linux`.
-        assert_eq!(
-            derive_for("linux")["android"],
-            json!(["android.permission.NFC"])
-        );
-        let mac = derive_for("macos");
-        assert_eq!(mac["entitlements"], json!([]));
-        assert!(mac.get("entitlementValues").is_none());
     }
 
     #[test]

@@ -15,7 +15,9 @@
 
 use super::{computed, has, literal};
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node};
+use contract_checking::{Site, Structure, Visit};
+use contract_syntax::{Attr, Expr, Span};
+use std::collections::BTreeMap;
 
 /// The plain boxes the walk looks inside, down to the scroller.
 const BOXES: &[&str] = &[
@@ -27,76 +29,80 @@ const CONTROLS: &[&str] = &["button", "link", "input", "textarea", "select"];
 
 /// The route's scroller and the boxes above and below it on the way down,
 /// warned. A `header` is left to the route's bar and its own warnings.
-pub(super) fn fixed_beside(route: (&str, &[Attr]), children: &[Node], out: &mut Vec<LowerError>) {
-    if across(route.0, route.1) {
+pub(super) fn fixed_beside(route: Visit<'_>, out: &mut Vec<LowerError>) {
+    let Some((tag, _, attrs)) = route.element() else {
+        return;
+    };
+    if across(tag, attrs) {
         return;
     }
     // A route whose first child is no `header` has no bar to run the list under.
-    if matches!(children.first(), Some(Node::Element { tag, .. }) if tag != "header") {
+    if route
+        .children()
+        .next()
+        .and_then(|node| node.element())
+        .is_some_and(|(tag, _, _)| tag != "header")
+    {
         return;
     }
-    walk(children.iter().collect(), out);
-}
-
-/// One level on the way down to the scroller: its neighbours there warned,
-/// then the box or each branch holding it.
-fn walk(level: Vec<&Node>, out: &mut Vec<LowerError>) {
-    let Some(i) = level.iter().position(|n| holds_scroller(n)) else {
-        return;
-    };
-    let scroller = level[i];
-    for (j, n) in level.iter().enumerate().filter(|(j, _)| *j != i) {
-        if let Some(span) = fixed(n).filter(|s| {
-            !out.iter()
-                .any(|e| e.id == "lower-list-beside-fixed" && e.span == *s)
-        }) {
-            let below = j > i;
-            out.push(LowerError {
-                id: "lower-list-beside-fixed",
-                message: format!(
-                    "this box stays put {} the list that scrolls this route, and holds more than controls (a text, an image or a fill), so on iOS the rows stop at it in a hard line where a hand-built screen's list scrolls under what is pinned over it, blurred by the scroll edge effect. Put what it says in the list (a section's `header` or `footer`, or the first row), or keep only buttons, fields and a tablist in it, unfilled: those the list runs under, faded and blurred where it passes as iOS does under a hand-built composer, so a field's text over it stays legible (docs/recipes/list-rows.md)",
-                    if below { "below" } else { "above" }
-                ),
-                span,
-            });
-        }
+    let facts = facts(route);
+    let mut selected = BTreeMap::new();
+    for region in route.regions() {
+        select(region, &facts, &mut selected);
     }
-    match scroller {
-        Node::Element {
-            tag,
-            attrs,
-            children,
-            ..
-        } if BOXES.contains(&tag.as_str()) && !scrolls(tag, attrs) && !across(tag, attrs) => {
-            walk(children.iter().collect(), out)
-        }
-        Node::Element {
-            tag,
-            attrs,
-            children,
-            span,
-            ..
-        } if BOXES.contains(&tag.as_str()) && !scrolls(tag, attrs) => {
-            if children
-                .iter()
-                .any(|n| !holds_scroller(n) && beside(n, false))
-            {
+    for region in route.regions() {
+        for _ in region.events((), |node, _| {
+            let neighbours = selected.remove(&node.site())?;
+            for (span, below) in neighbours {
+                if out.iter().any(|e| e.id == "lower-list-beside-fixed" && e.span == span) { continue; }
                 out.push(LowerError {
                     id: "lower-list-beside-fixed",
-                    message: "the list that scrolls this route sits in a row beside another box, so on iOS it is not the route's own: its large title never collapses, and its rows stop above the bottom bar (a search field there) where a hand-built screen's list collapses the title and runs under the bar. Make the list the route's child after its `header`, and leave what stands beside it to the platform: a list whose sections are each headed by one letter has UIKit's A–Z index, and sections above the letters (Favorites) are left out of it".into(),
-                    span: *span,
+                    message: format!(
+                        "this box stays put {} the list that scrolls this route, and holds more than controls (a text, an image or a fill), so on iOS the rows stop at it in a hard line where a hand-built screen's list scrolls under what is pinned over it, blurred by the scroll edge effect. Put what it says in the list (a section's `header` or `footer`, or the first row), or keep only buttons, fields and a tablist in it, unfilled: those the list runs under, faded and blurred where it passes as iOS does under a hand-built composer, so a field's text over it stays legible (docs/recipes/list-rows.md)",
+                        if below { "below" } else { "above" }
+                    ),
+                    span,
                 });
             }
-        }
-        Node::Element { .. } | Node::Use { .. } | Node::Children { .. } => {}
-        // Of an `if` or a `match`, each branch with a scroller (an empty
-        // state's own is one): the others are shown instead.
-        node => {
-            for list in node.child_lists() {
-                walk(list.iter().collect(), out);
-            }
-        }
+            if let Some((tag, _, attrs)) = node.element() {
+                if !BOXES.contains(&tag) || scrolls(tag, attrs) { return None; }
+                if across(tag, attrs) {
+                    if node.children().any(|child| !facts[&child.site()].holds && facts[&child.site()].beside[0]) {
+                        out.push(LowerError {
+                            id: "lower-list-beside-fixed",
+                            message: "the list that scrolls this route sits in a row beside another box, so on iOS it is not the route's own: its large title never collapses, and its rows stop above the bottom bar (a search field there) where a hand-built screen's list collapses the title and runs under the bar. Make the list the route's child after its `header`, and leave what stands beside it to the platform: a list whose sections are each headed by one letter has UIKit's A–Z index, and sections above the letters (Favorites) are left out of it".into(),
+                            span: node.span(),
+                        });
+                    }
+                    return None;
+                }
+            } else if node.component_use().is_some() || node.is_slot() { return None; }
+            for region in node.regions() { select(region, &facts, &mut selected); }
+            Some(())
+        }) {}
     }
+}
+
+/// Choose one scroller per sibling region, preserving neighbour order.
+fn select(
+    region: Structure<'_>,
+    facts: &BTreeMap<Site, Facts>,
+    selected: &mut BTreeMap<Site, Vec<(Span, bool)>>,
+) {
+    let Some((index, node)) = region
+        .roots()
+        .enumerate()
+        .find(|(_, node)| facts[&node.site()].holds)
+    else {
+        return;
+    };
+    let neighbours = region
+        .roots()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .filter_map(|(i, node)| facts[&node.site()].fixed.map(|span| (span, i > index)))
+        .collect();
+    selected.insert(node.site(), neighbours);
 }
 
 /// Whether a box lays its children side by side: its neighbours then
@@ -108,17 +114,51 @@ fn across(tag: &str, attrs: &[Attr]) -> bool {
     }
 }
 
-/// Whether a node in the row stands beside the list: an element in flow,
-/// or a use. One shown only sometimes counts when it is a strip (an index, at
-/// most 48 wide): a wide one is often a pane a wide window adds.
-fn beside(node: &Node, sometimes: bool) -> bool {
-    match node {
-        Node::Element { tag, attrs, .. } => {
+#[derive(Clone, Copy)]
+struct Facts {
+    holds: bool,
+    beside: [bool; 2],
+    controls: Option<bool>,
+    fixed: Option<Span>,
+}
+
+impl Default for Facts {
+    fn default() -> Self {
+        Self {
+            holds: false,
+            beside: [false; 2],
+            controls: Some(true),
+            fixed: None,
+        }
+    }
+}
+
+/// Postorder facts avoid rewalking descendants for each ancestor predicate.
+fn facts(route: Visit<'_>) -> BTreeMap<Site, Facts> {
+    let mut out = BTreeMap::new();
+    let mut stack = Vec::<Facts>::new();
+    for (node, (), entering) in route.subtree().events((), |_, _| Some(())) {
+        if entering {
+            stack.push(Facts::default());
+            continue;
+        }
+        let children = stack.pop().unwrap();
+        let fact = if let Some((tag, _, attrs)) = node.element() {
+            let controls = if CONTROLS.contains(&tag) || literal(attrs, "role") == Some("tablist") {
+                Some(true)
+            } else if !BOXES.contains(&tag)
+                || has(attrs, "background-color")
+                || has(attrs, "background")
+            {
+                Some(false)
+            } else {
+                children.controls
+            };
             let out_of_flow = matches!(literal(attrs, "position"), Some("absolute" | "fixed"))
                 || literal(attrs, "display") == Some("none")
                 || has(attrs, "popover")
                 || tag == "dialog";
-            let strip = || match attrs
+            let strip = match attrs
                 .iter()
                 .rev()
                 .find(|a| a.name == "width")
@@ -131,108 +171,54 @@ fn beside(node: &Node, sometimes: bool) -> bool {
                     .is_ok_and(|w| w <= 48.0),
                 _ => false,
             };
-            !out_of_flow && (!sometimes || strip())
-        }
-        Node::When {
-            then, otherwise, ..
-        } => then.iter().chain(otherwise).any(|n| beside(n, true)),
-        Node::Each { body, .. } => body.iter().any(|n| beside(n, sometimes)),
-        Node::Match { some, none, .. } => some.1.iter().chain(none).any(|n| beside(n, true)),
-        Node::Use { .. } => !sometimes,
-        Node::Children { .. } => false,
-    }
-}
-
-/// A vertical scroller that takes the room it is given (a `list`, or a
-/// `scroll` not held sideways, with a `flex`), or a box or branch holding one.
-fn holds_scroller(node: &Node) -> bool {
-    match node {
-        Node::Element {
-            tag,
-            attrs,
-            children,
-            ..
-        } => {
-            if scrolls(tag, attrs) {
-                return has(attrs, "flex") || has(attrs, "flex-grow");
+            let fixed = !out_of_flow
+                && !has(attrs, "navigationSplit")
+                && tag != "header"
+                && !computed(attrs, "position")
+                && !computed(attrs, "display")
+                && controls == Some(false);
+            Facts {
+                holds: if scrolls(tag, attrs) {
+                    has(attrs, "flex") || has(attrs, "flex-grow")
+                } else {
+                    BOXES.contains(&tag) && children.holds
+                },
+                beside: [!out_of_flow, !out_of_flow && strip],
+                controls,
+                fixed: fixed.then_some(node.span()),
             }
-            BOXES.contains(&tag.as_str()) && children.iter().any(holds_scroller)
+        } else if node.component_use().is_some() || node.is_slot() {
+            Facts {
+                beside: [node.component_use().is_some(), false],
+                controls: None,
+                ..Facts::default()
+            }
+        } else if node.is_choice() {
+            Facts {
+                beside: [children.beside[1]; 2],
+                controls: children.controls.filter(|only| *only),
+                fixed: None,
+                ..children
+            }
+        } else {
+            children
+        };
+        out.insert(node.site(), fact);
+        if let Some(parent) = stack.last_mut() {
+            parent.holds |= fact.holds;
+            parent.beside[0] |= fact.beside[0];
+            parent.beside[1] |= fact.beside[1];
+            parent.controls = match (parent.controls, fact.controls) {
+                (Some(false), _) | (_, Some(false)) => Some(false),
+                (None, _) | (_, None) => None,
+                _ => Some(true),
+            };
+            parent.fixed = parent.fixed.or(fact.fixed);
         }
-        Node::Use { .. } | Node::Children { .. } => false,
-        node => node.children().any(holds_scroller),
     }
+    out
 }
 
 fn scrolls(tag: &str, attrs: &[Attr]) -> bool {
     tag == "list" || (tag == "scroll" && literal(attrs, "overflow-y") != Some("hidden"))
-}
-
-/// Where a neighbour in flow holds more than controls: its own span, or a
-/// repeated one's. None for a bar of controls, a box out of flow or
-/// hidden, a conditional one (often another route's, or a banner that
-/// comes and goes) and what the compiler cannot see into.
-fn fixed(node: &Node) -> Option<contract_syntax::Span> {
-    match node {
-        Node::Element { tag, attrs, .. } => {
-            let out_of_flow = matches!(literal(attrs, "position"), Some("absolute" | "fixed"))
-                || literal(attrs, "display") == Some("none")
-                || has(attrs, "popover")
-                || has(attrs, "navigationSplit")
-                || tag == "dialog"
-                || tag == "header";
-            if out_of_flow || computed(attrs, "position") || computed(attrs, "display") {
-                return None;
-            }
-            (!controls_only(node)?).then(|| node.span())
-        }
-        Node::Each { body, .. } => body.iter().find_map(fixed),
-        Node::When { .. } | Node::Match { .. } | Node::Use { .. } | Node::Children { .. } => None,
-    }
-}
-
-/// Whether a node holds only controls and unfilled boxes of them (LLP 1131
-/// D1); None where the compiler cannot tell.
-fn controls_only(node: &Node) -> Option<bool> {
-    match node {
-        Node::Element {
-            tag,
-            attrs,
-            children,
-            ..
-        } => {
-            if CONTROLS.contains(&tag.as_str()) || literal(attrs, "role") == Some("tablist") {
-                return Some(true);
-            }
-            if !BOXES.contains(&tag.as_str())
-                || has(attrs, "background-color")
-                || has(attrs, "background")
-            {
-                return Some(false);
-            }
-            all(children)
-        }
-        // What shows only sometimes (a reply's preview over a composer) is given the benefit.
-        Node::When {
-            then, otherwise, ..
-        } => all_of(then.iter().chain(otherwise)).filter(|&only| only),
-        Node::Each { body, .. } => all(body),
-        Node::Match { some, none, .. } => all_of(some.1.iter().chain(none)).filter(|&only| only),
-        Node::Use { .. } | Node::Children { .. } => None,
-    }
-}
-
-fn all(nodes: &[Node]) -> Option<bool> {
-    all_of(nodes.iter())
-}
-
-fn all_of<'a>(nodes: impl Iterator<Item = &'a Node>) -> Option<bool> {
-    let mut answer = Some(true);
-    for n in nodes {
-        match controls_only(n) {
-            Some(false) => return Some(false),
-            None => answer = None,
-            Some(true) => {}
-        }
-    }
-    answer
 }

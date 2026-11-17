@@ -166,8 +166,12 @@ extension NodeView {
     /// glass's ultra-thin stand-in with that corner and shadow, unmeasured
     /// against the pre-glass popover, no older runtime being installed). It
     /// is a popover while `popover` says so; a menu, by its role or as a
-    /// node's context menu, is the platform's own. Nil: none here.
+    /// node's context menu, is the platform's own, which the Mac draws
+    /// under one it paints (`paintedMenuRadius`). Nil: none here.
     var defaultSurfaceRadius: CGFloat? {
+        #if os(macOS)
+        if let radius = paintedMenuRadius { return radius }
+        #endif
         guard props["defaultSurface"] == "true", props["popover"] != nil, props["accessibilityRole"] != "menu",
               let radius = props["defaultSurfaceRadius"].flatMap(Double.init) else { return nil }
         #if os(iOS)
@@ -180,11 +184,9 @@ extension NodeView {
 
     /// The corners actually painted, including the platform's unsaid popover surface.
     func effectiveCornerSizes(in rect: CGRect) -> [CGSize] {
-        #if os(iOS) || os(tvOS)
         if materialView != nil, !writesCorner, let radius = defaultSurfaceRadius {
             return BorderPaint.reduced(Array(repeating: CGSize(width: radius, height: radius), count: 4), in: rect)
         }
-        #endif
         return cornerSizes(in: rect)
     }
 

@@ -43,6 +43,7 @@ class AuthTest {
                 if (answer == "opened") opened += id else answers += id to answer
             }
             @JvmStatic @Implementation fun requests(): IntArray? = pending.getAndSet(null)
+            @JvmStatic @Implementation fun background(applying: Boolean) = -1.0
         }
     }
 
@@ -50,6 +51,7 @@ class AuthTest {
     class Environment {
         companion object {
             val values = HashMap<String, String?>()
+            @JvmStatic @Implementation fun environ(): Array<String> = values.map { "${it.key}=${it.value}" }.toTypedArray()
             @JvmStatic @Implementation fun setenv(name: String, value: String?, overwrite: Boolean) {
                 if (overwrite || name !in values) values[name] = value
             }
@@ -193,7 +195,7 @@ class AuthTest {
         assertTrue(Host.answers.isEmpty())
     }
 
-    private fun authRequest(id: Int, state: String = "s1"): IntArray {
+    private fun authRequest(id: Int, state: String = "s1", logout: Boolean = false): IntArray {
         val body = ArrayList<Int>()
         for (text in listOf("https://login.test/authorize", "app.test:/cb", state)) {
             val bytes = text.toByteArray(Charsets.UTF_8)
@@ -202,6 +204,7 @@ class AuthTest {
                 body += chunk.foldIndexed(0) { i, word, byte -> word or ((byte.toInt() and 255) shl (i * 8)) }
             }
         }
+        body += if (logout) 1 else 0
         return intArrayOf(17, id, body.size) + body.toIntArray()
     }
 
@@ -330,6 +333,26 @@ class AuthTest {
         }
     }
 
+    @Test fun registeredProtocolHandlersReachExact2AndTheirLinksReachNavigation() {
+        val handlers = "[{\"protocol\":\"sscontrol\",\"url\":\"/open?u=%s\"}]"
+        val info = activity.packageManager.getApplicationInfo(activity.packageName, 0)
+        info.metaData = Bundle().apply { putString("dev.exact.auth.callbacks", "[\"app.test:/cb\"]"); putString("dev.exact.protocol_handlers", handlers) }
+        shadowOf(activity.packageManager).addPackage(android.content.pm.PackageInfo().apply {
+            packageName = activity.packageName; applicationInfo = info
+        })
+        val url = "sscontrol://ficha/7?x=1#top"
+        controller.pause().stop().destroy()
+        Exact.live = false
+        controller = Robolectric.buildActivity(Reader::class.java, intent(url))
+        controller.create().start().resume()
+        // Cold: the handlers and the whole URL, which exact2 puts at the template.
+        assertEquals(handlers, Environment.values["EXACT_PROTOCOL_HANDLERS"])
+        assertEquals(url, Environment.values["EXACT_LAUNCH_URL"])
+        // Warm: the URL as given, to `Exact.open`.
+        controller.newIntent(intent("sscontrol://urgencies"))
+        assertEquals("sscontrol://urgencies", Host.urls.lastOrNull())
+    }
+
     @Test fun aCallbackRecreatesTheActivityWithSavedStateInTheLiveProcess() {
         browser(true)
         Auth.open(activity, 1, "https://login.test/authorize", "app.test:/cb", "s1")
@@ -449,6 +472,22 @@ class AuthTest {
         // A later ordinary return still cancels: callback suppression lasts one resume.
         controller.pause().stop().start().resume()
         assertEquals(listOf(1 to "cancelled"), Host.answers)
+    }
+
+    @Test fun stateLessLogoutReturnsAndCannotTakeASignInResponse() {
+        browser(true)
+        val requests = Requests(activity)
+        requests.perform(authRequest(1, "sign-in"))
+        requests.perform(authRequest(2, "logout", logout = true))
+        controller.pause().stop()
+        controller.newIntent(intent("app.test:/cb?code=sign-in-code&state=logout")).start().resume()
+        assertTrue(Host.urls.isEmpty())
+        val signIn = "app.test:/cb?code=sign-in-code&state=sign-in"
+        controller.newIntent(intent(signIn))
+        assertEquals(listOf(signIn), Host.urls)
+        val returned = "app.test:/cb"
+        controller.newIntent(intent(returned))
+        assertEquals(listOf(signIn, returned), Host.urls)
     }
 
     @Test fun defaultBrowserWaitsUntilTheBoundAndForgettingCancelsOnlyTheWait() {

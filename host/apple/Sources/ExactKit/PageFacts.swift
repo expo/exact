@@ -112,7 +112,7 @@ package enum PageFacts {
         #if os(macOS)
         if NSApp.isHidden { return true }
         let windows = NSApp.windows.filter { $0.isVisible || $0.isMiniaturized || closeHid.contains($0) || unshown.contains($0) }
-        return !windows.isEmpty && windows.allSatisfy { !$0.isVisible || $0.isMiniaturized || !$0.occlusionState.contains(.visible) }
+        return !windows.isEmpty && windows.allSatisfy { !$0.isVisible || $0.isMiniaturized || !$0.screenOcclusionState.contains(.visible) }
         #else
         return AppBackground.now
         #endif
@@ -404,9 +404,11 @@ extension ExactSession {
         // Keep URLSession running through the bounded close wait in setPage.
         freezeCloseHold.moved(PageFacts.frozen)
         defer { freezeCloseHold.moved(false) }
+        if clock == nil { followOffset() }
         let reads = runtime.readsOnLine()
         readsOnLineKnown = (generation, reads)
         apply(runtime.setPage(PageFacts.bits(pageWindow, page: view?.window, readsOnLine: reads)))
+        if let presentedHeld { apply(runtime.preferPresented(presentedHeld)) }
         apply(runtime.setRootFontSize(PageFacts.rootFontSize))
         tellDisplayScale()
     }
@@ -417,6 +419,15 @@ extension ExactSession {
     func tellDisplayScale() {
         guard booted, state != .destroyed else { return }
         apply(runtime.setDisplayScale(PageFacts.displayScale(presenter.viewport)))
+    }
+    /// What the first boot's first layout reads of the view, told before it
+    /// boots: the insets (which the boot takes), the root font size and the
+    /// display scale. Told after the boot instead, each lays the tree out again.
+    func primeView(insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat), displayScale: Double) {
+        guard !booted, state != .destroyed else { return }
+        _ = runtime.insets(top: insets.top, right: insets.right, bottom: insets.bottom, left: insets.left)
+        _ = runtime.setRootFontSize(PageFacts.rootFontSize)
+        _ = runtime.setDisplayScale(displayScale)
     }
 }
 

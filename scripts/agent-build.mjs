@@ -28,7 +28,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
+import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
 import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
@@ -68,9 +68,18 @@ export function nativeBuild(host, app, { sample = false, checked = null, launch 
   return { built, receipt, changed, backendOrigin };
 }
 
+/** Whether the macOS build a drive of `app` launches signs the App Sandbox (`mac --sandbox`, LLP 1030.005 D4), as
+ * its receipt's entitlements say. */
+export function macSandboxed(app) {
+  try { return /<key>com\.apple\.security\.app-sandbox<\/key>\s*<true\/>/.test(JSON.parse(readFileSync(receiptPath('macos', app), 'utf8')).entitlements ?? ''); } catch { return false; }
+}
+
 /** The receipt of the build a drive of `app` on `host` (`ios`, else macOS) launches, or undefined without one. */
 export function receiptPath(host, app, { sample = false } = {}) {
-  if (host === 'ios') return [resolve(appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle, 'receipt.json')].find(existsSync);
+  if (host === 'ios') {
+    const paths = appleArtifacts(app, { destination: 'ios-simulator', host: sample });
+    return [resolve(paths.products, 'receipt.json'), resolve(paths.bundle, 'receipt.json')].find(existsSync);
+  }
   return [resolve(appleArtifacts(app, { host: sample }).products, 'receipt.json'), resolve(appleArtifacts(app, { host: sample }).bundle, 'Contents/Resources/receipt.json')].find(existsSync);
 }
 
@@ -121,12 +130,12 @@ export function refuseBuild(host, state, app, { sample = false } = {}) {
 export const buildArgs = (host, app) => [...(host === 'ios' ? ['--ios'] : []), app.crate('apple'), ...(host === 'ios' ? ['--no-install'] : [])];
 
 const errorLine = line => /^error\b|\berror(\[E\d+\])?:/.test(line);
-/** What a failed build said, short: from its first error, at most 30 lines (else
- * its last 20), and its last line. */
+/** What a failed build said, short: from its first error, at most 30 lines (else its last 20, or from the compiler's
+ * first error when those leave it out), and its last line. */
 function failureLines(output) {
   const lines = output.split('\n').filter(line => line.trim());
-  const first = lines.findIndex(errorLine);
-  const shown = first < 0 ? lines.slice(-20) : lines.slice(first, first + 30);
+  const first = lines.findIndex(errorLine), compiler = lines.findIndex(compilerError);
+  const shown = first >= 0 ? lines.slice(first, first + 30) : compiler >= 0 && compiler < lines.length - 20 ? lines.slice(compiler, compiler + 30) : lines.slice(-20);
   if (lines.length && !shown.includes(lines.at(-1))) shown.push('…', lines.at(-1));
   return shown;
 }
@@ -421,7 +430,7 @@ export async function buildFirst(host, app, { say = line => console.error(line),
 /** What a Windows drive of `app` launches, `dist-windows/<name>.exe`, and its changes since the build that packaged it
  * (`changed`, null when there is none), from the same receipt check the driver uses. */
 export function windowsBuild(app) {
-  const bin = resolve(app.dir, 'dist-windows', `${executableName(app)}.exe`);
+  const bin = resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(app.dir, 'dist-windows'), `${executableName(app)}.exe`);
   if (!existsSync(bin)) return { bin, changed: null };
   return { bin, changed: packagedBuildChanges(resolve(bakeOutput(app), `windows-${bakeTarget('windows')}.build.json`), dirname(bin), app) };
 }

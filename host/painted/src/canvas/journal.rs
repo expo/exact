@@ -7,13 +7,9 @@
 
 use super::CanvasHost;
 use exact_runner::DataSource;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 static ON: std::sync::LazyLock<bool> =
     std::sync::LazyLock::new(|| std::env::var("EXACT_LOG_JOURNAL").is_ok_and(|v| v == "1"));
-
-/// Journal lines already written (a process has one host).
-static WRITTEN: AtomicUsize = AtomicUsize::new(0);
 
 impl<D: DataSource + Default> CanvasHost<D> {
     /// Write the journal's lines since the last call, when the switch is on.
@@ -22,14 +18,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
             return;
         }
         let runner = self.p.host().runner();
-        let start = runner.journal_start();
-        let from = WRITTEN.load(Ordering::Relaxed).max(start);
         let ms = self.started.elapsed().as_secs_f64() * 1000.0;
-        let mut next = from;
-        for line in runner.journal().skip(from - start) {
+        for line in runner.journal_echo() {
             eprintln!("exact: journal +{ms:.1} ms: {line}");
-            next += 1;
         }
-        WRITTEN.store(next, Ordering::Relaxed);
     }
 }

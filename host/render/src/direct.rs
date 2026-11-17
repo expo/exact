@@ -114,6 +114,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
             crate::render_time(),
             delivery,
             paints_boot.then_some(&mut on_boot as &mut dyn FnMut(&mut _)),
+            None,
         )?
     };
     let tree = match page.runner.document_tree() {
@@ -266,6 +267,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
             activate,
             wake,
             runtime_form: true,
+            chooses_scheme: exact_runner::uses::chooses_scheme(plan),
             drew,
         },
         body,
@@ -374,7 +376,7 @@ mod tests {
 <link rel="modulepreload" href="./app.js">
 <style>p{margin:0}</style>
 <div id="exact-root"></div>
-<script type="module" src="./app.js"></script>
+<script type="module" data-entry src="./app.js"></script>
 "#;
     const SOURCE: &str = r#"
 routes nav

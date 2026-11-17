@@ -27,7 +27,7 @@ impl<D: DataSource> Host<D> {
     pub fn apply_live(&mut self, frame: &str) -> (Option<String>, bool, bool) {
         let Some(edit) = exact_runner::design::Edit::parse(frame) else {
             return (
-                Some("live: not a tamber batch or snapshot".into()),
+                Some("live: not a forma batch or snapshot".into()),
                 false,
                 false,
             );

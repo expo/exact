@@ -82,12 +82,13 @@ export function installData(manifest, build = {}) {
   const errors = installProblems(manifest);
   if (methodsFor(manifest, 'web').some(m => !validURL(m.url, 'browser'))) errors.push('install.web: invalid browser URL');
   if (errors.length) throw new Error(errors.join('\n'));
-  const brand = manifest.brand ?? {}, rooted = path => path && '/' + path;
+  const base = manifest.host?.web?.base ?? '/';
+  const brand = manifest.brand ?? {}, rooted = path => path && base + path;
   const wordmark = brand.wordmark && { ...brand.wordmark, ...(brand.wordmark.image ? { image: rooted(brand.wordmark.image) } : {}), ...(brand.wordmark.font ? { font: rooted(brand.wordmark.font) } : {}) };
   const platforms = Object.fromEntries(INSTALL_PLATFORMS.map(platform => [platform, {
     methods: methodsFor(manifest, platform).map(({ order, ...m }) => {
       const description = m.description ?? details[m.kind] ?? 'Install this app on your device.';
-      return { ...m, label: m.label ?? labels[m.kind], ...(description ? { description } : {}) };
+      return { ...m, ...(platform === 'web' && m.url.startsWith('/') && base !== '/' ? { url: base.slice(0, -1) + m.url } : {}), label: m.label ?? labels[m.kind], ...(description ? { description } : {}) };
     }),
     ...(platform === 'web' && manifest.install?.web?.urls ? { urls: manifest.install.web.urls } : {}),
   }]));

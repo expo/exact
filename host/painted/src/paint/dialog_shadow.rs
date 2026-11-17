@@ -75,7 +75,7 @@ impl DialogShadow {
                 .chunks_exact_mut(width as usize * 4)
                 .enumerate()
             {
-                for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+                for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                     // The nine-grid's middle is hollow and covered by the dialog.
                     if (9. ..55.).contains(&xs[x]) && (9. ..55.).contains(&ys[y]) {
                         continue;

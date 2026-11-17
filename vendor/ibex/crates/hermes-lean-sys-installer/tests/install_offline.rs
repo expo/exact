@@ -470,7 +470,7 @@ serde_json = "1"
 sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"
-ureq = { version = "=3.4.0", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 "#,
     )
     .expect("fixture manifest");

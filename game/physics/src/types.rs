@@ -13,7 +13,7 @@ pub enum BodyKind {
 }
 
 /// A rigid body's controls and observed motion. Bodies must be hierarchy roots.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Data)]
 pub struct Body {
     /// Static, game-controlled, or simulated (the default).
     pub kind: BodyKind,
@@ -40,22 +40,17 @@ pub struct Body {
     /// its motion against every other collider, so it cannot pass through a thin
     /// or small one between steps. Two bodies that both set it are not swept
     /// against each other. Without it, a fast body is swept only against static
-    /// colliders. Ignored on static and kinematic bodies. Saved, hashed and
-    /// serialized only when true, and a read that omits it keeps the current
-    /// value: reading a serialized body without CCD into one with CCD leaves CCD
-    /// on. To turn it off, write the field.
+    /// colliders. Ignored on static and kinematic bodies.
     pub ccd: bool,
     /// A world-space force at the centre of mass in newtons, applied in every step
     /// until it is written back to zero. Contacts still act on the body, as they do
     /// under gravity. Ignored on static and kinematic bodies. Writing a non-zero
     /// force wakes the body; a body at rest under a constant force may sleep, as
-    /// under gravity. Saved, hashed and serialized only when non-zero, with the
-    /// omission rule of `ccd`.
+    /// under gravity.
     pub force: Vec3,
     /// Principal moments of inertia in kg·m² about the centre of mass, along the
     /// body's local axes. All zero (the default) derives them from the collider;
-    /// otherwise all three must be positive. Saved, hashed and serialized only when
-    /// set, with the omission rule of `ccd`.
+    /// otherwise all three must be positive.
     pub inertia: Vec3,
 }
 impl Default for Body {
@@ -75,21 +70,16 @@ impl Default for Body {
         }
     }
 }
-/// The derive's record, plus fields written only when they differ from the type's
-/// default, so a value that never sets them keeps the saves and hashes it has.
-/// Reading keeps the record rule: an omitted field keeps its current value, which
-/// is the default when decoding a new value. The first list is always written; the
-/// second is `Body::ccd`, which predates the third; the third is named in the hash
-/// as well (`Writer::key`), since a hash does not name fields and two of them
-/// written alone could otherwise collide.
+/// A record with trailing fields written only when non-default. Omitted fields
+/// keep their current values. Optional fields enter the hash by name (`Writer::key`)
+/// so two of them written alone cannot collide.
 macro_rules! record {
-    ($ty:ident { $($field:ident),* $(,)? } unnamed { $($bare:ident),* $(,)? } named { $($opt:ident),* $(,)? }) => {
+    ($ty:ident { $($field:ident),* $(,)? } named { $($opt:ident),* $(,)? }) => {
         impl exact_game::Data for $ty {
             const TYPE_ID: &'static str = concat!("table:", module_path!(), "::", stringify!($ty));
             fn set_field(&mut self, field: &str, text: &str) -> Result<(), exact_game::DataError> {
                 match field {
                     $(stringify!($field) => exact_game::data::edit_field(&mut self.$field, text),)*
-                    $(stringify!($bare) => exact_game::data::edit_field(&mut self.$bare, text),)*
                     $(stringify!($opt) => exact_game::data::edit_field(&mut self.$opt, text),)*
                     _ => Err(exact_game::DataError::new(format!("unknown field {field}"))),
                 }
@@ -100,12 +90,6 @@ macro_rules! record {
                 $(
                     w.field(stringify!($field));
                     exact_game::Data::write(&self.$field, w);
-                )*
-                $(
-                    if self.$bare != default.$bare {
-                        w.field(stringify!($bare));
-                        exact_game::Data::write(&self.$bare, w);
-                    }
                 )*
                 $(
                     if self.$opt != default.$opt {
@@ -126,8 +110,6 @@ macro_rules! record {
                     match field.as_str() {
                         $(stringify!($field) => exact_game::Data::read(&mut self.$field, r)
                             .map_err(|e| e.at(stringify!($field)))?,)*
-                        $(stringify!($bare) => exact_game::Data::read(&mut self.$bare, r)
-                            .map_err(|e| e.at(stringify!($bare)))?,)*
                         $(stringify!($opt) => exact_game::Data::read(&mut self.$opt, r)
                             .map_err(|e| e.at(stringify!($opt)))?,)*
                         _ => r.skip().map_err(|e| e.at(&field))?,
@@ -141,16 +123,6 @@ macro_rules! record {
         }
     };
 }
-record!(Body {
-    kind,
-    velocity,
-    spin,
-    mass,
-    gravity,
-    damping,
-    spin_damping,
-    asleep,
-} unnamed { ccd } named { force, inertia });
 pub(crate) use record;
 impl Component for Body {
     const NAME: &'static str = "Body";
@@ -236,7 +208,7 @@ pub enum BounceCombine {
 }
 
 /// Collision material and filtering; a collider without a Body is static.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Data)]
 pub struct Collider {
     /// Local geometry.
     pub shape: Shape,
@@ -254,13 +226,12 @@ pub struct Collider {
     /// Accepted membership bits; defaults to all bits.
     pub mask: u32,
     /// How this collider's pairs combine restitution; defaults to the larger
-    /// value. Saved, hashed and serialized only when not the default.
+    /// value.
     pub bounce_combine: BounceCombine,
     /// More shapes on the same Body. They add no mass: the Body's mass and
     /// inertia are the primary shape's (or authored). A touch with one reports
     /// this entity. Queries (rays, sweeps, overlaps, capsules) see the primary
-    /// shape only, for now. Needs a Body. Saved, hashed and serialized only when
-    /// not empty.
+    /// shape only, for now. Needs a Body.
     pub extra: Vec<ExtraShape>,
 }
 impl Default for Collider {
@@ -278,16 +249,6 @@ impl Default for Collider {
         }
     }
 }
-record!(Collider {
-    shape,
-    offset,
-    friction,
-    bounce,
-    sensor,
-    layer,
-    mask,
-} unnamed {} named { bounce_combine, extra });
-
 /// One more shape on a collider's Body (`Collider::extra`), with its own
 /// material and filtering, and no mass. It may not be a mesh or a heightfield.
 #[derive(Clone, Debug, PartialEq, Data)]
@@ -397,7 +358,7 @@ crate::types::record!(Physics {
     gravity,
     events,
     executor,
-} unnamed {} named {
+} named {
     solver_iterations,
     contact_frequency,
     static_contact_frequency,

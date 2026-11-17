@@ -15,6 +15,8 @@ class MainActivity : ExactActivity() {
     override val modules = NativeModules.load()
     /** Compose Material 3's, when the plan has a date or time control (`src/compose`). */
     override val pickers get() = materialPickers ?: super.pickers
+    /** Media3's, when the APK links it (`src/video`). */
+    override val video = videoPlayers
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)

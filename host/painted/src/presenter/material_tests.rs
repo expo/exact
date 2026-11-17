@@ -49,7 +49,7 @@ pub(super) fn material_process() -> bool {
 }
 
 fn boot() -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 600.),
@@ -84,7 +84,7 @@ fn materials_indeterminate_progress_is_its_arc() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(
             r##"component App
   view
@@ -252,7 +252,7 @@ fn materials_radio_and_touch_target_reach_past_the_drawn_control() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(MARKS),
         (),
         (400., 700.),
@@ -412,7 +412,7 @@ const SEGMENTS: &str = r##"component App
 "##;
 
 fn segments() -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(SEGMENTS),
         (),
         (400., 700.),
@@ -678,7 +678,7 @@ fn materials_segmented_group_follows_a_change_that_moves_its_eligibility() {
         return;
     }
     let boot = |start: [bool; SWITCHES]| {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&switched(start)),
             (),
             (400., 400.),
@@ -721,7 +721,7 @@ fn materials_segments_keep_what_the_author_wrote_and_their_visual_order() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(
             r##"component App
   view
@@ -776,7 +776,7 @@ fn materials_segmented_group_that_is_a_grouped_row_spans_the_card() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(GROUPED),
         (),
         (400., 300.),
@@ -815,7 +815,7 @@ fn materials_segment_takes_an_authored_press_colour() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(
             r##"component App
   state n = 0
@@ -868,7 +868,7 @@ fn materials_segments_keep_a_radios_own_size_and_a_columns_check() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(
             r##"component App
   view
@@ -926,7 +926,7 @@ fn materials_segmented_group_fits_what_holds_it() {
     if !material_process() {
         return;
     }
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(
             r##"component App
   view
@@ -998,4 +998,48 @@ fn materials_segmented_group_fits_what_holds_it() {
     let long = rect(&mut p, "l-1");
     assert_eq!(long.2, 100.0);
     assert!(long.3 > 40.0, "{long:?}");
+}
+
+#[test]
+fn rtl_switch_thumb_follows_checked_state_and_direction() {
+    if !material_process() {
+        return;
+    }
+    for on in [false, true] {
+        let source = format!(
+            r#"component App
+  view
+    column direction="rtl" align-items="flex-start"
+      input type="checkbox" switch checked={on} testId="switch"
+"#
+        );
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(&source),
+            (),
+            (200., 100.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let (x, y, w, h) = p.rect_of(id(&p, "switch")).unwrap();
+        let frame = p.frame();
+        let at = |right: bool| {
+            frame
+                .pixel(
+                    (x + if right { w - h / 2. } else { h / 2. }) as u32,
+                    (y + h / 2.) as u32,
+                )
+                .unwrap()
+                .demultiply()
+        };
+        let thumb = at(!on);
+        let track = at(on);
+        assert!(
+            thumb.red() > track.red(),
+            "on={on}: thumb {thumb:?}, track {track:?}"
+        );
+    }
 }

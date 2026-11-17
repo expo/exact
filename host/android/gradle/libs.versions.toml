@@ -8,6 +8,8 @@ referenceSdk = "36"
 robolectric = "4.17"
 roborazzi = "1.76.0"
 junit = "4.13.2"
+# The `video` element's player (LLP 1042.001 D2). Media3 needs every module at one version: `:video` holds the group to it.
+media3 = "1.11.1"
 # What the reference's test manifest resolves already, so the catalogue adds no version to the reference's graph.
 activity = "1.8.2"
 
@@ -22,3 +24,6 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
 roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
 junit = { module = "junit:junit", version.ref = "junit" }
+media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+media3-exoplayer-hls = { module = "androidx.media3:media3-exoplayer-hls", version.ref = "media3" }
+media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3" }

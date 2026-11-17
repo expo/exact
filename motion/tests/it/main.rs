@@ -6,6 +6,7 @@ mod clock;
 mod descriptor;
 mod easing;
 mod engine;
+mod filter;
 mod first_frame;
 mod height;
 mod hold;

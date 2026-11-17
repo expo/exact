@@ -108,6 +108,7 @@ fn data_call(r: &mut Runner<Granted>, body: &Json, replies: &Replies) {
         replies.lock().unwrap().push(answer);
     };
     match work {
+        Work::HttpResponse(_) => panic!("HTTP fixtures require the HTTP executor"),
         Work::Now(work) => done(work()),
         Work::Later(work) => work(Reply::new(done)),
     }

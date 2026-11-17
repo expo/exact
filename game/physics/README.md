@@ -30,10 +30,11 @@ the actual `displacement` and `grounded` state.
   in the Rapier snapshot and replays exactly after a restore. Friction combines
   geometrically. Restitution combines by `Collider::bounce_combine`: `Max` (the
   default), `Multiply`, `Min` or `Average`; a pair whose colliders differ takes the
-  later of those (Rapier's priority), so `Average` needs both. `ccd`, `force`,
-  `inertia` and a non-default `bounce_combine` are saved and hashed only when set. Contact slop is 0.1 mm; other integration defaults
-  are Rapier's. The Physics resource sets the solver: `solver_iterations` (substeps,
-  4), `contact_frequency` and `static_contact_frequency` (the contact springs
+  later of those (Rapier's priority), so `Average` needs both. Bodies and colliders
+  write every field, including defaults, so decoding a save into an existing value
+  replaces every field. A patch keeps fields it omits. Contact slop is 0.1 mm;
+  other integration defaults are Rapier's. The Physics resource sets the solver:
+  `solver_iterations` (substeps, 4), `contact_frequency` and `static_contact_frequency` (the contact springs
   between moving bodies and against a fixed one, 30 and 60 Hz),
   `contact_damping_ratio` (both springs, 10) and `coulomb_friction` (one friction
   constraint per contact point instead of Rapier's grouped friction with a twist
@@ -114,28 +115,20 @@ refreshes and decodes that same representation. There is no parallel field-by-fi
 Rapier clone. See [state.rs](src/state.rs), [continuation tests](tests/paranoid.rs)
 and [the pile diagnostic](examples/pile.rs).
 
-EXPHYS v2 parity has native arm64, x86-64 Linux and browser fixture evidence.
-On arm64 and x86-64,
-`tests/continuation/mod.rs` reaches a non-initial `deferred_optimize_pending = true`
-boundary at tick 6 through two bulk collision-only refreshes after a regular step.
-Off/Save/FreshGame and restored continuation agree at tick 12; clearing only the
-serialized pending flag changes the subsequent hash. Both continuations have consumed
-the flag by then: the divergence is subsequent executor state, not a retained flag bit.
-This proves the saved executor boundary, not that every kinematic scene reaches it.
-The minimal-120 pin changed because awake work now enters the existing saved busy
-reasons. Native arm64, x86-64 and Chrome Wasm agree in Off/Save/FreshGame; pile-600 is
-unchanged. This legacy physics card keeps both values in [tests/pins.json](tests/pins.json)
-rather than using the game prover's `--repin` command.
-Both pins moved on 2026-10-03 when fixed solids stopped pairing: the snapshot lost
-those pairs and each collider's flags changed. Every body pose, velocity and event
-over 600 ticks of pile/stack/drop/bounce and 120 of minimal is byte-identical to the
-previous build (native arm64). They moved again with EXPHYS v3's holes, trajectories
-again unchanged, and once more when the world hash became a stream of per-page
-digests and saves became columnar (EXGAME v4), and again when a hash began reading
-the executor's digest. The current values (in [tests/pins.json](tests/pins.json)) agree on native arm64, on x86-64
-(`--target x86_64-apple-darwin` under Rosetta) and in the web-profile `minimal`
-Wasm under Bun, Off/Save/FreshGame alike, and the living controller still rests at
-tick 547 with Off/Save/FreshGame agreement (2026-10-03).
+The physics cards in [tests/pins.json](tests/pins.json) cover minimal-120 and
+pile-600. Native arm64 macOS and the web-profile `minimal` Wasm under Bun agree
+in Off/Save/FreshGame, including the pile's restored continuation. Native x86-64
+Linux has EXPHYS v2 fixture parity evidence; the current pin values have not been
+rerun there. The living controller rests at tick 547 with Off/Save/FreshGame
+agreement.
+
+`tests/continuation/mod.rs` reaches a non-initial
+`deferred_optimize_pending = true` boundary at tick 6 through two bulk
+collision-only refreshes after a regular step. Off/Save/FreshGame and restored
+continuation agree at tick 12; clearing only the serialized pending flag changes
+the subsequent hash. Both continuations have consumed the flag by then: the
+divergence is subsequent executor state, not a retained flag bit. This proves
+the saved executor boundary, not that every kinematic scene reaches it.
 
 Reproduce from `game/` with `EXACT_UPDATE_TRUST=development`:
 ```

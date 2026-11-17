@@ -4,7 +4,9 @@
 //! `globalshortcut` as a person's activation when it is pressed, once per
 //! press unless `windows.repeat` asks for a press per keyboard repeat (LLP
 //! 1133.025 D8). Under the agent the runner's substitute answers, unless the
-//! drive binds it.
+//! drive binds it. While a session reads bare `PrintScreen`, which Snipping
+//! Tool's setting reserves, the host asks its readings again when that
+//! setting changes (#503).
 
 use exact_painted::package::{json, Context, Json, Package, Reply};
 
@@ -12,6 +14,9 @@ pub struct GlobalShortcuts {
     context: Context,
     /// The chords this session reads: `(id, keys)`.
     reading: Vec<(String, String)>,
+    /// Whether the host asks this session's readings again when Print
+    /// Screen is taken or given back.
+    watching: bool,
 }
 
 impl GlobalShortcuts {
@@ -28,6 +33,7 @@ impl Package for GlobalShortcuts {
         GlobalShortcuts {
             context,
             reading: Vec::new(),
+            watching: false,
         }
     }
 
@@ -42,10 +48,20 @@ impl Package for GlobalShortcuts {
                 let (session, extension) =
                     (self.context.session().to_owned(), self.context.extension());
                 let repeat = args["windows"]["repeat"] == true;
+                if keys == "PrintScreen" && !self.watching {
+                    let (notifier, topic) =
+                        (self.context.notifier(), format!("{extension}.{name}"));
+                    host.watch_reserved(&session, Box::new(move || notifier.changed(&topic)));
+                    self.watching = true;
+                }
                 let outcome =
                     host.register_hotkey(&session, id, keys, repeat, extension, "globalshortcut");
                 let reading = (id.to_owned(), keys.to_owned());
-                if outcome.is_ok() && !self.reading.contains(&reading) {
+                if outcome.is_err() {
+                    // Asked again after the system took the chord, the host
+                    // has dropped this reader.
+                    self.reading.retain(|r| r != &reading);
+                } else if !self.reading.contains(&reading) {
                     self.reading.push(reading);
                 }
                 let registered = match outcome {
@@ -86,5 +102,8 @@ impl Package for GlobalShortcuts {
 
     fn destroy(&mut self) {
         self.release("globalShortcut", None);
+        if let Some(host) = self.context.desktop().filter(|_| self.watching) {
+            host.unwatch_reserved(self.context.session());
+        }
     }
 }

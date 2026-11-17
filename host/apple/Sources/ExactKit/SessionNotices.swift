@@ -13,12 +13,15 @@ extension ExactSession {
     func pumpReplies() {
         guard state != .destroyed else { return }
         let began = CACurrentMediaTime()
-        let captured = generation, time = now()
+        let time = now()
         repliesInFlight += 1
+        #if DEBUG
+        replyPumpsForTests += 1
+        #endif
         // Keep parsing, settlement and batch decoding on the existing owner.
         // Publication joins fills and ticks before any later synchronous batch.
-        runtime.pumpAsync(now: time) { [weak self] batch in
-            self?.publish(batch == nil ? .cancelledReply : .reply, batch ?? Batch(ops: [], timers: false, motion: false, clock: nil, error: nil), captured)
+        runtime.pumpAsync(now: time) { [weak self] completion in
+            self?.publish(.reply, completion)
         }
         replySubmissions.append((CACurrentMediaTime() - began) * 1000)
     }
@@ -28,7 +31,7 @@ extension ExactSession {
     func publishCancelledReplyForTests() {
         repliesInFlight += 1
         replySubmissions.append(0)
-        publish(.cancelledReply, Batch(ops: [], timers: false, motion: false, clock: nil, error: nil), generation)
+        publish(.reply, RuntimeCompletion(lease: runtime.completionLease, batch: Runtime.heldBatch))
     }
     #endif
 
@@ -56,8 +59,7 @@ extension ExactSession {
     func tellSoon(_ calls: [(Runtime) -> Batch]) {
         guard !runtime.holds("tellSoon(_:)") else { return } // (a notice a restart's reset sets off: held before it is counted or queued, ResetGate)
         noticesInFlight += calls.count
-        let captured = generation
-        runtime.later(calls) { [weak self] batch in self?.publish(.notice, batch, captured) }
+        runtime.later(calls) { [weak self] batch in self?.publish(.notice, batch) }
     }
 
     /// `tellPage` for a notice; at once unless the data source is activating
@@ -69,6 +71,7 @@ extension ExactSession {
         #if canImport(UIKit)
         if view?.window?.windowScene?.activationState != .foregroundActive { presenter.supersedePress() }
         #endif
+        if clock == nil { dateChanged() } // (queued ahead of the page's facts, as `tellPage` checks first)
         let bits = PageFacts.bits(pageWindow, page: view?.window, readsOnLine: reads.value)
         let font = PageFacts.rootFontSize, scale = PageFacts.displayScale(presenter.viewport)
         tellSoon([{ $0.setPage(bits) }, { $0.setRootFontSize(font) }, { $0.setDisplayScale(scale) }])

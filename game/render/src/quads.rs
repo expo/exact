@@ -1131,43 +1131,47 @@ pub(crate) fn feed_poses<T: exact_game::Component + Clone>(
     parent_changed: bool,
     visible_only: bool,
 ) {
+    let poses = crate::world::scene::PoseRows::new(w);
     feed_with_pose(
         w,
+        &poses,
         items,
         initial,
         next_tick,
         parent_changed,
         visible_only,
-        crate::world::scene::pose,
+        |e| poses.pose(e),
     );
 }
 #[allow(clippy::too_many_arguments)]
 fn feed_with_pose<T: exact_game::Component + Clone>(
     w: &World,
+    poses: &crate::world::scene::PoseRows<'_>,
     items: &mut Vec<Item<T>>,
     initial: bool,
     next_tick: bool,
     parent_changed: bool,
     visible_only: bool,
-    pose: fn(&World, Entity) -> Option<Transform>,
+    pose: impl Fn(Entity) -> Option<Transform>,
 ) {
     let revision = w.revision::<T>();
+    let values = w.components::<T>();
     // Compact once, then append arrivals. Never shift the tail for each removal.
     items.retain_mut(|i| {
-        let Some(value) = w.get::<T>(i.entity) else {
+        let Some(value) = values.get(i.entity) else {
             return false;
         };
-        if visible_only && !w.is_visible(i.entity) {
+        if visible_only && !poses.is_visible(i.entity) {
             return false;
         }
-        let Some(pose) = pose(w, i.entity) else {
+        let Some(pose) = pose(i.entity) else {
             return false;
         };
         if next_tick {
             i.poses[0] = i.poses[1];
         }
         i.poses[1] = pose;
-        if initial || crate::world::scene::snap(w, i.entity, parent_changed) {
+        if initial || poses.snap(i.entity, parent_changed) {
             i.poses[0] = pose;
         }
         if initial || i.revision != revision {
@@ -1184,10 +1188,10 @@ fn feed_with_pose<T: exact_game::Component + Clone>(
             retained += 1;
             continue;
         }
-        if visible_only && !w.is_visible(entity) {
+        if visible_only && !poses.is_visible(entity) {
             continue;
         }
-        if let Some(pose) = pose(w, entity) {
+        if let Some(pose) = pose(entity) {
             items.push(Item {
                 entity,
                 poses: [pose; 2],

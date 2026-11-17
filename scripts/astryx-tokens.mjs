@@ -1,6 +1,6 @@
 // An Astryx theme's tokens, resolved (LLP 1121 D14, importer 4): the pinned
 // theme package and its core resolved to light and dark values with
-// `resolveThemeTokens()`, written as JSON for `contract tamber import astryx`.
+// `resolveThemeTokens()`, written as JSON for `contract forma import astryx`.
 // The packages are installed in a temporary directory, never in this repo.
 //
 //   bun scripts/astryx-tokens.mjs [--theme @astryxdesign/theme-neutral@0.7.0] [--out <file>]

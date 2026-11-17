@@ -40,6 +40,9 @@ struct ChipFace: Equatable {
     /// Unwritten bar-button ink is the tint before iOS 26; a readout's is always the label colour.
     let shares: [Double?], accents: [UIColor?]
     let gap: CGFloat
+    /// The button's left and right padding, room the face keeps inside the
+    /// item's glass beside its parts, as a button in the page keeps it.
+    let insetLeft: CGFloat, insetRight: CGFloat
     /// The scheme it is drawn in. A bar item sized from one variant of a
     /// light/dark image asset kept that size for the other (a dark capsule
     /// three times the face's width, iOS 27), so the face is drawn for the
@@ -157,6 +160,8 @@ struct ChipFace: Equatable {
         self.shares = shares
         self.accents = accents
         self.gap = gap ?? 0
+        insetLeft = readout ? 0 : max(0, button.number("padding_left"))
+        insetRight = readout ? 0 : max(0, button.number("padding_right"))
         dark = button.drawsDark
         self.bold = bold
     }
@@ -169,7 +174,7 @@ struct ChipFace: Equatable {
             case .symbol(let name, let points, let tint): return "s\(name)\(points)\(tint)"
             case .text(let text, let font, let color): return "t\(text)\(font.fontName)\(font.pointSize)\(color)"
             }
-        }.joined(separator: "|") + "|\(opacities)|\(lineHeights)|\(shares)|\(gap)|\(dark)|\(bold)"
+        }.joined(separator: "|") + "|\(opacities)|\(lineHeights)|\(shares)|\(gap)|\(insetLeft),\(insetRight)|\(dark)|\(bold)"
     }
 
     /// The face drawn, its unwritten ink the bar's (`tint`, what a plain
@@ -204,9 +209,9 @@ struct ChipFace: Equatable {
             }
         }
         let height = drawn.map(\.0.height).max() ?? 0
-        let width = drawn.map(\.0.width).reduce(0, +) + gap * CGFloat(max(0, drawn.count - 1))
+        let width = insetLeft + drawn.map(\.0.width).reduce(0, +) + gap * CGFloat(max(0, drawn.count - 1)) + insetRight
         return UIGraphicsImageRenderer(size: CGSize(width: max(1, width), height: max(1, height))).image { context in
-            var x: CGFloat = 0
+            var x: CGFloat = insetLeft
             for ((size, paint), alpha) in zip(drawn, opacities) {
                 context.cgContext.saveGState()
                 context.cgContext.setAlpha(alpha)

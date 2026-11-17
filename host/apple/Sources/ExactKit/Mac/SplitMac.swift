@@ -624,8 +624,8 @@ final class SplitHost {
     var summary: [String: Any] {
         guard let controller, active, let shown else { return ["installed": false, "wanted": wanted] }
         return ["installed": true, "list": Int(shown.list.id), "table": shown.table.map { Int($0) } ?? NSNull(),
-                "listWidth": Agent.r2(controller.listColumnWidth), "detailWidth": Agent.r2(controller.detailWidth),
-                "authoredWidth": shown.width.map { Agent.r2($0) } ?? NSNull(),
+                "listWidth": InspectionValue.r2(controller.listColumnWidth), "detailWidth": InspectionValue.r2(controller.detailWidth),
+                "authoredWidth": shown.width.map { InspectionValue.r2($0) } ?? NSNull(),
                 "routes": shown.routes.map { Int($0.id) }, "detail": shown.detail.map { Int($0.id) } ?? NSNull(),
                 "base": shown.base, "row": shown.row.map { Int($0) } ?? NSNull(), "empty": controller.detail.saysNothing ?? NSNull(),
                 "placeholder": placeholder.map { Int($0.id) } ?? NSNull(), "marked": marked.map { Int($0.id) } ?? NSNull()]

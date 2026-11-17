@@ -12,6 +12,7 @@ mod overrun;
 mod polls;
 // A canvas input's samples across a seek.
 mod sensors;
+mod visibility;
 
 #[test]
 fn a_seek_past_the_discrete_instant_cap_reports_where_it_stopped() {
@@ -1263,13 +1264,10 @@ fn clock_settle_waits_for_background_storage_and_a_jump_names_it() {
 /// scheme left as it is; an axis or value the design lacks is refused.
 #[test]
 fn prefer_mode_sets_the_apps_modes() {
-    let dir =
-        std::env::temp_dir().join(format!("exact-painted-prefer-mode-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-painted-prefer-mode");
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\naxes\n  dark-style = black | dim\n\ntheme\n  page = #000000\n    when dark-style=dim: #161e27\n",
+        dir.join("app.forma"),
+        "forma t\n\naxes\n  dark-style = black | dim\n\ntheme\n  page = #000000\n    when dark-style=dim: #161e27\n",
     )
     .unwrap();
     std::fs::write(

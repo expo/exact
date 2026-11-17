@@ -70,7 +70,8 @@ test "a failed refresh retains rows and retries"
 ```
 
 `fail fetch` rejects before `tap` returns. To assert loading, hold a reply with a
-[test server](rest-backend.md), which can also supply an HTTP status/body.
+[test server](rest-backend.md). For a status/body, use
+`answer fetch "<prefix>" with 200 {"text":"Hello"}`.
 
 For private data, gate by principal and auth generation, including after an await
 before caching: A → B → A must reject the first A's answers. Await prerequisites

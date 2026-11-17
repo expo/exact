@@ -309,7 +309,13 @@ fn upload_rows(
                 right = texture.width() as usize;
                 break;
             }
-            for (x, (a, b)) in old.chunks_exact(4).zip(new.chunks_exact(4)).enumerate() {
+            for (x, (a, b)) in old
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(new.as_chunks::<4>().0)
+                .enumerate()
+            {
                 if a != b {
                     left = left.min(x);
                     right = right.max(x + 1);
@@ -396,14 +402,11 @@ impl Module {
         // Upload accepted UI into retained textures before acquiring a drawable.
         // Those uploads remain valid if acquisition later times out.
         window.pending_ui |= changed;
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        window.background.prepare(
-            &gpu.queue,
-            &mut encoder,
-            &window.below,
-            below,
-            window.pending_ui,
-        );
+        let mut recording = crate::frame::Recording::begin(&gpu.device);
+        let encoder = &mut recording.encoder;
+        window
+            .background
+            .prepare(&gpu.queue, encoder, &window.below, below, window.pending_ui);
         if window.pending_ui {
             window
                 .overlay
@@ -425,7 +428,7 @@ impl Module {
                 &frame,
                 &gpu.device,
                 &gpu.queue,
-                &mut encoder,
+                encoder,
                 &window.scene.create_view(&Default::default()),
                 format,
             );
@@ -449,7 +452,16 @@ impl Module {
         // Start offscreen rendering before waiting for the swapchain. Otherwise
         // the acquisition wait serializes the previous GPU frame with this
         // frame's simulation, scene uploads and command encoding.
-        let commands = encoder.finish();
+        let commands = match recording.finish() {
+            Ok(commands) => commands,
+            Err(e) => {
+                let own = inst.as_mut().and_then(|inst| {
+                    inst.drain();
+                    inst.surface.take_error()
+                });
+                return Err(own.map_or(e, |SurfaceError(own)| own));
+            }
+        };
         let timed = inst.as_ref().is_some_and(|i| i.performance.enabled());
         let (_, submit_ms) = crate::performance::time(timed, || gpu.queue.submit([commands]));
         if let (Some(ms), Some(inst)) = (submit_ms, inst.as_mut()) {

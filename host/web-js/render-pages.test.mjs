@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import { webCompiler } from './module.mjs';
 import { buildTreeFile } from '../web/serve.mjs';
 import { generationOf } from '../web/generations.mjs';
+import { builtFile } from './content-names.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const contract = (call, extra = '') => `routes nav
@@ -132,8 +133,8 @@ export function answer(name: string, args: any[]): any {
       expect(buildTreeFile(dist, '/deck/100%25/', 'text/html')?.path).toBe(resolve(dist, 'deck/100%/index.html'));
       expect(buildTreeFile(dist, '/deck/100%25/')?.path).toBe(resolve(dist, 'deck/100%/index.html'));
       // A path below a file names no file and is routed as any other path naming nothing.
-      expect(existsSync(resolve(dist, 'app.js'))).toBe(true);
-      const below = await get('/app.js/x'), nothing = await get('/nothing/x');
+      expect(existsSync(resolve(dist, builtFile(dist, 'app.js')))).toBe(true);
+      const below = await get(`/${builtFile(dist, 'app.js')}/x`), nothing = await get('/nothing/x');
       expect(below.status).toBe(nothing.status);
       // The crawler files the build wrote are served as files.
       const robots = await get('/robots.txt');

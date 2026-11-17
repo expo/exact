@@ -14,6 +14,7 @@ fn url(ticket: u64) -> String {
 
 fn job(ticket: u64, class: RequestClass) -> RequestOut {
     RequestOut {
+        completion: None,
         ticket,
         target: "read".into(),
         request: Request::get(&url(ticket)),

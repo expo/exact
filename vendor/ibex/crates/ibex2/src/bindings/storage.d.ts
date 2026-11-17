@@ -41,11 +41,12 @@ export interface FileSystem {
   flock(path: string, options?: { timeout?: number }): Promise<{ unlock(): Promise<void> }>;
   /** Exact patch 9 (exact2 LLP 1069.002 A1), the app interface: decode the
    * image at `from`, scale it to fit `maxDimension` and encode a JPEG of at
-   * most `maxBytes` at `to`, searching quality as Bluesky's composer does;
-   * or, with `type: "image/png"` (A1.11), a PNG that keeps alpha, shrunk by
-   * 0.8 up to four times until it fits. Orientation is applied and no
-   * metadata is written. Needs `fs.read` on
-   * `from` and `fs.write` on `to`, both `app:/` paths. Rejects with a
+   * most `maxBytes` at `to`, searching quality as Bluesky's composer does,
+   * under `quality` when it is given (A1.12); with `quality` alone, one
+   * encode at it; or, with `type: "image/png"` (A1.11), a PNG that keeps
+   * alpha, shrunk by 0.8 up to four times until it fits. Orientation is
+   * applied and no metadata is written. Needs `fs.read` on `from` and
+   * `fs.write` on `to`, both `app:/` paths. Rejects with a
    * `TypeError` for a bad option, else with `code` `unsupported` (no codec
    * on this host), `undecodable`, `too-large` (over 64 MiB, 64 Mi pixels,
    * or more decoding memory than the host allows), `unfit` (nothing fits) or
@@ -111,11 +112,18 @@ export interface WriteOptions {
   readonly expect?: Pick<FileStat, "modifiedMs" | "size">;
 }
 
-export interface CompressImageOptions {
+/** A byte target, a quality or both (exact2 LLP 1069.002 A1.12). */
+export type CompressImageOptions = CompressImageLimits &
+  ({ readonly maxBytes: number } | { readonly quality: number });
+
+export interface CompressImageLimits {
   /** An integer from 1 to 8192: the longer side's limit, in pixels. */
   readonly maxDimension: number;
   /** An integer from 1 to 67108864: the encoded file's limit. */
-  readonly maxBytes: number;
+  readonly maxBytes?: number;
+  /** From 0 to 1: the JPEG quality tried first at each size and never
+   * exceeded; without `maxBytes`, the one encode's. A PNG ignores it. */
+  readonly quality?: number;
   /** What to write; `"image/jpeg"` when absent. */
   readonly type?: "image/jpeg" | "image/png";
   /** Exact patch 9a (exact2 LLP 1133.019 D15): `transformImage`'s edit. */

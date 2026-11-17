@@ -313,7 +313,9 @@ public final class ExactLaunch: NSObject {
         evaluateScheduled = true
         DispatchQueue.main.async { [weak self] in
             self?.evaluateScheduled = false
-            self?.evaluate()
+            guard let self else { return }
+            if let session = self.launchSession { session.afterBootOwner { [weak self] in self?.evaluate() } }
+            else { self.evaluate() }
         }
     }
 
@@ -426,13 +428,18 @@ public final class ExactLaunch: NSObject {
     private func load(_ s: (module: String, when: ExactServiceLoad, config: [String: Any], handoff: () -> Data)) {
         loaded.insert(s.module)
         DispatchQueue.main.async {
-            let config = (try? JSONSerialization.data(withJSONObject: s.config)) ?? Data("{}".utf8)
-            guard let service = ExactService.load(module: s.module, config: config, handoff: s.handoff()) else {
-                self.failed.insert(s.module)
-                return ExactJournal.shared.loadEnded(s.module, nil)
-            }
-            ExactJournal.shared.attach(service)
+            if let session = self.launchSession { session.afterBootOwner { self.loadService(s) } }
+            else { self.loadService(s) }
         }
+    }
+
+    private func loadService(_ s: (module: String, when: ExactServiceLoad, config: [String: Any], handoff: () -> Data)) {
+        let config = (try? JSONSerialization.data(withJSONObject: s.config)) ?? Data("{}".utf8)
+        guard let service = ExactService.load(module: s.module, config: config, handoff: s.handoff()) else {
+            self.failed.insert(s.module)
+            return ExactJournal.shared.loadEnded(s.module, nil)
+        }
+        ExactJournal.shared.attach(service)
     }
 
     private func stopWatching() {

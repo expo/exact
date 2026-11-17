@@ -3,14 +3,151 @@ import XCTest
 import UIKit
 #endif
 @testable import ExactKit
+@testable import ExactCore
 
 /// A timer's (or a scroll event's) batch that changes nothing only moves the clock: it does not
 /// reach `apply`, as fills and list feedback already skip theirs, and the
 /// next timer is armed for its deadline. A batch with ops, an error, a
 /// control's viewless contents (`controls`, LLP 1069.011 §9), new motion,
-/// moved page facts, diagnostics, a wake lock or word on work the app must finish still applies. The flag crosses the wire
+/// moved page facts, a wake lock or word on work the app must finish still applies; alerts and journal lines are logged. The flag crosses the wire
 /// as `"controls":true`. A published batch that shows nothing new is not outstanding work either.
 final class IdleTickTests: XCTestCase {
+    func testSessionOutputsReadEachOpOnceAndKeepTheirApplicationOrder() {
+        let ops = wireBatch([
+            ["op": "roles", "roles": ["AccentColor": [255, 0, 0, 255]]],
+            ["op": "auth", "step": "first"], ["op": "sound", "step": "first"],
+            ["op": "title", "title": "first"], ["op": "router", "step": "first"],
+            ["op": "props", "id": 1, "set": ["text": "row"]],
+            ["op": "presence", "step": "second"], ["op": "midi", "step": "second"],
+            ["op": "activity", "step": "first"], ["op": "surfaceWork", "step": "first"],
+            ["op": "roles", "roles": ["AccentColor": [0, 255, 0, 255]]],
+            ["op": "auth", "step": "third"], ["op": "sound", "step": "third"],
+            ["op": "title", "title": "second"], ["op": "router", "step": "second"],
+            ["op": "reorder", "step": "first"], ["op": "activity", "step": "second"],
+            ["op": "surfaceWork", "step": "second"], ["op": "reorder", "step": "second"],
+        ]).ops
+        var reads = 0
+        let outputs = SessionBatchOps(ops.lazy.map { op in reads += 1; return op })
+        XCTAssertEqual(outputs.authentication.map(\.op), [.auth, .presence, .auth])
+        XCTAssertEqual(outputs.authentication.compactMap { $0.payload["step"] as? String }, ["first", "second", "third"])
+        XCTAssertEqual(outputs.audio.map(\.op), [.sound, .midi, .sound])
+        XCTAssertEqual(outputs.titles.compactMap(\.title), ["first", "second"])
+        for phase in [outputs.routers, outputs.activities, outputs.surfaces, outputs.reorders] {
+            XCTAssertEqual(phase.compactMap { $0.payload["step"] as? String }, ["first", "second"])
+        }
+        XCTAssertEqual(outputs.roles?.style, ops[10].style)
+        let p = Presenter(), generation = ThemeRoles.generation
+        defer { ThemeRoles.apply(wireBatch([["op": "roles", "roles": [:]]]).ops[0], root: p.root) }
+        XCTAssertTrue(ThemeRoles.apply(outputs.roles, root: p.root))
+        XCTAssertEqual(ThemeRoles.generation - generation, 1, "only the last table applies")
+        XCTAssertFalse(ThemeRoles.apply(outputs.roles, root: p.root), "an unchanged table keeps its generation")
+        XCTAssertFalse(ThemeRoles.apply(SessionBatchOps([]).roles, root: p.root), "no roles op keeps the table")
+        XCTAssertEqual(ThemeRoles.generation - generation, 1)
+        XCTAssertEqual(reads, ops.count, "consuming classified outputs never rereads the batch")
+        print("LANE L session output ops=\(ops.count) reads=\(reads)")
+    }
+
+    func testReentrantPublicationsKeepOwnerOrderAndShareOneScheduledDrain() {
+        let session = ExactApp.shared.makeSession(label: "publication-order")
+        session.clock = 0
+        defer { session.destroy() }
+        var landed: [String] = []
+        func publish(_ name: String) {
+            var batch = wireBatch([])
+            batch.journal = [name]
+            session.publishTickForTests(batch)
+        }
+        session.onLandForTests = { _, batch in
+            let name = batch.journal[0]
+            landed.append(name)
+            if name == "a" {
+                publish("c")
+                session.landFill()
+                XCTAssertEqual(landed, ["a"], "reentry waits for the current landing")
+            }
+        }
+        let before = session.publishedDrainCountForTests
+        publish("a"); publish("b")
+        session.landFill()
+        XCTAssertEqual(landed, ["a", "b", "c"])
+        publish("d")
+        XCTAssertEqual(session.publishedDrainCountForTests - before, 1, "the scheduled drain still owns the turn")
+        waitForMainQueue()
+        XCTAssertEqual(landed, ["a", "b", "c", "d"])
+        publish("e")
+        waitForMainQueue()
+        XCTAssertEqual(landed, ["a", "b", "c", "d", "e"])
+        XCTAssertEqual(session.publishedDrainCountForTests - before, 2)
+        session.onLandForTests = nil
+    }
+
+    func testAPublicationAfterTheEmptyReadStaysInTheScheduledDrain() {
+        let queue = PublishedBatches(), door = RuntimeDoor(), batch = wireBatch([])
+        func completion(_ generation: Int) -> RuntimeCompletion {
+            while door.lease().generation < generation { door.replace() }
+            return RuntimeCompletion(lease: door.lease(), batch: batch)
+        }
+        XCTAssertTrue(queue.append((.tick, completion(1))))
+        XCTAssertNotNil(queue.next())
+        XCTAssertNil(queue.next())
+        XCTAssertFalse(queue.append((.tick, completion(2))))
+        XCTAssertTrue(queue.finishDrain())
+        XCTAssertEqual(queue.scheduledDrains, 2)
+        XCTAssertEqual(queue.next()?.completion.lease.generation, 2)
+        XCTAssertFalse(queue.contains { _ in true }, "consumed publications do not hold settlement")
+        XCTAssertNil(queue.next())
+        XCTAssertFalse(queue.finishDrain())
+        XCTAssertTrue(queue.append((.tick, completion(3))))
+        XCTAssertEqual(queue.scheduledDrains, 3)
+    }
+
+    func testAQueueCursorKeepsOrderWhileReentrantPublicationsWrapAndGrowIt() {
+        let queue = PublishedBatches(), door = RuntimeDoor(), batch = wireBatch([])
+        func completion(_ generation: Int) -> RuntimeCompletion {
+            while door.lease().generation < generation { door.replace() }
+            return RuntimeCompletion(lease: door.lease(), batch: batch)
+        }
+        for generation in 0..<200 {
+            XCTAssertEqual(queue.append((.tick, completion(generation))), generation == 0)
+        }
+        var next = 200
+        for generation in 0..<500 {
+            XCTAssertEqual(queue.next()?.completion.lease.generation, generation)
+            if generation < 200 {
+                XCTAssertFalse(queue.append((.tick, completion(next))))
+                next += 1
+            }
+            if generation == 100 {
+                for _ in 0..<100 {
+                    XCTAssertFalse(queue.append((.tick, completion(next))))
+                    next += 1
+                }
+            }
+        }
+        XCTAssertNil(queue.next())
+        XCTAssertFalse(queue.finishDrain())
+        XCTAssertEqual(queue.scheduledDrains, 1)
+    }
+
+    func testAScheduledDrainCanReenterASynchronousLanding() {
+        let session = ExactApp.shared.makeSession(label: "publication-run-loop")
+        session.clock = 0
+        defer { session.destroy() }
+        var landed = 0
+        session.onLandForTests = { _, _ in
+            landed += 1
+            if landed == 1 { self.waitForMainQueue() }
+        }
+        session.publishTickForTests(wireBatch([]))
+        session.publishTickForTests(wireBatch([]))
+        session.landFill()
+        XCTAssertEqual(landed, 2)
+        session.publishTickForTests(wireBatch([]))
+        waitForMainQueue()
+        XCTAssertEqual(landed, 3)
+        session.onLandForTests = nil
+    }
+
     /// A published batch (a reply's, a frame's tick's) that shows nothing new
     /// does not hold settled or TTI (LLP 1132 D5); one that changes a view or
     /// asks for a canvas image holds them until it lands. A slice in flight
@@ -20,7 +157,7 @@ final class IdleTickTests: XCTestCase {
         defer { session.destroy() }
         func reply(_ batch: Batch) {
             session.repliesInFlight += 1; session.replySubmissions.append(0)
-            session.publish(.reply, batch, session.generation)
+            session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: batch))
         }
         session.publishTickForTests(wireBatch([]))
         reply(wireBatch([]))
@@ -38,7 +175,7 @@ final class IdleTickTests: XCTestCase {
         session.publishTickForTests(image)
         XCTAssertEqual(session.hostOutstanding, ["published"])
         waitFor("the tick lands") { session.hostOutstanding.isEmpty && !session.ownerInFlight }
-        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
         XCTAssertEqual(session.hostOutstanding, ["fill"])
         waitFor("the slice lands") { session.hostOutstanding.isEmpty }
     }
@@ -144,16 +281,27 @@ final class IdleTickTests: XCTestCase {
         wakelock.wakelock = false
         var finish = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
         finish.mustFinish = false
-        var journal = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
-        journal.journal = ["late preload"]
-        var alert = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
-        alert.alerts = ["preload failed"]
-        for batch in [controls, failed, moving, ops, facts, wakelock, finish, journal, alert] {
+        for batch in [controls, failed, moving, ops, facts, wakelock, finish] {
             XCTAssertFalse(session.changesNothing(batch))
             let count = session.appliedBatches
             session.applyUnlessEmpty(batch)
             XCTAssertEqual(session.appliedBatches, count + 1)
         }
+        // Alerts and journal lines are no change: the skip writes them to the log and takes no pass (LLP 1171 D1).
+        var logged: [[String]] = []
+        session.onSkippedLogForTests = { alerts, journal in logged.append(alerts + journal) }
+        defer { session.onSkippedLogForTests = nil }
+        var journal = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
+        journal.journal = ["late preload"]
+        var alert = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
+        alert.alerts = ["preload failed"]
+        for batch in [journal, alert] {
+            XCTAssertTrue(session.changesNothing(batch))
+            let count = session.appliedBatches
+            session.applyUnlessEmpty(batch)
+            XCTAssertEqual(session.appliedBatches, count, "no pass")
+        }
+        XCTAssertEqual(logged, [["late preload"], ["preload failed"]], "each logged once")
     }
 
     /// A slice the owner published before an empty scroll batch lands
@@ -187,10 +335,10 @@ final class IdleTickTests: XCTestCase {
         session.holdFillForTests()
         session.whenIdle { calls.append("pump") }
         session.whenIdle(bound: true, { calls.append("old views") }, cancelled: { calls.append("cancelled") })
-        let staleGeneration = session.generation
+        let staleLease = session.runtime.completionLease
         session.commitForTests()
         session.whenIdle(bound: true) { calls.append("new views") }
-        session.publishFillForTests(1, wireBatch([["op": "create", "id": 999, "kind": "view"]]), generation: staleGeneration)
+        session.publishFillForTests(1, wireBatch([["op": "create", "id": 999, "kind": "view"]]), lease: staleLease)
         session.drainFill()
         XCTAssertTrue(calls.isEmpty, "the commit's tree must apply before its waiters")
         XCTAssertNil(session.presenter.views[999], "a stale slice applies nothing")
@@ -200,7 +348,7 @@ final class IdleTickTests: XCTestCase {
         XCTAssertEqual(calls, ["pump", "cancelled", "new views"])
         session.holdFillForTests()
         session.whenIdle { calls.append("same generation") }
-        session.publishFillForTests(1, Batch(ops: [], timers: false, motion: false, clock: nil, error: nil), generation: session.generation)
+        session.publishFillForTests(1, Batch(ops: [], timers: false, motion: false, clock: nil, error: nil), lease: session.runtime.completionLease)
         session.drainFill()
         XCTAssertEqual(calls.last, "same generation")
     }

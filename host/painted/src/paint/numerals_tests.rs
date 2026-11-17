@@ -19,7 +19,7 @@ fn boot(reduced_motion: bool) -> Presenter<()> {
 }
 
 fn boot_source(source: &str, reduced_motion: bool) -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (300., 200.),
@@ -112,8 +112,10 @@ fn inherited_decorations_stay_at_rest_while_digits_roll() {
             still.clock(1000.);
             let red = |pixels: &[u8]| {
                 pixels
-                    .chunks_exact(4)
-                    .map(|p| p == [255, 0, 0, 255])
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|p| *p == [255, 0, 0, 255])
                     .collect::<Vec<_>>()
             };
             let expected = red(&pixels(&mut still));
@@ -148,9 +150,11 @@ fn rolling_glyphs_and_stationary_decorations_cast_one_shadow() {
     lines.clock(1000.);
     let reference = pixels(&mut lines);
     let points: Vec<_> = reference
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
-        .filter_map(|(i, p)| (p == [255, 0, 0, 255]).then_some(i))
+        .filter_map(|(i, p)| (*p == [255, 0, 0, 255]).then_some(i))
         .collect();
     assert!(points.len() > 80);
     for elapsed in [0., 100., 400., 500.] {

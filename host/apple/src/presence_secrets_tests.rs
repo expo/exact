@@ -338,8 +338,9 @@ fn locked_items_are_the_keychain_s_by_name_and_generation_and_never_plain() {
         FAIL_PROBE.store(false, std::sync::atomic::Ordering::Relaxed);
     }
     // A reinstall is recorded only after both services have been wiped.
-    let root =
-        std::env::temp_dir().join(format!("exact-presence-reinstall-{}", std::process::id()));
+    let root = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-presence-reinstall-{}", std::process::id())),
+    );
     let marker = root.join("installed");
     let clean = ibex2::host::Host::new()
         .with_kv_store(Box::new(ibex2::kv::MemoryStore::new()))

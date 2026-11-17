@@ -40,6 +40,8 @@ impl<D: DataSource> Presenter<D> {
             content,
             &|id| self.host.presented(id),
             &|id| self.host.presented_path(id),
+            // Filters take no part in hits (LLP 1055.000 D14).
+            &|_| None,
             self.dark(),
         );
         scene

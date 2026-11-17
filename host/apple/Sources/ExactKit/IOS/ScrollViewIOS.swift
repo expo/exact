@@ -13,10 +13,11 @@ package final class PlainView: UIView {
         let m = (superview as? Viewport)?.pageMargins ?? .zero
         // A one-axis clip's box fits its children's paint, not their hit
         // slop: past the node it limits only the clipped axis. Its canvas
-        // overlay leaves the clip to the canvas's own hit test.
+        // overlay leaves the clip to the canvas's own hit test. A layout
+        // transition uses its shown padding edge.
         let inside: Bool
-        if let node = superview as? NodeView, node.clipBox === self, node.clipsOneAxis {
-            inside = node.oneAxisClipContains(convert(point, to: node))
+        if let node = superview as? NodeView, node.clipBox === self, node.clipsOneAxis || node.surface != nil {
+            inside = node.reachesChildren(at: convert(point, to: node))
         } else {
             inside = canvasOverlayOwner?.clipsOneAxis == true
                 || bounds.inset(by: UIEdgeInsets(top: -m.top, left: -m.left, bottom: -m.bottom, right: -m.right)).contains(point)
@@ -44,7 +45,34 @@ package class ScrollView: UIScrollView {
     var snapPages = false
     package override func layoutSubviews() {
         super.layoutSubviews()
+        syncIndicators()
         keepPlatformViewsOver()
+    }
+    /// UIKit exposes an indicator and its thumb to accessibility even when
+    /// the axis has no range. Keep the requested visibility across resizes
+    /// and content changes, including CSS `none` and native hatch writes.
+    private var horizontalIndicator = true, verticalIndicator = true
+    package override var showsHorizontalScrollIndicator: Bool {
+        get { super.showsHorizontalScrollIndicator }
+        set { horizontalIndicator = newValue; syncIndicators() }
+    }
+    package override var showsVerticalScrollIndicator: Bool {
+        get { super.showsVerticalScrollIndicator }
+        set { verticalIndicator = newValue; syncIndicators() }
+    }
+    private func syncIndicators() {
+        let inset = adjustedContentInset
+        let x = horizontalIndicator && scrollsX && isScrollEnabled && contentSize.width + inset.left + inset.right > bounds.width + 0.5
+        let y = verticalIndicator && scrollsY && isScrollEnabled && contentSize.height + inset.top + inset.bottom > bounds.height + 0.5
+        if super.showsHorizontalScrollIndicator != x { super.showsHorizontalScrollIndicator = x }
+        if super.showsVerticalScrollIndicator != y { super.showsVerticalScrollIndicator = y }
+    }
+    package override var contentSize: CGSize { didSet { if contentSize != oldValue { setNeedsLayout() } } }
+    package override var isScrollEnabled: Bool { didSet { if isScrollEnabled != oldValue { setNeedsLayout() } } }
+    /// VoiceOver's scroll is the reader's, as a drag is, and supersedes a position Exact carries (`dropCarriedScroll`)
+    package override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+        scrollingNode?.dropCarriedScroll()
+        return super.accessibilityScroll(direction)
     }
     /// The offset of a node's scroller or a route's viewport, which UIKit
     /// itself also sets (keeping it at the start as a safe area reaches the
@@ -70,6 +98,7 @@ package class ScrollView: UIScrollView {
         let was = keptInset
         keptInset = adjustedContentInset
         super.adjustedContentInsetDidChange()
+        setNeedsLayout()
         // the port is a `scroll` event's (`clientHeight`): one that changes without moving
         // the offset gets no `scrollViewDidScroll`, so its event is sent from here.
         (superview as? NodeView)?.queueScrollEvent()
@@ -112,8 +141,8 @@ package class ScrollView: UIScrollView {
         return false
     }
 
-    package var scrollsX = true
-    package var scrollsY = true
+    package var scrollsX = true { didSet { if scrollsX != oldValue { setNeedsLayout() } } }
+    package var scrollsY = true { didSet { if scrollsY != oldValue { setNeedsLayout() } } }
     #if os(tvOS)
     /// The offset the remote's last step scrolls to, and when it began
     /// (`RemoteTVOS.swift`): a step pressed during that animation goes on
@@ -136,6 +165,9 @@ package class ScrollView: UIScrollView {
             let translation = panGestureRecognizer.translation(in: self)
             if !admitsPan(velocity: velocity, translation: translation, start: CGPoint(x: location.x - translation.x, y: location.y - translation.y)) { return false }
         }
+        #if os(iOS)
+        if gesture === pinchGestureRecognizer, !admitsPinch(at: gesture.location(in: self)) { return false }
+        #endif
         return super.gestureRecognizerShouldBegin(gesture)
     }
     /// The pan's own check, apart from UIKit's: `touch-action` intersected
@@ -157,6 +189,21 @@ package class ScrollView: UIScrollView {
         if let owner = scrollingNode, !owner.allowsTouchPan(direction) { return false }
         return !handsOff(direction)
     }
+    #if os(iOS)
+    /// A zoomable scroller's pinch (LLP 1057.001.000 §3): rule 2, where
+    /// `touch-action` from the node under the fingers through this container
+    /// allows `pinch-zoom`, and never over a surface that owns its input.
+    func admitsPinch(at point: CGPoint) -> Bool {
+        var view = hitTest(point, with: nil)
+        if CanvasInputs.owns(view) { return false }
+        while let current = view {
+            if let node = current as? NodeView, !node.allowsTouchPinch { return false }
+            if current === self { break }
+            view = current.superview
+        }
+        return scrollingNode?.allowsTouchPinch ?? true
+    }
+    #endif
     /// CSS's scroll chaining at a gesture's start (LLP 1070 G1, Q4 as ruled
     /// provisionally): under `overscroll-behavior: auto`, a drag that begins
     /// at this view's edge and pushes outward belongs to the enclosing
@@ -266,18 +313,24 @@ final class PaddedRefreshControl: UIRefreshControl {
 #endif
 
 extension Presenter {
-    func restoreScrollPositions() {
-        let ids = scrollers.union(pendingScrolls).union(materialNodes)
-        // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to.
-        let names = Set(session?.pendingElementScrolls ?? [])
-        let authored = (names.isEmpty ? [] : views.values.filter { $0.props["id"].map(names.contains) == true })
-            + ids.compactMap { views[$0] }.filter { $0.pendingScrollTop != nil || $0.pendingScrollLeft != nil }
-        for id in ids {
+    func finishScrollPositions(restoring: Bool) {
+        let ids = restoring ? scrollers.union(pendingScrolls) : pendingScrolls
+        if restoring {
+            // What the batch's `scrollIntoView`s will move, and the scrollers it writes `scrollTop` to.
+            let names = Set(session?.pendingElementScrolls ?? [])
+            let authored = (names.isEmpty ? [] : views.values.filter { $0.props["id"].map(names.contains) == true })
+                + ids.compactMap { views[$0] }.filter { $0.pendingScrollTop != nil || $0.pendingScrollLeft != nil }
+            for id in ids {
+                guard let node = views[id] else { continue }
+                // Navigation can resize a native port after its row projection.
+                // Settle that layout before restoring or authoring an offset.
+                if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
+                if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
+            }
+        }
+        for id in ids { views[id]?.settleZoom() }
+        for id in materialNodes {
             guard let node = views[id] else { continue }
-            // Navigation can resize a native port after its row projection.
-            // Settle that layout before restoring or authoring an offset.
-            if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
-            if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
             if let material = node.materialView { node.sendSubviewToBack(node.glassSlot ?? material) }
         }
         // Every capture is restored before any authored offset lands: a
@@ -285,8 +338,28 @@ extension Presenter {
         // batch its feedback applies captures, restores and clears every
         // scroller's capture, which a follow-end scroller still waiting here
         // would read as having been at its end.
+        writePendingScrolls(ids, laidOut: restoring)
+    }
+
+    /// Write the positions Exact carried across a change of its own outside a batch (`retainScrollPosition`) to
+    /// scrollers laid out. No batch's `restoreScrollPositions` need follow when the covers change nothing, and one
+    /// that came later would write a position over the reader's scroll made meanwhile by any means, VoiceOver's or
+    /// the keyboard's among them.
+    func writeCarriedScrolls() {
+        let carried = pendingScrolls.filter { views[$0].map { $0.extras?.pendingScrollTransfer == true && $0.hasScrollLayoutBox } ?? false }
+        guard !carried.isEmpty else { return }
+        for id in carried where views[id]?.groupedOwner == true { views[id]?.scrollView?.layoutIfNeeded() }
+        writePendingScrolls(carried, laidOut: true)
+    }
+
+    /// Write `ids`' pending positions, laying a native list out first unless the caller has (`laidOut`). A position
+    /// Exact carries waits while covers are still to be answered (`coversAnswerOwed`), checked before each write,
+    /// since a layout or an earlier write can report them; it lands in the layout their answer brings.
+    private func writePendingScrolls(_ ids: Set<UInt32>, laidOut: Bool) {
         for id in ids {
             guard let node = views[id] else { continue }
+            if !laidOut, node.groupedOwner { node.scrollView?.layoutIfNeeded() }
+            guard node.extras?.pendingScrollTransfer != true || !navigation.coversAnswerOwed else { continue }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
             node.applyPendingScroll()
         }
@@ -318,6 +391,17 @@ extension NodeView {
         applyAffordances()
         presenter?.navigation.scrollBackendChanged(self)
         presenter?.keyboardToolbars.backendChanged()
+    }
+
+    /// The reader's move supersedes a position Exact carries (`retainScrollPosition`), as an authored write does.
+    package func dropCarriedScroll() {
+        if extras?.pendingScrollTransfer == true { pendingScrollTop = nil; pendingScrollLeft = nil }
+    }
+
+    /// Whether a scroll newer than a position Exact carries is under way on `sv`: one the scroll view makes itself
+    /// (`scrollsItself`), an element reveal, or a list's smooth correction
+    func scrollUnderWay(_ sv: UIScrollView) -> Bool {
+        sv.scrollsItself || presenter?.elementScrolls.revealing(sv) != nil || presenter?.collections.animating.contains(id) == true
     }
 
     /// A replacement keeps the logical offset; an authored write takes priority.
@@ -432,7 +516,7 @@ extension NodeView {
         }
         let y = Self.followedTop(current: sv.contentOffset.y, minimum: minimum, maximum: maximum, end: follows, top: top,
                                  moving: sv.isTracking || sv.isDragging || sv.isDecelerating)
-        let inactive = window == nil || presenter?.navigation.isInactiveRoute(containing: self) == true
+        let inactive = window == nil || presenter?.navigation.isInactiveRoute(containing: self, layout: true) == true
         retainedScrollTop = !prior.end && top > maximum && (inactive || retainedScrollTop != nil) ? top : nil
         // While the reader's finger is down or the fling is running, an
         // absolute write would cut the pan, the deceleration or the rubber
@@ -477,6 +561,8 @@ extension NodeView {
         if hiddenScroll != nil, let sv = scrollView, sv.bounds.isEmpty, hasScrollLayoutBox { return }
         defer { pendingScrollTop = nil; pendingScrollLeft = nil }
         guard let sv = scrollView else { return }
+        // A position Exact carries (`retainScrollPosition`) gives way to a scroll under way, before anything here stops it
+        if extras?.pendingScrollTransfer == true, scrollUnderWay(sv) { return }
         // An authored position takes over from a smooth correction.
         if (pendingScrollTop != nil || pendingScrollLeft != nil), presenter?.collections.animating.contains(id) == true {
             presenter?.collections.stopAnimation(id)
@@ -573,5 +659,17 @@ extension NodeView {
         control.endRefreshing()
     }
     #endif
+}
+
+extension UIScrollView {
+    /// Whether the scroll view is moving itself: the reader's drag and its deceleration, or a scroll it animates (a
+    /// status-bar tap's, a hardware keyboard's, an animated `setContentOffset` or `scrollRectToVisible`, iOS 17.4's
+    /// [`isScrollAnimating`](https://developer.apple.com/documentation/uikit/uiscrollview/isscrollanimating)). Such a
+    /// scroll is newer than a position Exact carries (`retainScrollPosition`), which gives way to it.
+    var scrollsItself: Bool {
+        if isTracking || isDragging || isDecelerating { return true }
+        if #available(iOS 17.4, tvOS 17.4, *) { return isScrollAnimating }
+        return false
+    }
 }
 #endif

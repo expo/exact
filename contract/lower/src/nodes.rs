@@ -1,5 +1,7 @@
 //! Element lowering keeps its large per-tag temporaries off the recursive view path.
 
+#[path = "custom_props.rs"]
+mod custom_props;
 use super::*;
 
 pub(super) struct ElementStep<'n> {
@@ -367,6 +369,8 @@ impl Lowerer<'_> {
         // @ref LLP 1116.009 D3 — and a sheet is never transparent.
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
+        // @ref LLP 1013.001 D4 — a route's entrance and exit, by its place.
+        self.check_route_parts(&self.nav_place, tag, expanded)?;
         let nav_place = self
             .nav_place
             .enter(first, tag, expanded, children, *span)?;
@@ -596,7 +600,13 @@ impl Lowerer<'_> {
         }
         let flex = tags::flex_container(tag, expanded);
         self.element_children = !children.is_empty();
+        let (custom, refused_custom) = custom_props::merged(expanded, scope, &self.types.shapes);
+        self.errors.extend(refused_custom);
         for (index, a) in expanded.iter().enumerate() {
+            // Its custom properties are bound as one row, after the others
+            if exact_kernel::style::safe_area_properties::is_author_name(&a.name) {
+                continue;
+            }
             if let Some(e) = flex.and_then(|f| tags::multicol_on_flex(f, a).err()) {
                 self.errors.push(e);
                 continue;
@@ -716,6 +726,26 @@ impl Lowerer<'_> {
                 origins.resize(bindings.len(), origin);
             }
         }
+        if let Some(a) = &custom {
+            let control = contract_syntax::payload_control(tag, attrs);
+            let font = &font;
+            if let Err(e) = self.attr(
+                tag,
+                control,
+                a,
+                scope,
+                locals,
+                &mut bindings,
+                &mut handlers,
+                &mut surface,
+                font,
+            ) {
+                self.errors.push(native::name_the_fix(n, e));
+            }
+            if let Some(origins) = &mut origins {
+                origins.resize(bindings.len(), Origin::Own(None));
+            }
+        }
         // @ref LLP 1116.006 D2 — no box where no split shows it (the web shell shows it).
         if routes::split_placeholder(expanded).is_some() {
             let none = self.fixed(true, "none");
@@ -749,6 +779,7 @@ impl Lowerer<'_> {
                 a.span,
             );
         }
+        crate::zoom::check(tag, t.node_type, expanded, children, *span)?;
         // The web draws a hit slop as a pseudo-element, which an element the
         // browser replaces cannot have (Charlie, 2026-11-10).
         if matches!(

@@ -10,6 +10,15 @@ use std::path::{Path, PathBuf};
 /// beside it (`contract::native::android_entry`). Off Android the crate is
 /// empty and nothing is baked.
 pub fn build_android(app: &Path) -> Result<(), BakeError> {
+    android(app, |app| build(app, "linux"))
+}
+
+/// Off Android, nothing; on it, `bake` (a Linux bake of the app at the canonical path it is given), then what
+/// `build_android` writes beside the plan.
+pub(crate) fn android(
+    app: &Path,
+    bake: impl FnOnce(&Path) -> Result<(), BakeError>,
+) -> Result<(), BakeError> {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
         return Ok(());
     }
@@ -17,7 +26,7 @@ pub fn build_android(app: &Path) -> Result<(), BakeError> {
     let app = app
         .canonicalize()
         .map_err(|e| BakeError(format!("{}: {e}", app.display())))?;
-    build(&app, "linux")?;
+    bake(&app)?;
     println!("cargo:rerun-if-changed={}", app.join("app.json").display());
     let out = PathBuf::from(
         std::env::var_os("OUT_DIR").ok_or_else(|| BakeError("build requires OUT_DIR".into()))?,
@@ -30,4 +39,13 @@ pub fn build_android(app: &Path) -> Result<(), BakeError> {
         contract::Manifest::read(&app).map_err(|e| BakeError(format!("app.json: {e}")))?;
     contract::native::android_entry(&app, &manifest, &plan, &out)
         .map_err(|e| BakeError(format!("android: {e}")))
+}
+
+/// The Android permissions the app's use of module names derives (`saveEvent`:
+/// `WRITE_CALENDAR`), which an installed APK cannot see in its source: an
+/// update's module receipt carries them signed, to compare with the APK's
+/// (LLP 1030.006 D4a).
+pub(crate) fn module_permissions(plan: &exact_plan::Plan, grants: &str, app: &Path) -> Vec<String> {
+    let text = contract::native::app_text(app);
+    contract::native::android_permissions(plan, Some(grants), &text)
 }

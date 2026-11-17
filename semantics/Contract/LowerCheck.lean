@@ -45,19 +45,29 @@ structure Body where
   /-- The checked substitution behind an executable instance row. -/
   source : Option Expr := none
   executable : Bool := false
-  owner : Option Nat := none
+  /-- The plan region and arm that own an executable row. -/
+  owner : Option (Nat × Nat) := none
+  /-- The corresponding source region tag and arm. -/
+  sourceOwner : Option (Nat × Nat) := none
+  /-- The row's derive-table index. -/
+  row : Option Nat := none
   deriving Inhabited
 
 /-- What the difftest reads from the plan. -/
 structure PlanInfo where
   strings : Array String := #[]
   types : Array (String × Nat) := #[]
-  /-- Every slot: its name and whether a region instance owns it. -/
-  slots : List (String × Bool) := []
+  /-- Every slot: its name and owning plan region, if any. -/
+  slots : List (String × Option Nat) := []
   derives : List String := []
   /-- Executable body bytes and owning region, indexed by the derive table. -/
   executables : List (Option (String × Option Nat)) := []
-  resources : List String := []
+  /-- Source region tags to plan region indices. -/
+  regions : List (Nat × Nat) := []
+  /-- Whether the plan being checked has the region roster this mapping describes. -/
+  regionRosterMatches : Bool := true
+  /-- Every resource: its name and owning plan region and arm, if any. -/
+  resources : List (String × Option (Nat × Nat)) := []
   /-- Every mutation: its name and slot. -/
   mutations : List (String × Nat) := []
   bodies : List Body := []
@@ -96,7 +106,8 @@ def layout (p : Program) (pi : PlanInfo) : Layout :=
   let slotNames := pi.slots.map (·.1)
   { slots := p.states.filterMap fun s => (indexOf s.name slotNames).map (s.name, ·)
     derives := p.derives.filterMap fun d => (indexOf d.name pi.derives).map (d.name, ·)
-    resources := p.resources.filterMap fun r => (indexOf r.name pi.resources).map (r.name, ·)
+    resources := p.resources.filterMap fun r =>
+      (indexOf r.name (pi.resources.map (·.1))).map (r.name, ·)
     mutations := p.mutations.filterMap fun m =>
       ((pi.mutations.map (·.1)).findIdx? (· == m.name)).bind fun k =>
         (pi.mutations[k]?).map fun (_, s) => (m.name, s, k) }
@@ -108,12 +119,12 @@ flight, every resource current unless idle. -/
 def vmEnv (p : Program) (pi : PlanInfo) (c : Config) (params : List Value) (writes : List Nat) :
     Vm.Env :=
   { slots := pi.slots.map fun (n, owned) =>
-      if owned then Option.none
+      if owned.isSome then Option.none
       else if isRootState p n then lookup n c.slots else Option.some .unit
-    owned := pi.slots.map (·.2)
+    owned := pi.slots.map (·.2.isSome)
     derives := pi.derives.map (lookup · c.settled.derives)
-    resources := pi.resources.map (lookup · c.settled.resources)
-    currentResources := pi.resources.map fun r => !(c.settled.idle.contains r)
+    resources := pi.resources.map fun (name, _) => lookup name c.settled.resources
+    currentResources := pi.resources.map fun (name, _) => !(c.settled.idle.contains name)
     params, now := c.now, writable := writes
     mutationSlots := pi.mutations.map (·.2), routes := p.routes,
     strings := p.strings }
@@ -121,6 +132,153 @@ def vmEnv (p : Program) (pi : PlanInfo) (c : Config) (params : List Value) (writ
 def semEnv (p : Program) (c : Config) : Contract.Env :=
   { prog := p, slots := c.slots, derives := c.settled.derives,
     resources := c.settled.resources, now := c.now, idle := c.settled.idle }
+
+/-- The VM environment at a rendered instance. A child's resources live in
+its recorded rows rather than the root settlement, just as its slots do. -/
+def vmEnvAt (p : Program) (pi : PlanInfo) (c : Config) (rows : List RowId)
+    (params : List Value) (writes : List Nat) : Vm.Env :=
+  let root := vmEnv p pi c params writes
+  let rowValues := rowSlots c.store rows
+  { root with
+    resources := (pi.resources.zip root.resources).map fun ((name, _), value) =>
+      if isOwned p name then lookup name rowValues else value
+    currentResources := (pi.resources.zip root.currentResources).map fun ((name, _), current) =>
+      if isOwned p name then
+        (lookup name rowValues).isSome && (lookup (ownedArgs name) rowValues).isSome
+      else current }
+
+/-- One live source instance, with the corresponding plan frames. The
+root is the one context whose owner and id are absent. -/
+structure InstanceContext where
+  owner : Option (Nat × Nat) := none
+  id : Option RowId := none
+  locals : Locals := []
+  rows : List RowId := []
+  regions : List (Option Nat) := []
+  arms : List (Option Nat) := []
+  frames : List Vm.Frame := []
+  stores : List (List (Nat × Value)) := []
+  deriving Inhabited
+
+def planRegion (pi : PlanInfo) (tag : Nat) : Option Nat :=
+  (pi.regions.find? (·.1 == tag)).map (·.2)
+
+def instanceStore (pi : PlanInfo) (slots : List (String × Value)) : List (Nat × Value) :=
+  slots.filterMap fun (name, value) =>
+    (indexOf name (pi.slots.map (·.1))).map fun i => (i, value)
+
+def sameRowId (a b : RowId) : Bool :=
+  a.length == b.length && (a.zip b).all fun ((t, k, d), (t', k', d')) =>
+    t == t' && d == d' && Value.same k k'
+
+inductive RegionBinding where
+  | when
+  | matchN (name : String)
+  | each (item : String) (index : Option String)
+
+partial def findRegion (tag : Nat) : List Node → Option RegionBinding
+  | [] => none
+  | .element _ _ _ _ children :: rest =>
+    (findRegion tag children).orElse fun _ => findRegion tag rest
+  | .when own _ thn els :: rest =>
+    if own == tag then some .when else
+      (findRegion tag thn).orElse fun _ =>
+        (findRegion tag els).orElse fun _ => findRegion tag rest
+  | .matchN own _ name someNodes noneNodes :: rest =>
+    if own == tag then some (.matchN name) else
+      (findRegion tag someNodes).orElse fun _ =>
+        (findRegion tag noneNodes).orElse fun _ => findRegion tag rest
+  | .each own item index _ _ body :: rest =>
+    if own == tag then some (.each item index) else
+      (findRegion tag body).orElse fun _ => findRegion tag rest
+
+def markerValue (p : Program) (store : RowStore) (id : RowId) (kind : Nat) : Option Value :=
+  (store.find? fun (candidate, _) =>
+    candidate.length == id.length + 1 && sameRowId (candidate.take id.length) id &&
+      match candidate.getLast? with
+      | some (tag, _, markerKind) => tag == instanceMarkerTag p && markerKind == kind
+      | none => false).bind fun (candidate, _) => candidate.getLast?.map (·.2.1)
+
+def isMarkerId (p : Program) (id : RowId) : Bool :=
+  id.getLast?.any fun (tag, _, _) => tag == instanceMarkerTag p
+
+def renderedArm (key : Value) : Result Nat :=
+  if Value.same key (.num 0) then pure 0
+  else if Value.same key (.num 1) then pure 1
+  else throw (.refused "a rendered arm has an invalid identity")
+
+def enterRecorded (pi : PlanInfo) (cx : InstanceContext) (id : RowId)
+    (slots : List (String × Value)) (owner : Nat × Nat) (locals : Locals)
+    (frame : Vm.Frame) : InstanceContext :=
+  match planRegion pi owner.1 with
+  | some region =>
+    ⟨some owner, some id, locals, id :: cx.rows, some region :: cx.regions,
+      some owner.2 :: cx.arms, frame :: cx.frames, instanceStore pi slots :: cx.stores⟩
+  | none =>
+    -- A lowering rewrite may replace the source region with one expression.
+    -- Keep its source identity for descendant row ids, but add no plan frame.
+    { cx with owner := some owner, id := some id, locals, rows := id :: cx.rows }
+
+/-- Rebuild an instance's frames from the identity and binders the render
+recorded, without evaluating the source expressions that selected it. -/
+def instanceContext (p : Program) (pi : PlanInfo) (store : RowStore)
+    (id : RowId) : Result InstanceContext := do
+  let mut cx : InstanceContext := {}
+  for n in [0:id.length] do
+    let path := id.take (n + 1)
+    let slots ← (store.find path).elim
+      (.error (.refused "a live instance has no recorded ancestor")) .ok
+    let (tag, key, _) ← path.getLast?.elim
+      (.error (.refused "a live instance has an empty identity")) .ok
+    let binding ← (findRegion tag p.view).elim
+      (.error (.refused "a live instance has no source region")) .ok
+    match binding with
+    | .when =>
+      let arm ← renderedArm key
+      cx := enterRecorded pi cx path slots (tag, arm) cx.locals {}
+    | .matchN name =>
+      let arm ← renderedArm key
+      if arm == 0 then
+        let value ← (markerValue p store path 2).elim
+          (.error (.refused "a rendered match instance has no recorded binding")) .ok
+        let locals := (name, value) :: cx.locals
+        cx := enterRecorded pi cx path slots (tag, arm) locals { bound := some value }
+      else
+        cx := enterRecorded pi cx path slots (tag, arm) cx.locals {}
+    | .each item index =>
+      let value ← (markerValue p store path 0).elim
+        (.error (.refused "a rendered each instance has no recorded item")) .ok
+      let indexValue ← (markerValue p store path 1).elim
+        (.error (.refused "a rendered each instance has no recorded index")) .ok
+      let i ← match indexValue with
+        | .num number => pure number.toNat
+        | _ => throw (.refused "a rendered each instance has an invalid recorded index")
+      let locals := (item, value) :: cx.locals
+      let locals := index.elim locals fun name => (name, .num (F64.ofNat i)) :: locals
+      cx := enterRecorded pi cx path slots (tag, 0) locals
+        { item := some value, index := some i }
+  pure cx
+
+/-- The root and every region instance the render left live. Marker rows
+carry binders and are not themselves instances. -/
+def liveContexts (p : Program) (pi : PlanInfo) (store : RowStore) : Result (List InstanceContext) := do
+  let root : InstanceContext := {}
+  let ids := store.filterMap fun (id, _) => if isMarkerId p id then none else some id
+  pure (root :: (← ids.mapM (instanceContext p pi store)))
+
+def isReaderOf (owner reader : InstanceContext) : Bool :=
+  match owner.id with
+  | none => true
+  | some id => reader.rows.any (sameRowId id)
+
+/-- The row call and every frame read expressible by view bytecode. Each is a
+separate run, so validation does not charge a list the application never builds. -/
+def readerCalls (row : Nat) (frames : List Vm.Frame) : List (Code × Option Value) :=
+  let reads : List (Vm.Instr × Value) := frames.zipIdx.flatMap fun (frame, depth) =>
+    (frame.item.map fun v => (Vm.Instr.loadItem depth, v)).toList ++
+    (frame.index.map fun i => (Vm.Instr.loadIndex depth, Value.num (F64.ofNat i))).toList ++
+    (frame.bound.map fun v => (Vm.Instr.loadBound depth, v)).toList
+  ([([.loadDerive row, .ret], none)] ++ reads.map fun (read, value) => ([read, .ret], some value))
 
 /-- An argument of each type, two ways. -/
 partial def sample (p : Program) (k : Nat) : Ty → Value
@@ -216,6 +374,9 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
     pure { code, owner }
   let mut t : Tally := {}
   let mut out : Array String := #[]
+  if !pi.regionRosterMatches then
+    t := { t with diverge := t.diverge + 1 }
+    out := out.push "DIVERGE regions: source and plan region rosters differ"
   -- The configurations to check in: boot, and after each event that is not
   -- poisoned. A refused observed step can still have committed the work due
   -- before its event, the event after a refused advance (`dispatchAt`), or
@@ -242,30 +403,64 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
       t := { t with undecoded := t.undecoded + 1 }
       out := out.push s!"UNDECODED {what}: {why}"
     | .ok code =>
-      if b.executable && b.owner.isSome then
-        t := { t with refused := t.refused + 1 }
-        out := out.push s!"REFUSED {what}: owner region {b.owner.getD 0} needs an instance environment"
+      let expectedOwner := b.sourceOwner.bind fun (tag, arm) =>
+        (planRegion pi tag).map fun region => (region, arm)
+      if b.executable && b.owner != expectedOwner then
+        t := { t with diverge := t.diverge + 1 }
+        out := out.push s!"DIVERGE {what}: plan owner {repr b.owner}, source owner {repr b.sourceOwner}"
         continue
       -- The compiler of `Contract.Lower` against the Rust compiler's code.
-      let lean : Except String Code := match b.kind with
-        | .action =>
-          match p.actions.find? (·.name == b.name) with
-          | .some a => compileAction p L a
-          | .none => .error "no such action"
-        | _ =>
-          match exprOf p b with
-          | .some e => compileBody p L e
-          | .none => .error "no such declaration"
-      match lean with
-      | .error why =>
-        t := { t with refused := t.refused + 1 }
-        out := out.push s!"REFUSED {what}: {why}"
-      | .ok lc =>
-        match structural code lc with
-        | .none => t := { t with same := t.same + 1 }
-        | .some d =>
-          t := { t with differ := t.differ + 1 }
-          out := out.push s!"STRUCT {what} {d}"
+      -- An arm body has source binders that `compileBody`'s root scope does
+      -- not contain. Its decoded code is checked contextually below.
+      if !(b.executable && b.sourceOwner.isSome) then
+        let lean : Except String Code := match b.kind with
+          | .action =>
+            match p.actions.find? (·.name == b.name) with
+            | .some a => compileAction p L a
+            | .none => .error "no such action"
+          | _ =>
+            match exprOf p b with
+            | .some e => compileBody p L e
+            | .none => .error "no such declaration"
+        match lean with
+        | .error why =>
+          t := { t with refused := t.refused + 1 }
+          out := out.push s!"REFUSED {what}: {why}"
+        | .ok lc =>
+          match structural code lc with
+          | .none => t := { t with same := t.same + 1 }
+          | .some d =>
+            t := { t with differ := t.differ + 1 }
+            out := out.push s!"STRUCT {what} {d}"
+      if b.executable then
+        match b.source, b.row with
+        | .some source, .some row =>
+          for (cfg, k) in cfgs.toList.zipIdx do
+            match liveContexts p pi cfg.store with
+            | .error why =>
+              t := { t with diverge := t.diverge + 1 }
+              out := out.push s!"DIVERGE {what} cfg{k}: instance walk failed: {Observe.why why}"
+            | .ok contexts =>
+              let owners := contexts.filter (·.owner == b.sourceOwner)
+              for (owner, ownerIndex) in owners.zipIdx do
+                let env := Env.withOwned { semEnv p cfg with rows := rowSlots cfg.store owner.rows }
+                let sem := eval Contract.fuel env false owner.locals source
+                for (reader, readerIndex) in (contexts.filter (isReaderOf owner)).zipIdx do
+                  let venv := { vmEnvAt p pi cfg reader.rows [] [] with frames := reader.frames }
+                  for ((call, expected), probe) in (readerCalls row reader.frames).zipIdx do
+                    let vm := VmRows.run executableRows call venv reader.regions (1 <<< 22)
+                      reader.stores (pi.slots.map (·.2)) (pi.resources.map (·.2)) reader.arms
+                    let expected := expected.elim sem fun value => pure value
+                    let expected := expected.map fun value => (value, ({} : Vm.Effects))
+                    let (t', ls') := judge
+                      s!"{what} cfg{k} instance{ownerIndex} reader{readerIndex} probe{probe}"
+                      vm expected t
+                    t := t'
+                    out := out ++ ls'.toArray
+        | _, _ =>
+          t := { t with diverge := t.diverge + 1 }
+          out := out.push s!"DIVERGE {what}: executable row has no checked source or table index"
+        continue
       -- The decoded code on the VM against the semantics.
       for (cfg, k) in cfgs.toList.zipIdx do
         let env := semEnv p cfg
@@ -282,7 +477,7 @@ def check (p : Program) (o : Oracle) (events : List Observe.ScriptEvent) (pi : P
                 if st.owner.isSome then Option.some (st.name, sample p s st.ty) else Option.none
               let venv := vmEnv p pi cfg args b.writes
               let slots := (pi.slots.zip venv.slots).map fun ((n, owned), v) =>
-                if owned then lookup n rows else v
+                if owned.isSome then lookup n rows else v
               let venv := { venv with slots }
               let vm := VmRows.run executableRows code venv
               let ls : Locals := ((a.params.map (·.1)).zip args).reverse

@@ -30,7 +30,7 @@ import kotlin.math.sign
  *
  * What crosses to exact2 and back is `host/painted/src/presenter/scrollers.rs`:
  * - at a touch's down the reader asks what is under it ([Native.under]): the scrollers, innermost first, and the axes
- *   exact2's own gestures claim there (a swipe row, a reorder grip, a `pan`);
+ *   exact2's own gestures claim there (a swipe row, a reorder grip, a `pan`, a sheet's drag);
  * - past the slop, a drag along an axis exact2 claims stays its own; along one a scroller under the finger scrolls
  *   on, the scroll wins: exact2's press and drag recognition for the touch is cancelled ([ExactView.forward] with a
  *   cancel) and no more of the touch reaches it;
@@ -91,8 +91,9 @@ internal class Scrolling(private val view: ExactView) {
         fun end(sideways: Boolean) = if (sideways) maxX else maxY
     }
 
-    /** A scroller under the touch, and the axes it takes part on for a drag from there. */
-    private class Link(val s: Scroller, val x: Boolean, val y: Boolean)
+    /** A scroller under the touch, the axes it takes part on for a drag from there, whether it zooms and whether a
+     * double tap there zooms it ([Zooming]). */
+    private class Link(val s: Scroller, val x: Boolean, val y: Boolean, val zoom: Boolean = false, val taps: Boolean = false)
     /** A move sent to exact2's thread: its number, and how far it moved which scroller. */
     private class Sent(val seq: Int, val s: Scroller, val dx: Float, val dy: Float)
 
@@ -120,7 +121,8 @@ internal class Scrolling(private val view: ExactView) {
             if (field == FLINGING && value != FLINGING) rested()
             field = value
         }
-    val timerActive: Boolean get() = mode != IDLE
+    val timerActive: Boolean get() = mode != IDLE || zooming.active
+    val dragging: Boolean get() = mode == DRAGGING
     /** What exact2 said is under the touch, once it has. */
     private var chain: List<Link> = emptyList()
     private var claims = 0
@@ -149,6 +151,17 @@ internal class Scrolling(private val view: ExactView) {
     /** The scrollers the drag has moved, each told to exact2 as dragged from its first move ([move]) and held so
      * until the lift, or until the fling the lift threw stops ([lifted], [rested]). */
     private val held = LinkedHashSet<Scroller>()
+    /** A zoomable scroller's pinch, double tap and pan (LLP 1057.001.000 §5). */
+    private val zooming = Zooming(view, object : Zooming.Host {
+        override fun pan(s: Scroller, dx: Float, dy: Float) = panBoth(s, dx, dy)
+        override fun tell(f: () -> Unit) = this@Scrolling.tell(f)
+        override fun took(x: Float, y: Float, tool: Int) {
+            if (mode == DRAGGING) { edged()?.edges?.forEach { it?.onRelease() }; lifted(0f, false) }
+            if (mode != FLINGING) mode = IDLE
+            if (!replaying) view.cancelContact(x, y, tool)
+        }
+    })
+
     /** The scroller that first moved in the last [move], and whether this drag has said what it does to the keyboard. */
     private var mover: Scroller? = null
     private var keyed = false
@@ -162,7 +175,7 @@ internal class Scrolling(private val view: ExactView) {
      * had the answer come at once ([next], [caughtUp]): a frame that answers late loses none of the finger's way, its
      * turns at a scroller's end, a finger that lifted, or the lift itself.
      */
-    fun touch(e: MotionEvent): Boolean {
+    fun touch(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             val ended = early.any { it.actionMasked == MotionEvent.ACTION_UP || it.actionMasked == MotionEvent.ACTION_CANCEL }
             val first = down
@@ -177,6 +190,11 @@ internal class Scrolling(private val view: ExactView) {
             pointer = e.getPointerId(0); tool = e.getToolType(0)
             downX = e.x; downY = e.y; lastX = e.x; lastY = e.y
             serial++
+            if (zooming.catches(e.x, e.y)) {
+                // A finger on a zoomed scroller that is flinging stops it and pans it.
+                mode = WATCHING; answered = false; chain = emptyList(); claims = 0
+                return true
+            }
             if (mode == FLINGING) {
                 // A finger on a list that is flinging stops it and has it, as the platform's lists do: no press.
                 halt()
@@ -192,18 +210,25 @@ internal class Scrolling(private val view: ExactView) {
             return false
         }
         if (mode == WATCHING && !answered) { early.add(MotionEvent.obtain(e)); return false }
-        return take(e)
+        return take(e, disallowIntercept)
     }
 
     /** [e], a touch event after the down, once exact2 has answered for the touch: whether the scroll took it. */
-    private fun take(e: MotionEvent): Boolean {
+    private fun take(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
+        if (zooming.touch(e)) {
+            if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
+                if (mode != FLINGING) mode = IDLE
+                tracker?.recycle(); tracker = null
+            }
+            return true
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 tracker?.addMovement(e)
                 val i = e.findPointerIndex(pointer)
                 if (i < 0) return mode == DRAGGING
                 val x = e.getX(i); val y = e.getY(i)
-                if (mode == WATCHING) decide(x, y)
+                if (mode == WATCHING && !disallowIntercept) decide(x, y)
                 if (mode != DRAGGING) return false
                 val d = if (sideways) lastX - x else lastY - y
                 lastX = x; lastY = y
@@ -239,6 +264,20 @@ internal class Scrolling(private val view: ExactView) {
                 return was == DRAGGING
             }
         }
+    }
+
+    /** An accepted down can stop a fling, but scroll interception still waits for the new contact's slop. */
+    fun hosted() { if (mode == DRAGGING) mode = WATCHING }
+
+    /** This sequence no longer belongs to scrolling; unrelated refreshes and edge effects stay visible. */
+    fun yieldToHosted() {
+        zooming.stopped()
+        if (mode == WATCHING || mode == DRAGGING) mode = IDLE
+        forget()
+        for (o in owing) for (e in o.events) e.recycle()
+        owing.clear()
+        tracker?.recycle(); tracker = null
+        serial++
     }
 
     /**
@@ -313,12 +352,17 @@ internal class Scrolling(private val view: ExactView) {
         for (o in owing) for (e in o.events) e.recycle()
         owing.clear()
         if (mode == DRAGGING) lifted(0f, false)
+        zooming.stopped()
         pulling?.let { pulled(it, false) }
         dismissal.lifted(0f)
         forget()
         tracker?.recycle(); tracker = null
         released()
-        mode = IDLE
+        serial++
+        mode = IDLE; answered = false; chain = emptyList(); active = emptyList(); pointer = -1
+        halt()
+        frames.removeFrameCallback(edger); edging = false
+        for (s in scrollers.values) for (edge in s.edges) edge?.finish()
     }
 
     /**
@@ -328,7 +372,7 @@ internal class Scrolling(private val view: ExactView) {
      */
     fun under(serial: Int, w: IntArray) {
         if (serial != this.serial) { owing.firstOrNull { it.serial == serial }?.let { owing.remove(it); owed(it, w) }; return }
-        if (mode != WATCHING || w.size < 3) return
+        if ((mode != WATCHING && mode != DRAGGING) || w.size < 3) return
         answered(w)
     }
 
@@ -347,11 +391,11 @@ internal class Scrolling(private val view: ExactView) {
             val policy = (if (s.told) s.flags else w[i + 1]) and SAID
             s.flags = (s.flags and 3) or (w[i + 1] and 4) or policy
             s.port.set(f(w[i + 7]), f(w[i + 8]), f(w[i + 7]) + f(w[i + 9]), f(w[i + 8]) + f(w[i + 10]))
-            links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0))
+            links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0, w[i + 1] and ZOOM_FLAG != 0, w[i + 1] and DOUBLE_TAP_FLAG != 0))
             i += 11
         }
-        // After the module's ten words, each scroller's snap.
-        var at = 3 + 11 * w[1] + 10
+        // After the module's thirteen words, each scroller's snap.
+        var at = 3 + 11 * w[1] + 13
         for (link in links) {
             if (at >= w.size) break
             val s = link.s
@@ -371,6 +415,14 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values) if (links.none { it.s === s }) s.bar?.let { (it.parent as? ViewGroup)?.removeView(it); s.bar = null }
         chain = links
         answered = true
+        // The innermost zoomable scroller under the down has its own gestures; a drag of it is its pan while it is
+        // the innermost scroller there and can move.
+        val d = down
+        if (d != null && !replaying) {
+            val z = links.firstOrNull { it.zoom }
+            val pans = z != null && links.first() === z && claims == 0 && (z.s.maxX > 0f || z.s.maxY > 0f)
+            zooming.down(d, z?.s, z?.taps == true, pans)
+        }
     }
 
     /** Past the slop: whose the touch is. Along an axis exact2 claims, its own; along one a scroller under it scrolls
@@ -396,7 +448,7 @@ internal class Scrolling(private val view: ExactView) {
         // crossed the slop went far past it (a quick swipe, or moves held back until a late answer).
         lastX = if (sideways) downX + sign(x - downX) * slop else x
         lastY = if (sideways) y else downY + sign(y - downY) * slop
-        if (!replaying) view.forward(3, x, y, tool, 0L)
+        if (!replaying) view.cancelContact(x, y, tool)
         keyed = false
     }
 
@@ -499,6 +551,19 @@ internal class Scrolling(private val view: ExactView) {
         return rest
     }
 
+    /** A zoomable scroller's pan ([Zooming]) moved [s] by ([dx], [dy]) px, both axes at once, within its travel. */
+    private fun panBoth(s: Scroller, dx: Float, dy: Float) {
+        val tx = (s.at(true) + dx).coerceIn(0f, max(0f, s.maxX)) - s.at(true)
+        val ty = (s.at(false) + dy).coerceIn(0f, max(0f, s.maxY)) - s.at(false)
+        if (abs(tx) < 0.01f && abs(ty) < 0.01f) return
+        s.own = true
+        val seq = view.scrolled(s.id, tx, ty, s.rev)
+        if (seq != 0) { s.pendX += tx; s.pendY += ty; sent.addLast(Sent(seq, s, tx, ty)) }
+        indicate(s)
+        view.tick()
+        if (!s.node) view.awaitScrolled()
+    }
+
     /** Each scroller the reader has moved, drawn where the reader has it: its rows' node as far from where they were
      * painted as the offset is. Called after every stream too, which draws them where exact2 had them. */
     fun place() {
@@ -533,6 +598,7 @@ internal class Scrolling(private val view: ExactView) {
                 sent.removeAll { it.s === s }
                 s.pendX = 0f; s.pendY = 0f
                 if (mode == FLINGING && s in active) { halt(); mode = IDLE }
+                if (zooming.flinging(s)) zooming.halt()
             }
             s.rev = w[i + 2]
             s.told = true
@@ -557,6 +623,7 @@ internal class Scrolling(private val view: ExactView) {
     /** A driver from outside scrolls ([ExactView.scrollBy]): the scrollers are exact2's to place again. */
     fun released() {
         if (mode == FLINGING) { halt(); mode = IDLE }
+        zooming.halt()
         for (s in scrollers.values) s.own = false
     }
 
@@ -880,9 +947,13 @@ internal class Scrolling(private val view: ExactView) {
 
     private fun f(bits: Int) = java.lang.Float.intBitsToFloat(bits)
 
-    private companion object {
+    internal companion object {
+        /** A touch's answer: the scroller zooms, and a double tap there zooms it (`presenter/scrollers.rs`). */
+        const val ZOOM_FLAG = 256
+        const val DOUBLE_TAP_FLAG = 512
         /** The bits of a scroller's flags its statement is the authority on, and a hit answer only before one. */
         const val SAID = 8 or 16 or 32 or 192
+
         /** How long after a pull sent `refresh` an app that set no `refreshing` keeps the indicator turning: the iOS
          * host's wait for UIKit's control (`ScrollViewIOS.swift`). */
         const val UNSTARTED_MS = 350L

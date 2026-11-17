@@ -1,14 +1,13 @@
-// scripts/wasm-check.mjs, which caps.mjs runs before every push: the crates a web app links, compiled for wasm32
-// when a change touches Rust. The compile itself is the lane's (its wasm builds); here, what is checked, when, and
-// what a failure says.
-import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+// The hourly wasm graph, compilation commands and complete diagnostics.
+import { afterAll, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { report, warm, wasmCheck, wasmCrates } from './wasm-check.mjs';
+import { report, wasmCheck, wasmCrates } from './wasm-check.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 const TARGET = mkdtempSync(join(tmpdir(), 'wasm-check-')); // a cold target directory, never compiled into
+afterAll(() => rmSync(TARGET, { recursive: true, force: true }));
 const FOUND = { crates: ['contract', 'exact-kernel', 'exact-web'], bins: [['exact-textflow', 'textflow-web']], dirs: ['contract/cli/', 'kernel/', 'host/web/', 'textflow/'], target: TARGET };
 
 test('the crates checked are the libraries the web apps link for wasm32, the apps and vendored crates aside', () => {
@@ -21,33 +20,16 @@ test('the crates checked are the libraries the web apps link for wasm32, the app
   expect(crates).not.toContain('taffy');
 }, 30_000);
 
-test("warm is exact-web's own wasm32 debug fingerprint, not a sibling crate's or another profile's", () => {
-  const dir = mkdtempSync(join(tmpdir(), 'wasm-check-warm-'));
-  try {
-    const prints = (profile) => join(dir, 'wasm32-unknown-unknown', profile, '.fingerprint');
-    expect(warm(dir)).toBe(false);
-    mkdirSync(join(prints('debug'), 'exact-web-js-motion-e5e559bbbf3de2f3'), { recursive: true });
-    mkdirSync(join(prints('debug'), 'exact-web-geometry-a8f8e2a7e50310f2'));
-    mkdirSync(join(prints('web'), 'exact-web-54f62345199d9191'), { recursive: true });
-    expect(warm(dir)).toBe(false);
-    mkdirSync(join(prints('debug'), 'exact-web-54f62345199d9191'));
-    expect(warm(dir)).toBe(true);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('a cold target directory waits for Rust or a crate\'s own files; a warm one leaves it to Cargo; EXACT_CAPS_WASM=0 skips', () => {
-  const at = (changed, extra = {}) => wasmCheck(ROOT, { env: {}, changed, dry: true, found: FOUND, ...extra }).counted;
-  for (const changed of [[], ['docs/x.md', 'scripts/agent.mjs', 'Cargo.md', 'host/web/tests/resize-boot.test.mjs', 'host/web/agent.test.mjs']]) {
-    expect(at(changed)).toBe('wasm32: no Rust changed since origin/main and no earlier check in this target directory, not checked');
-    expect(at(changed, { hot: true })).toBe('wasm32: would check (Cargo decides what changed)');
-  }
-  // kernel/build.rs reads kernel/tables/schema.json; host/web includes its index.html
-  for (const changed of [['kernel/tables/schema.json'], ['host\\web\\index.html'], ['.cargo/config.toml'], ['a/b.rs'], ['rust-toolchain.toml'], ['Cargo.lock']]) {
-    expect(at(changed)).toBe("wasm32: would check (Rust or a crate's files changed since origin/main: 1)");
-  }
-  expect(at(null)).toBe('wasm32: would check (no origin/main to compare)');
-  expect(wasmCheck(ROOT, { env: { CARGO_BUILD_BUILD_DIR: TARGET + '-elsewhere' }, changed: [], dry: true, found: { ...FOUND } }).counted).toMatch(/not checked/);
-  expect(wasmCheck(ROOT, { env: { EXACT_CAPS_WASM: '0' }, changed: ['contract/cli/src/gallery.rs'] }).counted).toBe('wasm32: skipped (EXACT_CAPS_WASM=0)');
+test('the hourly check always runs every library and binary, even after a failed compile', () => {
+  const calls = [];
+  const result = wasmCheck(ROOT, { found: { ...FOUND }, execute: (root, cmd, args) => {
+    calls.push([root, cmd, args]);
+    return { status: calls.length === 1 ? 101 : 0, stderr: 'contract/src/lib.rs:1:1: error[E0425]: missing name' };
+  } });
+  expect(calls.length).toBe(2);
+  expect(calls[0][2]).toEqual(expect.arrayContaining(['--lib', '--keep-going', '-p', 'contract', '-p', 'exact-kernel', '-p', 'exact-web']));
+  expect(calls[1][2]).toEqual(expect.arrayContaining(['-p', 'exact-textflow', '--bin', 'textflow-web']));
+  expect(result.problems.length).toBe(1);
 });
 
 test('a failure says every diagnostic, a build script\'s cause beneath it, and a rerun for each check that failed', () => {

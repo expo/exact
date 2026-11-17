@@ -116,3 +116,59 @@ fn the_freeze_bit_releases_pending_and_delivered_streams_before_returning() {
         );
     }
 }
+
+/// LLP 1069.000 D2 r7 on Apple: with the first-frame latch on, the page asks
+/// for a frame though nothing animates; that frame's tick sets `presented`,
+/// and what the boot began starts at it (LLP 1003.001 D9); `prefer
+/// presented` holds the fact.
+#[test]
+fn the_first_frame_presents_the_page() {
+    const SPLASH: &str = r##"keyframes enter
+  from opacity=0
+shape Page
+  presented: bool
+component A
+  resource page = exactPage() as shape Page
+  view
+    column
+      box testId="logo" width=24 height=24 animation="enter 400ms ease-out both"
+"##;
+    let plan = contract::compile(SPLASH).unwrap().encode();
+    let mut bridge = Bridge::new();
+    bridge.start_on_frame(true, 0.0);
+    let len = bridge.boot(&plan, Feed, Hooks::none(), 390., 844.);
+    let booted = String::from_utf8_lossy(bridge.output_bytes(len as usize)).into_owned();
+    assert!(
+        booted.contains("\"motion\":true"),
+        "the link runs for it: {booted}"
+    );
+    let seen = |bridge: &Bridge<Feed>| {
+        bridge
+            .host
+            .as_ref()
+            .unwrap()
+            .runner()
+            .resource("page")
+            .cloned()
+            == Some(Value::record(vec![Value::Bool(true)]))
+    };
+    assert!(!seen(&bridge));
+    let host = bridge.host.as_mut().unwrap();
+    host.tick(5.0);
+    assert!(
+        !host.runner().presented().seen,
+        "a tick with no frame is no present"
+    );
+    host.tick_at(10.0, 16.0);
+    assert!(host.runner().presented().seen);
+    let logo = {
+        let k = host.runner().kernel();
+        exact_kernel::motion::motion_node(k.find_by_test_id("logo")[0])
+    };
+    assert_eq!(host.engine().animation_plays(logo)[0].start, 0.016);
+    assert!(seen(&bridge));
+    bridge.host.as_mut().unwrap().prefer_presented(Some(false));
+    assert!(!seen(&bridge), "held by the agent");
+    bridge.host.as_mut().unwrap().prefer_presented(None);
+    assert!(seen(&bridge));
+}

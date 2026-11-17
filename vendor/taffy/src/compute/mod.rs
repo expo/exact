@@ -166,6 +166,36 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
         Size::NONE
     };
 
+    // EXACT PATCH 77: a keyword width resolves as a block child's does, against the offer
+    // less the margins, then within its bounds.
+    let known_dimensions = match (in_flow && known_dimensions.width.is_none())
+        .then(|| {
+            let stretch = parent_size.width.maybe_sub(non_auto_margin.horizontal_axis_sum());
+            let style = tree.get_core_container_style(root);
+            common::sizing_keyword::resolve_sizing_keyword(style.size().width, stretch, parent_size.width)
+        })
+        .flatten()
+    {
+        Some(resolution) => Size {
+            width: Some(
+                common::sizing_keyword::measure_keyword_width(
+                    tree,
+                    root,
+                    resolution,
+                    Size::NONE,
+                    parent_size,
+                    AvailableSpace::MaxContent,
+                    SizingMode::InherentSize,
+                    Line::FALSE,
+                )
+                .maybe_clamp(min_size.width, max_size.width)
+                .max(padding_border_size.width),
+            ),
+            height: known_dimensions.height,
+        },
+        None => known_dimensions,
+    };
+
     let ratio_min = crate::compute::ratio::minimum_ratio_width(tree, root, parent_size, None);
     let known_dimensions = known_dimensions.map_width(|width| width.maybe_max(ratio_min));
 

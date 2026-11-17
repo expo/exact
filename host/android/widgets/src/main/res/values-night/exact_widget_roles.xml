@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material 3's baseline roles, dark. Index i is exact2's Material role i (host/painted/src/presenter/palette.rs `Material`), the index a
+     snapshot tree names a role colour by (LLP 1126.003 D2). The launcher resolves these ids itself, so a new wallpaper or
+     the night mode recolours a widget with no code running. -->
+<resources>
+    <color name="exact_widget_role_0">#FFD0BCFF</color>
+    <color name="exact_widget_role_1">#FF381E72</color>
+    <color name="exact_widget_role_2">#FF4A4458</color>
+    <color name="exact_widget_role_3">#FF141218</color>
+    <color name="exact_widget_role_4">#FFE6E0E9</color>
+    <color name="exact_widget_role_5">#FFCAC4D0</color>
+    <color name="exact_widget_role_6">#FF1D1B20</color>
+    <color name="exact_widget_role_7">#FF211F26</color>
+    <color name="exact_widget_role_8">#FF2B2930</color>
+    <color name="exact_widget_role_9">#FF36343B</color>
+    <color name="exact_widget_role_10">#FF49454F</color>
+    <color name="exact_widget_role_11">#FFF2B8B5</color>
+    <color name="exact_widget_role_12">#FF4F378B</color>
+    <color name="exact_widget_role_13">#FFEADDFF</color>
+    <color name="exact_widget_role_14">#FF6750A4</color>
+    <color name="exact_widget_role_15">#FFCCC2DC</color>
+    <color name="exact_widget_role_16">#FF332D41</color>
+    <color name="exact_widget_role_17">#FFE8DEF8</color>
+    <color name="exact_widget_role_18">#FFEFB8C8</color>
+    <color name="exact_widget_role_19">#FF492532</color>
+    <color name="exact_widget_role_20">#FF633B48</color>
+    <color name="exact_widget_role_21">#FFFFD8E4</color>
+    <color name="exact_widget_role_22">#FF141218</color>
+    <color name="exact_widget_role_23">#FFE6E0E9</color>
+    <color name="exact_widget_role_24">#FF49454F</color>
+    <color name="exact_widget_role_25">#FFD0BCFF</color>
+    <color name="exact_widget_role_26">#FFE6E0E9</color>
+    <color name="exact_widget_role_27">#FF322F35</color>
+    <color name="exact_widget_role_28">#FF601410</color>
+    <color name="exact_widget_role_29">#FF8C1D18</color>
+    <color name="exact_widget_role_30">#FFF9DEDC</color>
+    <color name="exact_widget_role_31">#FF938F99</color>
+    <color name="exact_widget_role_32">#FF000000</color>
+    <color name="exact_widget_role_33">#FF3B383E</color>
+    <color name="exact_widget_role_34">#FF141218</color>
+    <color name="exact_widget_role_35">#FF0F0D13</color>
+</resources>

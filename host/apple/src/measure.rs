@@ -154,6 +154,10 @@ pub struct CRequest {
     pub faces: *const u8,
     /// Its length in bytes.
     pub faces_len: usize,
+    /// 1 for natural text (LLP 1060.000 D3): each paragraph's base is its
+    /// first strong character's (`exact_text_paragraph_bases`), `direction`
+    /// where it has none; `direction` still resolves alignment.
+    pub natural: u8,
 }
 
 /// What the callback returns.
@@ -164,7 +168,7 @@ pub struct CMetrics {
     pub width: f32,
     /// Points.
     pub height: f32,
-    /// Top to first alphabetic baseline, points; negative when unknown.
+    /// Top to first alphabetic baseline, points; -1 unknown, -2 pending geometry.
     pub baseline: f32,
 }
 
@@ -577,6 +581,7 @@ impl CallbackMeasurer {
             atoms_len: request.atoms.kinds.len(),
             faces: request.atoms.faces.as_ptr(),
             faces_len: request.atoms.faces.len(),
+            natural: u8::from(request.paragraph.natural),
         };
         // The one foreign call: the app's function, with the structs above
         // alive for its duration and read-only.
@@ -597,6 +602,7 @@ fn sanitize(m: CMetrics) -> TextMetrics {
             0.0
         },
         first_baseline: (m.baseline.is_finite() && m.baseline >= 0.0).then_some(m.baseline),
+        pending: m.baseline == -2.0,
     }
 }
 
@@ -726,7 +732,7 @@ impl TextMeasurer for CallbackMeasurer {
         });
         out.truncate(count.min(out.len()));
         // A non-finite pair is a box on no line, which the kernel hides.
-        origins.extend(out.chunks_exact(2).map(|p| (p[0], p[1])));
+        origins.extend(out.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])));
     }
 
     /// @ref LLP 1093 D6 — the paragraph's line boxes, from the app's hook.
@@ -768,7 +774,8 @@ impl TextMeasurer for CallbackMeasurer {
             return metrics;
         }
         let raw = self.foreign_measure(request, Some(stamp));
-        if raw.baseline == -2.0 {
+        let metrics = sanitize(raw);
+        if metrics.pending {
             self.memo.defer_to_owner(stamp);
         }
         let valid = raw.width.is_finite()
@@ -776,8 +783,7 @@ impl TextMeasurer for CallbackMeasurer {
             && raw.height.is_finite()
             && raw.height >= 0.0
             && raw.baseline.is_finite()
-            && raw.baseline != -2.0; // pending worker metrics are never memoized here
-        let metrics = sanitize(raw);
+            && !metrics.pending;
         // A negative finite baseline is the existing C "unknown" sentinel.
         // Invalid raw output keeps its existing sanitized return behavior, but
         // must retry the callback next time instead of caching a synthetic zero.

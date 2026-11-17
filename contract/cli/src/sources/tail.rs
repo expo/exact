@@ -58,7 +58,7 @@ impl GraphBase {
                 },
                 |p| p.to_string_lossy().replace('\\', "/"),
             );
-        let parses = exact_tamber::parse(&text).is_ok();
+        let parses = exact_forma::parse(&text).is_ok();
         let source = contract_syntax::DesignSource {
             path: path.display().to_string(),
             home,
@@ -117,16 +117,16 @@ impl GraphBase {
             Some(text) => Some(text),
             // Its packages' designs alone fold too: their icons' SVGs are read (round 1, Astra 5).
             None => (!params.is_empty() || !package_designs.is_empty())
-                .then(|| "tamber app\n".to_string()),
+                .then(|| "forma app\n".to_string()),
         };
         // With its packages' tokens, which an app token may name (D11); a
         // package's SVG under its root, a source of the package (stage 13).
         let icons: Vec<(PathBuf, Option<Origin>, Option<Origin>)> = text
-            .and_then(|text| exact_tamber::parse(&text).ok())
+            .and_then(|text| exact_forma::parse(&text).ok())
             .and_then(|d| contract_lower::with_package_designs(Some(d), &package_designs))
             .and_then(|mut d| {
                 contract_lower::params::add_to(&mut d, &params, &self.identities);
-                exact_tamber::check_design(d, &contract_lower::tamber_vocab()).ok()
+                exact_forma::check_design(d, &contract_lower::forma_vocab()).ok()
             })
             .map(|folding| {
                 let app = root_key.parent().unwrap_or(Path::new("."));

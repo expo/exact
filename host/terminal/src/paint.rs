@@ -59,6 +59,8 @@ pub struct Scene<'a> {
     pub images: &'a crate::image::Images,
     /// Centre a dialog with no insets in the grid (full screen).
     pub center: bool,
+    /// Border-box origins of invoker popovers sized in their selected regions.
+    pub origins: &'a HashMap<ViewId, (f32, f32)>,
     /// Whether a node has a `press` of its own (a `box press=`, a card):
     /// a press can hit it as it hits a control (whether that press runs is
     /// the host's: a disabled or inert box swallows it).
@@ -102,10 +104,9 @@ pub fn paint(scene: &Scene<'_>, roots: &[ViewId], cols: usize, rows: usize, top:
     out
 }
 
-/// Where an open layer paints: where it was laid out, or centred in the
-/// grid when it names no inset (as the Mac host centres a dialog). A
-/// popover laid out in the viewport's block (stage 14 B) is placed by its
-/// insets in the grid, which stays put as the document scrolls.
+/// Where an open layer paints: its selected position-area, its viewport
+/// insets, or centred in the grid when it has neither. Inline layers sit
+/// at the bottom of the live region.
 pub(crate) fn placement(
     scene: &Scene<'_>,
     layer: ViewId,
@@ -125,6 +126,9 @@ pub(crate) fn placement(
         // up over what is already printed).
         let gy = (rows as f32 - h).max(0.0);
         return (0.0, f.y - gy * ROW);
+    }
+    if let Some(&(x, y)) = scene.origins.get(&layer) {
+        return (f.x - x, f.y - y);
     }
     let auto = [
         s.top.clone(),

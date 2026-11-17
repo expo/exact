@@ -11,6 +11,33 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
+/// The refusal of a base locale with no table names both repairs: the
+/// base's table, or `strings.base` naming a table the app has.
+fn base_missing<'a>(
+    base: &str,
+    declared: bool,
+    tables: impl Iterator<Item = &'a String>,
+) -> String {
+    let tables: Vec<_> = tables.collect();
+    let named = if declared {
+        format!("the base locale is `{base}` (app.json's `strings.base`), and it has no table")
+    } else {
+        format!(
+            "the base locale is `{base}` (app.json names no `strings.base`), and it has no table"
+        )
+    };
+    match tables.as_slice() {
+        [] => format!("{named}: add `strings/{base}.json`"),
+        [only] => format!(
+            "{named}: add `strings/{base}.json`, or make `{only}` the base with `\"strings\": {{ \"base\": \"{only}\" }}` in app.json"
+        ),
+        [first, ..] => format!(
+            "{named}: add `strings/{base}.json`, or make one of {} the base, as in `\"strings\": {{ \"base\": \"{first}\" }}` in app.json",
+            tables.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
 /// The tables, `None` for an app without a `strings` directory.
 /// `source` is the root `app.contract`, which a manifest refusal names as
 /// the driver's own does.
@@ -110,7 +137,7 @@ pub(super) fn load(
         errors.push(refusal(
             "strings-base-missing",
             &dir.join(format!("{base}.json")),
-            format!("the base locale is `{base}`, and it has no table"),
+            base_missing(&base, declared.is_some(), tables.keys()),
         ));
         return Err(errors);
     };

@@ -283,7 +283,7 @@ extension NodeView {
         default:
             guard scrollsVertically else { return .none }
             #if os(iOS)
-            let route = ViewPresentation.controllers(for: self).lazy.compactMap { $0 as? RouteController }.first
+            let route = ViewPresentation.controllers(for: self, layout: true).lazy.compactMap { $0 as? RouteController }.first
             if route?.search?.controller.searchBar.searchTextField.isEditing == true { return .onDrag }
             #endif
             return .interactive

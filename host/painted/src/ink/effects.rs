@@ -59,6 +59,13 @@ fn sampling_reach(filter: &exact_kernel::style::BackdropFilter, scale: f32) -> f
 }
 
 impl Ink {
+    pub(super) fn end_frame(&mut self) -> Result<TextureId> {
+        let target = self.flush()?;
+        self.images.end(&mut self.device)?;
+        self.pool.end(&mut self.device)?;
+        Ok(target)
+    }
+
     pub(super) fn flush(&mut self) -> Result<TextureId> {
         if let Some(e) = &self.error {
             return Err(Error::Device(e.clone()));
@@ -148,7 +155,7 @@ impl Ink {
         if dst.2 <= 0. || dst.3 <= 0. {
             return Ok(());
         }
-        let texture = self.images.pixmap(&mut self.device, pixels)?;
+        let texture = self.images.pixmap(&mut self.device, pixels, true)?;
         let mut i = Instance::new(Kind::RoundedRect, Brush::Image, rect(dst));
         i.xform = affine(self.device_transform(ts));
         i.flags |= u32::from(mode.min(15)) << flags::BLEND_SHIFT;

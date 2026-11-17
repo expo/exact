@@ -5,9 +5,10 @@ use exact_runner::{DataError, Value};
 use exact_update::{sha256_hex, Client, Outcome};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-const UPDATE_COMPAT: &str = r#"{"id":"fixture00000000","inputs":{"app":"com.exact.fixture","keys":null,"trust":"development","store":{"L":"A"}},"delivery":{"channel":"prod","origin":"https://updates.example"}}"#;
+const UPDATE_COMPAT: &str = r#"{"id":"fixture00000000","inputs":{"app":"com.exact.fixture","keys":null,"trust":"development","store":{"L":"A"},"rustMode":"wasm"},"delivery":{"channel":"prod","origin":"https://updates.example"}}"#;
 /// Dev binaries check only a named origin; name the fixture's.
 const ORIGIN: &str = "https://updates.example";
 
@@ -35,7 +36,18 @@ fn checked(
     assets: &[(&str, Vec<u8>)],
     running: bool,
 ) -> Client {
-    let mut client = Client::open_at(dir, dir, UPDATE_COMPAT, baked, Some(ORIGIN)).unwrap();
+    checked_as(UPDATE_COMPAT, dir, baked, plan, assets, running)
+}
+
+fn checked_as(
+    compat: &str,
+    dir: &Path,
+    baked: &[u8],
+    plan: &[u8],
+    assets: &[(&str, Vec<u8>)],
+    running: bool,
+) -> Client {
+    let mut client = Client::open_at(dir, dir, compat, baked, Some(ORIGIN)).unwrap();
     if running {
         client.boot_started().unwrap();
     }
@@ -89,11 +101,15 @@ fn checked(
         client
     } else {
         drop(client);
-        Client::open_at(dir, dir, UPDATE_COMPAT, baked, Some(ORIGIN)).unwrap()
+        Client::open_at(dir, dir, compat, baked, Some(ORIGIN)).unwrap()
     }
 }
 
 fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
+    selected_config_as(UPDATE_COMPAT, dir, baked, client)
+}
+
+fn selected_config_as(compat: &str, dir: &Path, baked: &[u8], client: Client) -> Config {
     let mut config = Config {
         content_region: None,
         launch: "/".into(),
@@ -111,10 +127,11 @@ fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
         dev_said: None,
         card: String::new(),
         vnc: None,
-        compat: UPDATE_COMPAT.into(),
+        compat: compat.into(),
         explicit: false,
         entry: None,
         selected_assets: None,
+        selected_dir: None,
         module: Ok(None),
         updates: None,
         hatches: None,
@@ -127,6 +144,8 @@ fn selected_config(dir: &Path, baked: &[u8], client: Client) -> Config {
     config
 }
 
+mod typescript;
+
 #[test]
 fn an_analysis_boot_refuses_before_touching_an_attached_selection() {
     let baked = contract::compile("component App\n  view\n    text \"baked\"\n")
@@ -135,7 +154,9 @@ fn an_analysis_boot_refuses_before_touching_an_attached_selection() {
     let candidate = contract::compile("component App\n  view\n    text \"selected\"\n")
         .unwrap()
         .encode();
-    let dir = std::env::temp_dir().join(format!("exact-linux-analysis-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-analysis-{}", std::process::id())),
+    );
     let client = stage(&dir, &baked, &candidate, &[]);
     let record = client.dir().join("record.json");
     let before = std::fs::read(&record).unwrap();
@@ -182,6 +203,7 @@ fn a_fetched_plan_refused_at_boot_falls_back_to_baked() {
         explicit: true,
         entry: None,
         selected_assets: None,
+        selected_dir: None,
         module: Ok(None),
         updates: None,
         hatches: None,
@@ -205,8 +227,9 @@ fn a_partial_initial_dev_plan_falls_back_without_counting_the_store() {
     let update = contract::compile("component App\n  view\n    text \"selected\"\n")
         .unwrap()
         .encode();
-    let dir =
-        std::env::temp_dir().join(format!("exact-linux-dev-precedence-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-dev-precedence-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let compat = UPDATE_COMPAT;
@@ -256,6 +279,7 @@ fn a_partial_initial_dev_plan_falls_back_without_counting_the_store() {
         explicit: true,
         entry: None,
         selected_assets: None,
+        selected_dir: None,
         module: Ok(None),
         updates: None,
         hatches: None,
@@ -286,10 +310,10 @@ fn a_second_instance_boots_the_update_the_first_runs() {
     let selected = contract::compile("component App\n  view\n    text \"selected\"\n")
         .unwrap()
         .encode();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-second-instance-{}",
         std::process::id()
-    ));
+    )));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let staged = stage(&dir, &baked, &selected, &[]);
@@ -324,8 +348,9 @@ fn a_selected_image_loads_from_its_verified_generation() {
         "/../../apps/caltrain/assets/caltrain.png"
     ))
     .unwrap();
-    let dir =
-        std::env::temp_dir().join(format!("exact-linux-selected-asset-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-selected-asset-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(&dir, &baked, &selected, &[("assets/mark.png", png)]);
@@ -362,8 +387,9 @@ fn a_selected_font_loads_from_its_verified_generation() {
         "/../../scripts/fixtures/fonts/assets/DejaVuSans.ttf"
     ))
     .unwrap();
-    let dir =
-        std::env::temp_dir().join(format!("exact-linux-selected-font-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-selected-font-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(&dir, &baked, &selected, &[("assets/DejaVuSans.ttf", font)]);
@@ -394,10 +420,10 @@ fn an_absent_selected_asset_tombstones_the_embedded_file() {
         contract::compile("component App\n  view\n    image \"assets/caltrain.png\" width=96\n")
             .unwrap()
             .encode();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-selected-tombstone-{}",
         std::process::id()
-    ));
+    )));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(&dir, &baked, &selected, &[]);
@@ -427,10 +453,10 @@ fn a_corrupt_selected_asset_falls_back_before_first_pixel() {
         contract::compile("shape Delivery\n  seq: number\ncomponent App\n  resource delivery = exactDelivery() as shape Delivery\n  view\n    column\n      if delivery.seq > 0\n        image \"assets/mark.png\" width=96\n      else\n        text \"embedded\"\n")
             .unwrap()
             .encode();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-corrupt-selected-asset-{}",
         std::process::id()
-    ));
+    )));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(
@@ -473,12 +499,15 @@ fn activation_refuses_carried_layout_without_advancing_then_commits_after_repair
     )
     .unwrap()
     .encode();
-    let dir = std::env::temp_dir().join(format!("exact-linux-activation-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-activation-{}", std::process::id())),
+    );
     std::fs::create_dir_all(&dir).unwrap();
     let client = checked(&dir, &baked, &candidate, &[], true);
     let record = client.dir().join("record.json");
     let (mut presenter, error) =
-        exact_painted::Presenter::boot(&baked, Named, (390.0, 844.0), 1.0, dir.clone()).unwrap();
+        exact_painted::Presenter::boot(&baked, Named, (390.0, 844.0), 1.0, dir.to_path_buf())
+            .unwrap();
     assert!(error.is_none(), "{error:?}");
     assert!(presenter.set_delivery_from_compat(UPDATE_COMPAT).is_none());
     presenter.set_updates(Some(Box::new(Updates::from_client(client).unwrap())));
@@ -554,10 +583,10 @@ fn verified_launch_refusals_are_demoted_after_failed_launches() {
         ("decode", b"EXPL".as_slice()),
         ("layout", bad_layout.as_slice()),
     ] {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::TempDir(std::env::temp_dir().join(format!(
             "exact-linux-bad-launch-{label}-{}",
             std::process::id()
-        ));
+        )));
         std::fs::create_dir_all(&dir).unwrap();
         let client = stage(&dir, &baked, candidate, &[]);
         let record = client.dir().join("record.json");
@@ -620,10 +649,10 @@ fn a_crash_during_selected_app_construction_is_counted_before_it_happens() {
     let selected = contract::compile("component App\n  view\n    text \"selected\"\n")
         .unwrap()
         .encode();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-crash-before-return-{}",
         std::process::id()
-    ));
+    )));
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(&dir, &baked, &selected, &[]);
     let record = client.dir().join("record.json");
@@ -762,10 +791,10 @@ fn a_refused_initial_layout_releases_no_network_requests() {
         .unwrap()
         .encode();
     let source = "shape Reply\n  value: string\nshape Delivery\n  seq: number\ncomponent App\n  resource delivery = exactDelivery() as shape Delivery\n  resource reply = ping(delivery.seq) as shape Reply\n  view\n    text \"x\" font-size=SIZE\n";
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-refused-network-{}",
         std::process::id()
-    ));
+    )));
     let result = std::panic::catch_unwind(|| {
         let seed = contract::bake(
             // @ref LLP 1038 D5 — bake a placeholder keyed to this candidate's
@@ -884,7 +913,9 @@ fn signed_rust_pair_is_deferred_and_failed_live_replacement_keeps_the_old_genera
         .unwrap()
         .encode();
     let receipt = br#"{"module":{"file":"app.module.wasm"}}"#.to_vec();
-    let dir = std::env::temp_dir().join(format!("exact-linux-rust-pair-{}", std::process::id()));
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-linux-rust-pair-{}", std::process::id())),
+    );
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(
         &dir,
@@ -950,10 +981,10 @@ fn corrupt_or_disabled_signed_rust_pair_falls_back_before_booting_its_plan() {
         .unwrap()
         .encode();
     for corrupt in [false, true] {
-        let dir = std::env::temp_dir().join(format!(
+        let dir = crate::TempDir(std::env::temp_dir().join(format!(
             "exact-linux-rust-refused-{corrupt}-{}",
             std::process::id()
-        ));
+        )));
         std::fs::create_dir_all(&dir).unwrap();
         let client = stage(
             &dir,
@@ -1015,10 +1046,10 @@ fn failed_post_pixel_rust_activation_does_not_bless_the_selected_bundle() {
     let plan = contract::compile("component App\n  view\n    text \"candidate\"\n")
         .unwrap()
         .encode();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-linux-rust-activation-failure-{}",
         std::process::id()
-    ));
+    )));
     std::fs::create_dir_all(&dir).unwrap();
     let client = stage(
         &dir,
@@ -1101,4 +1132,94 @@ fn a_live_rust_swap_refuses_before_loading_while_a_request_is_pending() {
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     assert_eq!(presenter.host().runner().pending(), pending);
+}
+
+#[test]
+fn delivered_module_reads_wait_for_requests_and_all_assets_verify_before_commit() {
+    use exact_runner::{Answer, Store};
+    struct Held;
+    impl DataSource for Held {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(name.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Later(exact_runner::Request::continuation(1)))
+        }
+        fn replacement(&self, _: &[u8], _: &str, _: Vec<u8>) -> Result<Self, DataError> {
+            Ok(Self)
+        }
+    }
+    let plan = contract::compile("component App\n  mutation w as shape number\n  action start\n    send w = wait()\n  action cancel\n    w = none\n  view\n    column\n      button press=start testId=\"start\"\n        text \"Start\"\n      button press=cancel testId=\"cancel\"\n        text \"Cancel\"\n").unwrap().encode();
+    for (dir_name, file, receipt) in [
+        (
+            "rust",
+            "app.module.wasm",
+            br#"{"module":{"file":"app.module.wasm"}}"#.as_slice(),
+        ),
+        ("typescript", "app.hbc", b"{}".as_slice()),
+    ] {
+        let dir = crate::TempDir(std::env::temp_dir().join(format!(
+            "exact-delivery-lazy-assets-{}-{dir_name}",
+            std::process::id()
+        )));
+        std::fs::create_dir_all(&dir).unwrap();
+        let compat = UPDATE_COMPAT.replace(
+            "\"rustMode\":\"wasm\"",
+            "\"rustMode\":\"wasm\",\"executors\":[\"hermes\"]",
+        );
+        let module_path = format!("{dir_name}/{file}");
+        let mut client = checked_as(
+            &compat,
+            &dir,
+            &plan,
+            &plan,
+            &[
+                (&format!("{dir_name}/app.module.json"), receipt.to_vec()),
+                (&module_path, b"module".to_vec()),
+                ("assets/unused.txt", b"signed".to_vec()),
+            ],
+            true,
+        );
+        let candidate = client.prepare_activation().unwrap().unwrap();
+        let root = candidate.assets.root().to_path_buf();
+        let updates = Updates::from_client(client).unwrap();
+        let (mut presenter, error) =
+            exact_painted::Presenter::boot(&plan, Held, (390., 844.), 1., dir.to_path_buf())
+                .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        presenter.set_delivery_from_compat(&compat);
+        presenter.set_updates(Some(Box::new(updates)));
+        let id = |p: &exact_painted::Presenter<Held>, name| {
+            let k = p.host().kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        };
+        presenter.tap(id(&presenter, "start")).unwrap();
+        assert!(presenter.host().runner().has_pending());
+        // A missing executable makes any eager disk read fail, even one
+        // outside the presenter's resolver. Its signed roster stays intact.
+        std::fs::remove_file(root.join(&module_path)).unwrap();
+        let result = presenter.activate_update(Held);
+        assert!(
+            matches!(result, Err(exact_painted::host::HostError::RequestsPending)),
+            "{dir_name}: {result:?}"
+        );
+        assert_eq!(presenter.host().runner().delivery().seq, 0);
+        std::fs::write(root.join(&module_path), b"module").unwrap();
+        presenter.tap(id(&presenter, "cancel")).unwrap();
+        assert!(!presenter.host().runner().has_pending());
+        // Path-based readers can open an asset the plan never resolved.
+        // Full verification must still refuse it before the store commits.
+        std::fs::write(root.join("assets/unused.txt"), b"broken").unwrap();
+        let result = presenter.activate_update(Held);
+        assert!(
+            matches!(result, Err(exact_painted::host::HostError::Asset(_))),
+            "{dir_name}: {result:?}"
+        );
+        assert_eq!(presenter.host().runner().delivery().seq, 0);
+        assert!(presenter.host().runner().delivery().staged);
+        std::fs::write(root.join("assets/unused.txt"), b"signed").unwrap();
+        assert!(presenter.activate_update(Held).unwrap());
+        assert_eq!(presenter.host().runner().delivery().seq, 1);
+        assert!(!presenter.host().runner().delivery().staged);
+    }
 }

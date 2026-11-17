@@ -9,7 +9,7 @@ import XCTest
 final class RangeIOSTests: XCTestCase {
     private var window: UIWindow!
 
-    private func slider(_ props: [String: String]) throws -> (Presenter, RangeSlider) {
+    private func slider(_ props: [String: String], handlers: [String] = ["input", "change"]) throws -> (Presenter, RangeSlider) {
         let p = Presenter()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
         p.viewport.frame = window.bounds
@@ -17,7 +17,7 @@ final class RangeIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "control", "props": ["type": "range"].merging(props) { $1 },
-             "handlers": ["input", "change"], "style": [:]],
+             "handlers": handlers, "style": [:]],
             ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 28.0],
         ]))
@@ -122,6 +122,84 @@ final class RangeIOSTests: XCTestCase {
         XCTAssertFalse(s.isEnabled)
         s.accessibilityIncrement()
         XCTAssertEqual(s.value, 0.55, accuracy: 1e-6, "a disabled range does not move")
+    }
+
+    /// VoiceOver's swipe is first the range's arrow key (LLP 1069.001,
+    /// amended 2026-11-16): where a `key` handler calls `preventDefault()`
+    /// the move is the handler's and the slider's own step does not happen;
+    /// where none does, the slider steps as before. A drag stays `step`'s.
+    func testVoiceOversSwipeIsTheRangesArrowKeyFirst() throws {
+        let (p, s) = try slider(["min": "0", "max": "240", "step": "any", "value": "40"], handlers: ["input", "change", "key", "keyup"])
+        var keys: [String] = [], sent: [String] = [], takes = true
+        p.onControlValue = { _, value, input, change in sent.append("\(value) \(input) \(change)") }
+        p.onKey = { id, key in
+            keys.append("\(id):\(key.up ? "up" : "down"):\(key.chord)")
+            if takes, !key.up { p.defaultPrevented = true }
+        }
+        s.accessibilityIncrement()
+        s.accessibilityDecrement()
+        XCTAssertEqual(keys, ["1:down:ArrowRight", "1:up:ArrowRight", "1:down:ArrowLeft", "1:up:ArrowLeft"])
+        XCTAssertEqual(s.value, 40, "the handler took both: the slider moved nothing")
+        XCTAssertEqual(sent, [])
+        // The handler's change to the bound value is the move.
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["value": "50"]]]))
+        XCTAssertEqual(s.value, 50)
+        XCTAssertEqual(s.accessibilityValue, "50")
+        s.value = 123
+        p.controls.rangeMoved(s)
+        XCTAssertEqual(sent, ["123 true false"], "the drag lands off the handler's tens")
+
+        takes = false
+        keys = []
+        sent = []
+        s.accessibilityIncrement()
+        XCTAssertEqual(keys, ["1:down:ArrowRight", "1:up:ArrowRight"], "heard, and left to the slider")
+        XCTAssertEqual(s.value, 135, "a twentieth of the span")
+        XCTAssertEqual(sent, ["135 true true"])
+
+        // The increment's key is the one that raises the value where the range runs right to left.
+        try XCTUnwrap(p.views[1]).applyStyle(["direction": "rtl"])
+        keys = []
+        s.accessibilityIncrement()
+        XCTAssertEqual(keys.first, "1:down:ArrowLeft")
+
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["disabled": "true"]]]))
+        keys = []
+        s.accessibilityIncrement()
+        XCTAssertEqual(keys, [], "a disabled range sends no key")
+    }
+
+    /// A swipe nothing prevented is the key's default action: it lands
+    /// between the keydown and the keyup, as a keyboard's arrow does, from
+    /// the value the keydown's handler left; and a range that handler
+    /// disabled, made inert or replaced does not move.
+    func testAnUnpreventedSwipeFollowsTheKeydownAndWhatItChanged() throws {
+        let (p, s) = try slider(["min": "0", "max": "240", "step": "5", "value": "40"], handlers: ["input", "change", "key", "keyup"])
+        var heard: [String] = [], onKeydown: [[String: Any]] = [["op": "props", "id": 1, "set": ["value": "60"]]]
+        p.onControlValue = { _, value, _, _ in heard.append(value) }
+        p.onKey = { _, key in
+            heard.append(key.up ? "up" : "down")
+            if !key.up { p.apply(wireBatch(onKeydown)) }
+        }
+        s.accessibilityIncrement()
+        XCTAssertEqual(heard, ["down", "65", "up"], "one step past the handler's 60, before the keyup")
+        for prop in ["disabled", "inert"] {
+            onKeydown = [["op": "props", "id": 1, "set": [prop: "true"]]]
+            heard = []
+            s.accessibilityIncrement()
+            XCTAssertEqual(heard, ["down"], prop)
+            XCTAssertEqual(s.value, 65, prop)
+            p.apply(wireBatch([["op": "props", "id": 1, "clear": [prop]]]))
+        }
+        onKeydown = [
+            ["op": "destroy", "id": 1],
+            ["op": "create", "id": 1, "kind": "control", "props": ["type": "range", "value": "65", "max": "240"], "handlers": ["input", "change"], "style": [:]],
+            ["op": "roots", "ids": [1]],
+        ]
+        heard = []
+        s.accessibilityIncrement()
+        XCTAssertEqual(heard, ["down"], "the slider is no longer the range's")
+        XCTAssertEqual((p.controls.controls[1] as? RangeSlider)?.value, 65)
     }
 
     /// A step finer than the thumb's `Float` still adds up, whether or not

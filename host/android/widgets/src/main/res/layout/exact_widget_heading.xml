@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A heading's line: the text layout with the heading flag TalkBack navigates by (LLP 1126.003 D3). -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/exact_widget_view"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:fontFamily="sans-serif"
+    android:gravity="left|top"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:singleLine="true"
+    android:textDirection="anyRtl"
+    android:accessibilityHeading="true" />

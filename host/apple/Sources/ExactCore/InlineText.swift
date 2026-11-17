@@ -11,6 +11,9 @@ package struct InlineText {
     package let darkBackground: [Double]?
     package let colorRef: BatchValue?
     package let backgroundRef: BatchValue?
+    /// Its border's colours as the wire carries them, top, right, bottom,
+    /// left, resolved with the run's appearance (`Run.border`).
+    package let borderColors: [BatchValue?]
     /// Its `color` is one its author fixed (`BatchValue.fixesInk`).
     package let fixedInk: Bool
     package let paint: RunPaintRows
@@ -40,27 +43,35 @@ package struct InlineText {
         self.id = id; self.parent = parent; self.props = props
         var value = style.run
         value.text = props["text"] ?? ""
-        if value.background != nil || style.backgroundRef != nil { value.backgroundBox = id } else { value.backgroundRadii = [] }
+        // Its border's widths as its line counts them ("top right bottom left").
+        if let widths = props["inlineBorder"]?.split(separator: " ").compactMap({ Float($0) }), widths.count == 4 {
+            value.border = InlineBorder(widths: widths.map { CGFloat($0) },
+                                        colors: style.borderColors.map { $0?.fallbackChannels(dark: false) ?? [0, 0, 0, 0] },
+                                        styles: style.borderStyles)
+        }
+        if value.background != nil || style.backgroundRef != nil || value.border != nil { value.backgroundBox = id } else { value.backgroundRadii = [] }
         value.href = props["href"] ?? ""
         // The room its inline boxes take beside its text, as the kernel measured it ("start end").
         if let edges = props["inlineEdges"]?.split(separator: " ").compactMap({ Float($0) }), edges.count == 2 {
             value.inlineStart = CGFloat(edges[0]); value.inlineEnd = CGFloat(edges[1])
         }
-        // Its padding box's reach past its text, which its background covers.
-        if let pad = props["inlinePad"]?.split(separator: " ").compactMap({ Float($0) }), pad.count == 2 {
+        // Its padding box's reach past its text, which its background covers ("start end above below").
+        if let pad = props["inlinePad"]?.split(separator: " ").compactMap({ Float($0) }), pad.count == 4 {
             value.backgroundBefore = CGFloat(pad[0]); value.backgroundAfter = CGFloat(pad[1])
+            value.backgroundAbove = CGFloat(pad[2]); value.backgroundBelow = CGFloat(pad[3])
         }
         // An image in the text is its box, with no ink or paint of its own (LLP 1011.002).
         boxShown = props["inlineBoxHidden"] != "true"
         if let box = InlineBox(prop: props["inlineBox"]) {
             value.box = box; value.hidden = true
-            value.background = nil; value.backgroundBox = 0; value.backgroundRadii = []
+            value.background = nil; value.backgroundBox = 0; value.backgroundRadii = []; value.border = nil
             value.decoration = ""; value.shadow = nil; value.stroke = nil
         }
         lightRun = value
         darkColor = style.darkColor
         darkBackground = style.darkBackground
         colorRef = style.colorRef; backgroundRef = style.backgroundRef
+        borderColors = style.borderColors
         fixedInk = style.fixedInk
         paint = style.paint
         hasSchemeColor = style.paired || style.paint.paired
@@ -94,18 +105,36 @@ public struct InlineOpacity: Hashable {
     public init(box: UInt32, alpha: Double) { self.box = box; self.alpha = alpha }
 }
 
-/// A box with a background around a run's own (`Run.background`), which
-/// paints under it: its colour, node, `border-radius` and padding box's
-/// reach past its first and last characters, as the run's own fields.
+/// A box with a background or a border around a run's own
+/// (`Run.background`), which paints under it: its colour (clear for none),
+/// node, `border-radius`, padding box's reach past its first and last
+/// characters and above and below its text, and border, as the run's own
+/// fields.
 package struct OuterBackground: Hashable {
     package var opacity: [InlineOpacity] = []
     package var color: [Double]
     package var box: UInt32
     package var radii: [InlineRadius]
     package var before: CGFloat, after: CGFloat
-    package init(color: [Double], box: UInt32, radii: [InlineRadius], before: CGFloat, after: CGFloat, opacity: [InlineOpacity] = []) {
+    package var above: CGFloat = 0, below: CGFloat = 0
+    package var border: InlineBorder?
+    package init(color: [Double], box: UInt32, radii: [InlineRadius], before: CGFloat, after: CGFloat,
+                 above: CGFloat = 0, below: CGFloat = 0, border: InlineBorder? = nil, opacity: [InlineOpacity] = []) {
         self.opacity = opacity
         self.color = color; self.box = box; self.radii = radii; self.before = before; self.after = after
+        self.above = above; self.below = below; self.border = border
+    }
+}
+
+/// An inline box's border, top, right, bottom and left: the widths its line
+/// counts, its colours' channels and its styles (`solid`, `dashed`, …), which
+/// paint on each of its fragments over its background (CSS 2 §8.6).
+package struct InlineBorder: Hashable {
+    package var widths: [CGFloat]
+    package var colors: [[Double]]
+    package var styles: [String]
+    package init(widths: [CGFloat], colors: [[Double]], styles: [String]) {
+        self.widths = widths; self.colors = colors; self.styles = styles
     }
 }
 
@@ -145,6 +174,9 @@ package struct InlineStyle {
     /// A platform colour by name, resolved when the run is read (LLP 1095 D5).
     package var colorRef: BatchValue?
     package var backgroundRef: BatchValue?
+    /// The border's colours and styles, top, right, bottom, left (`InlineBorder`).
+    package var borderColors: [BatchValue?] = [nil, nil, nil, nil]
+    package var borderStyles = ["solid", "solid", "solid", "solid"]
     /// Whether `color` is one its author fixed, not a platform colour by name.
     package var fixedInk = false
     /// `text-shadow` and `-webkit-text-stroke`, computed for the run (LLP 1077).

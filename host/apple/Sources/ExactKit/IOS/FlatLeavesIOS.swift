@@ -161,7 +161,7 @@ final class FlatLeaves {
         var parentOf: [UInt32: UInt32] = [:], kids: [UInt32: [UInt32]] = [:], ranks: [UInt32: Int64] = [:]
         for op in batch.ops {
             if op.op == .children { kids[op.id] = op.ids; for child in op.ids { parentOf[child] = op.id } }
-            if op.op == .rank { ranks[op.id] = (op.payload["rank"] as? NSNumber)?.int64Value ?? 0 }
+            if op.op == .rank { ranks[op.id] = op.rank ?? 0 }
             if !own.contains(op.op) { candidates.remove(op.id) }
             if op.op == .transformDrag || op.op == .heightDrag {
                 for key in ["target", "clip"] { if let v = (op.payload[key] as? Int).flatMap(UInt32.init(exactly:)) { candidates.remove(v) } }
@@ -207,6 +207,10 @@ final class FlatLeaves {
         return true
     }
     func isFlat(_ id: UInt32) -> Bool { leaves[id] != nil }
+
+    /// `parent`'s leaves drawn again at the next flush: the omitted boxes
+    /// that bound its runs changed.
+    func boundsChanged(_ parent: UInt32) { if order[parent] != nil { dirty.insert(parent) } }
     /// The node a flat leaf's children op placed it in.
     func parent(of id: UInt32) -> UInt32? { leaves[id]?.parent }
     /// `id`'s children moved to another container view (a material or a
@@ -283,7 +287,7 @@ final class FlatLeaves {
         // A view's CSS animations are its layer's: one holding any stays a view.
         guard let view = presenter.views[id], view.kind == "view", view.paintRank == 0,
               view.handlers.isEmpty, view.props.isEmpty, view.subviews.isEmpty, !holdsLeaves(id),
-              view.surface == nil, view.boxFilter == nil, !presenter.svg.animatesBox(id),
+              view.layoutHits == nil, view.surface == nil, view.boxFilter == nil, !presenter.svg.animatesBox(id),
               let flat = FlatPaint(view.style), !flat.positioned else { return }
         var ancestor = view.superview
         while let v = ancestor, !(v is NodeView) { ancestor = v.superview }
@@ -305,9 +309,8 @@ final class FlatLeaves {
         leaf.layer.opacity = leaf.opacity
     }
 
-    func content(_ id: UInt32, _ payload: [String: Any]) {
-        let r = payload["rect"] as? [Double]
-        leaves[id]?.content = r.flatMap { $0.count == 4 ? (CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]), NodeView.sentPadding(payload)) : nil }
+    func content(_ id: UInt32, _ op: BatchOp) {
+        leaves[id]?.content = op.contentRect.map { ($0, op.contentPadding) }
     }
 
     func frame(_ id: UInt32, _ rect: CGRect) {
@@ -531,6 +534,7 @@ final class FlatLeaves {
             for id in ids { leaves[id]?.layer.removeFromSuperlayer() }
             var made: [CAShapeLayer] = []
             var previous: CALayer?
+            let bounds = parent?.layoutHits?.bounds ?? []
             func put(_ layer: CALayer, at i: Int, frames: [CGRect]) {
                 layer.flatHit = parent.map { FlatHit(owner: $0, frames: frames) }
                 if let previous {
@@ -551,7 +555,7 @@ final class FlatLeaves {
                 }
                 var j = i + 1
                 if let key = runKey(leaf) {
-                    while j < ids.count, let next = leaves[ids[j]], runKey(next) == key { j += 1 }
+                    while j < ids.count, !bounds.contains(ids[j]), let next = leaves[ids[j]], runKey(next) == key { j += 1 }
                 }
                 if j - i >= 2 {
                     let run = CAShapeLayer()

@@ -24,6 +24,9 @@ extension Presenter {
         set { focusEvents.onEvent = newValue }
     }
     func focus(_ id: UInt32) {
+        #if os(iOS)
+        navigation.finishBootOwner()
+        #endif
         #if os(macOS)
         tabStart = nil
         #endif

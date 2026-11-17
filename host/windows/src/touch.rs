@@ -17,10 +17,29 @@ pub(crate) enum Phase {
 }
 
 /// The pointer the presenter's one contact follows: the first to touch
-/// down, a pen's or a finger's.
+/// down, a pen's or a finger's, and where it is.
 #[derive(Default)]
 pub(crate) struct Touches {
-    held: Option<(u64, PointerKind)>,
+    held: Option<(u64, PointerKind, (f32, f32))>,
+    pinch: Option<Pinch>,
+}
+
+/// Two fingers on a zoomable scroller: its pinch (LLP 1057.001.000 §5,
+/// step 6), each finger's pointer id and where it is.
+struct Pinch {
+    container: u32,
+    fingers: [(u64, (f32, f32)); 2],
+}
+
+impl Pinch {
+    /// The fingers' midpoint and how far apart they are.
+    fn focal(&self) -> ((f32, f32), f32) {
+        let [(_, a), (_, b)] = self.fingers;
+        (
+            ((a.0 + b.0) / 2., (a.1 + b.1) / 2.),
+            (a.0 - b.0).hypot(a.1 - b.1),
+        )
+    }
 }
 
 impl Touches {
@@ -28,8 +47,9 @@ impl Touches {
     /// whether a new contact is a pen's; it is asked only of a touch down.
     /// A pen's hover (an update with no contact) does nothing, nor does a
     /// finger after the first, except that its touch down cancels the
-    /// first's press, as Android's reader does. Answers whether a contact
-    /// went down.
+    /// first's press, as Android's reader does, and over a zoomable
+    /// scroller the two fingers pinch it until either lifts. Answers
+    /// whether a contact went down.
     pub(crate) fn contact<D: DataSource>(
         &mut self,
         p: &mut Presenter<D>,
@@ -38,6 +58,9 @@ impl Touches {
         now: f64,
         pen: impl FnOnce() -> bool,
     ) -> bool {
+        if self.pinched(p, (id, phase), (x, y)) {
+            return false;
+        }
         let kind = match (phase, self.held) {
             (Phase::Started, None) => {
                 let kind = if pen() {
@@ -45,16 +68,30 @@ impl Touches {
                 } else {
                     PointerKind::Touch
                 };
-                self.held = Some((id, kind));
+                self.held = Some((id, kind, (x, y)));
                 kind
             }
-            (Phase::Started, Some((_, kind))) => {
+            (Phase::Started, Some((first, kind, at))) => {
                 self.held = None;
                 p.set_pointer_kind(kind);
                 let _ = p.pointer_cancel(now);
+                let both = [(first, at), (id, (x, y))];
+                let under = |p: &mut Presenter<D>, at: (f32, f32)| p.zoomable_under(at.0, at.1);
+                if kind == PointerKind::Touch {
+                    if let Some(container) = under(p, at).filter(|c| under(p, (x, y)) == Some(*c)) {
+                        p.zoom_pinch_began(container);
+                        self.pinch = Some(Pinch {
+                            container,
+                            fingers: both,
+                        });
+                    }
+                }
                 return false;
             }
-            (_, Some((held, kind))) if held == id => kind,
+            (_, Some((held, kind, _))) if held == id => {
+                self.held = Some((held, kind, (x, y)));
+                kind
+            }
             _ => return false,
         };
         // The mouse may have moved since: its events say it is a mouse again.
@@ -71,9 +108,41 @@ impl Touches {
         phase == Phase::Started
     }
 
+    /// A finger of the pinch moved or lifted: the zoom follows the two, the
+    /// point between them staying under them, and either's lift ends it.
+    /// Whether the event was the pinch's.
+    fn pinched<D: DataSource>(
+        &mut self,
+        p: &mut Presenter<D>,
+        (id, phase): (u64, Phase),
+        at: (f32, f32),
+    ) -> bool {
+        let Some(pinch) = self.pinch.as_mut() else {
+            return false;
+        };
+        let Some(k) = pinch.fingers.iter().position(|f| f.0 == id) else {
+            // A third finger is no part of it.
+            return true;
+        };
+        if phase == Phase::Moved {
+            let (from, was) = pinch.focal();
+            pinch.fingers[k].1 = at;
+            let (to, now) = pinch.focal();
+            let factor = if was > 1. { now / was } else { 1. };
+            p.zoom_pinched(pinch.container, factor, from, to);
+        } else {
+            p.zoom_pinch_ended(pinch.container);
+            self.pinch = None;
+        }
+        true
+    }
+
     /// The window lost the focus, and its contact with it.
-    pub(crate) fn forget(&mut self) {
+    pub(crate) fn forget<D: DataSource>(&mut self, p: &mut Presenter<D>) {
         self.held = None;
+        if let Some(pinch) = self.pinch.take() {
+            p.zoom_pinch_ended(pinch.container);
+        }
     }
 
     /// winit's touch, at the window's `scale`.
@@ -201,7 +270,7 @@ mod tests {
         send(&mut p, &mut t, 12, Phase::Started, (20., 120.), false);
         send(&mut p, &mut t, 12, Phase::Cancelled, (20., 120.), false);
         send(&mut p, &mut t, 13, Phase::Started, (20., 120.), false);
-        t.forget();
+        t.forget(&mut p);
         p.pointer_lost(1000.).unwrap();
         assert!(!send(&mut p, &mut t, 13, Phase::Ended, (20., 120.), false));
         assert_eq!(seen(&p), Some(Value::str(" touch pen press")));
@@ -209,5 +278,59 @@ mod tests {
         send(&mut p, &mut t, 14, Phase::Started, (20., 120.), false);
         send(&mut p, &mut t, 14, Phase::Ended, (20., 120.), false);
         assert_eq!(seen(&p), Some(Value::str(" touch pen press press")));
+    }
+
+    #[test]
+    fn two_fingers_on_a_zoomable_scroller_pinch_it_about_their_midpoint() {
+        let source = "component App
+  state zoom = 1
+  action zoomed(x: number, y: number, e: ScrollEvent)
+    zoom = e.scrollZoom
+  view
+    scroll width=300 height=200 -exact-max-zoom=4 scrollZoom=zoom scroll=zoomed testId=\"port\"
+      box width=300 height=200
+";
+        let plan = contract::compile(source).unwrap().encode();
+        let (mut p, warning) = Presenter::boot_with(
+            &plan,
+            (),
+            (400., 300.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(warning.is_none());
+        let mut t = Touches::default();
+        let mut at = 0.;
+        let mut send = |p: &mut Presenter<()>, t: &mut Touches, id, phase, xy| {
+            at += 10.;
+            t.contact(p, (id, phase), xy, at, || false)
+        };
+        // Fingers 100 apart about (150, 100), spread to 200 apart.
+        send(&mut p, &mut t, 1, Phase::Started, (100., 100.));
+        send(&mut p, &mut t, 2, Phase::Started, (200., 100.));
+        send(&mut p, &mut t, 1, Phase::Moved, (75., 100.));
+        send(&mut p, &mut t, 2, Phase::Moved, (225., 100.));
+        send(&mut p, &mut t, 1, Phase::Moved, (50., 100.));
+        send(&mut p, &mut t, 2, Phase::Moved, (250., 100.));
+        send(&mut p, &mut t, 2, Phase::Ended, (250., 100.));
+        send(&mut p, &mut t, 1, Phase::Ended, (50., 100.));
+        let port = p.host().kernel();
+        let port = port
+            .node_by_key(port.find_by_test_id("port")[0])
+            .unwrap()
+            .id;
+        // Twice the zoom, the midpoint kept: the child's point at (150, 100) stays there.
+        let offset = p.scroll_of(port);
+        assert!(
+            (offset.0 - 150.).abs() < 0.01 && (offset.1 - 100.).abs() < 0.01,
+            "{offset:?}"
+        );
+        let zoom = p.host().runner().slot("zoom").cloned();
+        assert!(
+            matches!(zoom, Some(Value::Number(z)) if (z - 2.).abs() < 1e-4),
+            "{zoom:?}"
+        );
     }
 }

@@ -421,6 +421,10 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
     if let Some(target) = crate::style_names::lookup(name) {
         return Some(target);
     }
+    // @ref LLP 1123 D5 — a runtime custom property; a node's are one row
+    if exact_kernel::style::safe_area_properties::is_author_name(name) {
+        return Some(AttrTarget::Styles(&[StyleId::SafeAreaProperties]));
+    }
     Some(match name {
         "datetime" => AttrTarget::Prop(PropId::Datetime),
         "format" => AttrTarget::Prop(PropId::TimeFormat),
@@ -598,6 +602,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "requiresLinearPlayback" => AttrTarget::Prop(p("requiresLinearPlayback")),
         "preferredPeakBitRate" => AttrTarget::Prop(p("preferredPeakBitRate")),
         "preferredForwardBufferDuration" => AttrTarget::Prop(p("preferredForwardBufferDuration")),
+        // @ref LLP 1042.000 D2, D3 — which rendition an HLS stream plays.
+        "preferredMaximumResolution" => AttrTarget::Prop(p("preferredMaximumResolution")),
+        "startsOnFirstEligibleVariant" => AttrTarget::Prop(p("startsOnFirstEligibleVariant")),
         "automaticallyWaitsToMinimizeStalling" => {
             AttrTarget::Prop(p("automaticallyWaitsToMinimizeStalling"))
         }
@@ -726,6 +733,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "color-type" => AttrTarget::Prop(p("colorType")),
         "scrollTop" => AttrTarget::Prop(p("scrollTop")),
         "scrollLeft" => AttrTarget::Prop(p("scrollLeft")),
+        // @ref LLP 1057.001.000 D2 — a zoomable container's zoom, as `scrollTop` is its offset.
+        "scrollZoom" => AttrTarget::Prop(p("scrollZoom")),
         "swipeContent" => AttrTarget::Prop(p("swipeContent")),
         "swipeLeading" => AttrTarget::Prop(p("swipeLeading")),
         "swipeTrailing" => AttrTarget::Prop(p("swipeTrailing")),

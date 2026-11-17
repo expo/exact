@@ -147,6 +147,7 @@ fn token_refresh_is_durable_before_the_preload_uses_the_new_secret() {
             std::process::id(),
             feed.address.port()
         ));
+        let _remove = crate::TempDir(directory.clone());
         let grants = format!(
             "net.fetch http://{}\nnet.fetch http://{}\nsecret.keep session\nsecret.keep refresh",
             token.address, feed.address
@@ -215,6 +216,79 @@ fn token_refresh_is_durable_before_the_preload_uses_the_new_secret() {
         drop(launch);
         std::fs::remove_dir_all(directory).unwrap();
     }
+}
+
+/// A launch function's `set_secret` or `forget_secret` reaches the store without
+/// a runner store write. The batch that adopts it says `stored`, which the
+/// presenter relays to watch replication, also when the session reads none of it.
+#[test]
+fn a_launch_write_adopted_after_first_pixel_is_relayed_as_stored() {
+    use crate::store::KeptStore;
+    struct Idle;
+    impl exact_runner::DataSource for Idle {
+        fn query(
+            &mut self,
+            name: &str,
+            _: &[exact_plan::Value],
+        ) -> Result<exact_plan::Value, exact_runner::DataError> {
+            Err(exact_runner::DataError::UnknownSource(name.into()))
+        }
+        fn grants(&self) -> &str {
+            "secret.keep session"
+        }
+    }
+    let plan = contract::compile("component App\n  view\n    text \"hello\"\n")
+        .unwrap()
+        .encode();
+    crate::store::PLATFORM
+        .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
+    let bindings = crate::store::endow("secret.keep session").unwrap();
+    crate::store::PLATFORM.with(|p| *p.borrow_mut() = None);
+    let platform = crate::store::Platform::of(&bindings);
+    let launch = LaunchPreloads::default();
+    let (mut host, _) = crate::Host::boot_stored(
+        &plan,
+        Idle,
+        Box::new(exact_kernel::MonospaceMeasurer::default()),
+        300.0,
+        200.0,
+        None,
+        platform.snapshot(Vec::new()).values,
+        Some(platform.clone()),
+    )
+    .unwrap();
+    host.launch_store = Some(launch.watch_store(|| false));
+    let first = host.activate_data();
+    assert!(!first.contains("\"stored\":true"), "{first}");
+    for value in [Some(b"token B".to_vec()), None] {
+        platform
+            .write(&exact_runner::StoreWrite {
+                durable: false,
+                name: "session".into(),
+                value,
+            })
+            .unwrap();
+        launch.store_written();
+        let adopted = host.activate_data();
+        assert!(adopted.contains("\"stored\":true"), "{adopted}");
+        let quiet = host.activate_data();
+        assert!(!quiet.contains("\"stored\":true"), "{quiet}");
+    }
+    // A foreground refresh can read the write first. Its adoption changes nothing
+    // for the session and is still relayed.
+    platform
+        .write(&exact_runner::StoreWrite {
+            durable: false,
+            name: "session".into(),
+            value: Some(b"token C".to_vec()),
+        })
+        .unwrap();
+    launch.store_written();
+    let refreshed = host.refresh_store();
+    assert!(!refreshed.contains("\"stored\":true"), "{refreshed}");
+    let adopted = host.activate_data();
+    assert!(adopted.contains("\"unchanged\":true"), "{adopted}");
+    assert!(adopted.contains("\"stored\":true"), "{adopted}");
 }
 
 #[test]
@@ -780,6 +854,7 @@ impl Executing {
 }
 fn read(ticket: u64, request: Request) -> exact_runner::RequestOut {
     exact_runner::RequestOut {
+        completion: None,
         ticket,
         target: "feed".into(),
         request,

@@ -40,6 +40,7 @@ mod arrive;
 mod back;
 pub mod bars;
 mod build_channel;
+mod checks;
 pub mod clipboard;
 mod clock;
 mod collection;
@@ -65,12 +66,17 @@ mod group;
 mod hatch;
 mod history;
 pub mod ime;
+#[cfg(test)]
+mod launch_tests;
 mod layout_json;
+mod media;
 mod number;
 mod painter;
 mod pan_release;
 mod picker;
 mod pointer;
+mod present;
+pub use present::Carried;
 mod pump;
 mod radio;
 mod range;
@@ -104,7 +110,7 @@ mod height_drag_tests;
 mod hosted;
 mod images;
 mod links;
-mod palette;
+pub(crate) mod palette;
 pub mod preferences;
 pub(crate) mod remote;
 mod requests;
@@ -137,6 +143,7 @@ mod unload;
 mod window;
 #[cfg(windows)]
 mod word;
+mod zoom;
 
 #[cfg(test)]
 mod collection_tests;
@@ -168,7 +175,7 @@ pub use painter::{set_custom_painter, PainterChoice, PainterFactory, PainterInfo
 pub(crate) use palette::reported_accent;
 pub use palette::{material, ContrastPalette, Material, Palette, MATERIAL_ROLES};
 pub use pointer::PointerKind;
-pub use requests::{Haptic, Pick, Request};
+pub use requests::{AgentTurn, Handed, Haptic, Pick, Request};
 pub use scrollers::{Scroller, Under, PAGE};
 pub use stage::SHEET_HANDLE;
 pub use window::{Chrome, Window};
@@ -179,6 +186,8 @@ pub struct Presenter<D: DataSource> {
     /// [`Presenter::set_deferred_collections`]), with whether input moved the
     /// acknowledged offset; `None` when turns run at once.
     deferred_collections: Option<Vec<(ViewId, bool)>>,
+    /// What the reader's media players last reported (`presenter/media.rs`).
+    media: media::Players,
     pub(crate) host: Host<D>,
     /// The scroller the last wheel moved.
     last_wheel: Option<ViewId>,
@@ -190,6 +199,8 @@ pub struct Presenter<D: DataSource> {
     snap_rested: BTreeMap<(ViewId, bool), (ViewId, f32)>,
     /// The display's clock while it owns time, given to every host (`clock.rs`)
     live_clock: Option<clock::Wall>,
+    /// Pictures reach a display whose presents the host hears (`present.rs`).
+    presents: bool,
     native_timers: bool,
     timers_hidden: bool,
     clock_generation: u64,
@@ -198,12 +209,27 @@ pub struct Presenter<D: DataSource> {
     pub(crate) surfaces: crate::surfaces::Surfaces,
     module: Option<crate::delivery::Module>,
     painted: bool,
+    /// Nothing shows the session, so its data module activates with no
+    /// pixel ([`Presenter::activate_unshown`]), until a frame is displayed.
+    unshown: bool,
+    /// A launch share's copies ([`Presenter::launch_share`]), until storage
+    /// is configured.
+    launch_share: Option<(exact_runner::share_in::Claimed, crate::picker::Held)>,
     /// Why the data module did not activate ([`Presenter::activation_error`]).
     activation_failed: Option<String>,
     dev: Option<crate::fetch::Poller>,
     pending_dev: Option<crate::fetch::Generation>,
     pending_update: bool,
+    update_explicit: bool,
+    update_waits_for_requests: bool,
+    /// When the store checks its stream, with one attached (LLP 1030.006 D5).
+    update_checks: Option<checks::Checks>,
+    /// The boot is good when a reader drew it ([`Presenter::reader_drew`]),
+    /// not at first pixel; and whether it has (LLP 1030.006 D5).
+    reader_blesses: bool,
+    blessed: bool,
     text: Shared,
+    make_text: fn(&Plan, &Assets) -> Shared,
     /// A touch down's press, to lay out ahead (`ahead.rs`).
     ahead: Option<ahead::Ahead>,
     pub(crate) brush: Painter,
@@ -219,6 +245,8 @@ pub struct Presenter<D: DataSource> {
     /// when another replaces the one it measured (LLP 1079 D3).
     pub(crate) hosts: u64,
     pub(crate) focus: Option<ViewId>,
+    /// What was typed into a menu in its last half second (`tabs.rs`).
+    type_ahead: exact_kernel::TypeAhead,
     /// Last connected path from the focused node, for a removal commit.
     focus_out: Vec<(ViewId, Event)>,
     /// The current pointer press may yield its focus to a newly mounted field.
@@ -366,6 +394,8 @@ pub struct Presenter<D: DataSource> {
     person_scrolls: u64,
     /// Smooth element reveals under way (`glide.rs`).
     glides: glide::Glides,
+    /// Zoomable scroll containers' zooms and the double tap (`zoom.rs`).
+    zooms: zoom::Zooms,
     /// HTML's sequential focus navigation starting point: where Tab starts
     /// from while nothing has the focus (a fragment's target).
     focus_start: Option<ViewId>,
@@ -429,11 +459,13 @@ impl<D: DataSource> Presenter<D> {
             scale,
             assets,
             painter,
+            TextEngine::shared_for_assets,
             Some(delivery),
             launch,
             region,
         )?;
         presenter.compat = compat.to_string();
+        presenter.host.web_mount = crate::app::web_mount(compat);
         presenter.measure();
         Ok((presenter, error))
     }
@@ -446,6 +478,7 @@ impl<D: DataSource> Presenter<D> {
         scale: f32,
         assets: Assets,
         painter: PainterBoot,
+        make_text: fn(&Plan, &Assets) -> Shared,
         delivery: Option<exact_runner::Delivery>,
         launch: &str,
         region: Option<crate::content_region::ContentRegionRegistration>,
@@ -471,9 +504,7 @@ impl<D: DataSource> Presenter<D> {
         crate::app::boot_phase(c"plan-ready");
         #[cfg(windows)]
         let preparing = painter.prepare_direct();
-        let text = crate::traced(c"boot fonts", || {
-            TextEngine::shared_for_assets(&decoded, &assets)
-        });
+        let text = crate::traced(c"boot fonts", || make_text(&decoded, &assets));
         if let Some(reason) = assets.take_refusal() {
             return Err(HostError::Asset(reason));
         }
@@ -511,6 +542,7 @@ impl<D: DataSource> Presenter<D> {
                 .map_err(HostError::Painter)?,
             None => opened.expect("synchronous painter"),
         };
+        host.flights.enabled = backend.name() == "canvas";
         if assets.is_selected() {
             if let Some(error) = error {
                 return Err(HostError::Layout(error));
@@ -550,6 +582,7 @@ impl<D: DataSource> Presenter<D> {
             group: None,
             brush: Painter::new(text.clone(), scale, backend),
             text,
+            make_text,
             ahead: None,
             viewport,
             scroll: BTreeMap::new(),
@@ -560,6 +593,7 @@ impl<D: DataSource> Presenter<D> {
             compat: String::new(),
             hosts: 0,
             focus: None,
+            type_ahead: Default::default(),
             focus_out: Vec::new(),
             autofocus_from: None,
             disabled_blur: Vec::new(),
@@ -607,7 +641,9 @@ impl<D: DataSource> Presenter<D> {
             dirty: true,
             image_paint_pending: false,
             deferred_collections: None,
+            media: Default::default(),
             live_clock: None,
+            presents: false,
             native_timers: false,
             timers_hidden: false,
             clock_generation: 0,
@@ -632,10 +668,17 @@ impl<D: DataSource> Presenter<D> {
             surfaces: Default::default(),
             module: None,
             painted: false,
+            unshown: false,
+            launch_share: None,
             activation_failed: None,
             dev: None,
             pending_dev: None,
             pending_update: false,
+            update_explicit: false,
+            update_waits_for_requests: false,
+            update_checks: None,
+            reader_blesses: false,
+            blessed: false,
             last_frame_succeeded: false,
             display: display_frame::State::default(),
             choice,
@@ -648,6 +691,7 @@ impl<D: DataSource> Presenter<D> {
             fragment_anchor: None,
             person_scrolls: 0,
             glides: Default::default(),
+            zooms: Default::default(),
             focus_start: None,
             field_select_tasks: Vec::new(),
             field_change_tasks: Default::default(),
@@ -660,6 +704,10 @@ impl<D: DataSource> Presenter<D> {
         };
         p.read_ranges();
         p.set_system_scheme(false);
+        // The scheme the app chose at an earlier launch, in the first frame
+        // whenever the host runs the boot's commands.
+        let kept = preferences::app_dark(p.host.runner().asked().scheme.as_ref());
+        p.app_scheme(kept);
         let e = p.after_commit();
         p.booting = false;
         if let Some(reason) = p.assets.take_refusal() {
@@ -691,7 +739,7 @@ impl<D: DataSource> Presenter<D> {
         let module = module.or_else(|| self.module.clone());
         let decoded = Plan::decode(plan).map_err(HostError::Plan)?;
         // Preserve live font state until the candidate runner boots successfully.
-        let candidate_text = TextEngine::shared_for_assets(&decoded, &self.assets);
+        let candidate_text = (self.make_text)(&decoded, &self.assets);
         if let Some(reason) = self.assets.take_refusal() {
             return Err(HostError::Asset(reason));
         }
@@ -735,7 +783,9 @@ impl<D: DataSource> Presenter<D> {
         self.surfaces
             .commit_shaders(shaders)
             .map_err(HostError::Asset)?;
+        let faults = self.host.runner().faults().clone();
         self.host = host;
+        self.host.runner_mut().share_faults(&faults);
         // The old executor lets go of everything, then says which uploads had
         // begun to go out; the rest never left (LLP 1016.000 D10).
         self.executor.forget(|_| false);
@@ -826,7 +876,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// Whether the picture is stale.
     pub fn dirty(&self) -> bool {
-        self.dirty || !self.surfaces.captures.is_empty()
+        // A hold no picture has carried owes one, to carry it to a present
+        // (LLP 1003.001 D9).
+        self.dirty || !self.surfaces.captures.is_empty() || self.host.holds_uncarried()
     }
 
     /// Where the pointer is drawn (`None` draws none).
@@ -863,6 +915,7 @@ impl<D: DataSource> Presenter<D> {
         self.field_reveal |= geometry_changed;
         self.dirty |= geometry_changed;
         self.viewport = (width, height);
+        crate::desktop::surface(self.viewport, self.brush.scale, self.pointer);
         self.images.fit(self.viewport, self.brush.scale);
         if geometry_changed {
             self.collection.advance_all();
@@ -996,13 +1049,15 @@ impl<D: DataSource> Presenter<D> {
             .runner_mut()
             .publish_sockets(|batch| executor.socket(batch));
         let commands = self.host.take_commands();
-        if let Some(activation) = (self.host.router_op())
-            .map(|op| op.activation)
-            .filter(|a| *a > self.fragment_seen)
-        {
-            self.fragment_anchor = None;
-            self.fragment_seen = activation;
-            self.fragment_armed = Some((activation, self.person_scrolls));
+        if let Some(op) = self.host.router_op() {
+            if op.activation == 0 {
+                self.fragment_anchor = None;
+                self.fragment_armed = None;
+            } else if op.activation > self.fragment_seen {
+                self.fragment_anchor = None;
+                self.fragment_seen = op.activation;
+                self.fragment_armed = Some((op.activation, self.person_scrolls));
+            }
         }
         if !commands.is_empty() {
             self.commands.extend(commands);
@@ -1024,6 +1079,7 @@ impl<D: DataSource> Presenter<D> {
         if focus_sent {
             return error;
         }
+        self.sync_zoom();
         self.sync_authored_scroll();
         self.dirty |= self.clamp_scroll();
         self.retire_pointer();
@@ -1172,7 +1228,7 @@ impl<D: DataSource> Presenter<D> {
         self.boxes
             .iter()
             .find(|b| b.id == id && self.display.allows(self.host.kernel(), id))
-            .copied()
+            .cloned()
             .or_else(|| {
                 self.inline_box(id)
                     .filter(|_| self.display.allows(self.host.kernel(), id))
@@ -1232,21 +1288,22 @@ impl<D: DataSource> Presenter<D> {
             .map(|id| self.inline_hit(id, x, y).unwrap_or(id))
     }
 
-    /// The deepest box of the latest paint under a point, as [`Self::hit`]
-    /// finds it once the boxes are fresh and the page takes a press.
+    /// Hit-test the latest paint; [`Self::hit`] refreshes its boxes first.
     pub(super) fn painted_hit(&self, x: f32, y: f32, current: bool) -> Option<ViewId> {
         self.boxes
             .iter()
+            .map(PaintedBox::for_hit)
             .rev()
             .filter(|b| {
                 self.alert_allows(b.id)
+                    && !self.host.flying(b.id)
                     && (b.contains(x, y) && crate::paint::hits(self.host.kernel(), b, x, y)
                         || crate::paint::slop_hits(self.host.kernel(), b, x, y))
                     && !self.host.route_visibility(b.id).1
                     && self.display.allows(self.host.kernel(), b.id)
             })
             .find_map(|b| {
-                let mut hit = *b;
+                let mut hit = b.clone();
                 if current && !self.brush.region_blocks_action(b.id) {
                     let node = self.host.kernel().node(b.id)?;
                     hit.pointer_hit = node
@@ -1311,9 +1368,11 @@ impl<D: DataSource> Presenter<D> {
         self.images.wake_fd()
     }
 
-    /// Whether a request is in flight.
+    /// Whether a request is in flight, the shell has a tell to answer
+    /// ([`Presenter::telling`]), or a topic an extension announced waits for
+    /// the next pump.
     pub fn pending(&self) -> bool {
-        self.host.runner().has_pending()
+        self.host.runner().has_pending() || self.telling() || self.host.has_announced()
     }
 
     /// Measure the work of every binary but a production one (LLP 1079
@@ -1342,8 +1401,10 @@ impl<D: DataSource> Presenter<D> {
             || self.focus.is_some()
             || self.brush.moving()
             || self.bars_ripple_moving()
+            || self.surface_ripple_moving()
             || self.stage_moving();
         let (layout, paint) = self.host.tick_effects(now_ms);
+        self.release_overdue();
         if layout {
             self.hatches.stale = true;
             self.dirty = true;
@@ -1355,6 +1416,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.tick_arrange(self.host.now());
         self.step_glides(now_ms);
+        self.step_zooms(now_ms);
         if let Some(error) = self.deliver_scroll_ends() {
             self.host.log(error);
         }
@@ -1386,3 +1448,6 @@ fn attached(kernel: &exact_kernel::Kernel, id: ViewId) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod fixtures;

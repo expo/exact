@@ -28,7 +28,7 @@ exact-route = { path = "../../route" }
 exact-textflow = { path = "../../textflow" }
 # Images: PNG decoded once; base64 for the kitty and iTerm2 protocols.
 base64 = "0.22"
-png = "=0.18.1"
+png = "0.18"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
 # A cell's usual grapheme fits inline; long combining sequences still fit.

@@ -42,7 +42,7 @@ pub(super) fn response(request: &Request, shared: &Shared, path: &str) -> Option
             {
                 return Some(missing());
             }
-            if version.is_some() || named_stage(&decoded, tag) {
+            if kept(shared, &decoded, version.is_some(), tag) {
                 for (key, value) in &mut response.headers {
                     if *key == "Cache-Control" {
                         *value = "public, max-age=31536000, immutable".into();
@@ -82,7 +82,7 @@ pub(super) fn response(request: &Request, shared: &Shared, path: &str) -> Option
     let auth = decoded.starts_with(AUTH_CALLBACK);
     let cache = if auth {
         "no-store"
-    } else if named || named_stage(&decoded, tag) {
+    } else if kept(shared, &decoded, named, tag) {
         "public, max-age=31536000, immutable"
     } else {
         "no-cache"
@@ -117,4 +117,11 @@ pub(super) fn response(request: &Request, shared: &Shared, path: &str) -> Option
         file: None,
         streamed: false,
     })
+}
+
+/// Whether a client keeps `path` for good: a version of `app.wasm` the URL
+/// names, a split build's stage, or a file the build names by content (LLP
+/// 1153.004 D6).
+fn kept(shared: &Shared, path: &str, versioned: bool, tag: &str) -> bool {
+    versioned || named_stage(path, tag) || shared.content.contains(path)
 }

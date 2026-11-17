@@ -91,7 +91,13 @@ pub(super) fn draw(
         let row_start = y * stride + left;
         let coverage = mask.map(|m| &m.data()[row_start..row_start + horizontal.len()]);
         let row = &mut target.data_mut()[row_start * 4..(row_start + horizontal.len()) * 4];
-        for (x, (out, horizontal)) in row.chunks_exact_mut(4).zip(horizontal.iter()).enumerate() {
+        for (x, (out, horizontal)) in row
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(horizontal.iter())
+            .enumerate()
+        {
             let cover = coverage.map_or(255, |m| m[x]);
             if cover == 0 {
                 continue;

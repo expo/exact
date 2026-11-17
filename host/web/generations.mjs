@@ -13,6 +13,16 @@ import { resolve } from 'node:path';
 import { BESIDE } from './beside.mjs';
 import { lockHeld } from './build-lock.mjs';
 import { buildTreeFileAsync } from './serve.mjs';
+import { withoutBase } from '../web-js/route-pattern.js';
+
+export function buildBase(dist) {
+  try { return JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).base ?? '/'; }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    try { return JSON.parse(readFileSync(resolve(`${dist}.previous`, 'routes.json'), 'utf8')).base ?? '/'; }
+    catch (previous) { if (previous.code === 'ENOENT') return '/'; throw previous; }
+  }
+}
 
 /** A generation's form: 32 lowercase hex digits, nothing else. */
 export const GENERATION = /^[0-9a-f]{32}$/;
@@ -245,7 +255,8 @@ export function withGenerationBase(html, id, base = '/') {
  * build; a document's base set to its generation. `{ status, route?, body?, id?, render? }`: 200, 400 for a malformed
  * generation path, 404 (with the build's page for a miss where it has one), or 410 for a generation kept no more;
  * `render`, for the shell, is the render policy of the route it is served for. */
-export async function servedFile(dist, pathname, accept = '', { base = '/', pinned = null } = {}) {
+export async function servedFile(dist, pathname, accept = '', { base = buildBase(dist), pinned = null } = {}) {
+  if (withoutBase(pathname, base) === null) return { status: 404 };
   const under = generationPath(pathname, base);
   if (under === 'bad') return { status: 400 };
   // The path in the app: a request under a generation names its page without that prefix.
@@ -273,5 +284,5 @@ export async function servedFile(dist, pathname, accept = '', { base = '/', pinn
   }
   if (!found) return { status: 404 };
   const body = found.route.endsWith('.html') && found.id ? withGenerationBase(found.body, found.id, base) : found.body;
-  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location };
+  return { status: found.status ?? 200, route: found.route, body, id: found.id, render: found.render, location, immutable: found.immutable };
 }

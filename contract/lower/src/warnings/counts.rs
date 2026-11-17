@@ -12,9 +12,10 @@
 //! ${total} cards`) is rarely one.
 
 use crate::LowerError;
-use contract_syntax::{BinOp, Expr, Node, Span, Stmt, TemplatePart, UnOp};
-use contract_types::{infer, Checked, Ref, Scope, Shapes, Ty};
-use std::collections::BTreeSet;
+use contract_checking::{Checking, View};
+use contract_syntax::{BinOp, Expr, Span, Stmt, TemplatePart, UnOp};
+use contract_types::{infer, Ref, Scope, Shapes, Ty};
+use std::{collections::BTreeSet, sync::Arc};
 
 /// Plurals that do not end in `s`.
 const IRREGULAR: &[(&str, &str)] = &[
@@ -196,74 +197,44 @@ impl Counts<'_> {
         }
     }
 
-    fn nodes(&mut self, nodes: &[Node], scope: &Scope, chosen: bool) {
-        for node in nodes {
-            match node {
-                Node::Element {
-                    positional,
-                    attrs,
-                    children,
-                    ..
-                } => {
+    fn nodes(&mut self, view: &View<'_>) {
+        for _ in view.structure().walk_regions_with(
+            (Arc::new(view.scope().clone()), false),
+            |node, (scope, chosen)| {
+                if let Some((_, positional, attrs)) = node.element() {
                     for e in positional.iter().chain(attrs.iter().map(|a| &a.value)) {
-                        self.expr(e, scope, chosen);
+                        self.expr(e, scope, *chosen);
                     }
-                    self.nodes(children, scope, chosen);
-                }
-                Node::When {
-                    cond,
-                    then,
-                    otherwise,
-                    ..
-                } => {
-                    self.expr(cond, scope, chosen);
-                    let chosen = chosen || on_one(cond);
-                    self.nodes(then, scope, chosen);
-                    self.nodes(otherwise, scope, chosen);
-                }
-                Node::Each {
-                    var,
-                    index,
-                    list,
-                    body,
-                    ..
-                } => {
-                    self.expr(list, scope, chosen);
-                    let item = match infer(list, scope, self.shapes) {
-                        Ok(Ty::List(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let mut inner = scope.clone();
-                    inner.push_each(var, index.as_deref(), item);
-                    self.nodes(body, &inner, chosen);
-                }
-                Node::Match {
-                    subject,
-                    some,
-                    none,
-                    ..
-                } => {
-                    self.expr(subject, scope, chosen);
-                    let bound = match infer(subject, scope, self.shapes) {
-                        Ok(Ty::Option(t)) => *t,
-                        _ => Ty::Unknown,
-                    };
-                    let mut inner = scope.clone();
-                    inner.push_region(Some((some.0.clone(), Ref::Bound(0), bound)));
-                    self.nodes(&some.1, &inner, chosen);
-                    let mut none_scope = scope.clone();
-                    none_scope.push_region(None);
-                    self.nodes(none, &none_scope, chosen);
-                }
-                Node::Use { args, children, .. } => {
+                } else if let Some((_, _, args)) = node.component_use() {
                     for a in args {
-                        self.expr(&a.value, scope, chosen);
+                        self.expr(&a.value, scope, *chosen);
                     }
-                    self.nodes(children, scope, chosen);
+                } else if let Some((_, var, index, list, _)) = node.repetition() {
+                    self.expr(list, scope, *chosen);
+                    let ty = infer(list, scope, self.shapes).unwrap_or(Ty::Unknown);
+                    let mut inner = (**scope).clone();
+                    inner.push_each_of(var, index, ty);
+                    return [Some((Arc::new(inner), *chosen)), None];
+                } else if node.is_choice() {
+                    let subject = node.expressions().next().unwrap();
+                    self.expr(subject, scope, *chosen);
+                    if let Some(name) = node.bindings()[0].iter().next() {
+                        let ty = infer(subject, scope, self.shapes).unwrap_or(Ty::Unknown);
+                        let mut inner = (**scope).clone();
+                        inner.push_some_of(name, ty);
+                        let mut none = (**scope).clone();
+                        none.push_none();
+                        return [
+                            Some((Arc::new(inner), *chosen)),
+                            Some((Arc::new(none), *chosen)),
+                        ];
+                    }
+                    let chosen = *chosen || on_one(subject);
+                    return [Some((scope.clone(), chosen)), Some((scope.clone(), chosen))];
                 }
-                Node::Children { .. } => {}
-            }
-        }
+                [Some((scope.clone(), *chosen)), None]
+            },
+        ) {}
     }
 
     fn stmts(&mut self, body: &[Stmt], scope: &Scope, chosen: bool) {
@@ -322,19 +293,16 @@ impl Counts<'_> {
 
 /// `lower-count-plural`'s sites in the expanded root: its view, derives,
 /// states and actions, and the file's `fn`s.
-pub(super) fn count_plural(checked: &Checked<'_>) -> Vec<LowerError> {
-    let root = &checked.expanded.root;
-    let Some(types) = checked.types.components.first() else {
-        return Vec::new();
-    };
-    let shapes = &checked.types.shapes;
+pub(super) fn count_plural(checking: &Checking<'_>) -> Vec<LowerError> {
+    let view = checking.expanded();
+    let shapes = checking.shapes();
     let mut counts = Counts {
         shapes,
         seen: BTreeSet::new(),
         out: Vec::new(),
     };
-    let scope = checked.types.component_scope(root, types);
-    for f in &checked.file.fns {
+    let scope = view.scope();
+    for f in checking.functions() {
         let params = shapes
             .fns
             .get(&f.name)
@@ -353,11 +321,15 @@ pub(super) fn count_plural(checked: &Checked<'_>) -> Vec<LowerError> {
         );
         counts.expr(&f.body, &inner, false);
     }
-    for b in root.states.iter().chain(&root.derives) {
-        counts.expr(&b.expr, &scope, false);
+    for b in checking.states().iter().chain(checking.derives()) {
+        counts.expr(&b.expr, scope, false);
     }
-    for (i, a) in root.actions.iter().enumerate() {
-        let params = types.actions.get(i).map(Vec::as_slice).unwrap_or_default();
+    for (i, a) in checking.actions(0).iter().enumerate() {
+        let params = checking
+            .action_types()
+            .get(i)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let mut inner = scope.clone();
         inner.enter_action();
         inner.push(
@@ -372,7 +344,7 @@ pub(super) fn count_plural(checked: &Checked<'_>) -> Vec<LowerError> {
         );
         counts.stmts(&a.body, &inner, false);
     }
-    counts.nodes(&root.view, &scope, false);
+    counts.nodes(&view);
     let mut out = counts.out;
     out.sort_by_key(|e| (e.span.source_id, e.span.line, e.span.col));
     out

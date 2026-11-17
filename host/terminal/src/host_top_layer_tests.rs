@@ -1,6 +1,5 @@
-//! A popover in the terminal's top layer (stage 14 B): laid out in the
-//! viewport's block, painted by its insets in the grid, centred with none,
-//! anchored to the bottom inline, and not revealed through the page.
+//! Terminal top-layer placement: invoker regions, viewport insets, centring,
+//! inline anchoring, and isolation from the page's scrolling.
 use super::*;
 
 fn app(insets: &str) -> String {
@@ -214,4 +213,184 @@ fn a_dialog_a_blur_opens_keeps_its_autofocus() {
     host.key(Key::Char('x'));
     assert_eq!(host.focus, Some(node(&host, "inside")));
     assert_eq!(host.value(node(&host, "opener")), "");
+}
+
+#[path = "../../painted/tests/position_area_region/cases.rs"]
+mod region_cases;
+
+#[test]
+fn position_area_region_matches_chrome() {
+    // Terminal entries refuse direction. The LTR cases use whole-cell margins
+    // before and after exchanging axes.
+    const SCALE: f32 = 16.;
+    for c in region_cases::cases(false) {
+        let plan =
+            contract::compile_terminal(&region_cases::source(&c, false, SCALE, true)).unwrap();
+        let mut host = Host::boot(plan, (), Mode::Fullscreen, 800, 600).unwrap();
+        let anchor = node(&host, "anchor");
+        host.press(anchor);
+        host.act("read");
+        let (x, y, w, h) = c.rect;
+        let (x, y, w, h) = (SCALE * x, SCALE * y, SCALE * w, SCALE * h);
+        let expected = exact_plan::Value::list(
+            [x, y, w, h]
+                .map(|v| exact_plan::Value::Number(v.into()))
+                .to_vec(),
+        );
+        assert_eq!(host.runner.slot("at"), Some(&expected), "{c:?}");
+        let rect = host.frame().layer.unwrap();
+        let snap_x = |v: f32| (v / COLUMN).round() as i32;
+        let snap_y = |v: f32| (v / ROW).round() as i32;
+        assert_eq!(
+            (rect.x, rect.y, rect.w, rect.h),
+            (
+                snap_x(x),
+                snap_y(y),
+                snap_x(x + w) - snap_x(x),
+                snap_y(y + h) - snap_y(y)
+            ),
+            "{c:?}"
+        );
+    }
+}
+
+#[test]
+fn an_invoker_keeps_authored_insets_and_releases_the_region_on_close() {
+    let plan = contract::compile_terminal(
+        r#"component App
+  view
+    column
+      button id="anchor" popovertarget="pop" width="5ch" height="1lh"
+      column id="pop" popover="manual" width="10ch" height="2lh" top="2lh" left="2ch"
+"#,
+    )
+    .unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 20).unwrap();
+    host.press(node(&host, "anchor"));
+    let r = host.frame().layer.unwrap();
+    assert_eq!((r.x, r.y, r.w, r.h), (2, 2, 10, 2));
+    host.close_layer(node(&host, "pop"));
+    assert!(host.kernel().host_block_implied(node(&host, "pop")));
+}
+
+#[test]
+fn an_invoker_retains_its_fitting_option_until_reopened() {
+    let plan = contract::compile_terminal(r#"component App
+  view
+    scroll id="page" height="100%"
+      box height="100lh"
+      button id="anchor" popovertarget="pop" position="absolute" left="10ch" top="10lh" width="5ch" height="1lh"
+      column id="pop" popover="manual" width="10ch" height="2lh" position-area="bottom span-right" position-try-fallbacks="flip-block" margin=0 padding=0 border-width=0
+"#).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 12).unwrap();
+    let pop = node(&host, "pop");
+    host.press(node(&host, "anchor"));
+    assert_eq!(host.frame().layer.unwrap().y, 8, "flipped above");
+    host.resize(40, 20);
+    assert_eq!(host.frame().layer.unwrap().y, 8, "keeps the fitting flip");
+    host.close_layer(pop);
+    assert!(host.kernel().host_block_implied(pop));
+    host.press(node(&host, "anchor"));
+    assert_eq!(
+        host.frame().layer.unwrap().y,
+        11,
+        "a fresh opening tries the base first"
+    );
+    host.scroll_node_by(node(&host, "page"), 32.);
+    assert_eq!(
+        host.frame().layer.unwrap().y,
+        9,
+        "follows the scrolled invoker"
+    );
+}
+
+#[test]
+fn an_invoker_inside_a_placed_dialog_uses_screen_coordinates() {
+    let plan = contract::compile_terminal(r#"component App
+  view
+    scroll id="page" height="100%"
+      box height="100lh"
+      dialog id="dialog" width="20ch" height="6lh" margin=0 padding=0 border-width=0
+        button id="anchor" popovertarget="pop" width="5ch" height="1lh" appearance="none" padding=0 border-width=0
+        column id="pop" popover="manual" width="10ch" height="2lh" margin=0 padding=0 border-width=0
+"#).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 12).unwrap();
+    host.scroll.insert(node(&host, "page"), 160.);
+    host.open_layer(node(&host, "dialog"), true);
+    host.press(node(&host, "anchor"));
+    let r = host.frame().layer.unwrap();
+    assert_eq!((r.x, r.y, r.w, r.h), (10, 4, 10, 2));
+}
+
+#[test]
+fn scrolling_keeps_a_percentage_popovers_selected_region() {
+    let plan = contract::compile_terminal(r#"component App
+  view
+    scroll id="page" height="100%"
+      box height="100lh"
+      button id="anchor" popovertarget="pop" position="absolute" left="10ch" top="6lh" width="5ch" height="1lh" appearance="none" padding=0 border-width=0
+      column id="pop" popover="manual" position-area="bottom span-right" width="50%" height="50%" margin=0 padding=0 border-width=0
+"#).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 40).unwrap();
+    host.press(node(&host, "anchor"));
+    let pop = node(&host, "pop");
+    let before = host.kernel().node(pop).unwrap().frame;
+    host.scroll_node_by(node(&host, "page"), 64.);
+    let r = host.frame().layer.unwrap();
+    let after = host.kernel().node(pop).unwrap().frame;
+    assert_eq!((before.width, before.height), (120., 264.));
+    assert_eq!((after.width, after.height), (120., 264.));
+    assert_eq!((r.x, r.y), (10, 3));
+}
+
+#[test]
+fn authored_none_keeps_a_terminal_popover_in_the_viewport_block() {
+    for area in ["none", "bottom span-right"] {
+        let case = region_cases::Case {
+            anchor: (300., 100.),
+            area: area.into(),
+            fallbacks: "none",
+            rect: (100., 120., 300., 18.),
+            boxes: 6,
+            css: String::new(),
+        };
+        let source = region_cases::source(&case, false, 16., true)
+            .replace(
+                "  state at",
+                &format!(
+                    "  state area = \"{area}\"\n  action unset\n    area = \"none\"\n  state at"
+                ),
+            )
+            .replace(&format!("position-area=\"{area}\""), "position-area=area");
+        let plan = contract::compile_terminal(&source).unwrap();
+        let mut host = Host::boot(plan, (), Mode::Fullscreen, 800, 600).unwrap();
+        host.press(node(&host, "anchor"));
+        if area != "none" {
+            assert!(!host.kernel().host_block_implied(node(&host, "pop")));
+            host.act("unset");
+        }
+        let r = host.frame().layer.unwrap();
+        assert_eq!((r.x, r.y, r.w, r.h), (200, 120, 600, 18));
+        assert!(host.kernel().host_block_implied(node(&host, "pop")));
+    }
+}
+
+#[test]
+fn a_popover_changed_to_sticky_releases_its_region() {
+    let plan = contract::compile_terminal(r#"component App
+  state position = "absolute"
+  action stick
+    position = "sticky"
+  view
+    column
+      button id="anchor" popovertarget="pop" width="5ch" height="1lh"
+      column id="pop" popover="manual" position=position position-area="bottom" width="10ch" height="2lh" margin=0 padding=0 border-width=0
+"#).unwrap();
+    let mut host = Host::boot(plan, (), Mode::Fullscreen, 40, 20).unwrap();
+    host.press(node(&host, "anchor"));
+    let pop = node(&host, "pop");
+    assert!(host.kernel().host_block(pop).is_some());
+    host.act("stick");
+    host.frame();
+    assert!(host.kernel().host_block(pop).is_none());
 }

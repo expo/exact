@@ -180,7 +180,7 @@ test('a failed Canvas 2D helper rejects queued captures and preserves the destin
     ${glueCase(wasm, 'canvasCapture')}
   } };`)(pieces, { incarnation: 1 }, () => true, p => tracked.push(p.catch(e => e)),
     (_owner, ticket, kind, status, _headers, bytes) => answers.push([ticket, kind, status, JSON.parse(new TextDecoder().decode(bytes))]),
-    new TextEncoder(), async () => ({ writePng: async (_path, bytes) => { destination = bytes; } }), () => null);
+    new TextEncoder(), async () => ({ writeCapture: async (_path, bytes) => { destination = bytes; } }), () => null);
   apply({ op: 'canvasCapturePrepare', ticket: 7 });
   apply({ op: 'canvasCapture', ticket: 8, path: 'app:/tmp/shot.png' });
   await Promise.resolve();

@@ -435,6 +435,8 @@ pub(super) fn declare(shapes: &mut Shapes) {
         .chain([
             ("firstVisibleKey".into(), Ty::Option(Box::new(Ty::String))),
             ("firstVisibleOffset".into(), Ty::Number),
+            // A zoomable container's zoom (LLP 1057.001.000 D2), 1 elsewhere.
+            ("scrollZoom".into(), Ty::Number),
         ])
         .collect(),
     );

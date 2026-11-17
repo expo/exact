@@ -2,7 +2,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { main } from './agent.mjs';
 
-test('--live selects the Mac wall-clock carrier and preserves the chosen store and input', async () => {
+test('--live selects the wall-clock carrier on macOS and the iOS simulator and preserves the chosen store and input', async () => {
   const output = console.log;
   console.log = () => {};
   let options, typed;
@@ -13,7 +13,10 @@ test('--live selects the Mac wall-clock carrier and preserves the chosen store a
     assert.equal(await main(['macos', '--live', '--storage', 'latency', 'type field hello', 'state'], injected), 0);
     assert.equal(options.env.EXACT_AGENT, 'live');assert.equal(options.timing, 'platform');assert.equal(options.storage, 'latency');
     assert.deepEqual(typed, ['field', 'hello']);
-    await assert.rejects(main(['web', '--live', 'state'], injected), /--live requires a macOS/);
+    assert.equal(await main(['ios', '--live', 'state'], injected), 0);
+    assert.equal(options.env.EXACT_AGENT, 'live');assert.equal(options.timing, 'platform');
+    await assert.rejects(main(['web', '--live', 'state'], injected), /--live requires a macOS or iOS simulator/);
+    await assert.rejects(main(['ios', '--live', '--device', 'state'], injected), /not a phone/);
     await assert.rejects(main(['macos', '--live', '--timing', 'agent', 'state'], injected), /keeps the platform clock/);
   } finally {console.log = output;}
 });

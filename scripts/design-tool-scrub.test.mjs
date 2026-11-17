@@ -3,7 +3,7 @@
 import { expect, onTestFinished, test } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnOwned } from './test-children.mjs';
 import { DRIVEN, HEARTBEAT_RACE, ROOT, TOOL_ORIGIN, edit, lines, signals, stop, timed, toolTurns } from './design-tool-harness.mjs';
 
@@ -15,7 +15,7 @@ function framed(looked) {
   let done = false;
   const polling = (async () => {
     while (!done) {
-      const listed = await fetch(`${TOOL_ORIGIN}/__tamber/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
+      const listed = await fetch(`${TOOL_ORIGIN}/__forma/token`).then(r => r.json()).then(({ token }) => fetch(`${TOOL_ORIGIN}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: '{"method":"hello"}' })).then(r => r.json()).catch(() => null);
       if (listed?.ok?.builds?.some(b => b.host === 'web-js' && b.design && b.planDigest)) { looked.fire(0); return; }
       await Bun.sleep(100);
     }
@@ -30,13 +30,14 @@ const ready = looked => [looked.pause(4000, 0), 'clock +1', 'clock data', 'clock
 
 test('T2: a scrub chosen on a token previews on the frame\'s build with no reload and no file written, Keep writes one line, Cancel restores, and an edit that rebuilds has no scrub', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-scrub-'));
-  for (const f of ['app.contract', 'app.tamber', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
-  const original = readFileSync(join(app, 'app.tamber'), 'utf8');
+  for (const f of ['app.contract', 'app.forma', 'app.json']) cpSync(resolve(ROOT, 'apps/theme-fixture', f), join(app, f));
+  const original = readFileSync(join(app, 'app.forma'), 'utf8');
   const listener = (await import('node:http')).createServer();
   await new Promise(ok => listener.listen(0, '127.0.0.1', ok));
   const port = listener.address().port;
   await new Promise(ok => listener.close(ok));
-  const dist = mkdtempSync(join(tmpdir(), 'exact-design-tool-scrub-dist-'));
+  // The build's lock and kept generations go beside its dist (serve.mjs `replaceBuild`): the dist sits in a directory of its own.
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-design-tool-scrub-dist-')), 'dist');
   const dev = spawnOwned(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--port', String(port)], { cwd: ROOT, env: { ...timed({ POLL: 3_000 }), EXACT_APP_DIR: app, EXACT_WEB_DIST: dist }, stdio: ['ignore', 'pipe', 'pipe'] });
   let tool;
   try {
@@ -45,8 +46,8 @@ test('T2: a scrub chosen on a token previews on the frame\'s build with no reloa
     await devSaid.until(l => l.includes(`127.0.0.1:${port}/`), 600_000);
     // Its design reader built: before it is, a live edit is proposed as a rebuild (theme2 10:01), and this test scrubs.
     await devSaid.until(l => l === 'design reader ready', 600_000);
-    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000);
+    tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--via', base, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000);
     // What the dev loop serves its builds now (`/__dev/design`), the frame's
     // build (its id, and the design it reports running), how many pages
     // have connected, and the file: read while the drive holds each moment
@@ -59,11 +60,11 @@ test('T2: a scrub chosen on a token previews on the frame\'s build with no reloa
       for (;;) {
         const design = await fetch(`${base}/__dev/design`);
         const snapshot = design.status === 200 ? await design.json() : null;
-        const builds = (await (await fetch(`${TOOL_ORIGIN}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': (await (await fetch(`${TOOL_ORIGIN}/__tamber/token`)).json()).token }, body: '{"method":"hello"}' })).json()).ok.builds;
+        const builds = (await (await fetch(`${TOOL_ORIGIN}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': (await (await fetch(`${TOOL_ORIGIN}/__forma/token`)).json()).token }, body: '{"method":"hello"}' })).json()).ok.builds;
         const frame = builds.find(b => b.host === 'web-js');
         // Before any scrub the loop has no snapshot to give (204): the first look's frame runs the build's own design.
         if ((snapshot ? frame?.design === snapshot.design : first && design.status === 204 && !!frame?.design) || Date.now() > end) {
-          seen.push({ connects: connects(), snapshot, frame, file: readFileSync(join(app, 'app.tamber'), 'utf8') });
+          seen.push({ connects: connects(), snapshot, frame, file: readFileSync(join(app, 'app.forma'), 'utf8') });
           return;
         }
         await Bun.sleep(100);
@@ -156,6 +157,6 @@ test('T2: a scrub chosen on a token previews on the frame\'s build with no reloa
     if (tool) await stop(tool);
     await stop(dev);
     rmSync(app, { recursive: true, force: true });
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 900_000);

@@ -142,6 +142,10 @@ final class IframeAutomationTests: XCTestCase {
         return (handle, web)
     }
 
+    /// Where pictures and downloads go, removed after the class.
+    private static let folder = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-automation-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    override class func tearDown() { try? FileManager.default.removeItem(at: folder); super.tearDown() }
+
     nonisolated(unsafe) private static var server: AutomationPages?
     private var baseURL: String { "http://127.0.0.1:\(Self.server!.port)" }
     override func setUpWithError() throws {
@@ -304,7 +308,7 @@ final class IframeAutomationTests: XCTestCase {
         XCTAssertNil(run(arm, "releaseActions")["error"], "an acting call takes the frame")
         _ = call(arm, "evaluate", ["expression": "setTimeout(() => alert('Held'), 0), 1"])
         spin { seen.records.contains { $0.event == "userpromptopened" } }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-automation-\(ProcessInfo.processInfo.processIdentifier)/held.png")
+        let file = Self.folder.appendingPathComponent("held.png")
         let shot = call(arm, "captureScreenshot", ["path": "app:/tmp/held.png", "pathFile": file.path, "clip": ["x": 0, "y": 0, "width": 100, "height": 50]])
         pause(0.2)
         XCTAssertNil(shot.value, "the dialog holds the viewport's script")
@@ -318,7 +322,7 @@ final class IframeAutomationTests: XCTestCase {
         let arm = try arm(), seen = Seen()
         let (handle, _) = mount(arm, seen)
         defer { arm.destroy(handle) }
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-automation-\(ProcessInfo.processInfo.processIdentifier)/downloads", isDirectory: true)
+        let folder = Self.folder.appendingPathComponent("downloads", isDirectory: true)
         try? FileManager.default.removeItem(at: folder)
         XCTAssertNil(run(arm, "setDownloadBehavior", ["destinationFolder": "app:/tmp/downloads", "destinationFolderFile": folder.path])["error"])
         XCTAssertNil(run(arm, "evaluate", ["expression": "location.href = '/download', 1"])["error"])
@@ -339,7 +343,7 @@ final class IframeAutomationTests: XCTestCase {
         XCTAssertNil(navigated.value)
         XCTAssertNil(run(arm, "evaluate", ["expression": "location.href = '/other', 1"])["error"])
         XCTAssertEqual(answered(navigated)["error"] as? String, "AbortError")
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-automation-\(ProcessInfo.processInfo.processIdentifier)/shot.png")
+        let file = Self.folder.appendingPathComponent("shot.png")
         let shot = run(arm, "captureScreenshot", ["path": "app:/tmp/shot.png", "pathFile": file.path, "clip": ["x": 0, "y": 0, "width": 100, "height": 50]])
         XCTAssertEqual(shot["path"] as? String, "app:/tmp/shot.png", "\(shot)")
         XCTAssertGreaterThan(shot["width"] as? Int ?? 0, 99, "\(shot)")

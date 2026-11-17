@@ -316,6 +316,20 @@ impl fmt::Display for Uses {
 /// The capabilities `plan` uses (LLP 1047 D2).
 pub fn uses(plan: &Plan) -> Uses {
     let mut uses = Uses::NONE;
+    if plan.tools.iter().any(|t| {
+        serde_json::from_str::<serde_json::Value>(plan.str(t.face)).is_ok_and(|face| {
+            face["doors"]
+                .as_array()
+                .is_some_and(|doors| doors.iter().any(|d| d == "apple"))
+                && face["parameters"].as_object().is_some_and(|params| {
+                    params
+                        .values()
+                        .any(|p| p.get("type").is_some_and(|t| t == "file"))
+                })
+        })
+    }) {
+        uses = uses.with(Capability::Picker);
+    }
     if !plan.keyframes.is_empty() {
         uses = uses.with(Capability::Animations);
     }
@@ -324,7 +338,10 @@ pub fn uses(plan: &Plan) -> Uses {
     }
     // Kept answers and surface records both need the host's store, and a
     // declared source its network (LLP 1162.001 D3).
-    if plan.resources.iter().any(|r| r.reader || r.keep) || !plan.fetches.is_empty() {
+    if plan.resources.iter().any(|r| r.reader || r.keep)
+        || !plan.fetches.is_empty()
+        || plan.slots.iter().any(|s| s.persist)
+    {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -441,7 +458,12 @@ pub fn uses(plan: &Plan) -> Uses {
                 }
                 if matches!(
                     StyleId::from_bit(u32::from(binding.id)),
-                    Some(StyleId::Animation | StyleId::ExitAnimation)
+                    Some(
+                        StyleId::Animation
+                            | StyleId::ExitAnimation
+                            | StyleId::ViewTransitionNew
+                            | StyleId::ViewTransitionOld
+                    )
                 ) {
                     uses = uses.with(Capability::Animations);
                 }
@@ -567,6 +589,28 @@ fn shows_media_picker(plan: &Plan) -> bool {
     })
 }
 
+/// Whether node `node` is a zoomable scroller (LLP 1057.001.000 D1): either
+/// range row written, literal or bound. The web loads its zoom module, and the
+/// wasm host names its absence, only for a plan with one.
+pub fn zoomable(plan: &Plan, node: exact_plan::NodesId) -> bool {
+    plan.node(node)
+        .bindings
+        .iter()
+        .map(|b| plan.binding(b))
+        .any(|b| {
+            b.kind == BindingKind::Style
+                && matches!(
+                    StyleId::from_bit(b.id as u32),
+                    Some(StyleId::MinZoom | StyleId::MaxZoom)
+                )
+        })
+}
+
+/// Whether `plan` has a zoomable scroller.
+pub fn zooms(plan: &Plan) -> bool {
+    (0..plan.nodes.len()).any(|i| zoomable(plan, exact_plan::NodesId(i as u32)))
+}
+
 /// Whether `plan` can show an SVG island (LLP 1055.000 D10, D14): a `mask`
 /// or `filter` element, or `filter` bound on an SVG element (its functions
 /// need no element). A host whose island module is loaded on demand (LLP
@@ -677,6 +721,22 @@ pub fn uses_picture_in_picture(plan: &Plan) -> bool {
     runs_command(plan, &["requestPictureInPicture"])
 }
 
+/// Whether an image's, a media element's or a frame's source can be remote:
+/// an `http:` or `https:` literal, or one computed at run time, which this
+/// cannot read. The Mac App Store sandbox loads such a source only with
+/// `network.client` (LLP 1030.005 D2).
+pub fn sources_can_be_remote(plan: &Plan) -> bool {
+    plan.bindings.iter().any(|binding| {
+        binding.kind == BindingKind::Prop
+            && matches!(
+                PropId::from_wire(binding.id),
+                Some(PropId::Src | PropId::ImageSource)
+            )
+            && constant_str(plan, plan.code(binding.expr))
+                .is_none_or(|src| src.starts_with("http:") || src.starts_with("https:"))
+    })
+}
+
 /// Whether the runner keeps a MIDI queue the agent shows (`state.midi`):
 /// for a plan that [`uses_midi`] or declares a sequence, whose notes and
 /// clock go on it. The JS target bundles midi.js then.
@@ -688,6 +748,12 @@ pub fn keeps_midi(plan: &Plan) -> bool {
 /// app chose, kept in the store, choose its strings at the next launch.
 pub fn chooses_locale(plan: &Plan) -> bool {
     runs_command(plan, &["setLocale"])
+}
+
+/// Whether the plan runs `setScheme`: then the scheme it chose is kept
+/// across launches.
+pub fn chooses_scheme(plan: &Plan) -> bool {
+    runs_command(plan, &["setScheme"])
 }
 
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
@@ -760,6 +826,33 @@ mod grant_tests {
         }
         for grants in ["", "secret.keep token", "device.local-auth purpose.lock"] {
             assert!(!Uses::NONE.with_grants(grants).has(Capability::Presence));
+        }
+    }
+
+    #[test]
+    fn persisted_slots_link_storage_without_resources() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+        for persist in [false, true] {
+            let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let boolean = b.primitive(TypeKind::Bool);
+            let mut initial = Asm::new();
+            initial.bool(false);
+            let initial = b.code(initial);
+            let slot = b.slot("liked", boolean, initial);
+            b.set_slot_persist(slot, persist);
+            b.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            assert_eq!(
+                super::uses(&b.finish().unwrap()).has(Capability::Io),
+                persist
+            );
         }
     }
 

@@ -13,6 +13,7 @@ import { delimiter, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bakeTarget, buildBake, copyShaders, developmentBuildEnv, resolveApp, windowsFile } from '../../scripts/app.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
+import { unclaimedNote } from '../../scripts/links.mjs';
 import { pickIcon, readPng, WINDOWS_ICON_SIZES, windowsIconRes } from '../../scripts/app-icons.mjs';
 import { syncStaticTree } from '../web/serve.mjs';
 
@@ -128,6 +129,8 @@ if (import.meta.main) {
   const outAt = args.indexOf('--out');
   if (outAt >= 0 && !args[outAt + 1]) throw new Error('--out needs a directory');
   const app = resolveApp(args.find((arg, i) => !arg.startsWith('--') && (outAt < 0 || i !== outAt + 1)));
+  // Every build packages into one directory, with one set of libraries and one compat.json.
+  if (app.manifest.variant) throw new Error(`variant ${app.manifest.variant.name}: Windows takes no variant (LLP 1030.008 §6); build without --variant or EXACT_VARIANT`);
   prepareShaders(app.manifest);
   const target = bakeTarget('windows');
   const profile = args.includes('--release') ? 'release' : 'gpu-dev';
@@ -136,34 +139,37 @@ if (import.meta.main) {
   let icon;
   try { icon = pickIcon(app.manifest, app.dir, { purposes: ['any', 'maskable'], px: 256, formats: ['png'], native: true, name: 'the Windows icon' }); }
   catch (error) { console.error(`${app.name}: ${error.message}`); process.exit(1); }
-  const iconRes = icon ? resolve(app.target, 'windows-icon.res') : '';
+  const iconRes = icon ? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? app.target, 'windows-icon.res') : '';
   if (icon) {
     const source = createHash('sha256').update(JSON.stringify(['res-v1', WINDOWS_ICON_SIZES])).update(readFileSync(icon.path)).digest('hex'), made = `${iconRes}.sha256`;
     if (!existsSync(iconRes) || !existsSync(made) || readFileSync(made, 'utf8') !== source) {
-      mkdirSync(app.target, { recursive: true });
+      mkdirSync(dirname(iconRes), { recursive: true });
       writeFileSync(iconRes, windowsIconRes(readPng(icon.path)));
       writeFileSync(made, source);
     }
   }
-  const build = buildBake(app, 'windows', target, { profile, env: { ...developmentBuildEnv(app), EXACT_WINDOWS_ICON_RES: iconRes } });
   // A running copy holds its executable and DLL open, so another directory lets
   // a second copy be packaged beside it.
-  const output = outAt >= 0 ? resolve(args[outAt + 1]) : resolve(app.dir, 'dist-windows');
+  const output = outAt >= 0 ? resolve(args[outAt + 1]) : resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(app.dir, 'dist-windows'));
+  const build = buildBake(app, 'windows', target, { profile, env: { ...developmentBuildEnv(app), EXACT_WINDOWS_ICON_RES: iconRes }, capture(build) {
+    mkdirSync(output, { recursive: true });
+    const exe = build.products.find(product => product.path.endsWith(`${app.crate('windows')}.exe`));
+    if (!exe) throw new Error('Windows bake produced no executable');
+    closeOpened(resolve(output, windowsFile(app, exe.path)));
+    for (const product of build.products.filter(p => /\.(exe|dll)$/.test(p.path))) {
+      const destination = resolve(output, windowsFile(app, product.path));
+      try { copyFileSync(product.path, destination); }
+      catch (error) {
+        if (!['EBUSY', 'EPERM'].includes(error.code)) throw error;
+        throw new Error(`${destination} is in use: quit it, or package into another directory with --out <dir> (drive that copy with EXACT_WINDOWS_BIN)`);
+      }
+      if (createHash('sha256').update(readFileSync(destination)).digest('hex') !== product.sha256) throw new Error(`Cargo product changed before Windows capture: ${product.path}`);
+    }
+  } });
   mkdirSync(output, {recursive:true});
   const exe = build.products.find((product) => product.path.endsWith(`${app.crate('windows')}.exe`));
   if (!exe) throw new Error('Windows bake produced no executable');
   const executable = resolve(output, windowsFile(app, exe.path));
-  // The copy the last --run opened here is this build's to replace.
-  closeOpened(executable);
-  for (const product of build.products) {
-    if (!/\.(exe|dll)$/.test(product.path)) continue;
-    const destination = resolve(output, windowsFile(app, product.path));
-    try { copyFileSync(product.path, destination); }
-    catch (error) {
-      if (error.code !== 'EBUSY' && error.code !== 'EPERM') throw error;
-      throw new Error(`${destination} is in use, most likely by a running copy of the app: quit it, or package into another directory with --out <dir> (run that copy under the agent with EXACT_WINDOWS_BIN)`);
-    }
-  }
   for (const name of ['assets','deck']) {
     syncStaticTree(resolve(app.dir, name), resolve(output, name));
   }
@@ -171,6 +177,8 @@ if (import.meta.main) {
   writeFileSync(resolve(output, 'compat.json'), JSON.stringify(build.compat, null, 2) + '\n');
   writePackagedReceipt(app, build, output);
   console.log(`Windows: ${executable}`);
+  const unclaimed = unclaimedNote(app.manifest, 'windows');
+  if (unclaimed) console.log(`Windows: ${unclaimed}`);
   if (args.includes('--json')) reportBuilt({ path: executable, target: 'windows', trust: build.trust });
   if (args.includes('--run') && remote()) {
     const opened = await openOnDesktop(executable);

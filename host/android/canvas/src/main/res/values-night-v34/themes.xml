@@ -5,8 +5,6 @@
     <style name="ExactLaunch" parent="@android:style/Theme.DeviceDefault.NoActionBar">
         <item name="android:windowSplashScreenBackground">@android:color/system_surface_dark</item>
         <item name="android:windowBackground">@android:color/system_surface_dark</item>
-        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
-        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>

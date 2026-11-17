@@ -331,15 +331,14 @@ final class OneColorInkIOSTests: XCTestCase {
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
     }
 
-    /// The window's pixels as the screen shows them, one a point, RGBA
+    /// The window's static layer tree, one pixel a point, RGBA. Unlike a screen snapshot, this does
+    /// not depend on the simulator's display reaching another display update.
     private func rgba(_ window: UIWindow) throws -> [UInt8] {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1; format.opaque = true
-        var drawn = false
-        let shot = try XCTUnwrap(UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
-            drawn = window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        let shot = try XCTUnwrap(UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { context in
+            window.layer.render(in: context.cgContext)
         }.cgImage)
-        XCTAssertTrue(drawn, "the screen's pixels")
         var bytes = [UInt8](repeating: 0, count: shot.width * shot.height * 4)
         let context = try XCTUnwrap(CGContext(data: &bytes, width: shot.width, height: shot.height, bitsPerComponent: 8, bytesPerRow: shot.width * 4,
                                               space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))

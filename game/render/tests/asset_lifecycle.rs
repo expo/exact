@@ -341,7 +341,12 @@ fn textureless_live_model_survives_unrelated_retirement_and_module_device_loss()
     };
     let (before, _) = module.readback(id, &frame).unwrap();
     assert!(
-        before.data.chunks_exact(4).any(|p| p != &before.data[..4]),
+        before
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p != &before.data[..4]),
         "model must have visible pixels"
     );
     assert!(module.input_json(

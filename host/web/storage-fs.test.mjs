@@ -80,6 +80,25 @@ test('a stored Blob with no type is shown with the type asked for, as bytes are'
   expect(types).toEqual(['application/pdf', 'application/pdf', 'application/x-picked']);
 }, 60_000);
 
+test('a request body bounds only a file the app wrote, which IndexedDB reads whole', async () => {
+  // `requestBody` passes `bytesOnly`: a picked file, a recorded video or an `exactBodyTo` reply is a Blob
+  // the browser streams as it sends (LLP 1133.008.000 D4). Eight bytes stands in for 64 MiB.
+  const result = await inPage(async () => {
+    const { createFileStore } = await import('/storage-fs.js');
+    const store = createFileStore('body-bound');
+    const nine = new Uint8Array(9).fill(7);
+    try {
+      await store.writeFile('app:/data/written', nine);
+      await store.putBlob('app:/data/recorded.mp4', new File([nine], 'clip.mp4', { type: 'video/mp4' }));
+      const written = await store.blob('app:/data/written', '', 8, 'exactBodyFrom', true).catch(e => e.code);
+      const recorded = (await store.blob('app:/data/recorded.mp4', '', 8, 'exactBodyFrom', true)).blob.size;
+      const image = await store.blob('app:/data/recorded.mp4', '', 8).catch(e => e.code);
+      return { written, recorded, image };
+    } finally { store.close(); }
+  });
+  expect(result).toEqual({ written: 'too-large', recorded: 9, image: 'too-large' });
+}, 60_000);
+
 test('a rename onto the other kind of entry is EISDIR or ENOTDIR, as rename(2) answers natively', async () => {
   const codes = await inPage(async () => {
     const { createFileStore } = await import('/storage-fs.js');

@@ -228,30 +228,72 @@ final class PressWashMacTests: XCTestCase {
     /// shows it, at Actual Size and under a page zoom (a 2.4 device scale).
     /// At 120% a sidebar row's project name went blank after a press once a
     /// copy shared its backing store, until the row was laid out again.
-    func testTheWashCopyDrawsWhatAppKitDrewAgain() throws {
-        for zoom in [1, 1.2] {
+    func testCaptureCopiesOwnWhatAppKitDrewAgain() throws {
+        for backingScale in [CGFloat(1), 1.2, 2.4] {
             session?.destroy(); window?.orderOut(nil)
-            let p = fixture(zoom: zoom)
-            // Small enough that AppKit draws it at both scales, not a raster (`textIsSmall`).
+            let p = fixture()
+            session?.pageZoom = Double(backingScale / window.backingScaleFactor)
+            window.setContentSize(NSSize(width: 600, height: 200))
+            // Small enough that AppKit draws it at these scales, not a raster (`textIsSmall`).
             p.apply(wireBatch([["op": "frame", "id": 2, "x": 10.0, "y": 10.0, "w": 100.0, "h": 20.0]]))
             window.orderFrontRegardless()
-            settle()
+            window.displayIfNeeded(); CATransaction.flush()
             let button = try XCTUnwrap(p.views[1]), layer = try XCTUnwrap(button.layer)
             let text = try XCTUnwrap(p.views[2]), textLayer = try XCTUnwrap(text.layer)
             XCTAssertTrue(Capture.borrowsBackingStore(textLayer) || textLayer.sublayers?.contains(where: Capture.borrowsBackingStore) == true,
                           "AppKit draws the label: the case this covers")
             let scale = try XCTUnwrap(button.pixelScale)
-            let tree = Capture.paintOrderLayer(of: button, root: layer, redraw: scale)
+            let tree = Capture.paintOrderLayer(of: button, root: layer)
             defer { Capture.releasePaintCopy(tree) }
-            XCTAssertTrue(Set(contents(tree)).isDisjoint(with: Set(stores(layer))), "at \(zoom), the copy shares a view's backing store")
+            XCTAssertTrue(Set(contents(tree)).isDisjoint(with: Set(stores(layer))), "at \(backingScale), the copy shares a view's backing store")
             // The label's ink rows in the copy's picture and on screen, in device pixels of the button's box.
             let picture = try XCTUnwrap(Capture.picture(of: tree, size: layer.bounds.size, scale: scale))
-            guard let shown = onScreen() else { throw XCTSkip("no window server picture") }
+            guard var shown = onScreen() else { throw XCTSkip("no window server picture") }
             let box = button.convert(button.bounds, to: nil)
             let onScreenBox = CGRect(x: box.minX, y: window.frame.height - box.maxY, width: box.width, height: box.height)
             let copiedInk = try XCTUnwrap(inkRows(picture, in: CGRect(origin: .zero, size: layer.bounds.size), scale: scale), "the copy draws the label")
+            var matched = false
+            waitFor("the window's label at \(backingScale)×") {
+                if !matched, let image = onScreen() {
+                    let rows = inkRows(image, in: onScreenBox, scale: CGFloat(image.width) / window.frame.width)
+                    matched = rows == copiedInk
+                    if matched { shown = image }
+                }
+                return matched
+            }
             let shownInk = try XCTUnwrap(inkRows(shown, in: onScreenBox, scale: CGFloat(shown.width) / window.frame.width), "the window draws the label")
-            XCTAssertEqual(copiedInk, shownInk, "at \(zoom)")
+            XCTAssertEqual(copiedInk, shownInk, "at \(backingScale)")
+        }
+    }
+
+    func testRepeatedPicturesKeepSmallLiveLabelsAfterZoomAndMovement() throws {
+        for backingScale in [CGFloat(1), 1.2, 2.4] {
+            session?.destroy(); window?.orderOut(nil)
+            let p = fixture()
+            session?.pageZoom = Double(backingScale / window.backingScaleFactor)
+            window.setContentSize(NSSize(width: 600, height: 200))
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 10, "y": 10, "w": 100, "h": 20]]))
+            window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
+            let text = try XCTUnwrap(p.views[2]), layer = try XCTUnwrap(text.layer)
+            XCTAssertTrue(Capture.borrowsBackingStore(layer) || layer.sublayers?.contains(where: Capture.borrowsBackingStore) == true)
+            func shownInk() -> Int {
+                guard let shown = onScreen() else { return 0 }
+                let box = text.convert(text.bounds, to: nil)
+                return ink(shown, in: CGRect(x: box.minX, y: window.frame.height - box.maxY, width: box.width, height: box.height))
+            }
+            guard onScreen() != nil else { throw XCTSkip("no window server picture") }
+            waitFor("the small label at \(backingScale)×") { shownInk() > 40 }
+            let originalInk = shownInk()
+            for step in 0..<3 {
+                try autoreleasepool {
+                    _ = try XCTUnwrap(Capture.picture(of: p.viewport))
+                }
+                CATransaction.flush()
+                let dx = step.isMultiple(of: 2) ? 18 : 0
+                p.apply(wireBatch([["op": "frame", "id": 2, "x": 10 + dx, "y": 10, "w": 100, "h": 20]]))
+                window.displayIfNeeded(); CATransaction.flush()
+                waitFor("the live label after screenshot \(step) at \(backingScale)×") { shownInk() > originalInk / 2 }
+            }
         }
     }
 

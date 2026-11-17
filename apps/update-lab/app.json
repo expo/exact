@@ -12,6 +12,7 @@
     "name": "Update Lab"
   },
   "rust": {
+    "data": { "crate": "update-lab-data", "type": "update_lab_data::Probe", "source": "update_lab_data::Probe" },
     "module": {
       "package": "update-lab-logic"
     },

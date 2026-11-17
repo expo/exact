@@ -1,8 +1,9 @@
 //! A paragraph's paint-only run data in canonical run order: colour and
 //! source (the palette), and inline backgrounds (LLP 1053 §0).
 use super::rgba;
+use crate::text::backgrounds::{InlineBackground, InlineBorder, InlinePaint};
 use crate::text::markup::QUIET;
-use crate::text::{backgrounds::InlineBackground, Paragraph, RunPaint};
+use crate::text::{Paragraph, RunPaint};
 use exact_kernel::{Kernel, NodeRef, NodeType, PropId, StyleId};
 
 pub(super) fn focus_fragments(
@@ -22,6 +23,9 @@ pub(super) fn focus_fragments(
                         color: [255; 4],
                         radii: [const { exact_kernel::Dimension::Points(2.0) }; 4],
                         reach: exact_kernel::InlineEdges::default(),
+                        above: 0.0,
+                        below: 0.0,
+                        border: None,
                         outer: Vec::new(),
                     });
                 }
@@ -33,8 +37,32 @@ pub(super) fn focus_fragments(
     paragraph
         .inline_backgrounds(&backgrounds, &kernel.env_of(focus))
         .into_iter()
-        .map(|(shape, _)| shape)
+        .map(|paint| *paint.shape())
         .collect()
+}
+
+/// One of [`Paragraph::inline_backgrounds`]' paints, moved by `origin`.
+pub(super) fn paint_inline(
+    backend: &mut dyn super::Backend,
+    paint: &InlinePaint,
+    origin: (f32, f32),
+    ts: tiny_skia::Transform,
+) {
+    match paint.clone().translated(origin.0, origin.1) {
+        InlinePaint::Fill(shape, color) => backend.fill(&shape, color, ts),
+        InlinePaint::Border(shape, border) => {
+            let InlineBorder {
+                widths,
+                colors,
+                styles,
+            } = border;
+            let mut fills = super::border::border_fills_styled(&shape, widths, colors, styles);
+            fills.extend(super::border::pattern_fills(&shape, widths, colors, styles));
+            for fill in &fills {
+                backend.fill_border(fill, ts);
+            }
+        }
+    }
 }
 
 /// Mirror the canonical run ownership (own text suppresses descendants),
@@ -77,11 +105,11 @@ pub(crate) fn text_palette(
     }
 }
 
-/// Each canonical run's inline `background-color`, in [`text_palette`]'s
-/// order: its own, else its nearest inline ancestor's (CSS: a container's
-/// background covers its descendants' fragments), with the ancestors' it
-/// stands in under it. The paragraph's own background is its box's,
-/// painted with the box.
+/// Each canonical run's inline `background-color` and border, in
+/// [`text_palette`]'s order: its own, else its nearest inline ancestor's
+/// (CSS: a container's background and border surround its descendants'
+/// fragments), with the ancestors' it stands in under it. The paragraph's
+/// own are its box's, painted with the box.
 pub(super) fn text_backgrounds(
     kernel: &Kernel,
     node: &NodeRef<'_>,
@@ -103,7 +131,8 @@ fn collect_backgrounds(
 ) {
     let own = |n: &NodeRef<'_>| {
         let _accent = super::accent_scope(n);
-        n.style
+        let color = n
+            .style
             .mask
             .has(StyleId::BackgroundColor)
             .then(|| {
@@ -115,9 +144,29 @@ fn collect_backgrounds(
                         .resolve(dark),
                 )
             })
-            .filter(|c| c[3] != 0)
-            .map(|color| InlineBackground {
-                color,
+            .filter(|c| c[3] != 0);
+        let widths = n.inline_border_widths();
+        let border = widths
+            .iter()
+            .any(|w| *w > 0.0)
+            .then(|| InlineBorder {
+                widths,
+                colors: n
+                    .style
+                    .border_colors(n.text_color())
+                    .map(|c| rgba(c.resolve(dark))),
+                styles: [
+                    n.style.border_style_top,
+                    n.style.border_style_right,
+                    n.style.border_style_bottom,
+                    n.style.border_style_left,
+                ],
+            })
+            .filter(|b| b.colors.iter().any(|c| c[3] != 0));
+        (color.is_some() || border.is_some()).then(|| {
+            let (above, below) = n.inline_background_block_reach();
+            InlineBackground {
+                color: color.unwrap_or_default(),
                 id: n.id,
                 radii: [
                     n.style.border_radius_top_left.clone(),
@@ -127,8 +176,12 @@ fn collect_backgrounds(
                 ]
                 .map(|d| d.resolve(&kernel.env_of(n.id))),
                 reach: n.inline_background_reach(),
+                above,
+                below,
+                border,
                 outer: Vec::new(),
-            })
+            }
+        })
     };
     if node.props.str(PropId::Text).is_some() {
         out.push(inherited);

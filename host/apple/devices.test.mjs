@@ -11,6 +11,23 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { once } from 'node:events';
 
+test('simulator launches resolve the installed app bundle without touching its website data', async () => {
+  const { simulatorAppContainer } = await import('./devices.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-simulator-data-'));
+  const webkit = resolve(dir, 'Library/WebKit/localStorage');
+  try {
+    mkdirSync(resolve(webkit, '..'), { recursive: true });
+    writeFileSync(webkit, 'saved');
+    const run = (cmd, args) => {
+      expect([cmd, ...args]).toEqual(['xcrun', 'simctl', 'get_app_container', 'sim', 'app.id', 'app']);
+      return { status: 0, stdout: dir + '\n' };
+    };
+    expect(simulatorAppContainer('sim', 'app.id', 'app', run)).toBe(dir);
+    expect(readFileSync(webkit, 'utf8')).toBe('saved');
+    expect(() => simulatorAppContainer('sim', 'app.id', 'app', () => ({ status: 1, stderr: 'not installed' }))).toThrow('not installed');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('Mac signing uses the selected team and never chooses the first of several identities', async () => {
   const { macIdentity } = await import('./devices.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-mac-identities-'));

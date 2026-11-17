@@ -418,7 +418,7 @@ fn folding_keeps_the_same_bits_on_every_host() {
         0x3f76_f5ad_db50_c914
     );
 
-    // Tamber's mix.tamber: color-mix(in oklab, #1083fe 88%, #0b0f14).
+    // Forma's mix.forma: color-mix(in oklab, #1083fe 88%, #0b0f14).
     // Its a component differed by one ulp between the Linux run and the golden.
     let lab = |rgb: [f64; 3]| {
         MixSpace::Oklab.from_linear_srgb(

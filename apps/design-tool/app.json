@@ -14,6 +14,6 @@
   },
   "rust": false,
   "commands": {
-    "server": ["bun", "stub/tamber-stub.ts"]
+    "server": ["bun", "stub/forma-stub.ts"]
   }
 }

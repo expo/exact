@@ -90,8 +90,10 @@ fn a_blocks_tactic_reaches_the_trial_and_the_layout_through_the_abi() {
     assert_eq!(bridge.measure_block(id, [260.0, 100.0], [3, 3], tactic), 32);
     let measured: Vec<_> = bridge
         .output
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect();
     assert_eq!(&measured[2..], &[180.0, 60.0, 26.0, 8.0, 13.0, 4.0]);
     let record = |tactic| {

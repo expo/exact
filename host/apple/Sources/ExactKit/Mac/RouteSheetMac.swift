@@ -124,8 +124,8 @@ final class RouteChromeLine: NSView {
 /// A sheet's own push button. It is a Tab stop as Keyboard Navigation has
 /// an `NSButton`, by the setting the session reads (a drive's or a test's
 /// stands in for the person's, KeyViewLoopMac.swift).
-final class RouteChromeButton: NSButton, AgentOwned {
-    var agentViewId: UInt32? { tag > 0 ? UInt32(exactly: tag) : nil }
+final class RouteChromeButton: NSButton, InspectionOwned {
+    var inspectionViewId: UInt32? { tag > 0 ? UInt32(exactly: tag) : nil }
     override var acceptsFirstResponder: Bool { KeyboardNavigation.on && isEnabled }
     override var canBecomeKeyView: Bool { acceptsFirstResponder && !isHiddenOrHasHiddenAncestor }
 }
@@ -457,7 +457,7 @@ extension DialogHost {
             let size = entry.sheet?.window.contentView?.frame.size ?? .zero
             return ["route": Int(entry.dialog.id), "presentation": "sheet", "title": entry.header?.title ?? NSNull(),
                     "cancel": id(entry.header?.cancel), "confirm": id(entry.header?.confirm), "header": entry.header.map { $0.whole ? "projected" : "partly" } ?? "authored",
-                    "size": [Agent.r2(size.width), Agent.r2(size.height)], "closedby": dismissalOwner(of: entry.dialog).props["closedby"] ?? "closerequest"]
+                    "size": [InspectionValue.r2(size.width), InspectionValue.r2(size.height)], "closedby": dismissalOwner(of: entry.dialog).props["closedby"] ?? "closerequest"]
         }
         guard let painted = presenter.navigation.paintedModal else { return nil }
         return ["route": Int(painted.id), "presentation": "painted", "kept": presenter.navigation.keptSheets[painted.id] ?? NSNull()]

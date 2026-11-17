@@ -107,7 +107,7 @@ impl World {
         } else {
             Vec::new()
         };
-        for (&name, storage) in &self.components {
+        for (&name, storage) in self.components.iter() {
             if self.registry[name].presentation {
                 continue;
             }
@@ -129,7 +129,7 @@ impl World {
                 reasons.len() < 8
             });
         }
-        for (&name, storage) in &self.resources {
+        for (&name, storage) in self.resources.iter() {
             if reasons.len() == 8 {
                 break;
             }
@@ -262,15 +262,11 @@ impl World {
         self.storages_json(&self.resources, 0)
     }
     #[track_caller]
-    fn storages_json(
-        &self,
-        storages: &BTreeMap<&str, Box<dyn Erased>>,
-        index: usize,
-    ) -> Result<String, DataError> {
+    fn storages_json(&self, storages: &Storages, index: usize) -> Result<String, DataError> {
         self.check_reads(std::panic::Location::caller());
         let mut w = crate::json::Encoder::default(); // State round-trips; only layout is rounded.
         w.begin_struct();
-        for (name, s) in storages {
+        for (name, s) in storages.iter() {
             if s.has(index) {
                 w.field(name);
                 s.write_one(index, &mut w);

@@ -1,3 +1,6 @@
+// On a compact iPhone the gallery opens on its sidebar, UIKit's collapsed
+// split view, and a section's views are on screen only once it is selected.
+// So a test taps inside a section only after selecting that section.
 test "text styles and color samples are present and animate"
   clock data
   expect tree has "text-styles"
@@ -20,14 +23,6 @@ test "text styles and color samples are present and animate"
   expect tree has "text-cjk"
   expect tree has "text-emoji"
   expect tree has "text-tall"
-  expect text "text-changing" == "Original words"
-  expect text "text-numeric" == "109.01"
-  tap "text-animate"
-  clock settle
-  expect text "text-changing" == "Changed words"
-  expect text "text-numeric" == "128.90"
-  tap "text-animate"
-  clock settle
   expect text "text-changing" == "Original words"
   expect text "text-numeric" == "109.01"
   tap "section-textcolors"
@@ -57,18 +52,27 @@ test "text styles and color samples are present and animate"
   tap "section-typography"
   clock data
   expect text "text-changing" == "Original words"
+  expect text "text-numeric" == "109.01"
+  tap "text-animate"
+  clock settle
+  expect text "text-changing" == "Changed words"
+  expect text "text-numeric" == "128.90"
+  tap "text-animate"
+  clock settle
+  expect text "text-changing" == "Original words"
+  expect text "text-numeric" == "109.01"
 
 test "HDR range choices stay enabled across native sections" on ios
   clock data
   expect tree has "range-typography"
   expect text "range-typography-title" == "Dynamic range limit"
   expect tree missing "range-typography-note"
-  tap "range-typography-standard"
-  expect state limit == "standard"
+  expect state limit == "no-limit"
   tap "section-textcolors"
   clock data
-  expect enabled "range-textcolors-no-limit"
+  tap "range-textcolors-standard"
   expect state limit == "standard"
+  expect enabled "range-textcolors-no-limit"
   tap "range-textcolors-no-limit"
   expect state limit == "no-limit"
   tap "section-css"
@@ -98,6 +102,9 @@ test "HDR range choices stay enabled across native sections" on ios
   tap "section-typography"
   clock data
   expect state limit == "no-limit"
+  expect enabled "range-typography-standard"
+  tap "range-typography-standard"
+  expect state limit == "standard"
 
 test "the browser offers range choices only for HDR images" on web
   clock data

@@ -9,19 +9,6 @@ import Contract.Number
 
 namespace Contract
 
-inductive Value where
-  | num (f : F64)
-  | bool (b : Bool)
-  | str (s : String)
-  | unit
-  | none
-  | some (v : Value)
-  | list (xs : List Value)
-  /-- A record: the shape it was built as (for field access by name and
-  printing; never compared) and its fields in declaration order. -/
-  | record (shape : String) (fields : List Value)
-  deriving Repr, Inhabited
-
 /-- Why an evaluation has no value. `pending` is not a failure: a derive or
 resource read before it settled, which settlement retries. -/
 inductive Err where

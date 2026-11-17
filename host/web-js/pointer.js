@@ -36,14 +36,20 @@ export function pointer(e, kind, f) {
   }
   let s = e.$pointer;
   if (!s) {
-    s = e.$pointer = { held: null, owner: false, last: null, move: null, frame: 0 };
+    s = e.$pointer = { held: null, owner: false, last: null, move: null, frame: 0, spent: false };
     const live = () => e.isConnected && !e.closest("[data-exiting]");
     const flush = () => {
-      cancelAnimationFrame(s.frame); s.frame = 0;
       const m = s.move; s.move = null;
       if (m && live()) s.pointermove?.(record(e, m));
     };
-    const moved = ev => { s.last = ev; s.move = ev; if (!s.frame) s.frame = requestAnimationFrame(flush); };
+    // A move goes out in its own event unless one went out since the last animation frame; then the latest goes at
+    // the next frame. Chromium and Firefox deliver moves aligned to frames, so each goes out as it comes.
+    const tick = () => { s.frame = 0; s.spent = s.move !== null; flush(); if (s.spent) s.frame = requestAnimationFrame(tick); };
+    const moved = ev => {
+      s.last = ev; s.move = ev;
+      if (!s.spent) { s.spent = true; flush(); }
+      if (!s.frame) s.frame = requestAnimationFrame(tick);
+    };
     // While held, its pointer anywhere in the document: the owner's moves,
     // and every holder's latest point, which a blur's up reports.
     const held = ev => { if (ev.pointerId !== s.held) return; s.last = ev; if (s.owner && s.pointermove) moved(ev); };

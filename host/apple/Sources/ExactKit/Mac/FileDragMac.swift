@@ -150,6 +150,7 @@ extension Field {
     override func concludeDragOperation(_ sender: NSDraggingInfo?) { if !FileDrag.takes(self, sender) { super.concludeDragOperation(sender) } }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// `tap <target> drop <path…>`, `dragenter <path…>` and `dragleave`
     /// (studio diary R19): the drag a Finder drag would bring to the window
@@ -180,4 +181,5 @@ extension Agent {
         return ["tapped": Int(node.id), "at": at, "drop": paths.count, "delivery": "presenter"]
     }
 }
+#endif
 #endif

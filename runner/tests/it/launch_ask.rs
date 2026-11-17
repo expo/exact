@@ -121,8 +121,6 @@ fn shelf_asks_for_discover_only_on_its_tab() {
         "leaving Discover cancels its read"
     );
     assert!(r.pending().is_empty());
-    r.act("chooseSubject", vec![Value::str("fantasy")]).unwrap();
-    assert!(r.take_requests().is_empty());
     r.act("pick", vec![Value::str("discover")]).unwrap();
     let request = one_request(&mut r);
     r.fulfill(

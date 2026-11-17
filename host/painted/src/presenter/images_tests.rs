@@ -43,7 +43,7 @@ fn a_hidden_pictures_failed_download_is_asked_again_only_once_it_shows() {
         image "{origin}/busy.png" width=200 height=200 testId="picture"
 "#
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (300., 300.),
@@ -137,7 +137,7 @@ fn a_landed_picture_owes_one_paint_and_no_idle_deadline() {
     let origin = picture_server_gated(Arc::new(AtomicUsize::new(0)), Some(gate));
     let source =
         format!("component App\n  view\n    image \"{origin}/paint.png\" width=20 height=20\n");
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (40., 40.),
@@ -187,7 +187,7 @@ fn an_image_hears_load_once_a_source_when_its_first_picture_lands() {
       image "{origin}/" + name + ".png" width=(big ? 200 : 20) height=(big ? 200 : 20) load=loaded testId="picture"
 "#
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (300., 300.),
@@ -256,7 +256,7 @@ fn a_load_waiting_is_sent_only_to_the_node_and_source_it_landed_for_and_owes_a_t
     column width=300 height=300
       image "pictures/a.png" width=20 height=20 load=loaded testId="picture"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (300., 300.),
@@ -326,7 +326,7 @@ fn a_load_is_not_sent_once_an_earlier_loads_action_changed_its_source() {
       image "pictures/a.png" width=20 height=20 load=first testId="one"
       image second width=20 height=20 load=loaded testId="two"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (300., 300.),
@@ -380,7 +380,7 @@ fn a_load_waiting_is_dropped_when_actions_change_its_source_away_and_back() {
       image "pictures/two.png" width=20 height=20 load=back testId="two"
       image third width=20 height=20 load=loaded testId="three"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (300., 300.),
@@ -497,7 +497,7 @@ fn error_app(source: &str) -> Presenter<()> {
         image "{source}" + name + ".png" width=200 height=200 load=loaded error=failed testId="picture"
 "#
     );
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (300., 300.),
@@ -686,7 +686,7 @@ fn an_over_long_source_given_again_after_a_symbol_errs_again() {
       image shown width=40 height=40 error=failed testId="picture"
 "#
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (300., 300.),
@@ -701,4 +701,41 @@ fn an_over_long_source_given_again_after_a_symbol_errs_again() {
     run(&mut p, 100);
     press(&mut p, "back");
     until(&mut p, |s| s["errors"].as_f64() == Some(2.));
+}
+
+/// A video's poster loads as an image's picture does and paints in its box,
+/// placed by `object-fit` (`contain`: 150×150 in the middle here), until the player shows its source's first frame; the video's natural
+/// size stays its video's (LLP 1042.001 D5).
+#[test]
+fn a_poster_paints_until_the_first_frame_and_sizes_nothing() {
+    let origin = picture_server(Arc::new(AtomicUsize::new(0)));
+    let source = format!(
+        "component App\n  view\n    video src=\"a.mp4\" poster=\"{origin}/poster.png\" testId=\"video\"\n"
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &crate::test_plan(&source),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.frame();
+    assert!(p.wait_images(Duration::from_secs(30)));
+    let pixels = p.frame();
+    assert_eq!(pixels.pixel(150, 75).unwrap().blue(), 200, "the poster");
+    let key = p.host.kernel().find_by_test_id("video")[0];
+    let node = p.host.kernel().node_by_key(key).unwrap();
+    // HTML's 150 high before metadata, not the poster's 400.
+    assert_eq!(node.frame.height, 150.);
+    let (id, session) = (node.id, p.brush.native_session);
+    assert!(p.reader_media(id, key, session, "", "", r#"{"frameReady":true}"#, 1.));
+    let pixels = p.frame();
+    assert_ne!(
+        pixels.pixel(10, 10).unwrap().blue(),
+        200,
+        "gone at the first frame"
+    );
 }

@@ -1,5 +1,6 @@
-// Inline client rectangles: an empty run, a small run in a tall line, a wrapped run
-// (InlineFrameMacTests, InlineFrameIOSTests). Compiled by build.mjs --test.
+// Inline client rectangles: an empty run, a small run in a tall line, a wrapped run,
+// three runs' border boxes, one of them empty, and a right-to-left run's across two
+// lines (InlineFrameMacTests, InlineFrameIOSTests). Compiled by build.mjs --test.
 component App
   view
     column padding=24 gap=12
@@ -13,3 +14,21 @@ component App
       text width=40 font-size=16 font-family="Arial" line-height="20px" testId="wrap-paragraph"
         text "Hi"
         text " there" id="wrap" testId="wrap"
+      text width=260 font-size=16 font-family="Arial" line-height="20px" testId="padded-paragraph"
+        text "Hi "
+        text "link" id="padded" testId="padded" padding="7.5px 8px" margin-left=10 margin-right=12 border-right-width=3 border-right-style="solid"
+        text " there"
+      text width=260 font-size=16 font-family="Arial" line-height="20px" testId="nested-paragraph"
+        text "Hi "
+        text id="nested" testId="nested" padding=6
+          text "ab" padding-left=3 margin-left=2
+          text "cd" padding-right=4
+        text " x"
+      text width=260 font-size=16 font-family="Arial" line-height="20px" testId="padded-empty-paragraph"
+        text "Hi"
+        text "" id="paddedEmpty" testId="padded-empty" padding="3px 5px" border-width=2 border-style="solid" background-color="#dddddd"
+        text " there"
+      text width=180 font-size=16 font-family="Arial" line-height="20px" direction="rtl" testId="rtl-paragraph"
+        text "מילה "
+        text "טקסט ארוך שעובר בין שורות" id="rtlWrap" testId="rtl-wrap" padding="2px 6px" border-width=3 border-style="solid"
+        text " סוף"

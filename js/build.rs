@@ -41,6 +41,7 @@ fn main() {
         "src/store.js",
         "src/storage.js",
         "src/reply.js",
+        "src/errors.js",
         "src/prelude.js",
         "src/process.js",
         "src/intl.js",
@@ -161,6 +162,7 @@ fn main() {
         "src/store.js",
         "src/storage.js",
         "src/reply.js",
+        "src/errors.js",
         "src/prelude.js",
         "src/process.js",
         // Last: it deletes console.js's hand-offs to the files above.
@@ -276,6 +278,8 @@ fn main() {
         "nul-byte",
         "runtime-lines",
         "native-init",
+        "error-events",
+        "error-events-load",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

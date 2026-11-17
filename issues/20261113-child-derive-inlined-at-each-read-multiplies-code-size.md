@@ -30,8 +30,8 @@ Lowering emits executable rows per component use for child derives and
 non-atomic prop or inject arguments. Reads call those bodies on the reader's
 budget without storing results. Action bodies stay substituted on purpose,
 so their reads keep the action's sequential state semantics. Web builds report
-expanded code by component. The proof work and strict browser comparison
-listed under "Work still owed" remain open.
+expanded code by component. The proof work listed under "Work still owed"
+remains open.
 
 ## Size report
 
@@ -73,26 +73,152 @@ The executable-call model and translation validation are described in
 
 ## Work still owed
 
-Equivalent substituted expressions now register one sharing candidate per
-instance and owner. All 65 sibling aliases render on the runner and JS.
-Registration includes derives reached only through other derives, so their
-bodies stay shared without a direct view read. Static readers stop after
-64 alias peels.
-Compiled-source regressions cover both alias shapes; a plan test retains
-the 64/65 boundary independently of equivalent-expression deduplication.
+`LowerCheck` now validates root- and arm-owned rows against their substituted
+expressions in every live owner instance of every reached configuration.
+Lowering records the source tag of each emitted plan region; validation checks
+the complete region identity before joining owners, so a folded group label is
+absent without shifting the regions that follow it and a changed or reordered
+roster is a reported divergence. Owner projections use checked indices and
+offsets only after that roster matches. The render records each live
+instance's source tag, chosen arm or key, and duplicate ordinal in its row
+identity; render-owned marker rows record the item, position and match
+binding. The check enumerates those records, recovers binder names from the
+source region, and reconstructs plan frames and owned-slot stores without
+evaluating a condition, subject, list, key or navigation property. The item,
+key and arm are the render's; the row body and its substituted source are
+judged at the reached configuration's current clock. A closed panel has no
+recorded instances, while a prerendered panel has the instances its render
+built. The reader checks the row call and every item, position and match binding
+as separate VM runs. The row call covers the callee frame cut; the binding
+probes cover the reader context reconstructed from the render. Caller
+restoration is the VM invariant `resume_restores_environment`, and accounting
+case `row-restores-reader-frame` compares it with the runner in one run. A
+lowered plan cannot alter `resume`. The separate probes charge no synthetic
+aggregate that the application never builds.
 
-Keep this issue open for the general lowering-sharing correspondence.
-`VmRows` models fresh callee machines, owner-frame selection, shared call
-and callback-work counters, and restoration of the reader. `LowerCheck`
-validates root-owned bodies against their checked substituted expressions
-and detects a mutated row. Arm-owned bodies still need contextual validation
-in instance environments, including their view readers. The model now carries
-per-instance owned-slot stores and reselects them after a callee's frame cut,
-restoring the reader's environment on return. These stores still need to be
-supplied by contextual translation validation. The model still needs roster
-list-step, string and extent accounting, and a
-refinement proof against the runner. Its local invariants do not prove
-the transformation's scope, binder or transitive-dependency conditions.
+The focused case covers nested owners, shadowing, stateful instances,
+transitive-only dependencies and recreation. Mutating its owner arm, making
+its binder depth return a different enclosing value, or changing its body
+produces a divergence. Folded headers, folded footers, opened and closed
+panels, a prerendered panel inside a virtualized row, a reordered first-region
+owner and idle clocks with nonfinite or changing keys have focused coverage.
+"Executable row validation reads live owned answers without synthetic bounds"
+also makes both sides read an instance-owned request's recorded answer and
+currentness. Its focused mutation returns the root idle placeholder's result;
+the new corpus case covers the runner path. "Executable row validation resolves
+owned requests through retained frames" records each resource's plan owner;
+"Executable row validation resolves owned requests through the owning arm"
+retains both its region and arm. `VmRows` then resolves the read through that
+arm's retained instance frame, as the runner does. Moving the request's owner
+outside the frame cut or to the unselected sibling arm is a divergence. The
+69 accounting cases compare `BadScope` for the cut and for all five resource
+reads from the wrong arm. The restoration case also compares the returned
+reader item, `2`, not only the outcome and counters. The seeded 500-case run
+and the current 642-case corpus have no divergence and no instance-environment
+refusal.
+
+The checker has a deliberate limit. For a request an instance owns, its
+focused mutations detect a wrong executable body, a wrong owner frame, an
+owner cut out of the retained frames, and an owner moved to the wrong arm.
+They do not establish arbitrary plan mutations beyond those four, operations
+outside `Contract.Vm` such as `NativeProps` and linked Unicode case conversion,
+or a general proof that every admitted shared load equals substitution. They
+also cannot see an instance that production creates under an owned request's
+placeholder and destroys after the synchronous answer within one commit. A
+focused `false`-placeholder, `true`-answer case built `Temp` in the runner, but
+the semantics settled the parent's request before traversing its children, so
+the final `RowStore` held no `Temp` identity and both bodies received zero
+contextual comparisons. Repair needs the semantics to expose that intermediate
+render or record its instances. The request-settlement order inherited from
+main is unchanged; this branch adds render-owned frame markers.
+
+Further coverage is owed for a request moved to a retained ancestor whose
+arguments read an inner slot: `LowerCheck.vmEnvAt` keeps the source instance's
+answer while `VmRows.resourceInScope` checks only the mutated owner's retained
+region and arm, whereas production evaluates the arguments in the owner frames
+in `runner/src/runner/owned.rs`. It is also owed for repeated-region frames
+where the nearest instance lacks the request but an enclosing instance has it:
+`VmRows.resourceInScope` accepts any retained matching frame, while
+`Frame::row_of` in `runner/src/vm.rs` selects the innermost frame of the region.
+Finally, it is owed for successful in-scope `pending`, `failed` and `failure`
+reads whose instance status differs from the root columns: `LowerCheck.vmEnvAt`
+overwrites only value and currentness, and the present accounting cases reach
+those reads only after wrong-arm scope has already failed. These are coverage
+gaps, not reproduced results. They, the transient-instance case above and any
+further undetected plan mutation are owed work rather than fixes on this
+branch.
+
+Keep this issue open for stages 4 and 5. Stage 3 is done: `VmRows` charges
+callback and roster list work, string outputs, value nodes, string bytes and
+value depth at production's points and in production's refusal order. It
+transfers call and list counters and the extent memo into a row and back on
+success or refusal, and unwinds active call depth. `difftest accounting` runs
+69 fixed runner-against-model cases: pairs at and one past every resource and
+executable-call bound, plus owned-request scope and caller restoration. Each
+compares the trap, by name, and all three counters; restoration also compares
+the returned value.
+A roster result's size is decided from its arguments before it is built, so a
+`replaceAll` whose result would be 4 GiB is refused without constructing it.
+`NativeProps` and linked Unicode case conversion are outside the model and the
+comparison. No production accounting defect was found.
+
+One limit: no pair exercises `replaceAll` with a substitution template or with
+an empty pattern across an astral character, because a result at the bound
+exhausts the Lean interpreter. Two reviews checked that arithmetic by reading
+it against `runner/src/strings.rs`, and `QUEUE.md` names the cases past the
+bound that would cover it.
+
+Stage 4 has proved the local source and row rules, but not their general
+composition. `Contract.LowerSharing` states the matcher's active-depth,
+instance-chain, owner-frame, region-cut, binder/free-read and cached-chain
+conditions. Given valid reader and owner lowering contexts, `FrameCutCtx` and
+`ScopeResolves`, `localsRespectCut_of_ctx` derives free-read value agreement.
+Closed nested-owner examples discharge those structural hypotheses using
+distinct local lists and item, index and match bindings, and reject a wrong
+cut. No theorem yet derives them from an admitted site's real scope stack and
+`ownerFrames`. `admitted_site_value_iff` proves that such a reader and owner
+give the substituted expression the same source value when `Small` and
+`LocalsRespectCut` hold, and `admitted_expr_correct` transports the existing
+lowering theorem to the read site.
+
+`Contract.VmRowsProof` gives successful bounded runs an inductive call tree.
+`admitted_shared_load_value_iff` and
+`successful_shared_load_has_inlined_run` compose the exact load rule with the
+source theorem, but both still take the callee correspondence as a premise.
+`LiteralGraph.returns` discharges that premise by smaller-index induction for
+a finite load-only graph ending in one string literal, including transitive
+loads. It does not cover arbitrary expressions emitted by lowering. The Rust
+matcher test runs its exact conjunction through admitted nested-owner and
+unequal arm/scope-cut cases, plus refused chain, active, frame-cut,
+scope-underflow, free-read, expression and cached-margin cases. A focused
+lowering test checks child derives shared between text and distinct `for` keys,
+including one read only as a key; each key loads the emitted row and contains
+no copied `join` body. The lowering differential uses callback and outer
+values 2 and 10; replacing the callback-local read with the outer slot is a
+reported value divergence.
+
+Resource outcomes remain separate. A refusal has no value conclusion. One
+finite production-ordered graph with fully inlined body `[unit, ret]` checks
+that 64 shared calls return and the attempted 65th refuses `CallDepth`; a
+separate example checks that both 48- and 49-call lowering-margin chains
+return. An inlined body can also succeed while the shared form refuses its
+call count. A stage that states a resource outcome as a theorem must first
+make the walk it names total.
+
+Stage 4 still owes a theorem for every graph emitted by the Rust sharing
+transformation, with no semantic callee premise. The missing proof needs a
+syntactic relation between recursive `shared_expression` interception and
+`Lower.compile`, then a resource-aware trace simulation that replaces each
+successful shared call with its ordinary inlined derive read. It must state
+the graph's call-count and depth capacity for the source-to-shared direction;
+the successful-shared-to-source direction needs no budget premise. Before
+that composition can use the local source theorem, stage 4 also owes a lemma
+that obtains `FrameCutCtx` and `ScopeResolves` from an admitted site's actual
+scope stack and `ownerFrames`, and a generalization from `Lower.Ctx`'s empty
+VM local stack and local count zero to admitted reads beneath existing
+callback or `let` locals. Stage 5 must then move the shipped row-call path into
+extractable production code and prove it refines `VmRows` after the other
+owner-model lanes are integrated.
 
 The strict browser comparison before and after sharing found no new failure.
 `conform.mjs` over every web app with `--synthetic --build --strict`, on Linux

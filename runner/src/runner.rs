@@ -16,9 +16,11 @@ mod background;
 mod commit;
 mod console;
 pub use console::Console;
+mod completion;
 mod control;
 mod errors;
 mod reply;
+pub use completion::{Completion, CompletionCapability, CompletionReply, CompletionSubscription};
 #[cfg(test)]
 mod request_set_tests;
 #[cfg(test)]
@@ -52,20 +54,20 @@ mod held;
 mod live;
 mod mode;
 pub use held::Asked;
+mod forma;
 mod root_font;
 mod shown;
 mod sounds;
-mod tamber;
 mod theme;
 pub use event::{
     ActionBinding, ActionBindingError, ActionBindingRefusal, ControlValue, Event, KeyModifiers,
     KeyboardEvent, ScrollEvent,
 };
-pub use live::{LiveApplied, LiveRefusal};
-pub use tamber::{
-    Color as ColorKind, Font, Kind, Length as LengthKind, Number as NumberKind, Place, Tamber,
+pub use forma::{
+    Color as ColorKind, Font, Forma, Kind, Length as LengthKind, Number as NumberKind, Place,
     Token, Type as TypeKind,
 };
+pub use live::{LiveApplied, LiveRefusal};
 mod canvas2d;
 pub use canvas2d::{
     engine as canvas_engine, CanvasEngine, CanvasList, DrawReply, DrawRequest, Drawn, Geometry,
@@ -79,8 +81,8 @@ mod source;
 mod tabs;
 pub use source::{
     Announce, BackgroundState, DataError, DataSource, DataSourceWrapper, InFlight, Interrupt,
-    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, SnapshotModule, Target, Write,
-    BACKGROUND,
+    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, Report, Reporter, SnapshotModule,
+    Target, Write, BACKGROUND,
 };
 mod delivery;
 mod links;
@@ -113,6 +115,8 @@ mod lists;
 mod media_session;
 pub mod outstanding;
 mod overrun;
+mod owned;
+mod owned_sends;
 mod page;
 mod parallel;
 mod perf;
@@ -126,6 +130,7 @@ mod history;
 pub mod router;
 pub use lists::{ListTextPolicy, ListTextPosition};
 mod settlement;
+pub(crate) use settlement::zero;
 mod sockets;
 pub use sockets::{SocketReader, SocketState};
 mod activities;
@@ -256,6 +261,7 @@ enum Seed<'a> {
 /// answers, and the arguments it was asked with (what `parse` sees).
 #[derive(Clone)]
 struct PendingReq {
+    completion: Option<CompletionReply>,
     module: Option<ModuleInstance>,
     inspection_generation: u64,
     refusal: Option<(&'static str, bool)>,
@@ -383,7 +389,7 @@ pub struct Runner<D: DataSource> {
     /// A development build admitting live batches ([`Runner::admit_live`]), and its last scrub frame.
     live: live::Live,
     /// What a binding was told of this plan's tokens (a name it lacks), each said once (LLP 1121 D12).
-    tamber_said: Vec<String>,
+    forma_said: Vec<String>,
     /// How many times a token's value moved (`set_tokens`): a binding's input.
     design_moves: u64,
     /// Its role overrides, its own (LLP 1121 stage 5; [`Runner::roles`]).
@@ -462,7 +468,17 @@ pub struct Runner<D: DataSource> {
     then_due: Vec<f64>,
     /// `queue` mutations' waiting sends, `next`s and stalls (LLP 1092).
     queues: queue::Queues,
+    /// Each mutation row's instance: `None` for a declared row, a child's
+    /// send for a row after them (LLP 1035.005.004 D6, `owned_sends.rs`).
+    owned_sends: Vec<Option<owned_sends::OwnedSend>>,
+    /// What this commit's sends wrote into instances, to put back if it is refused.
+    send_undo: Vec<(
+        std::rc::Weak<std::cell::RefCell<vm::Owned>>,
+        u32,
+        Option<Value>,
+    )>,
     next_ticket: u64,
+    completion_identity: std::cell::OnceCell<completion::Identity>,
     /// The module's background work's round, when one is out (LLP 1097 D5).
     background: background::Background,
     /// Module work's requests in flight (LLP 1146 D2).
@@ -486,6 +502,11 @@ pub struct Runner<D: DataSource> {
     /// Resources an action asked to re-request; consumed by the next settle
     /// that can ask them (LLP 1054.000.000 D2).
     refresh_next: Vec<usize>,
+    /// The `late` slots are initialized: a `late` resource settles from now
+    /// on (LLP 1035.005.004 D2).
+    late_ready: bool,
+    /// The boot render's instances are making their requests (D8).
+    owned_launch: bool,
     /// Resources whose ask in the commit being made is the launch's own,
     /// replacing a stand-in: nobody asked for fresh data, so the request is
     /// not sent as a refresh, and a reply fetched for this launch may answer
@@ -520,16 +541,14 @@ pub struct Runner<D: DataSource> {
     /// The agent's preferred answers of native modules' sources (LLP 1124 D7).
     extensions: modules::Extensions,
     poisoned: bool,
-    /// Evaluate every site on every update (the incremental update's
-    /// reference; `set_full_evaluation`).
+    /// Evaluate every site on every update (the incremental update's reference; `set_full_evaluation`).
     full: bool,
     /// Row slots actions wrote, for the next update.
     row_writes: crate::instance::RowWrites,
     /// Journal lines an update produced, written once its batch applies.
     notes: Vec<String>,
-    /// This commit's work outside the tree: rows the event's lookup
-    /// compared, derives settled by evaluation, and the store's copied
-    /// bytes when it began.
+    /// This commit's work outside the tree: rows the event's lookup compared, derives settled
+    /// by evaluation, and the store's copied bytes when it began.
     lookup_rows: std::cell::Cell<usize>,
     derives_evaluated: usize,
     copied_at_checkpoint: usize,
@@ -546,11 +565,14 @@ pub struct Runner<D: DataSource> {
     viewport_geometry: crate::viewport::Geometry,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     page: crate::page::Page,
+    presented: crate::page::Presented, // `exactPage().presented` (LLP 1069.000 D2)
+    window_name: String,               // the page's `name` (LLP 1030.004 D2)
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
     text_axes: text_axes::TextAxes,
     place: crate::time::Place,
+    host_direction: Option<exact_kernel::Direction>, // the platform's, told at launch ([`Runner::direction`])
     surface_records: exact_kernel::SortedMap<String, String>,
     canvas_performance: exact_kernel::SortedMap<String, String>,
     surface_refusals: exact_kernel::SortedMap<String, String>,
@@ -587,6 +609,7 @@ pub struct Runner<D: DataSource> {
     /// its action issues (LLP 1069.003 D3).
     input_source: Option<ViewId>,
     journal_start: usize,
+    journal_echoed: std::cell::Cell<usize>,
     flow_warned: exact_kernel::SortedSet<exact_kernel::NodeKey>,
     fragment_warned: exact_kernel::SortedSet<exact_kernel::NodeKey>,
     /// The lists already found conforming to their types, so a live answer
@@ -807,8 +830,7 @@ impl<D: DataSource> Runner<D> {
                         }))
             })
             .collect();
-        // What each carried reader's last ask read (LLP 1069.005 D2): whether
-        // a store change asks it again.
+        // What each carried reader's last ask read (LLP 1069.005 D2): whether a store change asks it again.
         let read_contents: Vec<Option<bool>> = (plan.resources.iter())
             .map(|resource| {
                 let (name, source) = (plan.str(resource.name), plan.str(resource.source));
@@ -842,6 +864,7 @@ impl<D: DataSource> Runner<D> {
             inspection_digest: std::cell::OnceCell::new(),
             keeps_midi: std::cell::OnceCell::new(),
             action_binding_origin: std::rc::Rc::new(()),
+            completion_identity: Default::default(),
             detached_focus: Vec::new(),
             data,
             kernel,
@@ -864,7 +887,7 @@ impl<D: DataSource> Runner<D> {
             reorder_kept: Default::default(),
             design: None,
             live: Default::default(),
-            tamber_said: Vec::new(),
+            forma_said: Vec::new(),
             design_moves: 0,
             roles: exact_kernel::style::roles::Installed::new(roles.clone()),
             reorder_session: None,
@@ -900,6 +923,8 @@ impl<D: DataSource> Runner<D> {
             unsent: Vec::new(),
             then_due: Vec::new(),
             queues: Default::default(),
+            owned_sends: Vec::new(),
+            send_undo: Vec::new(),
             next_ticket: 1,
             background: Default::default(),
             module_work: Default::default(),
@@ -921,6 +946,8 @@ impl<D: DataSource> Runner<D> {
             retry_reader: None,
             mutation_requests: 0,
             refresh_next: Vec::new(),
+            late_ready: false,
+            owned_launch: false,
             launch: Vec::new(),
             writes: writes::Writes::default(),
             reconciling: Vec::new(),
@@ -935,10 +962,13 @@ impl<D: DataSource> Runner<D> {
             viewport,
             viewport_geometry,
             page: Default::default(),
+            presented: crate::page::Presented::at_boot(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
             text_axes: Default::default(),
             place: launched_place.clone().unwrap_or_default(),
+            window_name: crate::time::launch_window_name(),
+            host_direction: crate::time::launch_direction(),
             surface_records: Default::default(),
             canvas_performance: Default::default(),
             surface_refusals: Default::default(),
@@ -955,22 +985,23 @@ impl<D: DataSource> Runner<D> {
             derive_store_dependent: Vec::new(),
             journal: std::collections::VecDeque::new(),
             console: Default::default(),
-            faults: faults::Faults::from_env(),
+            faults: faults::Faults::from_env().map_err(RunnerError::InvalidFaults)?,
             device_holds: Vec::new(),
             held_replies: Vec::new(),
             auth: Default::default(),
             device_links: DeviceLinks::CORE,
             input_source: None,
             journal_start: 0,
+            journal_echoed: Default::default(),
             flow_warned: Default::default(),
             fragment_warned: Default::default(),
             conformed: Default::default(),
         };
         runner.init_slots(carried, launch)?;
         runner.carry_modes(carried.map_or(&[], |c| &c.modes));
+        runner.ask_kept_scheme();
         runner.derives = vec![None; runner.plan.derives.len()];
-        // Resources: carry only the same named source and a value that still
-        // fits the declared shape; a carried value can refuse nothing.
+        // Resources: carry only the same named source and a value that still fits the declared shape; a carried value can refuse nothing.
         let carried_resources = (0..runner.plan.resources.len())
             .map(|i| {
                 let name = runner.plan.str(runner.plan.resources[i].name);
@@ -1033,6 +1064,7 @@ impl<D: DataSource> Runner<D> {
         runner.pending_mut = vec![false; runner.plan.mutations.len()];
         runner.then_due = vec![f64::INFINITY; runner.plan.mutations.len()];
         runner.queues = queue::Queues::new(runner.plan.mutations.len());
+        runner.owned_sends = vec![None; runner.plan.mutations.len()];
         // A carried boot never takes compiled data: it was baked for the
         // initial state, and the carried state is not that.
         runner.settle(carried.is_none())?;
@@ -1042,28 +1074,8 @@ impl<D: DataSource> Runner<D> {
         };
         runner.journal_kept_seeds();
         runner.init_late_slots(carried)?;
-        let now = runner.now_ms;
-        // A gated task starts idle; the gate step arms the ones whose gate
-        // holds, over the settled state (LLP 1092 D8).
-        runner.timers = runner
-            .plan
-            .timers
-            .iter()
-            .map(|t| Timer {
-                next_ms: if t.gated || t.keyed {
-                    f64::INFINITY
-                } else if t.frame {
-                    virtual_frame(now, 1)
-                } else {
-                    now + t.interval_ms as f64
-                },
-                armed: !(t.gated || t.keyed),
-                generation: 0,
-                key: None,
-                base: now,
-                k: 1,
-            })
-            .collect();
+        runner.settle_late(carried.is_none())?;
+        runner.timers = runner.boot_timers();
         runner.gate_step()?;
         runner.launch.clear();
         // No commit's end follows the boot's settlement: what it did here.
@@ -1084,7 +1096,9 @@ impl<D: DataSource> Runner<D> {
         runner.shown = shown;
         runner.ids = ids;
         runner.tree = Some(tree);
-        let receipt = runner.apply(ops)?;
+        let mut receipt = runner.apply(ops)?;
+        // The instances the first frame made ask for what they own.
+        runner.boot_owned(&mut receipt)?;
         runner.samples_stood();
         runner.publish_surfaces(surfaces);
         runner.pin_canvas_captures();
@@ -1157,17 +1171,6 @@ impl<D: DataSource> Runner<D> {
                 }
             }
         }
-    }
-
-    /// The retained journal lines, oldest first.
-    pub fn journal(&self) -> impl Iterator<Item = &str> {
-        self.journal.iter().map(String::as_str)
-    }
-
-    /// The index (since boot) of the first retained journal line: how many
-    /// were dropped by the ring.
-    pub fn journal_start(&self) -> usize {
-        self.journal_start
     }
 
     /// Journal an outcome. `was_poisoned` is the runner's state before the
@@ -1287,14 +1290,14 @@ impl<D: DataSource> Runner<D> {
         self.now_ms
     }
 
-    /// The plan site a view was instantiated from and the instance path to
-    /// it — the `for` keys and active arms crossed — for `layout <node>`
-    /// (LLP 1035.002 D6). `None` for a view the instance tree does not own.
+    /// The plan site a view was instantiated from and its instance path (the `for` keys and
+    /// active arms crossed) for `layout <node>` (LLP 1035.002 D6); `None` outside the tree.
     pub fn site_of(&self, view: ViewId) -> Option<(NodesId, Vec<InstanceStep>)> {
         self.tree.as_ref().and_then(|t| t.site(view))
     }
 
-    pub(crate) fn plan_site_of(&self, view: ViewId) -> Option<NodesId> {
+    /// The plan site a view was instantiated from, without its instance path.
+    pub fn plan_site_of(&self, view: ViewId) -> Option<NodesId> {
         self.ids.site(view)
     }
 

@@ -21,9 +21,9 @@ async function fixture(source = "export const appId='test.canvas'; export const 
   try {
     const input = resolve(scratch, 'grants.txt');
     writeFileSync(input, 'fs.write app:/tmp\nfs.read app:/tmp');
-    const { cmd, pre } = webCompiler();
+    const { cmd, pre, env: toolEnv } = webCompiler();
     if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-    const run = spawnSync(cmd, [...pre, 'normalize-grants', input], { encoding: 'utf8' });
+    const run = spawnSync(cmd, [...pre, 'normalize-grants', input], { env: toolEnv, encoding: 'utf8' });
     if (run.status !== 0) throw new Error(run.stderr);
     grants = JSON.parse(run.stdout);
   } finally { rmSync(scratch, { recursive: true }); }
@@ -65,13 +65,13 @@ test('a capture in a drawing turn includes its new arguments and size', async ()
   try {
     const observed = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       install(rt.data);
       const canvas = document.createElement('canvas');
       let step, size, mutation, captured;
       const snapshots = [];
       // The encoder takes its copy at invocation, before its asynchronous completion.
-      globalThis.exact.canvas2dCapture = () => ({ width: canvas.width, height: canvas.height, scale: 1, png: () => {
+      globalThis.exact.canvas2dCapture = () => ({ width: canvas.width, height: canvas.height, scale: 1, encode: () => {
         snapshots.push([canvas.width, ...canvas.getContext('2d').getImageData(0, 0, 1, 1).data]);
         return Promise.reject(new Error('snapshot recorded'));
       } });
@@ -93,16 +93,23 @@ test('a capture in a drawing turn includes its new arguments and size', async ()
       }
       const { createRequestExecutor, createGrantSet } = await import('/host/web-js/admission.js');
       globalThis.exact.canvas2dCapture = () => ({ width: canvas.width, height: canvas.height, scale: 1,
-        png: () => new Promise(resolve => canvas.toBlob(resolve, 'image/png')) });
+        encode: (type, quality) => new Promise(resolve => canvas.toBlob(resolve, type, quality)) });
       const execute = createRequestExecutor('test.canvas', createGrantSet(grants));
-      const capture = (scope, path = 'app:/tmp/rust.png') => execute({ canvas: { surface: 'ink', path }, scope });
+      const capture = (scope, path = 'app:/tmp/rust.png', type, quality) => execute({ canvas: { surface: 'ink', path, type, quality }, scope });
       const allowed = await capture(null), refused = await capture(''), slashes = await capture(null, 'app://tmp/rust.png');
+      // `toBlob`'s type and quality: a JPEG, and a type no browser encodes written as a PNG.
+      const jpeg = await capture(null, 'app:/tmp/rust.jpg', 'image/jpeg', 0.5), unknown = await capture(null, 'app:/tmp/rust.x', 'image/x-none');
+      const { createFileSystem } = await import('/host/web/storage-fs.js');
+      const head = [...new Uint8Array(await createFileSystem('test.canvas', createGrantSet(grants)).readFile('app:/tmp/rust.jpg')).slice(0, 3)];
       const decode = reply => [reply.status, JSON.parse(new TextDecoder().decode(reply.body))];
-      return { snapshots, allowed: decode(allowed), refused: decode(refused), slashes: decode(slashes) };
+      return { snapshots, allowed: decode(allowed), refused: decode(refused), slashes: decode(slashes), jpeg: decode(jpeg), unknown: decode(unknown), head };
     }, grants);
     expect(observed.snapshots).toEqual([[10, 0, 0, 255, 255], [20, 0, 0, 255, 255]]);
-    expect(observed.allowed).toEqual([200, { path: 'app:/tmp/rust.png', width: 20, height: 10, scale: 1 }]);
-    expect(observed.slashes).toEqual([200, { path: 'app://tmp/rust.png', width: 20, height: 10, scale: 1 }]);
+    expect(observed.allowed).toEqual([200, { path: 'app:/tmp/rust.png', width: 20, height: 10, scale: 1, type: 'image/png' }]);
+    expect(observed.slashes).toEqual([200, { path: 'app://tmp/rust.png', width: 20, height: 10, scale: 1, type: 'image/png' }]);
+    expect(observed.jpeg).toEqual([200, { path: 'app:/tmp/rust.jpg', width: 20, height: 10, scale: 1, type: 'image/jpeg' }]);
+    expect(observed.unknown).toEqual([200, { path: 'app:/tmp/rust.x', width: 20, height: 10, scale: 1, type: 'image/png' }]);
+    expect(observed.head).toEqual([0xff, 0xd8, 0xff]);
     expect(observed.refused[0]).toBe(400);
     expect(observed.refused[1].name).toBe('NotAllowedError');
   } finally { await close(); }
@@ -138,7 +145,7 @@ test('a mutation mounts and captures the first canvas in the same action', async
   try {
     const result = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem } = await import('/host/web/storage-fs.js');
       install(rt.data);
@@ -169,7 +176,7 @@ test('capture paths agree with the runner, including repeated slashes', async ()
   const { captureCanvas } = await import('./canvas-capture.js');
   const vectors = JSON.parse(readFileSync(resolve(root, 'runner/tests/fixtures/canvas-capture-paths.json'), 'utf8'));
   for (const [bytes, valid] of [[4096, true], [4097, false]]) vectors.push(['app:/tmp/' + 'a'.repeat(bytes - 9), valid]);
-  const ready = Promise.resolve({ width: 1, height: 1, scale: 1, png: async () => new Blob(['png']) });
+  const ready = Promise.resolve({ width: 1, height: 1, scale: 1, encoded: async () => new Blob(['png']) });
   for (const [path, valid] of vectors) {
     let written = false, error;
     try { await captureCanvas('ink', path, async () => { written = true; }, ready); } catch (e) { error = e; }
@@ -191,7 +198,7 @@ for (const language of ['TypeScript', 'Rust']) {
       try {
         await page.evaluate(async ({ grants, language, scenario }) => {
           const rt = await import('/host/web-js/rt.js');
-          const { install } = await import('/host/web-js/ts-data.js');
+          const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
           const { createRequestExecutor, createGrantSet } = await import('/host/web-js/admission.js');
           const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
           const fs = createFileSystem('test.canvas', createGrantSet(grants));
@@ -210,7 +217,7 @@ for (const language of ['TypeScript', 'Rust']) {
           const pending = [];
           globalThis.exact.canvas2dCapture = () => {
             const width = canvas.width, height = canvas.height;
-            return { width, height, scale: 1, png: () => new Promise(resolve => {
+            return { width, height, scale: 1, encode: () => new Promise(resolve => {
               canvas.toBlob(blob => { if (scenario === 'cancel' || scenario === 'await-cancel' || scenario === 'replace' || scenario === 'drawing') pending.push(() => resolve(blob)); else resolve(blob); });
             }) };
           };
@@ -259,14 +266,14 @@ test('an overlay cannot start a canvas capture', async () => {
   try {
     const result = await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { overlaying, createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem } = await import('/host/web/storage-fs.js');
       const fs = createFileSystem('test.canvas', createGrantSet(grants));
       await fs.atomicWriteFile('app:/tmp/ink.png', new TextEncoder().encode('keep'));
       install(rt.data);
       let captures = 0;
-      globalThis.exact.canvas2dCapture = () => { captures++; return { width: 1, height: 1, scale: 1, png: async () => new Blob(['png']) }; };
+      globalThis.exact.canvas2dCapture = () => { captures++; return { width: 1, height: 1, scale: 1, encode: async () => new Blob(['png']) }; };
       overlaying.on = true;
       const promise = captureCanvas('ink', 'app:/tmp/ink.png').then(() => null, e => e.message);
       overlaying.on = false;
@@ -285,14 +292,14 @@ export const answer = () => Promise.resolve().then(() => captureCanvas('ink', 'a
   try {
     await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
       install(rt.data);
       const fs = createFileSystem('test.canvas', createGrantSet(grants));
       await fs.atomicWriteFile('app:/tmp/ink.png', new TextEncoder().encode('keep'));
       const release = await lockPaths('test.canvas', ['app:/tmp/ink.png']);
-      globalThis.exact.canvas2dCapture = () => ({ width: 1, height: 1, scale: 1, png: async () => new Blob(['png']) });
+      globalThis.exact.canvas2dCapture = () => ({ width: 1, height: 1, scale: 1, encode: async () => new Blob(['png']) });
       let slot, mutation;
       rt.mount(() => { slot = rt.sig(null); mutation = rt.mut('capture', slot, []); });
       rt.commit(() => rt.M(mutation, 'capture', []));
@@ -336,7 +343,7 @@ for (const count of [0, 1, 2]) test(`a capture pins ${count} canvases before dra
     const result = await page.evaluate(async () => {
       const capture = await pinnedCapture;
       if (capture.name) return capture.name;
-      const image = await createImageBitmap(await capture.png());
+      const image = await createImageBitmap(await capture.encoded());
       const size = [image.width, image.height]; image.close(); return size;
     });
     expect(result).toEqual(count === 0 ? 'NotFoundError' : count === 2 ? 'InvalidStateError' : [20, 20]);
@@ -362,7 +369,7 @@ export function streamed(req, grants, message, controller) {
   try {
     await page.evaluate(async grants => {
       const rt = await import('/host/web-js/rt.js');
-      const { install } = await import('/host/web-js/ts-data.js');
+      const { install } = await import('/host/web-js/ts-link.js').then(() => import('/host/web-js/ts-data.js'));
       const { createGrantSet } = await import('/host/web-js/admission.js');
       const { createFileSystem, lockPaths } = await import('/host/web/storage-fs.js');
       const { open } = await import('/host/web-js/ts-stream.js');
@@ -373,7 +380,7 @@ export function streamed(req, grants, message, controller) {
       await fs.atomicWriteFile('app:/tmp/ink.png', new TextEncoder().encode('keep'));
       const release = await lockPaths('test.canvas', ['app:/tmp/ink.png']);
       globalThis.captures = 0;
-      globalThis.exact.canvas2dCapture = () => { captures++; return { width: 1, height: 1, scale: 1, png: async () => new Blob(['png']) }; };
+      globalThis.exact.canvas2dCapture = () => { captures++; return { width: 1, height: 1, scale: 1, encode: async () => new Blob(['png']) }; };
       const controller = new AbortController();
       const ended = open({ input: 'https://example.test/events', init: { exactStream: map } }, v => v, null, () => {}, controller);
       globalThis.testMapper = { fs, controller, release, ended };
@@ -402,14 +409,14 @@ test('later commits can supply a capture and a snapshot keeps its pixels', async
       draw('red');
       rt.mount(root => root.append(canvas));
       globalThis.exact ??= {};
-      globalThis.exact.canvas2dCapture = () => ({ width: 2, height: 2, scale: 1, png: () => new Promise(resolve => canvas.toBlob(resolve)) });
+      globalThis.exact.canvas2dCapture = () => ({ width: 2, height: 2, scale: 1, encode: (type, quality) => new Promise(resolve => canvas.toBlob(resolve, type, quality)) });
       let ready;
       rt.clock.timers.push({ once: true, due: 1, action: () => rt.commit(() => { ready = rt.canvasCommitted('ink'); }) });
       rt.clock.timers.push({ once: true, due: 1, action: () => rt.commit(() => draw('blue')) });
       rt.advance(1);
       const capture = await ready;
       rt.commit(() => draw('green'));
-      const image = await createImageBitmap(await capture.png());
+      const image = await createImageBitmap(await capture.encoded());
       const copy = document.createElement('canvas'); copy.width = copy.height = 2;
       const c = copy.getContext('2d'); c.drawImage(image, 0, 0); image.close();
       return [...c.getImageData(0, 0, 1, 1).data];
@@ -438,7 +445,7 @@ test('a live frame task captures the time-dependent drawing after its commit', a
           let ready, time;
           rt.commit(() => { time = rt.x_performanceNow(); ready = rt.canvasCommitted('ink'); });
           ready.then(async capture => {
-            const image = await createImageBitmap(await capture.png());
+            const image = await createImageBitmap(await capture.encoded());
             const copy = document.createElement('canvas'); copy.width = copy.height = 20;
             const ctx = copy.getContext('2d'); ctx.drawImage(image, 0, 0); image.close();
             rows.push([Math.floor(time) % 251, ctx.getImageData(1, 1, 1, 1).data[0]]);
@@ -484,7 +491,7 @@ for (const row of ['later commits', 'several frames', 'unmount', 'replace']) tes
       }
       const capture = await ready;
       if (capture.name) return capture.name;
-      const image = await createImageBitmap(await capture.png());
+      const image = await createImageBitmap(await capture.encoded());
       const copy = document.createElement('canvas'); copy.width = copy.height = 20;
       const ctx = copy.getContext('2d'); ctx.drawImage(image, 0, 0); image.close();
       return ctx.getImageData(1, 1, 1, 1).data[0];

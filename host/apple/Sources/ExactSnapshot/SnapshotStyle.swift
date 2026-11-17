@@ -301,31 +301,18 @@ struct RoundedOutline: Shape {
 @available(iOS 17.0, macOS 14.0, watchOS 10.0, visionOS 26.0, *)
 struct ClipPathRow: Shape {
     let evenOdd: Bool
-    let commands: [(String, [CGFloat])]
+    let value: BatchValue
 
     init?(_ value: BatchValue?) {
-        guard case .object(let object)? = value, let list = object["commands"]?.array, !list.isEmpty else { return nil }
+        guard let value, case .object(let object) = value,
+              object["shape"] != nil || object["commands"]?.array?.isEmpty == false else { return nil }
         evenOdd = object["rule"]?.string == "evenodd"
-        commands = list.compactMap { command in
-            guard let pair = command.array, let kind = pair.first?.string else { return nil }
-            return (kind, (pair.last?.numbers ?? []).map { CGFloat($0) })
-        }
+        self.value = value
     }
 
     func path(in rect: CGRect) -> Path {
-        var p = Path()
-        for (kind, v) in commands {
-            func point(_ i: Int) -> CGPoint { CGPoint(x: rect.minX + v[i], y: rect.minY + v[i + 1]) }
-            switch kind {
-            case "M" where v.count == 2: p.move(to: point(0))
-            case "L" where v.count == 2: p.addLine(to: point(0))
-            case "Q" where v.count == 4: p.addQuadCurve(to: point(2), control: point(0))
-            case "C" where v.count == 6: p.addCurve(to: point(4), control1: point(0), control2: point(2))
-            case "Z": p.closeSubpath()
-            default: break
-            }
-        }
-        return p
+        guard let path = ClipGeometry.path(value, size: rect.size) else { return Path() }
+        return Path(path).offsetBy(dx: rect.minX, dy: rect.minY)
     }
 
     /// A rule is the shape's fill style, which `clipShape` takes.

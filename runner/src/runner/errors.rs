@@ -42,6 +42,7 @@ pub enum RunnerError {
         host: String,
         fix: String,
     },
+    InvalidFaults(String),
     Plan(PlanError),
     NotOneRoot(usize),
     Trap(Trap),
@@ -56,6 +57,8 @@ pub enum RunnerError {
         /// Where the answer first differs from the declared shape.
         why: String,
     },
+    /// A canvas draw failed its existing stamp or structural checks.
+    CanvasDraw(String),
     UnknownView(ViewId),
     /// A typed host event carries invalid numeric values. No action ran.
     InvalidEvent {
@@ -173,6 +176,7 @@ impl std::fmt::Debug for RunnerError {
                 .field("host", host)
                 .field("fix", fix)
                 .finish(),
+            Self::InvalidFaults(why) => write!(f, "invalid launch fetch fixtures: {why}"),
             Self::Plan(value) => f.debug_tuple("Plan").field(value).finish(),
             Self::NotOneRoot(value) => f.debug_tuple("NotOneRoot").field(value).finish(),
             Self::Trap(value) => f.debug_tuple("Trap").field(value).finish(),
@@ -197,6 +201,7 @@ impl std::fmt::Debug for RunnerError {
                 .field("resource", resource)
                 .field("why", why)
                 .finish(),
+            Self::CanvasDraw(why) => f.debug_tuple("CanvasDraw").field(why).finish(),
             Self::UnknownView(value) => f.debug_tuple("UnknownView").field(value).finish(),
             Self::InvalidEvent { event } => f
                 .debug_struct("InvalidEvent")

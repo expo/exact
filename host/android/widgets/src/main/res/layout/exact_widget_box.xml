@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A box that clips its content, or that a link makes pressable: its children are placed in it. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/exact_widget_view"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:clipChildren="true"
+    android:clipToOutline="true" />

@@ -16,6 +16,16 @@ pub(crate) fn file_icon(source: &str) -> Option<&str> {
     (icon.path.is_empty() && !icon.svg.is_empty()).then_some(icon.svg)
 }
 
+/// What a node's picture is drawn from: an image's `src`, or a video's
+/// `poster` (LLP 1042.001 D5); `None` for a node with no picture.
+fn picture_source<'a>(node: &exact_kernel::NodeRef<'a>) -> Option<&'a str> {
+    match node.node_type {
+        NodeType::Image => Some(node.props.str(PropId::ImageSource).unwrap_or("")),
+        NodeType::Video => node.props.str(PropId::Poster),
+        _ => None,
+    }
+}
+
 /// Symbols drawn from a path, without loading a picture.
 pub(crate) fn is_symbol(source: &str) -> bool {
     source.starts_with("symbol:") && file_icon(source).is_none()
@@ -235,6 +245,12 @@ pub struct Images {
     /// presenter sets it): an SVG picture with text is painted here, with
     /// the session's fonts (LLP 1011.001 D3).
     painter: Option<crate::text::Shared>,
+    /// The views whose picture is a `video`'s poster (LLP 1042.001 D5): the
+    /// video's natural size is its video's, so a poster reports none.
+    posters: std::collections::BTreeSet<ViewId>,
+    /// Posters whose picture landed or went since the presenter last took
+    /// them: their rows paint again.
+    pub(crate) posters_changed: Vec<ViewId>,
     /// The image nodes in preorder, as of a kernel epoch: the walk
     /// [`Images::sync_visible`] needs, redone only after a commit.
     pub(crate) order: Option<(u64, Vec<ViewId>)>,
@@ -276,6 +292,8 @@ impl Images {
             settled: None,
             scale: 1.0,
             painter: None,
+            posters: Default::default(),
+            posters_changed: Vec::new(),
             order: None,
             box_index: None,
             package: package::Pictures::default(),
@@ -374,9 +392,9 @@ impl Images {
             let Some(node) = kernel.node(*id) else {
                 continue;
             };
-            if node.node_type != NodeType::Image {
+            let Some(source) = picture_source(&node) else {
                 continue;
-            }
+            };
             if seen.len() >= SUBSCRIPTIONS {
                 self.deferred += 1;
                 continue;
@@ -387,7 +405,11 @@ impl Images {
                 view: packed,
                 generation: self.generation,
             };
-            let source = node.props.str(PropId::ImageSource).unwrap_or("");
+            if node.node_type == NodeType::Video {
+                self.posters.insert(*id);
+            } else {
+                self.posters.remove(id);
+            }
             if self.views.get(id).is_some_and(|view| view.key != key) {
                 self.remove(*id);
             }
@@ -558,8 +580,23 @@ impl Images {
             .collect();
         for id in gone {
             self.remove(id);
+            self.posters.remove(&id);
         }
         reports.extend(self.poll());
+        self.natural(reports)
+    }
+
+    /// Natural sizes for the kernel: a poster's are left out and its row
+    /// painted again instead.
+    fn natural(&mut self, mut reports: Vec<Report>) -> Vec<Report> {
+        let (posters, changed) = (&self.posters, &mut self.posters_changed);
+        reports.retain(|(id, _)| {
+            let poster = posters.contains(id);
+            if poster {
+                changed.push(*id);
+            }
+            !poster
+        });
         reports
     }
     /// Views a commit renewed (LLP 1078): one that shows a picture of a
@@ -575,7 +612,7 @@ impl Images {
             };
             let source = kernel
                 .node(*id)
-                .and_then(|n| n.props.str(PropId::ImageSource).map(str::to_owned))
+                .and_then(|n| picture_source(&n).map(str::to_owned))
                 .unwrap_or_default();
             // (An over-long source is kept as its hash, not the string.)
             let rejected = view.source.is_empty()
@@ -587,7 +624,7 @@ impl Images {
             self.remove(*id);
             reports.push((*id, None));
         }
-        reports
+        self.natural(reports)
     }
     fn remove(&mut self, id: ViewId) {
         if let Some(view) = self.views.remove(&id) {
@@ -901,7 +938,7 @@ impl Images {
                     .map(|b| (view.displayed_source.clone(), b.natural()))
             })
             .collect();
-        reports
+        self.natural(reports)
     }
     /// Which assignment of its source view `id` shows ([`LoadEvent`]).
     pub(crate) fn assignment(&self, id: ViewId) -> Option<u64> {

@@ -255,11 +255,10 @@ fn decorated(s: &StyleProps) -> bool {
 pub(crate) fn kind(arena: &NodeArena, slot: u32) -> Kind {
     let effective = arena.effective_style(slot);
     let s = &*effective;
-    let sized = |d: Dimension| !matches!(d, Dimension::Auto);
+    let sized = |d: Dimension| !d.is_content_sized();
     // A negative calculated minimum lays out as zero.
-    let floor = |d: Dimension| {
-        !matches!(d, Dimension::Auto) && !matches!(d, Dimension::Points(v) if v <= 0.0)
-    };
+    let floor =
+        |d: Dimension| !d.is_content_sized() && !matches!(d, Dimension::Points(v) if v <= 0.0);
     let sized =
         sized(s.height.clone()) || floor(s.min_height.clone()) || sized(s.max_height.clone());
     match arena.node_type(slot) {

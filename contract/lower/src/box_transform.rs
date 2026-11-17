@@ -155,14 +155,10 @@ fn literal(text: &str, span: Span) -> Result<[Expr; 3], String> {
             return Err(format!("`{rest}` is not a transform function"));
         };
         let name = rest[..open].trim();
-        let Some(close) = rest[open..].find(')').map(|c| c + open) else {
+        let Some(close) = closing(rest, open) else {
             return Err(format!("`{}(` has no closing parenthesis", name));
         };
-        let args: Vec<&str> = rest[open + 1..close]
-            .split(',')
-            .map(str::trim)
-            .filter(|a| !a.is_empty())
-            .collect();
+        let args = arguments(&rest[open + 1..close]);
         let (index, value) = function(name, &args, span)?;
         match last {
             Some(l) if l == index => {
@@ -181,6 +177,41 @@ fn literal(text: &str, span: Span) -> Result<[Expr; 3], String> {
         rest = rest[close + 1..].trim_start();
     }
     Ok(rows)
+}
+
+/// The index of the parenthesis that closes the one at `open`, past any
+/// nested in it (`translate(calc(50% - 12px), 0)`).
+fn closing(text: &str, open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, c) in text[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 1 => return Some(open + i),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A function's arguments: its text split at the commas outside any nested
+/// function, each trimmed, empty ones dropped.
+fn arguments(text: &str) -> Vec<&str> {
+    let (mut out, mut depth, mut start) = (Vec::new(), 0usize, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(text[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(text[start..].trim());
+    out.retain(|a| !a.is_empty());
+    out
 }
 
 /// A function as its row's index and value. The row's own parser reads a

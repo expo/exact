@@ -112,7 +112,7 @@ routes nav
   recipeSuspendingFeed "/recipes/suspending-feed" render=build activate=idle
   recipeSymbols "/recipes/symbols" render=build activate=idle
   recipeTabs "/recipes/tabs" render=build activate=idle
-  recipeTamber "/recipes/tamber" render=build activate=idle
+  recipeForma "/recipes/forma" render=build activate=idle
   recipeTests "/recipes/tests" render=build activate=idle
   recipeTheme "/recipes/theme" render=build activate=idle
   recipeTimerInAComponent "/recipes/timer-in-a-component" render=build activate=idle
@@ -263,10 +263,6 @@ component App
         copied = true
       case none
         copied = false
-  task theming mount
-    after(1, applyTheme)
-  action applyTheme
-    setScheme(theme)
   action chooseTheme(value: string)
     theme = value
     setScheme(value)

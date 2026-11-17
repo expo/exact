@@ -1,4 +1,4 @@
-// Installed before Ibex bindings capture their exception reporter.
+// Installed before Ibex's bindings, which may capture `console`.
 // @ref LLP 1027 D10 — console writes to the runner
 // @ref LLP 1027.009 D1 — each line with the method that wrote it; the runtime's own with none
 (function (global) {
@@ -46,12 +46,12 @@
     };
     // What the runtime itself says: journaled as `console: …`, as the app's
     // lines are, but with no method, so no host writes it to the platform's
-    // log. The prelude's files take it, and Ibex's abort binding takes
-    // `reportError`, which it prefers to `console.error`, for an error a
-    // listener did not catch. intl.js deletes both before the app loads:
-    // neither is the app's to call.
-    var runtimeLine = function (line) { writeLog(string(line), ''); };
-    global.__exact_runtime_line = runtimeLine;
-    global.reportError = function (error) { runtimeLine('Uncaught ' + string(error)); };
+    // log. The prelude's files take it, and intl.js deletes it before the app
+    // loads: it is not the app's to call.
+    global.__exact_runtime_line = function (line) { writeLog(string(line), ''); };
+    // An error event no listener cancelled, as a browser's console prints
+    // it: written to the platform's log alone, at error level, as the
+    // runtime's line already journals it (LLP 1175 D5). prelude.js takes it.
+    global.__exact_uncaught = function (prefix, value) { writeLog(prefix + render(value), 'uncaught'); };
   }
 })(globalThis);

@@ -16,7 +16,7 @@ const concreteRole = /^(?:alert|alertdialog|application|article|banner|blockquot
 export function listItem(el, owner) {
   const p = el.parentElement;
   owner ??= listOwner(p?.hasAttribute("data-exact-list-item") ? p.parentNode : p);
-  const marker = el.localName === "dialog" || el.hasAttribute("popover") ? "layer" : "", ownerRole = owner && listRole(owner), role = (!owner || ownerRole === "list" || ownerRole === "directory") && listRole(el) !== "listitem" ? "listitem" : "presentation";
+  const marker = el.localName === "dialog" || el.hasAttribute("popover") ? "layer" : "", ownerRole = owner && listRole(owner), role = !el.$collectionFixed && !p?.$collectionFixed && (!owner || ownerRole === "list" || ownerRole === "directory") && listRole(el) !== "listitem" ? "listitem" : "presentation";
   if (p?.hasAttribute("data-exact-list-item")) {
     if (p.getAttribute("data-exact-list-item") !== marker) {
       p.setAttribute("data-exact-list-item", marker);

@@ -226,7 +226,7 @@ export function engine(rt) {
   if (clock.agent && x.advance) { const advance = x.advance; x.advance = (to, wall, stop) => { const r = advance(to, wall, stop); frame(); return r; }; }
   const glue = x.canvas2dGlue({ views: rt.views, now: () => clock.now });
   // A capture's canvas (ts-data.js `captureCanvas`): the runner's checks
-  // (runner/src/runner/canvas2d.rs `capture`), then the glue's PNG.
+  // (runner/src/runner/canvas2d.rs `capture`), then the glue's encoding.
   x.canvas2dCapture = (surface, targets) => {
     const mounted = [...records].filter(([, r]) => r.c.name === surface && r.c.e.isConnected);
     targets ??= mounted.map(([, r]) => r.c);
@@ -243,9 +243,9 @@ export function engine(rt) {
     const b = r.backing;
     if (!module) return { name: 'NotSupportedError', message: undrawn ?? 'the canvas drawer is not ready' };
     if (!b || !b.w || !b.h) return { name: 'IndexSizeError', message: `the canvas of surface ${JSON.stringify(surface)} has no bitmap: its box has no area` };
-    if (b.p3 || b.float16) return { name: 'NotSupportedError', message: 'a capture is an sRGB PNG of 8-bit pixels: this canvas is display-p3 or float16' };
+    if (b.p3 || b.float16) return { name: 'NotSupportedError', message: 'a capture is an sRGB image of 8-bit pixels: this canvas is display-p3 or float16' };
     if (b.w * b.h > 1 << 26) return { name: 'QuotaExceededError', message: `${b.w} × ${b.h} px is over the ${1 << 26} px a capture writes` };
-    return { width: b.w, height: b.h, scale: b.scale, png: () => glue.capture(id, r.lifetime, r.generation, b.w, b.h, r.seq - 1) };
+    return { width: b.w, height: b.h, scale: b.scale, encode: (type, quality) => glue.capture(id, r.lifetime, r.generation, b.w, b.h, r.seq - 1, undefined, type, quality) };
   };
   host();
   // The module arrives after first pixel (rust-data.js); until then causes wait.

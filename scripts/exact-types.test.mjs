@@ -1,9 +1,40 @@
 import { test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { appManifestDigest, publicFileCards } from '../host/web/serve.mjs';
+import { loopWebDist } from './web-build.mjs';
+
+test('native live reload finds the wasm loop and honors explicit plan and dist paths', async () => {
+  const { devPlan } = await import('./exact.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-live-plan-'));
+  const app = { dir, target: resolve(dir, 'target'), id: 'test.live', displayName: 'Live', manifest: {} };
+  const previous = { EXACT_WEB_DIST: process.env.EXACT_WEB_DIST, EXACT_DEV_PLAN: process.env.EXACT_DEV_PLAN };
+  try {
+    delete process.env.EXACT_WEB_DIST; delete process.env.EXACT_DEV_PLAN;
+    const dist = loopWebDist(app, 'wasm'), plan = Buffer.alloc(36 + app.id.length);
+    plan.write('EXPL'); plan.writeUInt32LE(app.id.length, 32); plan.write(app.id, 36);
+    mkdirSync(dist, { recursive: true });
+    for (const file of ['app.wasm', 'glue.js', 'navigation.js', 'index.html', 'manifest.json']) writeFileSync(resolve(dist, file), 'fixture');
+    writeFileSync(resolve(dist, 'app.plan'), plan);
+    writeFileSync(resolve(dist, 'exact.json'), JSON.stringify({ exact: 1, app: { id: app.id, name: app.displayName }, plan: { url: './app.plan', bytes: plan.length, sha256: createHash('sha256').update(plan).digest('hex') } }));
+    writeFileSync(resolve(dist, '.exact-build.json'), JSON.stringify({ exactBuild: 1, app: { id: app.id, name: app.displayName }, manifestSha256: appManifestDigest(app), files: await publicFileCards(dist) }));
+    assert.equal((await devPlan(app)).path, resolve(dist, 'app.plan'));
+    process.env.EXACT_WEB_DIST = resolve(dir, 'explicit-dist');
+    assert.equal((await devPlan(app)).path, null);
+    assert.match((await devPlan(app)).why, /explicit-dist/);
+    process.env.EXACT_WEB_DIST = dist;
+    assert.equal((await devPlan(app)).path, resolve(dist, 'app.plan'));
+    process.env.EXACT_DEV_PLAN = resolve(dir, 'explicit.plan');
+    assert.equal((await devPlan(app)).path, process.env.EXACT_DEV_PLAN);
+  } finally {
+    for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function inDir(body) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-types-'));
@@ -137,6 +168,20 @@ test('contract JSON preserves the backend-selection diagnostic id', () => inDir(
   assert.equal(errors[0].file, 'app.ts');
   assert.match(errors[0].message, /^EXACT_BACKEND_ORIGIN:/);
 }), 60000);
+
+test("without cargo, a built web compiler or a tool set, app.ts's check says it needs Rust, and its diagnostic keeps that id (#460, LLP 1174 D5)", async () => {
+  const { typeDiagnostics } = await import('./exact.mjs');
+  inDir(dir => {
+    backendApp(dir);
+    // No cargo on PATH, and neither this checkout's compiler nor a tool set or one kept for the machine (HOME, the target) to run instead.
+    const env = { ...process.env, EXACT_APP_DIR: dir, PATH: dirname(process.execPath), HOME: dir, CARGO_TARGET_DIR: resolve(dir, 'target') };
+    delete env.EXACT_WEB_COMPILER; delete env.EXACT_BACKEND_ORIGIN;
+    const r = spawnSync(process.execPath, ['host/web-js/build.mjs', 'backend', '--check', '--out', resolve(dir, 'dist')], { cwd: resolve(import.meta.dir, '..'), env, encoding: 'utf8', timeout: 60000 });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    assert.match(r.stderr, /^error \[rust-missing\]: exact-web-js builds with Rust, which this machine does not have .* no tool set on this machine has it .*Install Rust with rustup \(https:\/\/rustup\.rs\)/m);
+    assert.deepEqual(typeDiagnostics(r.stderr, dir).map(d => d.id), ['rust-missing']);
+  });
+}, 60000);
 
 test('a native bake preserves backend flag provenance through its Cargo environment', () => {
   const root = resolve(import.meta.dir, '..'), dir = mkdtempSync(resolve(root, 'target/backend-native-'));

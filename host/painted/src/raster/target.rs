@@ -275,16 +275,20 @@ mod tests {
         assert_eq!(second.data().as_ptr(), address);
         assert!(second
             .data()
-            .chunks_exact(4)
-            .all(|p| p == [30, 80, 120, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [30, 80, 120, 255]));
         raster.recycle_frame(second);
         raster.begin(60., 32., 1.5);
         let resized = raster.finish().unwrap();
         assert_eq!((resized.width(), resized.height()), (90, 48));
         assert!(resized
             .data()
-            .chunks_exact(4)
-            .all(|p| p == [30, 80, 120, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [30, 80, 120, 255]));
         raster.recycle_frame(resized);
         raster.transparent = true;
         raster.begin(60., 32., 1.5);
@@ -360,7 +364,7 @@ mod tests {
         r.fill(&full, b, identity);
         assert_eq!(r.target.clears, 0);
         let pixels = r.finish().unwrap();
-        assert!(pixels.data().chunks_exact(4).all(|p| p == b));
+        assert!(pixels.data().as_chunks::<4>().0.iter().all(|p| *p == b));
         assert_eq!(r.target.clears, 1);
 
         // Resolve the parent's fill before an opacity layer starts.
@@ -428,8 +432,10 @@ mod tests {
             let below = layer.into_pixels();
             assert!(below
                 .data()
-                .chunks_exact(4)
-                .all(|p| p == [31, 72, 109, 255]));
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [31, 72, 109, 255]));
             let above = r.finish().unwrap();
             assert!(above.data().iter().all(|&v| v == 0));
             let mut dirty_above = above;

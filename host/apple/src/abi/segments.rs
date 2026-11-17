@@ -24,7 +24,9 @@ pub fn segment_rects(input: &[u8], count: u32) -> Vec<exact_kernel::Rect> {
         return Vec::new();
     }
     input[..bytes]
-        .chunks_exact(16)
+        .as_chunks::<16>()
+        .0
+        .iter()
         .map(|r| {
             let f = |i: usize| f32::from_le_bytes([r[i], r[i + 1], r[i + 2], r[i + 3]]);
             exact_kernel::Rect::new(f(0), f(4), f(8), f(12))

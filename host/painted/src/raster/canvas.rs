@@ -92,7 +92,12 @@ impl Raster {
                         || mask.height() != target.height()
                         || mask.data().iter().any(|&a| a != 255)
                 })
-            || image.data().chunks_exact(4).any(|pixel| pixel[3] != 255)
+            || image
+                .data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 255)
         {
             return false;
         }
@@ -186,7 +191,7 @@ mod tests {
 
     fn image(w: u32, h: u32) -> Arc<Pixmap> {
         let mut p = Pixmap::new(w, h).unwrap();
-        for (i, pixel) in p.data_mut().chunks_exact_mut(4).enumerate() {
+        for (i, pixel) in p.data_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
             pixel.copy_from_slice(&[(i * 17) as u8, (i * 41) as u8, (i * 7) as u8, 255]);
         }
         Arc::new(p)

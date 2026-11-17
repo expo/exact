@@ -259,7 +259,9 @@ fn cancel_after_source_property_takeover_preserves_successor() {
     let mut p = packet(&h, b, 19, 120., 0.);
     // Rebase contains exactly the surviving originals, excluding the successor.
     let rows = p[176..]
-        .chunks_exact(32)
+        .as_chunks::<32>()
+        .0
+        .iter()
         .filter(|r| u64::from_le_bytes(r[..8].try_into().unwrap()) != motion_node(b.wrapper))
         .flatten()
         .copied()

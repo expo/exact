@@ -1,5 +1,6 @@
-//! Painted radio groups, tablists and menus use the kernel's keys (LLP 1166.000 D2). An open
-//! surface of the top layer takes every key before these (`key_pressed`, `surface_key`).
+//! Painted radio groups, tablists and menus use the kernel's keys (LLP 1166.000 D2), and a menu
+//! its type-ahead. An open surface of the top layer takes every key before these (`key_pressed`,
+//! `surface_key`).
 use super::*;
 use std::collections::BTreeSet;
 
@@ -32,6 +33,40 @@ impl<D: DataSource> Presenter<D> {
             if step.press {
                 self.note_press(next);
                 self.activate_with(next, now_ms, false);
+            }
+        }
+        true
+    }
+
+    /// A printable key at a menu's item moves the focus to the next item it starts
+    /// (`Kernel::role_type_ahead`). Whether the key was the menu's; one that starts no item, or
+    /// Space with no search under way, is left to the page.
+    pub(super) fn type_ahead_key(&mut self, id: ViewId, name: &str, now_ms: f64) -> bool {
+        let held = self.modifiers();
+        if held.ctrl || held.alt || held.meta {
+            return false;
+        }
+        let mut typed = std::mem::take(&mut self.type_ahead);
+        let step = self
+            .host
+            .kernel()
+            .role_type_ahead(id, name, now_ms, &mut typed);
+        self.type_ahead = typed;
+        // Only for a menu's key: the shown boxes lay the page out.
+        let Some(step) = step else {
+            return false;
+        };
+        let boxed = self.shown_boxes();
+        let Some(next) = step
+            .order
+            .into_iter()
+            .find(|id| self.role_focusable(*id, &boxed))
+        else {
+            return false;
+        };
+        if next != id {
+            if let Some(error) = self.set_focus(Some(next), now_ms) {
+                eprintln!("exact: {error}");
             }
         }
         true

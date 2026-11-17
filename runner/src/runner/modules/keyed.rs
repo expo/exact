@@ -27,6 +27,19 @@ use crate::HoldAnswer;
 use serde_json::json;
 
 impl<D: DataSource> Runner<D> {
+    /// The declaration's qualified name, as `prefer` and the journal name it.
+    pub(in crate::runner) fn key(&self, row: &ModulesRow) -> String {
+        let owner = self.substitute(row)["owner"]
+            .as_str()
+            .map(|s| format!("#{s}"))
+            .unwrap_or_default();
+        format!(
+            "{}.{}{owner}",
+            self.plan.str(row.extension),
+            self.plan.str(row.declared)
+        )
+    }
+
     /// `sub` without the permissions declared for other targets.
     pub(super) fn this_target(&self, sub: &mut Json) {
         let target = self.host_target();

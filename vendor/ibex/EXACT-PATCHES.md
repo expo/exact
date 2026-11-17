@@ -22,10 +22,29 @@ receipt-listed archive, header, compiler and ICU filter against its digest,
 independently of the selected Intl data tier. Android’s JSI, Boost and base ICU archives
 must be present in the manifest.
 
+## Android certificate verification
+
+HTTP and WebSocket TLS share `transport/tls.rs`. Android uses
+`rustls-platform-verifier`, initialized with the application's JVM context before
+network work starts. The local Kotlin companion in `crates/ibex2/android` uses
+`AndroidCAStore` for the phone's system and user-installed roots unless the base
+APK's manifest declares a network security configuration; it makes that trust
+manager again after `KeyChain.ACTION_TRUST_STORE_CHANGED`, because a manager
+over an explicit keystore copies its anchors once. With that declaration,
+it initializes the default trust manager with a null keystore to honor the app's
+anchors and exclusions. Both paths pass the hostname to
+`X509TrustManagerExtensions`. The companion implements the 0.7 JNI interface,
+unchanged in 0.7.1 (Android artifact 0.2.0); `CertificateVerifierTest` checks its
+static method, result fields and status codes. The Canvas reader compiles these
+classes and keeps them through R8. Other Android consumers must compile these
+classes instead of the published Android AAR and call
+`transport::initialize_android` before TLS; an uninitialized consumer receives
+an error.
+
 ## Distrusted emSign keys
 
-The portable transports trust what `webpki-roots` compiles in when the system
-has no roots, and verify with `rustls-webpki`. Both locks, like Exact's root
+Off Android, the portable transports trust what `webpki-roots` compiles in when
+the system has no roots, and verify with `rustls-webpki`. Both locks, like Exact's root
 lock, hold `webpki-roots` 1.0.12, without the emSign roots Mozilla removed
 (RUSTSEC-2026-0381), and `rustls-webpki` 0.103.17, which refuses a path holding
 the distrusted emSign intermediate keys (RUSTSEC-2026-0382). Exact's
@@ -200,14 +219,20 @@ snapshot. Exact's render and non-Apple executors consume that portable path.
 
 Patch 9's app interface stays Exact's and is replayed on a refresh:
 `bindings/storage.d.ts` declares `compressImage(from, to, {maxDimension,
-maxBytes, type})` resolving to `{path, type, size, width, height}`, as Exact's docs
+maxBytes, quality, type})` resolving to `{path, type, size, width, height}`, as Exact's docs
 give it, and Exact's prelude (`js/src/prelude.js`) adapts that to upstream's
 positional binding (`compressImage(from, to, maxDimension, maxBytes)`, replying
 `width\theight\tsize`). Exact adds a fifth positional argument, the media type
 (exact2 LLP 1069.002 A1.11, 2026-10-20): `boundary_abi.rs` reads it into
 `fs_image::ImageRequest::format` (`ImageFormat::Jpeg` when absent, `Png`; any
-other value is an invalid argument), and the codec is Exact's. Replay both on a
-refresh. The October 13 refresh replaced the declaration with
+other value is an invalid argument), and the codec is Exact's. The fourth,
+`maxBytes`, may be undefined or null (exact2 LLP 1069.002 A1.12, 2026-11-14):
+`ImageRequest::max_bytes` is an `Option`, `None` for no byte target, and the
+codec's output is then bounded by the service's `max_output_bytes`
+(`ImageJob::prepare`, `execute`); the call's `quality` rides in patch 9a's
+options JSON, which the codec reads.
+`fs_image.rs`'s `a_compression_without_a_byte_target_is_bounded_by_the_service`
+pins it. Replay all three on a refresh. The October 13 refresh replaced the declaration with
 the positional form; `contract/cli/tests/it/typescript.rs` now pins it. Upstream
 now preserves Exact's app error branches: a source over the read cap is
 `compressImage: too-large:`, and a trial deadline before publication is
@@ -470,9 +495,9 @@ refresh.
 ## Local patch 23, an upload's bytes sent
 
 `stdlib/fetch.rs` gives `Request` an optional `sent` hook (`Sent`), told
-`(loaded, total)` as the body goes out and `(total, total)` by the time the
-headers have arrived (exact2 LLP 1016.000 D10, XMLHttpRequest's upload
-progress), and an optional start hook beside it. `fetch_stream_gated` tells
+`(loaded, total)` as the body goes out, reaching `(total, total)` once it has
+all gone (exact2 LLP 1016.000 D10, XMLHttpRequest's upload progress; patch 46
+stops it at the bytes written when the reply comes first), and an optional start hook beside it. `fetch_stream_gated` tells
 the start hook once, when `admit_hop` has passed the first hop's grant check
 and local-network gate, so a request they refuse never started (the
 embedder's `exact:sending`). The hook answers whether the upload may go out:
@@ -488,8 +513,8 @@ resend (`rustls_http.rs`'s `send`; tested in
 exchange, and `ibex2_darwin_http_headers` takes the bytes the caller last saw,
 returning 2 when they change before the headers, so `transport/darwin.rs`
 tells the hook on the opening thread and waits again.
-`transport/rustls_http.rs` sends such a body through a reader that tells the
-hook each read ureq takes, with an explicit `content-length`. Without a hook
+`transport/rustls_http.rs` sends such a body through a counted reader, with an
+explicit `content-length`, and tells the hook after each write (patch 46). Without a hook
 nothing changes. `fetch_stream_gated`, every request's hop loop, moves the
 body into each hop's request and back instead of cloning it, so a request
 holds one copy of its body while it goes out, the platform's aside.
@@ -521,6 +546,17 @@ putting them in place, and `fork` runs with every signal blocked until the
 child's handlers are defaults. A `PATH` lookup skips relative entries.
 On macOS a group's member list uses libproc's PID count to size its buffer
 and retries a full buffer, so growth cannot silently truncate the list.
+Exit observation uses `waitid(WNOWAIT)`, leaving the leader's identity
+reserved until the supervisor and quit finish signalling, then `wait`
+reaps it. `try_observe_exit` polls without waiting or reaping. Group liveness
+and member lists exclude zombies on both platforms; Linux checks a zombie
+leader's remaining threads. Failed inspection leaves liveness unknown and
+is treated as alive for signalling and escalation. On Linux, membership is
+`getpgid`'s answer, so a process outside the group that `/proc`'s
+`hidepid` makes unreadable does not fail the scan (`process/scan.rs`).
+`signal_process_if` replaces `signal_process`: it signals a pid only if a
+test holds for it, and on Linux holds the process by a pidfd across the
+test, so a pid reused after the test is not signalled.
 `stdlib/fs.rs` resolves `home:/` and `bundle:/` (the namespaces `grant.rs`
 reads) against roots the host sets (`set_roots`), the bundle read only,
 each path admitted as spelt and run from its root's retained descriptor
@@ -980,6 +1016,60 @@ since `LIBSQLITE3_FLAGS` also reaches an iOS build's host dependencies.
 Recheck every filesystem probe when updating the amalgamation. Replay the
 bundled dependency, C replacement and build driver together on a refresh.
 
+## Local patch 44, the events binding's engine hooks for an embedder
+
+`InstallOptions::events_hooks` names a global through which the installer
+publishes the events binding's engine hooks (`reportException`, `onUnhandled`,
+`onHandled`, `configure`), frozen, as it publishes the other bootstrap outputs.
+Exact's data module reads them before its code runs (exact2 LLP 1175).
+Installed so, the binding reads no clock, since that realm refuses one to its
+code: `Event.timeStamp` is 0. `configure({ report, result, during })`, allowed
+once, makes the embedder hear every report with whether a listener cancelled
+it, in place of `nativeReport`; hear each listener's and `on…` handler's
+return value; and run the host's own dispatches of `error`,
+`unhandledrejection` and `rejectionhandled` inside `during`. `reportException`
+and `onUnhandled` return whether a listener cancelled. Without the option the
+binding behaves as upstream's. `js/tests/it/error_events.rs` covers it. Offer
+upstream; replay on a refresh until it lands.
+
+## Local patch 45, ibex2 takes Exact's private copy of ureq
+
+`ibex2` depends on `ureq = { package = "exact-ureq", path = "../../../ureq" }`,
+ureq 3.4.0 vendored under another name (`vendor/ureq/EXACT-PATCHES.md`): the
+portable transport implements ureq's `unversioned` traits, which change
+between minor releases, and an app's own `ureq` must resolve apart from it
+(LLP 1153.003 D6.5). `hermes-lean-sys` and its installer call only `ureq::get`
+and require `"3"`. The atomics call `try_update`, Rust's current name for the
+deprecated `fetch_update`. Replay on a refresh.
+
+## Local patch 46, a request body streamed from a file
+
+`Request::body_file` is a body read from a file as it goes out (exact2 LLP
+1133.008.000 D4): a `BodyFile` over the embedder's `FileBody`, which gives the
+body's length and a reader from its first byte for each attempt. A redirect
+that drops the body drops it; a request with both it and `body` is refused, as
+is one on the asynchronous fetch. Its length is the `Content-Length`.
+
+The portable transport sends it through `SendBody::from_reader`. A request
+whose body is a file and which names no timeout has no limit on the whole
+exchange: each write may wait 60 s (`IDLE_SEND`), then the reply has its usual
+15 s and 15 s. A resend on a new connection opens a new reader. Progress, for
+any counted body, is told after each write that succeeds (`Written`), never on
+the read before it, and is no longer filled to `(total, total)` when the
+response arrives: a reply before the whole body went out tells only the bytes
+written.
+
+Darwin sends it as `uploadTaskWithStreamedRequest:`. `needNewBodyStream`
+supplies each attempt's stream, the first included: the input half of a 64 KiB
+bound stream pair, with a thread (`Ibex2FilePump`) copying the reader's bytes
+into the output half and never writing when there is no space. URLSession's
+own stream lets it read a reply that comes before the body has gone (a 413 in
+under a second, measured); an `NSInputStream` subclass left it waiting 60 s for
+its timeout. A reader that fails fails the exchange with its words unless a
+reply came first. Progress stops at `didSendBodyData`'s last count.
+
+Replay on a refresh.
+
 ## Terminal heap exhaustion
 
 The borrowed adapter propagates native engine exceptions through installation,
@@ -998,3 +1088,35 @@ confirms receipt of the peer's closing frame through its delegate; the portable
 pump confirms that the close frame reached TCP. The native executor waits across
 this boundary before a suspending host returns, with a bounded deadline. Ordinary
 resource releases wait on a worker. Replay on a refresh.
+
+## Session-free file transfers
+
+`Fetch::admit` checks the binding's grants and hop gate without sending a
+request; a later `stream` checks them again at every hop. HTTP admission
+refuses non-HTTP schemes and, at the first hop and at every redirect, a URL
+with userinfo: Fetch throws a `TypeError` for a
+[request URL that includes credentials](https://fetch.spec.whatwg.org/#dom-request)
+and answers a network error for a
+[redirect to one](https://fetch.spec.whatwg.org/#http-redirect-fetch) in
+another origin, which every server is to an app. The background-transfer
+carrier refuses userinfo in its own hop gate as well, beside the source's
+grant and gate. Redirects rewrite POST on 301/302,
+rewrite non-GET/HEAD on 303, and drop body headers when dropping the body,
+as Fetch's redirect algorithm requires. Authorization remains removed after
+any origin change.
+Redirect credential stripping compares parsed URL origins, leaving hostless
+and non-HTTP targets to hop admission. Such targets fail URL validation,
+not HTTP-origin extraction, so a carrier never retries them as network faults.
+
+`Request::idle_timeout` lets a portable file transfer outlive the ordinary
+total deadline while bounding DNS (including the wait for a lookup helper)
+and each socket wait. An explicit total timeout
+wins; a reused connection restores the next request's own timeouts. TLS,
+trust selection and HTTP framing are unchanged. The Android carrier uses
+this through the same endowed fetch binding as ordinary requests (LLP
+1133.017). Replay on a refresh.
+
+`AppDirectories::publish_file` admits a destination under pinned directories and
+renames a completed host-owned file into it on the same filesystem. Recovery
+recognizes an already-published destination; storage errors preserve the source
+for retry. This avoids requiring another response-sized allocation at publication.

@@ -320,9 +320,10 @@ extension CanvasesHost {
         for e in Array(entries.values) { publishRecord(e) }
     }
 
+    /// Each canvas of a surface runs its own world; the first live one alone
+    /// publishes the surface's record (LLP 1046.003).
     func claimPublisher(_ e: Entry) {
         if publishers[e.name] == nil { publishers[e.name] = e }
-        else { fputs("exact gpu: surface \(e.name): duplicate live publisher ignored\n", stderr) }
     }
 
     func releasePublisher(_ e: Entry) {
@@ -330,10 +331,18 @@ extension CanvasesHost {
         publishers.removeValue(forKey: e.name)
         updatePerformanceTimer()
         surfaceRecord(e.name, nil)
-        if e.performance { session?.canvasPerformanceRecord(e.name, nil) }
+        session?.canvasPerformanceRecord(e.name, nil)
     }
 
     func updatePerformanceTimer() {
+        for e in entries.values where e.id != 0 {
+            guard let m = e.module else { continue }
+            let enabled = publishers[e.name] === e && session?.canvasPerformanceRequested(e.name) == true
+            if enabled != e.performance {
+                e.performance = enabled
+                _ = m.performanceReporting?(e.id, enabled)
+            }
+        }
         guard visible, session?.clock == nil, publishers.values.contains(where: { $0.performance && $0.id != 0 }) else {
             performanceTimer?.invalidate(); performanceTimer = nil; return
         }
@@ -525,7 +534,7 @@ extension CanvasesHost {
     func agent(_ view: UInt32, _ request: [String: Any]) -> [String: Any]? {
         guard let e = live(view), let s = session, let m = e.module, let ask = m.agent else { return nil }
         var request = request
-        let size = s.agentInstance.box(e.view)
+        let size = InspectionGeometry.box(e.view.bounds, of: e.view, viewport: s.presenter.viewport)
         request["width"] = max(1, size.width)
         request["height"] = max(1, size.height)
         request["scale"] = e.view.canvasScale
@@ -568,7 +577,7 @@ extension CanvasesHost {
     }
 
     func decorate(_ request: [String: Any], _ reply: [String: Any]) -> [String: Any] {
-        guard reply["error"] == nil, !Agent.worldRequest(request) else { return reply }
+        guard reply["error"] == nil, request["entity"] == nil, request["world"] as? Bool != true else { return reply }
         var reply = reply
         switch request["op"] as? String {
         case "tree":

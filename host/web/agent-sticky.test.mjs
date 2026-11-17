@@ -3,8 +3,8 @@
 // the box leaves (`reveal`, host/web/agent-input.js), as a person scrolls a row out from under a docked bar, and pressed;
 // a pass-through sticky (pointer-events: none), which the tap's own hit-test passes, scrolls nothing; a popover over a
 // row is no scroll's to clear, and the tap still refuses there; nor a dock taller than the band it leaves.
-import { test, expect } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -35,8 +35,12 @@ const CONTRACT = `component StickyFixture
           text "Dock"
 `;
 
+const dirs = [];
+afterAll(() => { for (const dir of dirs) rmSync(dir, { recursive: true, force: true }); });
 async function serve() {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-sticky-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = mkdtempSync(join(tmpdir(), 'exact-sticky-'));
+  dirs.push(dir);
+  const contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, CONTRACT);
   const compile = spawnSync(compiler, ['build', contract, '-o', plan], { encoding: 'utf8' });
   if (compile.status !== 0) throw new Error(compile.stderr);

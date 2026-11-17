@@ -226,11 +226,57 @@ impl Painter {
         }
     }
 
-    /// SVG text (LLP 1055.000 D11): each run shaped as a one-line paragraph
-    /// by the text engine, its chunk anchored by the runs' total advance and
-    /// set on the baseline `dominant-baseline` names. The fill is painted;
-    /// a stroke or a gradient on text is owed on this host.
+    /// SVG text fills (LLP 1055.000 D11); strokes and gradients on text are owed.
     fn svg_text(&mut self, item: &exact_kernel::svg::scene::TextItem, ts: Transform) {
+        self.svg_text_runs(item, |painter, paragraph, run, at| {
+            // A gradient on text is owed, not its fallback colour.
+            if let Some(fill) = run.fill.as_ref().filter(|f| f.server.is_none()) {
+                let mut c = rgba(fill.color.resolve(painter.dark));
+                c[3] = (c[3] as f32 * fill.opacity).round() as u8;
+                let palette = [crate::text::RunPaint {
+                    color: c,
+                    source: run.id,
+                }];
+                painter
+                    .backend
+                    .text(&mut painter.text.borrow_mut(), paragraph, &palette, at, ts);
+            }
+        });
+    }
+
+    pub(super) fn svg_text_bounds(
+        &mut self,
+        item: &exact_kernel::svg::scene::TextItem,
+    ) -> Option<super::Rect4> {
+        let mut area = None;
+        let mut complete = true;
+        self.svg_text_runs(item, |painter, paragraph, run, at| {
+            if run.fill.as_ref().is_none_or(|f| f.server.is_some()) {
+                return;
+            }
+            if let Some((x, y, w, h)) = paragraph.paint_bounds(painter.scale) {
+                if w > 0. && h > 0. {
+                    let rect = (x + at.0, y + at.1, w, h);
+                    area = Some(area.map_or(rect, |a| island::union(a, rect)));
+                }
+            } else {
+                complete = false;
+            }
+        });
+        complete.then(|| area.unwrap_or_default())
+    }
+
+    /// Shaping, anchoring and baseline placement shared by paint and island bounds.
+    fn svg_text_runs(
+        &mut self,
+        item: &exact_kernel::svg::scene::TextItem,
+        mut visit: impl FnMut(
+            &mut Self,
+            &crate::text::Paragraph,
+            &exact_kernel::svg::scene::TextRun,
+            (f32, f32),
+        ),
+    ) {
         use exact_kernel::{DominantBaseline, TextAnchor, WhiteSpace};
         let mut pen = (0.0f32, 0.0f32);
         for chunk in &item.chunks {
@@ -275,23 +321,7 @@ impl Painter {
             for (p, r) in &shaped {
                 x += r.dx;
                 y += r.dy;
-                // A gradient on text is owed, not its fallback colour.
-                if let Some(fill) = r.fill.as_ref().filter(|f| f.server.is_none()) {
-                    let mut c = rgba(fill.color.resolve(self.dark));
-                    c[3] = (c[3] as f32 * fill.opacity).round() as u8;
-                    let palette = [crate::text::RunPaint {
-                        color: c,
-                        source: r.id,
-                    }];
-                    let mut engine = self.text.borrow_mut();
-                    self.backend.text(
-                        &mut engine,
-                        p,
-                        &palette,
-                        (x, y + shift - p.first_baseline),
-                        ts,
-                    );
-                }
+                visit(self, p, r, (x, y + shift - p.first_baseline));
                 x += p.width;
             }
             pen = (x, y);
@@ -328,10 +358,13 @@ pub(super) fn affine(t: [f32; 6]) -> Transform {
 
 impl Painter {
     pub(super) fn svg_note(&mut self, node: &NodeRef<'_>, scene: &scene::Scene) {
-        if let Some(limit) = scene.over {
+        let note = scene
+            .over
+            .map(|limit| format!("{limit}; drawing nothing"))
+            .or_else(|| scene.refused.map(str::to_string));
+        if let Some(note) = note {
             if self.svg_warned.insert(node.key) {
-                self.notes
-                    .push(format!("svg #{}: {limit}; drawing nothing", node.id));
+                self.notes.push(format!("svg #{}: {note}", node.id));
             }
         }
     }
@@ -345,13 +378,6 @@ impl Painter {
     ) {
         let scene = resolve_svg(walk.scene, node, content.rect, self.dark);
         self.svg_note(node, &scene);
-        if let Some(refusal) = scene.refused {
-            // @ref LLP 1055.000 D13 — refused by name, once.
-            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("exact svg: {refusal}");
-            }
-        }
         let (ox, oy) = effective_overflow(node);
         let clips = ox != Overflow::Visible || oy != Overflow::Visible;
         // The elements the reader animates (`crate::host::lower`).
@@ -374,18 +400,40 @@ impl Painter {
     /// content box of `css` points, painted by a painter of its own at
     /// `scale` device pixels per point into a transparent pixmap of
     /// `css × scale` pixels, as an island is, so the picture and the same
-    /// content inlined never differ on this host.
+    /// content inlined never differ on this host. Its colours take their
+    /// `dark` forms.
     pub(crate) fn svg_picture(
         text: crate::text::Shared,
         scene: &exact_kernel::svg::Scene,
         css: (f32, f32),
         scale: f32,
+        dark: bool,
     ) -> Result<tiny_skia::Pixmap, String> {
         let mut painter = Painter::new(text, scale, Box::new(crate::raster::Raster::transparent()));
+        painter.dark = dark;
         painter.viewport = css;
         painter.backend.begin(css.0, css.1, scale);
         let rect: Rect4 = (0.0, 0.0, css.0, css.1);
         painter.paint_svg(scene, scene.clip, Shape::rect(rect), Transform::identity());
+        painter.backend.finish()
+    }
+
+    /// A symbol (`symbol:`'s role or icon token) alone, filling a square of
+    /// `side` points in `colour`, at `scale` device pixels per point, into a
+    /// transparent pixmap: a status item's image (LLP 1133.025 D4).
+    pub(crate) fn symbol_picture(
+        text: crate::text::Shared,
+        role: &str,
+        style: &exact_kernel::StyleProps,
+        side: f32,
+        scale: f32,
+        colour: [u8; 4],
+    ) -> Result<tiny_skia::Pixmap, String> {
+        let mut painter = Painter::new(text, scale, Box::new(crate::raster::Raster::transparent()));
+        painter.viewport = (side, side);
+        painter.backend.begin(side, side, scale);
+        let rect: Rect4 = (0.0, 0.0, side, side);
+        painter.symbol_face(role, style, rect, colour, Transform::identity());
         painter.backend.finish()
     }
 
@@ -401,6 +449,59 @@ impl Painter {
     ) {
         if scene.view.is_none() {
             return;
+        }
+        // Android's stream places pictures without a blend operator. Keep
+        // the backdrop and every blended element in one CPU-rendered SVG.
+        fn blends(item: &Item) -> bool {
+            item.blend != 0
+                || match &item.kind {
+                    Kind::Group(c) | Kind::Viewport { children: c, .. } => c.iter().any(blends),
+                    Kind::Shape(shape) => shape.markers.iter().any(blends),
+                    _ => false,
+                }
+        }
+        if !self.backend.supports_blend() && scene.items.iter().any(blends) {
+            let origin = ts.pre_translate(content.rect.0, content.rect.1);
+            let space = origin.pre_concat(affine(scene.view.unwrap()));
+            let area = if clips {
+                Some(island::bounds(ts, content.rect))
+            } else {
+                island::blend_bounds(self, &scene.items, space, origin)
+            };
+            // Snap outward without clipping to the window: retained row pictures
+            // also hold content that a later scroll can reveal.
+            let rect = area.map(|(x, y, w, h)| {
+                let s = self.scale;
+                let left = (x * s).floor() / s;
+                let top = (y * s).floor() / s;
+                (
+                    left,
+                    top,
+                    ((x + w) * s).ceil() / s - left,
+                    ((y + h) * s).ceil() / s - top,
+                )
+            });
+            if let Some((rect, pixels)) = rect.and_then(|rect| {
+                // Bound the area before Raster allocates either the scene or
+                // its blended source. Keep recording-space bounds for scroll.
+                let w = (rect.2 * self.scale).ceil();
+                let h = (rect.3 * self.scale).ceil();
+                if ![rect.0, rect.1, w, h].iter().all(|v| v.is_finite())
+                    || w <= 0.
+                    || h <= 0.
+                    || w * h > 16_777_216.
+                {
+                    return None;
+                }
+                self.island(rect, |p, shift| {
+                    p.paint_svg(scene, clips, content, shift.pre_concat(ts));
+                })
+                .map(|pixels| (rect, pixels))
+            }) {
+                self.backend
+                    .surface_image(std::sync::Arc::new(pixels), rect);
+                return;
+            }
         }
         if clips {
             self.backend.push_clip(&content, ts);
@@ -426,7 +527,15 @@ pub(super) fn resolve_svg(
     content: Rect4,
     dark: bool,
 ) -> exact_kernel::svg::Scene {
-    resolve_with(walk.kernel, node, content, walk.presented, walk.paths, dark)
+    resolve_with(
+        walk.kernel,
+        node,
+        content,
+        walk.presented,
+        walk.paths,
+        walk.filters,
+        dark,
+    )
 }
 
 /// [`resolve_svg`] with the host's presented values and paths by view.
@@ -436,6 +545,7 @@ pub fn resolve_with(
     content: Rect4,
     presented: &dyn Fn(exact_kernel::ViewId) -> super::Presented,
     paths: &dyn Fn(exact_kernel::ViewId) -> Option<exact_motion::PathValue>,
+    filters: &dyn Fn(exact_kernel::ViewId) -> Option<exact_motion::FilterValue>,
     dark: bool,
 ) -> exact_kernel::svg::Scene {
     /// The host's values by node, as the scene asks for them.
@@ -443,6 +553,7 @@ pub fn resolve_with(
         kernel: &'a exact_kernel::Kernel,
         value: V,
         paths: &'a dyn Fn(exact_kernel::ViewId) -> Option<exact_motion::PathValue>,
+        filters: &'a dyn Fn(exact_kernel::ViewId) -> Option<exact_motion::FilterValue>,
     }
     impl<V: Fn(NodeKey, Property) -> Option<Value>> scene::Present for ByNode<'_, V> {
         fn value(&self, key: NodeKey, p: Property) -> Option<Value> {
@@ -450,6 +561,9 @@ pub fn resolve_with(
         }
         fn path(&self, key: NodeKey) -> Option<exact_motion::PathValue> {
             (self.paths)(self.kernel.node_by_key(key)?.id)
+        }
+        fn filter(&self, key: NodeKey) -> Option<exact_motion::FilterValue> {
+            (self.filters)(self.kernel.node_by_key(key)?.id)
         }
     }
     {
@@ -481,6 +595,7 @@ pub fn resolve_with(
                 kernel,
                 value,
                 paths,
+                filters,
             },
             dark,
         )
@@ -562,6 +677,12 @@ impl Painter {
             let (vw, vh) = self.viewport;
             let mut plain = item.clone();
             plain.blend = 0;
+            if !self.backend.supports_blend() {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| eprintln!("exact style-undrawn: mix-blend-mode could not composite its SVG picture; the SVG draws unblended"));
+                self.svg_item(&plain, ts, origin);
+                return;
+            }
             if let Some(pixels) = self.island((0.0, 0.0, vw, vh), |p, shift| {
                 p.svg_item(&plain, shift.pre_concat(ts), shift.pre_concat(origin));
             }) {
@@ -572,6 +693,12 @@ impl Painter {
                     Transform::identity(),
                     item.blend,
                 );
+            } else {
+                static SAID: std::sync::Once = std::sync::Once::new();
+                SAID.call_once(|| {
+                    eprintln!("exact style-undrawn: mix-blend-mode on SVG #{} could not allocate its picture; the element draws unblended", item.id);
+                });
+                self.svg_item(&plain, ts, origin);
             }
             return;
         }

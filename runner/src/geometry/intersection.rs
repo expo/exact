@@ -120,7 +120,7 @@ pub(crate) fn intersection(
                 rooted |= element_root;
             }
             if !rooted && slot != key.index {
-                if let Some(bounds) = path_bounds(&s.rare.clip_path) {
+                if let Some(bounds) = path_bounds(&s.rare.clip_path.resolved(f.width, f.height)) {
                     clipped = clip(map(transform, clipped), bounds)?;
                     transform = IDENTITY;
                 }

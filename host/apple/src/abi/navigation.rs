@@ -93,6 +93,29 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
+    /// Make the UTF-8 location in the input buffer the window's only visit
+    /// (LLP 1030.004 D2), a batch.
+    pub fn host_root(&mut self, len: usize, now_ms: f64) -> u32 {
+        let location = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]);
+        let out = self
+            .host
+            .as_mut()
+            .map_or_else(not_booted, |h| h.host_root(&location, now_ms));
+        self.emit(out)
+    }
+
+    /// `exact_route_part`: the entrance (`exit` 0) or exit (1) route `view`
+    /// declares, posed for a box `width` by `height` points
+    /// (`Host::route_part`, LLP 1013.001 D1), JSON in the output buffer;
+    /// returns its length.
+    pub fn route_part(&mut self, view: u32, exit: u32, width: f64, height: f64) -> u32 {
+        let out = (self.host.as_ref()).map_or_else(
+            || "null".into(),
+            |h| h.route_part(view, exit != 0, (width, height)),
+        );
+        self.emit(out)
+    }
+
     /// Deliver native Forward at the navigation root, a batch.
     pub fn host_forward(&mut self, root: u32, now_ms: f64) -> u32 {
         let out = self

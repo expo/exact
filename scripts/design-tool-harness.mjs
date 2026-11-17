@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { checkoutPort, claimPort, takePort } from './port-lock.mjs';
 import { spawnOwned, stopAll } from './test-children.mjs';
-import { upstream } from './tamber-request.mjs';
+import { upstream } from './forma-request.mjs';
 import { fileURLToPath } from 'node:url';
 
 export const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -20,14 +20,14 @@ export const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const claimed = process.env.EXACT_TOOL_PORT === undefined ? await claimPort(checkoutPort(ROOT) + 1, { label: `the design tool's tests in ${ROOT}`, except: [checkoutPort(ROOT)] }) : null;
 if (claimed) process.env.EXACT_TOOL_PORT = String(claimed.port);
 // The port module reads the port once, at its first import: a file run before these in the same process
-// (tamber-server.test.mjs) loads it with none (7740), where these runs' children serve this checkout's; then
+// (forma-server.test.mjs) loads it with none (7740), where these runs' children serve this checkout's; then
 // these take an instance of their own (a query is a module of its own).
-const loaded = await import('./tamber-tool-port.mjs');
-export const { TOOL_DIST, TOOL_ORIGIN, TOOL_PORT, stageTool } = String(loaded.TOOL_PORT) === process.env.EXACT_TOOL_PORT ? loaded : await import(`./tamber-tool-port.mjs?port=${process.env.EXACT_TOOL_PORT}`);
+const loaded = await import('./forma-tool-port.mjs');
+export const { TOOL_DIST, TOOL_ORIGIN, TOOL_PORT, stageTool } = String(loaded.TOOL_PORT) === process.env.EXACT_TOOL_PORT ? loaded : await import(`./forma-tool-port.mjs?port=${process.env.EXACT_TOOL_PORT}`);
 // The app a drive names: the staged tool (no server of its own) on another port, so no drive starts the stub on 7740.
 export const DRIVEN = TOOL_PORT === 7740 ? { args: ['--app', 'design-tool'], env: process.env } : { args: [], env: { ...process.env, EXACT_APP_DIR: stageTool().dir } };
 // The stub's app (its components' params, which the stub's design sets):
-// the app beside a copy of stub/dials.tamber.
+// the app beside a copy of stub/dials.forma.
 export const STUB_APP = readFileSync(resolve(ROOT, 'apps/design-tool/stub/app.contract'), 'utf8');
 
 // The tool's port, in turn with other runs (the contract tests' stub, other
@@ -57,9 +57,9 @@ afterEach(() => { stopAll(); givePort(); });
 
 /** The slow lane (EXACT_SLOW_TESTS=1): the design server's real clocks, where other runs shorten them. */
 export const SLOW = process.env.EXACT_SLOW_TESTS === '1';
-/** The environment for a design server whose clocks a test shortens (tamber-timing.mjs: `{ POLL: 6000 }` is
- * EXACT_TAMBER_POLL_MS), under the test switch; the slow lane's keeps the real clocks. */
-export const timed = knobs => (SLOW ? process.env : { ...process.env, EXACT_TAMBER_TEST_TIMING: '1', ...Object.fromEntries(Object.entries(knobs).map(([k, v]) => [`EXACT_TAMBER_${k}_MS`, String(v)])) });
+/** The environment for a design server whose clocks a test shortens (forma-timing.mjs: `{ POLL: 6000 }` is
+ * EXACT_FORMA_POLL_MS), under the test switch; the slow lane's keeps the real clocks. */
+export const timed = knobs => (SLOW ? process.env : { ...process.env, EXACT_FORMA_TEST_TIMING: '1', ...Object.fromEntries(Object.entries(knobs).map(([k, v]) => [`EXACT_FORMA_${k}_MS`, String(v)])) });
 
 /** Signals a drive waits on (`clock +N real until <path>`, a real wait ended early once the file exists): files in a
  * temp directory of this test's own, so no two runs share one. `pause(ms, n)` is the op for the n-th wait (N its
@@ -69,8 +69,8 @@ export function signals(name) {
   return { pause: (ms, n) => `clock +${ms} real until ${join(dir, String(n))}`, fire: n => writeFileSync(join(dir, String(n)), ''), drop: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** This port's tool built once in this process, as `tamber tool` builds it (a run on a copy of the theme fixture, its
- * URL said once built, then stopped); nothing when its build is current (`tamber tool`'s own check, tamber-server.mjs
+/** This port's tool built once in this process, as `forma tool` builds it (a run on a copy of the theme fixture, its
+ * URL said once built, then stopped); nothing when its build is current (`forma tool`'s own check, forma-server.mjs
  * buildTool) or the port is not this run's own. */
 let built = null;
 export function toolBuilt() {
@@ -84,9 +84,9 @@ export function toolBuilt() {
     if (await builtAppMatches(TOOL_DIST, tool) && jsTargetBuild(TOOL_DIST) && !webChanges(TOOL_DIST, tool).all.length) return;
     const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-build-'));
     try {
-      for (const f of ['app.contract', 'app.tamber', 'app.json']) writeFileSync(join(app, f), readFileSync(resolve(ROOT, 'apps/theme-fixture', f)));
-      const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
-      try { await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 20 * 60_000); } finally { await stop(tool); }
+      for (const f of ['app.contract', 'app.forma', 'app.json']) writeFileSync(join(app, f), readFileSync(resolve(ROOT, 'apps/theme-fixture', f)));
+      const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+      try { await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 20 * 60_000); } finally { await stop(tool); }
     } finally { rmSync(app, { recursive: true, force: true }); }
   })();
 }
@@ -130,21 +130,21 @@ export async function drive(url, storage, ops, { keepStorage = false } = {}) {
   return out.seen.filter(l => l.startsWith('{')).map(l => JSON.parse(l));
 }
 
-/** The tool on `app` through `tamber tool --via` to a proxy in front of
+/** The tool on `app` through `forma tool --via` to a proxy in front of
  * the app's design server: the proxy records each write's file as the
  * server left it (read once its reply is in, so in the order written), and
  * calls `before(request)` before forwarding a request, so a hand edit lands
  * exactly between two of the tool's requests, with no timing. `env` is the
  * design server's (`timed(…)` for shortened clocks). */
 export async function proxied(app, before = () => {}, { env = process.env } = {}) {
-  const serve = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'serve', app], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
-  const origin = new URL(await lines(serve).until(l => /^http:\/\/127\.0\.0\.1:\d+\/__tamber$/.test(l), 600_000)).origin;
+  const serve = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'serve', app], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const origin = new URL(await lines(serve).until(l => /^http:\/\/127\.0\.0\.1:\d+\/__forma$/.test(l), 600_000)).origin;
   const writes = [];
   const proxy = Bun.serve({ hostname: '127.0.0.1', port: 0, idleTimeout: 0, fetch: async req => {
     const url = new URL(req.url);
     const body = req.method === 'POST' ? await req.text() : undefined;
     let request = {};
-    try { request = url.pathname === '/__tamber' && body ? JSON.parse(body) : {}; } catch { /* not ours */ }
+    try { request = url.pathname === '/__forma' && body ? JSON.parse(body) : {}; } catch { /* not ours */ }
     await before(request);
     const headers = new Headers(req.headers);
     headers.delete('host'); headers.delete('content-length');
@@ -152,16 +152,16 @@ export async function proxied(app, before = () => {}, { env = process.env } = {}
     const bytes = await res.arrayBuffer();
     if (request.method === 'transaction' || request.method === 'undo' || request.method === 'accept') {
       const reply = JSON.parse(new TextDecoder().decode(bytes));
-      writes.push({ method: request.method, ok: !!reply.ok, error: reply.error, after: readFileSync(join(app, 'app.tamber'), 'utf8') });
+      writes.push({ method: request.method, ok: !!reply.ok, error: reply.error, after: readFileSync(join(app, 'app.forma'), 'utf8') });
     }
     const out = new Headers(res.headers);
     out.delete('content-encoding'); out.delete('content-length');
     return new Response(bytes, { status: res.status, headers: out });
   } });
-  const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'tamber', 'tool', app, '--via', `http://127.0.0.1:${proxy.port}`, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const tool = spawnOwned(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'forma', 'tool', app, '--via', `http://127.0.0.1:${proxy.port}`, '--no-open'], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   let said = '';
   tool.stderr.on('data', d => { said = (said + d).slice(-4000); });
-  const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__tamber/tool/`), 600_000).catch(e => { throw new Error(`${e.message}\n${said}`); });
+  const url = await lines(tool).until(l => l.startsWith(`${TOOL_ORIGIN}/__forma/tool/`), 600_000).catch(e => { throw new Error(`${e.message}\n${said}`); });
   return { url, origin, writes, close: async () => { await stop(tool); proxy.stop(true); await stop(serve); } };
 }
 
@@ -178,7 +178,7 @@ export const edit = (a, b) => {
 /** A copy of the dials stub (its design and app) in a git repository of its own, one commit in. */
 export function repo(name) {
   const app = mkdtempSync(join(tmpdir(), `exact-design-tool-${name}-`));
-  writeFileSync(join(app, 'app.tamber'), readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.tamber'), 'utf8'));
+  writeFileSync(join(app, 'app.forma'), readFileSync(resolve(ROOT, 'apps/design-tool/stub/dials.forma'), 'utf8'));
   writeFileSync(join(app, 'app.contract'), STUB_APP);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app, encoding: 'utf8' });
   git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'design');

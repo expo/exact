@@ -153,6 +153,27 @@ pub fn session_budget(id: u64, budget: u64) {
     }
 }
 
+/// Retain the most recently used cold pictures within `bytes`.
+pub fn session_trim(id: u64, bytes: u64) {
+    if let Some(core) = session(id) {
+        core.trim_to(bytes);
+    }
+}
+
+/// Drop a source generation's cold pictures, preserving live requests and leases.
+pub fn session_trim_generation(id: u64, generation: u64) {
+    if let Some(core) = session(id) {
+        core.trim_generation(generation);
+    }
+}
+
+/// Forget a source's decoded entries without releasing surviving backing charges.
+pub fn session_retire_generation(id: u64, generation: u64) {
+    if let Some(core) = session(id) {
+        core.retire_generation(generation);
+    }
+}
+
 /// 0 reset, 1 pause, 2 resume, 3 shutdown, 4 trim. Charge handles survive all.
 pub fn session_control(id: u64, op: u32) {
     let Some(core) = session(id) else { return };

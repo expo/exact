@@ -1,6 +1,7 @@
 //! LLP 1017 P1: what the compiler refuses about values and names, and what
 //! bake's layout lint refuses that the compiler cannot see.
 
+use crate::scratch::Scratch;
 use contract::BakeError;
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource};
@@ -196,15 +197,15 @@ fn a_shorthand_read_from_a_name_is_left_to_lowering() {
     // Type tokens across the known arms, a prop's arm left out and a
     // derive's body in its place.
     let design =
-        "tamber t\n\ntheme\n  type.a = 700 1rem Georgia\n  type.b: type = 1rem\n  space.md = 8px\n";
+        "forma t\n\ntheme\n  type.a = 700 1rem Georgia\n  type.b: type = 1rem\n  space.md = 8px\n";
     let lint_designed = |view: &str| {
         let source = format!(
             "component App\n  view\n    Run(face=\"type.a\", on=true)\ncomponent Run\n  props\n    face: string\n    on: bool\n  state title = \"-exact-body\"\n  derive good = on ? face : \"-exact-body\"\n  derive bad = on ? \"twelve\" : good\n  view\n    {view}\n"
         );
         let mut file = contract_syntax::parse(&source).unwrap();
         file.design = Some(contract_syntax::DesignSource {
-            path: "app.tamber".into(),
-            home: "app.tamber".into(),
+            path: "app.forma".into(),
+            home: "app.forma".into(),
             text: design.into(),
             source_id: 1,
             bindable: false,
@@ -237,11 +238,11 @@ fn a_shorthand_read_from_a_name_is_left_to_lowering() {
         ),
         (
             font("(on ? \"type.a\" : \"type.b\")"),
-            Some("tamber-type-longhands"),
+            Some("forma-type-longhands"),
         ),
         (
             font("(on ? \"type.a\" : \"bold 12px serif\")"),
-            Some("tamber-kind"),
+            Some("forma-kind"),
         ),
         (
             font("(on ? \"-exact-body\" : \"space.md\")"),
@@ -1157,13 +1158,13 @@ fn the_element_lint_finds_nothing_in_any_app() {
         };
         let mut file = contract_syntax::parse(&src).unwrap();
         // The app's design is the driver's to read (LLP 1121 D2), as `contract build` does.
-        let design = path.with_file_name("app.tamber");
+        let design = path.with_file_name("app.forma");
         file.design =
             std::fs::read_to_string(&design)
                 .ok()
                 .map(|text| contract_syntax::DesignSource {
                     path: design.display().to_string(),
-                    home: "app.tamber".into(),
+                    home: "app.forma".into(),
                     text,
                     source_id: 1,
                     bindable: false,
@@ -1179,8 +1180,7 @@ fn the_element_lint_finds_nothing_in_any_app() {
 
 /// A file of its own, so `use`, fonts and the manifest resolve as for an app.
 fn compile_all(name: &str, source: &str) -> Vec<(String, u32, String)> {
-    let dir = std::env::temp_dir().join(format!("exact-plural-{}-{name}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-plural-{}-{name}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, source).unwrap();
     let Err(errors) = contract::compile_path_all(&path, false) else {

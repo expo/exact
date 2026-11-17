@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and 13, light: Material role 1 from the dynamic tonal palettes, as the reader's Palette.kt derives it. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:color="@android:color/system_accent1_0" />
+</selector>

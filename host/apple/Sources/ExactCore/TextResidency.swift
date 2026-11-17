@@ -45,7 +45,7 @@ package enum TextMetricKey {
         h.combine(spec.strut != nil)
         if let strut = spec.strut { fields(strut, &h) }
         h.combine(spec.align); h.combine(spec.lineClamp); h.combine(spec.overflowWrap)
-        h.combine(spec.direction); h.combine(spec.whiteSpace)
+        h.combine(spec.direction); h.combine(spec.natural); h.combine(spec.whiteSpace)
         h.combine(spec.textIndent); h.combine(spec.hyphens)
         if spec.automaticHyphens { h.combine(spec.language) }
         if !spec.emergencyBreaks.isEmpty { h.combine(spec.emergencyBreaks) }
@@ -63,7 +63,7 @@ package enum TextMetricKey {
         h.combine(true) // The callback always constructs a strut, even for empty text.
         fields(request.strut, &h)
         h.combine(Int(request.align)); h.combine(Int(request.line_clamp)); h.combine(Int(request.overflow_wrap))
-        h.combine(Int(request.direction)); h.combine(Int(request.white_space))
+        h.combine(Int(request.direction)); h.combine(request.natural != 0); h.combine(Int(request.white_space))
         h.combine(CGFloat(request.text_indent)); h.combine(Int(request.hyphens))
         if Spec.insertsHyphens(Int(request.hyphens), wrap: Int(request.overflow_wrap)) {
             h.combine(String(decoding: UnsafeBufferPointer(start: request.lang, count: request.lang_len), as: UTF8.self))
@@ -100,7 +100,8 @@ package enum TextMetricKey {
         guard request.markup == 0, !Spec.insertsHyphens(Int(request.hyphens), wrap: Int(request.overflow_wrap)) else { return false }
         guard request.count == geometry.runs.count, Int(request.align) == geometry.align,
               Int(request.line_clamp) == geometry.lineClamp, Int(request.overflow_wrap) == geometry.overflowWrap,
-              Int(request.direction) == geometry.direction, Int(request.white_space) == geometry.whiteSpace,
+              Int(request.direction) == geometry.direction, (request.natural != 0) == geometry.natural,
+              Int(request.white_space) == geometry.whiteSpace,
               CGFloat(request.text_indent) == geometry.textIndent, Int(request.hyphens) == geometry.hyphens,
               Int(request.text_box_trim) == geometry.textBoxTrim, Int(request.text_box_over) == geometry.textBoxOver,
               Int(request.text_box_under) == geometry.textBoxUnder, (request.text_wrap_style == 1) == geometry.balance,
@@ -173,6 +174,9 @@ extension Spec {
             value.runs[i].backgroundRadii = []
             value.runs[i].backgroundBefore = 0
             value.runs[i].backgroundAfter = 0
+            value.runs[i].backgroundAbove = 0
+            value.runs[i].backgroundBelow = 0
+            value.runs[i].border = nil
             value.runs[i].outerBackgrounds = []
             value.runs[i].shadow = nil
             value.runs[i].stroke = nil
@@ -205,6 +209,7 @@ package struct TextPaint: Hashable {
         let backgroundBox: UInt32
         let backgroundRadii: [InlineRadius]
         let backgroundReach: [CGFloat]
+        let border: InlineBorder?
         let outerBackgrounds: [OuterBackground]
         let shadow: [Double]?
         let stroke: [Double]?
@@ -214,7 +219,8 @@ package struct TextPaint: Hashable {
             hidden = r.hidden; fixedInk = r.fixedInk; color = r.color; decoration = r.decoration
             underlineColor = r.underlineColor; strikeColor = r.strikeColor; href = r.href
             background = r.background; backgroundBox = r.backgroundBox; backgroundRadii = r.backgroundRadii
-            backgroundReach = [r.backgroundBefore, r.backgroundAfter]; outerBackgrounds = r.outerBackgrounds
+            backgroundReach = [r.backgroundBefore, r.backgroundAfter, r.backgroundAbove, r.backgroundBelow]; border = r.border
+            outerBackgrounds = r.outerBackgrounds
             shadow = r.shadow; stroke = r.stroke; atomIcon = r.atomIcon
         }
         func apply(to run: inout Run) {
@@ -223,7 +229,8 @@ package struct TextPaint: Hashable {
             run.underlineColor = underlineColor; run.strikeColor = strikeColor; run.href = href
             run.background = background; run.backgroundBox = backgroundBox; run.backgroundRadii = backgroundRadii
             (run.backgroundBefore, run.backgroundAfter) = (backgroundReach[0], backgroundReach[1])
-            run.outerBackgrounds = outerBackgrounds
+            (run.backgroundAbove, run.backgroundBelow) = (backgroundReach[2], backgroundReach[3])
+            run.border = border; run.outerBackgrounds = outerBackgrounds
             run.shadow = shadow; run.stroke = stroke; run.atomIcon = atomIcon
         }
     }

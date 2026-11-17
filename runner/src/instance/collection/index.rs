@@ -75,7 +75,14 @@ struct RowHeight {
 pub(crate) struct Anchor {
     order: Rc<[Rc<str>]>,
     row: Option<usize>,
+    fixed: Option<usize>,
+    /// How far the port's top was into the row or fixed region; for an
+    /// anchor at the port's bottom, how far the port's bottom was past the
+    /// row's end.
     within: f64,
+    /// Held by the last visible row's end and the port's bottom
+    /// ([`SizeIndex::capture_bottom_anchor`]) rather than the first's top.
+    pub(super) bottom: bool,
     follows_end: bool,
     /// How far past the end the port was (a rubber band under a finger or a
     /// fling): kept past the end, an end it follows included, so a
@@ -104,6 +111,8 @@ pub(crate) struct SizeIndex {
     positions: HashMap<Rc<str>, usize>,
     rows: Vec<RowHeight>,
     tree: SumTree,
+    /// Always-mounted lead and trail items, outside the data-key namespace.
+    fixed: [f64; 2],
     estimate: f64,
     epoch: u64,
     next_generation: u64,
@@ -140,6 +149,7 @@ impl SizeIndex {
             positions: HashMap::new(),
             rows: Vec::new(),
             tree: SumTree::new(&[])?,
+            fixed: [0.0; 2],
             estimate,
             epoch: 1,
             next_generation: 0,
@@ -338,18 +348,51 @@ impl SizeIndex {
         self.rows.get(index).map(|row| row.height)
     }
 
-    /// Height of rows `[0, end)`, including `end == len()`; O(log N).
+    /// The lead plus the height of rows `[0, end)`, including `end == len()`; O(log N).
     pub(crate) fn prefix(&self, end: usize) -> Option<f64> {
-        (end <= self.len()).then(|| self.tree.prefix(end))
+        (end <= self.len()).then(|| self.fixed[0] + self.tree.prefix(end))
     }
 
     /// Where the rows end: their heights' sum, less the gap the last one
     /// counts after it.
     pub(crate) fn total_height(&self) -> f64 {
-        if self.rows.is_empty() {
-            return self.tree.total();
+        self.fixed[0] + self.data_extent() + self.fixed[1]
+    }
+
+    pub(crate) fn data_extent(&self) -> f64 {
+        (self.tree.total() - if self.rows.is_empty() { 0.0 } else { self.gap }).max(0.0)
+    }
+
+    pub(crate) fn first_in_port(&self, offset: f64, viewport: f64) -> Option<usize> {
+        let band = self.band(offset, (offset + viewport).min(self.total_height()));
+        (band.start < band.end).then_some(band.start)
+    }
+
+    pub(crate) fn fixed_anchor(&self, side: usize, within: f64) -> Anchor {
+        Anchor {
+            order: Rc::clone(&self.order),
+            row: None,
+            fixed: Some(side),
+            within,
+            bottom: false,
+            follows_end: false,
+            beyond: 0.0,
+            raw: 0.0,
         }
-        (self.tree.total() - self.gap).max(0.0)
+    }
+
+    pub(crate) fn fixed_size(&self, side: usize) -> f64 {
+        self.fixed[side]
+    }
+
+    pub(crate) fn measure_fixed(&mut self, side: usize, size: f64) -> Result<(), IndexError> {
+        let size = valid_height(size)?;
+        let extent = self.fixed[1 - side] + self.data_extent() + size;
+        if !extent.is_finite() || extent > f64::from(f32::MAX) {
+            return Err(IndexError::ExtentOverflow);
+        }
+        self.fixed[side] = size;
+        Ok(())
     }
 
     /// The gap each row's height counts after it.
@@ -443,7 +486,9 @@ impl SizeIndex {
     /// are skipped in O(log N). At/past total height there is no containing row.
     pub(crate) fn row_at(&self, offset: f64) -> Result<Option<usize>, IndexError> {
         valid_geometry(offset)?;
-        Ok(self.tree.find(offset, false))
+        Ok((offset >= self.fixed[0])
+            .then(|| self.tree.find(offset - self.fixed[0], false))
+            .flatten())
     }
 
     pub(crate) fn measurement_token(&self, key: &str) -> Option<MeasurementToken> {
@@ -675,29 +720,90 @@ impl SizeIndex {
         let at = raw.min(max).max(-self.leading);
         let follows_end = follow_end && viewport > 0.0 && max - at < END_SLACK;
         // An end it follows wins: a short transcript is at both edges.
-        let mut row = if offset <= 0.0 && !follows_end {
+        let fixed = if offset > 0.0 && offset < self.fixed[0] {
+            Some(0)
+        } else if self.fixed[1] > 0.0 && offset >= self.fixed[0] + self.data_extent() {
+            Some(1)
+        } else {
+            None
+        };
+        let mut row = if fixed.is_some() || (offset <= 0.0 && !follows_end) {
             None
         } else {
-            self.tree.find(offset, false)
+            self.tree.find(offset - self.fixed[0], false)
         };
-        let mut within = row.map_or(0.0, |i| (offset - self.tree.prefix(i)).max(0.0));
+        let mut within = fixed.map_or_else(
+            || row.map_or(0.0, |i| (offset - self.prefix(i).unwrap()).max(0.0)),
+            |side| {
+                offset
+                    - if side == 0 {
+                        0.0
+                    } else {
+                        self.fixed[0] + self.data_extent()
+                    }
+            },
+        );
         while !follows_end
             && row.is_some_and(|i| self.key(i).is_some_and(|k| excluded.contains(&k)))
         {
-            let next = self.tree.prefix(row.unwrap() + 1);
+            let next = self.prefix(row.unwrap() + 1).unwrap();
             row = self
                 .tree
-                .find(next, false)
-                .filter(|&i| self.tree.prefix(i) < offset + viewport);
-            within = row.map_or(offset, |i| offset - self.tree.prefix(i));
+                .find(next - self.fixed[0], false)
+                .filter(|&i| self.prefix(i).unwrap() < offset + viewport);
+            within = row.map_or(offset, |i| offset - self.prefix(i).unwrap());
         }
         Ok(Anchor {
             order: Rc::clone(&self.order),
             row,
+            fixed,
             within,
+            bottom: false,
             follows_end,
             beyond: (raw - max).max(0.0),
             raw,
+        })
+    }
+
+    /// @ref LLP 1168.000 D1.2 — the anchor of a list that opens at its end
+    /// when an update puts rows before its window: the last row the port
+    /// shows, by key, and the distance from that row's end to the port's
+    /// bottom. It is taken at a zero offset too, where the first visible row
+    /// would anchor nothing, so a page that lands above a reader at the top
+    /// of the loaded window leaves them where they were reading; a leading
+    /// row or a separator that moves with the page cannot take them along.
+    /// A port below the rows (in the padding after them) holds the last row
+    /// with a height.
+    /// An end it follows wins, as in [`Self::capture_anchor`].
+    pub(crate) fn capture_bottom_anchor(
+        &self,
+        raw: f64,
+        viewport: f64,
+        follow_end: bool,
+    ) -> Result<Anchor, IndexError> {
+        let anchor = self.capture_anchor(raw, viewport, follow_end)?;
+        if anchor.follows_end {
+            return Ok(anchor);
+        }
+        // The port's bottom where the port is, in the padding before the
+        // rows too (`capture_anchor` has refused a bad offset or port).
+        let bottom = raw.min(self.max_offset(viewport)).max(-self.leading) + viewport;
+        // In the rows' coordinates; a bottom inside fixed content keeps the
+        // top anchor, which holds a fixed region by its own identity.
+        let data = bottom - self.fixed[0];
+        if self.fixed != [0.0; 2] && !(0.0..=self.data_extent()).contains(&data) {
+            return Ok(anchor);
+        }
+        // Below the rows, the last row with a height: a zero-height tail
+        // shows nothing to keep.
+        let row = (self.tree.find(data, true)).or_else(|| self.tree.find(self.tree.total(), true));
+        let within = row.map_or(0.0, |i| data - self.tree.prefix(i + 1));
+        Ok(Anchor {
+            row,
+            fixed: None,
+            within,
+            bottom: row.is_some(),
+            ..anchor
         })
     }
 
@@ -724,6 +830,11 @@ impl SizeIndex {
                 None => return Ok(anchors),
             }
         }
+    }
+
+    /// The position, in the order it was taken on, of the row an anchor holds.
+    pub(crate) fn anchor_row(anchor: &Anchor) -> Option<usize> {
+        anchor.row
     }
 
     /// The key of the row an anchor holds.
@@ -765,7 +876,9 @@ impl SizeIndex {
         Some(Anchor {
             order: Rc::clone(&self.order),
             row: Some(self.position(key)?),
+            fixed: None,
             within,
+            bottom: false,
             follows_end: false,
             beyond: 0.0,
             raw: 0.0,
@@ -782,7 +895,7 @@ impl SizeIndex {
     pub(crate) fn kept_row(&self, anchor: &Anchor, viewport: f64) -> bool {
         !anchor.follows_end
             && self
-                .anchor_position(anchor)
+                .anchor_position(anchor, viewport)
                 .is_some_and(|offset| (-self.leading..=self.max_offset(viewport)).contains(&offset))
     }
 
@@ -790,16 +903,29 @@ impl SizeIndex {
     /// only after structural edits (which already permit an index rebuild).
     /// Drop/recapture the anchor after applying the correction; retaining many old
     /// anchors would retain their old O(N) key snapshots too.
-    fn anchor_position(&self, anchor: &Anchor) -> Option<f64> {
+    fn anchor_position(&self, anchor: &Anchor, viewport: f64) -> Option<f64> {
+        if let Some(side) = anchor.fixed {
+            return Some(
+                anchor.within
+                    + if side == 0 {
+                        0.0
+                    } else {
+                        self.fixed[0] + self.data_extent()
+                    },
+            );
+        }
         let old = anchor.row?;
-        self.position(&anchor.order[old])
-            .or_else(|| {
-                anchor.order[old + 1..]
-                    .iter()
-                    .chain(anchor.order[..old].iter().rev())
-                    .find_map(|key| self.position(key))
-            })
-            .map(|i| self.tree.prefix(i) + anchor.within)
+        let row = self.position(&anchor.order[old]).or_else(|| {
+            anchor.order[old + 1..]
+                .iter()
+                .chain(anchor.order[..old].iter().rev())
+                .find_map(|key| self.position(key))
+        })?;
+        Some(if anchor.bottom {
+            self.prefix(row + 1)? + anchor.within - viewport
+        } else {
+            self.prefix(row)? + anchor.within
+        })
     }
 
     /// Ported to the JS target as `host/web-js/list.js` `restoreAnchor`.
@@ -809,18 +935,22 @@ impl SizeIndex {
         if anchor.follows_end {
             return Ok(max + anchor.beyond);
         }
-        if anchor.row.is_none() {
+        if anchor.row.is_none() && anchor.fixed.is_none() {
             if anchor.beyond > 0.0 {
                 return Ok(anchor.raw);
             }
             return self.clamp_offset(anchor.raw, viewport);
         }
-        Ok(self.anchor_position(anchor).map_or(0.0, |offset| {
-            offset.max(-self.leading).min(max) + anchor.beyond
-        }))
+        Ok(self
+            .anchor_position(anchor, viewport)
+            .map_or(0.0, |offset| {
+                offset.max(-self.leading).min(max) + anchor.beyond
+            }))
     }
 
     fn band(&self, start: f64, end: f64) -> Range<usize> {
+        let start = (start - self.fixed[0]).max(0.0);
+        let end = (end - self.fixed[0]).max(0.0).min(self.data_extent());
         let first = self.tree.find(start, false).unwrap_or(self.len());
         if start >= end {
             return first..first;
@@ -829,16 +959,16 @@ impl SizeIndex {
         first..last
     }
 
-    /// The farthest a port of `viewport` scrolls: the rows and the padding
-    /// after them, less the port (offsets count from the first row's start).
-    /// A list shorter than that ends in the padding before its first row,
+    /// The farthest a port of `viewport` scrolls: lead, data, trail and the
+    /// padding after the trail, less the port. Offsets count from the content
+    /// origin before the lead. A shorter list ends in the padding before it,
     /// down to `scrollTop` 0 (LLP 1010 §6.9).
     pub(crate) fn max_offset(&self, viewport: f64) -> f64 {
         (self.total_height() + self.trailing - viewport).max(-self.leading)
     }
 
-    /// A port in the padding before the first row (a negative offset, LLP
-    /// 1010 §6.9) is at the rows' start.
+    /// A port in the leading padding (a negative offset, LLP 1010 §6.9)
+    /// clamps to the content origin before the lead.
     fn clamp_offset(&self, offset: f64, viewport: f64) -> Result<f64, IndexError> {
         if !offset.is_finite() {
             return Err(IndexError::InvalidGeometry);

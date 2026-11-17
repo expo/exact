@@ -43,6 +43,12 @@ enum Asked {
 }
 
 impl super::super::Core {
+    /// The session's live driver faults, checked by each long-poll attempt.
+    /// Set before the executor takes its first request.
+    pub fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        *self.shared.fetch_fault.lock().unwrap() = Some(fault);
+    }
+
     /// Each long poll's backoff wait, by its stream ticket, read live: what
     /// `state.streams` shows as `retrying`.
     pub fn retry_reader(&self) -> exact_runner::RetryReader {
@@ -95,7 +101,12 @@ pub(super) fn run(
             // (a reply asks again at most once a second: a server that answers at once is not held on)
             let asked_at = Instant::now();
             let floor = || millis_up(HEARTBEAT_FLOOR.saturating_sub(asked_at.elapsed()));
-            let (wait, error) = match ask(b, req, forced, limit, &abort) {
+            let fault = shared.fetch_fault.lock().unwrap().clone();
+            let asked = match fault.and_then(|fault| fault(&url)) {
+                Some(message) => Asked::Down(message),
+                None => ask(b, req, forced, limit, &abort),
+            };
+            let (wait, error) = match asked {
                 Asked::End(outcome) => return outcome,
                 Asked::Event(next, _)
                     if !terms.same_cursor_event && asked_with.as_deref() == Some(next.as_str()) =>
@@ -162,6 +173,10 @@ pub(super) fn run(
             if let Some(error) = &error {
                 let at = Instant::now() + Duration::from_millis(wait);
                 (shared.retrying.lock().unwrap()).insert(ticket, (failures, at, error.clone()));
+                #[cfg(test)]
+                if let Some(sent) = shared.retry_scheduled.lock().unwrap().as_ref() {
+                    let _ = sent.send((failures, wait, error.clone()));
+                }
             }
             let waited = wait == 0 || pause(&abort, wait);
             if error.is_some() {

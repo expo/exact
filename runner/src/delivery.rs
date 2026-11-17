@@ -50,7 +50,7 @@ pub fn production(json: &str) -> bool {
 
 /// Every field the runner can fill, by the name a declared shape gives it.
 /// A shape that names anything else is refused at bake (`bake-delivery-field`).
-pub const FIELDS: [&str; 9] = [
+pub const FIELDS: [&str; 10] = [
     "stream",
     "seq",
     "embeddedSeq",
@@ -60,6 +60,7 @@ pub const FIELDS: [&str; 9] = [
     "compatibilityId",
     "version",
     "buildNumber",
+    "production",
 ];
 
 /// The delivery facts, as the runner holds them.
@@ -69,6 +70,12 @@ pub struct Delivery {
     pub version: String,
     /// The installed binary's build number, kept as the build supplied it.
     pub build_number: String,
+    /// Whether the installed binary was baked with production trust, its
+    /// `compat.json`'s `embedded.trust` as [`production`] decides it (for
+    /// example Apple's `--release`, `--distribution` or `exact release`,
+    /// Android's `--bundle`, or `host/web/build.mjs --out`). False for a
+    /// development build, and until a host hands the runner its `compat.json`.
+    pub production: bool,
     /// The cohort this binary belongs to (LLP 1030 D3a): bake's digest of
     /// everything a bundle may depend on and cannot replace. Empty until a
     /// host hands the runner its `compat.json`.
@@ -100,6 +107,7 @@ impl Default for Delivery {
         Delivery {
             version: String::new(),
             build_number: String::new(),
+            production: false,
             compatibility_id: String::new(),
             store: 'A',
             executors: vec!["native".to_string()],
@@ -128,11 +136,12 @@ impl Delivery {
             "compatibilityId" => Value::str(&self.compatibility_id),
             "version" => Value::str(&self.version),
             "buildNumber" => Value::str(&self.build_number),
+            "production" => Value::Bool(self.production),
             _ => return None,
         })
     }
 
-    /// The binary's id, `store.L`, executors, version and embedded sequence from
+    /// The binary's id, `store.L`, executors, version, trust and embedded sequence from
     /// its archive's `compat.json`, as
     /// `exact_bake::Compat::to_json` writes them. Everything the store has to
     /// say is left as it was; a field the text does not carry is left as it
@@ -176,6 +185,11 @@ impl Delivery {
                 {
                     *target = value;
                 }
+            }
+            // The binary's resolved trust, decided as the runner's own guards decide it
+            // ([`production`]); a file without a string trust leaves it as it was.
+            if member(embedded, "trust").and_then(string_at).is_some() {
+                out.production = production(json);
             }
         }
         out
@@ -336,6 +350,52 @@ mod tests {
         assert_eq!(d.field("compatibilityId"), Some(Value::str("")));
         assert_eq!(d.field("sunset"), Some(Value::str("")));
         assert_eq!(d.field("nope"), None);
+    }
+
+    #[test]
+    fn production_is_the_binarys_own_resolved_trust() {
+        let built = |trust: &str| {
+            Delivery::default().with_compat(&format!(
+                r#"{{"inputs":{{"trust":null}},"embedded":{{"trust":"{trust}"}}}}"#
+            ))
+        };
+        assert_eq!(
+            built("production").field("production"),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            built("development").field("production"),
+            Some(Value::Bool(false))
+        );
+        // As `production()` decides: the embedded trust alone, never the inputs' or an asset's.
+        for (json, expected) in [
+            (
+                r#"{"inputs":{"trust":"production"},"embedded":{"trust":"development"}}"#,
+                false,
+            ),
+            (r#"{"embedded":{"assets":[{"trust":"production"}]}}"#, false),
+            (r#"{"embedded":{"trust":"production"}}"#, true),
+            // The guard compares the raw value, so an escaped spelling is not production for either.
+            (r#"{"embedded":{"trust":"\u0070roduction"}}"#, false),
+        ] {
+            assert_eq!(
+                Delivery::default().with_compat(json).production,
+                expected,
+                "{json}"
+            );
+            assert_eq!(production(json), expected, "{json}");
+        }
+        // A file that names no trust leaves what the runner had.
+        let production_before = Delivery {
+            production: true,
+            ..Delivery::default()
+        };
+        assert!(
+            production_before
+                .with_compat(r#"{"embedded":{"seq":0}}"#)
+                .production
+        );
+        assert!(!Delivery::default().production);
     }
 
     #[test]

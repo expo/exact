@@ -60,7 +60,7 @@ impl<D: DataSource> Runner<D> {
         for &(name, value, slices) in edits {
             moved |= crate::bridge::edit_token(&self.plan, name, value, slices);
         }
-        // What a binding reads moved (`Tamber::inputs`), if a value did.
+        // What a binding reads moved (`Forma::inputs`), if a value did.
         if moved {
             self.design_moves += 1;
         }

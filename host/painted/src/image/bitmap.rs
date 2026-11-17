@@ -337,7 +337,9 @@ mod tests {
                     );
                     assert!(drawn[0]
                         .data()
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .all(|p| p[..3].iter().all(|c| *c <= p[3])));
                 }
             }

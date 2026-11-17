@@ -226,7 +226,8 @@ impl<'a> Supervisor<'a> {
                 &self.spec,
                 &self.ran,
                 &self.ctl,
-            ),
+            )
+            .map(|child| child as Box<dyn Child>),
         }
     }
 

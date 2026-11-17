@@ -678,7 +678,7 @@ component App
         let len = bridge.input_write(b"{}");
         let len = bridge.design_rows(len);
         let invalid: Json = serde_json::from_slice(bridge.output_bytes(len as usize)).unwrap();
-        assert_eq!(invalid["error"], "live: not a tamber batch or snapshot");
+        assert_eq!(invalid["error"], "live: not a forma batch or snapshot");
         assert!(received.try_recv().is_err());
 
         let len = bridge.input_write(frame.json().as_bytes());

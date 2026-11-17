@@ -1,12 +1,24 @@
-//! `perf frames`' JNI methods (LLP 1079.000 §6.2; `canvas/frames.rs`),
+//! Background turns and `perf frames`' JNI methods (LLP 1079.000 §6.2; `canvas/frames.rs`),
 //! expanded by `canvas_jni!` inside its module, where `with` reaches the
-//! thread's host. The reader calls each on exact2's thread; times are
+//! thread's host. The reader calls each on exact2's thread; frame times are
 //! `System.nanoTime`, `CLOCK_MONOTONIC`.
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! canvas_jni_frames {
     () => {
+        /// A task turn while the activity is stopped, with no display frame.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_background(
+            _env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            applying: $crate::canvas::jni_sys::jboolean,
+        ) -> $crate::canvas::jni_sys::jdouble {
+            with(|h| h.background(applying != $crate::canvas::jni_sys::JNI_FALSE))
+                .flatten()
+                .unwrap_or(-1.0)
+        }
+
         /// A Choreographer turn (`Owner.turned`).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameTurn(

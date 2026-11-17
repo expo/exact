@@ -52,8 +52,8 @@ if (host !== 'web') {
     check(host, "1: the editor reports the turn in the photo's terms", JSON.parse(r[7] ?? '{}').rotate === 90, r[7]);
     check(host, '1: Save waits on a photos-add ticket', ticket(pending)?.device?.args?.capability === 'photos-add', JSON.stringify(pending));
     check(host, '1: "Saved to Photos"', r[13] === 'Saved to Photos', JSON.stringify(r[13]));
-    // The agent's card is 1280×960: turned, 960×1280.
-    check(host, '1: the add is the card turned, JPEG, its metadata kept', adds[0]?.width === 960 && adds[0]?.height === 1280 && adds[0]?.type === 'image/jpeg' && /^app:\/tmp\/edits\/1/.test(adds[0]?.path) && r[15]?.metadata === 'keep', `${JSON.stringify(adds)} ${JSON.stringify(r[15])}`);
+    // The agent's card is 1280×960: turned, 960×1280. Each edit has a name of its own, so overlapping saves never share a file.
+    check(host, '1: the add is the card turned, JPEG, its metadata kept', adds[0]?.width === 960 && adds[0]?.height === 1280 && adds[0]?.type === 'image/jpeg' && /^app:\/tmp\/edits\/[0-9a-f-]{36}\.jpg$/.test(adds[0]?.path) && r[15]?.metadata === 'keep', `${JSON.stringify(adds)} ${JSON.stringify(r[15])}`);
     check(host, '1: photos-add granted, the read still prompt', r[14]?.photos?.permissions?.['photos-add'] === 'granted' && r[14]?.photos?.permissions?.photos === 'prompt', JSON.stringify(r[14]?.photos?.permissions));
     check(host, '2: Save again asks nothing and adds again', !ticket(r[18]) && adds.length === 2 && r[20] === 'Saved to Photos', `${JSON.stringify(r[18])} ${adds.length}`);
   }
@@ -73,7 +73,7 @@ if (host !== 'web') {
     check(host, '4: Show reads, behind a photos ticket', ticket(r[4])?.device?.args?.capability === 'photos', JSON.stringify(r[4]));
     check(host, '4: six pictures in the strip', strip(r[8]).length === 6, JSON.stringify(strip(r[8])));
     check(host, '4: each picture admitted, none refused', (r[9]?.photos?.pictures?.admitted ?? 0) >= 6 && !r[9]?.photos?.pictures?.refused, JSON.stringify(r[9]?.photos?.pictures));
-    check(host, "4: recent-1 opens agent-1's copy, byte for byte", r[12] === 'app:/tmp/photos/1.jpg' && copied(logs)[0]?.id === 'agent-1' && copied(logs)[0]?.sha === AGENT(1), `${r[12]} ${JSON.stringify(copied(logs))}`);
+    check(host, "4: recent-1 opens agent-1's copy, byte for byte", /^app:\/tmp\/photos\/[0-9A-F-]{36}\.jpg$/.test(r[12]) && copied(logs)[0]?.path === r[12] && copied(logs)[0]?.id === 'agent-1' && copied(logs)[0]?.sha === AGENT(1), `${r[12]} ${JSON.stringify(copied(logs))}`);
   }
   if (host === 'ios') {
     // 5: limited: three, the caption and Manage; a new selection of two; an edit saved is a third.

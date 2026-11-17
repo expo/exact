@@ -6,7 +6,9 @@ extension InlineText {
     /// What it reads as: its text, or an image's `aria-label` (LLP 1011.002 D4).
     var spoken: String { lightRun.box == nil ? text : boxShown ? props["accessibilityLabel"] ?? "" : "" }
     /// Whether a colour here is the view's tint (LLP 1095 D8).
-    var namesTint: Bool { colorRef?.namesTint == true || backgroundRef?.namesTint == true || paint.namesTint }
+    var namesTint: Bool {
+        colorRef?.namesTint == true || backgroundRef?.namesTint == true || paint.namesTint || borderColors.contains { $0?.namesTint == true }
+    }
     /// The run in its paragraph owner's traits: `contrast` and `elevated`
     /// as `BatchValue.channels` takes them (LLP 1095 D5).
     func run(dark: Bool, contrast: Bool? = nil, elevated: Bool = false, tint: PlatformColor? = nil) -> Run {
@@ -16,6 +18,10 @@ extension InlineText {
         if let colorRef { value.color = colorRef.channels(dark: dark, contrast: contrast, elevated: elevated, tint: tint) }
         value.fixedInk = fixedInk
         if let backgroundRef { value.background = backgroundRef.channels(dark: dark, contrast: contrast, elevated: elevated, tint: tint) }
+        if value.border != nil {
+            let current = value.color ?? SystemColor.canvasTextChannels(dark: dark, contrast: contrast)
+            value.border?.colors = borderColors.map { $0?.channels(dark: dark, contrast: contrast, elevated: elevated, tint: tint) ?? current }
+        }
         (value.shadow, value.stroke) = paint.resolve(dark: dark, contrast: contrast, elevated: elevated, tint: tint,
                                                      color: value.color ?? SystemColor.canvasTextChannels(dark: dark, contrast: contrast))
         value.opacity = opacity < 1 ? [InlineOpacity(box: id, alpha: opacity)] : []
@@ -212,7 +218,7 @@ extension NodeView {
     func activateLink(_ url: String, bubbled: Bool = false) -> Bool {
         if pressReaderAtom(url) { return true }
         guard let session = presenter?.session, !disabled, !(bubbled ? authoredInert : inert) else { return false }
-        if url.hasPrefix("/") && !url.hasPrefix("//") { return session.navigate(url) }
+        if url.hasPrefix("/") && !url.hasPrefix("//") { return session.navigate(url, target: props["target"]) }
         session.delegate?.exactSession(session, command: "openURL", args: [url]); return true
     }
     /// Whether `activateInline` acts on run `id`: it is enabled and has a
@@ -239,6 +245,6 @@ extension NodeView {
         // A route in the note navigates; anything else is the app's to open
         // (session.follow). A button's own `href` uses `activateLink`.
         guard let url = run.props["href"], let session = presenter.session else { return false }
-        return session.follow(url)
+        return session.follow(url, target: run.props["target"])
     }
 }

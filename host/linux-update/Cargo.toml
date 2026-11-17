@@ -9,13 +9,14 @@ publish = false
 [dependencies]
 exact-linux = { path = "../linux" }
 exact-painted = { path = "../painted" }
+exact-painted-update = { path = "../painted-update" }
 exact-runner = { path = "../../runner" }
-exact-update = { path = "../../update" }
-ibex2 = { path = "../../vendor/ibex/crates/ibex2", default-features = false }
 
 [dev-dependencies]
-caltrain = { path = "../../apps/caltrain" }
-caltrain-data = { path = "../../apps/caltrain/data" }
-exact-kernel = { path = "../../kernel" }
 contract = { path = "../../contract/cli" }
+exact-update = { path = "../../update" }
+# A selected TypeScript pair, baked and run (src/app_tests/typescript.rs).
+exact-js = { path = "../../js" }
+exact-js-bake = { path = "../../js/bake" }
+exact-logic = { path = "../../logic" }
 serde_json = "1.0"

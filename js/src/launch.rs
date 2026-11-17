@@ -5,9 +5,6 @@
 //! process's environment). Read once per process, so every instance of the
 //! module in one launch (the owner's, a worker's, a reload's, an update's)
 //! reads the same value whatever later changes the environment.
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
-
 /// Door 28's answer for `name`: the launch's value, or none where the
 /// module takes the build's. None for a name the grants the module was
 /// loaded with do not carry (`env.launch`, which only the bake writes), so
@@ -19,56 +16,90 @@ pub(crate) fn value(state: &super::HostState, name: &str) -> Option<String> {
     if state.baking || !state.launch.iter().any(|granted| granted == name) {
         return None;
     }
-    let mut read = READ
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    read.entry(name.to_owned())
-        .or_insert_with(|| given(name, |n| std::env::var(n).ok()))
-        .clone()
-}
-
-/// What this process's launch gave, by name, once asked.
-static READ: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
-
-/// The value `environment` holds for `name` when a launch gave it: a
-/// setting's name (`[A-Z][A-Z0-9_]*`) and not the host's (`EXACT_…`), as the
-/// bake requires of a marked name, set and not empty. However it came to be
-/// there (a test, a launcher, what Bun loaded from `.env` into the command
-/// that started this process), it is the launch's (D2, "A drive"). Android
-/// starts an app with no environment a launcher sets (LLP 1153.002 Q1): the
-/// build's value there.
-fn given(name: &str, environment: impl Fn(&str) -> Option<String>) -> Option<String> {
-    let setting = name.starts_with(|c: char| c.is_ascii_uppercase())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-        && !name.starts_with("EXACT_");
-    if cfg!(target_os = "android") || !setting {
-        return None;
-    }
-    environment(name).filter(|value| !value.is_empty())
+    exact_runner::launch_env::value(name)
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_launch_gives_a_set_nonempty_setting() {
-        let environment = |name: &str| match name {
-            "API_BASE_URL" => Some("http://launch.test".to_owned()),
-            "EMPTY" | "EXACT_AGENT" => Some(String::new()),
-            "EXACT_HOST" => Some("x".to_owned()),
-            // Whatever names Bun noted (LLP 1153 D4.2), the value is read.
-            "FROM_FILE" => Some("A".to_owned()),
-            "EXACT_BUN_LOADED" => Some("FROM_FILE".to_owned()),
-            "lower" => Some("y".to_owned()),
-            _ => None,
+    fn preload_and_module_read_the_same_record() {
+        const TEST: &str = "launch::tests::preload_and_module_read_the_same_record";
+        let Ok(case) = std::env::var("EONE_MODULE_CASE") else {
+            for (case, value) in [
+                ("unset", None),
+                ("empty", Some("")),
+                ("launch", Some("https://launch.example")),
+            ] {
+                let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([TEST, "--exact", "--nocapture"])
+                    .env("EONE_MODULE_CASE", case)
+                    .env_remove("EONE_MODULE_URL");
+                if let Some(value) = value {
+                    command.env("EONE_MODULE_URL", value);
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{case}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
         };
-        let given = |name| super::given(name, environment);
-        assert_eq!(given("API_BASE_URL").as_deref(), Some("http://launch.test"));
-        assert_eq!(given("FROM_FILE").as_deref(), Some("A"));
-        for name in ["EMPTY", "UNSET", "EXACT_HOST", "lower", "", "1A"] {
-            assert_eq!(given(name), None, "{name}");
-        }
+        use exact_runner::{
+            request::{Preload, PreloadPart, PreloadWhen},
+            Request,
+        };
+        let record = serde_json::json!({"EONE_MODULE_URL":{"value":"https://built.example","source":"default","launch":true}});
+        let build: &'static str = record["EONE_MODULE_URL"]["value"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+            .leak();
+        let module = crate::Module::new(
+            Vec::<u8>::new(),
+            "test.preload-setting",
+            "net.fetch https:\nenv.launch EONE_MODULE_URL",
+        );
+        let value = super::value(&module.host, "EONE_MODULE_URL").unwrap_or_else(|| build.into());
+        let expected = if case == "launch" {
+            "https://launch.example"
+        } else {
+            build
+        };
+        assert_eq!(value, expected);
+        let mut request = Request::get(&format!("{value}/feed"));
+        request.method = "POST".into();
+        request.headers = vec![("X-Note".into(), value.clone())];
+        request.body = value.into_bytes();
+        let parts: &'static [PreloadPart] = vec![PreloadPart::Env("EONE_MODULE_URL", build)].leak();
+        let preload = Preload {
+            name: "feed",
+            method: "POST",
+            url: vec![parts[0], PreloadPart::Literal("/feed")].leak(),
+            headers: vec![("X-Note", parts)].leak(),
+            body: Some(parts),
+            timeout_ms: None,
+            when: PreloadWhen::Start,
+            secrets: &[],
+        };
+        assert_eq!(
+            preload
+                .fill(
+                    |_| panic!("no secrets"),
+                    exact_executor::preload::preload_url,
+                )
+                .unwrap(),
+            request
+        );
+        let mut rendering = crate::Module::new(
+            Vec::<u8>::new(),
+            "test.preload-setting",
+            "env.launch EONE_MODULE_URL",
+        );
+        rendering.host.launch.clear();
+        assert_eq!(super::value(&rendering.host, "EONE_MODULE_URL"), None);
     }
 }

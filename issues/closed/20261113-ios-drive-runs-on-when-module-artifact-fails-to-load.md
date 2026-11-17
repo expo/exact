@@ -27,7 +27,7 @@ screens and has to find the cause in the logs.
 ## The failure
 
 An app ported from React Native, at `94b8671f7`, on the iOS simulator: "`bun exact.mjs agent ios`
-after a Swift edit, a tamber change, or a changed environment variable reinstalls a bundle
+after a Swift edit, a forma change, or a changed environment variable reinstalls a bundle
 without the module frameworks: every native call fails with `dlopen … libexact_modules.dylib`
 and screens quietly come up empty. Cost several builders many drives. It also empties the app's
 data container (lost a recording in progress)."

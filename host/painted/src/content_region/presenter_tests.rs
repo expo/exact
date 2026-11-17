@@ -72,7 +72,7 @@ fn ready(p: &mut Presenter<()>) {
 #[test]
 fn non_cpu_region_refuses_before_plan_font_or_device_work() {
     for choice in [PainterChoice::Auto, PainterChoice::Gpu] {
-        let result = Presenter::boot_with_content_region(
+        let result = Presenter::boot_region_with_fixture_fonts(
             &[],
             (),
             (400., 500.),
@@ -106,7 +106,7 @@ fn retained_pointer_eligibility_changes_only_when_its_picture_is_acknowledged() 
             ("none", "auto")
         };
         let source = APP.replace("testId=\"paragraph\"", &format!("testId=\"paragraph\" pointer-events=(title == \"old picture\" ? \"{old}\" : \"{new}\")"));
-        let (mut p, error) = Presenter::boot_with_content_region(
+        let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (400., 500.),
@@ -161,7 +161,7 @@ fn retained_pointer_eligibility_changes_only_when_its_picture_is_acknowledged() 
 #[test]
 fn failed_frame_retains_source_hits_and_rejects_live_replacement_actions() {
     let _service = crate::content_region::test_service();
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 500.),
@@ -280,7 +280,7 @@ fn failed_frame_retains_source_hits_and_rejects_live_replacement_actions() {
 #[test]
 fn held_old_source_latest_demand_and_destroy_retire_without_publishing_stale_pixels() {
     let _service = crate::content_region::test_service();
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 500.),
@@ -394,7 +394,7 @@ fn held_old_source_latest_demand_and_destroy_retire_without_publishing_stale_pix
 #[test]
 fn exact_scale_prepared_index_refuses_changed_dpr_before_stale_adoption_or_replay() {
     let _service = crate::content_region::test_service();
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 500.),
@@ -498,7 +498,7 @@ fn exact_scale_prepared_index_refuses_changed_dpr_before_stale_adoption_or_repla
 #[test]
 fn malformed_region_scale_refuses_before_plan_fonts_or_worker_admission() {
     for scale in [0., -1., f32::NAN, f32::INFINITY] {
-        let result = Presenter::boot_with_content_region(
+        let result = Presenter::boot_region_with_fixture_fonts(
             &[],
             (),
             (400., 500.),
@@ -524,7 +524,7 @@ fn unsupported_region_query_preserves_previous_pixels_and_recovers() {
     let app = APP.replace("state showing = true", "state showing = true\n  state ownerScale = 1\n  action collapse\n    ownerScale = 0\n  action restore\n    ownerScale = 1")
         .replace("view id=\"owner\"", "view id=\"owner\" scale=ownerScale")
         .replace("button press=hide", "button press=collapse testId=\"collapse\" height=20\n        text \"collapse\"\n      button press=restore testId=\"restore\" height=20\n        text \"restore\"\n      button press=hide");
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(&app),
         (),
         (400., 500.),
@@ -569,7 +569,7 @@ fn uncertain_ink_coordinates_refuse_full_glyph_fallback_and_recover() {
     let app = APP.replace("state showing = true", "state showing = true\n  state inset = 0\n  action move\n    inset = 20000000\n  action restore\n    inset = 0")
         .replace("view height=600", "view height=600 padding-top=inset")
         .replace("button press=hide", "button press=move testId=\"move\" height=20\n        text \"move\"\n      button press=restore testId=\"restore\" height=20\n        text \"restore\"\n      button press=hide");
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(&app),
         (),
         (400., 500.),
@@ -641,7 +641,7 @@ fn natural_scroll_fixture(short: bool) -> Presenter<()> {
 "#,
         if short { "Short paragraph." } else { &tall }
     );
-    let (mut p, error) = Presenter::boot_with_content_region(
+    let (mut p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(&app),
         (),
         (400., 500.),
@@ -1091,7 +1091,7 @@ fn focus_region() -> Presenter<()> {
 }
 
 fn region_from(source: &str) -> Presenter<()> {
-    let (p, error) = Presenter::boot_with_content_region(
+    let (p, error) = Presenter::boot_region_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 500.),
@@ -1312,11 +1312,19 @@ fn retained_text_stays_inside_its_overflow_clip() {
     assert!(p.last_frame_succeeded);
     let paragraph = p.host.kernel().node(id(&p, "paragraph")).unwrap().frame;
     let width = frame.width() as usize;
-    let red = |p: &[u8]| p[0] > 128 && p[1] < 100 && p[2] < 100;
-    let inside = frame.data().chunks_exact(4).filter(|p| red(p)).count();
+    let red = |p: &[u8; 4]| p[0] > 128 && p[1] < 100 && p[2] < 100;
+    let inside = frame
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| red(p))
+        .count();
     let past = frame
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter(|(i, p)| (i % width) as f32 >= paragraph.width + 2.0 && red(p))
         .count();

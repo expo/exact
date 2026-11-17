@@ -15,6 +15,40 @@ impl DataSource for NoData {
     }
 }
 
+#[test]
+fn a_derive_bound_spring_moves_on_the_native_clock() {
+    let plan = contract::compile(
+        r#"component Repro
+  state open = false
+  derive spring = "translate -exact-spring(140, 10, 1)"
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      view width=40 height=40 testId="box" translate=(open ? "100px 0px" : "0px 0px") transition=spring
+"#,
+    ).unwrap().encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        420.,
+        900.,
+    )
+    .unwrap();
+    let node = motion_node(host.runner().kernel().node(id(&host, "box")).unwrap().key);
+    host.dispatch_at(id(&host, "toggle"), Event::Press, 0.);
+    host.advance(50.);
+    let x = host.engine().value(node, Property::Translate).unwrap().x;
+    assert!(x > 0. && x < 100., "{x}");
+    host.advance(10_000.);
+    assert_eq!(
+        host.engine().value(node, Property::Translate).unwrap().x,
+        100.
+    );
+}
+
 const APP: &str = r##"keyframes sweep
   from translate="-24px 0px"
   to translate="64px 8px"
@@ -1114,11 +1148,13 @@ fn random_lowered_colour_tracks_play_as_the_engine_samples() {
 }
 
 #[test]
-fn an_unsupported_filter_transition_is_named() {
-    let literal = "component App\n  view\n    box transition=\"opacity 200ms, filter 200ms\"\n";
+fn an_unsupported_transition_property_is_named() {
+    let literal = "component App\n  view\n    box transition=\"opacity 200ms, clip-path 200ms\"\n";
     let diagnostics = contract::compile(literal).unwrap_err();
-    assert!(format!("{diagnostics:?}").contains("`filter` is not a supported transition property"));
-    let source = "component App\n  state transitions = \"opacity 200ms, filter 200ms\"\n  view\n    box transition=transitions\n";
+    assert!(
+        format!("{diagnostics:?}").contains("`clip-path` is not a supported transition property")
+    );
+    let source = "component App\n  state transitions = \"opacity 200ms, clip-path 200ms\"\n  view\n    box transition=transitions\n";
     let plan = contract::compile(source).unwrap().encode();
     let (host, _) = Host::boot(
         &plan,
@@ -1130,7 +1166,7 @@ fn an_unsupported_filter_transition_is_named() {
     .unwrap();
     let logs = host.agent("{\"op\":\"logs\"}");
     assert!(logs.contains("invalid transition value"), "{logs}");
-    assert!(logs.contains("filter 200ms"), "{logs}");
+    assert!(logs.contains("clip-path 200ms"), "{logs}");
 }
 
 #[test]
@@ -1353,5 +1389,103 @@ fn clearing_or_refusing_authored_velocity_restores_interruption_inheritance() {
             exact_motion::Value::new(800., -600.),
             "{action} does not repeat old release"
         );
+    }
+}
+
+#[test]
+fn ios_rotation_tracks_preserve_sign_and_sample_axis_changes() {
+    for (from, to, lowered) in [
+        ("0 0 -1 0deg", "0 0 -1 90deg", true),
+        ("0 0 -1 10deg", "z 350deg", false),
+    ] {
+        let source = format!("keyframes spin\n  from rotate=\"{from}\"\n  to rotate=\"{to}\"\ncomponent App\n  state on = false\n  action go\n    on = true\n  view\n    column\n      button \"Go\" testId=\"go\" press=go\n      view testId=\"box\" width=120 height=60 animation=(on ? \"spin 1s linear both\" : \"none\")\n");
+        let (mut host, _) = Host::boot(
+            &contract::compile(&source).unwrap().encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            300.,
+            300.,
+        )
+        .unwrap();
+        ios(&mut host);
+        let batch = host.dispatch_at(id(&host, "go"), Event::Press, 0.);
+        let box_id = id(&host, "box");
+        let node = motion_node(host.runner.kernel().node(box_id).unwrap().key);
+        assert_eq!(!host.engine.node_sampled(node), lowered, "{batch}");
+        if lowered {
+            let spec = specs(&batch, box_id).unwrap();
+            let values = spec[0]["v"].as_array().unwrap();
+            assert!(
+                (values.last().unwrap().as_f64().unwrap() + std::f64::consts::FRAC_PI_2).abs()
+                    < 1e-4,
+                "{spec:?}"
+            );
+        } else {
+            host.advance(500.);
+            let v = host.engine.sampled_value(node, Property::Rotate).unwrap();
+            assert!((v.x + 10.0).abs() < 1e-5, "{v:?}");
+        }
+    }
+    let source = "component App\n  state on = false\n  action go\n    on = true\n  view\n    column\n      button \"Go\" testId=\"go\" press=go\n      view testId=\"box\" width=120 height=60 rotate=(on ? \"45deg z\" : \"90deg x\") transition=\"rotate 1s linear\"\n";
+    let (mut host, _) = Host::boot(
+        &contract::compile(source).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        300.,
+    )
+    .unwrap();
+    ios(&mut host);
+    host.dispatch_at(id(&host, "go"), Event::Press, 0.);
+    let node = motion_node(host.runner.kernel().node(id(&host, "box")).unwrap().key);
+    host.advance(500.);
+    assert!(!host.engine.is_played(node, Property::Rotate));
+    let actual = host.engine.value(node, Property::Rotate).unwrap();
+    let expected = exact_motion::rotation::interpolate(
+        exact_motion::rotation::parse("x 90deg").unwrap(),
+        exact_motion::rotation::parse("z 45deg").unwrap(),
+        0.5,
+    );
+    assert!((actual.x - expected.x).abs() < 1e-8, "{actual:?}");
+}
+
+#[test]
+fn negative_z_rows_inherit_the_authored_axis() {
+    for row in ["\"0 0 -1 0deg\"", "rotation"] {
+        for lowered in [false, true] {
+            let source = format!("keyframes spin\n  to rotate=60\ncomponent App\n  state rotation = \"0 0 -1 0deg\"\n  state on = false\n  action go\n    on = true\n  view\n    column\n      button \"Go\" testId=\"go\" press=go\n      view testId=\"box\" width=100 height=100 rotate={row} animation=(on ? \"spin 1s linear both\" : \"none\")\n");
+            let (mut host, _) = Host::boot(
+                &contract::compile(&source).unwrap().encode(),
+                NoData,
+                Box::new(MonospaceMeasurer::default()),
+                300.,
+                300.,
+            )
+            .unwrap();
+            if lowered {
+                ios(&mut host);
+            }
+            let batch = host.dispatch_at(id(&host, "go"), Event::Press, 0.);
+            let node = motion_node(host.runner.kernel().node(id(&host, "box")).unwrap().key);
+            if lowered {
+                let spec = specs(&batch, id(&host, "box")).unwrap();
+                let values = spec[0]["v"].as_array().unwrap();
+                assert!(
+                    (values.last().unwrap().as_f64().unwrap() + std::f64::consts::PI / 3.).abs()
+                        < 1e-4
+                );
+            } else {
+                host.advance(500.);
+                assert_eq!(
+                    host.engine.sampled_value(node, Property::Rotate).unwrap().x,
+                    -30.
+                );
+                host.advance(1000.);
+                assert_eq!(
+                    host.engine.sampled_value(node, Property::Rotate).unwrap().x,
+                    -60.
+                );
+            }
+        }
     }
 }

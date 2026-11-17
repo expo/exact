@@ -96,7 +96,9 @@ impl<D: DataSource> Presenter<D> {
         let declared = self.shortcut_buttons(name);
         // Shown: a box, not hidden or inert by its route or an ancestor.
         let Some(button) = declared.into_iter().find(|&id| {
-            self.host.route_visibility(id) == (false, false) && self.box_of(id).is_some()
+            self.host.route_visibility(id) == (false, false)
+                && !self.host.flying(id)
+                && self.box_of(id).is_some()
         }) else {
             return false;
         };

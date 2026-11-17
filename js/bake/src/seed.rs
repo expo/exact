@@ -299,6 +299,9 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     ) -> Result<(), DataError> {
         self.module.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.module.take_reports()
+    }
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         self.module.background_state()
     }

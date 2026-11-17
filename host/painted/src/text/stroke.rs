@@ -124,7 +124,7 @@ mod tests {
             source: 1,
         }];
         let mut cache = Cache::default();
-        let mut text = super::super::TextEngine::new();
+        let mut text = crate::text::fixtures::engine();
         let spec = crate::paint::text_spec(&exact_kernel::StyleProps::default(), "Ab");
         let paragraph = text.paragraph(&spec, Some(80.0));
         let origin = (0.0, 0.0);

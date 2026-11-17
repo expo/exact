@@ -9,7 +9,7 @@
 // while the row is still a screen away. Scrolling mounted text is compositing.
 //
 // `NodeView.draw` still paints text for everything this declines: a
-// selection, a capture, a decorated text box, a paragraph
+// selection, direct offscreen drawing, a decorated text box, a paragraph
 // taller than a screen, and one too small to repay a surface (unless HDR).
 #if os(macOS)
 import AppKit

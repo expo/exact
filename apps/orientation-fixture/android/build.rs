@@ -22,7 +22,7 @@ fn main() {
     // The compatibility id (LLP 1030 D3a) as `../linux/build.rs` computes it
     // for this target: the Canvas host is the Linux host's presenter under
     // Android's own Canvas. That host has no update store and replaces no
-    // Rust module, whatever the record says of either (host/android/README.md).
+    // Rust module, and the bake records no store (host/android/README.md).
     println!("cargo:rerun-if-changed=../app.json");
     println!("cargo:rerun-if-changed=../data");
     println!("cargo:rerun-if-changed=../../../Cargo.lock");

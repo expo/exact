@@ -32,6 +32,8 @@ export async function open(tsc, root) {
   return {
     stderr,
     openFile(file, languageId = 'contract') { notify('textDocument/didOpen', { textDocument: { uri: pathToFileURL(file).href, languageId, version: 1, text: readFileSync(file, 'utf8') } }); },
+    /** The editor's unsaved text of an open file. */
+    change(file, text, version = 2) { notify('textDocument/didChange', { textDocument: { uri: pathToFileURL(file).href, version }, contentChanges: [{ text }] }); },
     async definition(file, line, col) { const r = await request('textDocument/definition', at(file, line, col)); return (Array.isArray(r) ? r : r ? [r] : []).map(place); },
     async references(file, line, col) { const r = await request('textDocument/references', { ...at(file, line, col), context: { includeDeclaration: true } }); return (r ?? []).map(place).sort((a, b) => a[1] - b[1] || a[2] - b[2]); },
     async hover(file, line, col) { const r = await request('textDocument/hover', at(file, line, col)); const c = r?.contents; return !c ? null : typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.value ?? x).join('\n') : c.value; },

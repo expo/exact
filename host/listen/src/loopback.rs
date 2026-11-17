@@ -4,6 +4,8 @@
 //! query carries `state` exactly once, and exactly one `code` or `error`
 //! (RFC 6749 §4.1.2, §4.1.2.1), with a short page, and hands back the full
 //! callback URL; anything else gets a 400 and the receiver stays open.
+//! A logout instead accepts no `code` or `error` and either its one matching
+//! state or no state.
 //! Each connection has 5 s to send its head, of at most 32 KiB; at most 8
 //! are open at once, and while they are, new ones wait in the backlog; a
 //! reply that cannot be written within 5 s is abandoned.
@@ -28,6 +30,8 @@ pub struct Callback {
     pub path: String,
     /// The `state` the request carries.
     pub state: String,
+    /// This receiver waits for an RP-initiated logout return.
+    pub logout: bool,
     /// The app's name, for the page.
     pub app: String,
     /// The page's sentence when the app gives one, else "You can close this
@@ -251,8 +255,17 @@ fn check<'a>(head: &'a str, callback: &Callback) -> Result<&'a str, &'static str
             .collect()
     };
     let states = values("state");
-    if states.len() != 1 || !same(&states[0], &callback.state) {
+    if !(states.len() == 1 && same(&states[0], &callback.state)
+        || callback.logout && states.is_empty())
+    {
         return Err("This is not the sign-in this app is waiting for.");
+    }
+    if callback.logout {
+        return if values("code").is_empty() && values("error").is_empty() {
+            Ok(target)
+        } else {
+            Err("This logout return carries a code or error.")
+        };
     }
     match (values("code").as_slice(), values("error").as_slice()) {
         ([one], []) | ([], [one]) if !one.is_empty() => Ok(target),
@@ -365,6 +378,7 @@ mod tests {
             port,
             path: "/auth/callback".into(),
             state: "s 1".into(),
+            logout: false,
             app: "T3 <Code>".into(),
             message: None,
         };
@@ -416,6 +430,7 @@ mod tests {
             port,
             path: "/cb".into(),
             state: "s A".into(),
+            logout: false,
             app: "App".into(),
             message: None,
         }
@@ -430,6 +445,23 @@ mod tests {
         given.message = Some("Received <b>here</b>. You can close this tab.".into());
         assert!(page(&given)
             .contains("<p>Received &lt;b&gt;here&lt;/b&gt;. You can close this tab.</p>"));
+    }
+
+    #[test]
+    fn a_logout_accepts_matching_or_missing_state_but_no_oauth_response() {
+        let mut cb = callback(4333);
+        cb.logout = true;
+        let head = |target: &str| format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1:4333");
+        assert!(check(&head("/cb"), &cb).is_ok());
+        assert!(check(&head("/cb?state=s+A"), &cb).is_ok());
+        for target in [
+            "/cb?state=wrong",
+            "/cb?code=c",
+            "/cb?error=e",
+            "/cb?state=s+A&state=s+A",
+        ] {
+            assert!(check(&head(target), &cb).is_err(), "{target}");
+        }
     }
 
     #[test]

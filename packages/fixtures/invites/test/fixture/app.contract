@@ -1,0 +1,21 @@
+// The fixture of @fixture/invites: a delivery made through the package, and
+// what the session's instance took, by testId for the suite. The two status
+// reads are the names that need a grant each.
+use invites, deliverInvite, shareStatus, sharePlayStatus, Invites from "@fixture/invites"
+
+component Fixture
+  state n = 0
+  resource held = invites() as shape Invites else empty()
+  resource sharing = shareStatus() as shape bool else empty()
+  resource playing = sharePlayStatus() as shape bool else empty()
+  mutation sent as shape Invites
+  action deliver
+    send sent = deliverInvite(text=`invite ${n + 1}`)
+    n = n + 1
+  view
+    column gap=8 padding=16
+      button press=deliver testId="deliver"
+        text "Deliver"
+      text held.taken testId="taken"
+      text `${held.count}` testId="count"
+      text `${held.atStart}` testId="at-start"

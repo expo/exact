@@ -1,11 +1,12 @@
 use super::literal;
 use crate::LowerError;
-use contract_syntax::{Expr, Node, Span};
+use contract_checking::View;
+use contract_syntax::{Expr, Span};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub(super) fn use_foreign_object(view: &[Node], out: &mut Vec<LowerError>) {
+pub(super) fn use_foreign_object(view: &View<'_>, out: &mut Vec<LowerError>) {
     let mut refs = References::default();
-    refs.collect(view, false, false);
+    refs.collect(view);
     if refs.dynamic_id {
         return;
     }
@@ -36,53 +37,51 @@ struct References<'a> {
 impl<'a> References<'a> {
     /// Record whether each target contains a foreignObject in one tree walk.
     /// References inside a target are not followed.
-    fn collect(&mut self, nodes: &'a [Node], svg: bool, conditional: bool) -> bool {
-        let mut contains = false;
-        for node in nodes {
-            contains |= match node {
-                Node::Element {
-                    tag,
-                    attrs,
-                    children,
-                    span,
-                    ..
-                } => {
-                    let svg = svg || tag == "svg";
-                    let foreign = svg && tag == "foreignObject";
-                    let child_foreign = self.collect(children, svg && !foreign, conditional);
-                    let contains = foreign || child_foreign;
-                    if let Some(id) = attrs.iter().rev().find(|a| a.name == "id") {
-                        if let Expr::Str(id, _) = &id.value {
-                            let candidate = (svg && !conditional).then_some((*span, contains));
-                            self.targets
-                                .entry(id)
-                                .and_modify(|target| {
-                                    if *target != candidate {
-                                        *target = None;
-                                    }
-                                })
-                                .or_insert(candidate);
-                        } else {
-                            self.dynamic_id = true;
-                        }
+    fn collect(&mut self, view: &View<'a>) {
+        let mut contains = Vec::new();
+        for (node, (svg, conditional), entering) in
+            view.events((false, false), |node, &(svg, conditional)| {
+                Some(match node.element() {
+                    Some((tag, _, _)) => {
+                        ((svg || tag == "svg") && tag != "foreignObject", conditional)
                     }
-                    if svg && tag == "use" {
-                        if let Some(id) = literal(attrs, "href").and_then(|s| s.strip_prefix('#')) {
-                            self.uses.push((id, *span));
-                        }
+                    None => (svg, true),
+                })
+            })
+        {
+            if entering {
+                contains.push(false);
+                continue;
+            }
+            let child_foreign = contains.pop().unwrap();
+            let mut foreign = child_foreign;
+            if let Some((tag, _, attrs)) = node.element() {
+                let svg = svg || tag == "svg";
+                foreign |= svg && tag == "foreignObject";
+                if let Some(id) = attrs.iter().rev().find(|a| a.name == "id") {
+                    if let Expr::Str(id, _) = &id.value {
+                        let candidate = (svg && !conditional).then_some((node.span(), foreign));
+                        self.targets
+                            .entry(id)
+                            .and_modify(|target| {
+                                if *target != candidate {
+                                    *target = None;
+                                }
+                            })
+                            .or_insert(candidate);
+                    } else {
+                        self.dynamic_id = true;
                     }
-                    contains
                 }
-                // Every list is collected, so not `any`.
-                node => {
-                    let mut yes = false;
-                    for list in node.child_lists() {
-                        yes |= self.collect(list, svg, true);
+                if svg && tag == "use" {
+                    if let Some(id) = literal(attrs, "href").and_then(|s| s.strip_prefix('#')) {
+                        self.uses.push((id, node.span()));
                     }
-                    yes
                 }
-            };
+            }
+            if let Some(parent) = contains.last_mut() {
+                *parent |= foreign;
+            }
         }
-        contains
     }
 }

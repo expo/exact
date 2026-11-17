@@ -108,14 +108,16 @@ final class ExactTouches: XCTestCase {
                 let destination: (point: CGPoint, id: Int)?
                 do { destination = try Displays.target(req) }
                 catch { session.send(["error": String(describing: error)]); continue }
-                switch destination.map({ Synthesizer.tap($0.point, display: $0.id) }) ?? .missing {
+                let double = req["double"] as? Bool == true
+                switch destination.map({ Synthesizer.tap($0.point, display: $0.id, double: double) }) ?? .missing {
                 case .injected: break
                 // An unfinished touch may still land, so never replay it
                 case .unfinished: session.send(["error": "XCTest's event synthesizer did not finish the tap in 5 s; nothing more was injected"]); continue
                 case .missing, .refused:
                     guard destination == nil else { session.send(["error": "XCTest could not inject the tap on the requested display; no coordinate fallback was sent"]); continue }
                     via = "coordinate"
-                    target.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: p[0], dy: p[1])).tap()
+                    let at = target.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: p[0], dy: p[1]))
+                    if double { at.doubleTap() } else { at.tap() }
                 }
                 session.send(["done": true, "injected": ["start": start, "end": Date().timeIntervalSince1970 * 1000, "via": via]])
             case "drag":
@@ -155,6 +157,19 @@ final class ExactTouches: XCTestCase {
                 if p == q { from.press(forDuration: press + hold) }
                 else { from.press(forDuration: press, thenDragTo: zero.withOffset(CGVector(dx: q[0], dy: q[1])), withVelocity: XCUIGestureVelocity(velocity), thenHoldForDuration: hold) }
                 session.send(["done": true, "injected": ["start": start, "end": Date().timeIntervalSince1970 * 1000, "via": "coordinate"]])
+            case "pinch":
+                // Two fingers, each from `screen` to `screenTo` (fixed screen points, as a drag's ends).
+                guard let from = req["screen"] as? [[Double]], let to = req["screenTo"] as? [[Double]], from.count == 2, to.count == 2,
+                      (from + to).allSatisfy({ $0.count == 2 && $0.allSatisfy(\.isFinite) }),
+                      let over = req["over"] as? Double, over.isFinite, over > 0, over <= 2 else { session.send(["error": "pinch needs two fingers' finite screen and screenTo points and over in (0, 2] s"]); continue }
+                guard target.state == .runningForeground else { session.send(["error": "the app is \(Self.name(target.state)), not in the foreground"]); continue }
+                let start = Date().timeIntervalSince1970 * 1000
+                let point = { (p: [Double]) in CGPoint(x: p[0], y: p[1]) }
+                switch Synthesizer.pinch(from: from.map(point), to: to.map(point), press: 0.05, over: over, hold: 0.05, display: req["display"] as? Int) {
+                case .injected: session.send(["done": true, "injected": ["start": start, "end": Date().timeIntervalSince1970 * 1000, "via": "synthesizer"]])
+                case .unfinished: session.send(["error": "XCTest's event synthesizer did not finish the pinch in time; nothing more was injected"])
+                case .missing, .refused: session.send(["error": "XCTest could not inject the pinch on the requested display"])
+                }
             case "orientation":
                 let names: [String: UIDeviceOrientation] = ["portrait": .portrait, "portraitUpsideDown": .portraitUpsideDown, "landscapeLeft": .landscapeLeft, "landscapeRight": .landscapeRight]
                 guard let to = (req["to"] as? String).flatMap({ names[$0] }) else { session.send(["error": "orientation: one of \(names.keys.sorted())"]); continue }
@@ -311,9 +326,11 @@ enum Synthesizer {
 
     enum Outcome { case injected, refused, unfinished, missing }
 
-    /// A touch down at `at`, in portrait screen points, lifted 50 ms later.
-    static func tap(_ at: CGPoint, display: Int?) -> Outcome {
-        touch(at, moves: [], lift: 0.05, display: display, within: 5)
+    /// A touch down at `at`, in portrait screen points, lifted 50 ms later;
+    /// `double`, a second 150 ms after the first went down, as a finger's
+    /// double tap.
+    static func tap(_ at: CGPoint, display: Int?, double: Bool = false) -> Outcome {
+        touches([(at, 0, [], 0.05)] + (double ? [(at, 0.15, [], 0.2)] : []), display: display, within: 5)
     }
 
     /// A touch down at `from` (portrait screen points, as `tap`), held `press`
@@ -399,6 +416,26 @@ enum Synthesizer {
     /// sixtieths of a second the synthesizer played none of a drag's hold and
     /// lifted 50 ms after its move (Xcode 27.1).
     private static func touch(_ at: CGPoint, moves: [(to: CGPoint, offset: Double)], lift: Double, display: Int?, within: Double) -> Outcome {
+        touches([(at, 0, moves, lift)], display: display, within: within)
+    }
+
+    /// Two fingers down together at `from`, held `press` seconds, moved
+    /// straight to `to` over `over` seconds in sixtieths, held `hold` seconds
+    /// and lifted together: a pinch, which UIKit's own recognizers read
+    /// (a zoomable scroll view's, LLP 1057.001.000 §6).
+    static func pinch(from: [CGPoint], to: [CGPoint], press: Double, over: Double, hold: Double, display: Int?) -> Outcome {
+        let steps = max(1, Int((over * 60).rounded()))
+        let paths = zip(from, to).map { start, end in
+            (start, 0.0, (1...steps).map { i in
+                let t = CGFloat(i) / CGFloat(steps)
+                return (to: CGPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t), offset: press + over * Double(t))
+            } + (hold > 0 ? [(to: end, offset: press + over + hold)] : []), press + over + hold + 0.016)
+        }
+        return touches(paths, display: display, within: 5 + press + over + hold)
+    }
+
+    /// Several touches in one record, each down at its point at its offset.
+    private static func touches(_ fingers: [(at: CGPoint, down: Double, moves: [(to: CGPoint, offset: Double)], lift: Double)], display: Int?, within: Double) -> Outcome {
         let pathClass: AnyClass? = NSClassFromString("XCPointerEventPath"), recordClass: AnyClass? = NSClassFromString("XCSynthesizedEventRecord")
         guard let alloc = imp(pathClass, "alloc", Alloc.self, classMethod: true), let recordAlloc = imp(recordClass, "alloc", Alloc.self, classMethod: true),
               let initPath = imp(pathClass, "initForTouchAtPoint:offset:", InitPath.self),
@@ -408,17 +445,20 @@ enum Synthesizer {
         let initOnDisplay = imp(recordClass, "initWithName:displayID:interfaceOrientation:", InitRecordOnDisplay.self)
         let moveTo = imp(pathClass, "moveToPoint:atOffset:", Move.self)
         if display != nil, initOnDisplay == nil { return .missing }
-        if !moves.isEmpty, moveTo == nil { return .missing }
+        if fingers.contains(where: { !$0.moves.isEmpty }), moveTo == nil { return .missing }
         let syn = NSSelectorFromString("synthesizeEvent:completion:")
         guard let method = class_getInstanceMethod(object_getClass(device), syn) else { return .missing }
-        let path = initPath.1(alloc.1(pathClass!, alloc.0), initPath.0, at, 0)
         let ms = { (seconds: Double) in (seconds * 1000).rounded() / 1000 }
-        if let moveTo { for move in moves { moveTo.1(path, moveTo.0, move.to, ms(move.offset)) } }
-        up.1(path, up.0, ms(lift))
+        let paths = fingers.map { finger in
+            let path = initPath.1(alloc.1(pathClass!, alloc.0), initPath.0, finger.at, ms(finger.down))
+            if let moveTo { for move in finger.moves { moveTo.1(path, moveTo.0, move.to, ms(move.offset)) } }
+            up.1(path, up.0, ms(finger.lift))
+            return path
+        }
         let blank = recordAlloc.1(recordClass!, recordAlloc.0), portrait = UIInterfaceOrientation.portrait.rawValue
         let record = if let display, let initOnDisplay { initOnDisplay.1(blank, initOnDisplay.0, "exact" as NSString, display, portrait) }
             else { initRecord.1(blank, initRecord.0, "exact" as NSString, portrait) }
-        add.1(record, add.0, path)
+        for path in paths { add.1(record, add.0, path) }
         var result: Bool?
         unsafeBitCast(method_getImplementation(method), to: Synthesize.self)(device, syn, record) { ok, _ in DispatchQueue.main.async { result = ok } }
         let deadline = Date().addingTimeInterval(within)

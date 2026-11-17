@@ -12,20 +12,15 @@ func prepareGeneration<Session, Candidate>(_ sessions: [Session], prepare: (Sess
     return ready ? candidates : nil
 }
 
-/// The session generation that made a platform request (an authentication
-/// sheet, a file panel, an open, a tool call, a frame's queued event). A
-/// reload or plan replacement keeps the session but starts a new runner,
-/// which numbers its calls and nodes from the start again, so an answer
-/// that arrives after it would reach an unrelated call or node by the same
-/// number. Delivery goes through `session`, which is nil once that
-/// generation has ended or the session was destroyed. Main thread.
-struct GenerationStamp {
+/// A platform request's weak session owner and the runtime lease it asked
+/// under. Validation shares the posted-job door (LLP 1172.005 E11).
+struct SessionLease {
     private weak var owner: ExactSession?
-    let generation: Int
-    init(_ session: ExactSession) { owner = session; generation = session.generation }
-    /// The session, while it is alive and still runs the stamped generation.
+    private let runtime: RuntimeLease
+    var generation: Int { runtime.generation }
+    init(_ session: ExactSession) { owner = session; runtime = session.runtime.completionLease }
     var session: ExactSession? {
-        guard let owner, owner.state != .destroyed, owner.generation == generation else { return nil }
+        guard let owner, owner.runtime.accepts(runtime) else { return nil }
         return owner
     }
 }

@@ -197,6 +197,9 @@ macro_rules! configured {
             ) -> Result<(), $crate::exact_runner::DataError> {
                 $crate::exact_runner::DataSource::module_landed(&mut self.0, store, token, outcome)
             }
+            fn take_reports(&mut self) -> Vec<$crate::exact_runner::Report> {
+                $crate::exact_runner::DataSource::take_reports(&mut self.0)
+            }
             fn module_delivery(
                 &mut self,
                 store: &mut $crate::exact_runner::Store,

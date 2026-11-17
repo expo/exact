@@ -8,7 +8,7 @@ use exact_update::{gpu_code_digest as code_digest, Baked, Envelope};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-mod watch;
+pub(crate) mod watch;
 
 /// A development bake's map from plan node to Contract source (LLP 1035.002
 /// D6; LLP 1012.001.000 D6), `OUT_DIR/app.plan.map.json`: beside the plan,
@@ -687,8 +687,19 @@ fn artifact_graph(
     if !marked.is_empty() {
         requires.insert("hatches".into(), json!(marked));
     }
-    // A purpose's text is in the installed binary's Info.plist: a bundle
-    // whose purposes differ is a binary release (LLP 1069.008 D5).
+    // What the APK was composed from (LLP 1030.006 D4a): a plan that uses a
+    // capability or a package extension the installed APK did not link is a
+    // new APK. The classifier compares these as subsets of `androidLinked`.
+    if inputs.get("androidLinked").is_some() {
+        requires.insert(
+            "androidUses".into(),
+            json!(crate::compat::android_uses(plan)),
+        );
+        requires.insert(
+            "androidExtensions".into(),
+            json!(crate::compat::plan_extensions(plan)),
+        );
+    }
     // What a TypeScript module may ask of the binary's prelude (compat.rs
     // `TYPESCRIPT_RUNTIME`): an older cohort's prelude would ignore it
     // silently (`exactBodyFrom` sent as an empty body), so it takes no bundle.
@@ -698,8 +709,13 @@ fn artifact_graph(
             inputs["typescriptRuntime"].clone(),
         );
     }
-    if inputs.get("grantPurposes").is_some() {
-        requires.insert("grantPurposes".into(), inputs["grantPurposes"].clone());
+    // A purpose's text and the bundle's languages are in the installed
+    // binary's Info.plist: a bundle whose purposes or tables differ is a
+    // binary release (LLP 1069.008 D5).
+    for key in ["grantPurposes", "localizations", "watchSync"] {
+        if inputs.get(key).is_some() {
+            requires.insert(key.into(), inputs[key].clone());
+        }
     }
     let rust = assets
         .iter()

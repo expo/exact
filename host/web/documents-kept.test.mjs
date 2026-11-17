@@ -5,8 +5,8 @@
 // a forgotten one is gone after the next reload. In Chrome, over a file in
 // the origin-private file system, whose handles are real FileSystemHandles;
 // the browser's permission is stood in for, since it grants those always.
-import { expect } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,36 @@ import { need } from '../../scripts/coverage.mjs';
 const { unavailable } = chromium(), chromeTest = need('chrome', unavailable);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+function pickerManifest(
+  makeDirectory = () => mkdtempSync(resolve(tmpdir(), 'exact-picker-manifest-')),
+  run = spawnSync,
+) {
+  const manifestDir = makeDirectory(), manifestOut = resolve(manifestDir, 'dist');
+  try {
+    writeFileSync(resolve(manifestDir, 'app.json'), JSON.stringify({
+      name: 'Picker types', app: { id: 'test.picker-types', name: 'Picker types' },
+      file_handlers: [{ action: '/', name: 'Documents', accept: { 'application/x-studio-board+json': ['board'], 'text/markdown': ['.MD'], 'application/octet-stream': ['.tar.gz'] } }],
+    }));
+    writeFileSync(resolve(manifestDir, 'app.contract'), 'component App\n  view\n    text "Picker types"\n');
+    const built = run(process.execPath, ['host/web-js/build.mjs', manifestDir, '--out', manifestOut, '--render', 'none'], { cwd: ROOT, encoding: 'utf8' });
+    if (built.status !== 0) throw new Error(built.stdout + built.stderr || 'picker manifest build failed');
+    return { manifestDir, manifest: JSON.parse(readFileSync(resolve(manifestOut, 'manifest.json'), 'utf8')) };
+  } catch (error) {
+    rmSync(manifestDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+test('the picker manifest fixture is removed when its prerequisite build fails', () => {
+  const manifestDir = mkdtempSync(resolve(tmpdir(), 'exact-picker-manifest-failure-'));
+  try {
+    expect(() => pickerManifest(() => manifestDir, () => ({ status: 1, stdout: '', stderr: 'prerequisite failed' }))).toThrow('prerequisite failed');
+    expect(existsSync(manifestDir)).toBe(false);
+  } finally {
+    rmSync(manifestDir, { recursive: true, force: true });
+  }
+});
+
 function normalized(spec) {
   const built = spawnSync('cargo', ['build', '-q', '-p', 'exact-web-js'], { cwd: ROOT, encoding: 'utf8' });
   if (built.status !== 0) throw new Error(built.stderr || 'grant normalizer build failed');
@@ -56,9 +86,11 @@ const start = (grants, app) => `(async () => {
 chromeTest('a kept document reopens after a reload, asks again under a press, and is forgotten', async () => {
   const grants = normalized('fs.read doc:/\nfs.write doc:/\ndoc.keep'), app = `test.kept-${Date.now()}`;
   const dir = resolve(ROOT, 'host/web');
+  const { manifestDir, manifest } = pickerManifest();
   const page = Bun.serve({ port: 0, fetch(request) {
     const name = decodeURIComponent(new URL(request.url).pathname.slice(1)), file = resolve(dir, name);
     if (!name) return new Response('<!doctype html><title>kept</title><body></body>', { headers: { 'content-type': 'text/html' } });
+    if (name === 'manifest.json') return Response.json(manifest);
     if (!file.startsWith(dir + sep) || !existsSync(file)) return new Response('not found', { status: 404 });
     return new Response(Bun.file(file), { headers: { 'content-type': 'text/javascript' } });
   } });
@@ -84,6 +116,33 @@ chromeTest('a kept document reopens after a reload, asks again under a press, an
     };
     await call('Page.enable');
     await launch();
+    const declared = await run(`(async () => {
+      const root = await navigator.storage.getDirectory();
+      const picked = await root.getFileHandle('picked.board', { create: true });
+      globalThis.showOpenFilePicker = async (options) => { globalThis.pickerTypes = options.types; return [picked]; };
+      await host.show({ present: true, view: 1 }, 'showOpenFilePicker');
+      const pickedPath = chosen;
+      await exact.documents.forget(pickedPath, grants);
+      const drops = {};
+      for (const name of ['notes.MD', 'cardboard', 'archive.TAR.GZ', 'archive.gz', 'notes.gz']) {
+        const dropped = await root.getFileHandle(name, { create: true });
+        [drops[name]] = await host.dropped([dropped], [await dropped.getFile()]);
+      }
+      const recent = await listed();
+      return { types: pickerTypes, drops, recent };
+    })()`);
+    expect(declared.types).toEqual([{ description: 'Documents', accept: {
+      'application/x-studio-board+json': ['.board'], 'text/markdown': ['.md'], 'application/octet-stream': ['.tar.gz'],
+    } }]);
+    const recentPaths = new Set(declared.recent.map(row => row.split(' ')[0]));
+    for (const name of ['notes.MD', 'archive.TAR.GZ']) expect(recentPaths.has(declared.drops[name]), name).toBe(true);
+    for (const name of ['cardboard', 'archive.gz', 'notes.gz']) expect(recentPaths.has(declared.drops[name]), name).toBe(false);
+    await launch();
+    const reloadedDrops = await run('listed()');
+    for (const name of ['notes.MD', 'archive.TAR.GZ']) {
+      expect(reloadedDrops).toContain(`${declared.drops[name]} file readwrite`);
+      await run(`exact.documents.forget(${JSON.stringify(declared.drops[name])}, grants)`);
+    }
     // Chosen through the open picker (the browser's, given an origin-private file).
     const doc = await run(`(async () => {
       const root = await navigator.storage.getDirectory(), file = await root.getFileHandle('notes.md', { create: true });
@@ -197,5 +256,6 @@ chromeTest('a kept document reopens after a reload, asks again under a press, an
   } finally {
     await suite?.close();
     page.stop(true);
+    rmSync(manifestDir, { recursive: true, force: true });
   }
 }, 120_000);

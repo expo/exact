@@ -649,7 +649,7 @@ unsafe extern "C" fn render(
         // SAFETY: byte capacity was checked; the HAL supplies aligned float PCM.
         let output =
             unsafe { std::slice::from_raw_parts_mut(buffers[0].data.cast::<f32>(), frames * 2) };
-        for frame in output.chunks_exact_mut(2) {
+        for frame in output.as_chunks_mut::<2>().0 {
             let (l, r) = mixer.frame();
             frame[0] = l;
             frame[1] = r;

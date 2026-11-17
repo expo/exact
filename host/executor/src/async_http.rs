@@ -15,6 +15,7 @@ impl Machine {
         abort: AbortController,
         retiring: AbortRegistration,
         scoped: Option<ibex2::grant::GrantSet>,
+        fixture: Option<super::super::ResponseWork>,
     ) {
         let refuse = |outcome| self.answer(lane, run, outcome);
         if abort.signal().aborted() {
@@ -52,6 +53,7 @@ impl Machine {
                 abort,
                 retiring,
                 fetch,
+                fixture,
             };
             return if file.request.body_from.is_some() {
                 self.file(lane, run, file, sized)
@@ -62,6 +64,7 @@ impl Machine {
         let deadline = request.timeout_ms.map(|ms| (ms, abort.clone()));
         self.fetch(
             lane, run, request, None, forced, abort, retiring, limit, fetch, deadline, None,
+            fixture,
         );
     }
 
@@ -79,6 +82,7 @@ impl Machine {
         fetch: ibex2::host::Fetch,
         deadline: Option<(u32, AbortController)>,
         destination: Option<ibex2::stdlib::fetch_async::ResponseBody>,
+        fixture: Option<super::super::ResponseWork>,
     ) {
         let timeout = request.timeout_ms;
         let mut req = fetch_request(request, forced);
@@ -93,6 +97,7 @@ impl Machine {
             lane,
             run,
             deadline: Mutex::new(deadline),
+            fixture: Mutex::new(fixture),
         });
         let retry = super::super::cache::retry_request(&self.shared, run.0, &req).map(|request| {
             let (fetch, tracked, upload, signal) = (
@@ -147,6 +152,7 @@ struct Tracked {
     lane: usize,
     run: Run,
     deadline: Mutex<Option<(u32, AbortController)>>,
+    fixture: Mutex<Option<super::super::ResponseWork>>,
 }
 
 #[path = "metrics.rs"]

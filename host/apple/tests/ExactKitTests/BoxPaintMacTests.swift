@@ -108,9 +108,33 @@ final class BoxPaintMacTests: XCTestCase {
         XCTAssertEqual(rgba(rep, 50, 75)[0], 0.5, accuracy: 0.1, "a rounded, bordered fill")
     }
 
-    /// An image whose pixels are a sublayer is captured once: `draw(_:)`
-    /// paints the bitmap for the shot, and the sublayer is hidden for it,
-    /// so half-transparent red over white stays pink (Grok's batch 2 review).
+    func testCapturesKeepInsetShadowsAboveTheFill() throws {
+        let p = presenter()
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "view", "style": [
+                "background_color": [255, 255, 255, 255],
+                "box_shadow": [["o": [0, 0], "b": 0, "s": 6, "c": [0, 0, 0, 255], "i": true]],
+            ]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "frame", "id": 2, "x": 20, "y": 20, "w": 60, "h": 60],
+        ]))
+        let root = try XCTUnwrap(p.views[1])
+        p.viewport.minMagnification = 0.25; p.viewport.maxMagnification = 5
+        for scale in [CGFloat(1), 2] {
+            p.viewport.magnification = scale / (try XCTUnwrap(window)).backingScaleFactor
+            XCTAssertEqual(try XCTUnwrap(root.pixelScale), scale, accuracy: 0.001)
+            for capture in [{ Capture.bitmap(of: root, scale: scale) }, { Capture.picture(of: root) }] {
+                let rep = try XCTUnwrap(capture())
+                XCTAssertLessThan(rgba(rep, 22, 50)[0], 0.05, "the inset shadow paints over the fill at \(scale)×")
+                XCTAssertGreaterThan(rgba(rep, 50, 50)[0], 0.95, "the inset shadow leaves the centre clear")
+            }
+        }
+    }
+
+    /// A layer-backed image is captured once, so half-transparent red over
+    /// white stays pink (Grok's batch 2 review).
     func testATranslucentLayerImageIsCapturedOnce() throws {
         let (page, image) = try imageOnPage(red: 0.5, style: ["object_fit": .string("fill")])
         let sub = try XCTUnwrap(image.imageLayer, "the image took the layer path")
@@ -226,8 +250,8 @@ final class BoxPaintMacTests: XCTestCase {
         let raised = rgba(rep, 50, 30)
         XCTAssert(raised[0] > 0.9 && raised[2] < 0.1, "the raised box over the later one: \(raised)")
         XCTAssertEqual(rgba(rep, 50, 80)[0], 0.5, accuracy: 0.1, "the opacity the animation holds")
-        XCTAssertEqual(root.subviews, order, "the subviews are put back")
-        XCTAssertEqual(p.views[4]?.layer?.opacity, 1, "the model is put back")
+        XCTAssertEqual(root.subviews, order, "capture keeps the logical subview order")
+        XCTAssertEqual(p.views[4]?.layer?.opacity, 1, "capture leaves the model opacity unchanged")
     }
 }
 #endif

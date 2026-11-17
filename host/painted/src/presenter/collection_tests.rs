@@ -38,7 +38,7 @@ fn boot(row: &str) -> Presenter<Rows> {
     boot_source(&source)
 }
 fn boot_source(source: &str) -> Presenter<Rows> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         Rows,
         (400., 500.),
@@ -216,7 +216,7 @@ fn an_edge_before_activation_commits_and_activation_asks_once() {
           text `${x}` height=24
 "#;
     let plan = contract::bake(contract::compile(source).unwrap(), Deferred(true)).unwrap();
-    let (mut p, _) = Presenter::boot_with(
+    let (mut p, _) = Presenter::boot_with_fixture_fonts(
         &plan.encode(),
         Deferred(false),
         (400., 500.),
@@ -527,7 +527,7 @@ fn ordinary_scroll_events_preserve_change_order_and_observe_prior_handler_writes
 
     // Fresh runtime: A is first; its change to already-pending B coalesces.
     let bytes = p.host.runner().plan().encode();
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &bytes,
         Rows,
         (400., 500.),
@@ -1410,3 +1410,6 @@ fn the_readers_drag_after_a_keyed_requests_jump_ends_it_where_the_reader_is() {
     );
     assert_eq!(p.scroll_of(feed).1, at + 50.);
 }
+
+#[path = "collection/fixed_tests.rs"]
+mod fixed;

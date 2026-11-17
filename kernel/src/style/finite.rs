@@ -31,6 +31,7 @@ impl RowValue<'_> {
             | RowValue::DragTimeline(_)
             | RowValue::AnimationTimeline(_)
             | RowValue::TimelineScope(_)
+            | RowValue::SafeAreaProperties(_)
             | RowValue::TimelineName(_)
             | RowValue::BackgroundImage(_)
             | RowValue::TextShadow(_)

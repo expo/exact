@@ -437,7 +437,7 @@ test('TypeScript producer callback publishes success, reports failure and accept
   const run = new Function('early','console','publications','acceptModuleReply',`
     const child={stdout:{on(_,fn){this.reply=fn}}}, dev=child, scrubAsks=new Map();
     let buffered='', active, moduleRun=0, moduleStage, currentModule, moduleDesign, moduleScrubbed, moduleReleased, designSnapshot, designSource, seq=0;
-    const pending=new Map(), clients=new Set(), MODULE_FILES={web:'app.js'}, app={id:'test'}, tamber=null;
+    const pending=new Map(), clients=new Set(), MODULE_FILES={web:'app.js'}, app={id:'test'}, forma=null;
     const readFileSync=()=>new Uint8Array([1]), resolve=(...p)=>p.join('/'), captureAssets=()=>[], moduleCards=()=>{}, designBytes=()=> 'built-hash', contractBytes=()=> 'built-hash';
     let contractStamp, contractTreeStamp; const contractInputsStamp=()=> 'tree'; ${source.match(/function contractReady[^\n]+/)[0]}
     const captureGeneration=()=>publications.push(seq), push=()=>{}, announcement=()=>({}), watchPackages=()=>{}, rmSync=()=>{}, sayReady=line=>console.log(line);

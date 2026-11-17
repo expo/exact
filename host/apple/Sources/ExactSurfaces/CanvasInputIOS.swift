@@ -167,13 +167,17 @@ final class CanvasInputHost {
             }
             var sequence = samples[token]?.sequence ?? CanvasTouchSamples()
             let previousButtons = samples[token]?.buttons ?? buttons
+            // The hardware keyboard's modifiers, as the web's `shiftKey`, `ctrlKey`, `altKey` and `metaKey` (Command).
+            let flags = event?.modifierFlags ?? []
             sequence.forward(phase: phase, current: current, coalesced: coalesced) { part, sample, delta in
                 let held = part == "move" && (phase == "up" || phase == "cancel") ? previousButtons : buttons
                 let p = source.local(sample.point)
                 let from = source.local(CGPoint(x: sample.point.x - delta.x, y: sample.point.y - delta.y))
                 view.canvases?.input(view, ["t": "pointer", "phase": part, "id": id,
                     "x": p.x, "y": p.y, "dx": p.x - from.x, "dy": p.y - from.y,
-                    "kind": mouse ? "mouse" : "touch", "buttons": held], timestamp: sample.timestamp)
+                    "kind": mouse ? "mouse" : "touch", "buttons": held,
+                    "shiftKey": flags.contains(.shift), "ctrlKey": flags.contains(.control),
+                    "altKey": flags.contains(.alternate), "metaKey": flags.contains(.command)], timestamp: sample.timestamp)
             }
             samples[token] = (sequence, buttons)
             if phase == "up" || phase == "cancel" {

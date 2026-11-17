@@ -27,10 +27,16 @@ host/web/dev.mjs --app messages-stress --port 8771` instead.
 The ordinary native wrapper is available with
 `bun host/apple/build.mjs messages-stress-apple --run` (or `--ios --run`).
 
-All three runtime entries default to `ReusableMessagesStress`. The app-local
-build selector `EXACT_MESSAGES_SOURCE=reuse|stateless` selects that source or
-the original stateless control; unset means `reuse`. Empty, unknown and
-non-Unicode values fail before Contract compilation or bake. For example:
+All three runtime entries default to `ReusableMessagesStress`, the source
+app.json's `rust.data` names, which the JS target's module runs too. The
+app-local build selector `EXACT_MESSAGES_SOURCE=reuse|stateless` selects that
+source or the original stateless control; unset means `reuse`. Empty, unknown
+and non-Unicode values fail before Contract compilation or bake. The web's
+entry must pass the manifest's source, which the JS target's module runs
+(LLP 1153.003 D2), so a web build of the stateless control also sets
+`rust.data` to
+`{ "crate": "messages-stress-data", "type": "messages_stress_data::MessagesStress", "source": "messages_stress_data::MessagesStress" }`.
+For example:
 
 ```sh
 EXACT_MESSAGES_SOURCE=stateless EXACT_WEB_DIST=target/messages-control bun host/web/build.mjs messages-stress-web

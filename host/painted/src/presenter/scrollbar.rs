@@ -127,7 +127,7 @@ mod tests {
         let source = format!(
             "component App\n  view\n    input testId=\"editor\" direction=\"{direction}\" value=\"{value}\" width=200 height=64 padding=4 appearance=\"none\" overflow-x=\"auto\" font-size=16\n"
         );
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (300., 200.),
@@ -232,7 +232,7 @@ mod tests {
       button press=press width=1000 height=1000 flex-shrink=0
         text "A large row"
 "#;
-                let (mut p, error) = Presenter::boot_with(
+                let (mut p, error) = Presenter::boot_with_fixture_fonts(
                     &crate::test_plan(source),
                     (),
                     (240., 200.),
@@ -286,7 +286,7 @@ mod tests {
             let source = format!(
                 "component App\n  view\n    column width=240 height=200 overflow-x=\"auto\" overflow-y=\"{overflow_y}\"\n      column width=1000 height=1000 flex-shrink=0\n"
             );
-            let (mut p, error) = Presenter::boot_with(
+            let (mut p, error) = Presenter::boot_with_fixture_fonts(
                 &crate::test_plan(&source),
                 (),
                 (240., 200.),
@@ -316,7 +316,7 @@ mod tests {
       button press=press width=240 height=1000 flex-shrink=0
         text "A long row"
 "#;
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),
             (240., 200.),

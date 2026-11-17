@@ -21,9 +21,10 @@ state in exactly this form; the two texts are compared line by line.
   `queued <name> <count>`   each `queue` mutation's waiting sends
   `command <name> <value>…` each command the step's commit issued
   `view <testId> <text>`   each element with a `testId`, in preorder, but
-                           none inside a virtualized `list`: the runner
-                           shows the rows its window lays out (a layout
-                           fact), the semantics every row. An unopened
+                           omitting virtualized data rows: the runner
+                           shows only its window, the semantics every row.
+                           Fixed lead and trail children are observed.
+                           An unopened
                            tab panel has no descendants to observe
 
 Values: a number is `n` and its 16 hex digits of IEEE bits (every NaN is
@@ -104,9 +105,9 @@ def dispatchTrace (p : Program) (o : Oracle) (c : Config) (target : String) (eve
     | .some (_, a, args) =>
       if payload.isSome && n.control.isSome then
         ((c, .refused (.unsupported s!"a payload for a `{n.control.getD ""}` control")), []) else
-      let env : Env := { prog := p, slots := c.slots, derives := c.settled.derives,
-                         resources := c.settled.resources, rows := rowSlots c.store n.rows,
-                         now := c.now, idle := c.settled.idle }
+      let env : Env := ({ prog := p, slots := c.slots, derives := c.settled.derives,
+                          resources := c.settled.resources, rows := rowSlots c.store n.rows,
+                          now := c.now, idle := c.settled.idle } : Env).withOwned
       match evalList fuel env false n.locals args with
       | .error e => ((c, .refused e), [⟨"handler", a, .refused (.refused ("arguments refused: " ++ why e))⟩])
       | .ok vs =>
@@ -145,7 +146,14 @@ def advanceTrace (p : Program) (o : Oracle) (c : Config) (t : F64) : (Config × 
         | (c, out) => ((c, out), [⟨"queue", m, out⟩])
       | .some (.andThen m w a) =>
         let c := { c with armed := c.armed.filter (·.1 != m), now := if c.now < w then w else c.now }
-        match runAction p o c a [] [] with
+        match thenCommit p o c a (thenArgsOf p m) [] [] with
+        | (c, .ok) =>
+          let (result, ran) := go n c
+          (result, ⟨"then", a, .ok⟩ :: ran)
+        | (c, out) => ((c.armNexts p, out), [⟨"then", a, out⟩])
+      | .some (.owned i w a) =>
+        let c := { c with sendRows := disarm c.sendRows i, now := if c.now < w then w else c.now }
+        match ownedThen p o c i a with
         | (c, .ok) =>
           let (result, ran) := go n c
           (result, ⟨"then", a, .ok⟩ :: ran)
@@ -191,7 +199,14 @@ def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List R
         | (c, out) => ((c, out), [⟨"queue", m, out⟩])
       | .some (.andThen m _ a) =>
         let c := { c with armed := c.armed.filter (·.1 != m) }
-        match runAction p o c a [] [] with
+        match thenCommit p o c a (thenArgsOf p m) [] [] with
+        | (c, .ok) =>
+          let (result, ran) := go n c
+          (result, ⟨"then", a, .ok⟩ :: ran)
+        | (c, out) => ((c.armNexts p, out), [⟨"then", a, out⟩])
+      | .some (.owned i _ a) =>
+        let c := { c with sendRows := disarm c.sendRows i }
+        match ownedThen p o c i a with
         | (c, .ok) =>
           let (result, ran) := go n c
           (result, ⟨"then", a, .ok⟩ :: ran)
@@ -224,13 +239,17 @@ def lines (p : Program) (label : String) (c : Config) (out : Outcome) (commandsB
   | _ =>
     if c.poisoned then head else
     head ++
-    ((c.slots.filter fun (x, _) => p.locale != .some x && x != Format.formatSlot).map fun (x, v) =>
+    -- A child's mutation has an answer per instance: its root slot holds
+    -- none, and is not printed.
+    ((c.slots.filter fun (x, _) => p.locale != .some x && x != Format.formatSlot &&
+        !isOwnedMutation p x).map fun (x, v) =>
       "slot " ++ x ++ " " ++ value v) ++
     ((p.states.filter (·.persist)).filterMap fun st => (lookup st.name c.slots).map fun v =>
       "store " ++ st.name ++ " " ++ value v) ++
     (p.derives.filterMap fun d => (lookup d.name c.settled.derives).map fun v =>
       "derive " ++ d.name ++ " " ++ value v) ++
-    (p.resources.filterMap fun r => (lookup r.name c.settled.resources).map fun v =>
+    -- A child's resource has a value per instance, which the view shows.
+    ((p.resources.filter (·.owner.isNone)).filterMap fun r => (lookup r.name c.settled.resources).map fun v =>
       "resource " ++ r.name ++ " " ++ value v) ++
     ((p.mutations.filter (·.queue)).map fun m =>
       "queued " ++ m.name ++ " " ++ toString ((c.queued.filter (·.1 == m.name)).length)) ++
@@ -341,6 +360,7 @@ deriving instance Repr for TabInfo
 deriving instance Repr for Settled
 deriving instance Repr for VNode
 deriving instance Repr for Timer
+deriving instance Repr for SendRow
 deriving instance Repr for Config
 deriving instance Repr for Outcome
 

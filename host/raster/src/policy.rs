@@ -810,10 +810,32 @@ impl RasterSession {
     /// Memory pressure: drop unpinned cold owners, retaining displayed dedup.
     /// Surviving backing owners always retain their independent byte charge.
     pub fn trim(&self) {
+        self.trim_to(0);
+    }
+    /// Retain at most `bytes` of cold pictures, most recently used first.
+    /// Displayed pictures and surviving backing charges are unchanged.
+    pub fn trim_to(&self, bytes: u64) {
+        self.trim_cold(bytes, None);
+    }
+    /// Drop a source generation's cold pictures, preserving live requests and leases.
+    pub fn trim_generation(&self, generation: u64) {
+        self.trim_cold(0, Some(generation));
+    }
+    fn trim_cold(&self, bytes: u64, generation: Option<u64>) {
         let mut garbage = Vec::new();
         let mut state = self.owner.gate.inner.state.lock().unwrap();
         if let Some(s) = state.sessions.get_mut(&self.id()) {
-            for key in s.cold_keys() {
+            let cold: Vec<_> = s
+                .cold_keys()
+                .into_iter()
+                .filter(|key| generation.is_none_or(|g| key.generation == g))
+                .collect();
+            let mut remaining: u64 = cold.iter().map(|key| s.entries[key].bytes()).sum();
+            for key in cold {
+                if remaining <= bytes {
+                    break;
+                }
+                remaining -= s.entries[&key].bytes();
                 remove_entry(s, key, &mut garbage);
                 s.evicted += 1;
             }

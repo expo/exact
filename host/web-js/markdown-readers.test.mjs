@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { builtFile } from './content-names.mjs';
 
 test('known Markdown is compiled before a hidden reader opens; new content alone loads the parser', async () => {
   const root = resolve(import.meta.dirname, '../..'), dir = mkdtempSync(resolve(root, 'target/markdown-agent-test-'));
@@ -77,7 +78,7 @@ export const answer: Answer = (source, args) => {
     const asked = new Promise(r => requested = r), gate = new Promise(r => release = r);
     const errors = [];
     page.on('pageerror', e => errors.push(String(e)));
-    await page.route('**/markdown.wasm', async route => {
+    await page.route(`**/${builtFile(dist, 'markdown.wasm')}`, async route => {
       const attempt = ++requests;
       requested(); await gate;
       if (attempt === 1) await route.fulfill({ status: 503, body: 'unavailable' });

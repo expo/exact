@@ -54,7 +54,7 @@ const APP: &str = r#"component Forms
 "#;
 
 fn boot() -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 600.),
@@ -356,7 +356,7 @@ fn set_range_text_command_preserves_selection_and_reports_one_input() {
       button "Replace" testId="replace" press=replace
       text `${body}|${count}|${caret}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -467,7 +467,7 @@ fn range_replacement_url_sanitization_and_select_events_match_chrome() {
       text log testId="log"
       text heard testId="heard"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -526,7 +526,7 @@ fn range_replacement_select_tasks_observe_both_commands() {
       button "Replace" testId="replace" press=replace
       text log testId="log"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -562,7 +562,7 @@ fn beforeinput_cancels_paste_and_selectionchange_hears_a_caret_move() {
       textarea value=body beforeinput=before input=input selectionchange=moved testId="editor"
       text `${body}:${caret}:${kind}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 300.),
@@ -618,7 +618,7 @@ fn agent_typing_selects_all_then_delivers_a_cancelable_insert_text() {
       text events testId="events"
       text `${body}|${edits}|${changes}|${picked}|${moved}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -698,7 +698,7 @@ fn queued_selection_events_follow_the_edits_focus_command() {
         ("paste", "true:oldpaste:8-8", ""),
         ("cancel", "false:old:0-3", "false:old:0-3"),
     ] {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &plan,
             (),
             (400., 600.),
@@ -754,7 +754,7 @@ fn the_select_alls_handler_and_its_commands_run_before_the_agents_insertion() {
       textarea id="editor" testId="editor" value=body input=edited select=selected
       text `${body}|${picks}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -803,7 +803,7 @@ fn a_select_handler_that_moves_the_focus_takes_the_agents_insertion_with_it() {
       text `${body}|${note}` testId="result"
 "#;
     for (to_button, expected) in [(false, "old|nx"), (true, "old|n")] {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),
             (400., 600.),
@@ -855,7 +855,7 @@ fn the_agents_text_is_cut_to_the_room_maxlength_leaves_at_the_caret() {
       text `${{body}}|${{events}}` testId="result"
 "#
         );
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (400., 600.),
@@ -916,7 +916,7 @@ fn the_agents_fitted_insertion_matches_chromes_value_events_and_caret() {
       text events testId="events"
 "#
         );
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (400., 600.),
@@ -966,7 +966,7 @@ fn a_rejected_insertion_preserves_an_unchanged_selection_commands_mark() {
       button "Collapse" testId="collapse" press=collapse
       text `${picks}` testId="picks"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1038,7 +1038,7 @@ fn a_focus_handler_that_redirects_once_loses_the_focus_to_select_all() {
       input id="other" testId="other" value=note input=noted
       text `${body}|${note}|${focuses}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1087,7 +1087,7 @@ fn runtime_value_writes_report_only_selection_changes_at_mount_and_commit() {
       button "Same length" testId="same-length" press=sameLength
       text `${areaMoves}|${inputMoves}|${emptyMoves}|${caret}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1140,7 +1140,7 @@ fn range_replacement_end_reports_the_moved_caret_once() {
       textarea id="editor" testId="editor" value=body input=edited selectionchange=moving
       text `${body}|${moves}|${caret}|${events}` testId="result"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1187,7 +1187,7 @@ fn unmarked_and_stale_marks_compare_against_the_reported_caret() {
       textarea markup="markdown" id="editor" testId="editor" value=body
       button "Write" testId="write" press=write
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1261,7 +1261,7 @@ fn email_and_number_report_the_web_fallback_without_a_selection_api() {
       text `${moves}|${heard}` testId="result"
       text position testId="position"
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1330,7 +1330,7 @@ fn field_sync_visits_only_fields_touched_by_commits() {
       button "Toggle" testId="toggle" press=toggle
       text `${count}`
 "#;
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (400., 600.),
@@ -1395,7 +1395,7 @@ fn mouse_control_click_keeps_own_and_ancestor_press_handlers() {
       text seen testId="log"
 "#
                 );
-                let (mut p, error) = Presenter::boot_with(
+                let (mut p, error) = Presenter::boot_with_fixture_fonts(
                     &crate::test_plan(&source),
                     (),
                     (300., 200.),

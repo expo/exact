@@ -64,11 +64,19 @@ of range, an arithmetic overflow, a vector past `usize::MAX`) is not proved.
      (`Contract.Vm.Env`); `call` is `Contract.stdlib` (the corpus and random
      sweeps); `fetch` decodes as `Contract.Vm.decode` does, a jump's byte
      target being the instruction index there (`encIns`);
-   - the resource bounds: the model's `steps`, `kept` and `concat` never
-     refuse; the runner's may (`IterationLimit`, `CallLimit`, `CallDepth`,
-     `ValueTooLarge`, `ValueTooDeep`, `StringTooLong`) — the refinement the semantics already
-     names (`semantics/README.md`). `NativeProps` is outside the model: any
-     outcome there corresponds to its `unsupported`.
+   - the bare `Contract.Vm` remains unbounded: its `steps`, `kept` and
+     `concat` never refuse. `Contract.VmRows` wraps that proved machine with
+     the runner's executable-row charges. The 69-case `difftest accounting`
+     run compares the production `Host` outcomes and returned counters at and
+     one past every list, string, value, call-count and active-depth bound. It
+     covers each charged roster function, callback start and end, record
+     construction, refusal order for callbacks, `join`, failure reads, preorder
+     extent measurement, owned value and currentness after a frame cut, all
+     five owned reads from the wrong arm, and caller-frame restoration. It
+     names every compared trap explicitly.
+     The row-call implementation itself remains outside extraction until stage
+     5. `NativeProps` and linked Unicode case conversion are outside the model
+     and its accounting comparison.
 4. **Lean.** `Contract/*.lean` is compiled here at Aeneas's Lean
    (`lean-toolchain`), not the semantics' own; `Contract.Vm` and its imports
    build under both.
@@ -77,11 +85,13 @@ of range, an arithmetic overflow, a vector past `usize::MAX`) is not proved.
 
 ```
 sh semantics/vm-extract/check.sh
+cargo run -p contract-difftest -- accounting
 ```
 
-regenerates the extraction and checks the proofs (a few minutes; Aeneas runs
+The first command regenerates the extraction and checks the proofs (a few minutes; Aeneas runs
 `-sequential`). It skips, naming the missing tool, when one is absent (exit status 77). The
-async lane's `vm-extract` check runs it.
+async lane's `vm-extract` check runs it. The second compares the resource
+wrapper with the production `Host`; it reports 69 cases and zero divergences.
 
 Tools, outside the repo (as installed on the build Mac):
 

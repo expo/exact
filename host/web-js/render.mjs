@@ -9,17 +9,18 @@
 //   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes, robots.txt, sitemap.xml
 //   bun host/web-js/render.mjs <dist> <location>…                  print pages
 //   bun host/web-js/render.mjs <dist> --serve [--port 8830]        the site, as `serve` serves it (host/web/serve.mjs)
+import { parseFaults } from '../web/faults.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import vm from 'node:vm';
 import { brotliCompressSync, createBrotliCompress, constants } from 'node:zlib';
-import { createDocument } from './dom.js';
+import { createDocument, esc } from './dom.js';
 import { cachingFetch, directives, FRESH } from './http-cache.mjs';
-import { canonical } from './route-pattern.js';
+import { canonical, mountedHref, withBase } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
 import { buildPageFiles, writeCrawlerFiles } from '../web/crawl.mjs';
-import { generationOf, withGenerationBase } from '../web/generations.mjs';
+import { buildBase, generationOf, withGenerationBase } from '../web/generations.mjs';
 import { lockHeld } from '../web/build-lock.mjs';
 
 const DEADLINE = 3000;
@@ -75,15 +76,15 @@ const blanked = (html) => {
   }
   return out + html.slice(kept);
 };
-/** The shell's root, found in `seen` (`blanked`), and its entry: the first module script after the root, `./app.js`'s
- * or the one an `--inline` shell holds the bundle in, where a page puts its checkpoint and its capture script loads
- * `./app.js` (page.rs `js_entry`); `entry` is -1 where there is none. The root carries what the build wrote on it:
- * `data-audio-session` (LLP 1096 D7). */
+/** The shell's root, found in `seen` (`blanked`), and its entry after it, which the build marks: `data-entry` with the
+ * entry's `src`, or, in an `--inline` shell, which holds the bundle, naming it. A page puts its checkpoint there, and the
+ * checkpoint names the entry's URL, `entryURL`, for its capture script to load (page.rs `js_entry`, LLP 1153.004 D4);
+ * `entry` is -1 where there is none. The root carries what the build wrote on it: `data-audio-session` (LLP 1096 D7). */
 export function shellPlaces(seen) {
   const ROOT = /<div id="exact-root"( data-audio-session="[a-z-]+")?><\/div>/.exec(seen);
-  const ENTRY = ROOT && /<script type="module"(?: src="\.\/app\.js")?>\s*<\/script>/.exec(seen.slice(ROOT.index + ROOT[0].length));
+  const ENTRY = ROOT && /<script type="module" data-entry(?: src)?="([^"]*)">\s*<\/script>/.exec(seen.slice(ROOT.index + ROOT[0].length));
   const entry = ENTRY ? ROOT.index + ROOT[0].length + ENTRY.index : -1;
-  return { ROOT, entry, entryEnd: ENTRY ? entry + ENTRY[0].length : -1 };
+  return { ROOT, entry, entryEnd: ENTRY ? entry + ENTRY[0].length : -1, entryURL: ENTRY?.[1] ?? null };
 }
 /** Where the build puts the Markdown it compiled: before the shell's entry, whatever a head entry's text spells. */
 export const markdownAt = (shell) => shellPlaces(blanked(shell)).entry;
@@ -93,12 +94,15 @@ const builtMarkdown = (shell, seen) => {
   const at = seen.indexOf(MARKDOWN);
   return at < 0 ? '[]' : shell.slice(at + MARKDOWN.length, shell.indexOf('</script>', at + MARKDOWN.length));
 };
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+// A page whose render failed, as the render host writes it (host/render/src/serve.rs).
+const UNAVAILABLE = "<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n";
 const unesc = s => s.replace(/&(amp|lt|gt|quot);/g, (_, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"' })[e]);
 
 /** `url` if it navigates (document_url.rs `navigable`), made absolute against the manifest's origin (page.rs `absolute`). */
-function crawlable(url, origin) {
+function crawlable(url, origin, base = "/") {
+  url = url.replace(/^[\0- ]+|[\0- ]+$/g, '').replace(/[\t\n\r]/g, '');
   try { if (!['http:', 'https:', 'mailto:', 'tel:'].includes(new URL(url, 'https://render.invalid/').protocol)) return null; } catch { return null; }
+  if (base !== '/') url = mountedHref(/^[?#]/.test(url) ? '/' + url : url, base);
   if (!origin || /^[a-z0-9+.-]+:/i.test(url) || url.startsWith('//')) return url;
   return origin.replace(/\/+$/, '') + (url.startsWith('/') ? '' : '/') + url;
 }
@@ -158,7 +162,10 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const script = new vm.Script(read('.gen/server.js').toString('utf8'), { filename: 'server.js' });
   let shell;
   try { shell = read('shell.html').toString('utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; shell = read('index.html').toString('utf8'); }
-  const capture = readFileSync(new URL('./capture.js', import.meta.url), 'utf8').trim();
+  const base = /<base href="([^"]*)">/.exec(shell)?.[1] ?? '/';
+  // The rendered head combines the shell's scheme bootstrap with its capture script.
+  shell = shell.replace(/<script data-exact-scheme>[\s\S]*?<\/script>\n/, '');
+  const capture = (readFileSync(new URL('../web/scheme.js', import.meta.url), 'utf8') + readFileSync(new URL('./capture.js', import.meta.url), 'utf8')).trim();
   // A dist file once; a wasm compiled once, instantiated per render.
   const cache = new Map();
   const files = p => { let v = cache.get(p); if (!v) { v = read(p.replace(/^\.?\//, '')); if (p.endsWith('.wasm')) v = new WebAssembly.Module(v); cache.set(p, v); } return v; };
@@ -167,11 +174,11 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const name = unesc(/<title>([^<]*)<\/title>/.exec(shell)?.[1] ?? '');
   // The head's fields a crawler reads after the title and viewport, as page.rs `page_head` writes them.
   const crawled = (out, location) => {
-    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v)}">`, title = out.title ?? name;
-    const canonical = out.canonical ? crawlable(out.canonical, out.origin) : null, image = out.image ? crawlable(out.image, out.origin) : null;
+    const meta = (key, n, v) => `<meta ${key}="${n}" content="${esc(v, true)}">`, title = out.title ?? name;
+    const canonical = out.canonical ? crawlable(out.canonical, out.origin, base) : null, image = out.image ? crawlable(out.image, out.origin, base) : null;
     const url = canonical ?? (out.origin ? crawlable(location, out.origin) : null);
     return (out.description ? meta('name', 'description', out.description) : '') + (out.robots ? meta('name', 'robots', out.robots) : '')
-      + (canonical ? `<link rel="canonical" href="${esc(canonical)}">` : '')
+      + (canonical ? `<link rel="canonical" href="${esc(canonical, true)}">` : '')
       + meta('property', 'og:type', 'website') + meta('property', 'og:site_name', name) + meta('property', 'og:title', title)
       + (out.description ? meta('property', 'og:description', out.description) : '') + (url ? meta('property', 'og:url', url) : '')
       + (image ? meta('property', 'og:image', image) : '')
@@ -184,16 +191,16 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   // checkpoint.
   // The root carries what the build wrote on it: `data-audio-session` (LLP 1096 D7). The root, the entry and the
   // sheet are found in `seen`, outside every script element.
-  const seen = blanked(shell), { ROOT, entry, entryEnd } = shellPlaces(seen);
+  const seen = blanked(shell), { ROOT, entry, entryEnd, entryURL } = shellPlaces(seen);
   const title = shell.indexOf('<title>'), stop = shell.indexOf('>\n', shell.indexOf('<meta name="viewport"', title)) + 2;
   const root = ROOT?.index ?? -1, rootAttrs = ROOT?.[1] ?? '';
   // The build's preloads are before its sheet; after it, `host.web.head`'s entries are the app's, left as written.
   const sheetAt = seen.indexOf('<style>', stop), early = sheetAt < 0 || sheetAt > root ? root : sheetAt;
-  const viewportMeta = esc(/<meta name="viewport" content="([^"]*)"/.exec(shell)?.[1] ?? 'width=device-width, initial-scale=1');
+  const viewportMeta = esc(/<meta name="viewport" content="([^"]*)"/.exec(shell)?.[1] ?? 'width=device-width, initial-scale=1', true);
   // A page's `lang` and `dir` are the strings table the render resolved (LLP 1060 D4: `__start`'s `language`); with no
   // table, the shell's `lang`, which the build wrote from the manifest's (LLP 1115.000 D4.6), and `ltr` (page.rs `lang_attr`).
   const shellLang = /<html[^>]* lang="([^"]*)"/.exec(shell)?.[1] || 'en-US';
-  const htmlTag = language => language ? `<html lang="${esc(language[0])}" dir="${language[1]}">` : `<html lang="${shellLang}" dir="ltr">`;
+  const htmlTag = language => language ? `<html lang="${esc(language[0], true)}" dir="${language[1]}">` : `<html lang="${shellLang}" dir="ltr">`;
   // A fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs) is the system scheme a page renders in.
   const fixedScheme = /<meta name="color-scheme" content="(light|dark)">/.exec(seen)?.[1];
   // The shell's sheet as rules, when the build analyzed it: a page then carries only those its document can match, after
@@ -201,10 +208,11 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   let rules = null;
   try { rules = JSON.parse(read('.gen/page-style.json').toString('utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const sheet = rules ? /<style>[\s\S]*?<\/style>\n?/ : /(?!)/;
-  const rebase = head => generation ? withGenerationBase(head, generation) : head;
+  const rebase = head => generation ? withGenerationBase(head, generation, base) : head;
   // A rendered page paints without the runtime, which only adopts it, so its preloads are low priority (page.rs `push_low`).
   const headOf = (preload, language) => rebase(shell.slice(0, title).replace(/<html[^>]*>/, () => htmlTag(language)) + `<script>${capture}</script>\n`
-    + shell.slice(stop, early).replace(/(<link rel="modulepreload" href="[^"]*")>\n/g, preload ? '$1 fetchpriority="low">\n' : '')
+    // The TypeScript seam's line is the shell's alone: a page loads the seam at its first ask (LLP 1047.003 D6).
+    + shell.slice(stop, early).replace(/<link rel="modulepreload" href="[^"]*" data-exact-asks>\n/g, '').replace(/(<link rel="modulepreload" href="[^"]*")>\n/g, preload ? '$1 fetchpriority="low">\n' : '')
     + shell.slice(early, root).replace(sheet, ''));
   const preloads = (shell.slice(stop, early).match(/<link rel="modulepreload" href="[^"]*">\n/g) ?? []).map(l => l.replace('>', ' fetchpriority="low">')).join('');
   // A realm for one render: a document, a context with the server bundle run in it, and its location, which `begin`
@@ -213,8 +221,8 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const realm = () => {
     const document = createDocument(shell);
     // The bake's page facts (runner/src/page.rs): visible, online, focused, no share sheet or pickers. The
-    // base is the shell's `<base href="/">`, against which the runtime checks that a link navigates (rt.js `navigable`).
-    Object.assign(document, { visibilityState: 'visible', hasFocus: () => true, baseURI: 'http://render.invalid/' });
+    // base is the shell's mount, against which the runtime checks that a link navigates (rt.js `navigable`).
+    Object.assign(document, { visibilityState: 'visible', hasFocus: () => true, baseURI: `http://render.invalid${base}` });
     const location = { pathname: '/', search: '', href: 'http://render.invalid/', origin: 'http://render.invalid' };
     // What the render read that another render may not read alike: how long its answers stay fresh for any reader
     // (http-cache.mjs `FRESH`), and whether a source drew a random number (its only other reading the clock and
@@ -309,46 +317,48 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
     setImmediate(() => { making = false; if (!ahead && render.ahead !== false) ahead = realm(); });
   };
   /** Begin at the page's boot state; `finish` settles its data and composes the document. */
-  async function begin(location, viewport = PAGE) {
+  async function begin(location, viewport = PAGE, faults) {
     const url = new URL(location, 'http://render.invalid');
     const made = ahead ?? realm();
     ahead = null;
     const { ctx, read } = made;
+    if (faults !== undefined) ctx.__exactLaunchFaults = faults;
     Object.assign(made.location, { pathname: url.pathname, search: url.search, href: url.href });
     Object.assign(made.ctx, { innerWidth: viewport.width, innerHeight: viewport.height });
     made.prefers.clear();
     for (const [on, query] of [[fixedScheme ? fixedScheme === 'dark' : viewport.dark, '(prefers-color-scheme:dark)'], [viewport.reducedMotion, '(prefers-reduced-motion:reduce)'], [viewport.reducedTransparency, '(prefers-reduced-transparency:reduce)']]) if (on) made.prefers.add(query);
-    let info;
-    try { info = await ctx.__start(); } catch (error) { made.dispose(); throw error; }
     // The capture script imports the entry by the policy; an interaction
     // page drops the head's modulepreloads, and an undeclared one adds them
     // after its head once its render chose `eager` (page.rs `head_js`).
-    const head = headOf(info.activate !== 'interaction' && info.activate !== 'inferred', info.language);
+    let info, head;
+    try {
+      info = await ctx.__start();
+      head = headOf(info.activate !== 'interaction' && info.activate !== 'inferred', info.language);
+    } catch (error) { made.dispose(); throw error; }
     return { ...info, location, head, dispose: made.dispose, async finish(deadline = DEADLINE) {
       try {
         const out = await ctx.__render(deadline, info.canSetStatus !== false);
         out.failed = [...(out.failed ?? []), ...made.errors];
-        const hero = heroImage(out);
         const activate = info.activate === 'inferred' ? infer(out) : info.activate;
         const late = info.activate === 'inferred' && activate !== 'interaction' ? preloads : '';
-        const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake))}"` : '';
+        const wake = activate === 'interaction' && out.wake.length ? ` data-wake="${esc(JSON.stringify(out.wake), true)}"` : '';
         const fields = `<title>${esc(out.title ?? name)}</title><meta name="viewport" content="${viewportMeta}">${crawled(out, url.pathname + url.search)}`;
         const revalidate = info.activate !== 'never' && (out.outstanding || out.continuing);
-        const checkpoint = `{"location":${JSON.stringify(url.pathname + url.search)},"time":${JSON.stringify(out.time)},"logic":null,"answers":${out.answers},"pending":${JSON.stringify(out.pending)}${out.open.length ? `,"open":${JSON.stringify(out.open)}` : ''}${out.readers.length ? `,"readers":${JSON.stringify(out.readers)}` : ''}${revalidate ? ',"revalidate":true' : ''}}`;
+        const checkpoint = `{"location":${JSON.stringify(url.pathname + url.search)},"time":${JSON.stringify(out.time)},"logic":null,"answers":${out.answers}${out.urls ? `,"urls":${JSON.stringify(out.urls)}` : ''},"pending":${JSON.stringify(out.pending)}${out.open.length ? `,"open":${JSON.stringify(out.open)}` : ''}${out.readers.length ? `,"readers":${JSON.stringify(out.readers)}` : ''}${revalidate ? ',"revalidate":true' : ''}}`;
         const digest = createHash('sha256').update(out.root).digest('hex').slice(0, 16);
         const style = rules ? `<style data-exact-page>${select(rules, tokens(out.root + shell.slice(root)))}</style>\n` : '';
         // A page made per request that waits for the reader names its answers past 1 KB rather than holding them: they
         // are needed only once the reader acts, and the capture script fetches them with the runtime (LLP 1048.007 D10).
-        const deferred = activate === 'interaction' && (info.policy === 'request' || info.policy === 'cached') && checkpoint.length > 1024;
-        const src = deferred ? ` data-src="/.exact/checkpoint/${deferAnswers(checkpoint)}.json"` : '';
-        const body = late => `${fields}\n${late}${style}${hero}<div id="exact-root"${rootAttrs}>${out.root}</div>${shell.slice(root + ROOT[0].length, entry)}`
-          + `<script type="application/vnd.exact.checkpoint" data-digest="${digest}" data-activate="${activate}"${wake}${src}>${deferred ? '' : checkpoint.replace(/</g, '\\u003c')}</script>${shell.slice(entryEnd)}`;
+        const deferred = faults === undefined && activate === 'interaction' && (info.policy === 'request' || info.policy === 'cached') && checkpoint.length > 1024;
+        const src = deferred ? ` data-src="${base}.exact/checkpoint/${deferAnswers(checkpoint)}.json"` : '';
+        const body = late => `${fields}\n${late}${style}${out.hero}<div id="exact-root"${rootAttrs}>${out.root}</div>${shell.slice(root + ROOT[0].length, entry)}`
+          + `<script type="application/vnd.exact.checkpoint" data-digest="${digest}" data-activate="${activate}" data-entry="${entryURL}"${wake}${src}>${deferred ? '' : checkpoint.replace(/</g, '\\u003c')}</script>${shell.slice(entryEnd)}`;
         // A complete page marks html and names the preloads in its head; a streamed head has gone already, so the rest
         // marks it before the body and names them after the head's fields, as page.rs does.
         const whole = late ? headOf(true, info.language) : head;
         // The canvas a bound root background gave the html element (canvas.rs).
         const canvas = ctx.document.documentElement.style.getPropertyValue('--exact-root-background');
-        const htmlAttrs = (out.scrollDocument ? 'data-scrolldocument ' : '') + (canvas ? `style="--exact-root-background:${esc(canvas)}" ` : '');
+        const htmlAttrs = (out.scrollDocument ? 'data-scrolldocument ' : '') + (canvas ? `style="--exact-root-background:${esc(canvas, true)}" ` : '');
         const markedHead = htmlAttrs ? whole.replace('<html ', `<html ${htmlAttrs}`) : whole;
         const mark = [out.scrollDocument && 'document.documentElement.setAttribute("data-scrolldocument","")',
           canvas && `document.documentElement.style.setProperty("--exact-root-background",${JSON.stringify(canvas).replace(/</g, '\\u003c')})`].filter(Boolean).join(';');
@@ -370,6 +380,10 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   }
   const render = async (location, deadline = DEADLINE) => (await begin(location)).finish(deadline);
   render.begin = begin;
+  // Only explicit development metadata permits request fixtures; standalone bundles have none.
+  render.production = true;
+  try { render.production = JSON.parse(read('app.version.json').toString('utf8')).production; }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   render.pages = async ({ name, pattern, source, args }, deadline = DEADLINE) => {
     let made, timer;
     try {
@@ -388,32 +402,6 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   };
   return render;
 }
-
-/** A rendered page's first image, when it loads with the page (no `for` repeats it, LLP 1048.007 D5), is likely its
- * largest paint: it is fetched at high priority and preloaded ahead of the document, as web.dev's LCP guidance has a
- * hero image (HTML's `fetchpriority` and `<link rel="preload" as="image">`). A page whose first image is a lazy row's
- * opens with a list, and has none. The first shown: a route the stack covers is `inert` and hidden, and what it holds
- * is not the page's. Writes the priority into `out.root`; returns the preload link (host/web/src/document_before.rs). */
-function heroImage(out) {
-  const tags = /<(\/?)([a-zA-Z][\w-]*)([^>]*)>/g, covered = [];
-  for (let m; (m = tags.exec(out.root));) {
-    const [, close, tag, attrs] = m, name = tag.toLowerCase();
-    if (close) { covered.pop(); continue; }
-    if (name === 'img') {
-      const src = /\bsrc="([^"]+)"/.exec(attrs)?.[1];
-      if (covered.includes(true) || !src || src.startsWith('data:')) continue;
-      if (/\bloading="lazy"/.test(attrs)) return '';
-      out.root = out.root.slice(0, m.index) + '<img fetchpriority="high"' + out.root.slice(m.index + 4);
-      return `<link rel="preload" as="image" href="${src}">`;
-    }
-    if (VOID.has(name) || attrs.endsWith('/')) continue;
-    // A style's or a script's text is not markup.
-    if (name === 'style' || name === 'script') { tags.lastIndex = Math.max(tags.lastIndex, out.root.indexOf(`</${name}`, tags.lastIndex)); }
-    covered.push(/\sinert(?=[\s=]|$)/.test(attrs) || /visibility:\s*hidden/.test(attrs));
-  }
-  return '';
-}
-const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: a page rendered on the server has no storage (${api}); the reader's page asks it`;
 
@@ -455,17 +443,28 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
   return async function page(location, header) {
     // Laid out for the reader's viewport (LLP 1048.006), and kept per viewport.
     const viewport = viewportOf(header), key = `${location} ${JSON.stringify(viewport)}`;
-    const t = performance.now(), hit = cache.get(key);
+    const query = new URL(location, 'http://render.invalid').searchParams;
+    const driven = render.production === false && query.has('agent') && query.get('failFetch') === '1';
+    let faults;
+    if (driven) {
+      const encoded = header('x-exact-faults') ?? '', bytes = Buffer.from(encoded, 'base64');
+      try {
+        faults = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+        if (!encoded || bytes.length > 65536 || bytes.toString('base64') !== encoded || !faults) throw new Error('missing or invalid fixture header');
+        parseFaults(faults);
+      } catch { return send(header, 'Invalid fetch fixtures.\n', 400, 'no-store'); }
+    }
+    const t = performance.now(), hit = !driven && cache.get(key);
     const asked = directives(header('cache-control')), revalidate = asked.has('no-cache') || asked.has('no-store') || Number(asked.get('max-age')) === 0;
     if (hit && hit.until > Date.now() && !revalidate) return send(header, hit.html, hit.status, hit.cacheControl);
-    const begun = await render.begin(location, viewport);
+    const begun = await render.begin(location, viewport, faults);
     reads = !!begun.readsViewport;
     const keep = page => {
       // Keep a `cached` route's page 60 s and share it, unless its render drew randomness: a draw is the device's (LLP
       // 1069.005 D2), and a shared page gives every reader the same one. Keep a `request` route's page as long as what
       // it was made of (`keep`). Keep nothing for a request that asks no cache to store its response (RFC 9111
       // §5.2.1.5), as the render host does.
-      const ms = page.status !== 200 || asked.has('no-store') ? 0 : shared(page) ? 60000 : page.policy === 'request' ? page.keep : 0;
+      const ms = driven || page.status !== 200 || asked.has('no-store') ? 0 : shared(page) ? 60000 : page.policy === 'request' ? page.keep : 0;
       if (ms > 0) { if (cache.size >= 64) cache.delete(cache.keys().next().value); cache.set(key, { html: page.html, status: page.status, until: Date.now() + ms, cacheControl: shared(page) ? 'public, max-age=0, s-maxage=60' : 'no-store' }); }
       log(`render ${page.location} ${page.status} ${(performance.now() - t).toFixed(1)}ms bytes=${page.html.length}${page.flushed ? ' flushed' : ''}`);
       for (const failure of page.failed) log(`  ${page.location}: resource ${failure}`);
@@ -484,18 +483,22 @@ export function pageServer(dist, render = renderer(dist), log = console.log) {
         const put = text => new Promise(ok => { if (!z) { out.enqueue(new TextEncoder().encode(text)); ok(); } else { z.write(text); z.flush(constants.BROTLI_OPERATION_FLUSH, ok); } });
         await put(begun.head);
         const page = await begun.finish().catch(e => ({ error: e }));
-        await put(page.error ? "<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n" : page.rest);
+        await put(page.error ? UNAVAILABLE : page.rest);
         if (z) await new Promise(ok => { z.on('end', ok); z.end(); });
         try { out.close(); } catch {}
         if (page.error) log(`render ${location} 500 ${page.error.message}`); else keep({ ...page, flushed: true });
       }, cancel() { z?.destroy?.(); } });
-      const headers = varies({ 'content-type': 'text/html; charset=utf-8', 'cache-control': begun.policy === 'request' ? 'no-store' : 'private, no-cache' });
+      const headers = varies({ 'content-type': 'text/html; charset=utf-8', 'cache-control': driven || begun.policy === 'request' ? 'no-store' : 'private, no-cache' });
       if (br) headers['content-encoding'] = 'br';
       return { status: 200, headers, body };
     }
-    const page = await begun.finish();
+    const page = await begun.finish().catch(error => ({ error }));
+    if (page.error) {
+      log(`render ${location} 500 ${page.error.message}`);
+      return send(header, `<!doctype html>\n${UNAVAILABLE}`, 500, 'no-store');
+    }
     keep(page);
-    return send(header, page.html, page.status, shared(page) && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
+    return send(header, page.html, page.status, !driven && shared(page) && page.status === 200 ? 'public, max-age=0, s-maxage=60' : 'no-store');
   };
 }
 
@@ -539,7 +542,7 @@ export function sitePages(dist, { pageServer: makeServer = (read, id) => pageSer
   const pages = async (id, location, header) => {
     // Uncompressed (no `accept-encoding`): `serve` compresses what it sends. Laid out for the viewport the request
     // tells (`viewportOf`, LLP 1048.006), and a navigation's head sent before the render (`sec-fetch-dest`).
-    const asked = name => name === 'cache-control' || name === 'user-agent' || name === 'sec-fetch-dest' || name.startsWith('sec-ch-') || name === 'viewport-width' ? header(name) : undefined;
+    const asked = name => name === 'x-exact-faults' || name === 'cache-control' || name === 'user-agent' || name === 'sec-fetch-dest' || name.startsWith('sec-ch-') || name === 'viewport-width' ? header(name) : undefined;
     try {
       const render = serverOf(id ?? null), page = render && await render(location, asked);
       if (!page) return null;
@@ -582,7 +585,7 @@ if (import.meta.main) {
       const files = buildPageFiles(dist, pages, routes);
       let origin = null;
       for (const [i, p] of pages.entries()) {
-        const page = await render(p.location);
+        const page = await render(withBase(p.location, buildBase(dist)));
         docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
         origin ??= page.origin;
         const file = files[i];
@@ -592,9 +595,9 @@ if (import.meta.main) {
         for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
         for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
       }
-      writeCrawlerFiles(dist, docs, origin, routes);
+      writeCrawlerFiles(dist, docs, origin, routes, buildBase(dist));
     } else for (const location of args.slice(1)) {
-      const page = await render(location);
+      const page = await render(withBase(location, buildBase(dist)));
       for (const failure of page.failed) console.error(`${location}: resource ${failure}`);
       process.stdout.write(page.html);
     }

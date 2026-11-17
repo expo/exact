@@ -71,10 +71,10 @@ pub struct File {
     pub color_profiles: Vec<ColorProfileDecl>,
     /// The app's `theme` (LLP 1095 D4): the root file's only.
     pub theme: Option<ThemeDecl>,
-    /// The app's design, `app.tamber` (LLP 1121 D2), set by the driver.
+    /// The app's design, `app.forma` (LLP 1121 D2), set by the driver.
     pub design: Option<DesignSource>,
     /// The designs of the packages the app's sources link (LLP 1121 D11),
-    /// each `<name>.tamber` beside its package's entry, set by the driver.
+    /// each `<name>.forma` beside its package's entry, set by the driver.
     pub package_designs: Vec<DesignSource>,
     /// The identities of the exported library components (LLP 1139 D0):
     /// each component a private package that ships a design declares in
@@ -1087,7 +1087,9 @@ pub fn text_input_type(value: &Expr) -> bool {
     }
 }
 
-pub use crate::part::{part_attr, PLACEHOLDER_COLOR};
+pub use crate::part::{
+    part_attr, BACKDROP_COLOR, PLACEHOLDER_COLOR, VIEW_TRANSITION_NEW, VIEW_TRANSITION_OLD,
+};
 
 /// `name=expr`.
 #[derive(Debug, Clone, PartialEq)]

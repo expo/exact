@@ -215,6 +215,7 @@ final class CanvasesHost {
     /// Load the module — once, after the first painted frame, only when a
     /// canvas exists. Returns whether a frame source is now wanted.
     func loadIfNeeded() {
+        updatePerformanceTimer()
         guard !entries.isEmpty, session?.firstDrawMs != nil else { return }
         // Each artifact the first time one of its canvases exists (LLP 1009
         // D6). A declared module loads on the next turn, after the frame that
@@ -265,8 +266,7 @@ final class CanvasesHost {
         e.id = bytes.withUnsafeBufferPointer { m.create($0.baseAddress, bytes.count, ptr, w, h) }
         e.presentable = e.id != 0
         if e.id == 0 { FileHandle.standardError.write(Data("exact gpu: \(m.error())\n".utf8)); return }
-        e.performance = publishers[e.name] === e && session?.canvasPerformanceRequested(e.name) == true
-        if e.performance { _ = m.performanceReporting?(e.id, true) }
+        e.performance = false
         e.module = m
         updatePerformanceTimer()
         lifecycle.deliver(e.id, module: m)
@@ -429,7 +429,7 @@ final class CanvasesHost {
         let scale = CGFloat(metal.layer?.contentsScale ?? 2)
         let w = Int((metal.bounds.width * scale).rounded()), h = Int((metal.bounds.height * scale).rounded())
         guard w > 0, h > 0,
-              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32),
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32)?.retagging(with: .sRGB),
               let data = rep.bitmapData
         else { return nil }
         rep.size = metal.bounds.size
@@ -457,7 +457,7 @@ final class CanvasesHost {
     var visible: Bool {
         guard let viewport = session?.presenter.viewport else { return false }
         // An unmounted view wants no frames (LLP 1031 D3).
-        return !NSApplication.shared.isHidden && (viewport.window?.occlusionState.contains(.visible) ?? false)
+        return !NSApplication.shared.isHidden && (viewport.window?.screenOcclusionState.contains(.visible) ?? false)
     }
 
     /// Whether any surface has something to render — or an edit is under a

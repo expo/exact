@@ -1151,3 +1151,33 @@ fn a_box_moving_when_a_control_is_measured_stays_where_it_shows() {
         .unwrap();
     assert_eq!(shown.y, moved, "it ends at the measured box");
 }
+
+/// LLP 1003.001 D9 on Apple: a hidden page releases what is held at its
+/// commit and holds nothing new; hiding never clears `presented`.
+#[test]
+fn a_hidden_page_releases_holds_at_their_commit_and_holds_nothing() {
+    let mut host = boot();
+    let go = id(&host, "go");
+    host.dispatch_at(go, Event::Press, 100.0);
+    assert_eq!(opacity(&host), 1.0, "held");
+    let hidden = exact_runner::Page {
+        hidden: true,
+        ..host.runner.page()
+    };
+    host.advance(400.0);
+    let out = host.set_page(hidden);
+    assert!(out.contains("\"ops\""), "{out}");
+    assert!(
+        (opacity(&host) - 0.7).abs() < 1e-9,
+        "timed from its commit: {}",
+        opacity(&host)
+    );
+    host.dispatch_at(go, Event::Press, 500.0);
+    let back = opacity(&host);
+    host.advance(600.0);
+    assert!(
+        opacity(&host) > back,
+        "a commit while hidden starts at once"
+    );
+    assert!(host.runner.presented().seen);
+}

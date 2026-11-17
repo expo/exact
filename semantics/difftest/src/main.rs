@@ -19,6 +19,7 @@
 //!   difftest lowering [--seed S] [--count N] [--batch B]
 //!   difftest lowering-corpus [<dir|file>…]     the compiler's bytecode against the
 //!                                              Lean VM model and `eval` (semantics/README.md)
+//!   difftest accounting                    executable-row resource bounds and counters
 //!   difftest expansion [<dir|file>…] [--seed S] [--count N] [--batch B]
 //!                                        component expansion against the Lean expander
 //!                                        and the component-level semantics
@@ -29,8 +30,8 @@
 //! compiler accepts.
 
 use contract_difftest::{
-    check, corpus, expectations, gen, js, leanrun, lowering, script::Case, shrink, work_dir,
-    Outcome, Verdict,
+    accounting, check, corpus, expectations, gen, js, leanrun, lowering, script::Case, shrink,
+    work_dir, Outcome, Verdict,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,6 +47,7 @@ const USAGE: &str = "usage:
   difftest types [--seed <u64>] [--count <n>]
   difftest show <seed>
   difftest apps [--write]
+  difftest accounting
   difftest lowering [--seed <u64>] [--count <n>] [--batch <n>]
   difftest lowering-corpus [<dir|file>…]
   difftest expansion [<dir|file>…] [--seed <u64>] [--count <n>] [--batch <n>]";
@@ -62,6 +64,7 @@ fn main() -> ExitCode {
         Some("arith") => run_arith(&args[1..]),
         Some("types") => run_types(&args[1..]),
         Some("apps") => run_apps(&args[1..]),
+        Some("accounting") if args.len() == 1 => accounting::run(),
         Some("lowering") => run_lowering(&args[1..]),
         Some("lowering-corpus") => run_lowering_corpus(&args[1..]),
         Some("expansion") => run_expansion(&args[1..]),

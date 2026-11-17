@@ -35,7 +35,7 @@ export function carriedChoice(fresh: string, tokens: number, offers: { items?: n
   ];
 }
 
-// The choice on the server (tamber/1.18 `choose`, #6's follow-up): what the card has chosen is sent as it is ticked,
+// The choice on the server (forma/1.18 `choose`, #6's follow-up): what the card has chosen is sent as it is ticked,
 // so a reload or another client starts from it. The card shows a base, the server's choice as this page took it (or
 // the card's default when there was none), with the page's flips over it. The page's own `choose` answers leave the
 // base be (its flips already say so). Another client's choice since replaces the base, and the page's flips on that

@@ -451,6 +451,7 @@ impl TextMeasurer for CellMeasurer {
         TextMetrics {
             width: measured.width as f32 * COLUMN,
             height: measured.rows as f32 * ROW,
+            pending: false,
             first_baseline: Some(ROW * 0.75),
         }
     }

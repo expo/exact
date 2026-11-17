@@ -17,6 +17,13 @@
 //   a file input with `accept="image/*"` and `capture`, clicked inside the
 //   press; the chosen image is written as `takePhoto`'s is. A phone's
 //   browser opens its camera; a desktop's, with no camera UI, its chooser.
+// - `recordVideoWithCameraApp` is the same input with `accept="video/*"`
+//   (LLP 1133.008.000 D2). The chosen `File` becomes the path's entry by
+//   reference, as a picked file is, so the page never reads the video's
+//   bytes; its facts are a `<video>` element's `loadedmetadata`.
+// - A call let go publishes nothing (LLP 1133.008.000 D7): the chooser stays
+//   up, as the browser's must, and what the person chooses is dropped. The
+//   store's transaction that publishes the file reads the let-go mark.
 // - Under the agent no camera exists: the viewfinder shows the agent's
 //   picture, mirrored for a `user` camera, and `takePhoto` writes the
 //   picture's bytes unchanged (§9). The picture is the package's test card,
@@ -89,8 +96,11 @@ export function implementation({ changed, agent, log, tracks, files }) {
   const say = line => log?.(`camera: ${line}`);
   /** Each viewfinder by its node's id: what the runner said of it and what it consumes. */
   const views = new Map();
-  let picture = null, pictureURL = null, pictureBitmap = null, taken = 0, cameraAppUp = false;
-  const photos = [];
+  let picture = null, pictureURL = null, pictureBitmap = null, taken = 0;
+  // The camera app's call while it is up or its file not yet published: its number, which `cancel` names, and
+  // whether it was let go (LLP 1133.008.000 D7). One at a time.
+  let cameraApp = null;
+  const photos = [], videos = [];
   const viewOf = id => {
     if (!views.has(id)) views.set(id, { el: null, src: null, changes: 0, reports: 0, shown: false, madeBy: 'app', sub: null });
     return views.get(id);
@@ -169,21 +179,109 @@ export function implementation({ changed, agent, log, tracks, files }) {
     return new Promise((done, fail) => canvas.toBlob(b => b ? done(b) : fail(new Error('the frame did not encode')), 'image/jpeg', 0.92));
   }
 
-  /** Photo `blob` written where the call says (`path` with its format's extension, else `app:/tmp/camera/<n>`), as
-   *  `Photo`: sized as it is shown. `track` is the one it was taken from, null for the camera app's. */
-  async function kept(blob, args, track) {
+  /** Where a file of format `ext` goes: the call's `path` with the extension, else `app:/tmp/camera/<n>.<ext>`. */
+  const placed = (args, ext) => args?.path ? (args.path.endsWith(`.${ext}`) ? args.path : `${args.path}.${ext}`) : `app:/tmp/camera/${++taken}.${ext}`;
+
+  /** Photo `blob` written where the call says, as `Photo`: sized as it is shown. `track` is the one it was taken
+   *  from, null for the camera app's, whose `turn` a `cancel` may let go before the write commits. */
+  async function kept(blob, args, track, turn = null) {
     const type = blob.type || 'image/jpeg', ext = MIME[type] ?? 'jpg';
-    const path = args?.path ? (args.path.endsWith(`.${ext}`) ? args.path : `${args.path}.${ext}`) : `app:/tmp/camera/${++taken}.${ext}`;
+    const path = placed(args, ext);
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let width = 0, height = 0;
     try { const b = await createImageBitmap(blob); width = b.width; height = b.height; b.close?.(); } catch { /* sized by nothing */ }
-    try { await files.write(path, bytes); }
-    catch (e) { say(`${path} not written: ${e.message}`); return { error: 'UnknownError' }; }
+    try {
+      if (turn) await files.put(path, bytes.slice().buffer, () => letGo(turn));
+      else await files.write(path, bytes);
+    } catch (e) {
+      if (e?.name === 'AbortError') return { error: 'AbortError' };
+      say(`${path} not written: ${e.message}`); return { error: 'UnknownError' };
+    }
     // The journal names each photo's SHA-256, which a drive compares with the agent's picture (§9).
     const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(b => b.toString(16).padStart(2, '0')).join('');
     say(`took ${path} (${bytes.length} bytes, ${width}×${height}, sha256 ${sha})`);
     photos.push({ path, sha256: sha, track, origin: 'app' });
     return { path, type, size: bytes.length, width, height };
+  }
+
+  /** The refusal a let-go call's write meets inside its transaction, else none. */
+  const letGo = turn => turn.letGo ? Object.assign(new Error('the call was let go'), { name: 'AbortError' }) : undefined;
+
+  /** A video's facts as a `<video>` reads them: `duration` (0 when not finite), `videoWidth`, `videoHeight`; all 0 on
+   *  its `error`. The object URL is revoked when they arrive, on the error, or when `turn` is let go. */
+  function videoFacts(file, turn) {
+    return new Promise(done => {
+      const url = URL.createObjectURL(file), video = document.createElement('video');
+      const end = facts => { video.removeAttribute('src'); video.load(); URL.revokeObjectURL(url); turn.stop = null; done(facts); };
+      turn.stop = () => end(null);
+      video.preload = 'metadata';
+      video.muted = true;
+      video.addEventListener('loadedmetadata', () => end({
+        duration: Number.isFinite(video.duration) ? video.duration : 0, width: video.videoWidth, height: video.videoHeight,
+      }), { once: true });
+      video.addEventListener('error', () => end({ duration: 0, width: 0, height: 0 }), { once: true });
+      video.src = url;
+    });
+  }
+
+  /** Video `file` made the entry of the path the call says, by reference (the browser keeps the `File`; the page reads
+   *  none of it), as `Video`. Under the agent `file` is the package's clip, listed for `state.extensions`. */
+  async function keptVideo(file, args, turn) {
+    const type = file.type || 'video/mp4', ext = type === 'video/quicktime' ? 'mov' : type === 'video/webm' ? 'webm' : 'mp4';
+    const path = placed(args, ext);
+    const facts = await videoFacts(file, turn);
+    if (!facts || turn.letGo) return { error: 'AbortError' };
+    try { await files.put(path, file, () => letGo(turn)); }
+    catch (e) {
+      if (e?.name === 'AbortError') return { error: 'AbortError' };
+      // A store over the browser's quota keeps what the path had (QuotaExceededError, in the journal as the browser says it).
+      if (e?.name === 'QuotaExceededError') { say(`${path} not written: ${e.name}: ${e.message}`); return { error: 'UnknownError' }; }
+      // WebKit's private browsing stores no Blob in IndexedDB: the bytes instead, read whole, which an upload reads
+      // whole too (at most 64 MiB, storage-fs.js `requestBody`).
+      say(`${path}: the store took no File (${e?.name ?? 'refused'}); writing its ${file.size} bytes`);
+      try { await files.put(path, await file.arrayBuffer(), () => letGo(turn)); }
+      catch (again) {
+        if (again?.name === 'AbortError') return { error: 'AbortError' };
+        say(`${path} not written: ${again?.name}: ${again?.message}`); return { error: 'UnknownError' };
+      }
+    }
+    if (agent) {
+      const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))].map(b => b.toString(16).padStart(2, '0')).join('');
+      videos.push({ path, sha256: sha, origin: 'app' });
+      say(`recorded ${path} (${file.size} bytes, the agent's clip, sha256 ${sha})`);
+    } else say(`recorded ${path} (${file.size} bytes)`);
+    return { path, type, size: file.size, ...facts };
+  }
+
+  /** The web's system camera UI for `accept`, `<input type="file" capture>`, opened inside the press (`"gesture":
+   *  true`, the browser's rule for a file input's `click()`); `keep` publishes what the person chose. A browser with no
+   *  camera UI shows its file chooser, which reads no `capture`. Cancelled, `AbortError`. */
+  function openCameraApp(accept, args, call, keep) {
+    if (cameraApp) return { error: 'InvalidStateError' };
+    // Outside a press the browser opens nothing and says nothing, so the call would never be answered.
+    if (navigator.userActivation && !navigator.userActivation.isActive) { say('camera app: not inside a press'); return { error: 'NotAllowedError' }; }
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    // Unsaid, the attribute's empty value: the browser's camera of choice.
+    input.setAttribute('capture', args?.facingMode ?? '');
+    input.style.display = 'none';
+    document.body.append(input);
+    const turn = cameraApp = { request: call?.request, letGo: false, stop: null };
+    const chosen = new Promise(done => {
+      input.addEventListener('change', () => done(input.files?.[0] ?? null), { once: true });
+      input.addEventListener('cancel', () => done(null), { once: true });
+    });
+    input.click();
+    say('camera app shown');
+    return chosen.then(async file => {
+      input.remove();
+      try {
+        if (!file) { say('camera app: cancelled'); return { error: 'AbortError' }; }
+        if (turn.letGo) { say('camera app: let go; the choice dropped'); return { error: 'AbortError' }; }
+        return await keep(file, turn);
+      } finally { if (cameraApp === turn) cameraApp = null; }
+    });
   }
 
   return {
@@ -221,37 +319,32 @@ export function implementation({ changed, agent, log, tracks, files }) {
       catch (e) { say(`takePhoto: ${e.message}`); return { error: /Error$/.test(e?.name ?? '') ? e.name : 'UnknownError' }; }
       return kept(blob, args, args.track);
     },
-    /** The web's system camera UI, `<input type="file" accept="image/*" capture>`, opened inside the press
-     *  (`"gesture": true`, the browser's rule for a file input's `click()`). A browser with no camera UI shows its
-     *  file chooser, which reads no `capture`. Cancelled, `AbortError`. */
+    /** The web's system camera UI for a photo, `<input type="file" accept="image/*" capture>`. */
     takePhotoWithCameraApp(args, call) {
       if (agent) {
         if (call?.preferred?.tap !== 'take') { say('camera app: cancelled (the agent\'s sheet)'); return { error: 'AbortError' }; }
         return agentPicture().then(url => fetch(url)).then(r => r.blob()).then(b => kept(b.type ? b : new Blob([b], { type: 'image/jpeg' }), args, null));
       }
-      if (cameraAppUp) return { error: 'InvalidStateError' };
-      // Outside a press the browser opens nothing and says nothing, so the call would never be answered.
-      if (navigator.userActivation && !navigator.userActivation.isActive) { say('camera app: not inside a press'); return { error: 'NotAllowedError' }; }
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-      // Unsaid, the attribute's empty value: the browser's camera of choice.
-      input.setAttribute('capture', args?.facingMode ?? '');
-      input.style.display = 'none';
-      document.body.append(input);
-      cameraAppUp = true;
-      const chosen = new Promise(done => {
-        input.addEventListener('change', () => done(input.files?.[0] ?? null), { once: true });
-        input.addEventListener('cancel', () => done(null), { once: true });
-      });
-      input.click();
-      say('camera app shown');
-      return chosen.then(file => {
-        input.remove();
-        cameraAppUp = false;
-        if (!file) { say('camera app: cancelled'); return { error: 'AbortError' }; }
-        return kept(file.type ? file : new Blob([file], { type: 'image/jpeg' }), args, null);
-      });
+      return openCameraApp('image/*', args, call, (file, turn) => kept(file.type ? file : new Blob([file], { type: 'image/jpeg' }), args, null, turn));
+    },
+    /** The web's system camera UI for a video, `<input type="file" accept="video/*" capture>` (LLP 1133.008.000 D2):
+     *  the browser's camera takes no limit or quality, so `maxDuration` asks nothing here. */
+    recordVideoWithCameraApp(args, call) {
+      if (agent) {
+        if (call?.preferred?.tap !== 'take') { say('camera app: cancelled (the agent\'s sheet)'); return { error: 'AbortError' }; }
+        return import('./clip.js').then(({ clip }) => {
+          const bytes = Uint8Array.from(atob(clip), c => c.charCodeAt(0));
+          return keptVideo(new File([bytes], 'clip.mp4', { type: 'video/mp4' }), args, { letGo: false, stop: null });
+        });
+      }
+      return openCameraApp('video/*', args, call, (file, turn) => keptVideo(file, args, turn));
+    },
+    /** The send `request` was let go (LLP 1133.016 D15 item 2): what its camera app's person chooses is dropped. */
+    cancel(request) {
+      if (!cameraApp || cameraApp.request !== request) return;
+      cameraApp.letGo = true;
+      cameraApp.stop?.();
+      say('camera app: let go');
     },
     async getPhotoCapabilities(args) {
       const entry = tracks.lookup(args?.track);
@@ -268,8 +361,9 @@ export function implementation({ changed, agent, log, tracks, files }) {
       } catch { return plain; }
     },
     picture: async () => ({ path: picture ?? '' }),
-    /** What `state.extensions` lists as this implementation's (D8 item 9): each photo, by path and SHA-256. */
-    state: () => ({ photos }),
+    /** What `state.extensions` lists as this implementation's (D8 item 9): each photo, and each of the agent's videos
+     *  (LLP 1133.008.000 D9), by path and SHA-256. */
+    state: () => ({ photos, videos }),
     /** Under the agent: the picture `prefer extension camera.picture={"path":…}` names (D8 item 9). */
     preferred(values) {
       const named = values?.picture?.path;

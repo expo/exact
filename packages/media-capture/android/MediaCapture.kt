@@ -189,19 +189,36 @@ class MediaCaptureModule internal constructor(
     override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
         val t = tracks[id] ?: throw TrackError("NotFoundError")
         if (t.readyState == "ended") { consumer.ended(); return {} }
-        t.consumers[consumer] = Unit
-        when {
-            t.active -> {
-                consumer.live(t.audio)
-                if (t.muted) consumer.muted(t.muteReason ?: "idle")
-            }
-            // While a recognizer holds the microphone exclusively, a track stays idle (LLP 1133.012 D8).
-            origin == "app" && t.enabled && (!t.used || start) && !context.tracks.held("audio") -> activate(t)
-            else -> consumer.muted(t.muteReason ?: "idle")
-        }
-        return {
+        val leave = {
             if (t.consumers.remove(consumer) != null && t.consumers.isEmpty() && t.active) deactivate(t)
         }
+        val active = t.active
+        val used = t.used
+        val platformMute = t.platformMute
+        t.consumers[consumer] = Unit
+        try {
+            when {
+                t.active -> {
+                    consumer.live(t.audio)
+                    if (t.muted) consumer.muted(t.muteReason ?: "idle")
+                }
+                // While a recognizer holds the microphone exclusively, a track stays idle (LLP 1133.012 D8).
+                origin == "app" && t.enabled && (!t.used || start) && !context.tracks.held("audio") -> activate(t)
+                else -> consumer.muted(t.muteReason ?: "idle")
+            }
+        } catch (e: Throwable) {
+            if (!active && t.active) {
+                t.consumers.remove(consumer)
+                t.used = used
+                t.platformMute = platformMute
+                val idle = t.muted && t.muteReason == "idle"
+                deactivate(t)
+                // Activation can fail before settle changes idle, but live callbacks already ran.
+                if (idle) each(t) { it.muted("idle") }
+            } else leave()
+            throw e
+        }
+        return leave
     }
 
     override fun leased(id: String) = tracks[id]?.active == true

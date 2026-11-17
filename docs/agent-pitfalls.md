@@ -21,6 +21,25 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Layout
 
+- **A video placed with `inset=0` does not fill its box.** An absolutely
+  positioned `video` with `inset=0` and no `width` or `height` is 300×150 until
+  its metadata arrives, then the stream's natural size, and an adaptive stream's
+  picture grows and shrinks with each rendition. Cause: CSS sizes a replaced
+  element whose width and height are auto by its natural size, and opposing
+  insets do not stretch it (CSS 2.1 §10.3.8, §10.6.5; an `image` likewise).
+  Chrome and iOS agree. Fix: `width="100%" height="100%"` with `object-fit`.
+  **Candidate diagnostic** (an absolutely positioned `video` or `image` with
+  opposing insets and an auto size on that axis). (expo/exact#648, web and iOS
+  simulator, 2026-11-15.)
+
+- **Inline runs with nothing between them never wrap apart.** Chips written as
+  adjacent runs (`text "one" padding="4px 8px" margin-right=6`, then `text
+  "two" …`) stay on one line and run off the edge. Cause: CSS breaks a line
+  only at a soft wrap opportunity, and two inline boxes with no white space
+  between them have none (CSS Text 3 §5), so the runs are one word; the web
+  does the same, and the margins still apply. Fix: a `text " "` run between
+  each pair. (expo/exact#649, web and iOS simulator, 2026-11-15.)
+
 - **A search field pushes a header button off a phone.** Under `--chrome agent`,
   the authored header lays out in the page. A search field with no width constraint
   can keep its intrinsic width even when the heading has `flex=1`. Give the field
@@ -83,7 +102,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex-basis` of 0 is never smaller than the border), so a calendar's today with
   `border-width=(isToday ? 2 : 0)` is wider and taller than its neighbours and
   the days after it sit off the columns above. Fix: give every cell the border and vary
-  its colour, `border-width=2 border-color=(isToday ? "-exact-label" : "transparent")`.
+  its colour, `border="2px solid" border-color=(isToday ? "-exact-label" : "transparent")`.
   (Bake-off round 28, mood journal: 50.9 points against 47.4 on iOS; Chrome alike, with
   `border-box` too.)
 
@@ -156,6 +175,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   deliberately light-only design, write `color-scheme="light"` on the root, which
   holds the whole app in light as `overrideUserInterfaceStyle` does. (Shelf port,
   2026-10-09.)
+- **A menu opens white on a dark page.** Cause: `scheme=fixed` tokens colour the
+  boxes they are written on, but the app's scheme is still the device's, so the
+  platform's menus, sheets and alerts stay light. Fix: an always-dark design says
+  `"userInterfaceStyle": "dark"` in `app.json` (or `color-scheme="dark"` on the
+  root); a menu in the brand's colours writes `background-color` and `color` on its
+  `popover` column, which the web draws and its rows take. (#552, 2026-11-14.)
 
 - **The app is wider than the window, and its tests still pass.** A box with
   `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
@@ -333,6 +358,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   its action: that misses a return which lands before the hide's timer has fired
   (`prefer visibility-state hidden` then `visible` with no clock step between).
   (Web and iOS simulator, 2026-10-06.)
+- **A hidden or frozen page fact under a drive is not a suspended process.**
+  `prefer visibility-state hidden` changes visibility and the background fact;
+  `prefer frozen true` applies the runner transitions defined for `frozen`, such
+  as stopping a transport sequence. A later `clock +N` still runs every due
+  timer and hatch callback, and replies and native announcements can land. Gate
+  authored work on the fact it follows. Test OS suspension and its coalescing or
+  wake behavior on a real host, outside the drive.
 - **A jump gated on the tab that shows runs again on every return to it.** A
   tab's panel and its list stay mounted while another tab shows, so the list
   keeps the reader's place, as a `UITabBarController`'s tabs and SwiftUI's
@@ -444,9 +476,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   screen is `host.ios.launchImage` centred on `background_color` (`color_scheme_dark`'s
   `background_color` in dark mode); unset, the platform's background (the grouped grey
   under a first route that scrolls a grouped list). Android's launch window takes the same
-  two colours. It is gone before a screenshot can be taken: record one
-  (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl launch`) and read its
-  frames (the euxy port's white launch, 2026-10-21).
+  two colours, with the launcher icon on them from Android 12 unless
+  `host.android.launchImage` names a picture or `false`. It is gone before a screenshot
+  can be taken: record one (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl
+  launch`; `adb shell screenrecord` on Android) and read its frames (the euxy port's white
+  launch, 2026-10-21).
 
 - **A sticky child under the bar covers the first row at rest.** Cause: a `top` written
   as the bar's height to clear it (React Conf's day picker, `top=114`). A route's
@@ -486,10 +520,13 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
   (docs/contract-for-agents.md, "Routes and web documents"). The compiler refuses
-  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
+  a name nothing in the route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostic:** the
   compiler could refuse a named scroller that is not right after the `header` (an
-  iOS-only rule today, so not refused); the hosts could journal a route whose
-  content overflows with nothing to scroll it (QUEUE.md).
+  iOS-only rule today, so not refused). Apple's `logs` journals `route-overflow`
+  after first pixel at the settled window offer when no scroller reaches the
+  route's in-flow overflow: an ancestor's or the document's stops at a clip or a
+  native block, and never moves content that stays in the route's box out of its
+  padding. A fitting layout clears suppression.
 - **The root screen has no native bar, and the log says `navigationKey "0" matches no
   route`.** Cause: the list route is keyed by a name (`navigationKey="items"`, as the
   `list-detail` and `rest` patterns key it) while the root names the visit,
@@ -531,7 +568,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   Cause: a brand written as hex on a page, a card or text (`#f3f5f1`, `#ffffff`,
   `#18392d`); it stays the same in dark mode while the platform's text and controls
   turn dark. Four of round 4's five hex-heavy bake-off apps broke so. Fix: write no
-  colour (the accent is the platform's blue; a brand is an `app.tamber`); surfaces and text
+  colour (the accent is the platform's blue; a brand is an `app.forma`); surfaces and text
   are roles (`-exact-label`) or unsaid. Look in both schemes: `"prefer prefers-color-scheme dark"` as a drive's
   first op, or `prefer prefers-color-scheme dark` before a test's first
   observation. A later `prefer prefers-color-scheme light` switches back.
@@ -549,7 +586,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   not presented; the authored header, tablist and popover paint instead, by default.
   To see the bars, the tab bar and sheets as a person does, drive with `--chrome
   platform` and take `screenshot out.png window`; menus stay the agent's popovers
-  there. On the Mac the same switch shows a `dialog` and a modal route as
+  there (on the Mac, a `role="menu"` popover is painted with its rows 5 points
+  inside its box, as an `NSMenu`'s items are, on each side its author wrote no
+  padding for, and on AppKit's menu panel where its author wrote no surface in
+  any state; a person gets the `NSMenu`, which draws none of the rows' own
+  colours). On the Mac the same switch shows a `dialog` and a modal route as
   sheets and a popover
   that is no menu as AppKit's popover; each is a window of its own, so a plain
   `screenshot` (the viewport's own drawing) leaves it out and says so
@@ -557,6 +598,14 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `EXACT_AGENT=1` and `EXACT_AGENT_FAIL_FETCH`, no socket) shows the native bars
   and menus, its fetches still failing. (Signal Clone, builds 5 and 10; Splitter,
   rough 4 and 11; Recipe Finder, round 27.)
+- **A header with more buttons than the bar has room for loses the rest to UIKit's
+  overflow menu.** UIKit shows the first buttons as bar items and lists the others
+  under a More (…) button: a 402-point bar showed a symbol and two worded buttons
+  of 33. Under `--chrome platform` a `tap` on one of the others is refused (`its bar
+  item is in the navigation bar's overflow menu`): the driver does not open that
+  menu. Fix: write only the buttons that fit, and put the rest in one menu button
+  (a `button` with a `popovertarget`). (#738; iPhone 17 Pro and iPad Pro 11-inch
+  simulators, iOS 27.0, 2026-11-16.)
 - **An `EmptyState`'s button sits at the bottom of the screen.** Cause: the part
   takes the free height it is given, so a `button` written after it lands at that
   space's foot. Fix: indent the button under the `EmptyState` call, its slot.
@@ -565,20 +614,37 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   inside a route draws under the native bars. Fix: render full-screen overlays
   (menus, action sheets) as root children after the tab container, or as a
   `navigationPresentation="fullscreen"` route. (Signal Clone, build 10.)
-- **A full-screen route on iOS shows white bands above and below its content.**
+- **A full-screen route on iOS shows bands above and below its content.**
   Cause: the host keeps the route's content clear of the status bar and the home
   indicator (LLP 1123 D3), so a child at `position="absolute" inset=0` starts
-  below the status bar, and where the route paints nothing its controller shows
-  the system background. Fix: give the route's own column the background
+  below the status bar and ends above the home indicator. Where the route paints
+  nothing, the bands show the nearest ancestor that paints a background, else
+  the platform background (the theme's page ground when set).
+  `system-bars-hidden=true` leaves them on a phone with a notch
+  or Dynamic Island, whose insets stay when the bars hide. Fix, where the
+  content needs only a backdrop: give the route's own column the background
   (`background-color`, with `color-scheme="dark"` for a photo viewer): it fills
   the screen to its edges, and where it is translucent, or fades out, the page
-  the route covers shows through. (Excord's image viewer, 2026-10-27.)
+  the route covers shows through. Fix, where the content itself must reach the
+  screen's edges (a full-screen canvas, a camera, a map): put
+  `-exact-safe-area="none"` on the route and place its controls
+  with `var(--exact-safe-area-inset-*)`, which still reads the route's insets.
+  (Excord's image viewer, 2026-10-27; #759, iPhone 12 and iPhone 17 Pro
+  simulators, iOS 27.0, 2026-11-16.)
 - **A Mac glass panel shows sharp content behind a wrapper.** AppKit's
   `backdrop-filter` samples only the parent's subtree, even when every wrapper
   is transparent. Make the glass a direct sibling of what it covers; put a
-  floating composer beside its scrolling transcript. Check it with `agent macos
-  "screenshot glass.png window"`: only the composited window capture shows
-  background filters; a plain `screenshot` shows every macOS glass sharp.
+  floating composer beside its scrolling transcript. CSS `backdrop-filter`
+  does not select the native-glass viewport path, so check its compositor blur
+  with `agent macos "screenshot glass.png window"`. Only native Liquid Glass
+  (`backgroundMaterial="glass"`, an `NSGlassEffectView`) selects the
+  WindowServer viewport path. `backgroundMaterial="sidebar"` and the other
+  `NSVisualEffectView` materials do not. If the WindowServer has no picture,
+  the viewport restores canvas readbacks, falls back to the ordinary
+  layer-tree capture and notes that glass was not composited. A capture
+  flushes, waits two display refreshes and reads the window without inserting
+  any view into it. The server's empty picture cannot distinguish a locked
+  screen from a sleeping display.
   (T3 Code backdrop case B; LLP 1053.000 §3.)
 - **A link in the app's own scheme never matches.** `signalclone://connect?x=1`
   reaches the root's `navigate` handler as the location `/connect?x=1`: the scheme
@@ -650,10 +716,10 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   empty id meanwhile; if that answer lands before the id, it is kept in the entry's
   place and the id's arrival has nothing to show. An id from a resource that reads
   no device state, on a placeholder that is not empty (`"nobody"`), is a known
-  mismatch, which `logs` names with the resource it read. A resource whose `when`
-  stays false until the id is set asks nothing for the empty id, so its kept answer
-  still waits. (A React Native port's diaries, 2026-11-13;
-  `runner/src/runner/kept_identity_tests.rs`.)
+  mismatch, which `logs` names with the resource it read but never with either
+  identifying value. A resource whose `when` stays false until the id is set asks
+  nothing for the empty id, so its kept answer still waits. (A React Native port's
+  diaries, 2026-11-13; `runner/src/runner/kept_identity_tests.rs`.)
 - **A grouped-list row you lay out loses its side insets, or its content runs off the
   card.** Cause: the sheet gives a custom row (a `row` that is not a title/value row)
   its padding, and `padding="12px 0"` replaces all four sides, so the row's content
@@ -712,6 +778,7 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `transform="rotate(-2deg)"` | `lower-attr-tag` | `rotate="-2deg"`, `translate="0px 25px"`, `scale=0.8` |
 | Expo's `NativeTabs.Trigger role="search"`, SwiftUI's `Tab(role: .search)` | `lower-attr-value` on `role="search"` | `rel="search"` on the root tab, written last; `autofocus` on its root's header search field sets it apart on iOS 26 (`contract vocab search`) |
 | a `ScrollView` in a `flex: 1` `View`: `column flex=1` › `scroll flex=1` | `lower-scroll-grows` (warning) | `min-height=0` on the column; the scroller alone needs none |
+| `borderWidth` and `borderColor` without a style (solid in RN) | `lower-border-unstyled` (warning) | `border="1px solid" border-color="…"`, or add `border-style="solid"` to the written width; for one edge use `border-top-style="solid"` so the other sides stay absent |
 | `alignItems`, `justifyContent`, `gap` on a `View` (a flex column in RN) | `lower-flex-on-block` (warning) | `column` or `row`: a `view` is `display: block`, as a `<div>` is |
 | `flexDirection="row"` on a `Pressable` with content | `lower-flex-on-block` (warning) | `button display="flex"`, and `text-align="left"` where its text is not centred: a `button` is a block with centred text, as `<button>` is |
 | `<SFSymbol name="x" size={N}>`, expo-symbols `SymbolView` | nothing; hand-drawn as an `svg`, or as `font-size=N`, the glyph comes out smaller | `image "symbol:sf/x" width=N height=N object-fit="contain"`, its tint as `color` ("Values beside an SF Symbol", below) |
@@ -921,17 +988,22 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `macos`, `ios` and `wasm32` arms, built for wasm32, ran the `wasm32` one;
   2026-11-12.)
 
-- **App resources belong in the root component.** A child can declare a reserved
-  viewport reader, but an app source there fails with `type-child-resource`.
-  Declare the resource in the root and pass the value the child needs as a prop.
+- **A row cannot own a request.** A component that declares a resource or a
+  mutation, used under a `for` over data or in a virtualized `list`, fails with
+  `type-child-resource`; it may own them as a screen, a tab or an `if` arm.
+  Declare the root's resource over the list, or the mutation in the root, and
+  pass each row its answer or an action that sends it.
 
-- **A send reads a derive from before the action's writes.** An action's writes
-  commit together; reading a derive after assigning one of its inputs still reads
-  the previous commit's derive. Build the next record explicitly for the send,
-  for example `DepartureState(current, at=current.at + 600000, status="Delayed")`,
-  and assign local state in the same action. Caltrain's activity update sent
-  "On time" after incrementing its delay until it built that next record
-  (`apps/caltrain/app.contract`, LLP 1126.001 WP9).
+- **A derive read after the action assigns its input is the old value, with no
+  warning.** With `derive count = items.length`, `items = next` then `found =
+  count` reads the old list's count. A derive read in an action is the starting
+  state's, as a state's read is, but only the state's read is warned of
+  (`analyze-read-after-assign`; a derive is a settled value, LLP 1089 D3). Read
+  what you assigned (`found = next.length`), and build the next record
+  explicitly for a send, for example `DepartureState(current, at=current.at +
+  600000, status="Delayed")`. Caltrain's activity update sent "On time" after
+  incrementing its delay until it built that next record
+  (`apps/caltrain/app.contract`, LLP 1126.001 WP9; expo/exact#649, 2026-11-15).
 
 - **A name refused as reserved.** `none`, `some`, `true`, `false` and the expression
   words (`if`, `for`, `match`, `and`, …) cannot name a state, a parameter or a `let`
@@ -990,6 +1062,18 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   that reads the authorization step's `Location` therefore works natively only:
   a web build sends that request from a server (`docs/contract-for-agents.md`,
   "An app's own sign-in screens").
+
+- **An error listener's later fetch reaches the server from the web build
+  only.** A fetch that a data module's `error` or `unhandledrejection` listener
+  makes after an `await`, in a `.then`, or in its report's reply is sent on the
+  web build, where the listener is the page's. Natively, only a plain HTTP fetch
+  made in the listener itself is sent. The later one is refused with a line in
+  `logs`: `fetch() called outside an answer: it was never run`, or `fetch()
+  called after an error event's listener returned` (LLP 1175 D3, D7). On the
+  web the listener also hears the whole page, and a request of its own that
+  fails uncaught calls it again. Fix: fetch in the listener itself, before any
+  `await`, and catch the failure ([recipe](recipes/report-errors.md)).
+  (Scratch app under `agent macos` and `agent web`, 2026-11-14.)
 
 - **`Date.now()` in a data module passes its Bun tests and fails on the
   device.** Since 2026-10-05 the build refuses a direct use by file and line
@@ -1322,6 +1406,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Driving and testing
 
+- **`packages/speech-recognition/test/drives.mjs --help` runs the web drives.**
+  That short package script has no help mode, so an unrecognized first argument
+  leaves its default platform in place. Pass a platform and optional drive number,
+  for example `ios --only 6`, or read the script before invoking it.
+  (Speech transcription rebase, 2026-11-15.)
+
 - **An Android APK drive needs an awake, unlocked screen.** The relay checks and
   wakes it and dismisses an insecure keyguard before launching. A secure lock
   screen fails at once: unlock the device and run the drive again. A readiness
@@ -1462,9 +1552,10 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   data source's `fetch` is captured when the data module loads, so a stub
   installed later (a browser script's `page.evaluate`, a console patch) never
   sees its requests. Fix: to test a failure, `fail fetch "<url prefix>"` (the
-  guide's testing section); a fixture that must stand in for the network
-  installs its stub before the document loads (`addInitScript`) or serves a
-  stand-in server. (Authoring bench, LLP 1087, t8-library, codex, 2026-10-08.)
+  guide's testing section). For a response, lead the authored test with
+  `answer fetch "<url prefix>" with 200 {"text":"Hello"}`. The driver installs
+  it before the first resource load. (Authoring bench, LLP 1087, t8-library,
+  codex, 2026-10-08; response fixtures, #699.)
 
 - **`xcrun simctl io booted screenshot` can capture the wrong simulator.** With
   several simulators booted, `booted` names any one of them, not the one the
@@ -1494,6 +1585,11 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   looks unchanged. Fix: `clock settle` (or `clock +N` past the transition)
   before `screenshot`. (Authoring bench, LLP 1087, t5-pomodoro, 2026-10-07:
   about 5 minutes and a probe script to find.)
+
+- **A macOS viewport screenshot omits a box's 3D rotation.** Both a static
+  `rotate="-45deg x"` and a sampled axis keyframe can look unrotated in the
+  default capture. Use `screenshot out.png window` to read the composited
+  window; `layout` also reports the transformed bounds. (#609, 2026-11-14.)
 
 - **A macOS `screenshot` shows no focus ring on a native field or button.** AppKit
   draws its focus ring only in the key window of the active app, and the driver's
@@ -1601,12 +1697,24 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   own document. With a `sandbox` on macOS, and always on iOS, it is the child of a
   wrapper page at `http://exact.invalid` (for an `http:` guest) or
   `https://exact.invalid`: the page's first request is a cross-site navigation, and
-  `window.parent`'s origin is the wrapper's. On the web the parent is the app's own
+  `window.parent`'s origin is the wrapper's. Either way its request carries
+  `Referer: http://exact.invalid/` (or `https:`), the parent's origin, as a browser
+  sends it for a cross-origin frame; Android's frame, a page of its own, is asked
+  for with the same value. On the web the parent is the app's own
   page, whose loopback port differs between the dev loop and an `agent web` or
   `test web` run. A server that checks `Origin`, `Referer` or `Sec-Fetch-Site`
   against a fixed list therefore refuses its own page on some hosts. Fix: admit the
   page by a token in the `src` URL the data module builds, and keep the origin check
   for the API requests the page itself makes. (Exact Draw, 2026-10-15.)
+
+- **An embed inside a bundled page gets no `Referer` on Apple.** An `iframe` the
+  app writes is asked for with its parent's origin as `Referer`, which an embed
+  that requires one (YouTube's player, else "Error 153") accepts. An `<iframe>`
+  written in the HTML of a page under `assets/` is not: that page is
+  `exact-app://app/<path>`, and WebKit sends no `Referer` from a custom scheme,
+  whatever its `<meta name="referrer">` says. Fix: put the embed in the app's own
+  `iframe`, or give the player what identifies its embedder in its URL (YouTube's
+  `origin` or `widget_referrer` parameter). (#704, 2026-11-15.)
 
 - **A focus ring never shows in an `agent macos` screenshot.** `type save key Tab`
   moves the focus (`state` reads it in `focus.logical`), yet neither `screenshot`
@@ -1866,8 +1974,8 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 - **The web build refuses every brand token (`color="ink.light"` is not a valid
   `color`) that `contract build` accepted a moment ago.** Cause: a later line
-  in `app.tamber` was refused (here `color-mix(in oklab, AccentColor 16%,
-  transparent)`, `tamber-residual`), and the web build reports the tokens the
+  in `app.forma` was refused (here `color-mix(in oklab, AccentColor 16%,
+  transparent)`, `forma-residual`), and the web build reports the tokens the
   design would have defined, not the design's refusal. Run `bun exact.mjs
   contract build app.contract --json`, which names the design's line. Also:
   a token's name is identifiers joined by dots (`hue.rose`, never `hue.1`).
@@ -1881,7 +1989,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   ancestor box's `color` (a token on `fill` itself draws black on the web).
   (Harmony, 2026-10-21.)
 
-- **`bun exact.mjs tamber check .` in an app outside the checkout says each icon's
+- **`bun exact.mjs forma check .` in an app outside the checkout says each icon's
   SVG under `assets/` is missing though it is there.** The check resolves
   `assets/<path>` from the process's working directory, which `exact.mjs`
   moves to the checkout; the app's build finds the files. Trust
@@ -1931,6 +2039,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   demo site, 2026-11-12.)
 
 ## Working on Exact itself
+
+- **An Android regression test still runs the temporarily reverted code after
+  the source is restored.** A revert and restore close together can leave
+  Gradle reporting `compileDebugKotlin UP-TO-DATE` and reusing the class from
+  the reverted source. Run the restored test with `--rerun-tasks`; an ordinary
+  second test run does not prove the restored source was compiled. (OAuth
+  logout regression audit, 2026-11-14.)
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
   `DOM.setChildNodes` replaces the frontend's node objects. Repeating it for
@@ -2242,9 +2357,10 @@ are in [Pitfalls when writing Exact games](game-pitfalls.md).
   Resources keep their previous value on failure. Gate account views while the
   account is pending or failed, and render rows only when their answer's principal
   matches the current principal. Throw `refused(page.denied)` on a query denial.
-  The complete online password example in `snapback4/README.md` demonstrates this
-  alongside reload, logout and sign-in tests; an empty successful list would hide
-  an authentication failure.
+  An empty successful list would hide an authentication failure. Where a checkout
+  has the Snapback client, its accompanying `snapback4/README.md` demonstrates this
+  in the complete online password example alongside reload, logout and sign-in
+  tests. That guide is not in this repository.
 
 
 - **A picker path can contain spaces.** Use `pick "attachment" "my photo.png"`

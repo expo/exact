@@ -381,8 +381,10 @@ fn refused_images_do_not_publish_rows_slots_or_layers() {
             .finish()
             .unwrap()
             .data()
-            .chunks_exact(4)
-            .all(|p| p == [255, 0, 0, 255]));
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [255, 0, 0, 255]));
         gpu.row_free(2);
     }
 }

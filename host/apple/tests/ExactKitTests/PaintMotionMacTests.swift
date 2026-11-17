@@ -89,7 +89,7 @@ final class PaintMotionMacTests: XCTestCase {
         let earlier = session.runtime.press(reveal.id, now: session.now())
         session.repliesInFlight = 1
         session.replySubmissions = [0]
-        session.publish(.reply, earlier, session.generation)
+        session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: earlier))
         let later = session.runtime.tick(now: session.now())
         XCTAssertTrue(session.changesNothing(later))
         var reportsAfterReply: [Bool] = []
@@ -135,8 +135,10 @@ final class PaintMotionMacTests: XCTestCase {
         XCTAssertEqual(node.paragraphSpec().runs.map(\.color), [[0, 0, 0, 255], [255, 0, 0, 255]])
     }
 
-    /// A run has no layer, so its `opacity` (its enclosing runs' times its
-    /// own, as the host sends it) is the alpha of everything it paints.
+    /// A run has no layer: its `opacity` (its enclosing runs' times its own, as
+    /// the host sends it) is a group its paints composite as one at that alpha
+    /// (f3b918b32, "An inline run's opacity groups all its paints"), so its
+    /// colours stay as authored; TextPaintTests reads the pixels.
     func testAnInlineRunsOpacityFadesItsPaint() throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "paint-run-opacity-mac")
@@ -155,9 +157,10 @@ final class PaintMotionMacTests: XCTestCase {
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 40.0],
         ]))
         let runs = try XCTUnwrap(p.views[1]).paragraphSpec().runs
-        XCTAssertEqual(runs.map(\.color), [black, [0, 0, 0, 255 * 0.3]])
-        XCTAssertEqual(runs[1].background, [255, 255, 0, 255 * 0.3])
-        XCTAssertEqual(runs[1].stroke, [1, 255, 0, 0, 128 * 0.3])
+        XCTAssertEqual(runs.map(\.opacity), [[], [InlineOpacity(box: 3, alpha: 0.3)]])
+        XCTAssertEqual(runs.map(\.color), [black, black])
+        XCTAssertEqual(runs[1].background, [255, 255, 0, 255])
+        XCTAssertEqual(runs[1].stroke, [1, 255, 0, 0, 128])
     }
 
     func testAViewInItsOwnAppearanceIsNotedOnceUntilItAgreesAgain() throws {

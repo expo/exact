@@ -1,8 +1,10 @@
 # Recipe: guests, personas and password sessions
 
-Use the [complete mixed identity app](../../snapback4/README.md#a-complete-mixed-identity-app)
-for the schema, Contract, TypeScript and browser tests. The README retest command
-runs it twice against the selected Snapback version.
+This recipe needs the Snapback client at `<exact2>/snapback4/`, which this
+repository does not include. Its accompanying `snapback4/README.md`, where a
+checkout has it, contains “A complete mixed identity app”: the schema, Contract,
+TypeScript and browser tests. The guide's retest command runs it twice against
+the selected Snapback version.
 
 Bare `use identity` permits guests and password accounts. Call `guest()` before
 reading; keep its session with `auth: {store, key, now}` and grant `secret.keep`
@@ -48,5 +50,5 @@ test "persona reload signs out; a password session restores"
 ```
 
 Run that test against `dev` with `fresh` and `epoch now` at the file's top.
-The [password example](../../snapback4/README.md#a-complete-online-password-app)
-adds login and periodic session refresh with Contract time.
+“A complete online password app” in that client's guide adds login and periodic
+session refresh with Contract time.

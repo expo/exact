@@ -30,6 +30,19 @@ internal object Sources {
         return asset(source, assets)
     }
 
+    /**
+     * The headers a frame's remote page is asked for with. A browser asks for a cross-origin frame's page with the
+     * parent's origin as its `Referer` (`strict-origin-when-cross-origin`, the default policy), and an embed that
+     * requires one refuses the load without it (YouTube's Error 153). The frame's WebView is a page of its own with no
+     * parent, so it is given the origin Apple's frames send, the host's frame page at `exact.invalid` in the guest's
+     * scheme (`GuestURL.request`, `host/apple/webarm/FrameBrowser.swift`). WebView makes a `Referer` passed here the
+     * navigation's referrer. The map is mutable because some older WebViews require it (`WebView.loadUrl`).
+     */
+    fun frameHeaders(url: String): MutableMap<String, String> = when (val scheme = scheme(url)) {
+        "http", "https" -> mutableMapOf("Referer" to "$scheme://exact.invalid/")
+        else -> mutableMapOf()
+    }
+
     /** A `video`'s `src`; [appFile] is the file an `app:/data|cache|tmp/…` path names, or null (`Native.appFile`). */
     fun video(src: String, assets: File, appFile: (String) -> File?): Source = when {
         src.isEmpty() -> Source.Refused("Empty src attribute")

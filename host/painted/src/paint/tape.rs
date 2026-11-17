@@ -124,6 +124,7 @@ pub(crate) struct Tape {
 pub(crate) struct Recorder {
     ops: Rc<RefCell<Vec<Op>>>,
     planes: bool,
+    blends: bool,
 }
 
 impl Recorder {
@@ -132,6 +133,7 @@ impl Recorder {
         Self {
             ops: Rc::default(),
             planes: target.supports_planes(),
+            blends: target.supports_blend(),
         }
     }
 
@@ -213,6 +215,9 @@ impl Backend for Recorder {
             tint,
             rendering,
         ));
+    }
+    fn supports_blend(&self) -> bool {
+        self.blends
     }
     fn supports_island_image(&self) -> bool {
         true

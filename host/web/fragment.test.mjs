@@ -116,15 +116,27 @@ test('a deferred traversal restoration yields to authored scrolling, navigation 
 
 // Run the wasm commit's property path without booting a plan or loading its unrelated capabilities.
 const wasmProperties = `
-const root = document.getElementById('root'), host = {}, presence = {}, views = new Map([[1, document.getElementById('port')]]);
+const root = document.getElementById('root'), host = { fragmentTurn: 0 }, presence = {}, views = new Map([[1, document.getElementById('port')]]);
 const retiredViews = new WeakSet(), followedScrolls = new Map(), pendingScrolls = new Map(), lists = new WeakSet();
 const agentMode = false, agentKeepsStore = false, log = () => {};
 const prepareContexts = log, syncMedia = log, refreshSymbols = log, syncLists = log, focusAutofocus = log, positionContexts = log, markScrollDocument = log;
-const collections = { restyled: log }, navigation = { project: log };
+const collections = { restyled: log }, navigation = { project: log, apply: op => history.replaceState({ exact: op.top, id: op.top, url: op.url }, '') };
+const loadAfterPaint = () => import('/fragment.js');
 const viewFor = (_, id) => views.get(id);
 ${glueDeclarations(hostFixtureFile(new URL('./wasm/views.js', import.meta.url), 'utf8'), ['applyProps'])}
 ${glueDeclarations(hostFixtureFile(new URL('./wasm/commit.js', import.meta.url), 'utf8'), ['apply'])}
 export const set = (name, value) => apply({ ops: [{ op: 'props', id: 1, set: { [name]: String(value) } }] });
+export const navigate = async op => {
+  host.fragmentGlue ??= loadAfterPaint();
+  apply({ ops: [{ op: 'router', ...op }] });
+  await host.fragmentGlue;
+};
+export const deferFragments = () => {
+  let finish;
+  host.fragmentGlue = new Promise(resolve => { finish = resolve; });
+  return () => loadAfterPaint().then(finish);
+};
+export const scrollFragment = args => apply({ ops: [{ op: 'command', name: 'scrollToFragment', args }] });
 `;
 
 async function inBrowser(run, { html = '<!doctype html><main id="root"></main>', path = '/', fetch, needs = [] } = {}) {
@@ -151,6 +163,73 @@ async function inBrowser(run, { html = '<!doctype html><main id="root"></main>',
     await run(page);
   } finally { await browser?.close(); server.stop(true); }
 }
+
+test('the JS router scrolls after obsolete data, keeps a pending activation through scrollBy, and yields to scrollIntoView', () => inBrowser(async page => {
+  expect(await page.evaluate(async () => {
+    const rt = await import('/host/web-js/rt.js'), { navigation } = await import('/host/web-js/navigation.js');
+    rt.clock.agent = true;
+    rt.routes([['home', '/', null, true, false]]);
+    const nav = rt.sig(rt.launch('/#moves')), arg = rt.sig(0), replies = [];
+    rt.data.answer = () => arg() ? { v: 'ready' } : { promise: new Promise(resolve => replies.push(resolve)) };
+    rt.mount(root => {
+      root.innerHTML = `<div id="port" style="height:200px;overflow:auto;overflow-anchor:none"><section navigationKey="${rt.x_top(nav())[0]}"><div style="height:700px"></div><div id="moves" style="height:20px">Moves</div><div style="height:300px"></div><div id="other">Other</div><div style="height:2000px"></div></section></div>`;
+      const detail = rt.res('detail', 'detail', () => [arg()], undefined, undefined, null, 'loading');
+      rt.effect(() => detail());
+      rt.router(nav, navigation);
+    });
+    const port = document.getElementById('port'), frames = async () => { for (let i = 0; i < 3; i++) await new Promise(requestAnimationFrame); };
+    await frames();
+    rt.Hosts.scrollBy('port', 0, 40);
+    await frames();
+    const pending = port.scrollTop;
+    rt.commit(() => rt.W(arg, 1));
+    await frames();
+    const settled = port.scrollTop;
+    rt.commit(() => { rt.W(arg, 0); rt.W(nav, rt.x_go(nav(), '/#moves')); });
+    await frames();
+    rt.Hosts.scrollIntoView('other', 'start', 'nearest', 'instant');
+    const authored = port.scrollTop;
+    rt.commit(() => rt.W(arg, 1));
+    for (const reply of replies) reply('obsolete');
+    await frames();
+    return { pending, settled, authored, after: port.scrollTop };
+  })).toEqual({ pending: 40, settled: 700, authored: 1020, after: 1020 });
+}, { html: '<!doctype html><main id="exact-root"></main>' }), 30_000);
+
+test('a wasm navigation without a fragment ends the old picture hold before returning to its visit', async () => {
+  let finish;
+  const picture = new Promise(resolve => { finish = resolve; });
+  try {
+    await inBrowser(async page => {
+      expect(await page.evaluate(async () => {
+        const f = await import('/fragment.js'), { navigate, deferFragments, scrollFragment } = await import('/wasm-properties.js');
+        const root = document.getElementById('root'), port = document.getElementById('port'), person = { personScrolls: 0 };
+        history.replaceState({ exact: 1, id: 1, url: '/item#moves' }, '');
+        f.arm(root, { top: 1, fragment: 'moves', activation: 1 }, person);
+        f.scroll(root, 1, 'moves', () => {}, 1);
+        await navigate({ top: 2, url: '/other', scroll: false });
+        await navigate({ top: 1, url: '/item#moves', scroll: false });
+        port.scrollTop = 300;
+        const img = document.querySelector('img');
+        img.style.height = '110px';
+        img.dispatchEvent(new Event('load'));
+        const held = port.scrollTop;
+        // A command waiting for the fragment module cannot revive after leaving and returning either.
+        const release = deferFragments();
+        scrollFragment([1, 'moves', 1]);
+        const away = navigate({ top: 2, url: '/other', scroll: false });
+        const back = navigate({ top: 1, url: '/item#moves', scroll: false });
+        port.scrollTop = 300;
+        await release();
+        await Promise.all([away, back]);
+        return [held, port.scrollTop];
+      })).toEqual([300, 300]);
+    }, {
+      html: '<!doctype html><main id="root"><div id="port" style="height:200px;overflow:auto;overflow-anchor:none"><section navigationKey="1"><img src="/slow.png" style="width:10px;height:10px;display:block"><div style="height:690px"></div><div id="moves">Moves</div><div style="height:2000px"></div></section></div></main>',
+      fetch: () => picture,
+    });
+  } finally { finish(new Response(null, { status: 404 })); }
+}, 30_000);
 
 for (const target of ['wasm', 'js']) test(`${target}: authored offsets end traversal restoration while pictures load`, async () => {
   let finish;

@@ -98,7 +98,7 @@ pub(super) fn face(node: &exact_kernel::NodeFacts<'_>, mut css: String) -> Strin
             css = css.replace("display:-webkit-box;", "");
             if node.style.line_clamp > 0 {
                 css.push_str(&format!(
-                    "--exact-button-clamp:{};--exact-button-title-display:-webkit-box;",
+                    "--exact-button-clamp:{};--exact-button-title-display:-webkit-box;--exact-button-title-overflow:hidden;",
                     node.style.line_clamp
                 ));
             }
@@ -123,12 +123,17 @@ pub(super) fn face(node: &exact_kernel::NodeFacts<'_>, mut css: String) -> Strin
     // A face text's own clamp overrides the button's inherited clamp.
     if node.node_type == NodeType::Text && node.style.mask.has(StyleId::LineClamp) {
         css.push_str(&format!(
-            "--exact-button-clamp:{};--exact-button-title-display:{};",
+            "--exact-button-clamp:{};--exact-button-title-display:{};--exact-button-title-overflow:{};",
             node.style.line_clamp,
             if node.style.line_clamp > 0 {
                 "-webkit-box"
             } else {
                 "block"
+            },
+            if node.style.line_clamp > 0 {
+                "hidden"
+            } else {
+                "clip"
             }
         ));
     }

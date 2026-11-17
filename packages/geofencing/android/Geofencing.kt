@@ -9,7 +9,7 @@
 // - Twenty a fence app (D11), `android.limit` up to Play services' 100; a radius under 100 m is raised with a journal
 //   line. A fence added while inside raises `geofenceenter` (`INITIAL_TRIGGER_ENTER`); a re-arm adds none.
 // - A crossing reaches `GeofenceReceiver` (Receivers.kt), which writes it to the store and asks for a region wake. A
-//   live session's module delivers it at once; with none (no headless session yet, §9 item 6) the store keeps it,
+//   live session's module delivers it at once; with none (it boots no session yet, §9 item 6) the store keeps it,
 //   and the module delivers it when a later launch makes it (D14 step 3), with its original time.
 package exact.geofencing
 

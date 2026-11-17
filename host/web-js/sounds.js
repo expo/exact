@@ -10,6 +10,7 @@
 // plays and `state.sounds.output` is `"agent"` (D10).
 import { journal, clock, Sounds } from './rt.js';
 import { plain } from './format.js';
+import { watchPage } from './facts.js';
 
 const LIVE = 32, WAITING = 256, RECORD = 1024, HAPTICS = 1024, SHOWN = 64, RAMP = 20, OWN = new Set(['playSound', 'playSounds', 'stopSounds', 'setSounds']);
 const say = line => journal.push(`t=${clock.now} ${line}`);
@@ -242,12 +243,14 @@ function load() {
     .catch(err => say(`sound: unavailable: ${err.message}`));
 }
 function flush() {
+  if (Sounds.settling) Ops = Ops.filter(op => op.op !== 'play' && op.op !== 'haptic');
   if (clock.agent) Ops = [];
   else if (Output) { if (Ops.length) Output.ops(Ops.splice(0)); }
   else load();
 }
 /** `table`: the plan's sounds, `[src, frames, rate]` each (host/web-js/src/main.rs). */
 export function install(table) {
+  watchPage(true);
   Table = table;
   Sounds.apply = apply;
   Sounds.seq = Seq;

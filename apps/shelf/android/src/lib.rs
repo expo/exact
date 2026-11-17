@@ -19,6 +19,9 @@ mod android {
     }
     include!(concat!(env!("OUT_DIR"), "/logic.rs"));
     include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
+    // The home-screen widget's JNI (LLP 1126.003 D9).
+    include!(concat!(env!("OUT_DIR"), "/widgets.rs"));
+    exact_widgets!(app_data());
 
     exact_painted::canvas_jni!(super::AppData, hatches = crate::android::exact_hatches());
 }

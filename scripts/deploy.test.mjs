@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
 import { streamBundle } from './texture-families.mjs';
-import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, holdBundles, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
+import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, deployRun, holdBundles, inspectHead, disposeSnapshot, materializeSnapshot, readAssetIndex, portableAssetNames, publishRoot, renderTable, snapshotOf as capturedSnapshotOf } from './deploy.mjs';
+import { defaultRelease, publishStream, streamHead, streamIndex } from './publisher.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
 // behavior is tested independently with declared requirements.
@@ -112,6 +113,25 @@ async function rejects(action, matches) {
     const bytes = Buffer.from(text + '\n');
     return { json: JSON.parse(text), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
   };
+  for (const [before, after] of [
+    [{state:[],secrets:[]}, {state:['liked'],secrets:['seed']}],
+    [{state:['liked'],secrets:['seed']}, {state:['liked'],secrets:['other']}],
+    [{state:['liked'],secrets:['seed']}, {state:[],secrets:[]}],
+    [{state:['liked'],secrets:[],types:{liked:'Bool'}}, {state:['liked'],secrets:[],types:{liked:'Number'}}],
+  ]) {
+    const installed = signed(head => { head.cohort.compat.inputs.watchSync = before; });
+    const candidate = fixtureBuild(compatibilityId, bundle);
+    candidate.compat.inputs.watchSync = after;
+    candidate.graph.artifacts[0].requires.watchSync = after;
+    const table = await classify({app, opts:{platform:['linux']}, origin:{kind:'directory',describe:()=>dir,
+      get:async name => name===blobPath(streamIndex(bundle).card.sha256)?streamIndex(bundle).bytes:null,
+      head:async()=>found(installed), list:async()=>[]}, channel:stream.channel,
+      snapshot:{commit:'watch-policy',dirty:false,changes:[],repo:dir}, release:'policy', bundle,
+      builds:{linux:candidate}, compat:{linux:candidate.compat}, platforms:['linux'], wantOrigin:false});
+    const row = table.rows.find(row => row.kind === 'stream');
+    result(`deployment requires a new binary for watch policy ${JSON.stringify(before)} to ${JSON.stringify(after)}`,
+      row.action === 'binary' && row.reason.includes('watchSync'), JSON.stringify(row));
+  }
   const valid = signed();
   // The head's asset index, a blob the origin must also serve.
   const index = streamIndex(bundle), indexPath = blobPath(index.card.sha256);
@@ -317,6 +337,43 @@ async function rejects(action, matches) {
   JSON.stringify(table));
   rmSync(dir, { recursive: true, force: true });
 }
+// Android's binary is the APK, which its own verb builds (LLP 1030.006 D6, LLP 1030.007 D5): with no stream and no
+// production APK receipt, the table names the APK's command.
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-android-binary-'));
+  const origin = { kind: 'directory', describe: () => dir, get: async () => null, head: async () => null, list: async () => [] };
+  const table = async (store) => classify({ app: { id: 'com.exact.test', displayName: 'Test', dir, manifest: { deploy: { store: { android: store } } } },
+    opts: { platform: [] }, origin, channel: 'prod', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir },
+    release: 'test', web: dir, bundle: { plan: { sha256: '0'.repeat(64) }, assets: [] }, builds: {}, compat: {}, platforms: ['android'], wantOrigin: false });
+  const updating = await table('A'), fixed = await table('0');
+  const rendered = renderTable(updating);
+  result('an Android deploy with no stream names the production APK command', updating.rows.length === 1
+    && updating.rows[0].kind === 'binary' && updating.rows[0].reason.includes('EXACT_UPDATE_TRUST=production bun exact.mjs android --release')
+    && updating.rows[0].reason.includes('EXACT_UPDATE_GENESIS=1') && fixed.rows[0].reason.startsWith('deploy.store.android is "0"')
+    && rendered.includes('new APK needed: android — EXACT_UPDATE_TRUST=production bun exact.mjs android --release'), rendered);
+  rmSync(dir, { recursive: true, force: true });
+}
+// A production APK receipt with no head starts its stream: the row's cohort is that APK's, and a note names the
+// receipt (LLP 1030.007 D4).
+{
+  const dir = mkdtempSync(join(tmpdir(), 'exact-android-start-'));
+  const origin = { kind: 'directory', describe: () => dir, get: async () => null, head: async () => null, list: async () => [] };
+  const id = 'a'.repeat(32), bundle = { plan: { sha256: '1'.repeat(64) }, assets: [] };
+  const apk = fixtureBuild(id, bundle);
+  apk.compat.inputs.platform = 'android';
+  const cohort = cohortReceipt(apk), stream = { channel: 'prod', compatibilityId: id };
+  const table = await classify({ app: { id: 'com.exact.test', displayName: 'Test', dir, manifest: { deploy: { store: { android: 'A' } } } },
+    opts: { platform: [] }, origin, channel: 'prod', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [], repo: dir },
+    release: 'test', web: dir, bundle, builds: {}, compat: {}, platforms: ['android'], wantOrigin: false,
+    knownStreams: [{ stream, head: null, cohort, platform: 'android', build: apk }],
+    candidates: new Map([[id, { build: apk, bundle }]]), anchors: new Map([[id, '/receipts/android-aarch64-linux-android.build.json']]) });
+  const [row] = table.rows;
+  result('a production APK receipt starts its Android stream with that APK as the cohort', table.rows.length === 1
+    && row.kind === 'stream' && row.platform === 'android' && row.action === 'bundle' && row.receipt === cohort && row.head === null
+    && table.notes.some((note) => note === `android stream ${id.slice(0, 8)} starts from the production build receipt /receipts/android-aarch64-linux-android.build.json: binary ${'0'.repeat(12)}`),
+  JSON.stringify(table));
+  rmSync(dir, { recursive: true, force: true });
+}
 // A dry-run renders network availability per row, including declared retired
 // streams. A corrupt response remains a hard refusal rather than masquerading
 // as a transient network problem.
@@ -393,6 +450,20 @@ async function rejects(action, matches) {
   result('a TypeScript pair goes only to a binary holding exactly its grants',
     !narrower.bundle&&narrower.missing[0].includes('typescript/app.hbc: javascriptGrants')&&!wider.bundle&&exact.bundle,
     JSON.stringify({narrower,wider,exact}));
+  // An Android cohort takes a generation that needs no more than its APK was composed from, and only its own Hermes
+  // bytecode version (LLP 1030.006 D4, D4a).
+  const apk=({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,hermesBytecode:96,
+    androidLinked:{uses:['fetch','dates'],permissions:['android.permission.READ_CALENDAR'],extensions:['swatch']}}}});
+  const android=(plan,module)=>{const c=structuredClone(moved);Object.assign(c.graph.artifacts[0].requires,plan);c.graph.artifacts.push({name:'typescript/app.hbc',requires:module});return c;};
+  const less=classifyArtifacts(android({androidUses:['fetch'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const capability=classifyArtifacts(android({androidUses:['fetch','camera'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const extension=classifyArtifacts(android({androidUses:[],androidExtensions:['pedometer']},{hermesBytecode:96,androidPermissions:[]}),apk);
+  const permission=classifyArtifacts(android({androidUses:[],androidExtensions:[]},{hermesBytecode:96,androidPermissions:['android.permission.WRITE_CALENDAR']}),apk);
+  const engine=classifyArtifacts(android({androidUses:[],androidExtensions:[]},{hermesBytecode:97,androidPermissions:[]}),apk);
+  result('an Android cohort refuses a generation beyond what its APK linked or of another bytecode version, and takes one that needs less',
+    less.bundle&&!capability.bundle&&capability.missing[0].includes('androidUses.camera')&&!extension.bundle&&extension.missing[0].includes('androidExtensions.pedometer')
+    &&!permission.bundle&&permission.missing[0].includes('WRITE_CALENDAR')&&!engine.bundle&&engine.missing[0].includes('Hermes bytecode 97'),
+    JSON.stringify({less,capability,extension,permission,engine}));
   result('artifact graph separates binary changes, compatible older cohorts, and named missing dependencies',
     same.binary&&same.bundle&&old.binary&&old.bundle&&old.warnings[0].includes('will run the old code')
     &&!absent.bundle&&absent.missing[0].includes('sources.camera')&&!unsupported.bundle&&unsupported.missing[0].includes('gpuSurfaces.map')
@@ -476,7 +547,8 @@ async function rejects(action, matches) {
   const compiler = join(fixture, 'contract-stub');
   writeFileSync(compiler, '#!/usr/bin/env bun\nconsole.log(JSON.stringify({packages:[],sources:[{origin:"app",path:process.argv.at(-1)}],consulted:[],errors:[]}));\n');
   chmodSync(compiler, 0o755);
-  const snapshotOf = (app, opts, exactRoot) => capturedSnapshotOf(app, { ...opts, compiler }, exactRoot);
+  const snapshots = [];
+  const snapshotOf = (app, opts, exactRoot) => { const snapshot = capturedSnapshotOf(app, { ...opts, compiler }, exactRoot); snapshots.push(snapshot); return snapshot; };
   const init = (repo, files) => {
     mkdirSync(repo, { recursive: true });
     spawnSync('git', ['init', '-q'], { cwd: repo });
@@ -735,6 +807,7 @@ async function rejects(action, matches) {
     stagedGitSealed, escapingSymlinkRefused,
     ignoredRootRefused, ignoredRootCaptured,
     ignoredDependencyRefused, capturedDependency, dependencyRefused }));
+  for (const snapshot of snapshots) disposeSnapshot(snapshot);
   rmSync(fixture, { recursive: true, force: true });
 }
 {
@@ -1228,7 +1301,7 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const bindings = {
     ROOT: exactRoot, canonicalPath: x => x, basename: path => path.split('/').at(-1), dirname, inside: (parent, child) => child.startsWith(parent + '/'),
     process: { env: {}, stderr: { write() {} } }, console: { log: text => output.push(text) },
-    resolveApp: () => app, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
+    resolveApp: selector => { expect(selector).toBe(state === 'new' ? 'bundle' : app.dir); return app; }, requireReleasePins() {}, channelOf: () => 'prod', validateChannel: x => x,
     channelOrigin: () => root, openOrigin: () => ({ writable: true, describe: () => root }), nativePlatforms: () => ['ios'],
     loadSigner: () => ({ keyId: 'test' }), namesNative: () => true,
     bake: () => root, bakeJs: () => root, readBundle: () => bundle, readBuilds: () => [{ ...build, compat: { ...build.compat, inputs: { ...build.compat.inputs, platform: 'web' } } }],
@@ -1244,9 +1317,10 @@ test.each(['new', 'invalid', 'authenticated'])('deploy skips a native bake only 
   const fn = source.slice(source.indexOf('async function deployCaptured('), source.indexOf('/** An explicitly supplied'));
   const deploy = new Function(...Object.keys(bindings), fn + ';return deployCaptured;')(...Object.values(bindings));
   try {
-    expect(await deploy({ _: ['bundle'], platform: ['ios'], keys: root, yes: true, json: true }, {
+    const selector = state === 'new' ? 'bundle' : state === 'invalid' ? '.' : resolve(root, 'live/app');
+    expect(await deploy({ _: [selector], platform: ['ios'], keys: root, yes: true, json: true }, {
       version: 1, run: resolve(root, 'run'), sourceRoot, exactRoot, release: 'update', app,
-      snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] },
+      snapshot: { id: 'snapshot', sources: [{ repo: resolve(root, 'live'), roles: ['exact'], commit: 'a'.repeat(40) }] }, receipts: [],
     })).toBe(0);
     expect(calls).toEqual(state === 'authenticated' ? ['publish'] : ['native bake', 'publish']);
     expect(JSON.parse(output.at(-1)).published[0].seq).toBe(8);

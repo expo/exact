@@ -162,10 +162,15 @@ fn validate(schema: &Schema) {
             "schema: ends applies to animations rows (`{}`)",
             row.field
         );
-        if row.admits_auto || row.refuses_percent {
+        assert!(
+            matches!(row.size_keywords.as_deref(), None | Some("size" | "basis")),
+            "schema: sizeKeywords is \"size\" or \"basis\" (`{}`)",
+            row.field
+        );
+        if row.admits_auto || row.size_keywords.is_some() || row.refuses_percent {
             assert!(
                 matches!(codec, Codec::Dimension),
-                "schema: admitsAuto and refusesPercent only apply to dimension rows (`{}`)",
+                "schema: admitsAuto, sizeKeywords and refusesPercent only apply to dimension rows (`{}`)",
                 row.field
             );
         }
@@ -243,6 +248,7 @@ fn write_validate_domain(w: &mut String, schema: &Schema) {
                 if row.refuses_percent {
                     writeln!(w, "        if self.mask.has(StyleId::{id}) && self.{field}.has_percent() {{ return Err(StyleDomainError::PercentNotAdmitted(StyleId::{id})); }}").unwrap();
                 }
+                writeln!(w, "        if self.mask.has(StyleId::{id}) && matches!(self.{field}, Dimension::Keyword(k) if !StyleId::{id}.admits_size_keyword(k)) {{ return Err(StyleDomainError::KeywordNotAdmitted(StyleId::{id})); }}").unwrap();
             }
             Codec::Tracks => {
                 writeln!(w, "        if self.mask.has(StyleId::{id}) && !self.{field}.is_valid() {{ return Err(StyleDomainError::InvalidGridTrack(StyleId::{id})); }}").unwrap();

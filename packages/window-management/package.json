@@ -1,0 +1,13 @@
+{
+  "name": "@exact/window-management",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The displays by the Window Management API's names, and where the pointer is (LLP 1178).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./web": "./web/exact.json",
+    "./linux": "./linux/exact.json",
+    "./windows": "./windows/exact.json"
+  }
+}

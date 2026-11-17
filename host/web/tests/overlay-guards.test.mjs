@@ -1,14 +1,15 @@
 // An overlay on the JS target refuses the same calls as the prelude's executors (js/tests/it/overlay.rs), by
 // name: a promise-returning call rejects, any other throws. The page's own `crypto`, the store facade and `fetch`
 // are the ones a data module is given (ts-fetch.js, admission.js).
-import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, expect, test } from 'bun:test';
+import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The real modules, beside the grant data a build writes (host/web-js/build.mjs).
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-overlay-guards-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const here = fileURLToPath(new URL('../..', import.meta.url));
 // Their scripts only: what they import, without builds, tests or Rust.
 const scripts = path => !/\/(dist|tests|src|target|node_modules)(\/|$)/.test(path);

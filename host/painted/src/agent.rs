@@ -22,7 +22,7 @@ use std::io::Write;
 
 /// The host this agent runs on, as a refusal names it: the Windows host and
 /// the Android reader run this code too.
-const HOST_NAME: &str = if cfg!(windows) {
+pub(crate) const HOST_NAME: &str = if cfg!(windows) {
     "Windows"
 } else if cfg!(target_os = "android") {
     "Android"
@@ -255,18 +255,8 @@ fn answer_line<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                         ",\"paint\":{{\"ms\":{paint},\"readbackMs\":{readback}}}"
                     ));
                 }
-                // A `video` or `audio` (LLP 1042 §5, §8): this host has no
-                // decoder and no audio output, so each is reported as an
-                // element that never plays would read, and says why.
-                let media: Vec<_> = p
-                    .host()
-                    .kernel()
-                    .rows(None)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|r| r.node_type == exact_kernel::NodeType::Video)
-                    .map(|r| serde_json::json!({"id": r.id, "state": {"unavailable": "no media decoder or audio output on this host", "paused": true, "currentTime": 0, "duration": null, "readyState": 0}}))
-                    .collect();
+                // A `video` or `audio` (LLP 1042 §8, LLP 1042.001 D7): as its player reports it.
+                let media = p.media_json();
                 s.push_str(&format!(",\"media\":{}", serde_json::json!(media)));
                 // The media session's record; nothing is published (LLP 1098 D9).
                 let session = crate::media_session::state(p);
@@ -395,6 +385,9 @@ fn answer_line<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
             }
             if let Some(reply) = p.control_tap(&request) {
                 return reply.to_string();
+            }
+            if let Some(reply) = p.zoom_tap(&request) {
+                return reply;
             }
             if phased {
                 return contact::answer(p, &request);
@@ -679,6 +672,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     let mut root_font_size = None;
     let mut display_scale = None;
     let mut retier = None;
+    let mut presented = None;
     let mut dark = p.scheme.1;
     for (name, value) in media {
         match (name.as_str(), value.as_str().unwrap_or_default()) {
@@ -745,6 +739,8 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
             ("iframe-partition", v @ ("true" | "false")) => page.iframe_partition = v == "true",
             ("frozen", v @ ("true" | "false")) => page.frozen = v == "true",
             ("has-focus", v @ ("true" | "false")) => page.has_focus = v == "true",
+            // @ref LLP 1069.000 D6 — held at the value named; no animation moves.
+            ("presented", v @ ("true" | "false")) => presented = Some(v == "true"),
             // @ref LLP 1139.003 D2 — the fact, and the modules' tier: their
             // renderers are made again at the new rung.
             ("gpu-tier", v @ ("high" | "mid" | "low")) => {
@@ -780,6 +776,9 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         p.retier_surfaces(code);
     }
     if let Some(e) = p.set_page(page) {
+        return error(&e);
+    }
+    if let Some(e) = presented.and_then(|v| p.prefer_presented(Some(v))) {
         return error(&e);
     }
     if let Some(px) = root_font_size {
@@ -826,6 +825,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         "iframe-partition": page.iframe_partition,
         "has-focus": page.has_focus,
         "frozen": page.frozen,
+        "presented": p.host().runner().presented().value(),
         "root-font-size": p.host().runner().root_font_size(),
         "display-scale": p.host().runner().display_scale(),
         "gpu-tier": page.gpu_tier(),
@@ -1311,15 +1311,14 @@ fn clock_stepped<D: DataSource>(
 }
 
 /// Pump the executor and packages until no polled module source's ask is in flight, or the
-/// deadline. Not on Android's reader, whose extensions answer on its main thread:
-/// `agent-android.mjs` waits there.
+/// deadline. The reader hands requests to its UI thread and takes answers on this thread.
 fn wait_for_polls<D: DataSource>(p: &mut Presenter<D>, deadline: std::time::Instant) {
     let asking = |p: &Presenter<D>| {
         p.host()
             .agent("{\"op\":\"polls\"}")
             .contains("\"asking\":true")
     };
-    while !crate::reader_driven() && asking(p) && std::time::Instant::now() < deadline {
+    while asking(p) && std::time::Instant::now() < deadline {
         p.package_turn();
         std::thread::sleep(std::time::Duration::from_millis(5));
         if let Some(e) = p.pump(p.host().now()) {

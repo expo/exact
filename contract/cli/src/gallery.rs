@@ -399,7 +399,7 @@ fn all_ignored(repository: &Path, out: &Path) -> Option<bool> {
     // `-z`: each path's record is four NUL-ended fields, its rule's source, line and pattern (all empty when none
     // matched) and the path, so no field's own `:` or tab is misread. A negation (`!`) is no ignore.
     let fields: Vec<&[u8]> = listed.stdout.split(|b| *b == 0).collect();
-    let records: Vec<&[&[u8]]> = fields.chunks_exact(4).collect();
+    let records = fields.as_chunks::<4>().0;
     Some(
         records.len() == 3
             && records
@@ -825,7 +825,7 @@ fn gallery_manifest(app: &crate::Manifest, design: Option<&Path>, out: &Path) ->
         let design = design
             .canonicalize()
             .unwrap_or_else(|_| design.to_path_buf());
-        json["tamber"] = relative(out, &design).into();
+        json["forma"] = relative(out, &design).into();
     }
     format!(
         "{}\n",
@@ -1306,9 +1306,9 @@ mod tests {
         assert_eq!(
             relative(
                 Path::new("/a/b/target/g"),
-                Path::new("/a/b/apps/x/app.tamber")
+                Path::new("/a/b/apps/x/app.forma")
             ),
-            "../../apps/x/app.tamber"
+            "../../apps/x/app.forma"
         );
     }
 }

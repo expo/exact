@@ -47,6 +47,7 @@ fn paragraph() -> Paragraph {
         markup: Markup::None,
         strut: style(10.0),
         direction: Direction::Ltr,
+        natural: false,
         text_align: TextAlign::Left,
         line_clamp: 0,
         text_overflow: TextOverflow::Clip,

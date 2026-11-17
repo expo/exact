@@ -209,10 +209,11 @@ pub fn action(w: &World, at: Vec3) -> Action {
     if p.dead {
         return Action::None;
     }
+    let items = w.components::<Item>();
     let carrying_fuel = p
         .pack
         .iter()
-        .any(|&e| w.get::<Item>(e).is_some_and(|i| i.kind != Kind::Food));
+        .any(|&e| items.get(e).is_some_and(|i| i.kind != Kind::Food));
     if carrying_fuel && Vec3::new(at.x, 0.0, at.z).length() < FIRE_REACH {
         return Action::Feed;
     }

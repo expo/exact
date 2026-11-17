@@ -1307,6 +1307,18 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         })
     }
 
+    /// The JavaScript member's, under its own grants as its answers' requests
+    /// are (`route_answer`); its replies come back through `module_delivery`,
+    /// which delivers to that member. A Rust member makes none.
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        let grants = self.javascript.grants().to_string();
+        let mut reports = DataSource::take_reports(&mut self.javascript);
+        for report in &mut reports {
+            report.request.grants = Some(grants.clone());
+        }
+        reports
+    }
+
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
         if token == exact_runner::BACKGROUND {
             return self.javascript.continuation(token);

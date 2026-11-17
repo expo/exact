@@ -62,6 +62,7 @@ final class AudioSessionIOSTests: XCTestCase {
         final class Holder {}
         let holder = Holder()
         for value in ["ambient", "playback", "playback-mix"] {
+            AudioSession.reset()
             AudioSession.configuration = .init(value)
             try session.setCategory(AudioSession.configuration.category, options: AudioSession.configuration.options)
             let readback = session.categoryOptions

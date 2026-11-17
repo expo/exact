@@ -31,6 +31,7 @@ pub fn row_json(row: StyleId, v: RowValue<'_>, out: &mut String) {
             quote(&format!("{}{}", num(n as f64), unit.name()), out)
         }
         RowValue::Dimension(Dimension::Auto) => out.push_str("\"auto\""),
+        RowValue::Dimension(Dimension::Keyword(k)) => quote(k.css(), out),
         RowValue::Dimension(Dimension::Points(p)) => {
             let _ = write!(out, "{}", num(p as f64));
         }
@@ -136,6 +137,7 @@ pub fn row_json(row: StyleId, v: RowValue<'_>, out: &mut String) {
         RowValue::AnimationTimeline(t) => quote(&t.css(), out),
         RowValue::AnimationRange(r) => quote(&r.css(), out),
         RowValue::TimelineScope(s) => quote(&s.css(), out),
+        RowValue::SafeAreaProperties(c) => quote(&c.css(), out),
         RowValue::TimelineName(n) => quote(&n.css(), out),
         RowValue::ViewTimelineInset(i) => quote(&i.css(), out),
         RowValue::PositionTryFallbacks(s) => quote(&s.css(), out),

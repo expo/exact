@@ -6,12 +6,14 @@ import CoreText
 import XCTest
 @testable import ExactKit
 
-/// Where a field's glyphs ink, drawn at 2x as the screen shows them,
+/// Where a field's glyphs ink, drawn at the screen's scale as it shows them,
 /// against the same glyphs drawn by Core Text where CSS puts them: from the
 /// content box's inline start, on the baseline of the CSS line box centred
 /// in the content box (Chrome's inner editor).
 final class FieldInkMacTests: XCTestCase {
-    static let scale: CGFloat = 2
+    /// The screen's: a field lays out on its window's device pixels, so the bitmap that reads it is that scale too
+    /// (2 on a Retina display, 1 on a headless Mac's virtual one).
+    static let scale: CGFloat = NSScreen.main?.backingScaleFactor ?? 2
     static let red: BatchValue = [255, 0, 0, 255]
 
     /// The box, in points from the top left, of the red ink: a pixel whose
@@ -141,9 +143,11 @@ final class FieldInkMacTests: XCTestCase {
         let got = try XCTUnwrap(got, "\(what): no ink", file: file, line: line)
         let want = try XCTUnwrap(want, "\(what): no reference ink", file: file, line: line)
         // Half a point: one device pixel at 2x.
-        XCTAssertEqual(got.minX, want.minX, accuracy: 0.5, "\(what): inline start \(got) against CSS's \(want)", file: file, line: line)
-        XCTAssertEqual(got.minY, want.minY, accuracy: 0.5, "\(what): top \(got) against CSS's \(want)", file: file, line: line)
-        XCTAssertEqual(got.maxY, want.maxY, accuracy: 0.5, "\(what): bottom \(got) against CSS's \(want)", file: file, line: line)
+        // Half a point at 2x; a whole device pixel at 1x, where a half point does not exist.
+        let near = max(0.5, 1 / Self.scale)
+        XCTAssertEqual(got.minX, want.minX, accuracy: near, "\(what): inline start \(got) against CSS's \(want)", file: file, line: line)
+        XCTAssertEqual(got.minY, want.minY, accuracy: near, "\(what): top \(got) against CSS's \(want)", file: file, line: line)
+        XCTAssertEqual(got.maxY, want.maxY, accuracy: near, "\(what): bottom \(got) against CSS's \(want)", file: file, line: line)
     }
 
     /// A field's value, the same value while it is edited (the field

@@ -110,10 +110,20 @@ use wire::outcome_to_json;
 
 type NativeFactory = fn(&str) -> Box<dyn NativeModule>;
 
-/// The module's journal lines since the last take: the runtime's own
-/// (`None`), those it wrote through the console among them, and the app's
-/// `console` lines, each with the method that wrote it.
-pub(crate) type Logs = Vec<(Option<exact_runner::Console>, String)>;
+/// Who wrote a line of the module's journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Writer {
+    /// The runtime itself, through the console among other ways.
+    Runtime,
+    /// The app's `console`, with the method that wrote it (LLP 1027.009 D1).
+    App(exact_runner::Console),
+    /// The runtime, for the platform's log alone: an error event no listener
+    /// cancelled, which a line of the runtime's own journals (LLP 1175 D5).
+    Uncaught,
+}
+
+/// The module's journal lines since the last take, each with who wrote it.
+pub(crate) type Logs = Vec<(Writer, String)>;
 
 /// The seam ABI this executor speaks. ABI 2 adds Canvas 2D's `draw` and
 /// `surfaces` (LLP 1056 D1); a module without them still reports 1, and
@@ -247,6 +257,11 @@ struct HostState {
     secrets: secrets::Shared,
     store: Option<*mut Store>,
     requests: Vec<(u64, Request)>,
+    /// Reports (LLP 1175 D3, op 29): requests an error event's listener
+    /// made, moved out of `requests`, with whose turn it interrupted.
+    reports: Vec<(u64, Request, exact_runner::Reporter)>,
+    /// Whose turn the call into the engine now runs, for a report made in it.
+    turn: Option<exact_runner::Reporter>,
     /// The fetch tickets the app aborted after their requests were handed
     /// out (op 23), until `take_aborted` names their answers to the runner.
     aborted: Vec<u64>,
@@ -316,6 +331,13 @@ struct HostState {
     /// requests in flight and live answers' steps they left (op 21,
     /// `module_work.rs`, LLP 1146 D2).
     module_outstanding: usize,
+}
+
+impl HostState {
+    /// No device to answer storage: the bake's module, or a validation pass's.
+    fn deferring(&self) -> bool {
+        self.baking || self.validating
+    }
 }
 
 /// A TypeScript data source: bytecode, its bake-time identity, and the
@@ -634,7 +656,7 @@ impl Module {
         self.install(engine)?;
         let took_ms = started.elapsed().as_secs_f64() * 1e3;
         if took_ms > SLOW_LOAD_MS {
-            self.logs.push((None, format!(
+            self.logs.push((Writer::Runtime, format!(
                 "the module's top level took {took_ms:.0} ms to evaluate, and every answer waits for it after first pixel: compute what a source needs in that source, or once on its first call"
             )));
         }
@@ -785,11 +807,15 @@ impl Module {
         engine
             .harden()
             .map_err(|e| format!("exact-js: hardening failed: {e}"))?;
-        match &self.bytecode {
+        let loaded = match &self.bytecode {
             Bytecode::Linked(bytes) => engine.load_static(bytes),
             Bytecode::Owned(bytes) => engine.load_shared(bytes.clone()),
+        };
+        if let Err(e) = loaded {
+            // What it said before it threw, its `error` listeners included (LLP 1175 D2), is kept for the journal.
+            self.logs.extend(engine.take_log());
+            return Err(format!("exact-js: the module did not load: {e}"));
         }
-        .map_err(|e| format!("exact-js: the module did not load: {e}"))?;
         let abi = engine.string("abi")?;
         if !abi_supported(&abi) {
             return Err(format!(
@@ -848,6 +874,7 @@ impl Module {
         self.parked.clear();
         self.work = Default::default();
         self.host.requests.clear();
+        self.host.reports.clear();
         self.host.aborted.clear();
         self.background = Default::default();
         // Module work ends with the engine (LLP 1146 D2).
@@ -894,6 +921,7 @@ impl Module {
     pub fn take_logs(&mut self) -> Vec<String> {
         self.take_lines()
             .into_iter()
+            .filter(|(by, _)| *by != Writer::Uncaught)
             .map(|(_, line)| line)
             .collect()
     }
@@ -930,6 +958,15 @@ impl Module {
         let count = engine.call("__exact_calls_open", ["", "", ""]);
         self.retire_oom();
         count.ok()?.parse().ok()
+    }
+
+    /// Whose turn a call for `target` runs, for a report made in it (LLP 1175 D3).
+    fn reporter(target: Option<Target>, source: &str) -> exact_runner::Reporter {
+        match target {
+            Some(target) => exact_runner::Reporter::Answer(target),
+            None if source.starts_with(TOOL) => exact_runner::Reporter::Tool,
+            None => exact_runner::Reporter::None,
+        }
     }
 
     fn take_request(&mut self, ticket: u64) -> Option<Request> {
@@ -998,6 +1035,7 @@ impl Module {
             None if session && source.starts_with(TOOL) => "tool",
             _ => "",
         };
+        self.host.turn = Some(Module::reporter(target, source));
         let started = Instant::now();
         let budget_ms = self.turn_budget_ms(started);
         // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
@@ -1025,9 +1063,16 @@ impl Module {
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
                 reply = Module::decode_reply(sig, engine, source, &text)?;
             }
-            Ok(Module::step(sig, engine, source, reply, self.host.baking))
+            Ok(Module::step(
+                sig,
+                engine,
+                source,
+                reply,
+                self.host.deferring(),
+            ))
         })();
         self.host.store = None;
+        self.host.turn = None;
         if let Some(error) = self.retire_oom() {
             return Err(error);
         }

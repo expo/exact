@@ -9,21 +9,25 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
-/// The app's window: an ordinary `UIWindow` that, under the agent only,
-/// logs the touches it dispatched.
+/// The app's window: an ordinary `UIWindow` that, under the agent or
+/// `--live` only, logs the touches it dispatched.
 public final class ExactWindow: UIWindow {
     public override func sendEvent(_ event: UIEvent) {
         // Read before UIKit delivers the event: which lifts lost the view their touch began on (`TouchLog.viewGone`),
         // and when the window had the event, on the mach clock of `UITouch.timestamp`
-        let gone = ExactEnv.agentMode && event.type == .touches ? TouchLog.viewGone(event) : []
-        let dispatched = ExactEnv.agentMode ? CACurrentMediaTime() : 0
+        #if EXACT_AGENT
+        let gone = ExactEnv.agentCarried && event.type == .touches ? TouchLog.viewGone(event) : []
+        let dispatched = ExactEnv.agentCarried ? CACurrentMediaTime() : 0
+        #endif
         // Inspect mode takes every touch and press (InspectIOS.swift), and
         // knows the touches down when it begins. (It reached this window,
         // so the agent's touch log still has it.)
         #if EXACT_INSPECT && os(iOS)
         InspectHost.see(event)
         if Inspect.on || InspectHost.owning, InspectHost.take(event, in: self) {
-            if ExactEnv.agentMode, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+            #if EXACT_AGENT
+            if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+            #endif
             return
         }
         #endif
@@ -37,7 +41,9 @@ public final class ExactWindow: UIWindow {
             HeldState.input(at: touch.view) // a contact on a held node, or in it, lets its hold go (HeldState.swift)
         }
         super.sendEvent(event)
-        if ExactEnv.agentMode, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+        #if EXACT_AGENT
+        if ExactEnv.agentCarried, event.type == .touches { TouchLog.record(event, in: self, gone: gone, dispatched: dispatched) }
+        #endif
         // A navigation is timed from its input: a finger lifting or a press.
         if event.type == .presses || (event.allTouches ?? []).contains(where: { $0.phase == .ended }) {
             ExactLaunch.shared.input(at: event.timestamp)
@@ -45,8 +51,22 @@ public final class ExactWindow: UIWindow {
     }
 }
 
+/// A row given to a menu UIKit shows: its node, and the label UIKit's row
+/// reads (its title, then its subtitle after a comma).
+struct GivenRow {
+    let row: UInt32, incarnation: UInt64, label: String
+    init(_ node: NodeView, title: String, subtitle: String?) {
+        row = node.id; incarnation = node.incarnation
+        label = subtitle.map { $0.isEmpty ? title : "\(title), \($0)" } ?? title
+    }
+}
+
+/// Why a finger cannot aim at what UIKit shows for a node.
+struct AimRefusal: Error { let why: String }
+
 /// The last 256 touch dispatches, in order. A touch is a small integer from
 /// the first time its `UITouch` is seen until it ends.
+#if EXACT_AGENT
 enum TouchLog {
     nonisolated(unsafe) static var entries: [[String: Any]] = []
     nonisolated(unsafe) static var seq = 0
@@ -109,7 +129,7 @@ enum TouchLog {
             let p = touch.location(in: window)
             seq += 1
             var entry: [String: Any] = ["seq": seq, "touch": id, "phase": phase, "t": touch.timestamp,
-                                        "at": [Agent.r2(p.x), Agent.r2(p.y)], "type": touch.type == .direct ? "direct" : "\(touch.type.rawValue)"]
+                                        "at": [InspectionValue.r2(p.x), InspectionValue.r2(p.y)], "type": touch.type == .direct ? "direct" : "\(touch.type.rawValue)"]
             // A touch a system recognizer takes (iOS 26's tab bar selects with
             // one on the window) has no view: where the window's hit test put it.
             for (key, value) in landing(touch.view ?? window.hitTest(p, with: nil)) { entry[key] = value }
@@ -216,7 +236,8 @@ extension Agent {
     /// pressed, focused or opened.
     func aim(_ req: [String: Any]) -> [String: Any] {
         settleForPress()
-        guard let v = view(req), let win = v.window else { return miss(req) }
+        let flat = flatBoxForRequest(req)
+        guard let v = view(req) ?? flat?.host, let win = v.window else { return miss(req) }
         if v.placedAncestor?.placementHidden == true { return ["error": "tap #\(v.id): placed child is hidden"] }
         // Said before where it sits: until a swipe reveals it, its node is
         // past the row's edge (splitter rough 12).
@@ -271,39 +292,41 @@ extension Agent {
         // A row a grouped list draws, or its toggle's or detail button's
         // control (LLP 1084 D5): the finger aims at UIKit's cell or
         // accessory, never the hidden authored node beneath it.
-        var target: UIView = v, port: UIScrollView?, region: CGRect?
-        switch presenter.groupedLists?.shown(v) {
-        case .refused(let why): return ["error": "tap #\(v.id): \(why)"]
-        case .view(let drawn, let list): target = drawn; port = list
-        case nil: break
+        var target: UIView = flat?.host.container ?? v, port: UIScrollView?, region = flat?.rect
+        if flat == nil {
+            switch presenter.groupedLists?.shown(v) {
+            case .refused(let why): return ["error": "tap #\(v.id): \(why)"]
+            case .view(let drawn, let list): target = drawn; port = list
+            case nil: break
+            }
         }
         // A segment or a header button's bar item UIKit draws in its place
         // (r5 weather, mood journal): there.
         var barred = false, inBar = false
-        if target === v, let place = drawnPlace(v) {
+        if flat == nil, target === v, let place = drawnPlace(v) {
             switch place {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]
             case .success(let drawn): target = drawn.view; region = drawn.region; barred = drawn.barred; inBar = drawn.inBar
             }
         }
-        if target === v, let field = presenter.navigation.drawnSearch(v) {
+        if flat == nil, target === v, let field = presenter.navigation.drawnSearch(v) {
             guard field.window === win, !field.isHidden, field.bounds.width > 0, field.bounds.height > 0 else {
                 return ["error": "tap #\(v.id): UIKit's search field is not shown; scroll to the top and `clock settle` first"]
             }
             target = field; barred = true
         }
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
-        if target === v, let item = tabItem(v) {
+        if flat == nil, target === v, let item = tabItem(v) {
             switch item {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]
             case .success(let control): target = control; region = control.bounds; barred = true
             }
         }
-        let drawnBox = target === v ? nil : box(target, region: region)
+        let drawnBox = flat == nil && target === v ? nil : box(target, region: region)
         // A point from the top left of what is drawn: UIKit's cell for a row a list draws.
         if let pair = at["at"] as? [Double] {
             let whole = drawnBox ?? box(v)
-            guard pair[0] >= 0, pair[1] >= 0, pair[0] < whole.width, pair[1] < whole.height else { return ["error": "tap #\(v.id) at: (\(pair[0]), \(pair[1])) is outside its \(Agent.r2(whole.width))×\(Agent.r2(whole.height)) box"] }
+            guard pair[0] >= 0, pair[1] >= 0, pair[0] < whole.width, pair[1] < whole.height else { return ["error": "tap #\(v.id) at: (\(pair[0]), \(pair[1])) is outside its \(InspectionValue.r2(whole.width))×\(InspectionValue.r2(whole.height)) box"] }
         }
         guard var local = tapPoint(at, node: v, drawn: drawnBox) else {
             return ["error": "tap #\(req["id"] ?? v.id): no visible text fragment; scroll it into view first"]
@@ -327,10 +350,12 @@ extension Agent {
                          native: ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
         }
         #endif
-        if let why = obscured(inBar ? barItemTarget(v, bar: target, hit: seen!) : target, at: p, hit: seen!) { return ["error": "tap #\(v.id): \(why)"] }
+        if let why = obscured(inBar ? barItemTarget(v, bar: target, hit: seen!) : target, at: p, hit: seen!)
+            ?? flat.flatMap({ flatObscured($0, at: p, hit: seen!) }) { return ["error": "tap #\(v.id): \(why)"] }
         // Named, it presses what it names, as the activation's tap does.
         var avoided: PressReach?
-        if press, target === v, at["at"] == nil, (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) == nil }) == true {
+        if let flat, press, at["at"] == nil, let refusal = flatAddressed(flat, at: p, in: win) { return refusal }
+        if flat == nil, press, target === v, at["at"] == nil, (req["id"] as? Int).map({ presenter.inlineText(UInt32($0)) == nil }) == true {
             switch addressedPoint(v, box: v.tapBox(box(v)), in: win) {
             case .refused(let refusal): return refusal.reply
             case .at(let q, let middle):
@@ -361,34 +386,34 @@ extension Agent {
             }
         }
         guard let space = scene?.coordinateSpace else { return ["error": "tap #\(v.id): no scene"] }
-        return aimed(v, at: p, local: local, in: win, space: space, hit: seen, avoided: avoided)
+        return aimed(v, at: p, local: local, in: win, space: space, hit: seen, avoided: avoided, node: flat?.id)
     }
 
     /// The aim's reply: the window point `p` in the scene's space (`local`
     /// in the viewport's), and where the dispatch log must see it land: the
     /// Exact node `seen` is in, or no node for UIKit's own row (`native`).
     private func aimed(_ v: NodeView, at p: CGPoint, local: CGPoint, in win: UIWindow, space: UICoordinateSpace, hit seen: UIView?,
-                       avoided: PressReach? = nil, native: [String: Any]? = nil) -> [String: Any] {
+                       avoided: PressReach? = nil, native: [String: Any]? = nil, node: UInt32? = nil) -> [String: Any] {
         let vp = presenter.viewport, s = win.convert(p, to: space), fixed = win.convert(p, to: win.screen.fixedCoordinateSpace)
         let origin = vp.convert(vp.pageOrigin, to: space)
         var aim: [String: Any] = [
             "seq": TouchLog.seq, "session": session.label, "generation": session.generation,
             "orientation": Agent.orientation(win.windowScene),
-            "screen": ["w": Agent.r2(space.bounds.width), "h": Agent.r2(space.bounds.height), "x": Agent.r2(origin.x), "y": Agent.r2(origin.y)],
-            "point": [Agent.r2(s.x), Agent.r2(s.y)], "node": Int(v.id),
-            "fixed": [Agent.r2(fixed.x), Agent.r2(fixed.y)], // the screen's portrait space, where XCTest's synthesizer presses (touches.swift)
+            "screen": ["w": InspectionValue.r2(space.bounds.width), "h": InspectionValue.r2(space.bounds.height), "x": InspectionValue.r2(origin.x), "y": InspectionValue.r2(origin.y)],
+            "point": [InspectionValue.r2(s.x), InspectionValue.r2(s.y)], "node": Int(node ?? v.id),
+            "fixed": [InspectionValue.r2(fixed.x), InspectionValue.r2(fixed.y)], // the screen's portrait space, where XCTest's synthesizer presses (touches.swift)
             // The size of the window's screen, by which the touch runner finds its display on a device with more than one
-            "display": [Agent.r2(win.screen.bounds.width), Agent.r2(win.screen.bounds.height)],
+            "display": [InspectionValue.r2(win.screen.bounds.width), InspectionValue.r2(win.screen.bounds.height)],
             // A window point's unit steps right and down in that space, by which a drag's end is found there
             "fixedAxes": [CGPoint(x: p.x + 1, y: p.y), CGPoint(x: p.x, y: p.y + 1)].map { step in
                 let f = win.convert(step, to: win.screen.fixedCoordinateSpace)
-                return [Agent.r2(f.x - fixed.x), Agent.r2(f.y - fixed.y)]
+                return [InspectionValue.r2(f.x - fixed.x), InspectionValue.r2(f.y - fixed.y)]
             },
-            "at": [Agent.r2(local.x), Agent.r2(local.y)], // the viewport point, as `tap` replies it
-            "window": [Agent.r2(p.x), Agent.r2(p.y)], // the window point, as the dispatch log records touches
-            "viewport": [Agent.r2(vp.pageSize.width), Agent.r2(vp.pageSize.height)],
-            "safeArea": ["bottom": Agent.r2(win.safeAreaInsets.bottom)],
-            "keyboard": keyboardBox().map { [$0.minX, $0.minY, $0.width, $0.height].map(Agent.r2) } ?? NSNull(),
+            "at": [InspectionValue.r2(local.x), InspectionValue.r2(local.y)], // the viewport point, as `tap` replies it
+            "window": [InspectionValue.r2(p.x), InspectionValue.r2(p.y)], // the window point, as the dispatch log records touches
+            "viewport": [InspectionValue.r2(vp.pageSize.width), InspectionValue.r2(vp.pageSize.height)],
+            "safeArea": ["bottom": InspectionValue.r2(win.safeAreaInsets.bottom)],
+            "keyboard": keyboardBox().map { [$0.minX, $0.minY, $0.width, $0.height].map(InspectionValue.r2) } ?? NSNull(),
             // The Exact node the window's hit test finds there: where the dispatch log must see the touch land.
             "hit": TouchLog.landing(seen)["node"] ?? NSNull(),
             // In a grouped list, the row and part it must land on too.
@@ -632,17 +657,5 @@ struct MenuReadings {
     }
 }
 
-/// A row given to a menu UIKit shows: its node, and the label UIKit's row
-/// reads (its title, then its subtitle after a comma).
-struct GivenRow {
-    let row: UInt32, incarnation: UInt64, label: String
-    init(_ node: NodeView, title: String, subtitle: String?) {
-        row = node.id; incarnation = node.incarnation
-        label = subtitle.map { $0.isEmpty ? title : "\(title), \($0)" } ?? title
-    }
-}
-
-/// Why a finger cannot aim at what UIKit shows for a node (a menu's row,
-/// a tab's item).
-struct AimRefusal: Error { let why: String }
+#endif
 #endif

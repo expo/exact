@@ -199,7 +199,7 @@ final class InspectIOSTests: XCTestCase {
         XCTAssertNil(Inspect.select(session, id: node.id, clicked: true), "no selection outside inspect mode")
     }
 
-    /// `select {up}` (tamber/1.17) by the runner's own tree and the plan's copies, as the web pages' and the Mac's
+    /// `select {up}` (forma/1.17) by the runner's own tree and the plan's copies, as the web pages' and the Mac's
     /// (InspectMacTests, over apps/select-walk-fixture's shapes): each new copy owning an ancestor a step, at step `up`
     /// that copy's outermost node, past the last the root, with `moved`; an ask for a selection that moved, or with no
     /// copies for its plan, is nil, the selection as it is now. (The copies here stand in for the server's map: every

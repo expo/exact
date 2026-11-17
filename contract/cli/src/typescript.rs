@@ -152,11 +152,11 @@ pub fn typescript_exporting(
          }\n\
          declare global {\n\
            /** Sign in through the system browser (LLP 1069.006): the callback URL, or a rejection whose `status` is 499 cancelled, 403, 409, 428, 501 or 502. `message` is the sentence a loopback callback's page shows in place of \"You can close this tab.\" (LLP 1133.005 D9). */\n\
-           function openAuthSession(url: string, options: { callback: string; state: string; ephemeral?: boolean; message?: string }): Promise<string>;\n\
+           function openAuthSession(url: string, options: { callback: string; state: string; /** An RP-initiated logout return has neither code nor error and may omit state. */ logout?: boolean; ephemeral?: boolean; message?: string }): Promise<string>;\n\
            /** This carrier's auth callback, known before PAR (LLP 1069.006 D2). */\n\
            function authCallback(): string;\n\
-           /** The kept bitmap of the one mounted 2D canvas of `surface`, what its host has drawn, written as a straight-alpha sRGB PNG at device pixels to the `app:/` file `path` under `fs.write` (LLP 1056 D9). Rejects with a DOMException: `NotFoundError` (none mounted), `InvalidStateError` (several, or its size refused), `IndexSizeError` (no bitmap), `QuotaExceededError` (over 8192² px), `NotSupportedError` (`display-p3` or `float16`, or a host that cannot), `NotAllowedError` (the path), `EncodingError`. */\n\
-           function captureCanvas(surface: string, path: string): Promise<{ readonly path: string; readonly width: number; readonly height: number; readonly scale: number }>;\n\
+           /** The kept bitmap of the one mounted 2D canvas of `surface`, what its host has drawn, written as an sRGB image at device pixels to the `app:/` file `path` under `fs.write` (LLP 1056 D9). `type` and `quality` are `toBlob`'s: a straight-alpha PNG by default, `image/jpeg` on every host (over opaque black, `quality` 0 to 1, 0.92 by default), another type where the host's system encoder writes it, else a PNG; `type` in the answer is the one written. Rejects with a DOMException: `NotFoundError` (none mounted), `InvalidStateError` (several, or its size refused), `IndexSizeError` (no bitmap), `QuotaExceededError` (over 8192² px), `NotSupportedError` (`display-p3` or `float16`, or a host that cannot), `NotAllowedError` (the path), `EncodingError`. */\n\
+           function captureCanvas(surface: string, path: string, type?: string, quality?: number): Promise<{ readonly path: string; readonly width: number; readonly height: number; readonly scale: number; readonly type: string }>;\n\
          }\n\
          export interface NativeModule { readonly available: boolean; call(request: Record<string, unknown>): Record<string, unknown>; later(request: Record<string, unknown>): Promise<Record<string, unknown>>; watch(topic: string): void }\n\
          /** A resource-owned WebSocket, for TypeScript on the web JS target and native hosts (LLP 1016.000 D7). Methods are synchronous-mutation-only; refresh or disposal invalidates it. */\n\
@@ -171,7 +171,7 @@ pub fn typescript_exporting(
          }\n\
          export interface StreamEvent { readonly type: string; readonly data: string | ArrayBuffer; readonly lastEventId: string; readonly coalesced: number; readonly protocol?: string; readonly kind?: string; readonly message?: string; readonly status?: number; readonly code?: number; readonly reason?: string; readonly wasClean?: boolean; /** An upload's `progress`: the body's bytes sent so far, of `total`. */ readonly loaded?: number; readonly total?: number; readonly lengthComputable?: boolean }\n\
          declare global {\n\
-           interface RequestInit { /** Checked on every host; the request is made as written. No host holds its reply yet. */ exactPrefetch?: boolean; /** Take this preload when method and URL agree; a name matching ^[a-z][a-z0-9-]*$. Accepted and ignored on the web. */ exactPreload?: string; exactProtocols?: string[]; cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\"; exactStream?: (event: StreamEvent, socket?: StreamSocket) => unknown; exactIndependentHttp?: { maxResponseBytes: number }; /** A deadline for the whole exchange, 1 to 3600000 ms: the request is cancelled and the fetch rejects with a FetchError whose `kind` is \"Timeout\". Not with `exactStream`, but for an upload (`exactUploadProgress`). */ exactTimeout?: number; /** With `exactStream` on a `ws:` or `wss:` URL: the socket ends when nothing has arrived for this long, 1 to 3600000 ms of real time, its opening and each message counting; the mapper gets one `error` event whose `kind` is \"Timeout\". Reopening is the app's: refresh the resource. */ exactIdleTimeout?: number; /** The body is this app file (`app:/…`), read by the host when it sends the request, under `fs.read`, at most 64 MiB; its bytes never enter JavaScript. Not with `body`, nor on a GET or HEAD; no Content-Type is added. */ exactBodyFrom?: string; /** A 2xx reply's body is written to this app file (`app:/…`) by the host as it arrives, under `fs.write`, at most `exactIndependentHttp.maxResponseBytes` or 1 GiB; its bytes never enter JavaScript. The file appears whole or not at all, and the response's `exactBodyTo` names the bytes written. A reply that is not 2xx leaves the file untouched and is read as usual. Not with `exactStream`, nor on a HEAD. */ exactBodyTo?: string; /** The server may hold the reply until something changes (a long poll): no clock waits on it (a jump, `clock settle`, `clock data`), and each reply that leaves it out names it. Its answer must be safe to supersede. Not with `exactStream`. */ exactHeld?: boolean; /** With `exactStream`, an upload: as its body (`body` or `exactBodyFrom`) goes out the mapper gets `progress` events (`loaded` of `total` bytes sent), then `load` with the reply's `status` and `data`, whatever the status, which ends it. It is in flight until that reply, for `pending` and every clock. Not on a GET or HEAD, a WebSocket or a long poll; it follows its redirects. */ exactUploadProgress?: boolean; /** With `exactStream`, a long poll: the host asks again and again, one GET at a time, each JSON reply an event whose `lastEventId` is its cursor (the reply's field `from`, `a` or `a.b`), asked with next in the query parameter `cursor`; a heartbeat (204, 304, an empty body, or by default the same cursor) is asked again with no event; the network, 408, 429, 502, 503 or 504 after `Retry-After` or a backoff of 1 s doubling to 30 s. */ exactLongPoll?: { cursor: string; from: string; sameCursor?: \"heartbeat\" | \"event\" } }\n\
+           interface RequestInit { /** Checked on every host; the request is made as written. No host holds its reply yet. */ exactPrefetch?: boolean; /** Take this preload when method and URL agree; a name matching ^[a-z][a-z0-9-]*$. Accepted and ignored on the web. */ exactPreload?: string; exactProtocols?: string[]; cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\"; exactStream?: (event: StreamEvent, socket?: StreamSocket) => unknown; exactIndependentHttp?: { maxResponseBytes: number }; /** A deadline for the whole exchange, 1 to 3600000 ms: the request is cancelled and the fetch rejects with a FetchError whose `kind` is \"Timeout\". Not with `exactStream`, but for an upload (`exactUploadProgress`). */ exactTimeout?: number; /** With `exactStream` on a `ws:` or `wss:` URL: the socket ends when nothing has arrived for this long, 1 to 3600000 ms of real time, its opening and each message counting; the mapper gets one `error` event whose `kind` is \"Timeout\". Reopening is the app's: refresh the resource. */ exactIdleTimeout?: number; /** The body is this app file (`app:/…`), streamed from disk by the host when it sends the request, under `fs.read`, with no size bound (on the web a file the app wrote is read whole, at most 64 MiB); its bytes never enter JavaScript. Not with `body`, nor on a GET or HEAD; no Content-Type is added. */ exactBodyFrom?: string; /** A 2xx reply's body is written to this app file (`app:/…`) by the host as it arrives, under `fs.write`, at most `exactIndependentHttp.maxResponseBytes` or 1 GiB; its bytes never enter JavaScript. The file appears whole or not at all, and the response's `exactBodyTo` names the bytes written. A reply that is not 2xx leaves the file untouched and is read as usual. Not with `exactStream`, nor on a HEAD. */ exactBodyTo?: string; /** The server may hold the reply until something changes (a long poll): no clock waits on it (a jump, `clock settle`, `clock data`), and each reply that leaves it out names it. Its answer must be safe to supersede. Not with `exactStream`. */ exactHeld?: boolean; /** With `exactStream`, an upload: as its body (`body` or `exactBodyFrom`) goes out the mapper gets `progress` events (`loaded` of `total` bytes sent), then `load` with the reply's `status` and `data`, whatever the status, which ends it. It is in flight until that reply, for `pending` and every clock. Not on a GET or HEAD, a WebSocket or a long poll; it follows its redirects. */ exactUploadProgress?: boolean; /** With `exactStream`, a long poll: the host asks again and again, one GET at a time, each JSON reply an event whose `lastEventId` is its cursor (the reply's field `from`, `a` or `a.b`), asked with next in the query parameter `cursor`; a heartbeat (204, 304, an empty body, or by default the same cursor) is asked again with no event; the network, 408, 429, 502, 503 or 504 after `Retry-After` or a backoff of 1 s doubling to 30 s. */ exactLongPoll?: { cursor: string; from: string; sameCursor?: \"heartbeat\" | \"event\" } }\n\
            /** `{path, bytes}` when `exactBodyTo` wrote the body to its file (its `text()` and `arrayBuffer()` are then empty); absent or `null` otherwise. */\n\
            interface Response { readonly exactBodyTo?: { readonly path: string; readonly bytes: number } | null }\n\
            /** An answer that keeps coming: `exactStream` maps each event, and the end, to the answer. */\n\
@@ -254,7 +254,7 @@ fn language_model_tools(plan: &Plan, out: &mut String) {
 /// `contract`, when it has a design that lists them (LLP 1121 D7).
 pub fn design_exports(contract: &std::path::Path) -> Option<Vec<String>> {
     let path = crate::design_path(contract)?;
-    let design = exact_tamber::parse(&std::fs::read_to_string(path).ok()?).ok()?;
+    let design = exact_forma::parse(&std::fs::read_to_string(path).ok()?).ok()?;
     Some(design.exports?.into_iter().map(|e| e.value).collect())
 }
 
@@ -282,13 +282,13 @@ fn tokens(plan: &Plan, exports: Option<&[String]>, out: &mut String) {
             // A role override by the role's spelling, as a row writes it and
             // the generators name it (`CanvasText`, `-exact-secondary-label`).
             let name = role.unwrap_or(plan.str(row.name));
-            // A component's param is every binding's (D15), as `tamber gen` names it
+            // A component's param is every binding's (D15), as `forma gen` names it
             // (stage 7 D, over A's leaving it out: a data module may return one).
             let exported = name.starts_with(contract_lower::params::PREFIX)
                 || exports.is_none_or(|lines| {
                     lines
                         .iter()
-                        .any(|line| exact_tamber::exports_names(line, name, role))
+                        .any(|line| exact_forma::exports_names(line, name, role))
                 });
             if exported && !name.contains('(') && !names.contains(&name) {
                 names.push(name);
@@ -312,18 +312,31 @@ fn tokens(plan: &Plan, exports: Option<&[String]>, out: &mut String) {
 /// The file's top (LLP 1116.006 D7): what `app.ts` writes, one line each, so a builder reads
 /// these lines and not the declarations below. Each source the data module implements with its
 /// arguments and answer, then each named shape those carry, as TypeScript types; comments only.
+/// The sources app.ts answers beside a Rust data source owning `rust_sources`: the plan's, but those the runner, a
+/// module or a fetch answers.
+fn typescript_rows<'a>(
+    plan: &'a Plan,
+    rust_sources: &'a [String],
+) -> impl Iterator<Item = &'a exact_plan::SourcesRow> {
+    plan.sources.iter().filter(|row| {
+        let name = plan.str(row.name);
+        !exact_plan::runner_owned_source(name)
+            && plan.module_named(name).is_none()
+            && plan.fetch_named(name).is_none()
+            && !rust_sources.iter().any(|source| source == name)
+    })
+}
+
+/// The names of the sources app.ts answers beside a Rust data source owning `rust_sources`: what a mixed host's
+/// composition gives the TypeScript module (`exact_data::Mixed::new`).
+pub fn typescript_sources(plan: &Plan, rust_sources: &[String]) -> Vec<String> {
+    typescript_rows(plan, rust_sources)
+        .map(|row| plan.str(row.name).to_string())
+        .collect()
+}
+
 fn summary(plan: &Plan, rust_sources: &[String], out: &mut String) {
-    let sources: Vec<_> = plan
-        .sources
-        .iter()
-        .filter(|row| {
-            let name = plan.str(row.name);
-            !exact_plan::runner_owned_source(name)
-                && plan.module_named(name).is_none()
-                && plan.fetch_named(name).is_none()
-                && !rust_sources.iter().any(|source| source == name)
-        })
-        .collect();
+    let sources: Vec<_> = typescript_rows(plan, rust_sources).collect();
     if sources.is_empty() {
         return;
     }

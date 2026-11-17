@@ -101,9 +101,8 @@ pub(super) fn reach(
                 cy + ch / 2.0 + ty + q.layout[1],
             );
             let k = (q.scale * q.press).abs().max(1.0);
-            let turned = q.rotate % 360.0 != 0.0
-                || child.style.rotate_axis.is_3d()
-                || child.style.translate_z != 0.0;
+            let turned =
+                q.rotate % 360.0 != 0.0 || q.rotate_axis.is_3d() || child.style.translate_z != 0.0;
             let (hw, hh) = if turned {
                 let d = k * cw.hypot(ch);
                 (d, d)
@@ -167,7 +166,7 @@ fn spatial_matrix(
     offset: (f32, f32),
 ) -> M4 {
     let s = node.style;
-    let axis = s.rotate_axis.0;
+    let axis = p.rotate_axis.0;
     // The box's own transform about `transform-origin`, as CSS orders
     // the individual properties: translate, rotate, scale.
     let (ox, oy) = s.transform_origin.resolve(w, h);
@@ -209,7 +208,7 @@ pub(crate) fn mapping(
 ) -> [f32; 9] {
     let f = node.frame;
     let rect = (f.x, f.y, f.width, f.height);
-    if node.style.rotate_axis.is_3d() || node.style.translate_z != 0. {
+    if p.rotate_axis.is_3d() || node.style.translate_z != 0. {
         let parent = node.parent.and_then(|id| kernel.node(id)).map(|parent| {
             let frame = parent.frame;
             (parent, frame)
@@ -263,7 +262,8 @@ impl Painter {
                 || node.computed_row(StyleId::TextStrokeWidth, |s| s.text_stroke_width) > 0.0
                 || s.content_transition != exact_kernel::ContentTransition::None
                 || self.placements.contains_key(&id)
-                || (id != root && (s.rotate_axis.is_3d() || s.translate_z != 0.0))
+                || (id != root
+                    && ((walk.scene.presented)(id).rotate_axis.is_3d() || s.translate_z != 0.0))
             {
                 return None;
             }
@@ -286,7 +286,7 @@ impl Painter {
         clip: Option<Rect4>,
     ) -> bool {
         let s = node.style;
-        if self.flatten == Some(node.id) || !(s.rotate_axis.is_3d() || s.translate_z != 0.0) {
+        if self.flatten == Some(node.id) || !(p.rotate_axis.is_3d() || s.translate_z != 0.0) {
             return false;
         }
         if w <= 0.0 || h <= 0.0 {
@@ -295,6 +295,17 @@ impl Painter {
         let parent = self.split_parent(walk.scene.kernel, node);
         let m = spatial_matrix(parent, node, p, (x, y, w, h), offset);
         let own = crate::placement::compose(plane(&m), ts, 0.0, 0.0);
+        let (hit_ts, hit_clip) = walk.hit_space.unwrap_or((ts, clip));
+        let mut hit_p = *p;
+        hit_p.press_translate = [0.; 4];
+        let hit_m = spatial_matrix(
+            self.split_parent(walk.scene.kernel, node),
+            node,
+            &hit_p,
+            (x, y, w, h),
+            offset,
+        );
+        let hit_own = crate::placement::compose(plane(&hit_m), hit_ts, 0., 0.);
         // The island covers what the box paints past itself: its outer
         // shadows and any overflowing descendant (nothing past a clip).
         let cap = (2.0 * w.max(h).max(64.0)).max(self.viewport.0.max(self.viewport.1));
@@ -320,6 +331,7 @@ impl Painter {
                 let flatten = self.flatten.replace(node.id);
                 let mut child_walk = Walk {
                     scene: walk.scene,
+                    hit_space: None,
                     boxes: Vec::new(),
                     text: BTreeMap::new(),
                     fields: HashMap::new(),
@@ -340,7 +352,8 @@ impl Painter {
                 self.flatten = flatten;
                 self.backend.pop_clip();
                 self.backend.plane_end();
-                project(walk, child_walk, inv, clip);
+                let hit_inv = crate::placement::inverse(hit_own).unwrap_or(inv);
+                project(walk, child_walk, inv, clip, hit_inv, hit_clip);
                 return true;
             }
         }
@@ -363,6 +376,7 @@ impl Painter {
         painter.backend.begin(iw, ih, self.scale);
         let mut child_walk = Walk {
             scene: walk.scene,
+            hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
             fields: HashMap::new(),
@@ -389,40 +403,55 @@ impl Painter {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }
         }
-        project(walk, child_walk, inv, clip);
+        let hit_plane = self::plane(&mul(&hit_m, &translate(x - left, y - top, 0.)));
+        let hit_device = crate::placement::compose(hit_plane, hit_ts, 0., 0.);
+        let hit_inv = crate::placement::inverse(hit_device).unwrap_or(inv);
+        project(walk, child_walk, inv, clip, hit_inv, hit_clip);
         true
     }
 }
 
 /// Move the plane's painted boxes and hit maps into its parent's coordinates.
-fn project(walk: &mut Walk<'_, '_>, child_walk: Walk<'_, '_>, inv: [f32; 9], clip: Option<Rect4>) {
+fn project(
+    walk: &mut Walk<'_, '_>,
+    child_walk: Walk<'_, '_>,
+    inv: [f32; 9],
+    clip: Option<Rect4>,
+    hit_inv: [f32; 9],
+    hit_clip: Option<Rect4>,
+) {
     walk.text.extend(child_walk.text);
     walk.fields.extend(child_walk.fields);
     walk.inline.extend(child_walk.inline);
-    let planes = [[0., 0., 1.]; 2];
-    for mut b in child_walk.boxes {
-        // A box already in its own plane (a 3D child) maps through both:
-        // this island's inverse, then its own (LLP 1077 D8).
-        // A clip between the two planes (an overflow inside this
-        // island) goes into the inner plane too, as its corners' bounds.
-        let (local, local_clip, inv, planes) = match b.projective {
-            Some((inner, r, c, p)) => {
-                let mid = b.clip.and_then(|m| mapped_bounds(&inner, m));
-                let c = match (c, mid) {
-                    (Some(c), Some(m)) => Some(intersect(c, m)),
-                    (c, m) => c.or(m),
-                };
-                (r, c, mul3(&inner, &inv), p)
-            }
-            None => (b.rect, b.clip, inv, planes),
-        };
-        if let Some(map) = crate::placement::inverse(inv) {
-            b.rect = crate::placement::clipped_bounds(&map, planes, local);
-        }
-        b.projective = Some((inv, local, local_clip, planes));
-        b.clip = clip;
+    for b in child_walk.boxes {
+        let hit = project_box(b.for_hit(), hit_inv, hit_clip);
+        let mut b = project_box(b, inv, clip);
+        b.hit = Some(hit.geometry());
         walk.boxes.push(b);
     }
+}
+
+fn project_box(mut b: PaintedBox, inv: [f32; 9], clip: Option<Rect4>) -> PaintedBox {
+    b.map_clips(inv);
+    let planes = [[0., 0., 1.]; 2];
+    // Compose nested planes and keep clips in the plane that owns them.
+    let (local, local_clip, inv, planes) = match b.projective {
+        Some((inner, r, c, p)) => {
+            let mid = b.clip.and_then(|m| mapped_bounds(&inner, m));
+            let c = match (c, mid) {
+                (Some(c), Some(m)) => Some(intersect(c, m)),
+                (c, m) => c.or(m),
+            };
+            (r, c, mul3(&inner, &inv), p)
+        }
+        None => (b.rect, b.clip, inv, planes),
+    };
+    if let Some(map) = crate::placement::inverse(inv) {
+        b.rect = crate::placement::clipped_bounds(&map, planes, local);
+    }
+    b.projective = Some((inv, local, local_clip, planes));
+    b.clip = clip;
+    b
 }
 
 // A painted box in a scroll container's coordinates (`presenter/reveal.rs`, `presenter/links.rs`).
@@ -469,6 +498,11 @@ impl PaintedBox {
 
     /// An inline run replaces the paragraph's local box while keeping its transforms.
     pub(crate) fn with_scroll_rect(mut self, rect: Rect4) -> Option<Self> {
+        let hit = self.hit.take().and_then(|hit| {
+            let mut b = self.clone();
+            b.hit = Some(hit);
+            b.for_hit().with_scroll_rect(rect).map(|b| b.geometry())
+        });
         let local = if let Some((ts, local)) = self.affine.as_mut() {
             *local = rect;
             bbox(*ts, rect)
@@ -480,6 +514,7 @@ impl PaintedBox {
         }
         self.rect = rect;
         self.rect = self.scroll_bounds(&self.scroll_mapping()?)?;
+        self.hit = hit;
         Some(self)
     }
 }

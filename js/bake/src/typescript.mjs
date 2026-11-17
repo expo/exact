@@ -14,7 +14,7 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { envReads, inlineSettings } from './__exact_env.mjs';
+import { checkPreloadBackend, envReads, inlineSettings } from './__exact_env.mjs';
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
@@ -71,7 +71,7 @@ export function fixtureBackendSelection(app, env=process.env, parse) {
 // The bound on a type check that never ends (the design tool's `build.mjs --check` spun 4.7 days, found 2026-10-26):
 // 10 minutes, a bound for "never", not a target (the clone's check takes seconds). A test may shorten it
 // (EXACT_CHECK_BOUND_MS), read only under EXACT_TEST_TIMING=1, as the design server's clocks are
-// (scripts/tamber-timing.mjs); a value not shorter, not a whole number of ms from 50, or set without the switch is
+// (scripts/forma-timing.mjs); a value not shorter, not a whole number of ms from 50, or set without the switch is
 // ignored. Here, not in a module of its own: the native bake copies this file alone into its stage.
 export const CHECK_BOUND_MS = 10 * 60_000;
 
@@ -503,8 +503,7 @@ export function stagePackages(stage, parse) {
 // captured file by file as the bundle reaches it: each import is resolved
 // from where its importer really is, or from the app for a linked package's peer
 // (Node's lookup, a package's `exports`, `main` and `browser` fields, as a
-// browser bundle resolves them), and the
-// file it leads to is copied into the stage under `node_modules/.packages/
+// browser bundle resolves them), and the file it leads to is copied into the stage under `node_modules/.packages/
 // <name>@<version>/`, with every `package.json` between it and the package's
 // root (their `type` and `sideEffects`). The bundle loads only those copies.
 // `__exact_packages.json` records each file by where it was read and its
@@ -523,8 +522,7 @@ const builtin=(spec)=>spec.startsWith('node:') || BUILTIN.has(spec) || BUILTIN.h
 // npm's package names (with the old capitals) and versions: a place in the
 // stage is made of them, so nothing else is taken.
 const NAME=/^(?:@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/i, VERSION=/^(?:[0-9a-z][\w.+-]*)?$/i;
-// The package a file belongs to: the nearest `package.json` that names one
-// (a nested `{"type":"module"}` names none).
+// A nameless entry manifest ends the package walk; a nested `{"type":"module"}` does not.
 function packageOf(file, installed) {
   for (let dir=dirname(file);;) {
     let json=null;
@@ -534,6 +532,7 @@ function packageOf(file, installed) {
       if (!NAME.test(json.name) || !VERSION.test(version)) throw new Error(`${join(dir,'package.json')}: not an npm package name and version (${JSON.stringify(json.name)}, ${JSON.stringify(version)})`);
       return {root:dir,key:json.name+'@'+version,name:json.name,json,installed:new Set(installed ? [installed] : [])};
     }
+    if (json && ['exports','main','types'].some(key=>Object.hasOwn(json,key))) return null;
     const up=dirname(dir);
     if (up===dir) return null;
     dir=up;
@@ -980,6 +979,7 @@ export function configure(stage, incremental=false, parse, web=false) {
       if (!selection) throw error;
       throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
     }
+    checkPreloadBackend(app,settings.record,literalBackendOrigin(settings.code,parse),selection);
     const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
     launchModule(stage,web ? [] : launched);
     const after=developmentGrants(launchGrants(injected,parse,launched),parse);
@@ -1228,7 +1228,8 @@ export function usedPackages(app) {
  * `macos`, `tvos`), of the `extensions` in the compiled plan (LLP 1133.001
  * D4): each extension, its own Swift module's name,
  * its class, its source files, what it adds to Info.plist (`plist`,
- * `plistKeys`), and the system frameworks it needs from an OS version
+ * `plistKeys`), the host events it takes (`hostEvents`, LLP 1133.001.000
+ * D2), and the system frameworks it needs from an OS version
  * (`frameworks`, LLP 1133.016 D15). */
 export function appleImplementations(app, target, extensions, contractSources = []) {
   const { text } = usedPackages(app), named = `${text}\n${appText(app)}\n${contractSources.map(path => readFileSync(path, 'utf8')).join('\n')}`;
@@ -1256,7 +1257,7 @@ export function appleImplementations(app, target, extensions, contractSources = 
     const events=(i.declaration.names ?? []).some(n=>n.event);
     const credentialMembers = Object.entries(i.declaration.members ?? {}).flatMap(([owner, members]) =>
       Object.keys(members).map(option => `${owner.split('/').at(-1)}.${option}`));
-    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',credentialMembers,frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
+    return [{privacyManifest:resolve(impl.dir,'PrivacyInfo.xcprivacy'),extension,module:'ExactPkg_'+extension.replace(/\W/g,'_'),className:impl.json.class,sources:files.map(f=>resolve(impl.dir,f)),plist,plistKeys:impl.json.plistKeys ?? null,hostEvents:impl.json.hostEvents ?? null,views:packageViewTags(i,impl),authenticator,start:i.declaration?.start==='load',credentialMembers,frameworks:impl.json.frameworks??{},activity:impl.json.apple?.activity??null}];
   });
 }
 
@@ -1402,7 +1403,13 @@ function checkFiles(stage, libraries, files) {
   libraries = realpathSync.native(libraries);
   const allowed = path => within(path, stage) || (within(path, libraries) && configuredLibrary(relative(libraries, path)));
   for (const path of files) {
-    if (path && !allowed(realpathSync.native(path))) throw new Error('module outside captured app: ' + path);
+    if (!path || allowed(realpathSync.native(path))) continue;
+    let pkg;
+    if (/\.[cm]?tsx?$/.test(path) && !DECLARATION.test(path)) {
+      try { pkg=packageOf(path); } catch { /* keep the capture refusal if package metadata is invalid */ }
+    }
+    const note=pkg && pkg.root!==physicalId(capturedOrigins(stage).at(-1)[1]) ? `: TypeScript source in package ${pkg.name} (${join(pkg.root,'package.json')}). The type check stages package declarations, not source. Export a declaration file for this entry (for example, a "types" condition before "default") and keep its imports within the staged declarations.` : '';
+    throw new Error('module outside captured app: ' + path + note);
   }
   checkPeers(stage,files);
 }
@@ -1418,12 +1425,6 @@ function checkPeers(stage, files) {
   for (const [file,why] of peerRefusals) if (used.has(physicalId(resolve(stage,file)))) throw new Error(why);
 }
 
-/** Type-check a configured stage with the native compiler `tsc` (whose
- * standard libraries are in `libraries`): its diagnostics, or the compiler's
- * actual resolved graph, type-only imports included, must stay inside the
- * stage (a package's declarations are in it: `stagePackages`) and the
- * configured libraries. An external declaration must not influence an
- * accepted app artifact. */
 /** The checker runs before the bundle refuses a Node built-in, and says only "Cannot find module 'node:fs'… Try
  * `npm i --save-dev @types/node`", which changes nothing (expo/exact-build#183). Said here as the bundle says it. */
 export function nodeNote(diagnostics) {
@@ -1434,6 +1435,9 @@ export function nodeNote(diagnostics) {
   if (!modules.length && !names) return '';
   return `\nnote: ${modules.length ? `${modules.map(m=>`'${m}'`).join(', ')} ${modules.length>1 ? "are Node's built-ins" : "is Node's built-in"}` : "Node's globals are"}: a data module runs on Hermes and in the browser, which have no Node modules, so @types/node does not help; import a part of the package that needs none, or another package\n`;
 }
+/** Type-check a configured stage with native `tsc`: diagnostics and resolved files, including type-only imports,
+ * must stay inside the stage (`stagePackages` captures package declarations) and the configured `libraries`.
+ * An external declaration must not influence an accepted app artifact. */
 export async function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.

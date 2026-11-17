@@ -8,10 +8,10 @@ fn native_library_uses_copied_buffers_and_keeps_existing_sessions_alive() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-logic-test-{}-{timestamp}",
         std::process::id()
-    ));
+    )));
     fs::create_dir(&dir).unwrap();
     let source = dir.join("fixture.c");
     let entered = dir.join("entered");

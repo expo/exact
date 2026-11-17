@@ -7,6 +7,37 @@ import UIKit
 #endif
 
 final class ElementScrollTests: XCTestCase {
+    #if os(iOS)
+    /// A request to bring an element into view owns its scroller: a position Exact carries for it, still waiting for
+    /// the covers' answer, gives way to an instant reveal, and the answer's write leaves the reveal's offset
+    func testAnInstantRevealDropsAPositionExactCarries() throws {
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["overflow_y": "scroll"]],
+            ["op": "create", "id": 2, "kind": "view", "props": ["id": "target"]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 200.0, "h": 200.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 400.0, "w": 100.0, "h": 50.0],
+        ]))
+        let window = UIWindow(frame: p.viewport.frame)
+        window.addSubview(p.viewport)
+        defer { withExtendedLifetime(window) {} }
+        let node = try XCTUnwrap(p.views[1])
+        let sv = try XCTUnwrap(node.scrollView)
+        sv.contentSize = CGSize(width: 200, height: 1000)
+        node.retainScrollPosition(from: sv)
+        p.navigation.coversReported += 1
+        p.scrollElementIntoView(["target", "start", "nearest", "instant"])
+        XCTAssertNil(node.pendingScrollTop, "the reveal drops the carried position")
+        let revealed = sv.contentOffset.y
+        XCTAssertGreaterThan(revealed, 300)
+        p.navigation.writeCarriedScrollsWhenAnswered(through: p.navigation.coversReported)
+        XCTAssertEqual(sv.contentOffset.y, revealed, accuracy: 0.5, "the answer's write leaves the reveal's offset")
+    }
+    #endif
+
     func testPaddingAndMarginsAlignStartAndNearest() throws {
         #if os(macOS)
         _ = NSApplication.shared
@@ -205,10 +236,14 @@ final class ElementScrollTests: XCTestCase {
             p.onScrollend = { _ in ended += 1 }
 
             p.scrollElementIntoView(["target", "start", "nearest"])
-            XCTAssertNotNil(p.views[1]?.scrollEnd?.elementAnimation, "the ordinary reveal is in flight")
+            let reveal = p.views[1]?.scrollEnd?.elementAnimation
+            XCTAssertNotNil(reveal, "the ordinary reveal is in flight")
             p.apply(wireBatch([["op": "props", "id": 1, "set": ["scrollTop": "120"]]]))
 
-            XCTAssertNil(p.views[1]?.scrollEnd?.elementAnimation, "the authored offset invalidates the reveal token")
+            // A smooth write owns the scroller with a token of its own until it lands (81bf0161d, "A scroll the app
+            // asks for owns a followed scroller until it settles"); an auto one lands at once and holds none.
+            XCTAssertNotEqual(p.views[1]?.scrollEnd?.elementAnimation, reveal, "the authored offset invalidates the reveal token")
+            if behavior == "auto" { XCTAssertNil(p.views[1]?.scrollEnd?.elementAnimation) }
             if behavior == "auto" {
                 XCTAssertEqual(scroll.contentView.bounds.minY, 120, accuracy: 0.5, "an auto offset write lands immediately")
             }

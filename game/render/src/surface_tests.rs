@@ -510,7 +510,7 @@ fn presentation_trace_is_opt_in_read_once_and_never_advances_the_clock() {
     assert_eq!(reply.trace.stride, 37);
     assert!(!reply.trace.overflow);
     assert_eq!(reply.trace.frames.len(), 111);
-    let rows: Vec<_> = reply.trace.frames.chunks_exact(37).collect();
+    let rows: Vec<_> = reply.trace.frames.as_chunks::<37>().0.iter().collect();
     // Seekable T = [17, 25, 34] ms, L = 0, step = 1000/60 ms.
     // R = T - step = [1/3, 25/3, 52/3] ms; x = R/step = [.02, .5, 1.04].
     for (row, x) in rows.iter().zip([0.02, 0.5, 1.04]) {
@@ -688,6 +688,10 @@ fn fresh_touch_region_matches_rendered_and_headless_worlds() {
             dy: 0.,
             kind: exact_gpu::PointerKind::Touch,
             buttons: 1,
+            shift_key: false,
+            ctrl_key: false,
+            alt_key: false,
+            meta_key: false,
             at_ms: 0.,
         });
     }

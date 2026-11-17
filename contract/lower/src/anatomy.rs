@@ -425,7 +425,7 @@ fn rows(c: &Component, file: &File, decl: &PartDecl, m: &Mark) -> Vec<LowerError
 /// package that has none (not warned of, as an app's own is), and a
 /// library component's param by its short name.
 pub(crate) fn param_lines(
-    design: &exact_tamber::Design,
+    design: &exact_forma::Design,
     params: &[crate::params::ParamToken],
     identities: &[String],
     file: &File,
@@ -450,20 +450,20 @@ pub(crate) fn param_lines(
     for entry in &design.params {
         let name = &entry.name.value;
         let error = match resolver.resolve(name) {
-            Err(e) if e.id == "tamber-param-unknown" && under_library(name) => LowerError {
-                id: "tamber-package-unknown",
+            Err(e) if e.id == "forma-param-unknown" && under_library(name) => LowerError {
+                id: "forma-package-unknown",
                 message: format!("`{name}` in the design's `params` block names no param of the library: its names are its API, so a renamed or removed one fails the build (LLP 1139 D8)"),
                 span: Span::default(),
             },
             // Short, naming no param, as a library component's (`Card.gap`
             // once `gap` is gone): a rename never falls back to the warning.
-            Err(e) if e.id == "tamber-param-unknown" && exported(name) => LowerError {
-                id: "tamber-param-short-library",
+            Err(e) if e.id == "forma-param-unknown" && exported(name) => LowerError {
+                id: "forma-param-short-library",
                 message: format!("`{name}` names no param, and `{}` is a library component: a library's params are named in full (`<package>/<file>#{}.<param>`), so a renamed or removed one fails the build (LLP 1139 D8)", short(name), short(name)),
                 span: Span::default(),
             },
             Ok(p) if !name.contains('#') && file.library.contains(&p.identity) => LowerError {
-                id: "tamber-param-short-library",
+                id: "forma-param-short-library",
                 message: format!("`{name}` names a library component's param by its short name: write it in full, `{}` (LLP 1139 D8)", p.full),
                 span: Span::default(),
             },
@@ -475,10 +475,10 @@ pub(crate) fn param_lines(
 }
 
 /// The design's `params` lines naming no param of the app
-/// (`tamber-param-unknown`, a warning), less those a library's names
+/// (`forma-param-unknown`, a warning), less those a library's names
 /// refuse ([`param_lines`]), never both.
 pub(crate) fn unknown_params(
-    design: &exact_tamber::Design,
+    design: &exact_forma::Design,
     params: &[crate::params::ParamToken],
     file: &File,
     source_id: u32,
@@ -663,7 +663,7 @@ impl Lowerer<'_> {
     }
 }
 
-/// What the Tamber IR says of a component's anatomy (LLP 1139 D5).
+/// What the Forma IR says of a component's anatomy (LLP 1139 D5).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Described {
     /// Each part: its name, its groups, and whether its node holds the

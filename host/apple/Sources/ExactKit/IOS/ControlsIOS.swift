@@ -519,16 +519,16 @@ final class ControlHost: NSObject {
         guard let control = controls[node.id] else { return nil }
         if let b = control as? NativeButtonIOS { return nativeObservation(b) }
         if let value = valueObservation(control) {
-            return value.merging(["size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]) { a, _ in a }
+            return value.merging(["size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]) { a, _ in a }
         }
         #if os(tvOS)
         let on = (control as? ExactCheckbox)?.isOn ?? false
         return ["view": "checkbox", "on": on,
-                "size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]
+                "size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]
         #else
         let on = (control as? UISwitch)?.isOn ?? (control as? ExactCheckbox)?.isOn ?? false
         return ["view": control is UISwitch ? "UISwitch" : control is ExactRadio ? "radio" : "checkbox", "on": on,
-                "size": [Agent.r2(control.bounds.width), Agent.r2(control.bounds.height)]]
+                "size": [InspectionValue.r2(control.bounds.width), InspectionValue.r2(control.bounds.height)]]
         #endif
     }
 

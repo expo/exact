@@ -1,6 +1,6 @@
-// The design tool (LLP 1122), T1: a `tamber/1` client over an app's design
-// files, served by the app's Tamber server at its own local URL
-// (`bun exact.mjs tamber tool <app>`). app.ts is the protocol client; this
+// The design tool (LLP 1122), T1: a `forma/1` client over an app's design
+// files, served by the app's Forma server at its own local URL
+// (`bun exact.mjs forma tool <app>`). app.ts is the protocol client; this
 // view keeps no design state of its own: the files are the design.
 use Written, Inspected, Uses, Hello, CanvasCheck, Clients, CanvasIn, Canvas, AppAxes, Changes, Grid, Design, Levels, Contrast, Branch, Proposal, Scrub, Changeset, Scope, Lit, History, Typed, Pinned, SelectUp, PairCode, Committed, Imported, Reverted, Choices, ChosenDiffs from "./shapes.contract"
 use Pairing from "./pairing.contract"
@@ -171,7 +171,7 @@ component DesignTool
   // The changeset follows the long poll and each design read (which
   // measures what changed); history is read when shown.
   resource changeset = loadChangeset(file, since, design.answer) as shape Changeset else empty(ok=true)
-  // Each import card's choice, sent to the server as it is ticked (tamber/1.18 `choose`), so a reload or another
+  // Each import card's choice, sent to the server as it is ticked (forma/1.18 `choose`), so a reload or another
   // client starts from it; and the flips another client's choice since makes stale.
   resource choices = sendChoices(client, picked.join(";"), changes.answer) as shape Choices else empty(ok=true)
   // The diff each recomputed or edited import's card shows, as its choice is now (stage 15 D1.1).
@@ -186,7 +186,7 @@ component DesignTool
   // The server's files and their digests, folded below the canvas and the tokens (the hands-on pass: 25 rows came
   // before either on the clone).
   state filesShown = false
-  // A move up the chain (tamber/1.16 `select`; 1.17 by the page's own tree): the selection it moved from, and whether one
+  // A move up the chain (forma/1.16 `select`; 1.17 by the page's own tree): the selection it moved from, and whether one
   // is on its way (upExpect >= 0); the page says how many steps it took (`moved`), and a move that reached the root
   // before `up` is said so.
   state upFromKey = ""
@@ -944,7 +944,7 @@ component DesignTool
   // A mapped token's id is picked when it differs from where it began (in, unless the server's choice leaves it out).
   action toggleLeaveOut(id: string, on: bool, checked: bool)
     picked = checked != on ? picked.filter(p => p != id).concat([id]) : picked.filter(p => p != id)
-  // Flips on a card another client chose on since: dropped, its choice the card's now (tamber/1.18).
+  // Flips on a card another client chose on since: dropped, its choice the card's now (forma/1.18).
   action takeChoices
     picked = picked.filter(p => not choices.drop.includes(p))
   // An offer's id is picked when it differs from where it began.
@@ -1036,7 +1036,7 @@ component DesignTool
             // code its tool shows; an https door or a tunnel to this machine.
             column gap=8 padding=12 border-radius=12 background-color="-exact-secondary-background" testId="pair-remote"
               text "A design server on another machine" role="heading" aria-level=3
-              text "Its tool shows a code and an address. Pair from the tool that address serves (<address>/__tamber/tool/, its certificate accepted in this browser if its SHA-256 is the one shown): type the address and the code there. That server refuses a tool opened anywhere else." color="-exact-secondary-label" font="-exact-footnote" testId="pair-remote-how"
+              text "Its tool shows a code and an address. Pair from the tool that address serves (<address>/__forma/tool/, its certificate accepted in this browser if its SHA-256 is the one shown): type the address and the code there. That server refuses a tool opened anywhere else." color="-exact-secondary-label" font="-exact-footnote" testId="pair-remote-how"
               input value=remoteAt input=editRemoteAt placeholder="https://192.168.1.20:7743" aria-label="Design server address" testId="remote-at"
               input value=remoteCode input=editRemoteCode submit=pairRemote placeholder="XXXXX-XXXXX" aria-label="Pairing code" testId="remote-code"
               button press=pairRemote disabled=(pending(pairedWith) or remoteAt.trim() == "" or remoteCode.trim() == "") buttonStyle="bordered" testId="remote-pair"
@@ -1105,7 +1105,7 @@ component DesignTool
               else
                 column gap=4 padding=16 border-radius=12 background-color="-exact-secondary-background" testId="no-app"
                   text "No app running" role="heading" aria-level=3
-                  text "The canvas shows the app from its dev loop. Start one (bun exact.mjs web, in the app's directory), then open the tool through it: bun exact.mjs tamber tool --via <its URL>. Stop this tool first: it holds the design server, and --via refuses while it runs." color="-exact-secondary-label" testId="no-app-how"
+                  text "The canvas shows the app from its dev loop. Start one (bun exact.mjs web, in the app's directory), then open the tool through it: bun exact.mjs forma tool --via <its URL>. Stop this tool first: it holds the design server, and --via refuses while it runs." color="-exact-secondary-label" testId="no-app-how"
               // Several live copies (LLP 1122 T7), each its own build: pinned to its
               // mode and text size, or holding the selected view's state.
               if canvasView != "one"
@@ -1405,7 +1405,7 @@ component DesignTool
                           button press=cancelEdit testId="cancel-edit"
                             text "Cancel"
                         if (editKind == "set-dial" or editKind == "set-token" or editKind == "set-param") and proposal.ok and proposal.active and proposal.chip != "live"
-                          text (hello.live ? "This edit rebuilds the app, so it can't be scrubbed: Apply writes it." : "Scrubbing previews on the running copies: open the tool through a dev loop (tamber tool --via).") color="-exact-secondary-label" font="-exact-footnote" testId="scrub-unavailable"
+                          text (hello.live ? "This edit rebuilds the app, so it can't be scrubbed: Apply writes it." : "Scrubbing previews on the running copies: open the tool through a dev loop (forma tool --via).") color="-exact-secondary-label" font="-exact-footnote" testId="scrub-unavailable"
               // The Remove confirmation outside the dock, so its own Escape (which closes it) never reaches the dock's.
               if branchShown and not branch.param
                 dialog id="confirm-remove" role="alertdialog" aria-label=`Remove ${selToken}?`

@@ -107,7 +107,7 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
     mkdirSync(framework, { recursive: true });
     const parent = { CFBundleVersion: '8', CFBundleShortVersionString: '1.0.0', MinimumOSVersion: '17.0',
       UIDeviceFamily: [1, 2], CFBundleSupportedPlatforms: [device ? 'iPhoneOS' : 'iPhoneSimulator'], DTPlatformName: platform, ExactWidgetGeneration: 'fixture',
-      ...(device ? { UIRequiredDeviceCapabilities: ['arm64'] } : {}) };
+      CFBundleDevelopmentRegion: 'ar', CFBundleLocalizations: ['ar', 'en'], ...(device ? { UIRequiredDeviceCapabilities: ['arm64'] } : {}) };
     writeFileSync(resolve(bundle, 'Info.plist'), plistFile(parent));
     writeFileSync(resolve(framework, 'Info.plist'), plistFile({ CFBundleIdentifier: 'dev.exact.fixture.runtime' }));
     let signed = null;
@@ -135,6 +135,8 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
     }
     assert.deepEqual(info.CFBundleSupportedPlatforms, parent.CFBundleSupportedPlatforms);
     assert.equal(info.CFBundleVersion, parent.CFBundleVersion);
+    assert.equal(info.CFBundleDevelopmentRegion, 'ar');
+    assert.deepEqual(info.CFBundleLocalizations, ['ar', 'en']);
   }
 }));
 for (const device of [true, false]) {
@@ -1253,6 +1255,7 @@ test("setup's Cargo crates row fails on a registry without exact2's locked crate
 
 test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact contract name another's cargo, rustup's rustc working", async () => {
   const { sdkReport } = await import('./exact.mjs');
+  const { freshCompiler } = await import('../host/web-js/module.mjs');
   const pin = Bun.TOML.parse(readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8')).toolchain.channel;
   inDir((brew) => {
     writeFileSync(resolve(brew, 'cargo'), `#!/bin/sh\necho 'error: no such command: \`+${pin}\`' >&2\nexit 101\n`, { mode: 0o755 });
@@ -1264,9 +1267,15 @@ test.skipIf(process.platform === 'win32')("the setup report's Rust row and exact
     const rust = sdkReport(env, { only: 'web' }).find(row => row.name === 'Rust');
     assert.equal(rust.ok, false);
     assert.equal(rust.fix, fault);
-    const vocab = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'contract', 'vocab', 'button'], { env, encoding: 'utf8' });
-    assert.equal(vocab.status, 101);
-    assert.ok(vocab.stderr.includes(`exact contract: ${fault}`), vocab.stderr);
+    // `exact contract` reaches Cargo only where this checkout's compiler is not fresh and no tool set matches; a HOME
+    // with no sets leaves the checkout's own build to decide (LLP 1174 D5).
+    const compiler = resolve(import.meta.dir, '../target/debug', 'contract');
+    const vocab = spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'contract', 'vocab', 'button'], { env: { ...env, HOME: brew }, encoding: 'utf8' });
+    if (freshCompiler(compiler)) assert.equal(vocab.status, 0, vocab.stderr);
+    else {
+      assert.equal(vocab.status, 101);
+      assert.ok(vocab.stderr.includes(`exact contract: ${fault}`), vocab.stderr);
+    }
   });
 }, 60_000);
 

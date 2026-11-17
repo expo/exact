@@ -122,6 +122,7 @@ impl Drop for Server {
 
 fn job(ticket: u64, url: &str, independent: bool) -> RequestOut {
     RequestOut {
+        completion: None,
         ticket,
         target: "redirect".into(),
         request: if independent {

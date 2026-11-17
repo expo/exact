@@ -253,6 +253,99 @@ test('App Attest and the age range: a Mac build without a profile signs neither,
   expect([entitlementValue('aps-environment', true), entitlementValue('aps-environment', false)]).toEqual(['development', 'production']);
 });
 
+test('SharePlay: a Mac build without a profile signs no Group Activities, and a release ships without it (LLP 1133.001.000 D3)', async () => {
+  const { entitlementValue, macProfileEntitlements } = await import('./presence.mjs');
+  const key = 'com.apple.developer.group-session', compat = bake('device.shareplay', [key]), said = [];
+  expect(macProvisioning(app, compat, { release: true, find: none, log: (l) => said.push(l) })).toBeNull();
+  expect(said).toEqual([expect.stringMatching(/^device\.shareplay: this build signs no com\.apple\.developer\.group-session, since .*: SharePlay is unavailable to the app\.$/)]);
+  expect(macProfileNeeds(compat)).toEqual([{ entitlement: key, lines: 'device.shareplay', effect: 'SharePlay is unavailable to the app', mandatory: false }]);
+  expect(entitlementValue(key, true)).toBe(true);
+  const profile = { prefix: 'TEAM', team: 'TEAM', dev: true };
+  expect(macProfileEntitlements(app, profile, macProfileNeeds(compat), compat)[key]).toBe(true);
+});
+
+test('CloudKit signs its arrays and capitalised environment, and an unprovisioned Mac release claims no shares', async () => {
+  const { entitlements, infoPlist, macInfoPlist, tvReach } = await import('./build.mjs');
+  const { macProfileEntitlements, signsGrant } = await import('./presence.mjs');
+  const { hostEventKeys } = await import('./plist.mjs');
+  const { plistFile, PROFILE_KEYS } = await import('./assets.mjs');
+  const owner = { id: 'com.example.boards', displayName: 'Boards', manifest: { host: {} } };
+  const services = 'com.apple.developer.icloud-services', containers = 'com.apple.developer.icloud-container-identifiers';
+  const environment = 'com.apple.developer.icloud-container-environment', keys = [services, containers, environment];
+  for (const container of [null, 'iCloud.com.example.shared']) {
+    const values = { [services]: ['CloudKit'], ...(container ? { [containers]: [container] } : {}) };
+    const reach = { entitlements: keys, profileEntitlements: keys, entitlementValues: values, tvOmits: keys };
+    const compat = { inputs: { grantCeiling: `device.cloudkit${container ? ` ${container}` : ''}` }, reach };
+    for (const dev of [true, false]) {
+      const expected = { [services]: ['CloudKit'], [containers]: [container ?? `iCloud.${owner.id}`], [environment]: dev ? 'Development' : 'Production' };
+      const signed = entitlements(owner, 'TEAM', dev, reach, { distributed: !dev });
+      for (const [key, value] of Object.entries(expected)) {
+        const entry = plistFile({ [key]: value }).match(/<dict>([\s\S]*)<\/dict>/)[1].trim();
+        expect(signed).toContain(entry);
+        expect(PROFILE_KEYS).toContain(key);
+      }
+      expect(macProfileEntitlements(owner, { prefix: 'PREFIX', team: 'TEAM', dev }, macProfileNeeds(compat), compat)).toMatchObject(expected);
+      for (const omitted of ['aps-environment', 'ubiquity-', 'remote-notification']) expect(signed).not.toContain(omitted);
+    }
+    for (const bundle of [{ ...owner, clipParent: owner.id }, { ...owner, widgetAppId: owner.id }]) {
+      expect(entitlements(bundle, null, true, reach)).not.toContain('com.apple.developer.icloud-');
+    }
+    expect(entitlements(owner, null, true, tvReach(reach))).not.toContain('com.apple.developer.icloud-');
+    const said = [];
+    expect(macProvisioning(owner, compat, { release: true, find: none, log: l => said.push(l) })).toBeNull();
+    expect(said.join('\n')).toContain('CloudKit is unavailable');
+    expect(signsGrant('device.cloudkit', compat, null)).toBe(false);
+    expect(signsGrant('device.cloudkit', compat, { entitlements: { [services]: ['CloudKit'] } })).toBe(false);
+    const taken = provisioning => ({ packages: hostEventKeys([{ extension: 'invites', event: 'cloudkit-share' }], line => signsGrant(line, compat, provisioning)) });
+    expect(macInfoPlist(owner, { reach: taken(null) })).not.toContain('CKSharingSupported');
+    const clip = infoPlist(owner, false, { reach: taken(undefined), clip: true });
+    expect(clip).not.toContain('CKSharingSupported');
+    expect(clip).not.toContain('ExactHostEvents');
+    for (const plist of [infoPlist(owner, false, { reach: taken(undefined) }), macInfoPlist(owner, { reach: taken({ entitlements: Object.fromEntries(keys.map(k => [k, true])) }) })]) {
+      expect(plist).toContain('CKSharingSupported');
+      expect(plist).toContain('ExactHostEvents');
+    }
+  }
+});
+
+test('CloudKit profiles must allow the service, selected container and signed environment by value on iOS and macOS', async () => {
+  const { decodeProfile, profile, allows } = await import('./devices.mjs');
+  const { grantEntitlementValues } = await import('./presence.mjs');
+  const { plistFile } = await import('./assets.mjs');
+  const services = 'com.apple.developer.icloud-services', containers = 'com.apple.developer.icloud-container-identifiers';
+  const environment = 'com.apple.developer.icloud-container-environment', required = [services, containers, environment];
+  const owner = { id: 'com.example.boards' }, values = { [services]: ['CloudKit'], [containers]: ['iCloud.com.example.shared'] };
+  for (const mac of [false, true]) {
+    const decoded = (edits = {}) => decodeProfile('/synthetic/cloudkit', 'darwin', { read: () => ({ stdout: plistFile({
+      Name: 'CloudKit', TeamIdentifier: ['TEAM'], Platform: [mac ? 'OSX' : 'iOS'], ProvisionedDevices: ['DEVICE'],
+      ExpirationDate: new Date(Date.now() + 864e7).toISOString(),
+      Entitlements: { [mac ? 'com.apple.application-identifier' : 'application-identifier']: `TEAM.${owner.id}`, 'get-task-allow': true,
+        ...values, [environment]: ['Development', 'Production'], ...edits },
+    }) }) });
+    const chosen = decoded();
+    chosen.expires = new Date(Date.now() + 864e7);
+    const select = installed => mac
+      ? macProfile(owner, required, { installed, named: null, team: null, udid: 'DEVICE', values })
+      : profile('DEVICE', owner.id, required, { installed, named: null, team: null, values });
+    expect(select([chosen])).toBe(chosen);
+    expect(allows({ ...chosen, dev: false }, required, values)).toBe(true);
+    expect(allows({ ...chosen, dev: false, entitlementValues: { ...chosen.entitlementValues, [environment]: ['Development'] } }, required, values)).toBe(false);
+    expect(allows({ ...chosen, entitlementValues: { ...chosen.entitlementValues, [containers]: ['iCloud.com.example.*'] } }, required, values)).toBe(true);
+    const defaults = grantEntitlementValues(owner, { entitlementValues: { [services]: ['CloudKit'] } });
+    expect(defaults[containers]).toEqual([`iCloud.${owner.id}`]);
+    const defaultProfile = { ...chosen, entitlementValues: { ...chosen.entitlementValues, [containers]: defaults[containers] } };
+    expect(allows(defaultProfile, required, defaults)).toBe(true);
+    if (mac) expect(macProfile(owner, required, { installed: [defaultProfile], named: null, team: null, udid: 'DEVICE', values: defaults })).toBe(defaultProfile);
+    for (const edits of [{ [services]: ['CloudDocuments'] }, { [containers]: ['iCloud.com.example.other'] }, { [environment]: ['Production'] }]) {
+      const wrong = { ...decoded(edits), expires: chosen.expires };
+      expect(allows(wrong, required, values)).toBe(false);
+      if (mac) expect(select([wrong])).toBeNull();
+      else expect(() => select([wrong])).toThrow(/grant-device-profile/);
+      expect(select([wrong, chosen])).toBe(chosen);
+    }
+  }
+});
+
 test('a release keeps what the build signed under its profile, and nothing else of its signature (LLP 1133.010 D7)', async () => {
   const { profileEntitlements, plistFile } = await import('./assets.mjs');
   const { mkdtempSync, copyFileSync, writeFileSync, rmSync } = await import('node:fs');
@@ -263,7 +356,8 @@ test('a release keeps what the build signed under its profile, and nothing else 
     const bin = join(dir, 'true'), ent = join(dir, 'e.plist');
     copyFileSync('/usr/bin/true', bin);
     const kept = { 'com.apple.application-identifier': 'T.com.example', 'com.apple.developer.team-identifier': 'T',
-      'com.apple.developer.aps-environment': 'production', 'keychain-access-groups': ['T.com.example'] };
+      'com.apple.developer.aps-environment': 'production', 'keychain-access-groups': ['T.com.example'],
+      'com.apple.developer.applesignin': ['Default'], 'com.apple.developer.in-app-payments': ['merchant.com.example'] };
     writeFileSync(ent, plistFile({ ...kept, 'com.apple.security.app-sandbox': true }));
     expect(Bun.spawnSync(['codesign', '--force', '--sign', '-', '--entitlements', ent, bin]).exitCode).toBe(0);
     expect(profileEntitlements(bin)).toEqual(kept);
@@ -271,9 +365,103 @@ test('a release keeps what the build signed under its profile, and nothing else 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('the Mac signs Sign in with Apple and Apple Pay from its profile, Developer ID and store builds alike (LLP 1030.005 §6 piece 4)', async () => {
+  const { macProfileEntitlements } = await import('./presence.mjs');
+  const signIn = 'com.apple.developer.applesignin', pay = 'com.apple.developer.in-app-payments';
+  const compat = { inputs: { grantCeiling: 'auth.apple com.example.web\npayment.apple-pay merchant.com.example.lock' },
+    reach: { profileEntitlements: [], auth: { signIn: { apple: ['com.example.web'] } }, payments: { merchantIds: ['merchant.com.example.lock'] } } };
+  const needs = macProfileNeeds(compat);
+  expect(needs).toEqual([
+    { entitlement: signIn, lines: 'auth.apple com.example.web', mandatory: false, effect: expect.stringContaining('NotSupportedError') },
+    { entitlement: pay, lines: 'payment.apple-pay merchant.com.example.lock', mandatory: false, effect: expect.stringContaining('canMakePayment() is false') },
+  ]);
+  // A synthetic profile of each distribution kind: one allowing both is chosen, one lacking Apple Pay is not.
+  const profile = (method, entitlements, name = method) => ({ name, team: 'TEAM', prefix: 'TEAM', appId: `TEAM.${app.id}`, path: `/p/${name}`,
+    platforms: ['OSX'], devices: [], dev: false, method, expires: new Date(Date.now() + 864e7), entitlements, keychain: [], groups: [] });
+  for (const method of ['developerid', 'appstore']) {
+    const both = profile(method, [signIn, pay]), lacking = profile(method, [signIn], `${method}-no-pay`);
+    const find = (a, required, options) => macProfile(a, required, { ...options, installed: [lacking, both], named: null, team: undefined });
+    const signed = macProvisioning(app, compat, { release: true, method, find, log: () => {} });
+    expect(signed.profile).toBe(both);
+    expect(signed.entitlements[signIn]).toEqual(['Default']);
+    expect(signed.entitlements[pay]).toEqual(['merchant.com.example.lock']);
+    expect(macProfile(app, [signIn, pay], { method, installed: [lacking], named: null, team: undefined })).toBeNull();
+  }
+  // Without a profile neither is signed, and a Developer ID release still ships, saying what the app reports; a store
+  // release is refused, since TestFlight requires the profile.
+  const said = [];
+  expect(macProvisioning(app, compat, { release: true, method: 'developerid', find: none, log: (l) => said.push(l) })).toBeNull();
+  expect(() => macProvisioning(app, compat, { release: true, method: 'appstore', find: none, log: () => {} })).toThrow(/^appstore-needs-profile: no App Store macOS/);
+  expect(said).toEqual([expect.stringMatching(/^auth\.apple com\.example\.web: this build signs no com\.apple\.developer\.applesignin, since no Developer ID macOS/),
+    expect.stringMatching(/^payment\.apple-pay merchant\.com\.example\.lock: this build signs no com\.apple\.developer\.in-app-payments/)]);
+  expect(macProfileEntitlements(app, { prefix: 'P', team: 'T', dev: false }, needs, compat)).toEqual({ 'com.apple.application-identifier': 'P.com.example.lock',
+    'com.apple.developer.team-identifier': 'T', [signIn]: ['Default'], [pay]: ['merchant.com.example.lock'] });
+});
+
 test('the Mac sample host takes the app\'s id under its profile, and a second identity without one (#396)', async () => {
   const { macHostIdentity } = await import('./presence.mjs');
   const app = { id: 'com.example.notes' };
   expect(macHostIdentity(app, { name: 'Notes Mac', appId: 'TEAM.com.example.notes' })).toEqual({ id: 'com.example.notes', name: 'Host (not Exact)' });
   expect(macHostIdentity(app, null).id).toBe('com.example.notes.host');
+});
+
+test('the iCloud key-value store signs the application identifier as its value, where a profile allows it (expo/exact#663)', async () => {
+  const { entitlements, SIMULATOR_PREFIX } = await import('./build.mjs');
+  const { KEY_VALUE_STORE, macProfileEntitlements } = await import('./presence.mjs');
+  const { profile: iosProfile, allows } = await import('./devices.mjs');
+  const { mkdtempSync, copyFileSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const store = { id: 'com.example.notes', manifest: { host: { ios: {} } } };
+  const reach = { entitlements: [KEY_VALUE_STORE] };
+  const value = (plist) => new RegExp(`<key>${KEY_VALUE_STORE.replaceAll('.', '\\.')}</key>\\s*<string>([^<]*)</string>`).exec(plist)?.[1];
+  // iOS: the signing profile's prefix, or a simulator's; an App Clip and an extension sign none.
+  const device = entitlements(store, 'TEAMID0000', true, reach, { prefix: 'PREFIX0000' });
+  expect(value(device)).toBe('PREFIX0000.com.example.notes');
+  expect(value(entitlements(store, null, true, reach, { simulator: true }))).toBe(`${SIMULATOR_PREFIX}.com.example.notes`);
+  expect(entitlements({ ...store, id: 'com.example.notes.Clip', clipParent: store.id }, null, true, reach, { simulator: true })).not.toContain(KEY_VALUE_STORE);
+  expect(entitlements({ ...store, widgetAppId: store.id }, null, true, reach, { simulator: true })).not.toContain(KEY_VALUE_STORE);
+  // The signature carries it: codesign reads it back from a signed executable.
+  const dir = mkdtempSync(join(tmpdir(), 'exact-kvstore-'));
+  try {
+    const bin = join(dir, 'true'), ent = join(dir, 'e.plist');
+    copyFileSync('/usr/bin/true', bin);
+    writeFileSync(ent, device);
+    expect(Bun.spawnSync(['codesign', '--force', '--sign', '-', '--entitlements', ent, bin]).exitCode).toBe(0);
+    expect(value(Bun.spawnSync(['codesign', '-d', '--entitlements', '-', '--xml', bin]).stdout.toString())).toBe('PREFIX0000.com.example.notes');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  // An iOS device build needs a profile that allows it: one without iCloud is refused, naming the entitlement.
+  const ios = (entitlements, name) => ({ name, team: 'TEAMID0000', prefix: 'PREFIX0000', appId: 'PREFIX0000.*', path: `/p/${name}`, platforms: ['iOS'],
+    devices: ['PHONE'], dev: true, method: 'development', expires: new Date(Date.now() + 864e7), entitlements, keychain: [], groups: [] });
+  const without = ios(['application-identifier'], 'no iCloud'), withStore = ios(['application-identifier', KEY_VALUE_STORE], 'iCloud');
+  expect(allows(without, reach.entitlements)).toBe(false);
+  expect(() => iosProfile('PHONE', store.id, reach.entitlements, { installed: [without], named: null, team: null }))
+    .toThrow(/^grant-device-profile: com\.apple\.developer\.ubiquity-kvstore-identifier is needed by this app's grants/);
+  expect(iosProfile('PHONE', store.id, reach.entitlements, { installed: [without, withStore], named: null, team: null })).toBe(withStore);
+  // The Mac: only under a profile that allows it, valued from that profile; a release without one is refused.
+  const compat = bake('device.icloud-kv', [KEY_VALUE_STORE]), said = [];
+  expect(macProvisioning(store, compat, { find: none, log: (l) => said.push(l) })).toBeNull();
+  expect(said).toEqual([expect.stringMatching(/^device\.icloud-kv: this build signs no com\.apple\.developer\.ubiquity-kvstore-identifier, since .*: NSUbiquitousKeyValueStore keeps its values on this Mac and syncs none\.$/)]);
+  expect(() => macProvisioning(store, compat, { release: true, find: none })).toThrow(/^grant-needs-profile: device\.icloud-kv: /);
+  const mac = (entitlements, name) => ({ ...ios(entitlements, name), platforms: ['OSX'], devices: ['THIS-MAC'] });
+  expect(macProfile(store, [KEY_VALUE_STORE], { installed: [mac([], 'no iCloud')], named: null, udid: 'THIS-MAC', team: null })).toBeNull();
+  const chosen = mac([KEY_VALUE_STORE], 'iCloud');
+  expect(macProfile(store, [KEY_VALUE_STORE], { installed: [chosen], named: null, udid: 'THIS-MAC', team: null })).toBe(chosen);
+  expect(macProfileEntitlements(store, chosen, macProfileNeeds(compat), compat)[KEY_VALUE_STORE]).toBe('PREFIX0000.com.example.notes');
+});
+
+test('Sensitive Content Analysis signs its array on iOS and under a Mac profile, and a Mac release without one is refused (expo/exact#708)', async () => {
+  const { entitlements } = await import('./build.mjs');
+  const { macProfileEntitlements } = await import('./presence.mjs');
+  const { PROFILE_KEYS } = await import('./assets.mjs');
+  const key = 'com.apple.developer.sensitivecontentanalysis.client', value = { [key]: ['analysis'] };
+  const analyzer = { id: 'com.example.safe', manifest: { host: { ios: {} } } };
+  const signed = entitlements(analyzer, null, true, { entitlements: [key], entitlementValues: value }, { simulator: true });
+  expect(signed.replace(/\s+/g, '')).toContain(`<key>${key}</key><array><string>analysis</string></array>`);
+  const compat = { ...bake('device.sensitive-content-analysis', [key]), reach: { profileEntitlements: [key], entitlementValues: value } }, said = [];
+  expect(macProvisioning(analyzer, compat, { find: none, log: (l) => said.push(l) })).toBeNull();
+  expect(said).toEqual([expect.stringMatching(/^device\.sensitive-content-analysis: this build signs no com\.apple\.developer\.sensitivecontentanalysis\.client, since .*: SCSensitivityAnalyzer reports nothing as sensitive\.$/)]);
+  expect(() => macProvisioning(analyzer, compat, { release: true, find: none })).toThrow(/^grant-needs-profile: device\.sensitive-content-analysis: /);
+  expect(macProfileEntitlements(analyzer, { prefix: 'P', team: 'T', dev: true }, macProfileNeeds(compat), compat)[key]).toEqual(['analysis']);
+  expect(PROFILE_KEYS).toContain(key);
 });

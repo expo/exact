@@ -56,7 +56,7 @@ class ModuleTapTest {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         activity.intent.putExtra("warm", "0")
         view = ExactView(activity, false) {}
-        val natives = Natives(activity, activity.filesDir, mapOf("test-button" to Button().also { button = it }))
+        val natives = Natives(activity, { activity.filesDir }, mapOf("test-button" to Button().also { button = it }))
         activity.setContentView(FrameLayout(activity).also {
             it.addView(natives)
             it.addView(view, FrameLayout.LayoutParams(400, 800))
@@ -74,11 +74,17 @@ class ModuleTapTest {
     private fun ensure(session: Long) = view.natives!!.ensure(1, 2, 100, 40,
         JSONObject().put("module", "test-button").put("slot", 3).put("generation", 4).put("session", session).toString(), 0)
 
-    private fun reply(session: Long = 1, longPresses: Int = 0) = intArrayOf(
-        0, 0, 0, 1, 0, 0, 100f.toBits(), 40f.toBits(), 3, 4, longPresses, session.toInt(), (session ushr 32).toInt(),
+    /** [context]: the node a long press would give to (0: none). */
+    private fun reply(session: Long = 1, longPresses: Int = 0, context: Int = 0) = intArrayOf(
+        0, 0, 0, 1, 0, 0, 100f.toBits(), 40f.toBits(), 3, 4, longPresses, session.toInt(), (session ushr 32).toInt(), 0, 0,
+        context,
     )
 
-    private fun answer(session: Long = 1, longPresses: Int = 0) = thread.answers.removeFirst()(reply(session, longPresses))
+    /** Android performs a view's click from a posted runnable after its release. */
+    private fun answer(session: Long = 1, longPresses: Int = 0, context: Int = 0) {
+        thread.answers.removeFirst()(reply(session, longPresses, context))
+        shadowOf(Looper.getMainLooper()).idle()
+    }
 
     private fun touch(action: Int, x: Float = 20f) {
         time = maxOf(time, android.os.SystemClock.uptimeMillis())
@@ -142,8 +148,8 @@ class ModuleTapTest {
     @Test fun cancellationAndMovementRetireOnlyTheirOwnAnswer() {
         for (cancel in listOf(true, false)) {
             touch(MotionEvent.ACTION_DOWN)
-            touch(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_MOVE, 100f)
-            if (!cancel) touch(MotionEvent.ACTION_UP, 100f)
+            touch(if (cancel) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_MOVE, 300f)
+            if (!cancel) touch(MotionEvent.ACTION_UP, 300f)
             touch(MotionEvent.ACTION_DOWN); touch(MotionEvent.ACTION_UP)
             answer()
             assertEquals(if (cancel) 0 else 1, button.clicks)
@@ -178,16 +184,17 @@ class ModuleTapTest {
             android.view.ViewConfiguration.getLongPressTimeout().toLong()))
         touch(MotionEvent.ACTION_UP)
         touch(MotionEvent.ACTION_DOWN); touch(MotionEvent.ACTION_UP)
-        answer(longPresses = 0)
+        // The hit, the check that no second finger came, and the count behind the long press exact2 took.
+        answer(longPresses = 0, context = 9)
+        answer(longPresses = 0, context = 9)
+        answer(longPresses = 1, context = 9)
         assertEquals(0, button.clicks)
-        answer(longPresses = 1)
-        assertEquals(0, button.clicks)
-        answer(longPresses = 1)
+        answer(longPresses = 1, context = 9)
         assertEquals(1, button.clicks)
-        assertEquals(listOf(0, 4, 1, 0, 3), thread.touches)
+        assertEquals(listOf(0, 4, 3, 0, 3), thread.touches)
     }
 
-    @Test fun aCompletedQueuedLongPressKeepsTheTimeItWasHeld() {
+    @Test fun aQueuedLongPressKeepsTheTimeItWasHeld() {
         touch(MotionEvent.ACTION_DOWN); touch(MotionEvent.ACTION_UP)
         touch(MotionEvent.ACTION_DOWN)
         shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(
@@ -195,10 +202,12 @@ class ModuleTapTest {
         touch(MotionEvent.ACTION_UP)
         answer()
         assertEquals(1, button.clicks)
-        assertEquals(listOf(0, 3, 0, 4), thread.touches)
-        answer(longPresses = 0)
-        answer(longPresses = 1)
+        assertEquals(listOf(0, 3, 0), thread.touches)
+        answer(longPresses = 0, context = 9)
+        answer(longPresses = 0, context = 9)
+        answer(longPresses = 1, context = 9)
         assertEquals(1, button.clicks)
-        assertEquals(listOf(0, 3, 0, 4, 1), thread.touches)
+        assertEquals(listOf(0, 3, 0, 4, 3), thread.touches)
+        assertTrue(thread.answers.isEmpty())
     }
 }

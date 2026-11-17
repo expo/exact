@@ -2,7 +2,8 @@
 // hand-built app's: the system's `SLComposeServiceViewController` on iOS,
 // which Xcode's template uses; on the Mac, where AppKit has none, a view
 // controller as Xcode's macOS template builds one. Post writes the inbox
-// (ShareInbox.swift) and ends; the extension never opens the app.
+// (ShareInbox.swift) and completes the request, or cancels it with the
+// error when the share cannot be written; the extension never opens the app.
 import Foundation
 #if canImport(UIKit)
 import Social
@@ -12,9 +13,12 @@ import UniformTypeIdentifiers
 @objc(ExactShareViewController)
 public final class ExactShareViewController: SLComposeServiceViewController {
     private var writer: ShareInboxWriter?
-    /// The inbox's target and its container (the App Group's when nil); a test sets both.
+    /// The inbox's target and its container (the App Group's when nil), and the extension's context; a test sets
+    /// all three.
     public var info: ShareTargetInfo? = ShareTargetInfo(bundle: .main)
     public var container: URL?
+    public var stubContext: NSExtensionContext?
+    private var context: NSExtensionContext? { stubContext ?? extensionContext }
 
     public override func viewDidLoad() {
         super.viewDidLoad()
@@ -32,18 +36,23 @@ public final class ExactShareViewController: SLComposeServiceViewController {
     public override func isContentValid() -> Bool { true }
 
     public override func didSelectPost() {
-        let items = extensionContext?.inputItems as? [NSExtensionItem] ?? []
+        let items = context?.inputItems as? [NSExtensionItem] ?? []
         let title = items.first?.attributedTitle?.string
         let text = contentText
         guard let info, let container = container ?? ShareInboxWriter.container(info),
               let writer = ShareInboxWriter(info: info, container: container) else {
-            extensionContext?.cancelRequest(withError: NSError(domain: "exact.share", code: 1, userInfo: [NSLocalizedDescriptionKey: "The app's shared container is not available."]))
+            context?.cancelRequest(withError: NSError(domain: "exact.share", code: 1, userInfo: [NSLocalizedDescriptionKey: "The app's shared container is not available."]))
             return
         }
         self.writer = writer
         writer.take(items) { [weak self] in
-            do { try writer.finish(title: title, text: text) } catch { writer.discard() }
-            self?.extensionContext?.completeRequest(returningItems: [], completionHandler: nil)
+            do {
+                try writer.finish(title: title, text: text)
+                self?.context?.completeRequest(returningItems: [], completionHandler: nil)
+            } catch {
+                writer.discard()
+                self?.context?.cancelRequest(withError: error)
+            }
         }
     }
 
@@ -124,8 +133,13 @@ public final class ExactShareViewController: NSViewController {
         }
         self.writer = writer
         writer.take(items) { [weak self] in
-            do { try writer.finish(title: title, text: text) } catch { writer.discard() }
-            self?.context?.completeRequest(returningItems: [], completionHandler: nil)
+            do {
+                try writer.finish(title: title, text: text)
+                self?.context?.completeRequest(returningItems: [], completionHandler: nil)
+            } catch {
+                writer.discard()
+                self?.context?.cancelRequest(withError: error)
+            }
         }
     }
 

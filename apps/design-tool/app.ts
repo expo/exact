@@ -1,9 +1,9 @@
-// The design tool's protocol client (LLP 1122 D2): `tamber/1` over HTTP to the
-// app's Tamber server, which serves this page from the same local origin
-// (`bun exact.mjs tamber tool`). The token comes once from `GET
-// /__tamber/token`, which answers only this machine's loopback, and rides
-// every POST as `x-exact-tamber-token`, never in a URL. Changes are followed
-// by the long poll, `POST /__tamber/events`: a data module's `fetch` reads a
+// The design tool's protocol client (LLP 1122 D2): `forma/1` over HTTP to the
+// app's Forma server, which serves this page from the same local origin
+// (`bun exact.mjs forma tool`). The token comes once from `GET
+// /__forma/token`, which answers only this machine's loopback, and rides
+// every POST as `x-exact-forma-token`, never in a URL. Changes are followed
+// by the long poll, `POST /__forma/events`: a data module's `fetch` reads a
 // body whole, so it cannot follow the server-sent stream. A failure is
 // words in the answer, never a throw.
 import type { Answer, Result, Sources, StreamEvent } from './app.contract.d.ts';
@@ -26,7 +26,7 @@ import { buildRow, Gone } from './builds';
 export { joined, missing, partsOf } from './parts';
 
 export const appId = 'com.exact.design-tool';
-// The tool's own local URL: `tamber tool` serves it here, and a grant names
+// The tool's own local URL: `forma tool` serves it here, and a grant names
 // one origin and port.
 export const API = 'http://127.0.0.1:7740';
 // Another machine's design server, paired with (T6): an https door, or a
@@ -43,7 +43,7 @@ const WRITE_WAIT = 130_000;
 const READ_WAIT = WRITE_WAIT;
 // The params' levels' read's wait (after the design shows).
 const LEVEL_WAIT = 5000;
-// The one `tamber/1` client (wire.ts): this machine's server at API, or
+// The one `forma/1` client (wire.ts): this machine's server at API, or
 // another machine's the tool paired with.
 const { call, longPoll, RESTARTED, pairWith, remote, scope: scopeNow } = wire(API, id => (heldRaw.find(p => String(p.proposal) === id)?.client ?? null) as string | null);
 
@@ -110,7 +110,7 @@ let liveTable = false;
 async function readDesign(file: string, wanted: () => boolean): Promise<{ error: string; ir?: any; resolved?: { tuples: any[] }[]; files?: Record<string, string>; pairs?: unknown; base?: any[]; targets?: unknown; params?: string[] }> {
   const which = file ? { file } : {}, epoch = place.epoch;
   for (let attempt = 0; attempt < 3 && wanted(); attempt++) {
-    const seq = place.seq, described = await call('/__tamber', { method: 'describe', ...which }, READ_WAIT);
+    const seq = place.seq, described = await call('/__forma', { method: 'describe', ...which }, READ_WAIT);
     if (described.error) return { error: described.error };
     const ir = described.reply.ok?.ir, pairs = described.reply.ok?.pairs;
     if (!ir || !Array.isArray(ir.tokens) || !Array.isArray(ir.axes) || ir.axes.some((a: Axis) => !Array.isArray(a.values))) return { error: 'The design server answered describe with no design in it.' };
@@ -123,7 +123,7 @@ async function readDesign(file: string, wanted: () => boolean): Promise<{ error:
     if (!wanted()) return { error: 'overtaken by a newer read' };
     const failed = resolved.find(r => r.error);
     if (failed) return { error: failed.error };
-    const after = await call('/__tamber', { method: 'hello' }, READ_WAIT);
+    const after = await call('/__forma', { method: 'hello' }, READ_WAIT);
     if (after.error) return { error: after.error };
     const before = described.reply.ok.files ?? {};
     const now = after.reply.ok?.files ?? {};
@@ -145,7 +145,7 @@ async function readDesign(file: string, wanted: () => boolean): Promise<{ error:
   return { error: wanted() ? 'The design kept changing while it was read. Try again.' : 'overtaken by a newer read' };
 }
 
-/** An edit's operation in `tamber/1`'s shape, on `file` (the app's design
+/** An edit's operation in `forma/1`'s shape, on `file` (the app's design
  * when ""). */
 /** An edit's operations: its one, and before a param's `when` line where
  * the app has no line for the param, that line (its default as written),
@@ -211,11 +211,11 @@ function pump(s: Scrubbing): Promise<void> {
     while (scrubbing === s && !s.releasing && s.want && opKey(s.want) !== opKey(s.shown)) {
       if (!s.id && closing) { await closing; continue; }
       const op = s.want;
-      const { error, reply } = await call('/__tamber', { method: 'scrub', client: s.client, ops: [op], ...(s.id ? { scrub: s.id } : { files: s.files }) }, WRITE_WAIT, s.token);
+      const { error, reply } = await call('/__forma', { method: 'scrub', client: s.client, ops: [op], ...(s.id ? { scrub: s.id } : { files: s.files }) }, WRITE_WAIT, s.token);
       const ok = (reply.ok ?? {}) as { scrub?: string; ended?: string; superseded?: boolean };
       if (scrubbing !== s) {
         // Cancelled while it opened: the scrub the server opened goes too.
-        if (!error && !s.id && ok.scrub && !ok.ended) await call('/__tamber', { method: 'scrub-cancel', client: s.client, scrub: ok.scrub }, 15000, s.token);
+        if (!error && !s.id && ok.scrub && !ok.ended) await call('/__forma', { method: 'scrub-cancel', client: s.client, scrub: ok.scrub }, 15000, s.token);
         return;
       }
       if (error) {
@@ -230,7 +230,7 @@ function pump(s: Scrubbing): Promise<void> {
       }
       if (ok.ended) { endScrub(s, scrubEndText(ok.ended)); return; }
       // Ended at the server before this answer came (its event first).
-      if (ok.scrub && endedIds.has(ok.scrub)) { endScrub(s, scrubEndText(endedIds.get(ok.scrub)!)); void call('/__tamber', { method: 'scrub-cancel', client: s.client, scrub: ok.scrub }, 15000, s.token); return; }
+      if (ok.scrub && endedIds.has(ok.scrub)) { endScrub(s, scrubEndText(endedIds.get(ok.scrub)!)); void call('/__forma', { method: 'scrub-cancel', client: s.client, scrub: ok.scrub }, 15000, s.token); return; }
       s.error = '';
       s.id = ok.scrub ?? s.id;
       if (!ok.superseded) s.shown = op;
@@ -255,7 +255,7 @@ function closeScrub(s: Scrubbing): Promise<string> {
   const done = (async () => {
     if (s.sending) await s.sending;
     if (!s.id) return '';
-    const { error } = await call('/__tamber', { method: 'scrub-cancel', client: s.client, scrub: s.id }, 15000, s.token);
+    const { error } = await call('/__forma', { method: 'scrub-cancel', client: s.client, scrub: s.id }, 15000, s.token);
     return error && !gone(error) ? error : '';
   })();
   const fence: Promise<void> = done.then(() => { if (closing === fence) closing = null; }, () => { if (closing === fence) closing = null; });
@@ -386,7 +386,7 @@ function streamed(e: StreamEvent, used: string, gen: number, epoch: string, clie
  * hand, which this asks for), or, `wait`, the POST long poll a server before 1.17 holds (`exactHeld`). */
 async function readChanges(gen: number, epoch: string, client: string, wait: boolean) {
   reread = false;
-  const { error, reply, used } = await call('/__tamber/events', epoch ? { after: place.seq, epoch, client, ...(wait ? {} : { wait: false }), ...(heldAt.epoch === epoch ? { held: heldAt.revision } : {}) } : { after: 0, wait: false, client }, 40000, undefined, wait);
+  const { error, reply, used } = await call('/__forma/events', epoch ? { after: place.seq, epoch, client, ...(wait ? {} : { wait: false }), ...(heldAt.epoch === epoch ? { held: heldAt.revision } : {}) } : { after: 0, wait: false, client }, 40000, undefined, wait);
   answers += 1;
   if (error) return { ok: false, error, missed: false, stream: false, ...changesState() };
   if (gen !== polls) return { ok: true, error: '', missed: false, stream: false, ...changesState() };
@@ -397,7 +397,7 @@ async function readChanges(gen: number, epoch: string, client: string, wait: boo
   // before this answer are not sent): read at once, not a poll later, and
   // again each poll until a read succeeds (the list kept meanwhile).
   if (resync) {
-    const now = await call('/__tamber', { method: 'hello' });
+    const now = await call('/__forma', { method: 'hello' });
     if (gen !== polls) return { ok: true, error: '', missed: false, stream: false, ...changesState() };
     if (!now.error) { takeBuilds((now.reply.ok as { builds?: any[] })?.builds ?? [], client); latch(); resync = false; }
     else if (!wait) return { ok: false, error: now.error, missed: false, stream: false, ...changesState() }; // (read at once, asked again in 3 s)
@@ -506,7 +506,7 @@ function fold(r: { events?: unknown[]; seq?: number; epoch?: string; missed?: bo
       const key = [e.build, e.node, e.site, JSON.stringify(e.instance ?? []), e.selected?.planDigest ?? e.planDigest ?? e.plan ?? ''].join('|'), moved: unknown = e.moved ?? (moving?.key === key ? moving.moved : undefined); moving = moved ? { key, moved } : null;
       selectionNow = { e: { ...(held || !e.held ? e : { ...e, held: undefined }), ...(moved ? { moved } : {}) }, at: buildKey(b), planAt: b?.planDigest ?? null, statusAt: b?.status != null, axes: JSON.stringify(designAxes), scheme: schemeOf(e, b), stale: '', files: i < lastWrite ? '' : digestKey(filesAt), visit: visitOf(e), arrival: ++arrivals };
     }
-    // Inspect mode's owners as they move (tamber/1.6): this client's on or
+    // Inspect mode's owners as they move (forma/1.6): this client's on or
     // off, or another's taking a build over. Inspect mode ending where the
     // selection is (an off taken by no one, `to: null`) ends it, whoever
     // had it; this client's own loss ends it too.
@@ -542,7 +542,7 @@ const takeBuilds = (list: any[], client = '') => {
   buildsNow = new Map((list ?? []).map(b => [String(b.id), buildOf(b, buildsNow.get(String(b.id)))]));
   for (const b of list ?? []) owned(b, client);
 };
-// This tool's inspect mode on a build, as its record says (tamber/1.6).
+// This tool's inspect mode on a build, as its record says (forma/1.6).
 const owned = (b: any, client: string) => { if (client && b && 'inspector' in b) { if (b.inspector === client) inspectOn.add(String(b.id)); else { inspectOn.delete(String(b.id)); const s = buildsNow.get(String(b.id)); if (s?.inspectRefused != null) refuse(s, null); } } };
 // The app's design file, as hello names it: what "" reads.
 let designFile = '';
@@ -589,7 +589,7 @@ let heldOps = new Map<string, any[]>();
 let heldReview = new Map<string, any>();
 // The token of the server run whose poll listed them.
 let heldToken = '';
-// The list's revision in that run (tamber/1.12): a poll that names it is
+// The list's revision in that run (forma/1.12): a poll that names it is
 // answered without the list while it is unchanged.
 let heldAt = { epoch: '', revision: -1 };
 // The list as last sent, and the design read its swatches were drawn from.
@@ -662,7 +662,7 @@ function reviewOf(p: any) {
 /** An import's items its card has chosen (choice.ts `chosenOf`); `picked`, the view's flips joined by `;`. */
 const chosen = (proposal: string, picked: string): number[] => chosenOf(proposal, picked, heldReview.get(proposal), heldOps.get(proposal) ?? [], held.find(h => h.proposal === proposal));
 /** A held proposal's choice recorded (1.18 `choose`): its answer, or null. */
-const askChoose = (client: string, proposal: string) => async (items: number[]) => { const { error, reply } = await call('/__tamber', { method: 'choose', client, proposal, items }, 15000, heldToken || undefined); return error ? null : reply.ok as { choiceAt?: number }; };
+const askChoose = (client: string, proposal: string) => async (items: number[]) => { const { error, reply } = await call('/__forma', { method: 'choose', client, proposal, items }, 15000, heldToken || undefined); return error ? null : reply.ok as { choiceAt?: number }; };
 /** An operation in plain words (optext.ts), and the file it edits (the design's when it names none): two items may
  * differ only there. */
 const opText = (o: any): string => `${opWords(o)} (${o?.file || designFile || 'the design'})`;
@@ -749,27 +749,28 @@ async function rescopeFor(file: string, op: Record<string, unknown>, token: stri
   const snap = [...snapshots.values()].reverse().find(x => app(x.file) && x.digests === key);
   if (!app(file) || !snap || (op.op !== 'set-param' && op.op !== 'set-token')) return null;
   return rescopeOf(op as { op: string; name: string; when: When[]; value: string }, snap.params, snap.tokenOf, async name => {
-    const { error, reply } = await call('/__tamber', { method: 'explain', token: name }, 15000, token);
+    const { error, reply } = await call('/__forma', { method: 'explain', token: name }, 15000, token);
     // (A base name's explain, stage 11, has no branches to re-scope: none offered.)
     return error || !Array.isArray(reply.ok?.whens) ? null : (reply.ok as { value: string; whens: { when: When[]; value: string }[]; files?: Record<string, string> });
   }, key);
 }
 
 const sources: Sources = {
-  ...pairingSources(call, pairWith, remote), sendSelectUp: async ([client, build, up]) => { stepping.add(String(build)); const r = await call('/__tamber', { method: 'inspect', client, build, select: { up } }); if (r.error) stepping.delete(String(build)); return { ok: !r.error, error: r.error }; },
+  ...pairingSources(call, pairWith, remote), sendSelectUp: async ([client, build, up]) => { stepping.add(String(build)); const r = await call('/__forma', { method: 'inspect', client, build, select: { up } }); if (r.error) stepping.delete(String(build)); return { ok: !r.error, error: r.error }; },
   ...gridSources(call, () => buildsNow, () => selectionNow, () => designAxes), loadCanvasCheck: () => canvasRefusal(API), ...chosenDiffSources(call, () => held.filter(h => h.importer && (h.replaces || h.from)), (p, picked) => chosen(p, picked), p => heldOps.get(p) ?? [], () => heldToken || undefined, () => lastFiles, (p, picked, gen) => heldChoice.inStep(p, picked, gen)), // (D1.1: the diff a card shows follows its choice)
   loadHello: async () => {
-    const { error, reply } = await call('/__tamber', { method: 'hello' });
+    const answer = await call('/__forma', { method: 'hello' }), reply = answer.reply, protocol = String(reply?.ok?.protocol ?? '');
+    const error = answer.error || (protocol.startsWith('tamber/') ? `rename protocol ${protocol} to ${protocol.replace('tamber/', 'forma/')}` : '');
     if (error) return { ok: false, error, protocol: '', format: 0, app: '', files: [], page: '', frame: '', live: false, scope: '', local: false, client: '', epoch: '' };
     const ok = reply.ok ?? {};
     // Paired, the server is another machine's whatever its hello says: never this machine's pages.
     const local = remote() === '' && ok.local !== false;
     liveTable = ok.live === true;
-    designFile = String(ok.design ?? ''); byCursor = Number(/^tamber\/1\.(\d+)$/.exec(String(ok.protocol ?? ''))?.[1] ?? 0) >= 17; byChoice = Number(/^tamber\/1\.(\d+)$/.exec(String(ok.protocol ?? ''))?.[1] ?? 0) >= 18; // (the events' GET long poll, 1.17; choose, 1.18)
+    designFile = String(ok.design ?? ''); byCursor = Number(/^forma\/1\.(\d+)$/.exec(String(ok.protocol ?? ''))?.[1] ?? 0) >= 17; byChoice = Number(/^forma\/1\.(\d+)$/.exec(String(ok.protocol ?? ''))?.[1] ?? 0) >= 18; // (the events' GET long poll, 1.17; choose, 1.18)
     // `page`: the dev loop's own origin, which the canvas frames; "" with no
-    // dev loop (tamber/1.3).
+    // dev loop (forma/1.3).
     return { ok: true, error: '', protocol: String(ok.protocol ?? ''), format: Number(ok.format ?? 0), app: String(ok.app ?? ''), files: files(ok.files), ...(local ? pageOf(ok.page, Number(new URL(API).port)) : { page: '', frame: '' }), live: liveTable,
-      // Its scope, and whether it is the local tool's token (tamber/1.13): a server before 1.13 has the local one alone.
+      // Its scope, and whether it is the local tool's token (forma/1.13): a server before 1.13 has the local one alone.
       scope: String(ok.scope ?? 'write'), local, client: String(ok.client ?? ''), epoch: String(ok.epoch ?? '') };
   },
   loadDesign: async ([file]) => {
@@ -879,7 +880,7 @@ const sources: Sources = {
     const snap = snapshots.get(answer);
     const col = snap?.columns.find(c => c.id === column);
     if (!token || !col || !snap || snap.file !== file) return none;
-    const { error, reply } = await call('/__tamber', { method: 'explain', token, ...(file ? { file } : {}) }, READ_WAIT);
+    const { error, reply } = await call('/__forma', { method: 'explain', token, ...(file ? { file } : {}) }, READ_WAIT);
     if (error) return { ...none, ok: false, error };
     const raw = reply.ok as { value?: string; whens?: { when: When[]; value: string }[]; dials?: string[]; names?: string[]; bases?: string[]; files?: Record<string, string>; kind?: string; package?: string; file?: string; base?: { override?: { text?: string } | null; columns?: Record<string, { value?: string }> } };
     // A base name (stage 11, `kind: 'base'`): its override is the app's line, edited as one; with none, the
@@ -924,9 +925,9 @@ const sources: Sources = {
     if (!ops.length && kind === 'detach-param') return { ...idle, ok: false, error: 'This param is set by the app\'s design, or its default reads another param: unset it, or give it a value of its own, before detaching it.' };
     if (!ops.length) return { ...idle, ok: false, error: `${lineName(target)}'s default reads another param, which its line can't: give it a value of its own first, then Only this mode.` };
     // (A proposal waits as long as a read: the server plans it behind the reads it serializes.)
-    let { error, reply, used } = await call('/__tamber', { method: 'propose', ops }, READ_WAIT);
+    let { error, reply, used } = await call('/__forma', { method: 'propose', ops }, READ_WAIT);
     for (let n = 0, t: any = null, u: { more: string[]; keep: boolean }; kind === 'detach-param' && error && n < 4 && ((u = unread(error, target, ops)).more.length || (u.keep && !t?.keep)); n++)
-      ({ error, reply, used } = await call('/__tamber', { method: 'propose', ops: ops = moveOps(file, kind, (t = { ...(t ?? JSON.parse(target)), keep: t?.keep || u.keep, extra: [...(t?.extra ?? []), ...u.more] }), '', appParams, appKinds) })); // (a detach's closure, as the server names it, D6)
+      ({ error, reply, used } = await call('/__forma', { method: 'propose', ops: ops = moveOps(file, kind, (t = { ...(t ?? JSON.parse(target)), keep: t?.keep || u.keep, extra: [...(t?.extra ?? []), ...u.more] }), '', appParams, appKinds) })); // (a detach's closure, as the server names it, D6)
     if (error) return { ...idle, ok: false, error };
     const ok = reply.ok as { diff: string; class: string; files: Record<string, string>; changed: { token: string }[] };
     // A param's first `when` line was planned from the params of another revision than this proposal's: asked again once the design is read.
@@ -948,10 +949,10 @@ const sources: Sources = {
     const op = ops.at(-1)!;
     const move = ops.length === 1 ? await rescopeFor(file, op, read.token, read.now ?? read.files) : null;
     // A client paired at `propose` (T6) holds it for someone with write to accept instead.
-    if (scopeNow() === 'propose') { const held = await call('/__tamber', { method: 'propose', hold: true, client, ops }, WRITE_WAIT, read.token); return { ...stacks(!held.error, held.error, ''), note: held.error ? '' : `Held for review as ${held.reply.ok?.proposal}: someone with write accepts it.` }; }
+    if (scopeNow() === 'propose') { const held = await call('/__forma', { method: 'propose', hold: true, client, ops }, WRITE_WAIT, read.token); return { ...stacks(!held.error, held.error, ''), note: held.error ? '' : `Held for review as ${held.reply.ok?.proposal}: someone with write accepts it.` }; }
     // Every file's digest as the proposal read it: the server checks the
     // ones the edit writes, whichever file the app's design is.
-    const { error, reply, used } = await call('/__tamber', { method: 'transaction', client, files: reviewed.get(key) ?? read.files, ops }, WRITE_WAIT, read.token);
+    const { error, reply, used } = await call('/__forma', { method: 'transaction', client, files: reviewed.get(key) ?? read.files, ops }, WRITE_WAIT, read.token);
     if (error === RESTARTED) forget(used);
     if (session !== at) return stacks(false, RESTARTED, '');
     const moved = (reply.error as { files?: Record<string, string> } | undefined)?.files; if (error) return stacks(false, byWhom(reply) ? `Not written: ${byWhom(reply)} since you reviewed it.${moved ? (reviewed.repin(key, moved), ' Apply again to write over it, on the file as it is now.') : ''}` : error, '');
@@ -972,7 +973,7 @@ const sources: Sources = {
     const { ops, files } = top.rescope;
     // Every file the move was worked out on, edited or not (a component's
     // default in its Contract source decides what the param shows): `requires`.
-    const { error, reply, used } = await call('/__tamber', { method: 'transaction', client, files, requires: files, ops }, WRITE_WAIT, top.token);
+    const { error, reply, used } = await call('/__forma', { method: 'transaction', client, files, requires: files, ops }, WRITE_WAIT, top.token);
     if (error === RESTARTED) forget(used);
     if (session !== at) return stacks(false, RESTARTED, '');
     // Refused by the server (a file moved, a loop through another token), it is not offered again.
@@ -1030,7 +1031,7 @@ const sources: Sources = {
     const value = draftValue;
     // Its re-scope, from the files the scrub opened on (it wrote nothing until now).
     const move = await rescopeFor(file, op, s.token, s.files);
-    const { error, reply, used } = await call('/__tamber', { method: 'scrub-release', client: s.client, scrub: s.id }, WRITE_WAIT, s.token);
+    const { error, reply, used } = await call('/__forma', { method: 'scrub-release', client: s.client, scrub: s.id }, WRITE_WAIT, s.token);
     // No answer from the server (not a refusal): the scrub may still be
     // open there, so it stays, to keep or cancel again.
     if (error && !reply.error && error !== RESTARTED && error !== GONE) { s.releasing = false; if (!scrubbing) scrubbing = s; return stacks(false, `Keep did not reach the server (${error}): keep or cancel again.`, ''); }
@@ -1063,7 +1064,7 @@ const sources: Sources = {
     const at = session;
     const top = undoStack.at(-1);
     if (!top) return stacks(false, 'Nothing to undo.', '');
-    const { error, reply, used } = await call('/__tamber', { method: 'undo', client, inverse: top.inverse }, WRITE_WAIT, top.token);
+    const { error, reply, used } = await call('/__forma', { method: 'undo', client, inverse: top.inverse }, WRITE_WAIT, top.token);
     if (error === RESTARTED) forget(used);
     if (session !== at) return stacks(false, RESTARTED, '');
     if (error) {
@@ -1091,11 +1092,11 @@ const sources: Sources = {
     if (!top) return stacks(false, 'Nothing to redo.', '');
     // The original transaction again, against the files as they are now,
     // on the run of the server it was undone on (its token).
-    const hello = await call('/__tamber', { method: 'hello' }, 15000, top.token);
+    const hello = await call('/__forma', { method: 'hello' }, 15000, top.token);
     if (hello.error === RESTARTED) forget(hello.used);
     if (session !== at) return stacks(false, RESTARTED, '');
     if (hello.error) return stacks(false, hello.error, '');
-    const { error, reply, used } = await call('/__tamber', { method: 'transaction', client: top.client ?? client, files: hello.reply.ok?.files ?? {}, ops: top.ops }, WRITE_WAIT, top.token);
+    const { error, reply, used } = await call('/__forma', { method: 'transaction', client: top.client ?? client, files: hello.reply.ok?.files ?? {}, ops: top.ops }, WRITE_WAIT, top.token);
     if (error === RESTARTED) forget(used);
     if (session !== at) return stacks(false, RESTARTED, '');
     if (error) {
@@ -1140,7 +1141,7 @@ const sources: Sources = {
     const gen = ++polls;
     // Another name is another client: what this tool inspects is read again.
     if (client !== polled) { polled = client; inspectOn.clear(); resync = true; }
-    // Once this run has been read, with nothing to read again first: the long poll by cursor (tamber/1.17's GET,
+    // Once this run has been read, with nothing to read again first: the long poll by cursor (forma/1.17's GET,
     // stage 14 D), its re-asks and backoff the host's (LLP 1016.000 D8), held by no clock after its first reply (D9),
     // each reply folded as it comes. Else, or with no token in hand, one read at once (`wait: false`); with a server
     // before 1.17, the POST long poll as before, held (`exactHeld`, D9).
@@ -1218,7 +1219,7 @@ const sources: Sources = {
     // Read again only when the files move, a commit is told or the server starts again; never for no one
     // (`design-tool:`, before the name), nor while this run has nothing written since its last commit.
     if (!client || client === 'design-tool:' || !written) return { open: 0, refused: false, unavailable: false };
-    const dry = await call('/__tamber', { method: 'commit', client, dry: true }, 15000, heldToken || undefined);
+    const dry = await call('/__forma', { method: 'commit', client, dry: true }, 15000, heldToken || undefined);
     const refused = ((dry.reply.error as { refused?: unknown[] } | undefined)?.refused ?? []).length;
     const nothing = /nothing to commit|written nothing/.test(dry.error);
     return { open: dry.error ? 0 : ((dry.reply.ok as { edits?: unknown[] })?.edits ?? []).length, refused: refused > 0, unavailable: !!dry.error && !refused && !nothing };
@@ -1239,7 +1240,7 @@ const sources: Sources = {
     const at = session;
     const refusedOf = (reply: Reply) => ((reply.error as { refused?: { file: string; why: string }[] } | undefined)?.refused ?? []).map(r => ({ file: String(r.file), why: String(r.why) }));
     const fail = (error: string, refused: { file: string; why: string }[]) => ({ ok: false, error: refused.length ? 'Not committed: these files are not only the session\'s. Commit them by hand.' : error, commit: '', files: [], refused, edits: [] });
-    const dry = await call('/__tamber', { method: 'commit', client, dry: true }, 15000, heldToken || undefined);
+    const dry = await call('/__forma', { method: 'commit', client, dry: true }, 15000, heldToken || undefined);
     if (dry.error === RESTARTED) forget(dry.used);
     if (session !== at) return fail(RESTARTED, []);
     if (dry.error) return fail(dry.error, refusedOf(dry.reply));
@@ -1253,7 +1254,7 @@ const sources: Sources = {
     const authors = [...new Set(scope.edits.map(e => e.client))];
     const message = `design: ${scope.edits.length} change${scope.edits.length === 1 ? '' : 's'} by ${authors.join(', ')}\n\n${lines.map(l => `- ${l}`).join('\n')}`;
     const sent = changeset[0]?.seq ?? 0;
-    const { error, reply, used } = await call('/__tamber', { method: 'commit', client, message, scope: scope.scope }, WRITE_WAIT, dry.used);
+    const { error, reply, used } = await call('/__forma', { method: 'commit', client, message, scope: scope.scope }, WRITE_WAIT, dry.used);
     if (error === RESTARTED) forget(used);
     if (session !== at) return fail(RESTARTED, []);
     if (error) return fail((reply.error as { stale?: boolean } | undefined)?.stale ? 'Something was written while the commit was being composed: nothing was committed. Commit again.' : error, refusedOf(reply));
@@ -1267,7 +1268,7 @@ const sources: Sources = {
     const none = { ok: true, error: '', commits: [], more: false };
     if (!shown) return none;
     // Ten a page, the newest first.
-    const { error, reply } = await call('/__tamber', { method: 'history', limit: 10, skip: 10 * (Math.max(1, pages) - 1) }, 30000);
+    const { error, reply } = await call('/__forma', { method: 'history', limit: 10, skip: 10 * (Math.max(1, pages) - 1) }, 30000);
     if (error) return { ...none, ok: false, error };
     const ok = reply.ok as { commits: any[]; more: boolean };
     const when = (w: When[]) => (w?.length ? ` when ${whenText(w)}` : '');
@@ -1296,7 +1297,7 @@ const sources: Sources = {
     const at = session, ops = (heldOps.get(proposal) ?? []) as Record<string, unknown>[], some = items ? items.split(',').map(Number) : byChoice ? ops.map((_, i) => i) : undefined; // (1.18: all named, never a recorded choice by default)
     const proposer = held.find(h => h.proposal === proposal)?.client;
     // To the server run that listed it.
-    const { error, reply, used } = await call('/__tamber', { method: 'accept', client, proposal, ...(some ? { items: some } : {}), ...(byChoice ? { choiceAt: heldChoice.at(proposal) } : {}) }, WRITE_WAIT, heldToken || undefined); // (the choice it saw: another client's since is 409, choice.ts)
+    const { error, reply, used } = await call('/__forma', { method: 'accept', client, proposal, ...(some ? { items: some } : {}), ...(byChoice ? { choiceAt: heldChoice.at(proposal) } : {}) }, WRITE_WAIT, heldToken || undefined); // (the choice it saw: another client's since is 409, choice.ts)
     if (error === RESTARTED) forget(used);
     if (session !== at) return { ...stacks(false, RESTARTED, ''), note: '' };
     if (error) return { ...stacks(false, error, ''), note: '' };
@@ -1322,7 +1323,7 @@ const sources: Sources = {
       return { ok: false, error: `The file could not be read (${(e as { code?: string }).code ?? 'failed'}).`, proposal: '', note: '', ...none };
     }
     const body = texts.length === 1 ? { source: texts[0].text, name: texts[0].name } : { sources: texts };
-    const { error, reply } = await call('/__tamber', { method: 'import', client, kind, ...body }, 60000);
+    const { error, reply } = await call('/__forma', { method: 'import', client, kind, ...body }, 60000);
     if (error) return { ok: false, error, proposal: '', note: '', ...none };
     const ok = reply.ok as { proposal: string | null; message?: string; review?: unknown };
     // Nothing to propose still has its report: what it could not map, and
@@ -1366,12 +1367,12 @@ const sources: Sources = {
     // 1.18 the card as shown, its choice recorded first and still it after, edit-held named its choiceAt: refused if moved.)
     if (byChoice && !(await heldChoice.send(proposal, [...was].sort((a, b) => a - b), askChoose(client, proposal)))) return { ...stacks(false, 'The choice could not be recorded on the design server, so the edit was not sent: try again.', ''), note: '', carried: [] };
     if (byChoice && heldChoice.gen(proposal) !== seen) return moved;
-    const made = await call('/__tamber', byCursor ? { method: 'edit-held', client, proposal, index, ...(mode ? { when: mode } : {}), value: value.trim(), ...(byChoice ? { choiceAt: heldChoice.at(proposal) } : {}) } : { method: 'propose', hold: true, client, ops, review }, WRITE_WAIT, heldToken || undefined);
+    const made = await call('/__forma', byCursor ? { method: 'edit-held', client, proposal, index, ...(mode ? { when: mode } : {}), value: value.trim(), ...(byChoice ? { choiceAt: heldChoice.at(proposal) } : {}) } : { method: 'propose', hold: true, client, ops, review }, WRITE_WAIT, heldToken || undefined);
     if (made.error === RESTARTED) forget(made.used);
     if (session !== at) return { ...stacks(false, RESTARTED, ''), note: '', carried: [] };
     if (made.error) return { ...stacks(false, made.error, ''), note: '', carried: [] };
     const fresh = String(made.reply.ok.proposal);
-    const dropped = byCursor ? { error: '' } : await call('/__tamber', { method: 'drop', client, proposal }, 15000, heldToken || undefined);
+    const dropped = byCursor ? { error: '' } : await call('/__forma', { method: 'drop', client, proposal }, 15000, heldToken || undefined);
     const carried = byChoice ? [] : carriedChoice(fresh, tokens, r.offers ?? [], was);
     const said = `${op.name} is ${value.trim()}${mode ? ` when ${whenText(op.whens[mode - 1].when ?? [])}` : ''} in the import, held again as ${fresh} with what was chosen: review it and accept.`;
     return { ...stacks(true, '', 'edited'), note: dropped.error ? `${said} The old one, ${proposal}, could not be dropped (${dropped.error}): drop it.` : said, carried };
@@ -1389,7 +1390,7 @@ const sources: Sources = {
     // read again as the changes move (the open file's read is the app's
     // when none is open).
     if (!file) return { axes: [], answer: 0 };
-    const axesAt = ++axesReads, partsAt = ++partsReads, { error, reply } = await call('/__tamber', { method: 'describe' });
+    const axesAt = ++axesReads, partsAt = ++partsReads, { error, reply } = await call('/__forma', { method: 'describe' });
     const ir = (reply?.ok as { ir?: { axes?: Axis[] } } | undefined)?.ir, axes = error ? [] : (ir?.axes ?? []);
     // Also the axes a selection is placed by, while this file is open; and its library components' parts, of the
     // newest of these reads (the open file's own reads move `axesReads`, never the parts).
@@ -1404,7 +1405,7 @@ const sources: Sources = {
     // It is shown as reported, not as current (the server keeps no cursor of when): it offers no edit.
     // Asked again after a failure, or once the poll missed events, until one answers.
     if (scopeNow() !== 'write' && place.epoch && seeded !== place.epoch && snapshots.size && (!selectionNow || selectionNow.stale)) {
-      const sel = await call('/__tamber', { method: 'inspect', client: polled, refresh: true }), e = (sel.reply.ok?.selections ?? []).at(-1);
+      const sel = await call('/__forma', { method: 'inspect', client: polled, refresh: true }), e = (sel.reply.ok?.selections ?? []).at(-1);
       if (!sel.error) seeded = place.epoch;
       if (!sel.error && e && (!selectionNow || selectionNow.stale)) { const b = buildsNow.get(String(e.build)); selectionNow = { e: { ...e, held: undefined }, at: buildKey(b), axes: JSON.stringify(designAxes), scheme: schemeOf(e, b), stale: 'the build reported it before this client joined', files: digestKey(lastFiles) }; }
     }
@@ -1420,7 +1421,7 @@ const sources: Sources = {
     const asking = selectionNow!;
     asked.set(id, ask); asking.asking = true;
     // (Refused or lost: asked again on a later read, and not said to be asked meanwhile.)
-    void call('/__tamber', { method: 'inspect', client: polled, build: asking.e.build, refresh: true }).then(({ error }) => { if (error && asked.get(id) === ask) { asked.delete(id); asking.asking = false; } });
+    void call('/__forma', { method: 'inspect', client: polled, build: asking.e.build, refresh: true }).then(({ error }) => { if (error && asked.get(id) === ask) { asked.delete(id); asking.asking = false; } });
     return view();
   },
   sendHold: async ([client, state]) => {
@@ -1428,14 +1429,14 @@ const sources: Sources = {
     // let go (""): one a build, which replaces the last.
     const e = selectionNow?.e;
     if (!e || selectionNow?.stale) return { ok: false, error: 'Select a view again to hold a state on it.', note: '' };
-    const { error } = await call('/__tamber', { method: 'hold', client, build: e.build, site: e.site, instance: e.instance ?? [], state: state || null });
+    const { error } = await call('/__forma', { method: 'hold', client, build: e.build, site: e.site, instance: e.instance ?? [], state: state || null });
     // (A refused hold keeps the last word: the refusal is beside it.)
     if (!error) { if (state) holdNotes.delete(String(e.build)); else holdNotes.set(String(e.build), 'Let go.'); }
     return error ? { ok: false, error, note: '' } : { ok: true, error: '', note: '' };
   },
   sendInspect: async ([client, on]) => {
     // Inspect mode on every build that can (LLP 1122 D4), or off; asked again, the refusals said before go (back on a failure).
-    const refused = takeRefusals(buildsNow), { error, reply } = await call('/__tamber', { method: 'inspect', client, on });
+    const refused = takeRefusals(buildsNow), { error, reply } = await call('/__forma', { method: 'inspect', client, on });
     if (error) { restoreRefusals(buildsNow, refused); return { ok: false, error, note: '' }; }
     const ok = reply.ok as { builds: string[]; unsupported: string[] };
     // The toggle follows the server's records and `inspect` events, not this
@@ -1447,7 +1448,7 @@ const sources: Sources = {
     // Where the app reads a token, statically (the server's `uses`): the
     // impact of an edit to it, as source sites, not mounted copies.
     if (!token) return { ok: true, error: '', token: '', sites: [] };
-    const { error, reply } = await call('/__tamber', { method: 'uses', token });
+    const { error, reply } = await call('/__forma', { method: 'uses', token });
     if (error) return { ok: false, error, token, sites: [] };
     const via = (v: any) => !v ? '' : v.token ? ` · through ${v.token}` : v.synthetic ? ` · through ${v.synthetic}` : v.slot ? ` · through the slot ${v.slot}` : v.derive ? ` · through the derive ${v.derive}` : '';
     const sites = ((reply.ok as { sites?: any[] }).sites ?? []).map(x => ({ file: String(x.file), line: Number(x.line), col: Number(x.col), text: `${String(x.file).split('/').pop()}:${x.line} · ${x.component}${via(x.via)}` }));
@@ -1455,10 +1456,10 @@ const sources: Sources = {
   },
   outlineUses: async ([client, token]) => {
     // A token's sites outlined on every build in inspect mode (`outline`).
-    const { error, reply } = await call('/__tamber', { method: 'uses', token });
+    const { error, reply } = await call('/__forma', { method: 'uses', token });
     if (error) return { ok: false, error, note: '' };
     const at = ((reply.ok as { sites?: any[] }).sites ?? []).map(x => ({ file: x.file, line: x.line, col: x.col }));
-    const out = await call('/__tamber', { method: 'outline', client, at });
+    const out = await call('/__forma', { method: 'outline', client, at });
     if (out.error) return { ok: false, error: out.error, note: '' };
     const done = out.reply.ok as { sites: number[]; builds: string[] };
     return { ok: true, error: '', note: done.builds?.length ? `Sent ${token}'s ${done.sites.length} site(s) to ${done.builds.join(', ')}; a build in inspect mode on that plan outlines them.` : `No build can inspect: ${token}'s sites were outlined nowhere.` };
@@ -1479,18 +1480,18 @@ const sources: Sources = {
     const body = preview
       ? { method: 'preview', client, build, axis: Object.keys(modes)[0], value: Object.values(modes)[0] }
       : { method: 'pin', client, ...(build ? { build } : {}), pin: clear ? null : facts };
-    const { error, reply } = await call('/__tamber', body);
+    const { error, reply } = await call('/__forma', body);
     if (error) return { ok: false, error, note: '' };
     const ok = reply.ok as { builds?: string[]; revision?: number };
     return { ok: true, error: '', note: clear ? `Pins handed back on ${(ok.builds ?? []).length} build(s).` : `Pinned on ${(ok.builds ?? []).length} build(s).` };
   },
   dropHeld: async ([client, proposal]) => {
-    const { error } = await call('/__tamber', { method: 'drop', client, proposal });
+    const { error } = await call('/__forma', { method: 'drop', client, proposal });
     return { ...stacks(!error, error, error ? '' : 'dropped'), note: error ? '' : `Dropped ${proposal}.` };
   },
   revertCommit: async ([client, commit]) => {
     // Held, never written: reviewed and accepted like any held proposal.
-    const { error, reply } = await call('/__tamber', { method: 'revert', client, commit }, 30000);
+    const { error, reply } = await call('/__forma', { method: 'revert', client, commit }, 30000);
     const refused = ((reply.error as { refused?: any[] } | undefined)?.refused ?? []).map(r => `${r.file}: ${r.edit ? `${r.edit.name}${r.edit.what === 'state' ? ` :${r.edit.state} ${r.edit.row}` : ''} ${r.edit.before ?? '(absent)'} → ${r.edit.after ?? '(absent)'}` : 'the file'}, ${r.why}${r.now != null ? ` (now ${r.now})` : ''}`);
     if (error) return { ok: false, error, commit, proposal: '', refused };
     return { ok: true, error: '', commit, proposal: String((reply.ok as { proposal: string }).proposal), refused: [] };

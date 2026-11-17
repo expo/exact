@@ -33,9 +33,18 @@ package final class Owner: @unchecked Sendable {
     private let lock = NSLock()
     private let work = DispatchSemaphore(value: 0)
     private var jobs: [Job] = []
+    #if DEBUG
+    private var posts = 0
+    package var postedJobsForTests: Int { lock.withLock { posts } }
+    #endif
     /// Notifications (T5): run after the job that posted them.
     private var later: [Job] = []
     private var mailbox: [MainCall] = []
+    private struct ScrollKey: Hashable {
+        let runtime: UInt32, view: UInt32
+        let collection: Bool
+    }
+    private var offsets: [ScrollKey: () -> Void] = [:]
     /// Wakes `sync` waited on, kept for the next: a semaphore makes its
     /// kernel object at its first wait, a Mach call that a frame task's
     /// sixty syncs a second each paid. A wake is signalled only under the
@@ -83,7 +92,7 @@ package final class Owner: @unchecked Sendable {
             // A notification was posted during an earlier job: it goes first.
             let job = later.isEmpty ? jobs.removeFirst() : later.removeFirst()
             lock.unlock()
-            autoreleasepool { job.body?() }
+            autoreleasepool { drainOffsets(); job.body?() }
             lock.lock()
             job.body = nil
             job.done = true
@@ -96,7 +105,7 @@ package final class Owner: @unchecked Sendable {
     /// Main waits, serving the owner's `callMain` requests meanwhile. From a
     /// call main serves for the owner, nothing can run: `busy` answers.
     package func sync<T>(_ body: () -> T, busy: @autoclosure () -> T) -> T {
-        if isOwner { return body() }
+        if isOwner { drainOffsets(); return body() }
         let main = Thread.isMainThread
         if main && serving > 0 {
             NSLog("exact: a runtime call from inside a callback the owner is waiting on was refused (LLP 1072 T5)")
@@ -147,9 +156,29 @@ package final class Owner: @unchecked Sendable {
     package func post(_ body: @escaping () -> Void) {
         lock.lock()
         jobs.append(Job(body))
+        #if DEBUG
+        posts += 1
+        #endif
         lock.unlock()
         work.signal()
     }
+
+    /// Replace a scroll fact without waking the owner. Every job reads the
+    /// latest facts before running, including jobs for another runtime.
+    package func noteScroll(runtime: UInt32, view: UInt32, collection: Bool = false, _ body: @escaping () -> Void) {
+        lock.withLock { offsets[ScrollKey(runtime: runtime, view: view, collection: collection)] = body }
+    }
+    private func drainOffsets() {
+        let pending: [() -> Void] = lock.withLock {
+            let pending = Array(offsets.values)
+            offsets.removeAll(keepingCapacity: true)
+            return pending
+        }
+        for update in pending { update() }
+    }
+    #if DEBUG
+    package var pendingScrollsForTests: Int { lock.withLock { offsets.count } }
+    #endif
 
     /// Give the stack pages under the boot back. A boot's decode, realize
     /// and first layout reach some 180 KB down this thread's 8 MB stack,

@@ -2402,3 +2402,48 @@ again, growing and shrinking alike. Taffy 0.15.1 has the same line.
 two items with `flex-grow: 0.25` and 100-point content, 40 points apart in a
 300-point row, are 115 wide in Chrome; before the repair their targets fell to
 95 and the automatic minimum held them at 100.
+
+## Patch 77: the size keywords resolve as Chrome does — to upstream
+
+LLP 1001.001 D4. `fit-content` (CSS Box Sizing 3 §3.2) is
+`max(min-content, min(max-content, stretch))`, two measurements through
+`fit_content_width`; 0.14 measured the box once at the stretch size, which a
+wrapped text measurer answers with its widest line. `resolve_sizing_keyword`
+returns `Fit` for it, and each caller (block items and floats, flex bases,
+main and cross sizes, grid alignment, absolute boxes, the root) measures it
+with `measure_keyword_width`; in the block axis it is a measurement under the
+stretch size (`block_axis`). A root resolves a keyword width against its
+offer as a block child does. A flex container's intrinsic contribution
+offers an item with a `min-content` or `max-content` main size that
+constraint. A column item's keyword width is resolved before its height is
+measured, and a keyword cross size does not stretch. `Style::min_size` and
+`Style::max_size` become `Dimension` (they were `LengthPercentageAuto`) so
+the bounds can hold the keywords patch 78 resolves.
+
+**Held by** `kernel/tests/it/browser_intrinsic.rs`: 160 cases measured in
+Chrome 156 (`fixtures/browser_intrinsic.tsv`), the size cases among them.
+
+## Patch 78: keyword bounds — to upstream
+
+LLP 1001.001 D4. A keyword on `min-*` or `max-*` resolves where the bounds
+are read, through `sizing_keyword::keyword_bounds`: the inline axis at the
+min-content or max-content constraint, or `fit-content` against the stretch
+size (under a min-content or max-content constraint, that size); the block
+axis as the content height at the box's width. Each is a border-box size
+measured in `SizingMode::ContentSize` with the box's known size, so a
+definite height transfers through a ratio first. The parent resolves its
+items' bounds (block items after the container width, flex items before
+their base sizes, grid items in alignment, absolute boxes); a box's own entry
+(block, flex, grid, leaf) resolves its own only in `InherentSize`
+(`own_keyword_bounds`). In `ContentSize` a keyword bound reads as unset, and
+so does the length bound in an axis that has a keyword bound, since the
+content size there is what the keyword measures (CSS Box Sizing 3 §5.1). The
+leaf's measure function is `FnMut`, so a leaf measures its own bounds. A grid
+item with a keyword height lays out its children with that height indefinite,
+and a box with a ratio and a keyword width keeps the ratio's automatic
+minimum, as with `auto`.
+
+**Held by** `kernel/tests/it/browser_intrinsic.rs` (the bound cases, a
+`min-width: max-content` beside a shorter length maximum on each layout
+among them) and `kernel/tests/it/size_cache.rs`'s `keyword` shapes, which
+compare layout with and without the size cache.

@@ -51,6 +51,46 @@ impl<D: DataSource> Presenter<D> {
         .map(|_| ())
     }
 
+    /// A share in the launching intent of the first window to show a host
+    /// that booted with nothing showing it (LLP 1133.017 D7): claimed as a
+    /// cold share is, its location the launch location, its files copied
+    /// now, or with the data module's activation when storage waits on it.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn launch_share(
+        &mut self,
+        q: &serde_json::Value,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        let (target, share) = request(q)?;
+        #[cfg(target_os = "android")]
+        let held = crate::picker::hold(&share);
+        #[cfg(not(target_os = "android"))]
+        let held = Held::new();
+        if !self.host.data_pending() {
+            return self
+                .receive(&target, share, held, |p, location| {
+                    p.launch_at(location, now_ms).map_or(Ok(()), Err)
+                })
+                .map(|_| ());
+        }
+        let claimed = self
+            .host
+            .runner_mut()
+            .claim_share(&target, share)
+            .ok_or("share: refused: the app declares no routes")?;
+        let mut error = None;
+        for (token, files) in claimed.tokens.clone() {
+            if let Some(e) = self.host.set_shared(&token, files) {
+                error.get_or_insert(e);
+            }
+        }
+        if let Some(e) = self.launch_at(&claimed.location, now_ms) {
+            error.get_or_insert(e);
+        }
+        self.launch_share = Some((claimed, held));
+        error.map_or(Ok(()), Err)
+    }
+
     /// Claims `share`, sets its tokens pending, delivers its location, then
     /// copies its files and closes what they arrived as. Answers the location.
     fn receive(
@@ -95,6 +135,16 @@ impl<D: DataSource> Presenter<D> {
             return;
         };
         self.host.log(claimed.line.clone());
+        if let Err(e) = self.land(&mut claimed, &held) {
+            self.host.log(e);
+        }
+    }
+
+    /// A launch share's copies, when storage was not configured at its claim.
+    pub(crate) fn land_launch_share(&mut self) {
+        let Some((mut claimed, held)) = self.launch_share.take() else {
+            return;
+        };
         if let Err(e) = self.land(&mut claimed, &held) {
             self.host.log(e);
         }

@@ -6,6 +6,8 @@ use super::super::top::SurfacePainter;
 use super::*;
 use crate::paint::Backend;
 
+#[path = "parts_tests.rs"]
+mod parts;
 #[path = "rules_tests.rs"]
 mod rules;
 
@@ -87,7 +89,7 @@ impl SurfacePainter for Pixels {
 }
 
 fn boot_source(source: &str) -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (412., 916.),
@@ -232,6 +234,104 @@ fn a_sheet_drags_to_its_tallest_detent_and_down_out_of_the_window() {
     after(&mut p, 1000.0);
     assert!(!p.stage_moving());
     assert!(p.top_sheet().is_none());
+}
+
+/// A spot picker (expo/exact#736): a sheet its route keeps open, most of
+/// it a module view (a map that pans), over a strip that hears `pan`.
+const PICKER: &str = r##"routes nav
+  home "/"
+    pick "/pick"
+component App
+  state n = 0
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action drag(dx: number, dy: number)
+    n = n + 1
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` testId="route-home" position="absolute" inset=0 background-color="#ffffff"
+            button press=open("/pick") testId="open-pick" height=40
+              text "Pick a spot"
+        if e.name == "pick"
+          column navigationKey=`${e.id}` navigationPresentation="modal" closedby="none" testId="route-pick" position="absolute" inset=0
+            native-menu width="100%" height=400 testId="map"
+            box pan=drag touch-action="none" width="100%" height=40 testId="strip"
+"##;
+
+/// The sheet takes a drag as a parent intercepts one, so the reader is
+/// told when the claim on up and down is the sheet's alone: it leaves that
+/// drag with a module view that asked to keep its touch, cancelling the
+/// presenter's contact, and takes it from one that did not (`Contacts.kt`).
+/// A gesture's claim is not told so.
+#[test]
+fn a_sheets_claim_on_a_drag_is_told_apart_from_a_gestures() {
+    let mut p = phone_source(PICKER);
+    tap(&mut p, "open-pick");
+    after(&mut p, 1000.0);
+    let (_, rest) = p.top_sheet().unwrap();
+    let map = rect(&mut p, "map");
+    let (x, y) = (map.0 + map.2 / 2., map.1 + map.3 / 2.);
+    let under = p.scrollers_at(x, y);
+    assert_eq!((under.claims, under.sheet), ((false, true), true));
+    assert_eq!(p.reader_under(x, y, 1.0)[0], 0b110);
+    assert_ne!(p.reader_module(x, y, 1.0)[0], 0, "the map is offered it");
+    // The map kept the drag: with the contact cancelled, the sheet is not
+    // dragged by what the finger does next.
+    let t = p.host().now();
+    p.pointer_down(x, y, t).unwrap();
+    p.pointer_cancel(t + 16.).unwrap();
+    p.pointer_move(x, y + 120., t + 32.).unwrap();
+    assert!(!p.stage_follows_finger(), "the map has the drag");
+    p.pointer_up(x, y + 120., t + 48.).unwrap();
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(near(frame.1, rest.1), "{frame:?} {rest:?}");
+    // A view that asked nothing loses it: the moves reach the sheet.
+    let t = p.host().now();
+    p.pointer_down(x, y, t).unwrap();
+    p.pointer_move(x, y + 30., t + 16.).unwrap();
+    assert!(p.stage_follows_finger(), "the sheet has the drag");
+    p.pointer_up(x, y + 30., t + 32.).unwrap();
+    after(&mut p, 1000.0);
+    let strip = rect(&mut p, "strip");
+    let (x, y) = (strip.0 + strip.2 / 2., strip.1 + strip.3 / 2.);
+    let under = p.scrollers_at(x, y);
+    assert_eq!((under.claims, under.sheet), ((true, true), false));
+    assert_eq!(p.reader_under(x, y, 1.0)[0], 0b011);
+}
+
+/// Android moves the last paint instead of painting while
+/// `Presenter::still` is unchanged (`canvas.rs`'s `shift`); a finger moving
+/// the stage leaves it `None`, so each move paints. Without that a dragged
+/// sheet stood still for 30 frames at a time (#656).
+#[test]
+fn a_sheets_drag_and_a_back_preview_follow_the_finger() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(!p.stage_follows_finger(), "a resting sheet");
+    let t = p.host().now();
+    let y = frame.1 + 10.0;
+    p.pointer_down(200., y, t).unwrap();
+    p.pointer_move(200., y + 4., t + 8.).unwrap();
+    assert!(!p.stage_follows_finger(), "inside the slop");
+    p.pointer_move(200., y + 30., t + 16.).unwrap();
+    assert!(
+        p.stage_follows_finger(),
+        "past the slop the sheet is dragged"
+    );
+    p.pointer_up(200., y + 30., t + 24.).unwrap();
+    assert!(!p.stage_follows_finger(), "let go, it glides on its own");
+    after(&mut p, 1000.0);
+    let t = p.host().now();
+    assert!(p.back_progress(0, 0.0, 1, t));
+    assert!(p.back_progress(1, 0.2, 1, t + 8.));
+    assert!(p.stage_follows_finger(), "Back's preview");
 }
 
 #[test]
@@ -457,7 +557,7 @@ fn without_bars_a_route_pushed_inside_a_sheet_takes_its_box() {
         r#"navigationPresentation="modal" navigationDetent="medium large" testId="route-info" position="absolute" inset=0"#,
         r#"navigationPresentation="modal" navigationDetent="medium large" testId="route-info" position="absolute" top=100 left=40 width=300 height=500"#,
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(&source),
         (),
         (412., 916.),
@@ -509,4 +609,88 @@ fn dismissing_a_sheet_closes_what_was_pushed_inside_it() {
         p.host().route_visibility(id(&p, "route-home")),
         (false, false)
     );
+}
+
+/// expo/exact#483's sheet: a short form whose route asks `fit-content
+/// large`, and one whose content is taller than the room the keyboard
+/// leaves.
+const FIT: &str = r##"routes nav
+  home "/"
+    resolve "/resolve"
+    long "/long"
+component App
+  state note = ""
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action write(v: string)
+    note = v
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" viewport-fit="cover" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 padding=16
+            button press=open("/resolve") testId="open" height=40
+              text "Resolve"
+            button press=open("/long") testId="open-long" height=40
+              text "Long"
+        if e.name == "resolve"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content large" testId="route-resolve" position="absolute" inset=0 gap=16 padding=16 background-color="#FFFFFF"
+            h2 "Resolve"
+            text "A short summary of what is being resolved."
+            input value=note input=write placeholder="Notes (optional)" aria-label="Notes" testId="note" height=40
+            button press=back testId="done" height=40
+              text "Done"
+        if e.name == "long"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content large" testId="route-long" position="absolute" inset=0 padding=16
+            column height=600
+            button press=back testId="long-done" height=40
+              text "Done"
+"##;
+
+/// The window with the keyboard up, `keys` tall.
+fn keyboard(keys: f32) -> Window {
+    Window {
+        keyboard: [0.0, 0.0, keys, 0.0],
+        ..WINDOW
+    }
+}
+
+#[test]
+fn a_fit_content_sheet_rests_at_its_content_and_on_the_keyboard() {
+    let mut p = phone_source(FIT);
+    tap(&mut p, "open");
+    after(&mut p, 1000.0);
+    // The route's content with the gesture bar under it: the last button's
+    // foot 16 above the bar, well short of `medium`.
+    let done = rect(&mut p, "done");
+    assert!(near(done.1 + done.3 + 16.0, H - FOOT), "{done:?}");
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(frame.1 > H - ((H - STATUS) / 2.0 + FOOT), "{frame:?}");
+    let resting = frame.1;
+    // The keyboard up: the same height, on the keys.
+    assert_eq!(p.set_window(keyboard(300.0)), None);
+    after(&mut p, 1000.0);
+    let done = rect(&mut p, "done");
+    assert!(near(done.1 + done.3 + 16.0, H - 300.0), "{done:?}");
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(near(frame.1, resting - 300.0 + FOOT), "{frame:?} {resting}");
+    // And down again: where it was.
+    assert_eq!(p.set_window(WINDOW), None);
+    after(&mut p, 1000.0);
+    assert!(near(p.top_sheet().unwrap().1 .1, resting));
+}
+
+#[test]
+fn a_fit_content_sheet_taller_than_the_keyboard_leaves_goes_to_its_tallest() {
+    let mut p = phone_source(FIT);
+    tap(&mut p, "open-long");
+    after(&mut p, 1000.0);
+    let done = rect(&mut p, "long-done");
+    assert!(near(done.1 + done.3 + 16.0, H - FOOT), "{done:?}");
+    assert_eq!(p.set_window(keyboard(300.0)), None);
+    after(&mut p, 1000.0);
+    let (_, frame) = p.top_sheet().unwrap();
+    assert!(near(frame.1, STATUS), "{frame:?}");
 }

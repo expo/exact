@@ -5,36 +5,9 @@
 
 use super::{computed, has, literal, BOXES};
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span, VisitSpans};
+use contract_checking::{Structure, View, Visit};
+use contract_syntax::{Attr, Expr, Span, VisitSpans};
 use std::collections::BTreeSet;
-
-fn elements<'a>(nodes: &'a [Node], visit: &mut impl FnMut(&'a [Attr], Span)) {
-    for node in nodes {
-        match node {
-            Node::Element {
-                attrs,
-                children,
-                span,
-                ..
-            } => {
-                visit(attrs, *span);
-                elements(children, visit);
-            }
-            Node::When {
-                then, otherwise, ..
-            } => {
-                elements(then, visit);
-                elements(otherwise, visit);
-            }
-            Node::Each { body, .. } => elements(body, visit),
-            Node::Match { some, none, .. } => {
-                elements(&some.1, visit);
-                elements(none, visit);
-            }
-            Node::Use { .. } | Node::Children { .. } => {}
-        }
-    }
-}
 
 /// The `aria-controls` the program writes (LLP 1166.000 D5), over the
 /// expanded root, so a field in one file names a group in a component of
@@ -46,14 +19,23 @@ pub(super) struct Controlled<'a> {
     exprs: Vec<(Span, Expr)>,
 }
 
-pub(super) fn controlled<'a>(checked: &'a contract_types::Checked<'_>) -> Controlled<'a> {
+pub(super) fn controlled<'a>(view: &View<'a>) -> Controlled<'a> {
     let mut out = Controlled {
         ids: BTreeSet::new(),
         exprs: Vec::new(),
     };
-    elements(&checked.expanded.root.view, &mut |attrs, span| {
+    for (node, (), entering) in view.events((), |node, _| {
+        (node.component_use().is_none() && !node.is_slot()).then_some(())
+    }) {
+        if !entering {
+            continue;
+        }
+        let Some((_, _, attrs)) = node.element() else {
+            continue;
+        };
+        let span = node.span();
         let Some(value) = attrs.iter().rev().find(|a| a.name == "aria-controls") else {
-            return;
+            continue;
         };
         let mut ids = Vec::new();
         results(&value.value, &mut ids);
@@ -61,7 +43,7 @@ pub(super) fn controlled<'a>(checked: &'a contract_types::Checked<'_>) -> Contro
         if !matches!(value.value, Expr::Str(..)) {
             out.exprs.push((span, unplaced(&value.value)));
         }
-    });
+    }
     out
 }
 
@@ -108,18 +90,16 @@ fn applied(written: &str) -> Option<&'static str> {
 /// and `match`. The check runs on the expanded root, where a use and a slot's
 /// fill are already inlined; one met unexpanded is given the benefit of the
 /// doubt, as what it holds may handle the keys.
-fn keyed(nodes: &[Node]) -> bool {
-    nodes.iter().any(|node| match node {
-        Node::Element {
-            attrs, children, ..
-        } => has(attrs, "key") || has(attrs, "keycapture") || keyed(children),
-        Node::When {
-            then, otherwise, ..
-        } => keyed(then) || keyed(otherwise),
-        Node::Each { body, .. } => keyed(body),
-        Node::Match { some, none, .. } => keyed(&some.1) || keyed(none),
-        Node::Use { .. } | Node::Children { .. } => true,
-    })
+fn keyed(regions: [Structure<'_>; 2]) -> bool {
+    regions
+        .into_iter()
+        .flat_map(|region| region.walk())
+        .any(|node| {
+            node.element()
+                .is_some_and(|(_, _, attrs)| has(attrs, "key") || has(attrs, "keycapture"))
+                || node.component_use().is_some()
+                || node.is_slot()
+        })
 }
 
 /// Composite widget roles whose keyboard behavior an author must supply
@@ -132,7 +112,7 @@ fn keyed(nodes: &[Node]) -> bool {
 /// `aria-controls` is.
 pub(super) fn keys(
     attrs: &[Attr],
-    children: &[Node],
+    node: Visit<'_>,
     span: Span,
     controlled: &Controlled<'_>,
 ) -> Option<LowerError> {
@@ -176,7 +156,7 @@ pub(super) fn keys(
             .is_some_and(|id| !matches!(id.value, Expr::Str(..)) && same(id))
         || has(attrs, "key")
         || has(attrs, "keycapture")
-        || keyed(children)
+        || keyed(node.regions())
     {
         return None;
     }
@@ -222,50 +202,65 @@ enum Says {
 /// The most any of `nodes` says. An `if`, `for` or `match` says what its
 /// most telling arm does; a use or a slot, and an element this walk does
 /// not know, are given the benefit of the doubt.
-fn says(nodes: &[Node], in_svg: bool) -> Says {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Element {
-                tag,
-                positional,
-                attrs,
-                children,
-                ..
-            } => {
+fn says(regions: [Structure<'_>; 2], in_svg: bool) -> Says {
+    let mut answer = Says::Nothing;
+    for region in regions {
+        for (node, svg, entering) in region.events(in_svg, |node, svg| match node.element() {
+            Some((tag, positional, attrs)) => {
                 if named(attrs) {
-                    return Says::Words;
+                    return None;
                 }
-                match tag.as_str() {
-                    "text" | "tspan" => match positional.first() {
-                        Some(Expr::Str(v, _)) if v.trim().is_empty() => says(children, in_svg),
-                        Some(_) => Says::Words,
-                        None => says(children, in_svg),
-                    },
-                    "image" => match attrs.iter().rev().find(|a| a.name == "alt") {
-                        Some(a) if !matches!(&a.value, Expr::Str(v, _) if v.trim().is_empty()) => {
-                            Says::Words
-                        }
-                        _ => Says::Unnamed,
-                    },
-                    // An `svg`'s shapes are drawn and read as nothing; its
-                    // `text` is words.
-                    "svg" => says(children, true).max(Says::Unnamed),
-                    t if BOXES.contains(&t) => says(children, in_svg),
-                    _ if in_svg => says(children, in_svg),
-                    _ => Says::Words,
+                match tag {
+                    "text" | "tspan"
+                        if positional.first().is_none_or(
+                            |e| matches!(e, Expr::Str(v, _) if v.trim().is_empty()),
+                        ) =>
+                    {
+                        Some(*svg)
+                    }
+                    "svg" => Some(true),
+                    t if BOXES.contains(&t) || *svg => (tag != "image").then_some(*svg),
+                    _ => None,
                 }
             }
-            Node::Use { .. } | Node::Children { .. } => Says::Words,
-            node => node
-                .child_lists()
-                .into_iter()
-                .map(|list| says(list, in_svg))
-                .max()
-                .unwrap_or(Says::Nothing),
-        })
-        .max()
-        .unwrap_or(Says::Nothing)
+            None => Some(*svg),
+        }) {
+            if !entering {
+                continue;
+            }
+            let contribution = if let Some((tag, positional, attrs)) = node.element() {
+                if named(attrs) {
+                    Says::Words
+                } else {
+                    match tag {
+                        "text" | "tspan" => match positional.first() {
+                            Some(Expr::Str(v, _)) if v.trim().is_empty() => Says::Nothing,
+                            Some(_) => Says::Words,
+                            None => Says::Nothing,
+                        },
+                        "image" => match attrs.iter().rev().find(|a| a.name == "alt") {
+                            Some(a) if !matches!(&a.value, Expr::Str(v, _) if v.trim().is_empty()) => {
+                                Says::Words
+                            }
+                            _ => Says::Unnamed,
+                        },
+                        "svg" => Says::Unnamed,
+                        t if BOXES.contains(&t) || svg => Says::Nothing,
+                        _ => Says::Words,
+                    }
+                }
+            } else if node.component_use().is_some() || node.is_slot() {
+                Says::Words
+            } else {
+                Says::Nothing
+            };
+            answer = answer.max(contribution);
+            if answer == Says::Words {
+                return answer;
+            }
+        }
+    }
+    answer
 }
 
 /// What a `tag` element says of itself as a button: unlabelled, or holding
@@ -273,12 +268,12 @@ fn says(nodes: &[Node], in_svg: bool) -> Says {
 pub(super) fn button(
     tag: &str,
     attrs: &[Attr],
-    children: &[Node],
+    node: Visit<'_>,
     span: Span,
 ) -> impl Iterator<Item = LowerError> {
     let button = tag == "button";
-    let unlabelled = button.then(|| unlabelled_button(attrs, children, span));
-    let nested = button.then(|| nested_button(children));
+    let unlabelled = button.then(|| unlabelled_button(attrs, node, span));
+    let nested = button.then(|| nested_button(node));
     unlabelled.flatten().into_iter().chain(nested.flatten())
 }
 
@@ -288,7 +283,7 @@ pub(super) fn button(
 /// with no child drew an empty button, and VoiceOver reads one as
 /// "button". A text of any expression, a symbol image with a name, and a
 /// button hidden from assistive technology are not named.
-fn unlabelled_button(attrs: &[Attr], children: &[Node], span: Span) -> Option<LowerError> {
+fn unlabelled_button(attrs: &[Attr], node: Visit<'_>, span: Span) -> Option<LowerError> {
     let hidden = attrs
         .iter()
         .rev()
@@ -301,7 +296,7 @@ fn unlabelled_button(attrs: &[Attr], children: &[Node], span: Span) -> Option<Lo
     if named(attrs) || hidden {
         return None;
     }
-    let message = match says(children, false) {
+    let message = match says(node.regions(), false) {
         Says::Words => return None,
         Says::Unnamed => {
             "this `button` shows only an image with no name: a screen reader on the web reads it as just \"button\", and VoiceOver on iOS by the symbol's generic name (\"add\", \"love\"). Name it: `aria-label=\"Add\"` on the button, beside its `image \"symbol:…\"` (docs/recipes/symbols.md)"
@@ -319,19 +314,17 @@ fn unlabelled_button(attrs: &[Attr], children: &[Node], span: Span) -> Option<Lo
 
 /// The first `button` among `nodes` or under them, through `if`, `for`
 /// and `match`: its span.
-fn inner_button(nodes: &[Node]) -> Option<Span> {
-    nodes.iter().find_map(|node| match node {
-        Node::Element {
-            tag,
-            span,
-            children,
-            ..
-        } => (tag == "button")
-            .then_some(*span)
-            .or_else(|| inner_button(children)),
-        Node::Use { .. } | Node::Children { .. } => None,
-        node => node.child_lists().into_iter().find_map(inner_button),
-    })
+fn inner_button(node: Visit<'_>) -> Option<Span> {
+    for region in node.regions() {
+        for (node, (), entering) in region.events((), |node, _| {
+            (node.component_use().is_none() && !node.is_slot()).then_some(())
+        }) {
+            if entering && node.element().is_some_and(|(tag, _, _)| tag == "button") {
+                return Some(node.span());
+            }
+        }
+    }
+    None
 }
 
 /// `lower-nested-button`: a `button` inside a `button`, at the inner one.
@@ -340,11 +333,11 @@ fn inner_button(nodes: &[Node]) -> Option<Span> {
 /// `Pressable` inside another takes the touch (euxy's Note row and its
 /// Listen pill, FRICTION 11), but the outer button's accessible name takes
 /// in the inner one's words: the web reads the row as "Note Listen".
-fn nested_button(children: &[Node]) -> Option<LowerError> {
+fn nested_button(node: Visit<'_>) -> Option<LowerError> {
     Some(LowerError {
         id: "lower-nested-button",
         message: "this `button` is inside another `button`. A press on it is its own (the outer one does not hear it, on every host), but the outer button's accessible name reads this one's words with its own, and HTML allows no button in a button. Put the two side by side: a `row` holding the outer's content as one `button` (`flex=1`) and this one after it, as a table cell holds its accessory button".into(),
-        span: inner_button(children)?,
+        span: inner_button(node)?,
     })
 }
 

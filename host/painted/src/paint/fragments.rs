@@ -141,12 +141,8 @@ impl Painter {
                             Some(b)
                         })
                         .collect();
-                    for (mut shape, color) in
-                        shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id))
-                    {
-                        shape.rect.0 += origin.0;
-                        shape.rect.1 += origin.1;
-                        painter.backend.fill(&shape, color, ts);
+                    for paint in shown.inline_backgrounds(&backgrounds, &kernel.env_of(node.id)) {
+                        inline::paint_inline(&mut *painter.backend, &paint, origin, ts);
                     }
                 }
                 inline_opacity::Paint::Text(range) => painter.text_paint(
@@ -242,6 +238,7 @@ impl Painter {
 /// Whether a point (viewport points) inside a painted box hits it: a box
 /// with fragments only inside one, never in its union's gap (D8).
 pub(crate) fn hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
+    let b = b.for_hit();
     let Some(node) = kernel.node(b.id) else {
         return true;
     };
@@ -255,6 +252,7 @@ pub(crate) fn hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
 /// grown in its own space, under the clips it was painted with. A box placed
 /// by a perspective takes none.
 pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool {
+    let b = b.for_hit();
     let Some(node) = kernel.node(b.id) else {
         return false;
     };
@@ -263,7 +261,7 @@ pub(crate) fn slop_hits(kernel: &Kernel, b: &PaintedBox, x: f32, y: f32) -> bool
         return false;
     }
     let grow = |q: Rect4| (q.0 - l, q.1 - t, q.2 + l + r, q.3 + t + bottom);
-    let mut grown = *b;
+    let mut grown = b.clone();
     match b.affine {
         Some((ts, local)) => {
             grown.affine = Some((ts, grow(local)));

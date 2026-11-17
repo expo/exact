@@ -229,7 +229,7 @@ pub fn part_css(plan: &Plan, kind: Kind, id: StyleId, value: &str) -> Option<Str
 /// axis, and in a development build every one; `(name, row, property)`. A
 /// family token's one row is its name's property, `--x-<name>`; a type
 /// token's `--x-<name>-<part>`. Every tuple writes the same rows
-/// (`tamber-type-longhands`), so the default tuple's say which.
+/// (`forma-type-longhands`), so the default tuple's say which.
 pub fn type_properties(plan: &Plan, every: bool) -> Vec<(String, StyleId, String)> {
     let mut out: Vec<(String, StyleId, String)> = Vec::new();
     let taken = crate::modes::properties(plan);

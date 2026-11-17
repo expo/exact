@@ -184,12 +184,16 @@ impl Glyphs {
             Content::Mask => image.data,
             Content::SubpixelMask => image
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| p[0].max(p[1]).max(p[2]))
                 .collect(),
             Content::Color => image
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .flat_map(|p| {
                     let a = u16::from(p[3]);
                     [

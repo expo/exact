@@ -56,10 +56,24 @@ impl Console {
         marked
     }
 
-    /// The method and the line of a line [`Console::mark`] marked.
-    fn unmark(line: &str) -> Option<(Console, &str)> {
-        let (name, text) = line.strip_prefix("console.")?.split_once(": ")?;
-        Some((Console::named(name)?, text))
+    /// `line` for the host's sink alone, never journaled: the runtime's
+    /// line for an error event no listener cancelled, which another line
+    /// journals (LLP 1175 D5). `unjournaled.error: …`.
+    pub fn mark_unjournaled(self, line: &str) -> String {
+        let mut marked = self.mark(line);
+        marked.replace_range(.."console".len(), "unjournaled");
+        marked
+    }
+
+    /// The method, whether it is journaled, and the line of a line
+    /// [`Console::mark`] or [`Console::mark_unjournaled`] marked.
+    fn unmark(line: &str) -> Option<(Console, bool, &str)> {
+        let (journaled, marked) = match line.strip_prefix("console.") {
+            Some(marked) => (true, marked),
+            None => (false, line.strip_prefix("unjournaled.")?),
+        };
+        let (name, text) = marked.split_once(": ")?;
+        Some((Console::named(name)?, journaled, text))
     }
 }
 
@@ -76,14 +90,12 @@ pub(super) struct Out {
 
 impl<D: DataSource> Runner<D> {
     /// A line of the module's journal into the journal. An app's `console`
-    /// line is journaled as `console: …` and handed to the host's sink.
+    /// line is journaled as `console: …` and handed to the host's sink; an
+    /// unjournaled one only handed to the sink.
     pub(super) fn journal_module_line(&mut self, line: String) {
-        let Some((method, text)) = Console::unmark(&line) else {
+        let Some((method, journaled, text)) = Console::unmark(&line) else {
             return self.log(line);
         };
-        let mut journaled = String::with_capacity("console: ".len() + text.len());
-        journaled.push_str("console: ");
-        journaled.push_str(text);
         let out = &mut self.console;
         match out.sink.as_mut() {
             Some(sink) => sink(method, text),
@@ -97,9 +109,15 @@ impl<D: DataSource> Runner<D> {
                 }
             }
         }
+        if !journaled {
+            return;
+        }
+        let mut line = String::with_capacity("console: ".len() + text.len());
+        line.push_str("console: ");
+        line.push_str(text);
         // The journal only, as an alert is: the sink is this line's way to
         // the platform's log, so the measuring queue must not carry it again.
-        self.journal_only(journaled);
+        self.journal_only(line);
     }
 
     /// Where this runner's app writes its `console` lines from now on, each

@@ -9,7 +9,8 @@ const RS = "\u001e", US = "\u001f", GS = "\u001d";
 const F = { digits: 0, decimal: 1, group: 2, grouping: 3, decimalStyle: 4, percent: 5, currencyTemplates: 6, currencies: 7, compact: 8,
   plurals: 9, medium: 10, mediumNames: 11, monthYear: 12, monthYearNames: 13, short: 14, shortNames: 15, weekdays: 16, time: 17,
   timePeriods: 18, time12: 19, time12Periods: 20, time23: 21, time23Periods: 22, dateTime: 23, days: 24, weekdayDate: 25,
-  weekdayDateNames: 26, weekdayYear: 27, weekdayYearNames: 28, weekdayLabels: 29 };
+  weekdayDateNames: 26, weekdayYear: 27, weekdayYearNames: 28, weekdayLabels: 29, monthDay: 30, monthDayNames: 31, time2Digit: 32,
+  time2DigitPeriods: 33, time2Digit12: 34, time2Digit12Periods: 35, time2Digit23: 36, time2Digit23Periods: 37 };
 let Records = new Map();
 
 /** The plan's tables' records, [name, record], and the hook format.js calls with a format locale other than "". */
@@ -60,7 +61,7 @@ function body(r, int, frac, least, symbols = [r[F.decimal], r[F.group], r[F.grou
 /** A percentage and an amount of money take their own symbols and grouping (locale.rs `styled`). */
 function styled(r, n, style, code) {
   let pair, symbol = "", min = 0, max = 3, shift = 0, money;
-  if (style === "decimal") pair = r[F.decimalStyle];
+  if (style === "decimal") { pair = r[F.decimalStyle]; if (typeof code === "number") min = max = code; }
   else if (style === "percent") { pair = r[F.percent]; max = 0; shift = 2; money = pair.split(US).slice(2); }
   else if (style === "currency") {
     const i = Object.keys(CODES).indexOf(code);
@@ -138,8 +139,11 @@ function fill(r, template, w, names, periods) {
   });
 }
 const date = (r, w, t, names) => fill(r, r[t], w, r[names], "");
-function time(r, w, c) {
-  const [t, p] = c === "h12" ? [F.time12, F.time12Periods] : c === "h23" ? [F.time23, F.time23Periods] : [F.time, F.timePeriods];
+/** The short time, or with `twoDigit` the two-digit hour's, in the hour cycle `c` forces. */
+function time(r, w, c, twoDigit = false) {
+  const [t, p] = twoDigit
+    ? c === "h12" ? [F.time2Digit12, F.time2Digit12Periods] : c === "h23" ? [F.time2Digit23, F.time2Digit23Periods] : [F.time2Digit, F.time2DigitPeriods]
+    : c === "h12" ? [F.time12, F.time12Periods] : c === "h23" ? [F.time23, F.time23Periods] : [F.time, F.timePeriods];
   return fill(r, r[t], w, "", r[p]);
 }
 function day(r, then, now, off, mode, c) {
@@ -169,11 +173,13 @@ function format(name, args, loc) {
   if (!r) throw new Error(`${name}: no format data for ${loc}`);
   const c = forced === undefined ? tagCycle(table) : forced === "h12" || forced === "h23" ? forced : null;
   switch (name) {
-    case "formatTime": { const w = wall(args[0], args[1]); return w === null ? "" : time(r, w, c); }
+    case "formatTime": { const w = wall(args[0], args[1]); return w === null ? "" : time(r, w, c, args[2] === "2-digit"); }
     case "formatDate": {
       if (args[2] === "iso") return x_formatDate(args[0], args[1], "iso", "");
       const w = dateWall(args[0], args[1]);
-      return w === null ? "" : args[2] === "month-year" ? date(r, w, F.monthYear, F.monthYearNames) : date(r, w, F.medium, F.mediumNames);
+      if (w === null) return "";
+      const [t, names] = { "month-year": [F.monthYear, F.monthYearNames], "month-day": [F.monthDay, F.monthDayNames] }[args[2]] ?? [F.medium, F.mediumNames];
+      return date(r, w, t, names);
     }
     case "formatDay": return day(r, args[0], args[1], args[2], args[3], c);
     case "formatNumber": return args[1] === "compact" ? compact(r, args[0]) : styled(r, args[0], args[1], args[2]);

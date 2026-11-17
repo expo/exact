@@ -77,7 +77,7 @@ const SETTINGS: &str = "list appearance=\"auto\" testId=\"list\" flex=1
     button press=go testId=\"profile\"
       image \"symbol:sf/person.circle\"
       text \"Profile\" testId=\"profile-title\"
-      image \"symbol:sf/chevron.right\"
+      image \"symbol:sf/chevron.right\" testId=\"profile-chevron\"
     button press=go testId=\"notes\"
       image \"symbol:sf/bell\"
       text \"Notifications\"
@@ -122,6 +122,7 @@ fn the_kernel_reads_sections_and_rows_as_a_native_list_draws_them() {
             symbol: Some("person.circle".into()),
             title: Some("Profile".into()),
             accessory: Accessory::Disclosure,
+            accessory_view: Some(id(&r, "profile-chevron")),
             pressable: true,
             ..GroupedRow::default()
         }

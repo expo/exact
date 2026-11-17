@@ -316,6 +316,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<(), DataError> {
         self.inner.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.inner.take_reports()
+    }
     fn take_logs(&mut self) -> Vec<String> {
         self.inner.take_logs()
     }

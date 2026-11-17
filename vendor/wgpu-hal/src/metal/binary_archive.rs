@@ -14,7 +14,7 @@ use objc2_metal::{
     MTLRenderPipelineState,
 };
 use parking_lot::Mutex;
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, sync::OnceLock};
 
 /// An optional archive shared by this device's render and compute pipelines.
 /// All archive use is serialized, including snapshots and compilation workers.
@@ -24,9 +24,12 @@ pub struct BinaryArchive {
     // Drop the archive before its device, including when a caller retains this handle.
     _device: Retained<ProtocolObject<dyn MTLDevice>>,
     restored: bool,
-    _source: Option<Temporary>,
+    // The file of the last serialization or, before one, the file restored from,
+    // with the count of additions it holds.
+    snapshot: Mutex<Option<(u64, Temporary)>>,
     hits: AtomicU64,
     misses: AtomicU64,
+    additions: AtomicU64,
 }
 // Metal archives have no thread affinity. The mutex serializes every operation,
 // including pipeline creation and serialization; the retained object never escapes.
@@ -88,9 +91,10 @@ impl Device {
                 raw: Mutex::new(raw),
                 _device: self.shared.device.clone(),
                 restored,
-                _source: source,
+                snapshot: Mutex::new(source.map(|source| (0, source))),
                 hits: AtomicU64::new(0),
                 misses: AtomicU64::new(0),
+                additions: AtomicU64::new(0),
             }))
         })?;
         *installed = Some(Arc::clone(&archive));
@@ -120,16 +124,29 @@ impl BinaryArchive {
             self.misses.load(Ordering::Relaxed),
         )
     }
+    /// Successful additions, across render and compute pipelines.
+    pub fn additions(&self) -> u64 {
+        self.additions.load(Ordering::Relaxed)
+    }
     /// Snapshot bytes while excluding pipeline additions. Disk ownership and
     /// atomic replacement of the persistent envelope belong to the caller.
     pub fn data(&self) -> Option<Vec<u8>> {
         autoreleasepool(|_| {
-            let temporary = Temporary::new().ok()?;
-            self.raw
-                .lock()
-                .serializeToURL_error(&temporary.url())
-                .ok()?;
-            std::fs::read(&temporary.path).ok()
+            let raw = self.raw.lock();
+            // Counted under the archive's lock, held here.
+            let additions = self.additions.load(Ordering::Relaxed);
+            let mut snapshot = self.snapshot.lock();
+            // Metal serializes an archive that gained nothing since its last
+            // serialization by moving that file, and then fails every later
+            // attempt until an addition (macOS 27.2). An unchanged archive is
+            // read from the kept file instead, which for a restored archive is
+            // the file it was restored from.
+            if snapshot.as_ref().is_none_or(|(at, _)| *at != additions) {
+                let temporary = Temporary::new().ok()?;
+                raw.serializeToURL_error(&temporary.url()).ok()?;
+                *snapshot = Some((additions, temporary));
+            }
+            std::fs::read(&snapshot.as_ref()?.1.path).ok()
         })
     }
     pub(super) fn render(
@@ -150,9 +167,14 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        if let Err(error) = archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor) {
-            log::warn!("Metal render archive addition failed: {error}");
-            descriptor.setBinaryArchives(None);
+        match archive.addRenderPipelineFunctionsWithDescriptor_error(descriptor) {
+            Ok(()) => {
+                self.additions.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                log::warn!("Metal render archive addition failed: {error}");
+                descriptor.setBinaryArchives(None);
+            }
         }
         device.newRenderPipelineStateWithDescriptor_error(descriptor)
     }
@@ -174,9 +196,14 @@ impl BinaryArchive {
             return cached;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        if let Err(error) = archive.addComputePipelineFunctionsWithDescriptor_error(descriptor) {
-            log::warn!("Metal compute archive addition failed: {error}");
-            descriptor.setBinaryArchives(None);
+        match archive.addComputePipelineFunctionsWithDescriptor_error(descriptor) {
+            Ok(()) => {
+                self.additions.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(error) => {
+                log::warn!("Metal compute archive addition failed: {error}");
+                descriptor.setBinaryArchives(None);
+            }
         }
         device.newComputePipelineStateWithDescriptor_options_reflection_error(
             descriptor,
@@ -186,34 +213,26 @@ impl BinaryArchive {
     }
 }
 
-// Metal accepts URLs rather than in-memory archive bytes. An exclusively created
-// directory keeps each transfer private to this process and is removed on every exit.
+// Metal accepts URLs rather than in-memory archive bytes. A snapshot's file lives
+// as long as its archive, and a killed process, the usual end of an iOS app,
+// removes nothing. So each process keeps its files in a directory of its own
+// beside a lock it holds for life, and the first use in a process removes the
+// directories whose lock is free.
 #[derive(Debug)]
 struct Temporary {
-    directory: PathBuf,
     path: PathBuf,
 }
 impl Temporary {
     fn new() -> io::Result<Self> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        for _ in 0..16 {
-            let directory = std::env::temp_dir().join(format!(
-                "exact-metal-{}-{}",
-                std::process::id(),
+        let directory =
+            directory().ok_or_else(|| io::Error::other("no Metal archive directory"))?;
+        Ok(Self {
+            path: directory.join(format!(
+                "{}.metallib",
                 NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            match std::fs::create_dir(&directory) {
-                Ok(()) => {
-                    return Ok(Self {
-                        path: directory.join("archive.metallib"),
-                        directory,
-                    })
-                }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Err(io::Error::other("Metal archive temporary paths occupied"))
+            )),
+        })
     }
     fn url(&self) -> Retained<NSURL> {
         NSURL::fileURLWithPath(&NSString::from_str(&self.path.to_string_lossy()))
@@ -222,6 +241,31 @@ impl Temporary {
 impl Drop for Temporary {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
-        let _ = std::fs::remove_dir(&self.directory);
     }
+}
+
+fn directory() -> Option<&'static PathBuf> {
+    static DIRECTORY: OnceLock<Option<(PathBuf, std::fs::File)>> = OnceLock::new();
+    DIRECTORY
+        .get_or_init(|| {
+            let root = std::env::temp_dir().join("exact-metal");
+            let own = root.join(format!("{}", std::process::id()));
+            // An earlier process of this id is gone.
+            let _ = std::fs::remove_dir_all(&own);
+            std::fs::create_dir_all(&own).ok()?;
+            let lock = std::fs::File::create(own.join("lock")).ok()?;
+            lock.try_lock().ok()?;
+            for entry in std::fs::read_dir(&root).ok()?.flatten() {
+                let other = entry.path();
+                let free = other != own
+                    && std::fs::File::open(other.join("lock"))
+                        .is_ok_and(|lock| lock.try_lock().is_ok());
+                if free {
+                    let _ = std::fs::remove_dir_all(&other);
+                }
+            }
+            Some((own, lock))
+        })
+        .as_ref()
+        .map(|(own, _)| own)
 }

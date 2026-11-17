@@ -7,9 +7,9 @@
 // first commit; after every commit that stands the store holds each
 // persisted slot's value. Types are the emitter's `type_json`: "n", "s",
 // "b", ["?", t], ["[", t].
-import { After, Kept as kept, say } from './rt.js';
+import { After, Kept as kept, W, recommit, say } from './rt.js';
 
-const LIMIT = 16384, KEY = kept('state'), Kept = [];
+const LIMIT = 16384, KEY = kept('state'), Kept = [], Initial = new Map();
 const NONFINITE = { NaN: NaN, Infinity: Infinity, '-Infinity': -Infinity };
 const bytes = text => new TextEncoder().encode(text).length;
 const name = t => typeof t === 'string' ? { n: 'number', s: 'string', b: 'bool' }[t] : `${t[0] === '?' ? 'option' : 'list'}<${name(t[1])}>`;
@@ -34,6 +34,7 @@ function encode(v, t) {
 
 /** Persisted slot `slot`'s first value: the stored one where it fits type `t`, else `initial`. */
 export function stored(slot, initial, t) {
+  Initial.set(slot, initial);
   let text = null;
   try { text = localStorage.getItem(KEY + slot); } catch {}
   if (text == null) return initial;
@@ -49,7 +50,26 @@ export function keep(s, slot, t) {
   let last = null;
   try { last = localStorage.getItem(KEY + slot); } catch {}
   Kept.push({ s, slot, t, last, failed: null });
-  if (Kept.length === 1) After.push(flush);
+  if (Kept.length === 1) {
+    After.push(flush);
+    globalThis.addEventListener?.('storage', peer);
+  }
+}
+
+/** Another tab of the app wrote a persisted slot, or removed it (LLP 1030.004 D2): the value is app-wide, as a Mac app's
+ * `UserDefaults` are, so this tab takes it, or the initial value, in a commit of its own. */
+function peer(e) {
+  if (e.storageArea !== globalThis.localStorage) return;
+  for (const k of Kept) {
+    if (e.key != null && e.key !== KEY + k.slot) continue;
+    const text = e.key == null ? null : e.newValue;
+    if (text === k.last) continue;
+    let v;
+    try { v = text == null ? Initial.get(k.slot) : bytes(text) <= LIMIT ? revive(JSON.parse(text), k.t) : undefined; } catch {}
+    if (v === undefined) continue;
+    k.last = text;
+    recommit(() => W(k.s, v), "another tab's persisted state");
+  }
 }
 
 function flush() {

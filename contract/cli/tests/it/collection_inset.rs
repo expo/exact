@@ -871,6 +871,7 @@ fn scroll_anchor_snapshots_use_the_event_axis_and_padding_and_restore_signed_off
                 height: 20000.0,
                 client_width: if horizontal { port } else { 400.0 },
                 client_height: if horizontal { 400.0 } else { port },
+                zoom: 1.0,
             };
             r.dispatch(view, exact_runner::Event::Scroll(event))
                 .unwrap();
@@ -922,6 +923,7 @@ fn native_scroll_anchors_subtract_the_resolved_content_origin_on_both_axes() {
                 height: 20000.0,
                 client_width: 400.0,
                 client_height: 400.0,
+                zoom: 1.0,
             }),
         )
         .unwrap();

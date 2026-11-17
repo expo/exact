@@ -276,17 +276,17 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Journal each kept answer the first frame shows, with the arguments it
-    /// was kept for (development tools read the journal; its request lines
-    /// already carry URLs), so a stale answer is traceable to its key.
+    /// Journal each kept answer the first frame shows. The line names the
+    /// declaration, never its identifying values (LLP 1027.005 D3).
     pub(super) fn journal_kept_seeds(&mut self) {
         self.journal_refused();
         for i in 0..self.resources.len() {
-            if let Some(state) = self.resources[i].state.as_ref().filter(|s| s.kept_seed) {
-                let mut args = String::new();
-                crate::agent::untyped_json(&Value::list(state.args.clone()), &mut args);
-                let line =
-                    super::lines::kept_shown(self.plan.str(self.resource_row(i).name), &args);
+            if self.resources[i]
+                .state
+                .as_ref()
+                .is_some_and(|state| state.kept_seed)
+            {
+                let line = super::lines::kept_shown(self.plan.str(self.resource_row(i).name));
                 self.log(line);
             }
         }
@@ -325,7 +325,7 @@ impl<D: DataSource> Runner<D> {
             (args.len() == identity && self.check_shape(i, &value).is_ok()).then_some((args, value))
         });
         if seed.is_none() {
-            let line = super::lines::kept_refused(name, None, "it no longer decodes or fits");
+            let line = super::lines::kept_refused(name, "it no longer decodes or fits");
             self.keeping.refused.push((i, line));
             if row.keep {
                 self.store.forget_kept(&kept_name(name));
@@ -438,8 +438,9 @@ impl<D: DataSource> Runner<D> {
     /// Keep a store-reading resource's fresh answer for the next boot's
     /// first frame (LLP 1027 D4), when this source may not be ready then.
     pub(super) fn keep_answer(&mut self, i: usize, args: &[Value], value: &Value) {
-        // An element of a resource over a list is the launch's to ask.
-        if self.member(i).is_some() {
+        // An element of a resource over a list is the launch's to ask, and
+        // so is an instance's request (LLP 1035.005.004 D8).
+        if self.member(i).is_some() || self.owned_row(i).is_some() {
             return;
         }
         self.answered_waiting(i, args, false);
@@ -541,11 +542,11 @@ impl<D: DataSource> Runner<D> {
             }
             total -= n;
             self.store.forget_kept(&other);
+            let other = &other[Store::KEPT.len()..];
+            let kept = &name[Store::KEPT.len()..];
             let line = format!(
-                "kept answers are at most {} KiB together: forgot `{}`'s ({n} bytes) to keep `{}`'s, so the next launch shows `{0}`'s placeholder until it answers (LLP 1027 D4)",
+                "kept answers are at most {} KiB together: forgot `{other}`'s kept answer to keep `{kept}`'s, so the next launch shows `{other}`'s placeholder until it answers (LLP 1027 D4)",
                 KEPT_TOTAL_BYTES / 1024,
-                &other[Store::KEPT.len()..],
-                &name[Store::KEPT.len()..],
             );
             self.log(line);
         }
@@ -893,7 +894,7 @@ impl<D: DataSource> Runner<D> {
         let m = target
             .mutation()
             .expect("a send's target names its mutation");
-        let name = self.plan.str(self.plan.mutations[m].name).to_string();
+        let name = self.mutation_name(m).to_string();
         let answer = self
             .check_send_arguments(m, &args)
             .map_err(|e| format!("{e:?}"))
@@ -917,7 +918,7 @@ impl<D: DataSource> Runner<D> {
                 answer.map_err(|e| format!("{e:?}"))
             });
         let refused = match answer {
-            Ok(super::Answer::Now(value)) if self.conforms(&value, self.plan.mutations[m].ty) => {
+            Ok(super::Answer::Now(value)) if self.conforms(&value, self.mutation_row(m).ty) => {
                 match self.mutation_slot(m) {
                     Ok(slot) => {
                         if self.newest_wins(m) {

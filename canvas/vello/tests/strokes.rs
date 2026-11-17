@@ -41,6 +41,7 @@ fn stroke(dash: &[f64], offset: f64, rectangle: bool) -> Scene {
         scene: Scene::new(),
         keep: true,
         shadows: Vec::new(),
+        masks: Vec::new(),
     };
     replayer.begin(&mut frame.scene);
     for list in ctx.take_lists() {

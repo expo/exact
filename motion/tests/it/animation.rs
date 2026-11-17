@@ -717,7 +717,7 @@ fn an_unbound_consumer_is_sampled_on_the_clock_again() {
             }
             assert!(!e.quiescent() && e.next_change().is_some(), "{case}");
             if first_frame {
-                e.present_frame(0.0).unwrap();
+                e.present_frame(0.0, 0.0).unwrap();
             }
             for (t, want) in [(0.25, 0.5), (0.5, 0.75)] {
                 e.advance(t).unwrap();

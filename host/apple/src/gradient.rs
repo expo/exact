@@ -29,12 +29,16 @@ fn tint_stop(c: [f32; 4], share: f32, legacy: bool) -> ColorValue {
     exact_kernel::style::wide::parse_wide(&wide.css()).unwrap_or(fixed)
 }
 
-/// Resolve one gradient into the existing presenter ramp plus its geometry.
+/// Resolve one gradient into the existing presenter ramp plus its geometry;
+/// with `cycle`, one period of a repeating linear gradient and the line it
+/// spans ([`Gradient::cycle`](exact_kernel::gradient::Gradient::cycle)), or
+/// nothing for any other gradient.
 ///
 /// # Safety
 /// `css` is valid for `len` reads; `tint`, when non-null, for four floats:
 /// extended sRGB red, green and blue, unclipped, then alpha;
 /// `out`, when non-null, for `cap` writes.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn resolve(
     css: *const u8,
     len: usize,
@@ -43,6 +47,7 @@ pub unsafe fn resolve(
     tint: *const f32,
     out: *mut u8,
     cap: usize,
+    cycle: bool,
 ) -> usize {
     if css.is_null() || !size.iter().all(|n| n.is_finite() && *n >= 0.0) {
         return 0;
@@ -85,7 +90,14 @@ pub unsafe fn resolve(
             hue: HueMethod::Shorter,
         }));
     }
-    let (mut ramp, geometry) = g.placed(size[0], size[1], dark);
+    let (mut ramp, geometry) = if cycle {
+        match g.cycle(size[0], size[1], dark) {
+            Some(period) => period,
+            None => return 0,
+        }
+    } else {
+        g.placed(size[0], size[1], dark)
+    };
     // The placement crosses resolved, below; explicit radii in the shape
     // would send the gradient back as CSS.
     if let GradientKind::Radial { size, .. } = &mut ramp.kind {
@@ -134,7 +146,46 @@ macro_rules! gradient_exports {
         ) -> usize {
             // SAFETY: forwarded from the caller's buffer contract.
             unsafe {
-                $crate::gradient::resolve(css, len, [width, height], dark != 0, tint, out, cap)
+                $crate::gradient::resolve(
+                    css,
+                    len,
+                    [width, height],
+                    dark != 0,
+                    tint,
+                    out,
+                    cap,
+                    false,
+                )
+            }
+        }
+
+        /// One period of a repeating linear gradient (#661).
+        ///
+        /// # Safety
+        /// Input/output buffers have their stated lengths.
+        #[no_mangle]
+        pub unsafe extern "C" fn exact_gradient_cycle(
+            css: *const u8,
+            len: usize,
+            width: f32,
+            height: f32,
+            dark: u8,
+            tint: *const f32,
+            out: *mut u8,
+            cap: usize,
+        ) -> usize {
+            // SAFETY: forwarded from the caller's buffer contract.
+            unsafe {
+                $crate::gradient::resolve(
+                    css,
+                    len,
+                    [width, height],
+                    dark != 0,
+                    tint,
+                    out,
+                    cap,
+                    true,
+                )
             }
         }
     };
@@ -324,6 +375,7 @@ mod tests {
                         floats.as_ptr(),
                         out.as_mut_ptr(),
                         out.len(),
+                        false,
                     )
                 };
                 assert!(n > 0 && n <= out.len(), "{css}: {n}");
@@ -371,6 +423,7 @@ mod tests {
                 std::ptr::null(),
                 out.as_mut_ptr(),
                 out.len(),
+                false,
             )
         };
         let value: serde_json::Value = serde_json::from_slice(&out[..n]).unwrap();
@@ -393,6 +446,7 @@ mod tests {
                 std::ptr::null(),
                 std::ptr::null_mut(),
                 0,
+                false,
             )
         };
         assert!(n > 0);
@@ -408,6 +462,7 @@ mod tests {
                     std::ptr::null(),
                     out.as_mut_ptr(),
                     n,
+                    false,
                 )
             },
             n
@@ -416,5 +471,37 @@ mod tests {
         assert!((value["stops"][5].as_f64().unwrap() - 0.1).abs() < 0.0001);
         assert_eq!(value["line"][2], 200.0);
         assert!(value.get("css").is_none());
+    }
+
+    #[test]
+    fn a_cycle_crosses_as_one_period_and_its_line() {
+        let resolve = |css: &str| {
+            let mut out = vec![0; 4096];
+            // SAFETY: both buffers have the lengths passed.
+            let n = unsafe {
+                super::resolve(
+                    css.as_ptr(),
+                    css.len(),
+                    [100.0, 70.0],
+                    false,
+                    std::ptr::null(),
+                    out.as_mut_ptr(),
+                    out.len(),
+                    true,
+                )
+            };
+            (n > 0).then(|| serde_json::from_slice::<serde_json::Value>(&out[..n]).unwrap())
+        };
+        let value = resolve("repeating-linear-gradient(90deg, red 2px, blue 12px)").unwrap();
+        let line: Vec<f64> = serde_json::from_value(value["line"].clone()).unwrap();
+        assert!(
+            line[0] == 2.0
+                && line[2] == 12.0
+                && (line[1] - 35.0).abs() < 1e-3
+                && line[1] == line[3],
+            "{line:?}"
+        );
+        assert_eq!(value["stops"].as_array().unwrap().len(), 10, "{value}");
+        assert!(resolve("linear-gradient(90deg, red 2px, blue 12px)").is_none());
     }
 }

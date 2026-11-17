@@ -241,8 +241,12 @@ mod tests {
     }
 
     /// A module whose surface composites its children, and which keeps what
-    /// `gpu_texture` was given.
-    fn composite_module() -> (std::path::PathBuf, serde_json::Value) {
+    /// `gpu_texture` was given; beside the probe, which removes it.
+    fn composite_module() -> (
+        crate::surfaces::tests::Probe,
+        std::path::PathBuf,
+        serde_json::Value,
+    ) {
         let (probe, _) = crate::surfaces::tests::fixture();
         let dir = probe.parent().unwrap();
         let source = std::fs::read_to_string(dir.join("probe.c"))
@@ -276,13 +280,13 @@ uint32_t test_texture_alpha(void) { return texture_pixel[3]; }
         let compat = serde_json::json!({"id":"cohort", "inputs":{"app":"test.app"}, "embedded":{"gpu":{
             "name":path.file_name().unwrap().to_str().unwrap(),"sha256":digest,
             "app":"test.app","cohort":"cohort","trust":"production"}}});
-        (path, compat)
+        (probe, path, compat)
     }
 
     #[test]
     fn a_composite_canvas_is_given_its_children_and_they_are_not_painted_over_it() {
         use crate::presenter::Presenter;
-        let (path, compat) = composite_module();
+        let (_probe, path, compat) = composite_module();
         let source = r##"component App
   view
     column

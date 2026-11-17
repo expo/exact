@@ -5,13 +5,12 @@
 // the app for all-session acceptance, and subscribe to the server's events
 // so an edit re-fetches. Transactional: a candidate replaces the
 // running app only after its bytes hash clean and boot runs; every failure
-// keeps the last good app on screen. `{rebuilt}`, or a generation for
-// another program, takes no generation — the wasm-side program changed, so a
-// new plan against this binary's data crate would be a poisoned boot — but
-// the host stays connected and registered, reconnects across restarts, and
-// takes the next generation for its own program; rebuilding the host, or the
-// menu's Reload, starts over. One connection per app (LLP 1031 D11), never
-// per session.
+// keeps the last good app on screen. A rebuild or generation naming changed
+// inputs for this binary's native cohort takes no generation: a new plan
+// against another native program could boot incorrectly. The host stays
+// connected and registered across restarts and takes the next generation for
+// its own program. Web-only rebuilds keep the native program and carried state.
+// One connection per app (LLP 1031 D11), never per session.
 import CryptoKit
 import Foundation
 
@@ -350,7 +349,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
     static let assetIndexLimit = 4 * 1024 * 1024
     static let planLimit = 64 * 1024 * 1024
     static let assetLimit = 64 * 1024 * 1024
-    /// One event frame: 1 MiB, the design server's own line limit, since a large plan's copies (tamber/1.17 `inspect`)
+    /// One event frame: 1 MiB, the design server's own line limit, since a large plan's copies (forma/1.17 `inspect`)
     /// pass 64 KiB (a generated 20,000-copy map: 85 KB).
     static let eventLimit = 1024 * 1024
     static let generationLimit = 256 * 1024 * 1024
@@ -610,19 +609,28 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
               let count = PlanURL.count(row["bytes"]), count <= (name.isEmpty ? PlanURL.planLimit : PlanURL.assetLimit) else { return nil }
         return FileCard(name: name, url: url, sha: sha, count: count)
     }
+    private static func nativeProgram(_ row: [String: Any]) -> String? {
+        let compat = BakedCompatibility.json
+        guard let cohort = compat["id"] as? String, let target = compat["target"] as? String,
+              let programs = row["nativePrograms"] as? [String: Any] else { return nil }
+        return digest(programs[target + "/" + cohort])
+    }
     private static func revision(_ row: [String: Any]) -> Revision? {
         guard let epoch = row["epoch"] as? String, !epoch.isEmpty, epoch.utf8.count <= 128,
               let seq = count(row["seq"]), let identity = digest(row["generation"]) else { return nil }
-        return Revision(epoch: epoch, seq: seq, identity: identity, program: digest(row["program"]))
+        return Revision(epoch: epoch, seq: seq, identity: identity, program: nativeProgram(row))
     }
 
     /// A new epoch resets ordering; an already retired epoch cannot return.
     /// All fetch completions also carry a local resolution, so a response
     /// started before a newer announcement cannot commit afterward.
     private func observe(_ revision: Revision) -> Bool {
-        // Its program, once known, is the only one it takes; until then the
-        // session pins the first (`acceptProgram`), except while it waits,
-        // when an unknown program cannot be checked and is not pinned.
+        // A revision naming no program for this host's cohort and target is
+        // refused. A known program is the only one the host takes; until one
+        // is known the session pins the first (`acceptProgram`), except while
+        // it waits: it cannot tell its own program returning from a rebuilt
+        // one, so it pins nothing until Reload or a relaunch.
+        guard revision.program != nil else { waitForProgram(); return false }
         if let known = adopted {
             guard revision.program == known else { waitForProgram(); return false }
         } else if terminal != nil || !acceptProgram(revision.program) {
@@ -964,14 +972,14 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
         failed("events disconnected; resolving the current generation", generation: resolution)
     }
 
-    /// The dev server's native code is no longer this host's (it rebuilt it,
-    /// or a generation names another program). The last good plan keeps
+    /// The dev server has no unchanged build receipt for this native cohort,
+    /// or names another native program. The last good plan keeps
     /// running and no generation is fetched, but the host stays connected and
     /// registered and keeps reconnecting across the server's restarts, so the
     /// generation for its own code, when the server has it again, is taken.
     private func waitForProgram() {
         if terminal == nil {
-            terminal = "the dev server rebuilt the app's native code — rebuild and relaunch this host (the last good plan is still running)"
+            terminal = "this host's native program is unavailable or changed — rebuild and relaunch this host (the last good plan is still running)"
             status(terminal!)
         }
         settle()
@@ -1038,7 +1046,8 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
     private func handle(_ frame: [String: Any]) {
         retrySeconds = 1
         if frame["rebuilt"] != nil {
-            waitForProgram()
+            if let known = adopted, PlanURL.nativeProgram(frame) == known { settle() }
+            else { waitForProgram() }
             return
         }
         if let error = frame["error"] as? String {
@@ -1046,7 +1055,7 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
             status("dev: \(error)")
             return
         }
-        if let kind = frame["kind"] as? String, kind == "tamber-batch" || kind == "tamber-snapshot" {
+        if let kind = frame["kind"] as? String, kind == "forma-batch" || kind == "forma-snapshot" {
             design(frame)
             return
         }

@@ -12,6 +12,25 @@ use std::collections::BTreeMap;
 #[path = "fixture/device.rs"]
 mod test_device;
 
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct Crate;
 impl Game for Crate {
     const ID: &'static str = "compressed-crate";
@@ -46,7 +65,8 @@ fn baked() -> BTreeMap<String, Vec<u8>> {
     // One directory a call: the tests bake at once.
     static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("compressed-{}-{call}", std::process::id()));
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("compressed-{}-{call}", std::process::id())));
     std::fs::create_dir_all(&dir).unwrap();
     let mut gltf: serde_json::Value =
         serde_json::from_str(include_str!("../../bake/tests/fixtures/crate.gltf")).unwrap();
@@ -156,8 +176,10 @@ fn block_payloads_draw_the_rgba8_material_within_tolerance() {
         let (mut sum, mut worst, mut changed) = (0u64, 0u8, 0);
         for (a, b) in reference
             .data
-            .chunks_exact(4)
-            .zip(image.data.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(image.data.as_chunks::<4>().0)
         {
             let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap();
             sum += u64::from(d);

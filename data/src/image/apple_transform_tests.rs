@@ -1,4 +1,4 @@
-use super::super::super::{compress_edited, Format, MAX_SOURCE_PIXELS};
+use super::super::super::{compress_edited, Format, Limits, MAX_SOURCE_PIXELS};
 use super::super::{inspect, png};
 use super::*;
 use crate::image::edit::{parse_transform, Edit, Flip, Rect};
@@ -283,8 +283,7 @@ fn metadata_is_kept_stripped_of_location_or_dropped() {
     let compressed = super::super::super::compress(
         EVERY_TAG,
         Format::Jpeg,
-        8,
-        100_000,
+        crate::image::tests::aim(8, 100_000),
         Instant::now() + Duration::from_secs(60),
     );
     assert_eq!(tags(&compressed.unwrap().bytes), nothing);
@@ -305,8 +304,11 @@ fn compress_takes_the_edit_and_still_keeps_nothing() {
     let out = compress_edited(
         FIXTURE,
         Format::Jpeg,
-        32,
-        2_000_000,
+        Limits {
+            max_dimension: 32,
+            max_bytes: Some(2_000_000),
+            quality: None,
+        },
         &edit,
         Deadline {
             at: Instant::now() + Duration::from_secs(60),
@@ -409,8 +411,7 @@ fn a_gain_map_survives_the_edit_and_the_colour_space_is_kept() {
         let flat = super::super::super::compress(
             &source,
             Format::Jpeg,
-            256,
-            2_000_000,
+            crate::image::tests::aim(256, 2_000_000),
             Instant::now() + Duration::from_secs(60),
         )
         .unwrap();

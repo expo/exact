@@ -424,13 +424,19 @@ impl Replayer {
                         quality: FilterQuality::Bilinear,
                     };
                     let ts = Transform::from_translate(ox * self.scale, oy * self.scale);
-                    self.pixmap
-                        .draw_pixmap(0, 0, shadow.as_ref(), &paint, ts, clip.as_ref());
+                    Arc::make_mut(&mut self.pixmap).draw_pixmap(
+                        0,
+                        0,
+                        shadow.as_ref(),
+                        &paint,
+                        ts,
+                        clip.as_ref(),
+                    );
                 }
             }
             if extent {
                 composite_extent(
-                    &mut self.pixmap,
+                    Arc::make_mut(&mut self.pixmap),
                     &layer,
                     self.state.composite,
                     clip.as_ref(),
@@ -439,7 +445,13 @@ impl Replayer {
             }
         }
         let mask = intersect(clip.as_ref(), band);
-        render(&mut self.pixmap, &geom, &src, mode, mask.as_ref());
+        render(
+            Arc::make_mut(&mut self.pixmap),
+            &geom,
+            &src,
+            mode,
+            mask.as_ref(),
+        );
     }
 
     /// The shadow of a layer: its alpha blurred and tinted.
@@ -508,7 +520,7 @@ impl Replayer {
         let (x0, y0) = (r.at(0) as i64, r.at(1) as i64);
         let (w, h) = (r.at(2) as i64, r.at(3) as i64);
         let (pw, ph) = (self.pixmap.width() as i64, self.pixmap.height() as i64);
-        let px = self.pixmap.pixels_mut();
+        let px = Arc::make_mut(&mut self.pixmap).pixels_mut();
         for y in 0..h {
             for x in 0..w {
                 let (tx, ty) = (x0 + x, y0 + y);

@@ -185,7 +185,7 @@ enum InspectHost {
         while let v = at {
             if let node = v as? NodeView, !node.isHidden { return (node.id, node, nil) }
             if let button = v as? NativeButtonMac, let owner = button.owner { return (owner.id, owner, nil) }
-            if let owned = v as? AgentOwned, let id = owned.agentViewId { return (id, v, nil) }
+            if let owned = v as? InspectionOwned, let id = owned.inspectionViewId { return (id, v, nil) }
             at = v.superview
         }
         return (nil, nil, nil)

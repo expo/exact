@@ -1,6 +1,6 @@
 # Paperback Settings: notes
 
-Built with Exact: `app.contract` (the view and every setting), `app.tamber` (the reading
+Built with Exact: `app.contract` (the view and every setting), `app.forma` (the reading
 paper/ink colours for Light, Dark and Sepia), `app.test.contract` (9 tests). Installed on
 simulator `CEDFB9C9-…` as `dev.bakeoff.settings.b6c2df1`, named "Settings".
 

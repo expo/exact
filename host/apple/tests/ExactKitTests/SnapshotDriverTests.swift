@@ -124,12 +124,18 @@ final class SnapshotDriverTests: XCTestCase {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_\(key)_PLAN"], "EXACT_\(key)_PLAN: build.mjs --test compiles it")
         return try Data(contentsOf: URL(fileURLWithPath: path))
     }
+    /// The rendered pictures go to `EXACT_WP4_OUT`, which keeps them, else to a directory removed after the class.
+    private nonisolated static let kept = ProcessInfo.processInfo.environment["EXACT_WP4_OUT"].map { URL(fileURLWithPath: $0) }
+    private nonisolated static let scratch = FileManager.default.temporaryDirectory.appending(path: "exact-wp4-\(ProcessInfo.processInfo.processIdentifier)")
     private static let out: URL = {
-        let dir = ProcessInfo.processInfo.environment["EXACT_WP4_OUT"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.temporaryDirectory.appending(path: "exact-wp4-\(ProcessInfo.processInfo.processIdentifier)")
+        let dir = kept ?? scratch
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()
+    nonisolated override class func tearDown() {
+        if kept == nil { try? FileManager.default.removeItem(at: scratch) }
+        super.tearDown()
+    }
     private static let baseline = ProcessInfo.processInfo.environment["EXACT_WP4_BASELINE"].map { URL(fileURLWithPath: $0) }
 
     // MARK: The stand-in for WidgetKit's container (the baseline's `WidgetContainer`)

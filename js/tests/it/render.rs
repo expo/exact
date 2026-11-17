@@ -10,7 +10,7 @@ use exact_render::{Serve, Server};
 use exact_runner::{Answer, DataError, DataSource, Interrupt, Outcome, Store, Target};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
@@ -26,10 +26,7 @@ impl Default for Spin {
             .with_native(|_| Box::new(super::interrupt::Announcer::<1>));
         module.set_budget_ms(f64::INFINITY);
         // A native module comes with storage: the spinning call tells it once it spins.
-        let root = std::env::temp_dir().join(format!(
-            "exact-js-render-spin-storage-{}",
-            std::process::id()
-        ));
+        let root = storage_root();
         module
             .configure_storage(root.join("data"), root.join("cache"), root.join("tmp"))
             .unwrap();
@@ -83,8 +80,28 @@ impl DataSource for Spin {
     }
 }
 
-fn start(deadline: Duration) -> SocketAddr {
+fn storage_root() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "exact-js-render-spin-storage-{}",
+        std::process::id()
+    ))
+}
+
+/// The server's dist and its modules' storage, removed when dropped. The
+/// server thread outlives the test; it is idle by then.
+struct Dirs([PathBuf; 2]);
+
+impl Drop for Dirs {
+    fn drop(&mut self) {
+        for dir in &self.0 {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+fn start(deadline: Duration) -> (SocketAddr, Dirs) {
     let dist = std::env::temp_dir().join(format!("exact-js-render-spin-{}", std::process::id()));
+    let dirs = Dirs([dist.clone(), storage_root()]);
     let _ = std::fs::remove_dir_all(&dist);
     std::fs::create_dir_all(&dist).unwrap();
     let shell = Path::new(env!("CARGO_MANIFEST_DIR")).join("../host/web/index.html");
@@ -106,7 +123,7 @@ fn start(deadline: Duration) -> SocketAddr {
     let server = Server::bind(serve, plan, "").unwrap();
     let addr = server.addr();
     std::thread::spawn(move || server.run(Spin::default));
-    addr
+    (addr, dirs)
 }
 
 /// Status, headers (lowercased names) and body; a stuck render is a failure
@@ -158,7 +175,7 @@ fn a_spinning_source_renders_503_at_its_deadline_and_the_server_keeps_serving() 
     // A bound only for a hanging test: the spinning page meets its deadline
     // when the test fires it (`exact_render::expire_renders`), once the call
     // says it is spinning.
-    let addr = start(Duration::from_secs(30));
+    let (addr, _dirs) = start(Duration::from_secs(30));
     let spin = std::thread::spawn(move || get(addr, "/page/spin"));
     let said = started.recv_timeout(Duration::from_secs(30));
     // Fired either way, so a call that never says so fails the test instead of hanging it

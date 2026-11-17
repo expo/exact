@@ -9,10 +9,13 @@
 //! (`document.hasFocus()`, #114), how the browser loaded the page
 //! (Navigation Timing's `type`), and whether the page is put away in, and
 //! how often it came back from, the back/forward cache (`pagehide` and
-//! `pageshow` with `persisted`). The host observes them; the app reads them
+//! `pageshow` with `persisted`), and the window's name (`window.name`,
+//! fixed at launch: [`crate::time::Launch`]), and whether a picture of the page has
+//! been presented (`presented`, kept apart from the wire's bits, which are all
+//! taken). The host observes them; the app reads them
 //! by field name from one reserved source. The word also carries the
 //! device's GPU tier, which an app reads as `exactViewport().gpuTier`.
-//! @ref LLP 1069.000 D2; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
+//! @ref LLP 1069.000 D2, D6; LLP 1003.001 D9; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
 
 use exact_plan::Value;
 
@@ -32,7 +35,48 @@ pub const FIELDS: &[&str] = &[
     "persisted",
     "restores",
     "iframePartition",
+    "name",
+    "presented",
 ];
+
+std::thread_local! {
+    static AWAITS_PRESENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the runners this thread makes from now on are a host's that
+/// presents pictures: their page's `presented` is false until the host hears
+/// the present of its first picture ([`crate::Runner::page_presented`]). Not
+/// (the default: the agent's clock, headless Linux, the render host, a
+/// test), nothing will ever present, and it is true from the first commit.
+/// Returns what it was, for a host that sets it around one boot.
+pub fn set_awaits_present(on: bool) -> bool {
+    AWAITS_PRESENT.with(|a| a.replace(on))
+}
+
+/// `exactPage().presented`: whether the host heard the present of the
+/// page's first picture, and what `prefer presented` holds it at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Presented {
+    /// The latch: set once a world, never cleared within it.
+    pub seen: bool,
+    /// `prefer presented` (LLP 1069.000 D6): stands in for the latch.
+    pub preferred: Option<bool>,
+}
+
+impl Presented {
+    /// A new runner's: false where its host presents, else true.
+    pub(crate) fn at_boot() -> Self {
+        Self {
+            seen: !AWAITS_PRESENT.with(std::cell::Cell::get),
+            preferred: None,
+        }
+    }
+
+    /// What the app reads.
+    pub fn value(self) -> bool {
+        self.preferred.unwrap_or(self.seen)
+    }
+}
 
 /// `navigationType`'s words, by their wire code (bits 5–6): the web's
 /// `PerformanceNavigationTiming.type`, or none where the app is no page a

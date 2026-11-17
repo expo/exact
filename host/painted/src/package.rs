@@ -291,6 +291,12 @@ impl Context {
         crate::desktop::services()
     }
 
+    /// The host's displays and pointer (LLP 1178 D6), or `None` on a host
+    /// that reports none.
+    pub fn displays(&self) -> Option<std::rc::Rc<dyn crate::desktop::Displays>> {
+        crate::desktop::displays()
+    }
+
     /// The host's pads (LLP 1133.022 D4): the process's one registry, which
     /// a canvas reads too, with this instance's claims, which end with it.
     pub fn pads(&self) -> crate::pads::Pads {

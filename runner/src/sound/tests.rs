@@ -7,7 +7,6 @@ use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use std::path::PathBuf;
 
 const SOURCE: &str = r#"sound "assets/kick.wav"
 sound "assets/hat.wav"
@@ -154,7 +153,7 @@ fn wav(path: &std::path::Path, ms: u32) {
 }
 
 /// The app's directory: the source and a 250 ms kick and 100 ms hat.
-fn app(source: &str) -> PathBuf {
+fn app(source: &str) -> crate::TempDir {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -166,7 +165,7 @@ fn app(source: &str) -> PathBuf {
     wav(&dir.join("assets/kick.wav"), 250);
     wav(&dir.join("assets/hat.wav"), 100);
     std::fs::write(dir.join("app.contract"), source).unwrap();
-    dir
+    crate::TempDir(dir)
 }
 
 /// The plan of `source` in an app directory with the kit's sounds, compiled once per source

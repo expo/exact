@@ -149,6 +149,19 @@ impl<D: DataSource> Host<D> {
                             size: n.frame.height as f64,
                         })
                     })
+                    .chain(snapshot.fixed.iter().enumerate().map(|(side, fixed)| {
+                        RowMeasurement {
+                            view: fixed.view,
+                            epoch: 1,
+                            size: kernel
+                                .collection_fixed_sizes(
+                                    snapshot.view,
+                                    &snapshot.fixed[0].roots,
+                                    &snapshot.fixed[1].roots,
+                                )
+                                .expect("fixed collection layout")[side],
+                        }
+                    }))
                     .collect();
                 let focus_view = self
                     .focus
@@ -235,5 +248,43 @@ impl<D: DataSource> Host<D> {
                 self.focus_open_layer();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fixed_tests {
+    use crate::host::{Host, Mode};
+
+    #[test]
+    fn a_growing_trail_stays_at_the_followed_end() {
+        let source = r#"component App
+  state tail = 20
+  action grow
+    tail = tail + 10
+  view
+    list virtualized=true appearance="none" height="12lh" width="30ch" estimated-item-height=32 scrollFollowEnd=true testId="list"
+      text "Lead" height="2lh"
+      for n in [1, 2, 3] key=n
+        text `${n}` height="2lh"
+      view height=`${tail}lh`
+        text "Trail"
+"#;
+        let mut host = Host::boot(
+            contract::compile_terminal(source).unwrap(),
+            (),
+            Mode::Fullscreen,
+            40,
+            20,
+        )
+        .unwrap();
+        host.arm = false;
+        let _ = host.frame();
+        let list = host.by_test_id("list").unwrap();
+        host.scroll_edge(true);
+        let _ = host.frame();
+        let before = host.scroll[&list];
+        host.act("grow");
+        let _ = host.frame();
+        assert_eq!(host.scroll[&list], before + 160.0);
     }
 }

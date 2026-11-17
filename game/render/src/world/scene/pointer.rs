@@ -18,6 +18,7 @@ impl CameraPointer {
     pub fn feed(
         &mut self,
         w: &World,
+        poses: &PoseRows<'_>,
         camera: Option<Entity>,
         next_tick: bool,
         structure: bool,
@@ -26,7 +27,7 @@ impl CameraPointer {
         let look = camera.and_then(|e| w.get::<MouseLook>(e).map(|p| *p));
         let pan = camera.and_then(|e| w.get::<PointerPan>(e).map(|p| *p));
         let changed = self.camera != camera;
-        if changed || camera.is_some_and(|e| snap_in(w, e, chains)) {
+        if changed || camera.is_some_and(|e| poses.snap_in(e, chains)) {
             self.pan_interpolates = false;
         } else if next_tick {
             self.pan_interpolates = true;
@@ -44,11 +45,11 @@ impl CameraPointer {
             for (e, _) in w.query::<&Parent>().iter() {
                 let mut at = e;
                 for _ in 0..=w.len() {
-                    let Some(parent) = w.get::<Parent>(at).map(|p| p.0) else {
+                    let Some(parent) = poses.parents.get(at).map(|p| p.0) else {
                         break;
                     };
                     if parent == camera {
-                        if let Some(t) = pose(w, e) {
+                        if let Some(t) = poses.pose(e) {
                             self.kids.push(
                                 old.iter()
                                     .copied()
@@ -63,12 +64,15 @@ impl CameraPointer {
             }
         }
         for history in &mut self.kids {
-            history.update(w, next_tick, chains);
+            history.update(poses, next_tick, chains);
         }
     }
+    /// `tick_move` is the camera's position change over the latest tick, the
+    /// one `alpha` interpolates.
     pub fn frame(
         &mut self,
         camera: &mut Transform,
+        tick_move: Vec3,
         out: &mut Vec<DisplayedAttachment>,
         alpha: f32,
     ) {
@@ -79,6 +83,11 @@ impl CameraPointer {
             .map_or(glam::Quat::IDENTITY, |look| {
                 look.turn(camera.rotation, motion)
             });
+        let bounds = self.pan.and_then(|pan| pan.bounds).filter(|[min, max]| {
+            min.cmple(*max).all()
+                && min.cmplt(Vec3::INFINITY).all()
+                && max.cmpgt(Vec3::NEG_INFINITY).all()
+        });
         let translation = match (self.pan, self.sample.take()) {
             (Some(pan), Some(sample)) if sample.id == pan.pointer && sample.current_contact => {
                 let undrawn = if self.pan_interpolates {
@@ -86,7 +95,15 @@ impl CameraPointer {
                 } else {
                     0.
                 };
-                pan.translation(sample.position - pan.position + pan.delta * undrawn)
+                // The pan move the latest tick made. A tick that clamps moved
+                // the camera less than `delta`: start from the camera's pose
+                // before that tick and apply the same limits.
+                let ticked = pan.translation(pan.delta);
+                let ticked = match bounds {
+                    Some(bounds) => limited(camera.position - tick_move * alpha, ticked, bounds),
+                    None => ticked,
+                };
+                pan.translation(sample.position - pan.position) + ticked * undrawn
             }
             _ => Vec3::ZERO,
         };
@@ -94,6 +111,12 @@ impl CameraPointer {
             translation
         } else {
             Vec3::ZERO
+        };
+        // Only the frame's own translation is limited: a camera with no
+        // unshown pointer motion is drawn where its tick put it.
+        let translation = match bounds {
+            Some(bounds) => limited(camera.position, translation, bounds),
+            None => translation,
         };
         if translation == Vec3::ZERO && turn == glam::Quat::IDENTITY {
             return;
@@ -122,4 +145,11 @@ impl CameraPointer {
             }
         }
     }
+}
+
+/// `step` from `from`, shortened on each axis so it ends inside `bounds`.
+/// The limits only shorten a pan's own move: an axis with no move stays, and
+/// a camera already outside is not pulled in (nor pushed further out).
+fn limited(from: Vec3, step: Vec3, [min, max]: [Vec3; 2]) -> Vec3 {
+    ((from + step).clamp(min, max) - from).clamp(step.min(Vec3::ZERO), step.max(Vec3::ZERO))
 }

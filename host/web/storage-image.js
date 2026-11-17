@@ -2,9 +2,10 @@
 // decodes (`createImageBitmap`, orientation applied), a canvas scales (onto
 // white for a JPEG, clear for a PNG, A1.11), and `convertToBlob` encodes each
 // trial. Loaded by storage-fs.js on the first call, never before first
-// pixel. A JPEG's search is Bluesky's (A1.2), the same trials as
-// `exact_data::image::search` (scripts/fixtures/picker/compress-trials.json);
-// a PNG's only shrinks, as `exact_data::image::search_lossless` does.
+// pixel. A JPEG's search is Bluesky's (A1.2), under the app's `quality` when
+// it names one (A1.12), the same trials as `exact_data::image::search`
+// (scripts/fixtures/picker/compress-trials.json); a PNG's only shrinks, as
+// `exact_data::image::search_lossless` does.
 // `transformImage` (LLP 1133.019 D14) and `compressImage`'s edit (D15) draw
 // the bitmap once through one transform, `geometry`'s, the same map as
 // `exact_data::image::edit::Geometry`. A canvas has no metadata, no colour
@@ -30,18 +31,22 @@ export function failure(code, detail, call = 'compressImage') {
   return error;
 }
 
-/** The options as A1.1 bounds them, or a TypeError. */
+/** The options as A1.1 and A1.12 bound them, or a TypeError. An unsaid
+ * `maxBytes` or `quality` is undefined. */
 export function limits(options) {
   const api = 'storage.fs.compressImage()';
-  if (!options || typeof options !== 'object') throw new TypeError(`${api}: options must be {maxDimension, maxBytes}`);
-  const { maxDimension, maxBytes } = options;
+  if (!options || typeof options !== 'object') throw new TypeError(`${api}: options must be an object`);
+  const { maxDimension, maxBytes, quality } = options;
   if (!Number.isInteger(maxDimension) || maxDimension < 1 || maxDimension > MAX_DIMENSION)
     throw new TypeError(`${api}: maxDimension must be an integer from 1 to ${MAX_DIMENSION}`);
-  if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES)
+  if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_BYTES))
     throw new TypeError(`${api}: maxBytes must be an integer from 1 to ${MAX_BYTES}`);
+  if (quality !== undefined && !(typeof quality === 'number' && quality >= 0 && quality <= 1))
+    throw new TypeError(`${api}: quality must be a number from 0 to 1`);
+  if (maxBytes === undefined && quality === undefined) throw new TypeError(`${api}: needs maxBytes, quality or both`);
   const type = options.type === undefined ? 'image/jpeg' : options.type;
   if (type !== 'image/jpeg' && type !== 'image/png') throw new TypeError(`${api}: type must be "image/jpeg" or "image/png"`);
-  return { maxDimension, maxBytes, type };
+  return { maxDimension, maxBytes, quality, type };
 }
 
 /** Where `edit` ({rotate, flip, crop}, as the prelude checked them) of a
@@ -124,20 +129,46 @@ export function contain(width, height, max) {
   return [Math.max(1, Math.floor(width * scale)), Math.max(1, Math.floor(height * scale))];
 }
 
-/** Bluesky's search. `encode(w, h, quality)` resolves `{size, value}`; the
- * best fit is `{value, width, height}`, or null when nothing fits. */
-export async function search(width, height, maxDimension, maxBytes, encode) {
-  let dimension = maxDimension, lo = 0, hi = 101, shrinks = 0, best = null;
-  while (hi - lo > 1) {
+/** The bisection's exclusive top in whole percents (A1.12): 101, or under a
+ * ceiling the least `n` with `n / 100 >= quality`, so that every trial is
+ * below it. `quality * 100` can round across a whole percent either way. */
+function top(quality) {
+  if (quality === undefined) return 101;
+  let n = Math.ceil(quality * 100);
+  if (n / 100 < quality) n++;
+  if (n > 0 && (n - 1) / 100 >= quality) n--;
+  return n;
+}
+
+/** The JPEG search: Bluesky's (A1.2), under `quality` when the app names
+ * one (A1.12); without `maxBytes`, one encode at `quality`. `encode(w, h,
+ * quality)`, quality 0 to 1, resolves `{size, value}`; the best fit is
+ * `{value, width, height}`, or null when nothing fits. */
+export async function search(width, height, { maxDimension, maxBytes, quality: ceiling }, encode) {
+  if (maxBytes === undefined) {
+    const [w, h] = contain(width, height, maxDimension);
+    const { size, value } = await encode(w, h, ceiling);
+    return size <= MAX_BYTES ? { value, width: w, height: h } : null;
+  }
+  const said = ceiling !== undefined, end = top(ceiling);
+  let dimension = maxDimension, lo = 0, hi = end, shrinks = 0, best = null, fresh = said;
+  // Until a quality fits and the bisection closes on it. Unsaid, `lo` is 0
+  // only while `hi` is at least 14, so this is Bluesky's `hi - lo > 1`.
+  while (lo === 0 || hi - lo > 1) {
     if (shrinks >= MAX_SHRINKS) break;
     const [w, h] = contain(width, height, dimension);
+    if (fresh) {
+      fresh = false;
+      const { size, value } = await encode(w, h, ceiling);
+      if (size <= maxBytes) return { value, width: w, height: h };
+    }
     const quality = Math.round((hi + lo) / 2);
     if (quality <= 13) {
-      lo = 0; hi = 101; shrinks++;
+      lo = 0; hi = end; shrinks++; fresh = said;
       dimension = Math.floor(dimension * 0.8);
       continue;
     }
-    const { size, value } = await encode(w, h, quality);
+    const { size, value } = await encode(w, h, quality / 100);
     if (size <= maxBytes) { lo = quality; best = { value, width: w, height: h }; }
     else hi = quality;
   }
@@ -145,14 +176,15 @@ export async function search(width, height, maxDimension, maxBytes, encode) {
 }
 
 /** A PNG's search (A1.11): the fitted size, then each 0.8 shrink, at most
- * four of them. `encode(w, h)` resolves `{size, value}`. */
-export async function searchLossless(width, height, maxDimension, maxBytes, encode) {
+ * four of them; without `maxBytes`, the fitted size alone (A1.12). A PNG
+ * has no quality. `encode(w, h)` resolves `{size, value}`. */
+export async function searchLossless(width, height, { maxDimension, maxBytes }, encode) {
   let dimension = maxDimension;
   for (let shrinks = 0; shrinks <= MAX_SHRINKS; shrinks++) {
     const [w, h] = contain(width, height, dimension);
     const { size, value } = await encode(w, h);
-    if (size <= maxBytes) return { value, width: w, height: h };
-    if (dimension === 1) break;
+    if (size <= (maxBytes ?? MAX_BYTES)) return { value, width: w, height: h };
+    if (dimension === 1 || maxBytes === undefined) break;
     dimension = Math.max(1, Math.floor(dimension * 0.8));
   }
   return null;
@@ -331,11 +363,12 @@ export async function transform(blob, options = {}, deadline = now() + DEADLINE_
   }
 }
 
-/** `blob` as a JPEG, or a PNG (`type`), within the budget: `{bytes:
- * ArrayBuffer, width, height}`. With `edit` ({rotate, flip, crop}) the
- * search runs on the edited picture (LLP 1133.019 D15). Nothing is decoded
- * or tried at or after `deadline`. */
-export async function compress(blob, maxDimension, maxBytes, deadline = now() + DEADLINE_MS, type = 'image/jpeg', edit = null) {
+/** `blob` as a JPEG, or a PNG (`type`), within `budget` ({maxDimension,
+ * maxBytes, quality}, as `limits` checks them): `{bytes: ArrayBuffer, width,
+ * height}`. With `edit` ({rotate, flip, crop}) the search runs on the edited
+ * picture (LLP 1133.019 D15). Nothing is decoded or tried at or after
+ * `deadline`. */
+export async function compress(blob, budget, deadline = now() + DEADLINE_MS, type = 'image/jpeg', edit = null) {
   const late = () => { if (now() >= deadline) throw failure('timeout', `the search ran past ${DEADLINE_MS / 1000} s`); };
   const bitmap = await open(blob, late, 'compressImage');
   try {
@@ -350,14 +383,14 @@ export async function compress(blob, maxDimension, maxBytes, deadline = now() + 
         drawn = null; // the last size's canvas goes before the next is made
         drawn = { w, h, encode: draw(bitmap, w, h, type, g?.toOutput(w, h), 'high', 'compressImage') };
       }
-      const out = await drawn.encode(quality === undefined ? undefined : quality / 100);
+      const out = await drawn.encode(quality);
       if (out.type !== type) throw failure('unsupported', `this browser encodes ${out.type || 'nothing'}, not ${type}`);
       return { size: out.size, value: out };
     };
     const best = type === 'image/png'
-      ? await searchLossless(width, height, maxDimension, maxBytes, (w, h) => trial(w, h))
-      : await search(width, height, maxDimension, maxBytes, trial);
-    if (!best) throw failure('unfit', `no ${name} of this image fits ${maxBytes} bytes`);
+      ? await searchLossless(width, height, budget, (w, h) => trial(w, h))
+      : await search(width, height, budget, trial);
+    if (!best) throw failure('unfit', `no ${name} of this image fits ${budget.maxBytes ?? MAX_BYTES} bytes`);
     return { bytes: await best.value.arrayBuffer(), width: best.width, height: best.height };
   } finally {
     bitmap.close?.();

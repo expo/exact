@@ -29,6 +29,10 @@ mod bars;
 mod content;
 #[path = "host_error.rs"]
 mod error;
+#[path = "first_frame.rs"]
+mod first_frame;
+#[path = "flights.rs"]
+pub(crate) mod flights;
 #[path = "hatches/host.rs"]
 mod hatch;
 #[path = "height.rs"]
@@ -52,7 +56,7 @@ mod scale;
 #[path = "store_writer.rs"]
 mod store_writer;
 #[path = "system_support.rs"]
-mod system;
+pub(crate) mod system;
 #[path = "transform_binding.rs"]
 mod transform_binding;
 #[path = "value_watch.rs"]
@@ -92,10 +96,11 @@ impl PlanBytes<'_> {
 /// One runner, one painter.
 pub struct Host<D: DataSource> {
     runner: Runner<D>,
+    pub(crate) web_mount: Option<serde_json::Value>,
     secret_session: system::SecretSession,
     doc_watch: Option<crate::doc_watch::DocWatch>,
     font_sync: Option<(crate::text::Shared, usize)>,
-    engine: Engine,
+    pub(crate) engine: Engine,
     keys: BTreeMap<NodeKey, ViewId>,
     presented: BTreeMap<ViewId, Presented>,
     /// Paint motion's owners and the appearance they resolve by (LLP 1062).
@@ -121,11 +126,13 @@ pub struct Host<D: DataSource> {
     data_activated: bool,
     pub(crate) sound: crate::sound::Pending,
     /// Reader-owned [`lower::LOWERED`] animations and their change count.
-    lowering: bool,
+    pub(crate) lowering: bool,
     lowered: std::collections::HashMap<u64, u8>,
     /// Whether colour transitions are lowered too (`lower.rs`).
     lower_colors: bool,
     lowered_epoch: u64,
+    /// The engine time the latest picture carried (`first_frame.rs`).
+    carried: Option<f64>,
     /// The epoch each lowered node's plays last changed at.
     lowered_changed: std::collections::HashMap<u64, u64>,
     played: std::collections::HashMap<
@@ -137,6 +144,7 @@ pub struct Host<D: DataSource> {
     router_op: Option<exact_runner::RouterChange>,
     pub(crate) navigation: crate::navigation::Navigation,
     presence: presence::Presence,
+    pub(crate) flights: flights::Flights,
     presses: BTreeMap<NodeKey, press::Feedback>,
     /// The 2D canvases' bitmaps (LLP 1056 D7).
     canvas2d: crate::canvas2d::Canvases,
@@ -306,6 +314,7 @@ impl<D: DataSource> Host<D> {
         }
         let mut host = Host {
             runner,
+            web_mount: None,
             secret_session,
             doc_watch: None,
             font_sync: font_sync.map(|text| (text, 0)),
@@ -333,12 +342,14 @@ impl<D: DataSource> Host<D> {
             lowered: Default::default(),
             lower_colors: false,
             lowered_epoch: 0,
+            carried: None,
             lowered_changed: Default::default(),
             played: Default::default(),
             preload_wake: Default::default(),
             router_op: None,
             navigation: Default::default(),
             presence: Default::default(),
+            flights: Default::default(),
             presses: Default::default(),
             canvas2d: Default::default(),
             renewed: Vec::new(),
@@ -367,6 +378,7 @@ impl<D: DataSource> Host<D> {
                 host.runner.kernel().motion_sync_node(node.key, &mut sync);
             }
         }
+        host.hold_from_boot();
         let applied = sync.apply(&mut host.engine);
         debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
         host.lower_eligibility(&sync);
@@ -416,6 +428,7 @@ impl<D: DataSource> Host<D> {
     /// is answered again in that one commit, which the painter picks up
     /// like any other — the kernel is the display list here.
     pub fn set_delivery_from_compat(&mut self, json: &str) -> Option<String> {
+        self.web_mount = crate::app::web_mount(json);
         match self.runner.set_delivery_from_compat(json) {
             Ok(None) => None,
             Ok(Some(receipt)) => {
@@ -733,16 +746,6 @@ impl<D: DataSource> Host<D> {
         !self.engine.quiescent() || self.press_settle().is_some()
     }
 
-    /// The next sampled visual change, in the host's milliseconds. A change
-    /// due now needs display callbacks; a later change needs only a timer.
-    pub fn motion_due_ms(&self) -> Option<f64> {
-        if self.press_settle().is_some() {
-            Some(self.now_ms)
-        } else {
-            self.engine.next_change().map(|seconds| seconds * 1000.0)
-        }
-    }
-
     /// The roots, in order.
     pub fn roots(&self) -> Vec<ViewId> {
         self.runner.roots()
@@ -842,6 +845,7 @@ impl<D: DataSource> Host<D> {
         self.runner.listen(executor.waker());
         self.runner.set_socket_reader(executor.socket_reader());
         self.runner.set_retry_reader(executor.retry_reader());
+        executor.set_fetch_fault(self.runner.fetch_fault());
         self.runner.set_listen_reader(executor.listen_reader());
         self.runner.set_work_clock(executor.work_clock());
         self.doc_watch = Some(crate::doc_watch::DocWatch::new(0, &mut self.runner)); // one session (LLP 1069.010 slice 3)
@@ -1255,8 +1259,11 @@ impl<D: DataSource> Host<D> {
 
     /// The display preferences (LLP 1061 D5): re-answer `exactViewport()` in one commit.
     pub fn set_preferences(&mut self, preferences: exact_runner::Preferences) -> Option<String> {
+        let was = self.runner.viewport().preferences.reduced_motion;
         let answer = self.runner.set_preferences(preferences);
-        self.told(answer, "preferences")
+        let error = self.told(answer, "preferences");
+        self.flights_restyled(error.is_none() && was != preferences.reduced_motion);
+        error
     }
 
     /// The page's visibility, connectivity and share sheet (LLP 1069.000
@@ -1395,6 +1402,7 @@ impl<D: DataSource> Host<D> {
             self.retire_svg_geometry(&sync.retired);
             self.lower_eligibility(&sync);
             self.sync_paint(&t.receipt);
+            self.start_flights(&t.receipt);
             if let Err(error) = self.sync_height_owner() {
                 self.log(error);
                 paint = true;

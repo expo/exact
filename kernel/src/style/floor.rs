@@ -2,12 +2,16 @@
 //! negative values (CSS Values 4 §9.1): a math function's result clamps there.
 
 use super::{Dimension, Env};
+
 use taffy::prelude::{length, percent};
 
 impl Dimension {
     /// The engine value for a [`super::calc::nonnegative_row`] size, clamped at zero.
     pub(crate) fn floor_taffy(&self, env: &Env) -> taffy::style::Dimension {
-        self.floor_lpa(env).into()
+        match self {
+            Dimension::Keyword(k) => k.taffy(),
+            _ => self.floor_lpa(env).into(),
+        }
     }
 
     /// [`Self::floor_taffy`] for a minimum or maximum size.
@@ -21,6 +25,9 @@ impl Dimension {
             Dimension::Compare(c) => {
                 taffy::style::LengthPercentageAuto::calc(super::tree_handle(c, true, 0.0))
             }
+            // Where only a length goes (a table cell's floor), a keyword is
+            // `auto` (LLP 1001.001 D3, "Tables").
+            Dimension::Keyword(_) => taffy::style::LengthPercentageAuto::auto(),
             _ => self.to_lpa(env),
         }
     }

@@ -52,7 +52,50 @@ impl AsyncTransport for Tracked {
             .as_ref()
             .map(|(transport, _)| transport.clone())
             .ok_or_else(ibex2::stdlib::fetch_async::aborted)?;
-        let exchange = Arc::new(inner.start(request, sink)?);
+        let exchange = if let Some(work) = self.fixture.lock().unwrap().take() {
+            let pending = Arc::new(Mutex::new(Some((work, sink))));
+            let cancelled = pending.clone();
+            let machine = self.machine.clone();
+            let lane = self.lane;
+            Exchange::new(
+                move || {
+                    machine.post(
+                        lane,
+                        Event::Fixture(Box::new(move || {
+                            let Some((work, mut sink)) = pending.lock().unwrap().take() else {
+                                return;
+                            };
+                            let fixture = super::super::super::outcome::Fixture(work);
+                            match fixture.response() {
+                                Ok(response) => {
+                                    let mut headers = ibex2::stdlib::fetch::Headers::new();
+                                    for (name, value) in response.headers {
+                                        headers.append(&name, &value);
+                                    }
+                                    if sink.head(Head {
+                                        status: response.status,
+                                        headers,
+                                        declared_length: None,
+                                    }) == Flow::Continue
+                                    {
+                                        sink.data(&response.body);
+                                    }
+                                    sink.end(Ok(()));
+                                }
+                                Err(error) => sink.end(Err(error)),
+                            }
+                        })),
+                    );
+                },
+                move || {
+                    cancelled.lock().unwrap().take();
+                },
+            )
+        } else {
+            inner.start(request, sink)?
+        };
+        let exchange = Arc::new(exchange);
+
         let first = self.deadline.lock().unwrap().take();
         let (machine, lane, run) = (self.machine.clone(), self.lane, self.run);
         let activate = exchange.clone();

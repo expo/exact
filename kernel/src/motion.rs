@@ -19,6 +19,8 @@
 //! and keeps the record of which nodes own paint motion. [`LayoutMotion`]
 //! observes boxes after layout; the hosts only present the resulting values.
 
+mod filter;
+pub use filter::{filter_list, filter_value};
 mod layout;
 mod looks;
 pub use looks::LookMotion;
@@ -61,6 +63,22 @@ pub fn transitions(style: &StyleProps) -> Transitions {
     } else {
         Transitions::initial()
     }
+}
+
+/// Whether rotation needs sampling rather than a scalar Z compositor track.
+pub fn rotation_needs_sampling(style: &StyleProps) -> bool {
+    style.rotate_axis.is_3d()
+        || style
+            .animation
+            .0
+            .iter()
+            .chain(&style.rare.exit_animation.0)
+            .any(|a| {
+                !a.keyframes.planar_rotation(exact_motion::rotation::value(
+                    style.rotate as f64,
+                    style.rotate_axis.0.map(f64::from),
+                ))
+            })
 }
 
 /// The generation-checked kernel key packed into an engine node number.
@@ -109,6 +127,11 @@ pub struct MotionSync {
     /// Each created or touched `path`'s `d`, absolute (LLP 1055.000 D15):
     /// `None` unless its `transition` covers `d` and the data is whole.
     pub paths: Vec<(u64, Option<exact_motion::PathValue>)>,
+    /// Each created or touched node's `filter` (LLP 1003.002 D6), `none`
+    /// included, and whether the node is new to the engine (created, renewed
+    /// or booted): a node it already knew that has no filter kept moves from
+    /// `none`. `None` for a list that never interpolates.
+    pub filters: Vec<(u64, Option<exact_motion::FilterValue>, bool)>,
 }
 
 impl MotionSync {
@@ -139,6 +162,11 @@ impl MotionSync {
                 (source.is_some() || bound.is_some()).then_some(*node)
             }))
             .chain((self.paths.iter()).filter_map(|(node, path)| path.as_ref().map(|_| *node)))
+            .chain(
+                (self.filters.iter()).filter_map(|(node, f, _)| {
+                    f.as_ref().filter(|f| !f.0.is_empty()).map(|_| *node)
+                }),
+            )
             .collect();
         moving.sort_unstable();
         moving
@@ -198,6 +226,9 @@ impl MotionSync {
         for (node, path) in &self.paths {
             engine.observe_path(*node, path.clone());
         }
+        for (node, filter, new) in &self.filters {
+            engine.observe_filter(*node, filter.clone(), *new);
+        }
         for (node, clock) in &self.clocks {
             engine.set_animation_clock(*node, clock.as_deref());
         }
@@ -238,7 +269,10 @@ pub fn targets(style: &StyleProps) -> [(Property, Value); 4] {
             ),
         ),
         (Property::Scale, Value::scalar(style.scale as f64)),
-        (Property::Rotate, Value::scalar(style.rotate as f64)),
+        (
+            Property::Rotate,
+            exact_motion::rotation::value(style.rotate as f64, style.rotate_axis.0.map(f64::from)),
+        ),
         (Property::Opacity, Value::scalar(style.opacity as f64)),
     ]
 }
@@ -771,8 +805,11 @@ impl Kernel {
                 .collect(),
             ..MotionSync::default()
         };
+        let created: crate::id::IdSet<NodeKey> = receipt.created.iter().copied().collect();
+        let renewed: crate::id::IdSet<NodeKey> = receipt.renewed.iter().copied().collect();
         for key in receipt_nodes(receipt) {
-            self.motion_sync_node(key, &mut sync);
+            let new = created.contains(&key) || renewed.contains(&key);
+            self.sync_node(key, new, &mut sync);
         }
         // A consumer the commit left alone whose name now finds another
         // timeline (LLP 1057.003 D4).
@@ -923,6 +960,12 @@ impl Kernel {
     /// what a host's boot says about every node (LLP 1055 D5: an animation
     /// starts when its node is first seen, boot included).
     pub fn motion_sync_node(&self, key: NodeKey, sync: &mut MotionSync) {
+        self.sync_node(key, true, sync)
+    }
+
+    /// [`Kernel::motion_sync_node`], `new` when the engine has not heard of
+    /// the node before this sync (it was created or renewed).
+    fn sync_node(&self, key: NodeKey, new: bool, sync: &mut MotionSync) {
         {
             let Some(node) = self.node_by_key(key) else {
                 return;
@@ -956,6 +999,12 @@ impl Kernel {
                     .flatten();
                 sync.paths.push((id, path));
             }
+            // @ref LLP 1003.002 D6 — every node's filter, `none` included:
+            // a commit that sets a filter and a `transition` covering it
+            // together moves from the filter before it, `none` for a node
+            // with no row. The engine keeps nothing for a settled `none`.
+            let filter = filter_value(&node.style.filter);
+            sync.filters.push((id, filter, new));
             if node.node_type.is_svg_shape() {
                 let targets = self.svg_targets(*key);
                 // A geometry row that is not a length now (a percentage)

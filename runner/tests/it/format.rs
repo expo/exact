@@ -16,7 +16,7 @@
 //! Bun prints U+0020 before AM/PM, so no row is normalized.
 
 use exact_plan::{Plan, Stdlib, Value};
-use exact_runner::stdlib::format_time;
+use exact_runner::stdlib::{format_time, format_time_two_digit};
 
 /// A plan with no strings tables: every entry formats `en-US`, as a call
 /// whose format locale is `""` (or absent) does.
@@ -875,13 +875,60 @@ fn decimal_percent_and_currency_numbers_are_intl_s() {
         STYLED.len() + CURRENCY.len(),
         wrong.join("\n")
     );
-    // The table is the roster's literal choice, code for code.
+    // The table is the roster's literal choice, code for code; the
+    // parameter's range is `decimal`'s digits.
     let listed: Vec<&str> = Stdlib::FormatNumber.params()[2]
         .split(" | ")
+        .filter(|c| c.starts_with('"'))
         .map(|c| c.trim_matches('"'))
         .collect();
     let tested: Vec<&str> = CURRENCY.iter().map(|c| c.0).collect();
     assert_eq!(listed, tested);
+}
+
+/// expo/exact#491: `formatTime`'s `"2-digit"`, `formatDate`'s `"month-day"`
+/// and `formatNumber(n, "decimal", digits)`, as Chrome's `Intl` prints
+/// `{ hour: "2-digit", minute: "2-digit" }`, `{ month: "short", day:
+/// "numeric" }` and `{ minimumFractionDigits: d, maximumFractionDigits: d }`.
+#[test]
+fn two_digit_hours_month_days_and_fixed_digits_are_intl_s() {
+    for (ms, offset, time, month_day) in [
+        (0.0, 0.0, "12:00 AM", "Jan 1"),
+        (-0.5, 60.0, "01:00 AM", "Jan 1"),
+        (3_720_000.0, 0.0, "01:02 AM", "Jan 1"),
+        (43_200_000.0, 0.0, "12:00 PM", "Jan 1"),
+        (45_000_000.0, 0.0, "12:30 PM", "Jan 1"),
+        (1_790_000_000_000.7, 345.0, "07:58 PM", "Sep 21"),
+        (1_791_762_120_000.0, -420.0, "04:42 PM", "Oct 11"),
+        (1_767_225_540_000.0, 330.0, "05:29 AM", "Jan 1"),
+    ] {
+        assert_eq!(format_time_two_digit(ms, offset), Value::str(time), "{ms}");
+        assert_eq!(date(ms, offset, "month-day"), Value::str(month_day), "{ms}");
+    }
+    let fixed = |n: f64, d: f64| {
+        formatting(
+            Stdlib::FormatNumber,
+            &[Value::Number(n), Value::str("decimal"), Value::Number(d)],
+        )
+    };
+    for (n, want) in [
+        (1.005, ["1", "1.0", "1.01", "1.0050"]),
+        (2.5, ["3", "2.5", "2.50", "2.5000"]),
+        (-0.0, ["-0", "-0.0", "-0.00", "-0.0000"]),
+        (-0.001, ["-0", "-0.0", "-0.00", "-0.0010"]),
+        (-1234.5, ["-1,235", "-1,234.5", "-1,234.50", "-1,234.5000"]),
+        (
+            123_456.789,
+            ["123,457", "123,456.8", "123,456.79", "123,456.7890"],
+        ),
+    ] {
+        for (d, want) in [0.0, 1.0, 2.0, 4.0].into_iter().zip(want) {
+            assert_eq!(fixed(n, d), Some(Value::str(want)), "{n} at {d}");
+        }
+    }
+    assert_eq!(fixed(f64::NAN, 2.0), Some(Value::str("")));
+    assert_eq!(fixed(1.0, 101.0), None, "past the roster's 0..=100");
+    assert_eq!(fixed(1.0, 1.5), None, "a whole number of digits");
 }
 
 /// D7: every entry prints `""` for a non-finite argument or an offset past

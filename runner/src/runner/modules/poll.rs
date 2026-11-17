@@ -11,6 +11,31 @@
 
 use super::super::{CommitReceipt, DataSource, Runner, RunnerError, Target};
 use super::{error_code, Json, ModulesRow, Route};
+use std::cell::Ref;
+use std::collections::{BTreeMap, BTreeSet};
+
+pub(super) struct Polled {
+    target: String,
+    bound: BTreeSet<String>,
+    agent: BTreeSet<String>,
+    polls: BTreeMap<String, f64>,
+    readers: BTreeMap<String, BTreeMap<usize, String>>,
+    failed: BTreeSet<String>,
+    within: BTreeMap<String, BTreeMap<usize, bool>>,
+    rows: Vec<(String, f64)>,
+}
+
+impl Polled {
+    fn agrees<D: DataSource>(&self, r: &Runner<D>) -> bool {
+        self.target == r.host_target()
+            && self.bound == r.extensions.bound
+            && self.agent == r.extensions.agent
+            && self.polls == r.extensions.polls
+            && self.readers == r.extensions.readers
+            && self.failed == r.extensions.failed
+            && self.within == r.extensions.within
+    }
+}
 
 impl<D: DataSource> Runner<D> {
     /// `row`'s poll option and its default period, if it is polled.
@@ -60,7 +85,29 @@ impl<D: DataSource> Runner<D> {
     /// with when its next ask is due. The substitute's sampled sources are
     /// polled too: their batches are taken on the session clock (LLP
     /// 1133.013 §9).
-    fn polled(&self) -> Vec<(String, f64)> {
+    fn polled(&self) -> Ref<'_, Vec<(String, f64)>> {
+        let mut cache = self.extensions.polled.borrow_mut();
+        if cache.as_ref().is_none_or(|c| !c.agrees(self)) {
+            *cache = Some(Polled {
+                target: self.host_target().to_owned(),
+                bound: self.extensions.bound.clone(),
+                agent: self.extensions.agent.clone(),
+                polls: self.extensions.polls.clone(),
+                readers: self.extensions.readers.clone(),
+                failed: self.extensions.failed.clone(),
+                within: self.extensions.within.clone(),
+                rows: self.read_polled(),
+            });
+        }
+        drop(cache);
+        Ref::map(self.extensions.polled.borrow(), |c| {
+            &c.as_ref().unwrap().rows
+        })
+    }
+
+    fn read_polled(&self) -> Vec<(String, f64)> {
+        #[cfg(test)]
+        super::POLL_SCANS.with(|n| n.set(n.get() + 1));
         (self.plan.modules.iter())
             .filter(|m| m.live && !m.send)
             .filter(|m| self.route(m) != Route::Substitute || self.substitute_polls(m))
@@ -133,9 +180,13 @@ impl<D: DataSource> Runner<D> {
 
     /// When the next poll is due, for a host on the live clock to wake at.
     pub(in crate::runner) fn poll_due_ms(&self) -> Option<f64> {
-        (self.polled().into_iter())
+        if self.extensions.polls.is_empty() {
+            return self.stale_due_ms();
+        }
+        self.polled()
+            .iter()
             .filter(|(key, _)| !self.asking(key))
-            .map(|(_, due)| due)
+            .map(|(_, due)| *due)
             .chain(self.stale_due_ms())
             .reduce(f64::min)
     }
@@ -143,9 +194,11 @@ impl<D: DataSource> Runner<D> {
     /// After an advance: each polled source whose period passed and whose
     /// last ask has landed is asked again, once.
     pub(in crate::runner) fn poll(&mut self) -> Result<Vec<CommitReceipt>, RunnerError> {
-        let due: Vec<String> = (self.polled().into_iter())
+        let due: Vec<String> = self
+            .polled()
+            .iter()
             .filter(|(key, due)| *due <= self.now_ms && !self.asking(key))
-            .map(|(key, _)| key)
+            .map(|(key, _)| key.clone())
             .collect();
         let mut receipts = Vec::new();
         for key in due {

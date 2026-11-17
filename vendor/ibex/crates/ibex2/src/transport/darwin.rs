@@ -10,7 +10,9 @@ use std::ffi::{c_char, c_int, c_uchar, CStr, CString};
 
 use crate::boundary::HostError;
 use crate::stdlib::abort::{AbortRegistration, AbortSignal};
-use crate::stdlib::fetch::{Body, BodySource, Headers, Request, StreamingResponse, Transport};
+use crate::stdlib::fetch::{
+    Body, BodyFile, BodySource, Headers, Request, StreamingResponse, Transport,
+};
 use std::sync::{
     atomic::{AtomicIsize, Ordering},
     Arc,
@@ -35,6 +37,8 @@ extern "C" {
         header_block: *const c_char,
         body: *const c_uchar,
         body_len: usize,
+        body_file: *mut std::ffi::c_void,
+        body_file_len: u64,
         max_body: usize,
         timeout_seconds: f64,
         speculative: c_int,
@@ -204,6 +208,81 @@ impl BodySource for DarwinBody {
         }
     }
 }
+/// A reader of a file body for one attempt, as `darwin_http.mm`'s pump
+/// holds it, with the failure that ended it (Exact patch 46).
+struct BodyReader {
+    reader: Box<dyn std::io::Read + Send>,
+    failure: Option<std::ffi::CString>,
+}
+
+/// One attempt's reader of `file`, a `Box<BodyFile>` the exchange owns, or
+/// null when it cannot be opened.
+#[no_mangle]
+extern "C" fn ibex2_darwin_body_open(file: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    // SAFETY: `file` is the exchange's `Box<BodyFile>`, live until it frees it.
+    let file = unsafe { &*file.cast::<BodyFile>() };
+    match file.0.reader() {
+        Ok(reader) => Box::into_raw(Box::new(BodyReader {
+            reader,
+            failure: None,
+        }))
+        .cast(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Up to `length` bytes of the attempt's body into `buffer`: the count, 0 at
+/// its end, or -1 when it failed ([`ibex2_darwin_body_failure`] says why).
+#[no_mangle]
+extern "C" fn ibex2_darwin_body_read(
+    reader: *mut std::ffi::c_void,
+    buffer: *mut c_uchar,
+    length: usize,
+) -> std::ffi::c_long {
+    // SAFETY: the pump owns `reader` and calls this from its one thread;
+    // `buffer` holds `length` bytes.
+    let (reader, out) = unsafe {
+        (
+            &mut *reader.cast::<BodyReader>(),
+            std::slice::from_raw_parts_mut(buffer, length),
+        )
+    };
+    loop {
+        match reader.reader.read(out) {
+            Ok(n) => return n as std::ffi::c_long,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                reader.failure = std::ffi::CString::new(e.to_string().replace('\0', " ")).ok();
+                return -1;
+            }
+        }
+    }
+}
+
+/// Why the attempt's last read failed, as UTF-8, live until the reader is
+/// closed; null when none did.
+#[no_mangle]
+extern "C" fn ibex2_darwin_body_failure(reader: *mut std::ffi::c_void) -> *const std::ffi::c_char {
+    // SAFETY: as for `ibex2_darwin_body_read`.
+    let reader = unsafe { &*reader.cast::<BodyReader>() };
+    reader
+        .failure
+        .as_ref()
+        .map_or(std::ptr::null(), |failure| failure.as_ptr())
+}
+
+#[no_mangle]
+extern "C" fn ibex2_darwin_body_close(reader: *mut std::ffi::c_void) {
+    // SAFETY: the pump's reader, released once.
+    drop(unsafe { Box::from_raw(reader.cast::<BodyReader>()) });
+}
+
+#[no_mangle]
+extern "C" fn ibex2_darwin_body_free(file: *mut std::ffi::c_void) {
+    // SAFETY: the exchange's `Box<BodyFile>`, released once.
+    drop(unsafe { Box::from_raw(file.cast::<BodyFile>()) });
+}
+
 impl Transport for DarwinTransport {
     fn open(
         &self,
@@ -225,6 +304,11 @@ impl Transport for DarwinTransport {
         let headers = CString::new(headers)
             .map_err(|_| HostError::Failed("TypeError: invalid header value".into()))?;
         let body = request.body.as_deref().unwrap_or_default();
+        let file = request.body_file.as_ref();
+        // Owned by the native exchange from here, which frees it (Exact patch 46).
+        let body_file = file.map_or(std::ptr::null_mut(), |f| {
+            Box::into_raw(Box::new(f.clone())).cast::<std::ffi::c_void>()
+        });
         let mut error = std::ptr::null_mut();
         // SAFETY: native start copies every input and returns a retained exchange.
         let handle = unsafe {
@@ -235,6 +319,8 @@ impl Transport for DarwinTransport {
                 headers.as_ptr(),
                 body.as_ptr(),
                 body.len(),
+                body_file,
+                file.map_or(0, |f| f.0.len()),
                 request.body_limit(),
                 request.timeout.map_or(0.0, |timeout| timeout.as_secs_f64()),
                 c_int::from(request.speculative),
@@ -259,10 +345,10 @@ impl Transport for DarwinTransport {
         // An upload's progress (Exact patch 23): each change URLSession's
         // `didSendBodyData` makes before the headers is told here, on this
         // thread, and the wait goes on.
-        let total = body.len() as u64;
+        let total = file.map_or(body.len() as u64, |f| f.0.len());
         let sent = request.sent.as_ref().filter(|_| total > 0);
         let mut seen = 0_i64;
-        let failed = loop {
+        let (failed, last) = loop {
             let mut now = seen;
             let progress = if sent.is_some() {
                 &mut now as *mut i64
@@ -285,7 +371,7 @@ impl Transport for DarwinTransport {
                     seen = now;
                     (sent.0)((now.max(0) as u64).min(total), total);
                 }
-                _ => break failed,
+                _ => break (failed, now),
             }
         };
         let head = unsafe { take_string(headers) }.map(|text| {
@@ -309,9 +395,10 @@ impl Transport for DarwinTransport {
             ));
         }
         signal.check()?;
-        // The whole body was sent once the headers came.
-        if let Some(sent) = sent.filter(|_| seen as u64 != total) {
-            (sent.0)(total, total);
+        // The bytes sent when the head came: all of them, unless the server
+        // answered before reading the whole body (Exact patch 46).
+        if let Some(sent) = sent.filter(|_| last != seen) {
+            (sent.0)((last.max(0) as u64).min(total), total);
         }
         let headers = head.unwrap_or_default();
         Ok(StreamingResponse {

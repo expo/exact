@@ -39,3 +39,26 @@ fn a_built_worker_keeps_its_template_here_and_builds_its_instance_on_the_owner()
         Answer::Now(_)
     ));
 }
+
+/// A data crate that names no app, as `exact new --rust` writes one.
+struct Unnamed;
+
+impl DataSource for Unnamed {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        Ok(Value::Number(4.0))
+    }
+}
+
+#[test]
+fn an_unnamed_source_placed_under_the_modules_name_composes_beside_it() {
+    let js = Source::new("js");
+    let unnamed = Placed::new(Unnamed, Placement::Main);
+    assert!(Mixed::new(js.clone(), unnamed, &["js"], &["rust"]).is_err());
+    let named = Placed::new(Unnamed, Placement::Main).named("com.exact.test");
+    let mut mixed = Mixed::new(js, named, &["js"], &["rust"]).unwrap();
+    assert_eq!(mixed.app_id(), "com.exact.test");
+    assert_eq!(mixed.query("rust", &[]).unwrap(), Value::Number(4.0));
+    let calls = Default::default();
+    let own = Placed::new(Threaded { calls }, Placement::Main).named("com.example.other");
+    assert_eq!(own.app_id(), "com.exact.test");
+}

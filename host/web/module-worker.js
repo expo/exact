@@ -163,7 +163,8 @@ async function forget(inFlight) {
   // refused, as the page realm does.
   parked = parked.filter(p => {
     if ((p.request.target ?? null) === null || staying.has(key(p.request))) return true;
-    unindex(p.context.requests); release(p.context.owner, p.answer.call);
+    unindex(p.context.requests);
+    release(p.context.owner, p.answer.call);
     p.done.reject(new Error('the runner let this answer go'));
     return false;
   });
@@ -181,12 +182,8 @@ const letGoHooks = {
 };
 
 // An answer whose storage operation is queued behind another answer's waits
-// with the module (prelude.js `settle`'s `waiting`): it parks and lets the
-// turn go, so the answer whose operation is in flight can be resumed and
-// deliver it, and is asked again after each delivery, until a pass delivers
-// nothing (LLP 1097 D3), as the page realm does (module-glue.js). Held in
-// the turn instead, it waited on an operation only that other answer's turn
-// could deliver.
+// with the module (prelude.js `settle`'s `waiting`): it parks and is asked
+// again after storage delivery (LLP 1097 D3, D7), as the page realm does.
 let parked = [], deliveries = 0;
 async function proceed(answer, request, done) {
   for (;;) {
@@ -222,7 +219,10 @@ async function resettle() {
     const waiting = parked; parked = [];
     for (const p of waiting) {
       context = p.context;
-      try { await proceed(JSON.parse(self.__exact_settle(String(p.answer.call))), p.request, p.done); }
+      try {
+        const answer = JSON.parse(self.__exact_settle(String(p.answer.call)));
+        await proceed(answer, p.request, p.done);
+      }
       catch (error) { storage.retire(context?.owner); context = null; p.done.reject(error); }
     }
     if (deliveries === before || !(parked.length || owed.size)) break;
@@ -265,8 +265,6 @@ self.onmessage = ({ data }) => {
     const before = deliveries;
     try { await turn(data.request, done); }
     catch (error) { storage?.retire(context?.owner); context = null; done.reject(error); }
-    // Its delivery may have put a parked answer's operation in flight:
-    // asked again in a turn of its own, after this one.
     if (deliveries !== before && (parked.length || owed.size)) { const again = tail.then(resettle); tail = again.catch(() => {}); }
   });
   tail = run.catch(() => {});

@@ -159,7 +159,7 @@ impl<D: DataSource> Host<D> {
                     self.parked.insert(token, r);
                 }
             }
-            Dispatch::Missing => immediate.push((
+            Dispatch::Run(Work::HttpResponse(_)) | Dispatch::Missing => immediate.push((
                 r.ticket,
                 Outcome::Failed {
                     kind: FailureKind::Unsupported,

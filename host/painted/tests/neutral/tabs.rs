@@ -465,6 +465,7 @@ component App
     rootSize = "medium"
   view
     column width="100%" gap=8 color-scheme="SCHEME" background-color="-exact-background" testId="page"
+      text "Library" font-size=20 font-weight=500 testId="line20"
       row role="tablist" testId="basic"
         button role="tab" aria-controls="missing" press=pressTab flex=1 testId="leading"
           image "symbol:book" testId="leading-image"
@@ -632,10 +633,18 @@ fn tab_geometry_at_root(p: &mut Presenter<()>, width: f32, root: f32, ground: [u
     for name in ["size-min", "size-padding"] {
         tab_ink_boxes(p, name, ground, &[(0.0, (24.0 - line) / 2.0, 80.0, line)]);
     }
+    // A 20 px title on its font's own line (`line20`) under the symbol and
+    // the 2 px gap, in 6 px of block padding each side; at a 20 px root the
+    // bar's 70 px floor.
+    let line20 = size(p, "line20").1;
     for name in ["local20", "child20"] {
         assert_eq!(
             size(p, name).1,
-            if root == 16.0 { 61.0 } else { 70.0 },
+            if root == 16.0 {
+                12.0 + symbol + 2.0 + line20
+            } else {
+                70.0
+            },
             "{name}"
         );
         let rows = p.host().kernel().button_face_style(id(p, name)).unwrap();
@@ -663,8 +672,8 @@ fn tab_geometry_at_root(p: &mut Presenter<()>, width: f32, root: f32, ground: [u
         ("leading", 2.0, line),
         ("natural-leading", 2.0, line),
         ("own-column", 5.0, line),
-        ("local20", 2.0, 25.0),
-        ("child20", 2.0, 25.0),
+        ("local20", 2.0, line20),
+        ("child20", 2.0, line20),
     ] {
         let (w, h) = size(p, name);
         let y = (h - symbol - gap - title_line) / 2.0;

@@ -122,6 +122,9 @@ the repository's apps. They skip when `EXACT_TSC71` is not set.
 - A source is not renamed from a contract: its name is also the key of the
   function in `app.ts` that answers it.
 - An import's alias (`use Row as TheirRow`) has no definition or rename.
+- An importer is given the file it imports as saved. Unsaved lines above a
+  declaration keep its uses; an unsaved change of its name or kind loses them
+  until the file is saved.
 - Which tags an attribute is allowed on is prose in `contract vocab`, so hover
   shows an attribute on any tag.
 - A shape named as a vocabulary type is (`MouseEvent`, `MediaMetadata`) shares

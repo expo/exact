@@ -78,10 +78,15 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
 
     private val available get() = recording != null || counter != null
 
+    /** The status last answered, which [resumed] compares with. */
+    private var said: String? = null
+
     private fun status(): JSONObject {
         val p = context.permission(PERMISSION)
-        return JSONObject().put("available", available).put("state", if (available) p.state else "unknown").put("apple", JSONObject.NULL)
+        val out = JSONObject().put("available", available).put("state", if (available) p.state else "unknown").put("apple", JSONObject.NULL)
             .put("android", JSONObject().put("shouldShowRationale", p.shouldShowRationale).put("permanentlyDenied", p.permanentlyDenied))
+        said = out.toString()
+        return out
     }
 
     private fun request(reply: (JSONObject) -> Unit) {
@@ -174,7 +179,12 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
         listen()
     }
 
-    override fun resumed() = subscribe()
+    /** The activity is in front again: a grant made in Settings meanwhile is a change, and may subscribe. */
+    override fun resumed() {
+        val before = said
+        if (before != null && status().toString() != before) context.changed("pedometer.pedometerStatus")
+        subscribe()
+    }
 
     override fun destroy(done: () -> Unit) {
         counts.clear()

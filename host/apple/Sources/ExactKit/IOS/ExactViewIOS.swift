@@ -39,6 +39,9 @@ public final class ExactView: UIView {
     private var canvas: UIColor?
     private var lastSize = CGSize.zero
     private var lastInsets = UIEdgeInsets.zero
+    /// The insets told before the boot in flight (`ExactSession.primeView`):
+    /// what its runner laid out with.
+    private var primedInsets: UIEdgeInsets?
     /// The layout regions last told (LLP 1123 D10); `nil` until a booted
     /// runner has them.
     private var lastRegions: [CGFloat]?
@@ -166,7 +169,7 @@ public final class ExactView: UIView {
 
     private func fitAheadOfLayout() {
         guard !fitting, session.booted, window != nil,
-              session.presenter.navigation.primaryOwner != nil, bounds.size != fittedSize else { return }
+              (session.presenter.navigation.primaryOwner ?? session.presenter.navigation.bootOwner) != nil, bounds.size != fittedSize else { return }
         fit()
         // Autoresizing may precede UIKit's safe-area update. The normal
         // layout still rereads insets and regions after its parent settles.
@@ -175,8 +178,15 @@ public final class ExactView: UIView {
 
     /// Paint motion resolves `light-dark()` by this view's appearance (LLP 1062).
     /// A system appearance change reaches the view as a trait change too:
-    /// `prefers-color-scheme` is told again (LLP 1069.000 D1).
-    private func reportScheme() { fitAheadOfLayout(); session.scheme(dark: traitCollection.userInterfaceStyle == .dark); session.tellPreferences(); session.natives.scopesChanged() }
+    /// `prefers-color-scheme` is told again (LLP 1069.000 D1), and the bars'
+    /// drawn items are drawn again in it.
+    private func reportScheme() {
+        fitAheadOfLayout()
+        session.scheme(dark: traitCollection.userInterfaceStyle == .dark)
+        session.tellPreferences()
+        session.natives.scopesChanged()
+        session.presenter.navigation.appearanceChanged()
+    }
     /// An app or window tint changed: `AccentColor` is reported again (LLP 1095 D9).
     public override func tintColorDidChange() { super.tintColorDidChange(); fitAheadOfLayout(); session.reportColors() }
 
@@ -211,6 +221,14 @@ public final class ExactView: UIView {
 
     /// The first root's `viewport-fit` prop (`"cover"` or nothing).
     public var viewportFit: String? { session.presenter.viewportFit }
+
+    public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        #if os(iOS)
+        // A touch starts under the real owner, so its scroll cannot span the boot transfer.
+        if session.presenter.navigation.bootOwner != nil, event?.type == .touches { session.presenter.navigation.finishBootOwner() }
+        #endif
+        return super.hitTest(point, with: event)
+    }
 
     public override func layoutSubviews() {
         super.layoutSubviews()
@@ -360,7 +378,19 @@ public final class ExactView: UIView {
     /// Native containers stay full size; their editing route owns avoidance.
     /// An ordinary page resizes its viewport or insets its content.
     func fit(boot: Bool = true) {
-        guard !fitting else { setNeedsLayout(); return }
+        guard !fitting else {
+            // A keyboard-guide change can lay this view out synchronously.
+            // Marking it dirty in that layout would keep UIKit in the same pass.
+            if !fitPending {
+                fitPending = true
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    fitPending = false
+                    setNeedsLayout()
+                }
+            }
+            return
+        }
         fitting = true
         defer { fitting = false }
         fitSession(boot: boot)
@@ -402,6 +432,10 @@ public final class ExactView: UIView {
             return
         }
         guard bounds.width > 0, bounds.height > 0 else { return }
+        #if os(iOS)
+        // A launch resize (including rotation) uses the native owner for the new geometry.
+        if fittedSize != .zero, bounds.size != fittedSize, presenter.navigation.bootOwner != nil { presenter.navigation.finishBootOwner() }
+        #endif
         fittedSize = bounds.size
         // @ref LLP 1123 D1 — the document is the session view's; a
         // presentation lays its routes out in their own blocks (D2)
@@ -475,7 +509,7 @@ public final class ExactView: UIView {
         }
         presenter.placeDocumentMount()
         // Establish UIKit's containing bounds before sampling route blocks.
-        if let owner = presenter.navigation.primaryOwner {
+        if let owner = presenter.navigation.primaryOwner ?? presenter.navigation.bootOwner {
             presenter.navigation.fitOwner()
             owner.view.layoutIfNeeded()
         }
@@ -511,6 +545,10 @@ public final class ExactView: UIView {
             lastInsets = insets
             presenter.insets = insets
             lastFold = segments
+            // The boot lays out with these, a refused plan's fallback with
+            // what its own fit primes again.
+            session.primeView(insets: (insets.top, insets.right, insets.bottom, insets.left), displayScale: PageFacts.displayScale(self))
+            primedInsets = insets
             guard boot else { return }
             session.boot(size: size, fallbackSize: {
                 // Refusal can change the root policy before the bake settles.
@@ -631,7 +669,9 @@ public final class ExactView: UIView {
     func rebooted() {
         // A new runner has no screen: tell it again first (Grok's review).
         if let screen = lastScreen { session.view(Runtime.ViewChange(screen: .some(screen))) }
-        if lastInsets != .zero { session.insets(top: lastInsets.top, right: lastInsets.right, bottom: lastInsets.bottom, left: lastInsets.left) }
+        // A new runner holds the insets told before its boot, or none.
+        if lastInsets != (primedInsets ?? .zero) { session.insets(top: lastInsets.top, right: lastInsets.right, bottom: lastInsets.bottom, left: lastInsets.left) }
+        primedInsets = nil
         lastRegions = nil  // the next fit tells the new runner
         lastKeyboard = 0  // as the new runner holds
         session.segments(lastFold)

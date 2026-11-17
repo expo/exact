@@ -90,6 +90,7 @@ fn change(k: &mut Kernel, ops: &[Op]) {
 #[test]
 fn a_route_title_keeps_the_large_title_line() {
     metrics::set_column(Column::Neutral);
+    button_font_variants();
     for text in ["Inbox", "", " "] {
         for button in [false, true] {
             let mut k = route(text, button);
@@ -299,4 +300,70 @@ fn a_route_title_keeps_the_large_title_line() {
         near(frame(&mut k, 3).height, 32.4);
         near(frame(&mut k, 3).y, 0.);
     }
+}
+
+fn button_font_variants() {
+    let mut k = Kernel::with_monospace();
+    let mut ops: Vec<_> = [
+        NodeType::View,
+        NodeType::Control,
+        NodeType::Text,
+        NodeType::Text,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, node_type)| Op::CreateView {
+        id: i as u32 + 1,
+        node_type,
+    })
+    .collect();
+    ops.extend([
+        prop(2, PropId::Type, "button"),
+        prop(2, PropId::ButtonStyle, "bordered"),
+        prop(3, PropId::Text, "fifl 123"),
+        prop(4, PropId::Text, "subtitle"),
+        style(
+            1,
+            &[
+                (StyleId::FontFamily, "3"),
+                (StyleId::FontVariantLigatures, "none"),
+                (StyleId::FontVariantNumeric, "tabular-nums"),
+            ],
+        ),
+        Op::SetChildren {
+            id: 1,
+            children: vec![2],
+        },
+        Op::SetChildren {
+            id: 2,
+            children: vec![3, 4],
+        },
+        Op::AttachRoot { id: 1 },
+    ]);
+    k.apply(0, 1, &ops).unwrap();
+    let inherited = k.node(1).unwrap().text_style();
+    assert_ne!(inherited.font_variant_ligatures, 0);
+    assert_ne!(inherited.font_variant_numeric, 0);
+    let face = k.button_face_style(2).unwrap();
+    for text in [face.title, face.subtitle.unwrap()] {
+        assert_eq!(text.font_family, inherited.font_family);
+        assert_eq!(text.font_variant_ligatures, 0);
+        assert_eq!(text.font_variant_numeric, 0);
+    }
+    change(
+        &mut k,
+        &[style(
+            3,
+            &[
+                (StyleId::FontVariantLigatures, "none"),
+                (StyleId::FontVariantNumeric, "tabular-nums"),
+            ],
+        )],
+    );
+    let title = k.button_face_style(2).unwrap().title;
+    assert_eq!(
+        title.font_variant_ligatures,
+        inherited.font_variant_ligatures
+    );
+    assert_eq!(title.font_variant_numeric, inherited.font_variant_numeric);
 }

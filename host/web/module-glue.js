@@ -7,6 +7,26 @@ import { admitsNetwork, grantError, sameGrantDeclaration, scopedGrantSet } from 
 import { faultMatches } from './faults.js';
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const hex = bytes => Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+const authWindowName = () => 'exact-auth-' + hex(crypto.getRandomValues(new Uint8Array(12)));
+const AUTH_RESERVATION_MS = 10 * 60 * 1000;
+const authReservations = () => ((globalThis.exact ??= {}).authReservations ??= new Map());
+const prepareAuthWindow = () => {
+  if (navigator.userActivation && !navigator.userActivation.isActive) return null;
+  const id = authWindowName(), popup = window.open('about:blank', id, 'popup,width=520,height=680');
+  if (!popup) return null;
+  const reservation = { window: popup, timer: null };
+  authReservations().set(id, reservation);
+  reservation.timer = setTimeout(() => cancelAuthWindow(id), AUTH_RESERVATION_MS);
+  reservation.timer?.unref?.();
+  return id;
+};
+const cancelAuthWindow = id => {
+  const reservation = authReservations().get(id);
+  if (!reservation) return;
+  authReservations().delete(id);
+  clearTimeout(reservation.timer);
+  try { reservation.window.close(); } catch {}
+};
 // A presence name's occupancy in the call's snapshot (LLP 1133.010 D5): the door's op 18 (a value is kept), 19
 // (locked or pending), 20 (this device keeps locked secrets, which a browser never does), never a value.
 const presenceRead = (store, op, name) => {
@@ -158,8 +178,15 @@ export async function prepare(payload, admitted, id = nextId++) {
     if (op === 8) { context.entropy = true; return; }
     // Under the agent, the realm's repeatable random bytes (LLP 1069.005 D2b).
     if (op === 11) return stream ? hex(stream(Number(value))) : undefined;
-    // `authCallback()`: this page's callback page, a device fact (LLP 1069.006 D2).
-    if (op === 12) { if (name !== 'callback') return; context.externalRead = true; return `${location.origin}/.exact/auth/callback`; }
+    // `authCallback()` and the browsing context reserved at the press
+    // (LLP 1069.006 D2, D4).
+    if (op === 12) {
+      context.externalRead = true;
+      if (name === 'callback') return `${location.origin}/.exact/auth/callback`;
+      if (name === 'auth-prepare') return prepareAuthWindow();
+      if (name === 'auth-cancel') { cancelAuthWindow(value); return; }
+      return;
+    }
     if (op >= 18 && op <= 20) { context.externalRead = true; return presenceRead(context.store, op, name); }
     if (!context.grants.has(name) || name.startsWith('exact.kept.')) return `secret ${name} is not granted`;
     context.writes.push([name, op === 3 ? value : null]);
@@ -249,10 +276,9 @@ export async function prepare(payload, admitted, id = nextId++) {
       return result;
     };
     // An answer between its storage steps keeps its store context and the
-    // realm's turn until its value is ready. One waiting with the module (its
-    // operation queued behind the background's, or a promise the background
-    // will settle) parks and lets the turn go; a background delivery asks it
-    // again (LLP 1097 D7).
+    // realm's turn until its value is ready. One waiting behind the
+    // background's storage parks and lets the turn go; a background delivery
+    // asks it again (LLP 1097 D7).
     const proceed = async (answer, request, done) => {
       for (;;) {
         // A `scheduler.yield()`: its yields resolve in a task of their own.
@@ -298,7 +324,10 @@ export async function prepare(payload, admitted, id = nextId++) {
         for (const p of waiting) {
           if (disposed) { p.done.reject(new Error('module environment disposed')); continue; }
           context = p.context;
-          try { await proceed(JSON.parse(win.__exact_settle(String(p.answer.call))), p.request, p.done); }
+          try {
+            const answer = JSON.parse(win.__exact_settle(String(p.answer.call)));
+            await proceed(answer, p.request, p.done);
+          }
           catch (error) { for (const drop of context?.early.values() ?? []) drop(); storage.retire(context?.owner); context = null; p.done.reject(error); }
         }
         if (deliveries === before || !(parked.length || owed.size)) break;
@@ -362,7 +391,8 @@ export async function prepare(payload, admitted, id = nextId++) {
             const done = {}; done.promise = new Promise((resolve, reject) => { done.resolve = resolve; done.reject = reject; });
             const before = deliveries;
             await proceed(answer, request, done);
-            // In a turn of its own, after this one: this answer replies now.
+            // In a turn of its own, after this one: a storage delivery may
+            // have made a parked answer ready.
             if (deliveries !== before && (parked.length || owed.size)) { const again = tail.then(resettle); tail = again.catch(() => {}); }
             return done;
           } catch (error) { for (const drop of context?.early.values() ?? []) drop(); storage.retire(context?.owner); context = null; throw error; }
@@ -426,7 +456,8 @@ export async function prepare(payload, admitted, id = nextId++) {
         }
         parked = parked.filter(p => {
           if ((p.request.target ?? null) === null || keep.has(key(p.request))) return true;
-          unindex(p.context.requests); release(p.context.owner, p.answer.call);
+          unindex(p.context.requests);
+          release(p.context.owner, p.answer.call);
           p.done.reject(new Error('the runner let this answer go'));
           return false;
         });
@@ -553,7 +584,9 @@ function endSecretTurn(turn, completed = false) {
     } catch {} // A surviving marker makes the next holder invalidate before reading.
     finally { release(); }
   }
-  secretTurns.delete(secretTurnKey(turn.id, turn.request));
+  turn.locks.clear();
+  const key = secretTurnKey(turn.id, turn.request);
+  if (secretTurns.get(key) === turn) secretTurns.delete(key);
 }
 function forgetSecretTurns(id, keep) {
   for (const turn of secretTurns.values()) if (turn.id === id && (!keep || (turn.request.target != null && !keep.has(workerKey(turn.request))))) endSecretTurn(turn);
@@ -598,6 +631,7 @@ export async function run(token, deliver) {
         turn.request.store = [...snapshot];
       }
       const result = await turn.run();
+      if (held && (!held.live || secretTurns.get(key) !== held)) throw new Error('the secret’s answer was let go');
       for (const field of ['reads', 'writes', 'topics']) result[field] = [...carried[field], ...(result[field] ?? [])];
       result.externalRead ||= carried.externalRead; result.entropy ||= carried.entropy;
       if (result.secret !== undefined) {
@@ -605,7 +639,7 @@ export async function run(token, deliver) {
         secretTurns.set(key, held);
         let secretError;
         try { await takeSecret(held, result.secret); } catch (error) { secretError = String(error.message ?? error); }
-        if (!held.live) throw new Error('the secret’s answer was let go');
+        if (!held.live || secretTurns.get(key) !== held) throw new Error('the secret’s answer was let go');
         const realm = realms.get(id);
         if (!realm) throw new Error('module environment disposed');
         carried = result;
@@ -625,8 +659,11 @@ export async function run(token, deliver) {
           localStorage.setItem(`exact.exclusive.exact.secret.${name}`, '1'); held.armed.add(name);
         }
       }
+      // The writes are durable and the lock remains held through delivery, but
+      // a continuation that delivery starts is no longer part of this turn.
+      if (held && result.secretComplete) secretTurns.delete(key);
       await deliver?.(result);
-      if (held && (result.tag !== 1 || result.request?.stream)) endSecretTurn(held, result.tag !== 2 && !result.error);
+      if (held && (result.secretComplete || result.tag !== 1 || result.request?.stream)) endSecretTurn(held, result.tag !== 2 && !result.error);
       return result;
     }
   } catch (error) { if (held) endSecretTurn(held); throw error; }

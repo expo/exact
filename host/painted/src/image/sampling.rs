@@ -86,7 +86,13 @@ pub(crate) fn pixelated(
                 continue;
             };
             let width = pixels.width() as usize;
-            for (i, pixel) in pixels.data_mut().chunks_exact_mut(4).enumerate() {
+            for (i, pixel) in pixels
+                .data_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .enumerate()
+            {
                 let sx =
                     (((halo[0] + (i % width) as u64) as f32 / n[0]) as u32).min(source.width() - 1);
                 let sy = (((halo[1] + (i / width) as u64) as f32 / n[1]) as u32)

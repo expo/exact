@@ -141,10 +141,11 @@ zeros dropped down to `min` (`decimal` keeps at most three, `currency` its
 code's exactly, `percent` none), the integer part grouped by threes, a
 negative value (zero too) signed before the symbol, and a symbol that ends
 in a letter set apart by a no-break space; `""` for a non-finite value.
-`none` for a style or code the compiler would have refused. -/
-def styled (n : F64) (style code : String) : Option String :=
+`none` for a style or code the compiler would have refused. A `decimal`
+given `digits` keeps exactly that many fraction digits. -/
+def styled (n : F64) (style code : String) (digits : Option Nat := .none) : Option String :=
   let spec : Option (String × Nat × Nat × Nat) :=
-    if style = "decimal" then .some ("", 0, 3, 0)
+    if style = "decimal" then .some (digits.elim ("", 0, 3, 0) fun d => ("", d, d, 0))
     else if style = "percent" then .some ("", 0, 0, 2)
     else if style = "currency" then
       (currencies.find? (·.1 == code)).map fun (_, sym, d) => (sym, d, d, 0)
@@ -197,8 +198,9 @@ def toNat (x : F64) : Nat := x.toNat
 /-- `x.floor() as i64` for `|x|` well inside `i64`. -/
 def floorInt (x : F64) : Int := Int.ediv x.floor.scaled (2 ^ 1074)
 
-/-- `formatTime(epochMs, utcOffset, "short")`: `h:mm AM`, `""` when invalid. -/
-def formatTime (epoch offset : F64) : String :=
+/-- `formatTime(epochMs, utcOffset, "short")`: `h:mm AM`, `""` when invalid;
+with `twoDigit` (`"2-digit"`), `hh:mm AM`. -/
+def formatTime (epoch offset : F64) (twoDigit : Bool := false) : String :=
   match wallMs epoch offset with
   | .none => ""
   | .some wall =>
@@ -208,7 +210,8 @@ def formatTime (epoch offset : F64) : String :=
     let (h12, suffix) :=
       if h == 0 then (12, " AM") else if h ≤ 11 then (h, " AM")
       else if h == 12 then (12, " PM") else (h - 12, " PM")
-    toString h12 ++ ":" ++ toString (m / 10) ++ toString (m % 10) ++ suffix
+    (if twoDigit && h12 < 10 then "0" else "") ++ toString h12 ++ ":" ++ toString (m / 10) ++
+      toString (m % 10) ++ suffix
 
 /-- The proleptic Gregorian (year, month, day) of `days` since 1970-01-01. -/
 def civil (days : Int) : Int × Nat × Nat :=
@@ -236,6 +239,14 @@ def formatDate (epoch offset : F64) (monthYear : Bool) : String :=
     let name := months.getD (month - 1) ""
     let head := if monthYear then name else String.ofList (name.toList.take 3) ++ " " ++ toString day ++ ","
     head ++ " " ++ toString year
+
+/-- `formatDate(epochMs, utcOffset, "month-day")`: `Sep 26`, `""` when invalid. -/
+def formatMonthDay (epoch offset : F64) : String :=
+  match wallMs epoch offset with
+  | .none => ""
+  | .some wall =>
+    let (_, month, day) := civil (floorInt (wall / 86400000))
+    String.ofList ((months.getD (month - 1) "").toList.take 3) ++ " " ++ toString day
 
 /-- `formatDate(epochMs, utcOffset, "iso")`: `YYYY-MM-DD`, the date part of
 `toISOString` at that wall time (LLP 1102 §3.4), `""` when invalid. Years
@@ -415,10 +426,12 @@ def signed (pair : String) (negative : Bool) : String :=
 /-- `decimal`, `percent` and `currency`: `rounded`'s digits in the
 locale's template, a percentage and an amount of money in their own symbols
 and grouping; `none` for a style or code the compiler refuses. -/
-def styledIn (r : Record) (n : F64) (style code : String) : Option String :=
+def styledIn (r : Record) (n : F64) (style code : String) (digits : Option Nat := .none) :
+    Option String :=
   let own := (fieldOf r 1, fieldOf r 2, fieldOf r 3)
   let spec : Option (String × String × (String × String × String) × Nat × Nat × Nat) :=
-    if style = "decimal" then .some (fieldOf r 4, "", own, 0, 3, 0)
+    if style = "decimal" then
+      .some (digits.elim (fieldOf r 4, "", own, 0, 3, 0) fun d => (fieldOf r 4, "", own, d, d, 0))
     else if style = "percent" then
       match itemsOf (fieldOf r 5) with
       | [_, _, dec, grp, grouping] => .some (fieldOf r 5, "", (dec, grp, grouping), 0, 0, 2)
@@ -526,9 +539,13 @@ def dateIn (r : Record) (wall : F64) (template names : Nat) : String :=
   let t := fieldOf r template
   fillTemplate r wall (fieldOf r names) "" (t.length + 1) t.toList ""
 
-/-- The short time, in the hour cycle the viewer forced, else the locale's. -/
-def timeIn (r : Record) (wall : F64) (cycle : Option String) : String :=
-  let (t, p) := if cycle == .some "h12" then (19, 20) else if cycle == .some "h23" then (21, 22) else (17, 18)
+/-- The short time, or with `twoDigit` the two-digit hour's, in the hour
+cycle the viewer forced, else the locale's. -/
+def timeIn (r : Record) (wall : F64) (cycle : Option String) (twoDigit : Bool := false) : String :=
+  let (t, p) :=
+    if twoDigit then
+      if cycle == .some "h12" then (34, 35) else if cycle == .some "h23" then (36, 37) else (32, 33)
+    else if cycle == .some "h12" then (19, 20) else if cycle == .some "h23" then (21, 22) else (17, 18)
   let t := fieldOf r t
   fillTemplate r wall "" (fieldOf r p) (t.length + 1) t.toList ""
 

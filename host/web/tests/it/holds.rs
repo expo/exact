@@ -267,19 +267,17 @@ fn real_wasm_swipe_takeover_style_commits_and_deletion() {
             text "Back"
 "##;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = std::env::temp_dir().join(format!("exact-motion-browser-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-motion-browser");
     let plan = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
     std::fs::write(dir.join("app.plan"), plan.encode()).unwrap();
     let output =
         std::process::Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
             .arg("host/web/tests/holds.mjs")
-            .env("EXACT_MOTION_TEST", &dir)
+            .env("EXACT_MOTION_TEST", &*dir)
             .current_dir(root)
             .output()
             .unwrap();
     eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-    std::fs::remove_dir_all(dir).unwrap();
     assert!(
         output.status.success(),
         "{}\n{}",

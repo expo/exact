@@ -506,6 +506,39 @@ fn an_upload_is_pending_until_its_reply_while_its_progress_commits() {
     assert!(!r.has_pending() && r.in_flight().is_empty() && !r.holds(ticket));
 }
 
+/// An upload in flight holds the app open until its reply, as a request with
+/// effects does; one let go is aborted and holds nothing (LLP 1133.008.000 D8).
+#[test]
+fn an_upload_must_finish_until_its_reply_and_not_once_let_go() {
+    let mut r = boot_with(Scripted {
+        upload: true,
+        ..Scripted::default()
+    });
+    let ticket = r.take_requests()[0].ticket;
+    assert!(r.must_finish(), "admitted");
+    started(&mut r, ticket);
+    r.fulfill(
+        ticket,
+        Outcome::Message(Message::upload_progress(1024, 4096)),
+    )
+    .unwrap();
+    assert!(r.must_finish(), "going out");
+    let reply = Outcome::Response(Response {
+        status: 201,
+        headers: Vec::new(),
+        body: b"{}".to_vec(),
+    });
+    r.fulfill(ticket, reply).unwrap();
+    assert!(!r.must_finish(), "replied");
+    r.act("wave", vec![Value::Number(2.)]).unwrap();
+    let second = r.take_requests()[0].ticket;
+    assert!(r.must_finish());
+    // Wave 0 answers now, letting the running upload go.
+    r.act("wave", vec![Value::Number(0.)]).unwrap();
+    assert!(!r.holds(second), "the host aborts what the runner let go");
+    assert!(!r.must_finish(), "a let-go upload is not kept");
+}
+
 /// An upload is asked once for its arguments (LLP 1016.000 D10): neither a
 /// topic it watches nor a refresh asks it again, in flight or after its
 /// reply; new arguments do, letting the running one go.

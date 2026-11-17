@@ -146,6 +146,21 @@ impl Module {
         kept
     }
 
+    /// The reports the module made since the last take (LLP 1175 D3): each
+    /// fetch's ticket is the token its reply comes back under, delivered in a
+    /// module turn as a kept request's is.
+    pub fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        let reports = std::mem::take(&mut self.host.reports);
+        (reports.into_iter())
+            .map(|(token, mut request, by)| {
+                self.work.keep_ticket(token);
+                request.fetch = Some(token);
+                request.module = Some(self.identity.instance());
+                exact_runner::Report { token, request, by }
+            })
+            .collect()
+    }
+
     /// Deliver the kept request `token`'s reply in a module turn.
     pub(crate) fn module_landed_now(
         &mut self,

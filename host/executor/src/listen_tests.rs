@@ -42,6 +42,7 @@ fn listen(ticket: u64, path: &std::path::Path) -> RequestOut {
         unreachable!()
     };
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "control".into(),

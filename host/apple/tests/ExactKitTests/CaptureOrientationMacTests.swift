@@ -253,7 +253,7 @@ final class CaptureOrientationMacTests: XCTestCase {
         }
         let backing = try XCTUnwrap(root.layer)
         let drawsBefore = [header.draws, first.draws, second.draws]
-        let copy = try XCTUnwrap(Capture.paintOrderBitmap(of: root, scale: 1))
+        let copy = try XCTUnwrap(Capture.picture(of: root, scale: 1))
         let drawsAfterCopy = [header.draws, first.draws, second.draws]
         let original = NSBitmapImageRep(cgImage: try XCTUnwrap(Capture.picture(of: backing, size: root.bounds.size, scale: 1)))
         print("MIXED DRAWS before=\(drawsBefore) afterCopy=\(drawsAfterCopy) afterOriginal=\([header.draws, first.draws, second.draws])")
@@ -401,7 +401,7 @@ final class CaptureOrientationMacTests: XCTestCase {
         CATransaction.flush()
         let drawn = views.map { ($0.draws, $0.drawnCTM) }
         let layer = try XCTUnwrap(root.layer)
-        let copy = try XCTUnwrap(Capture.paintOrderBitmap(of: root, scale: 1))
+        let copy = try XCTUnwrap(Capture.picture(of: root, scale: 1))
         let original = NSBitmapImageRep(cgImage: try XCTUnwrap(Capture.picture(of: layer, size: root.bounds.size, scale: 1)))
         CATransaction.flush()
         let presented = try layer.presentation().map { NSBitmapImageRep(cgImage: try XCTUnwrap(Capture.picture(of: $0, size: root.bounds.size, scale: 1))) }
@@ -490,7 +490,7 @@ final class CaptureOrientationMacTests: XCTestCase {
         }
         window.orderFront(nil); root.displayIfNeeded(); CATransaction.flush()
         let backing = try XCTUnwrap(root.layer)
-        let copy = try XCTUnwrap(Capture.paintOrderBitmap(of: root, scale: 1))
+        let copy = try XCTUnwrap(Capture.picture(of: root, scale: 1))
         let original = NSBitmapImageRep(cgImage: try XCTUnwrap(Capture.picture(of: backing, size: root.bounds.size, scale: 1)))
         let cache = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
         root.cacheDisplay(in: root.bounds, to: cache)

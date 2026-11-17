@@ -493,6 +493,7 @@ fn invalid_text_metrics_are_typed_and_never_publish_frames() {
     let valid = TextMetrics {
         width: 20.0,
         height: 10.0,
+        pending: false,
         first_baseline: Some(7.0),
     };
     let invalid = [
@@ -804,6 +805,7 @@ fn content_sized_textarea_keeps_the_caret_line_after_return() {
             TextMetrics {
                 width: 80.0,
                 height: 20.0 * text.lines().count().max(1) as f32,
+                pending: false,
                 first_baseline: Some(16.0),
             }
         }
@@ -889,6 +891,7 @@ fn a_text_field_keeps_its_own_width_in_a_block_as_the_web_does() {
             TextMetrics {
                 width: 80.0,
                 height: 20.0,
+                pending: false,
                 first_baseline: Some(16.0),
             }
         }

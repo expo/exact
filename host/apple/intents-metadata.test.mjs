@@ -42,6 +42,15 @@ test('a widget configuration intent and its AppEnum row come out under the widge
   expect(out.autoShortcuts).toEqual([]);
 });
 
+test('watch recommendations do not change the published configuration intent', () => {
+  const types = JSON.parse(readFileSync(new URL('./fixtures/watch-configuration.swiftconstvalues', import.meta.url), 'utf8'));
+  const action = types.find(t => t.properties?.some(p => p.label === 'exactRecommendations'));
+  expect(action).toBeDefined();
+  const withRecommendations = intentsMetadata(types, 27, { module: 'ExactWidgets' });
+  action.properties = action.properties.filter(p => p.label !== 'exactRecommendations');
+  expect(intentsMetadata(types, 27, { module: 'ExactWidgets' })).toEqual(withRecommendations);
+});
+
 test('the module name scopes every type, and the intents module keeps its default', () => {
   expect(() => intentsMetadata(widget(), 27)).toThrow('invalid or duplicate Swift type');
   expect(() => intentsMetadata(widget(), 27, { module: 'Exact Widgets' })).toThrow('invalid module name');
@@ -84,7 +93,8 @@ for (const platform of ['ios', 'watchos']) {
   test.skipIf(!xcode)(`widget configuration metadata matches Xcode's extractor (${platform})`, () => {
     const dir = mkdtempSync(resolve(tmpdir(), 'exact-widget-intents-')), keep = process.env.EXACT_REFERENCE_OUT;
     const run = (command, args) => {
-      const r = spawnSync(command, args, { encoding: 'utf8', timeout: 90000 });
+      // `swiftc` leaves a `TemporaryDirectory.*` in TMPDIR each run: the children's TMPDIR is this test's directory, removed after.
+      const r = spawnSync(command, args, { encoding: 'utf8', timeout: 90000, env: { ...process.env, TMPDIR: dir } });
       if (r.status !== 0) throw new Error(`${command}: ${r.error?.message ?? ''}\n${r.stdout}\n${r.stderr}`);
       return r.stdout.trim();
     };

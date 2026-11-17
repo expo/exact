@@ -10,8 +10,8 @@
 //! scratch kernel, never the runner's.
 //!
 //! It is a guess, and may be short: derives are not settled over the
-//! writes, a `for` is walked as last keyed, a virtualized list is not
-//! entered. A miss costs what no warm costs.
+//! writes, a `for` is walked as last keyed, and a virtualized list
+//! enters its fixed children but not its windowed rows. A miss costs what no warm costs.
 
 use super::region::init_owned;
 use super::*;
@@ -58,7 +58,7 @@ fn walk(
     for c in children {
         match c {
             Child::Node(n) => {
-                if n.collection().is_none() && u.stale(&sites.data.deps.nodes[n.node.0 as usize]) {
+                if u.stale(&sites.data.deps.nodes[n.node.0 as usize]) {
                     walk(u, &n.children, frames, Some(n.view), out)?;
                 }
             }
@@ -158,8 +158,8 @@ fn region(
             };
             new_frame.region = Some(r.region.0);
             let arm_id = plan.region(r.region).arms.iter().nth(i);
-            if let Some(id) = arm_id.filter(|id| plan.slots.iter().any(|s| s.owner == Some(*id))) {
-                let slots: RowSlots = Rc::new(RefCell::new(BTreeMap::new()));
+            if let Some(id) = arm_id.filter(|id| super::region::owns_slots(plan, *id)) {
+                let slots: RowSlots = crate::vm::Owned::shared();
                 new_frame.region = Some(r.region.0);
                 new_frame.row = Some(slots.clone());
                 init_owned(u, id, &slots, &with_frame(frames, new_frame.clone()))?;

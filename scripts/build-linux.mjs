@@ -8,6 +8,7 @@ import { bakeTarget, bakeWatchEnv, cargoEnvironment, linuxBinary, linuxBuild, re
 import { placeLibrary, prepareLibrary } from './package-libraries.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
 import { desktopEntry } from './desktop-entry.mjs';
+import { unclaimedNote } from './links.mjs';
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
 import { writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -33,6 +34,8 @@ if (built.status === 0) {
   recordBuiltSettings(binary, app);
   console.log(binary);
   console.log(entry);
+  const unclaimed = unclaimedNote(app.manifest, 'linux');
+  if (unclaimed) console.error(unclaimed);
   if (process.argv.includes('--json')) reportBuilt({ path: binary, target: 'linux', trust: process.env.EXACT_UPDATE_TRUST ?? 'development' });
 }
 process.exit(built.status ?? 1);

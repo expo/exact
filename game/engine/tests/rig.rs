@@ -86,7 +86,13 @@ fn rigs_validate_with_normalized_smooth_weights_and_named_sockets() {
     for model in [humanoid(), quadruped()] {
         model.validate().unwrap();
         let mesh = &model.meshes[0];
-        let shared = mesh.weights.chunks_exact(4).filter(|w| w[1] > 0.).count();
+        let shared = mesh
+            .weights
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|w| w[1] > 0.)
+            .count();
         assert!(shared > 0, "joints blend between bones");
         assert_eq!(model.skins[0].joints.len(), model.nodes.len() - 1);
     }
@@ -127,11 +133,16 @@ fn rig_fields_are_reached_through_checked_builders() {
         .bone("b", Some("a"), Vec3::Y, Vec3::Y, [0.2, 0.2], [1.; 4]);
     let model = ball.model([]);
     model.validate().unwrap();
-    let ball_weights = model.meshes[0].weights.chunks_exact(4).skip(13 * 10);
+    let ball_weights = model.meshes[0]
+        .weights
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .skip(13 * 10);
     assert!(ball_weights.clone().count() > 0);
     assert!(ball_weights
-        .zip(model.meshes[0].joints.chunks_exact(4).skip(130))
-        .all(|(w, j)| w == [1., 0., 0., 0.] && j[0] == 1));
+        .zip(model.meshes[0].joints.as_chunks::<4>().0.iter().skip(130))
+        .all(|(w, j)| *w == [1., 0., 0., 0.] && j[0] == 1));
     // At most 255 bones (the node limit, with the skin's node).
     let mut many = Rig::new();
     for i in 0..255 {

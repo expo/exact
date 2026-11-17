@@ -1,0 +1,30 @@
+# A screen's send answered now lands in it, and its `then` hands its count to the root.
+tap open-1
+clock settle
+tap now-1
+clock settle
+expect slots.log == " 1"
+# One answered later is pending on the screen until it lands, then its `then` runs.
+tap later-1
+clock settle
+expect slots.log == " 1 101"
+# Two screens send apart: each lands in its own screen and runs its own `then`, reading its own answer.
+tap open-2
+clock settle
+tap now-2
+clock settle
+tap later-2
+clock settle
+tap later-1
+clock settle
+expect slots.log == " 1 101 2 102 101"
+# Leaving a screen in the commit that sends forgets the send: nothing of it reaches the root.
+tap leave-2
+clock settle
+expect slots.log == " 1 101 2 102 101"
+# The screen below, shown again, still sends.
+tap now-1
+clock settle
+expect slots.log == " 1 101 2 102 101 1"
+tap back
+clock settle

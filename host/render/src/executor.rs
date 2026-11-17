@@ -40,6 +40,10 @@ impl Executor {
     /// Start the core's owners under `grants` (the render's, never more
     /// than the app's).
     pub fn start(grants: &str) -> Self {
+        Self::start_with_cache(grants, http_cache())
+    }
+
+    pub(crate) fn start_with_cache(grants: &str, cache: SharedHttpCache) -> Self {
         // @ref LLP 1048.000 D10 — a server, not an app on a device: its
         // fetches go over rustls on macOS too (Charlie, 2026-09-29), not
         // NSURLSession, whose per-call cost was ~30% of a RealWorld page's CPU.
@@ -82,7 +86,7 @@ impl Executor {
             transport,
             BUDGET,
         );
-        core.set_shared_http_cache(http_cache());
+        core.set_shared_http_cache(cache);
         Self { core, wake }
     }
 

@@ -1,7 +1,7 @@
 # `push --watch` does not publish after a save to the design file, a font or a sound
 
 **Status:** Closed
-**Resolution:** The watcher asks `pushReads`, which takes the design (`.tamber`) and any file under `assets/` or `deck/` whatever its type, and skips `.exact/` with `target/` and a `.DS_Store`.
+**Resolution:** The watcher asks `pushReads`, which takes the design (`.forma`) and any file under `assets/` or `deck/` whatever its type, and skips `.exact/` with `target/` and a `.DS_Store`.
 **Systems:** scripts/push.mjs (--watch)
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review
@@ -21,7 +21,7 @@ if (!file || /(^|\/)(target|node_modules|\.git)(\/|$)/.test(file)
 
 A push reads more than that list:
 
-- The plan carries the app's design (`app.tamber`, `contract/cli/src/sources.rs:300`), and
+- The plan carries the app's design (`app.forma`, `contract/cli/src/sources.rs:300`), and
   the dev loop watches it as a source (`host/web/dev.mjs:618`). Six apps under `apps/` have
   one.
 - `carriedAssets` (line 168) carries every regular file under `assets/` and `deck/`,
@@ -36,8 +36,8 @@ state under `.exact/`, and a write to `.exact/sent.json` (`scripts/feedback.mjs:
 
 ## The failure
 
-With `bun scripts/push.mjs <app> --watch` running, save `app.tamber` with a changed token.
-Observed: no `edit:` line and no push. Expected: `edit: app.tamber`, then the stream's next
+With `bun scripts/push.mjs <app> --watch` running, save `app.forma` with a changed token.
+Observed: no `edit:` line and no push. Expected: `edit: app.forma`, then the stream's next
 `seq` carrying the new plan, as a save to `app.contract` gives.
 
 ## Verification
@@ -51,20 +51,20 @@ Each file was then saved in turn:
 |---|---|---|
 | `app.contract` | yes | 1 |
 | `assets/logo.png` | yes | 1 |
-| `app.tamber` | no | 0 |
+| `app.forma` | no | 0 |
 | `assets/Inter.ttf`, `assets/chime.wav`, `assets/photo.webp` | no | 0 |
 | `deck/deck.js` | no | 0 |
 | `.exact/sent.json`, `.exact/shells/Cargo.toml` | yes | 1 each |
 
 Compiling a copy of `apps/theme-fixture` before and after changing `accent.fill` in its
-`app.tamber` gave two different plans (6,139 and 6,152 bytes), so the save changes what a
+`app.forma` gave two different plans (6,139 and 6,152 bytes), so the save changes what a
 push would carry.
 
 Not run: a watch against a deployed stream with a signing key.
 
 ## Direction
 
-Watch what a push reads: add `tamber`, drop the extension list for files under `assets/`
+Watch what a push reads: add `forma`, drop the extension list for files under `assets/`
 and `deck/`, and skip `.exact/` with `target/`.
 
 ## Related

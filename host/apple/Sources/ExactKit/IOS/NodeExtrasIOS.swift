@@ -51,6 +51,7 @@ final class NodeAside {
     var translatePx = CGPoint.zero, translatePercent = CGPoint.zero
     var scale: CGFloat = 1
     var rotate: CGFloat = 0
+    var rotationAxis: [Double] = [0, 0, 0]
     var content = CGSize.zero
     var fitContentHeight: CGFloat?
     var image: UIImage?
@@ -70,6 +71,8 @@ final class NodePaintExtras {
     var boxFill: CALayer?
     /// A `background-image` gradient Core Animation paints (LLP 1066).
     var boxGradient: CAGradientLayer?
+    /// Repeating linear gradients as patterns (`GradientPatternLayer`).
+    var boxPattern: GradientPatternLayer?
     /// What a fixed gradient was last aimed with (`reaimFixedGradient`).
     var aimedGradient: AimedGradient?
     /// `box-shadow` and the clip it casts outside (`BoxShadow.swift`).
@@ -94,6 +97,10 @@ final class NodeExtras {
     var layoutOffset: CGPoint = .zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
     var stickyOffset: CGPoint = .zero
+    /// A zoomable scroller's zoom, and the scale and shift its zoom draws its child at (`ScrollZoomIOS.swift`).
+    var zoom: ScrollZoom?
+    var zoomFactor: CGFloat = 1
+    var zoomShift: CGPoint = .zero
     var keyboardLift: CGFloat = 0
     /// How far its surface's size stands from the laid-out size (LLP 1063).
     var layoutResize: CGSize = .zero
@@ -176,11 +183,16 @@ final class NodeExtras {
     var hiddenBeforePlacement = false
     var placementHidden = false
     var materialView: UIVisualEffectView?
+    /// While a pull-down's menu has this invoker (`MenuButton`), its fill is
+    /// painted here, which UIKit's stand-in draws, instead of on its layer.
+    var lentFill: CAShapeLayer?
     /// `glassGroup`'s view and a grouped glass's slot (`GlassGroup.swift`).
     var glassGroupView: GlassGroupView?
     var glassSlot: GlassSlot?
     var pendingScrollLeft: Double?
     var pendingScrollTop: Double?
+    /// A `scrollZoom` written and not yet applied (`ScrollZoomIOS.swift`).
+    var pendingZoom: Double?
     var pendingScrollTransfer = false
     /// A collapsing title's scroller (LLP 1075.003 Stage 3): its expanded
     /// title's inset, where `scrollTop` 0 rests; 0 for every other scroller.
@@ -248,6 +260,7 @@ extension NodeView {
     var translatePx: CGPoint { get { aside?.translatePx ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePx = newValue } } }
     var translatePercent: CGPoint { get { aside?.translatePercent ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePercent = newValue } } }
     package var scale: CGFloat { get { aside?.scale ?? 1 } set { if newValue != 1 || aside != nil { asideMade.scale = newValue } } }
+    var rotationAxis: [Double] { get { aside?.rotationAxis ?? [0, 0, 0] } set { if newValue != [0, 0, 0] || aside != nil { asideMade.rotationAxis = newValue } } }
     package var rotate: CGFloat { get { aside?.rotate ?? 0 } set { if newValue != 0 || aside != nil { asideMade.rotate = newValue } } }
     /// A scroll container's content extent (the `content` op), before the
     /// axes that do not scroll are held to the box.
@@ -296,12 +309,15 @@ extension NodeView {
     }
     var boxFill: CALayer? { get { paintExtras?.boxFill } set { if newValue != nil || paintExtras != nil { paintMore.boxFill = newValue } } }
     var boxGradient: CAGradientLayer? { get { paintExtras?.boxGradient } set { if newValue != nil || paintExtras != nil { paintMore.boxGradient = newValue } } }
+    var boxPattern: GradientPatternLayer? { get { paintExtras?.boxPattern } set { if newValue != nil || paintExtras != nil { paintMore.boxPattern = newValue } } }
     var aimedGradient: AimedGradient? { get { paintExtras?.aimedGradient } set { if newValue != nil || paintExtras != nil { paintMore.aimedGradient = newValue } } }
     var shadowCaster: ShadowCaster? { get { paintExtras?.shadowCaster } set { if newValue != nil || paintExtras != nil { paintMore.shadowCaster = newValue } } }
     var insetCaster: InsetShadowCaster? { get { paintExtras?.insetCaster } set { if newValue != nil || paintExtras != nil { paintMore.insetCaster = newValue } } }
     var clipBox: PlainView? { get { extras?.clipBox } set { if newValue != nil || extras != nil { more.clipBox = newValue } } }
     var layoutOffset: CGPoint { get { extras?.layoutOffset ?? .zero } set { if newValue != .zero || extras != nil { more.layoutOffset = newValue } } }
     var stickyOffset: CGPoint { get { extras?.stickyOffset ?? .zero } set { if newValue != .zero || extras != nil { more.stickyOffset = newValue } } }
+    var zoomFactor: CGFloat { get { extras?.zoomFactor ?? 1 } set { if newValue != 1 || extras != nil { more.zoomFactor = newValue } } }
+    var zoomShift: CGPoint { get { extras?.zoomShift ?? .zero } set { if newValue != .zero || extras != nil { more.zoomShift = newValue } } }
     var authoredAccentTint: UIColor? { get { extras?.authoredAccentTint } set { if newValue != nil || extras != nil { more.authoredAccentTint = newValue } } }
     /// How far a keyboard toolbar rides up with the keyboard (KeyboardToolbarIOS).
     var keyboardLift: CGFloat { get { extras?.keyboardLift ?? 0 } set { if newValue != 0 || extras != nil { more.keyboardLift = newValue } } }
@@ -491,9 +507,10 @@ extension NodeView {
         if clipsOneAxis { return oneAxisClipContains(point) }
         let uniform = number("border_width")
         let widths = ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
-        if x && y { return innerOutline(widths, in: bounds).contains(point) }
-        return x ? point.x >= bounds.minX + widths[3] && point.x <= bounds.maxX - widths[1]
-            : point.y >= bounds.minY + widths[0] && point.y <= bounds.maxY - widths[2]
+        let box = surface?.frame ?? bounds
+        if x && y { return innerOutline(widths, in: box).contains(point) }
+        return x ? point.x >= box.minX + widths[3] && point.x <= box.maxX - widths[1]
+            : point.y >= box.minY + widths[0] && point.y <= box.maxY - widths[2]
     }
     /// Its scroll view's frame: its bounds, and the band past them.
     package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }

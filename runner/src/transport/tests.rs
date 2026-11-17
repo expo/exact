@@ -11,7 +11,6 @@ use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use std::path::PathBuf;
 
 pub(crate) const SOURCE: &str = r#"sound "assets/kick.wav"
 sound "assets/hat.wav"
@@ -209,11 +208,11 @@ fn compiled(source: &str) -> Plan {
     if let Some((_, plan)) = plans.iter().find(|(s, _)| s == source) {
         return plan.clone();
     }
-    let dir: PathBuf = std::env::temp_dir().join(format!(
+    let dir = crate::TempDir(std::env::temp_dir().join(format!(
         "exact-transport-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)
-    ));
+    )));
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     wav(&dir.join("assets/kick.wav"), 250);
     wav(&dir.join("assets/hat.wav"), 100);

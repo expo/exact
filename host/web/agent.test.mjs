@@ -1,6 +1,6 @@
 import { viewParent, viewChildren } from './navigation/lists.js';
 // @ref LLP 1043.000 §3 D7/D8 — flow settlement must not change LLP 1012's API.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -18,11 +18,15 @@ import { storageKey } from './storage-environment.js';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
 import { nodeNamed } from '../../scripts/agent-test.mjs';
-import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required, need } from '../../scripts/coverage.mjs';
+import { drivable, engineTests } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
 
-const engineTest = Object.fromEntries(await Promise.all(['chromium', 'firefox', 'webkit'].map(async e => [e, need(e, await browserMissing(e))])));
+const engineTest = await engineTests();
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 const mapAt = (digest, line = 12) => ({digest, nodes: [{file: '/app/ui/bubble.contract', line, col: 3, end_col: 9, component: 'Bubble',
   chain: [{file: '/app/app.contract', line: 45, col: 5, end_col: 11, component: 'App'}],
@@ -506,7 +510,7 @@ test('launch setup supplies fixed defaults and carries CLI overrides to every ho
 });
 
 test('programmatic web opens stay on Chrome and Firefox drives a small Exact plan', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-firefox-agent-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist'), png = join(dir, 'page.png');
+  const dir = scratch('exact-firefox-agent-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist'), png = join(dir, 'page.png');
   writeFileSync(contract, `component BrowserFixture
   state presses = 0
   state words = ""
@@ -544,10 +548,8 @@ test('programmatic web opens stay on Chrome and Firefox drives a small Exact pla
     expect(await chrome.carrier.evaluate(({ probe() { return 5; } }).probe)).toBe(5);
     expect(await chrome.carrier.evaluate(({ async probe() { return 6; } }).probe)).toBe(6);
     await chrome.close(); chrome = null;
-    // The Firefox half: a missing Firefox fails under EXACT_REQUIRED (scripts/coverage.mjs), else the Chrome half stands.
-    const firefoxMissing = await browserMissing('firefox');
-    if (firefoxMissing && required()) throw new Error(`missing firefox: ${firefoxMissing} (EXACT_REQUIRED=1)`);
-    if (firefoxMissing) return console.warn(`SKIP: missing firefox: ${firefoxMissing}`);
+    // The Firefox half; without Firefox the Chrome half stands.
+    if (!(await drivable(['firefox'])).length) return;
     session = await open({ host:'web', browser:'firefox', url, onProcess: child => { browserProcess = child; } });
     expect(session.carrier.browser).toBe('firefox');
     expect(browserProcess?.pid).toBeGreaterThan(0);
@@ -627,6 +629,10 @@ test('page facts: the platform off the agent, the drive\'s values under it (LLP 
   expect(() => agent.prefer({ online: 'maybe', 'can-share': false })).toThrow('prefer: online');
   expect(agent.read()['can-share']).toBe(true); expect(agent.read()['display-scale']).toBe(2); expect(real.displayScale()).toBe(1); agent.prefer({ 'display-scale': 2 }); expect(() => agent.prefer({ 'display-scale': 3 })).toThrow("prefer: display-scale: 3: the page's is 2");
   agent.onChange(() => { throw new Error('agent listened to the platform'); });
+  // `presented` (LLP 1069.000 D2 r7, D6): the page's false until its first picture, then true; the agent's true until
+  // `prefer presented` holds it; neither is a bit.
+  platform.getComputedStyle = () => ({ fontSize: '16px' }); expect(real.read().presented).toBe(false); expect(real.presentedNow()).toBe(true); expect(real.presentedNow()).toBe(false); expect(real.read().presented).toBe(true);
+  expect(agent.read().presented).toBe(true); expect(agent.presentedNow()).toBe(false); agent.prefer({ presented: 'false' }); expect(agent.read().presented).toBe(false); agent.prefer({ presented: true }); expect(agent.read().presented).toBe(true);
 });
 
 test('the app\'s root font size: a rule over the root, read past by the host (LLP 1069.000 D3)', () => { const rules = new Map(), said = [], say = line => said.push(line), document = { documentElement: {}, head: { append: el => rules.set(el.id, el) }, getElementById: id => rules.get(id) ?? null, createElement: () => ({ remove() { rules.delete(this.id); } }) }; const platform = { document, getComputedStyle: () => { const r = [...rules.values()].find(r => !r.disabled); return { fontSize: r ? r.textContent.match(/font-size:([\d.]+)px/)[1] + 'px' : '18px' }; } }, host = pageReporter(false, platform); // the browser's own 18; an enabled rule's `!important` wins
@@ -1263,7 +1269,7 @@ test('a typed pick answer split at a space names the pick step that keeps the pa
 });
 
 test('a mouse drag presses and releases the left button on the web', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-mouse-drag-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-mouse-drag-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, `component MouseDrag
   state log = ""
   action at(kind: string, e: PointerEvent)

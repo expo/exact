@@ -473,6 +473,19 @@ pub struct RoleStep {
     pub press: bool,
 }
 
+/// What was typed into a group with type-ahead (a menu) in its last half
+/// second, which `Kernel::role_type_ahead` reads and adds each key to. The
+/// host keeps one, as the kernel keeps no time.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TypeAhead {
+    typed: String,
+    at_ms: Option<f64>,
+}
+
+/// How long a type-ahead search lasts after its last key (WAI-ARIA APG's
+/// menu pattern leaves it to the author; the web's menus take half a second).
+const TYPE_AHEAD_MS: f64 = 500.0;
+
 /// A painted group's one Tab stop (`Kernel::role_tab_order`, LLP 1166.000
 /// D2). A menu has no stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -784,6 +797,84 @@ impl Kernel {
                 .filter(|id| self.role_eligible(*id))
                 .collect(),
             press: row.press && forward.is_some(),
+        })
+    }
+
+    /// A printable key at a member of a group with type-ahead (the `roles`
+    /// table's `typeAhead`: a menu), as the WAI-ARIA menu pattern's
+    /// type-ahead: the eligible members whose label (`aria-label`, else the
+    /// text) starts with what `typed` holds once `key` is added, in the
+    /// order tried. One letter, or the same one again, steps on from `view`
+    /// to the next it starts, wrapping; more letters refine the match from
+    /// `view`, which then may keep the focus. The host moves the focus to
+    /// the first it can focus and, with none, leaves the key to the page.
+    /// `None`, and `typed` unchanged, for a view that is no such member and
+    /// for a key that starts no search: one that is not a character, or
+    /// Space with no search under way, which presses. `view` may be the
+    /// menu itself, a menu no item of which has the focus, searched from its
+    /// first item.
+    pub fn role_type_ahead(
+        &self,
+        view: ViewId,
+        key: &str,
+        now_ms: f64,
+        typed: &mut TypeAhead,
+    ) -> Option<RoleStep> {
+        let role = self.node(view)?.props.str(PropId::AccessibilityRole);
+        let (group, row) = crate::ROLE_KEYS
+            .iter()
+            .find(|row| row.descendants && role == Some(row.role))
+            .map(|row| (view, row))
+            .or_else(|| {
+                [true, false]
+                    .into_iter()
+                    .find_map(|children| self.role_group(view, children))
+            })
+            .filter(|(_, row)| row.type_ahead)?;
+        let fresh = typed.at_ms.is_some_and(|at| now_ms - at <= TYPE_AHEAD_MS);
+        if key.chars().count() != 1 || key == " " && !fresh {
+            return None;
+        }
+        if !fresh {
+            typed.typed.clear();
+        }
+        typed.typed.push_str(&key.to_lowercase());
+        typed.at_ms = Some(now_ms);
+        let mut letters = typed.typed.chars();
+        let first = letters.next()?;
+        let again = letters.all(|c| c == first);
+        let prefix = if again {
+            first.to_string()
+        } else {
+            typed.typed.clone()
+        };
+        let members = self.role_members(group, row);
+        let at = if view == group {
+            0
+        } else {
+            members.iter().position(|id| *id == view)? + usize::from(again)
+        };
+        let label = |id: ViewId| {
+            self.node(id)
+                .and_then(|n| n.props.str(PropId::AccessibilityLabel).map(option_label))
+                .unwrap_or_else(|| self.option_text(id, false))
+                .to_lowercase()
+        };
+        let order = members[at..]
+            .iter()
+            .chain(&members[..at])
+            .copied()
+            .filter(|id| {
+                !(again && *id == view)
+                    && (*id == view || self.role_eligible(*id))
+                    && label(*id).starts_with(&prefix)
+            })
+            .collect();
+        Some(RoleStep {
+            group,
+            role: row.role,
+            order,
+            press: false,
         })
     }
 

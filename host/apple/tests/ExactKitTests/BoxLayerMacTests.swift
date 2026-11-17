@@ -315,7 +315,7 @@ final class BoxLayerMacTests: XCTestCase {
     func testAPaddingResolvedAtLayoutReadsTheKernelsContentBox() throws {
         let padding = try XCTUnwrap(CalculatedLength([
             "calc": .string("min(10%, 20px)"),
-            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0]
+            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0, 16]
         ]))
         let knots: NodeStyle = ["padding_top": .calculation(padding)]
         var style = knots

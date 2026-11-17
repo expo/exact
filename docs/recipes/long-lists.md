@@ -1,7 +1,8 @@
 # Recipe: a long list or grid that loads more
 
 Virtualize rows, each holding N cards (two here). The list has one direct keyed
-`for`; its template has one root in normal flow. Put conditions inside that root.
+`for`; its template has one root in normal flow. Loading content follows the
+`for` as a fixed child.
 
 ```contract
 shape Product
@@ -20,21 +21,19 @@ component Shop
   resource catalog = loadCatalog() as shape Catalog else empty()
   mutation more as shape Reply refreshes catalog
   derive loading = pending(catalog) or pending(more)
-  derive rows = loading ? catalog.rows.concat([GridRow(id="loading", cards=[])]) : catalog.rows
   action loadMore
     if catalog.hasNext and not loading
       send more = nextPage()
   view
     list id="products" testId="products" virtualized=true appearance="none"
       height="100%" estimated-item-height=124 reachend=loadMore reach-margin="100%"
-      for r in rows key=r.id
+      for r in catalog.rows key=r.id
         row gap=12 padding=12
-          if r.id == "loading"
-            text "Loading…" role="status" testId="loading"
-          else
-            for p in r.cards key=p.id
-              column flex=1 min-width=0 min-height=100
-                text p.title testId=`product-${p.id}`
+          for p in r.cards key=p.id
+            column flex=1 min-width=0 min-height=100
+              text p.title testId=`product-${p.id}`
+      if loading
+        text "Loading…" role="status" padding=12 testId="loading"
 ```
 
 In `app.ts`, append the page before `refreshes` re-reads the resource's answer
@@ -70,9 +69,11 @@ const sources: Sources = {
 export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);
 ```
 
-- The loading row is last in the collection while a page is out, never a sibling
-  of the `for`. `hasNext` stops requests after the last page; the pending guard
-  prevents duplicates. A failed mutation leaves the previous answer intact.
+- The loading child stays mounted while a page is out and is separate from the
+  keyed data. It appears after the last row, including when there are no rows.
+  `hasNext` stops requests after the last page; the pending guard prevents
+  duplicates. A failed mutation leaves the previous answer intact.
 - `reach-margin` is a nonnegative px or % of the list's port (default one port,
   `"100%"`); increase it to prefetch earlier. A fling can extend the lead. A first
   page shorter than two ports loads the next on first paint.
+- Toward the start too (a chat): `bun exact.mjs pattern chat`.

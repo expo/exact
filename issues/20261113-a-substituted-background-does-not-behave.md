@@ -6,7 +6,27 @@
 **Date:** 2026-11-13
 **Related:** issues/closed/20261113-agent-has-no-background-op-on-macos-or-a-phone.md
 
-## What is wrong
+## Resolution (2026-11-15)
+
+Main now has the separate `exactPage().frozen` fact (`9aa713c4b`, completed
+for Apple by `1c129fe5d`). A drive substitutes it with `prefer frozen true`;
+this is not `visibility-state hidden`. The frozen transition stops ordinary
+execution that has a transition defined for the fact and releases resources
+gated on it. It does not suspend the driven process.
+
+The painted-host test `driven_page_facts_leave_painted_host_work_running`
+starts an executor request and a hatch ticket, then sets both
+`visibility-state hidden` and `frozen`. It changes a native module topic,
+releases the reply and steps the clock. The test observes four repeating-timer
+periods, the reply's committed action, a hatch frame and `after` callback, and
+the module resource changing from `prompt` to `granted`; the announcement pump
+returns no error. Those are the current behavior, not defects of either fact.
+The commit titled “Driven page facts are documented without promising process
+suspension” records that ruling and lets this issue close when it lands. Process
+suspension, delivery coalescing and waking remain real-host qualifications
+outside a drive.
+
+## What was wrong
 
 Under `prefer visibility-state hidden` on a suspending host, work keeps running
 that a suspended process would not run:
@@ -25,6 +45,15 @@ that a suspended process would not run:
 The approved panel decision keeps real OS backgrounding outside the drive and
 adds no agent operation. This issue tracks the suspension model of the existing
 substitute, not a phone lifecycle operation.
+
+## Defects found beside the attempt
+
+The named timer, reply, hatch and announcement behavior is outside the facts'
+scope by the ruling above. Four independent defects remain in `QUEUE.md`:
+`apply_announced` drops later topics after a refusal, `frame_tasks` ignores
+`wake_stops_timers`, the announcement vector has no bound, and an executor
+`Vec<Message>` allocation is not charged. Each needs its own change; none calls
+for process suspension.
 
 ## Prior attempt and review cases
 
@@ -52,11 +81,13 @@ through `agent2-r4`. Cases to preserve in a new design:
   while held, wake explicitly on return, re-arm while work remains, and release
   the hold even when a resumed callback refuses.
 
-## Design direction
+## Superseded design direction
 
-Gate every delivery path in one place rather than adding a separate guard to
+The attempted design would have gated every delivery path in one place rather than adding a separate guard to
 each path. The boundary must cover runner timers, direct replies, executor
 completions, hatch clocks and actions, and native module topic/event
 announcements. Preserve commit application order, bounded buffering, bounded
 drain work and wake ownership across suspension and return. Executor-only gates
-and counter-only timer tests miss the hatch and announcement paths above.
+and counter-only timer tests miss the hatch and announcement paths above. Main's
+`frozen` fact instead gives each operation a defined transition rule and leaves
+host-wide process suspension to the platform.

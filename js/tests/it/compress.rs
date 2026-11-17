@@ -91,8 +91,65 @@ fn compress_image_writes_an_upright_jpeg_or_refuses_by_name() {
         lines[6].contains("maxDimension must be an integer from 1 to 8192"),
         "{text}"
     );
-    assert!(
-        lines[7].contains("options must be {maxDimension, maxBytes}"),
+    assert!(lines[7].contains("options must be an object"), "{text}");
+}
+
+/// An explicit `quality` (LLP 1069.002 A1.12) through the prelude, ibex2's
+/// opcode 121 (`maxBytes` undefined when unsaid) and the codec: on Apple
+/// lower is smaller, a ceiling that fits is that encode, and a PNG ignores
+/// it; elsewhere `unsupported`. A bad option is a `TypeError` everywhere.
+#[test]
+fn compress_image_takes_an_explicit_quality() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    std::fs::write(
+        root.0.join("data/in.jpg"),
+        include_bytes!("../../../scripts/fixtures/picker/oriented-gps.jpg"),
+    )
+    .unwrap();
+    let text = call(&mut m, &mut s, "compress-quality", "");
+    let lines: Vec<&str> = text.lines().collect();
+    if cfg!(target_vendor = "apple") {
+        let record = |l: &str| -> (String, u64, String) {
+            let f: Vec<&str> = l.split(' ').collect();
+            (
+                f[0].into(),
+                f[1].parse().expect(l),
+                format!("{}x{}", f[2], f[3]),
+            )
+        };
+        let (low, high, capped) = (record(lines[0]), record(lines[1]), record(lines[2]));
+        assert_eq!(
+            (low.0.as_str(), low.2.as_str()),
+            ("image/jpeg", "24x32"),
+            "{text}"
+        );
+        assert!(low.1 < high.1, "{text}");
+        assert_eq!(capped, high, "{text}");
+        let (plain, quality) = (record(lines[3]), record(lines[4]));
+        assert_eq!(plain.0, "image/png", "{text}");
+        assert_eq!(plain, quality, "{text}");
+    } else {
+        assert!(
+            lines[..5]
+                .iter()
+                .all(|l| l.starts_with("Error compressImage: unsupported: ")),
+            "{text}"
+        );
+    }
+    let api = "TypeError storage.fs.compressImage(): ";
+    assert_eq!(
+        lines[5..],
+        [
+            format!("{api}quality must be a number from 0 to 1"),
+            format!("{api}quality must be a number from 0 to 1"),
+            format!("{api}quality must be a number from 0 to 1"),
+            format!("{api}needs maxBytes, quality or both"),
+            format!("{api}maxBytes must be an integer from 1 to 67108864"),
+            format!("{api}type must be \"image/jpeg\" or \"image/png\""),
+        ],
         "{text}"
     );
 }

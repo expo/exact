@@ -33,8 +33,8 @@ two halves differ for those values.
 `exact-canvas` already depend on `exact-num`, and the last two on `exact-color`.
 
 Callers of `number_text`: `color/src/lib.rs:265` and `:545` (`Wide::css`),
-`kernel/src/gradient.rs:756`, `kernel/src/style/profiled.rs:100`, `tamber/src/color_fn.rs:360`
-and `:425`, `tamber/src/ir.rs:14` and `:15`. Callers of `js_number`: `canvas/src/font.rs:140`
+`kernel/src/gradient.rs:756`, `kernel/src/style/profiled.rs:100`, `forma/src/color_fn.rs:360`
+and `:425`, `forma/src/ir.rs:14` and `:15`. Callers of `js_number`: `canvas/src/font.rs:140`
 and `canvas/src/context/text.rs:28`, through the re-export at `canvas/src/font.rs:20`.
 `exact-motion` does not call its own copy, and no Swift, Kotlin, JavaScript or C source names
 either.
@@ -52,7 +52,7 @@ exact_color::number_text(1.5e21)  // "1500000000000000000000"; String(1.5e21) is
 A temporary test of `exact-color` printed the two `number_text` lines; `num/src/js.rs`'s own
 test pins `js(1e-7)`. Then, as a trial, `js_number` was deleted, `canvas/src/font.rs:20`
 re-exported `exact_color::number_text` under that name, and `number_text` returned
-`exact_num::js(v)`: `cargo check -p exact-color -p exact-motion -p exact-canvas -p exact-tamber
+`exact_num::js(v)`: `cargo check -p exact-color -p exact-motion -p exact-canvas -p exact-forma
 --all-targets` built, those four crates' tests passed, and the kernel's gradient and wide
 colour unit tests passed (`cargo test -p exact-kernel --lib -- gradient profiled wide`, 19).
 The trial was reverted. That the branch is dead is by reading: `Display` for `f64` is decimal

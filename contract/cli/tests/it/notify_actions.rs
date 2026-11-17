@@ -356,6 +356,9 @@ fn data_codes_post_naming_undeclared_actions_is_refused() {
             panic!("a module call is work");
         };
         let outcome = match work {
+            exact_runner::Work::HttpResponse(_) => {
+                panic!("HTTP fixtures require the HTTP executor")
+            }
             exact_runner::Work::Now(work) => work(),
             exact_runner::Work::Later(work) => {
                 let (tx, rx) = std::sync::mpsc::channel();

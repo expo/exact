@@ -32,6 +32,13 @@ impl<D: DataSource> Host<D> {
         self.engine.presented_path(motion_node(key))
     }
 
+    /// A `filter` while a transition moves it (LLP 1003.002 D8); `None`
+    /// paints the row.
+    pub fn presented_filter(&self, id: ViewId) -> Option<exact_motion::FilterValue> {
+        let key = self.runner.kernel().node(id)?.key;
+        self.engine.presented_filter(motion_node(key))
+    }
+
     /// Adopt a commit's paint, after its `motion_sync` set the rows.
     pub(super) fn sync_paint(&mut self, receipt: &CommitReceipt) {
         let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
@@ -261,6 +268,10 @@ impl<D: DataSource> Host<D> {
         self.play_transitions();
         let mut changed = self.lowered_epoch != epoch;
         for p in self.engine.frame() {
+            if self.present_flight(&p) {
+                changed = true;
+                continue;
+            }
             let key = node_key(p.node);
             let Some(view) = self.keys.get(&key).copied() else {
                 continue;
@@ -268,8 +279,9 @@ impl<D: DataSource> Host<D> {
             if p.property == Property::Height || self.presents_nothing(view, &p) {
                 continue;
             }
-            // A path's `d` is read from the engine where it is painted.
-            if p.property == Property::D {
+            // A path's `d` and a `filter` are read from the engine where
+            // they are painted.
+            if Property::TRANSITION_ONLY.contains(&p.property) {
                 changed = true;
                 self.row_dirty.node(key);
                 continue;
@@ -291,7 +303,12 @@ impl<D: DataSource> Host<D> {
                     entry.layout = layout_presented(&self.engine, p.node, p.value).map(|v| v as f32)
                 }
                 Property::Scale => entry.scale = p.value.x as f32,
-                Property::Rotate => entry.rotate = p.value.x as f32,
+                Property::Rotate => {
+                    entry.rotate = p.value.x as f32;
+                    entry.rotate_axis = exact_kernel::style::space::RotateAxis(
+                        exact_motion::rotation::axis(p.value).map(|v| v as f32),
+                    );
+                }
                 Property::Opacity => entry.opacity = p.value.x as f32,
                 Property::R => entry.svg[0] = Some(p.value.x as f32),
                 Property::StrokeDashoffset => entry.svg[1] = Some(p.value.x as f32),
@@ -305,7 +322,7 @@ impl<D: DataSource> Host<D> {
                 _ => unreachable!("height is projected through layout; paint is above"),
             }
         }
-        changed
+        self.land_flights() || changed
     }
 
     /// A step sampler can restate its value on unrelated timer turns. Such a
@@ -319,7 +336,10 @@ impl<D: DataSource> Host<D> {
                     && s.translate_percent == (v.z as f32, v.w as f32)
             }
             Property::Scale => s.scale == v.x as f32,
-            Property::Rotate => s.rotate == v.x as f32,
+            Property::Rotate => {
+                s.rotate == v.x as f32
+                    && s.rotate_axis.0 == exact_motion::rotation::axis(v).map(|v| v as f32)
+            }
             Property::Opacity => s.opacity == v.x as f32,
             Property::Layout => {
                 s.layout == layout_presented(&self.engine, p.node, v).map(|v| v as f32)

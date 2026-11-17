@@ -126,7 +126,8 @@ final class TextAreaLeadingMacTests: XCTestCase {
     /// a half point at 2x (2 of half-leading over a 13.5 ascent), where the
     /// line box rounded in points put it half a point lower.
     func testAnInputsTextIsOnATextareasDevicePixelRow() throws {
-        XCTAssertEqual(window.backingScaleFactor, 2, "a 2x display's half point")
+        // A 2x display's half point; a 1x one (a headless Mac's virtual display) has no half points.
+        guard window.backingScaleFactor == 2 else { throw XCTSkip("a 2x display's half point; this display is \(window.backingScaleFactor)x") }
         let area = try XCTUnwrap(node("textarea", ["value": "Hx"], height: 21, line: "21px").textArea)
         let typed = try inkTop(area)
         let input = try XCTUnwrap(node("input", ["value": "Hx"], height: 21, line: "21px").field)

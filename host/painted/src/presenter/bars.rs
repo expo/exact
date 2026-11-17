@@ -279,6 +279,7 @@ impl<D: DataSource> Presenter<D> {
         Some(Button {
             node: id,
             title: row.title,
+            direction: row.direction,
             symbol: row.symbol,
             enabled: row.enabled,
             destructive: row.destructive,
@@ -307,9 +308,20 @@ impl<D: DataSource> Presenter<D> {
                 Top {
                     route: r.route,
                     heading: r.shape.heading,
+                    direction: kernel
+                        .node(r.shape.header)
+                        .unwrap()
+                        .computed_row(exact_kernel::StyleId::Direction, |s| s.direction),
                     title: (r.shape.heading)
                         .and_then(|heading| kernel.bar_text(heading))
                         .unwrap_or_default(),
+                    title_direction: r
+                        .shape
+                        .heading
+                        .and_then(|id| kernel.node(id))
+                        .map_or(exact_kernel::Direction::Ltr, |node| {
+                            node.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
+                        }),
                     up: r.pushed,
                     leading: buttons(&r.shape.leading),
                     trailing: buttons(&r.shape.trailing),
@@ -318,6 +330,10 @@ impl<D: DataSource> Presenter<D> {
             });
         let bottom = bars.tabs.as_ref().map(|tabs| Bottom {
             tablist: tabs.tablist,
+            direction: kernel
+                .node(tabs.tablist)
+                .unwrap()
+                .computed_row(exact_kernel::StyleId::Direction, |s| s.direction),
             tabs: (tabs.tabs.iter())
                 .filter_map(|id| {
                     let node = kernel.node(*id)?;
@@ -325,6 +341,7 @@ impl<D: DataSource> Presenter<D> {
                     Some(Tab {
                         node: *id,
                         label: row.title,
+                        direction: row.direction,
                         symbol: row.symbol,
                         selected: node.props.bool(PropId::AccessibilitySelected) == Some(true),
                         enabled: row.enabled && !self.host.authored_visibility(*id).1,

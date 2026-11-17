@@ -81,20 +81,6 @@ final class Viewport: ScrollView {
         #endif
     }
     required init?(coder: NSCoder) { nil }
-    /// A scroll indicator is an accessibility element ("Horizontal scroll
-    /// bar, 1 page"), which a page that does not scroll on that axis has
-    /// none of, as a hand-built view controller's root has none: a route
-    /// that holds a list showed three pairs where UIKit's list shows one.
-    /// Each axis it scrolls has its indicator while its content reaches past the port.
-    package override func layoutSubviews() {
-        super.layoutSubviews()
-        let inset = adjustedContentInset
-        let x = scrollsX && contentSize.width + inset.left + inset.right > bounds.width + 0.5
-        let y = scrollsY && contentSize.height + inset.top + inset.bottom > bounds.height + 0.5
-        if showsHorizontalScrollIndicator != x { showsHorizontalScrollIndicator = x }
-        if showsVerticalScrollIndicator != y { showsVerticalScrollIndicator = y }
-    }
-    package override var contentSize: CGSize { didSet { if contentSize != oldValue { setNeedsLayout() } } }
     // tvOS focuses exact2's own nodes (RemoteTVOS), so its search sees every view.
     #if !os(tvOS)
     override func focusItems(in rect: CGRect) -> [any UIFocusItem] { FocusSearch.items(self, in: rect) }

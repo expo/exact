@@ -51,10 +51,11 @@ impl<D: DataSource> Runner<D> {
     }
 
     pub(super) fn check_send_arguments(&self, m: usize, args: &[Value]) -> Result<(), RunnerError> {
-        check_arguments(self.plan.str(self.plan.mutations[m].name), args)
+        check_arguments(self.mutation_name(m), args)
     }
 
     pub(super) fn query(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
+        self.resources[i].render_urls.clear();
         let row = self.resource_row(i);
         let source = self.plan.str(row.source).to_string();
         let resource = self.plan.str(row.name).to_string();
@@ -234,6 +235,53 @@ mod tests {
             "/",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn journal_echo_starts_over_with_a_replacement_runner() {
+        let mut r = runner();
+        r.log("old runner");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            r.journal().collect::<Vec<_>>()
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("old runner's next line");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            ["t=0 old runner's next line"]
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+
+        r = runner();
+        let boot = r.journal().map(str::to_owned).collect::<Vec<_>>();
+        assert!(!boot.is_empty());
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), boot);
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("replacement's next line");
+        assert_eq!(
+            r.journal_echo().collect::<Vec<_>>(),
+            ["t=0 replacement's next line"]
+        );
+        assert_eq!(r.journal_echo().count(), 0);
+    }
+
+    #[test]
+    fn journal_echo_skips_lines_dropped_between_reads() {
+        let mut r = runner();
+        r.journal_echo().for_each(drop);
+        for n in 0..(JOURNAL_RING + 3) {
+            r.log(format!("line {n}"));
+        }
+        assert!(r.journal_start() > 0);
+        let retained = r.journal().map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(retained.len(), JOURNAL_RING);
+        assert_eq!(retained.first().unwrap(), "t=0 line 3");
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), retained);
+        assert_eq!(r.journal_echo().count(), 0);
+        r.log("after wrap");
+        assert_eq!(r.journal_echo().collect::<Vec<_>>(), ["t=0 after wrap"]);
+        assert_eq!(r.journal_echo().count(), 0);
     }
 
     /// A source whose storage is not ready yet: `answer` refuses with its

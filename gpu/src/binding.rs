@@ -65,7 +65,8 @@ impl Module {
     }
 
     /// The canvas's size in points ([`crate::Surface::size`]); hosts give it
-    /// before each bind once layout has sized the canvas.
+    /// before the first bind once layout has sized the canvas, and again when
+    /// that size changes.
     pub fn size(&mut self, id: u32, width: f32, height: f32) -> bool {
         if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
             self.error = format!("size: {width}x{height} points is not a canvas size");

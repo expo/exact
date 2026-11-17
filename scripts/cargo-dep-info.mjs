@@ -25,9 +25,11 @@ function watchedPackage(path) {
   return existsSync(resolve(root, 'package.json')) ? root : null;
 }
 
+/** Resolve output aliases once for a collection of compiler inputs. */
+export const outputRoots = (outputs = []) => [...new Set(outputs.filter(Boolean).map(path => outputPath(resolve(path))))];
+
 /** Explicit package watches keep installed sources; incidental tool trees and actual outputs stay excluded. */
-export function watchOutput(outputs = [], inputs = []) {
-  const roots = [...new Set(outputs.filter(Boolean).map(path => outputPath(resolve(path))))];
+export function watchOutput(outputs = [], inputs = [], roots = outputRoots(outputs)) {
   const packages = [...new Set(inputs.map(watchedPackage).filter(Boolean))]
     .map(path => ({path, real:outputPath(path)})).sort((a, b) => b.path.length - a.path.length);
   const toolDirectory = name => /^(target|node_modules|\.git|\.exact|\.gradle|\.build)$/.test(name);
@@ -89,7 +91,7 @@ export function directoryInputSnapshot(path, skip = () => false) {
 }
 
 /** The receipt and drive walk the same filtered entries and record links before stopping cycles. */
-export function* watchedTree(paths, {outputs = [], skip = () => false} = {}) {
+export function* watchedTree(paths, {outputs = [], skip = () => false, roots = outputRoots(outputs)} = {}) {
   const ancestors = new Set();
   function* visit(path, excluded, top = false) {
     let info, link;
@@ -108,7 +110,7 @@ export function* watchedTree(paths, {outputs = [], skip = () => false} = {}) {
     finally { ancestors.delete(real); }
   }
   for (const path of paths) {
-    const output = watchOutput(outputs, [path]);
+    const output = watchOutput(outputs, [path], roots);
     yield* visit(resolve(path), (path, directory) => output(path, directory) || skip(path, directory), true);
   }
 }
@@ -128,8 +130,9 @@ export function packageDirectories(paths, outputs = []) {
 /** Capture compiler inputs by bytes, directory membership and the targets written in links. */
 export function buildInputCollector({outputs, nameOf, hashes, replaced}) {
   const inputs = new Map(), absent = new Map(), directories = new Map(), links = new Map();
+  let roots;
   const add = (path, optional = false, declarer = null) => {
-    for (const node of watchedTree([path], {outputs})) {
+    for (const node of watchedTree([path], {outputs, roots: roots ??= outputRoots(outputs)})) {
       const {path:input, info, link, snapshot, error} = node;
       if (replaced.has(input)) continue;
       const name = nameOf(input, declarer);
@@ -169,7 +172,7 @@ export function swiftTargetInputs(description, packageRoot, product, add) {
 
 /** Source-owned binary inputs, relocated by root instead of the builder's
  * absolute paths. Generated products and registry caches stay with the bake. */
-export function binarySourceInputs({files, directories, absent, links, metadata}, roots, outputs) {
+export function binarySourceInputs({files, directories, absent, links, inventories = [], metadata}, roots, outputs) {
   const skip = watchOutput(outputs);
   const located = path => {
     if (skip(path)) return null;
@@ -186,6 +189,7 @@ export function binarySourceInputs({files, directories, absent, links, metadata}
     directories: capture([...directories.values()], dir => dir.path, dir => ({ names: dir.names })),
     absent: capture([...absent.values()], path => path, () => ({})),
     links: capture([...links.values()], link => link.path, link => ({ sha256: createHash('sha256').update(link.target).digest('hex') })),
+    inventories: capture(inventories, inventory => inventory.path, inventory => ({ kind: inventory.kind, identity: inventory.identity })),
   };
 }
 
@@ -469,22 +473,24 @@ export function unitDepInfo(message, workspace, metadata) {
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) throw new Error(`ambiguous rustc unit dep-info for ${message.target.name}`);
   }
-  // The pinned nightly puts units under build/<package>/<hash>/out,
-  // reporting only the copied product. Watch archives use that layout too.
+  // Cargo 1.100 puts units under build/<package>/<hash>/out,
+  // reporting only the copied product, including executables.
   const pkg = metadata?.packages?.find(p => p.id === message.package_id);
-  for (const file of message.filenames.filter(path => /\.(wasm|a|rlib)$/.test(path))) {
+  for (const file of message.filenames.filter(path => /\.(wasm|a|rlib)$/.test(path) || path === message.executable)) {
     if (!pkg) continue;
     const directory = resolve(dirname(intermediate(file)), 'build', pkg.name);
     if (!existsSync(directory)) continue;
-    const bytes = readFileSync(file), matches = [], extension = file.slice(file.lastIndexOf('.'));
+    const executable = file === message.executable;
+    const bytes = readFileSync(file), matches = [], extension = executable ? (file.endsWith('.exe') ? '.exe' : '') : file.slice(file.lastIndexOf('.'));
     for (const hash of readdirSync(directory)) {
       if (!/^[a-f0-9]+$/.test(hash)) continue;
       const out = resolve(directory, hash, 'out');
       if (!existsSync(out)) continue;
-      const stem = basename(file, extension);
-      for (const name of readdirSync(out).filter(name => name === basename(file) || name === `${stem}-${hash}${extension}`)) {
+      const stem = executable ? message.target.name.replaceAll('-', '_') : basename(file, extension);
+      for (const name of readdirSync(out).filter(name => name === `${stem}${extension}` || name === `${stem}-${hash}${extension}`)) {
         const product = resolve(out, name);
-        const candidate = resolve(out, name.replace(/\.[^.]+$/, '.d').replace(extension === '.wasm' ? /^$/ : /^lib/, ''));
+        const unit = extension ? name.slice(0, -extension.length) : name;
+        const candidate = resolve(out, (executable || extension === '.wasm' ? unit : unit.replace(/^lib/, '')) + '.d');
         if (!existsSync(candidate) || statSync(product).size !== bytes.length || !readFileSync(product).equals(bytes)) continue;
         if (names(readFileSync(candidate, 'utf8'), candidate)) matches.push(candidate);
       }

@@ -31,6 +31,8 @@ pub struct Render {
     /// EXACT: dispatch the path count and tiling stages over their buffers'
     /// capacity instead of indirectly (the kernels stop at the bump count).
     direct: bool,
+    /// EXACT: packed persistent clip coverage, separate from the image atlas.
+    clip_mask_bytes: u64,
 
     #[cfg(feature = "debug_layers")]
     captured_buffers: Option<CapturedBuffers>,
@@ -62,6 +64,7 @@ struct FineResources {
     out_image: ImageProxy,
     /// EXACT: what the fine stage starts each pixel from (an external image).
     backdrop: ImageProxy,
+    clip_masks: BufferProxy,
 }
 
 /// A collection of internal buffers that are used for debug visualization when the
@@ -104,7 +107,7 @@ pub(crate) fn render_full(
 /// `sizes`, downloading the bump counters after the coarse stages (so a
 /// caller can tell whether they overflowed and render again), the fine
 /// stage starting from a backdrop image, writing BGRA8 when `bgra`. The
-/// target, the backdrop and the bump buffer, as proxies.
+/// target, backdrop, bump buffer and persistent clip coverage, as proxies.
 #[cfg(feature = "wgpu")]
 pub(crate) fn render_exact(
     scene: &Scene,
@@ -115,11 +118,13 @@ pub(crate) fn render_exact(
     sizes: &crate::BumpSizes,
     bgra: bool,
     direct: bool,
-) -> (Recording, ImageProxy, ImageProxy, BufferProxy) {
+    clip_mask_bytes: u64,
+) -> (Recording, ImageProxy, ImageProxy, BufferProxy, BufferProxy) {
     let mut render = Render::new();
     render.sizes = Some(*sizes);
     render.bgra = bgra;
     render.direct = direct;
+    render.clip_mask_bytes = clip_mask_bytes;
     let mut recording = render.render_encoding_coarse(
         scene.encoding(),
         resolver,
@@ -131,8 +136,9 @@ pub(crate) fn render_exact(
     let out_image = render.out_image();
     let backdrop = render.fine_resources.as_ref().unwrap().backdrop;
     let bump = render.bump_buf();
+    let masks = render.fine_resources.as_ref().unwrap().clip_masks;
     render.record_fine(shaders, &mut recording);
-    (recording, out_image, backdrop, bump)
+    (recording, out_image, backdrop, bump, masks)
 }
 
 #[cfg(feature = "wgpu")]
@@ -170,6 +176,7 @@ impl Render {
             sizes: None,
             bgra: false,
             direct: false,
+            clip_mask_bytes: 4,
             #[cfg(feature = "debug_layers")]
             captured_buffers: None,
         }
@@ -588,6 +595,7 @@ impl Render {
             image_atlas: ResourceProxy::Image(image_atlas),
             out_image,
             backdrop,
+            clip_masks: BufferProxy::new(self.clip_mask_bytes.max(4), "vello.clip_masks"),
         });
         if robust {
             recording.download(*bump_buf.as_buf().unwrap());
@@ -644,6 +652,7 @@ impl Render {
                         fine.gradient_image,
                         fine.image_atlas,
                         ResourceProxy::Image(fine.backdrop),
+                        ResourceProxy::Buffer(fine.clip_masks),
                     ],
                 );
             }
@@ -690,6 +699,7 @@ impl Render {
         recording.free_resource(fine.gradient_image);
         recording.free_resource(fine.info_bin_data_buf);
         recording.free_resource(fine.blend_spill_buf);
+        recording.free_resource(ResourceProxy::Buffer(fine.clip_masks));
         // TODO: make mask buf persistent
         if let Some(mask_buf) = self.mask_buf.take() {
             recording.free_resource(mask_buf);

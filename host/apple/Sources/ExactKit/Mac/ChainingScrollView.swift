@@ -10,7 +10,22 @@ import AppKit
 package final class ChainingScrollView: NSScrollView {
     /// Empty document and clip hits take this view. The node owns their
     /// mouse contact, even if a handler removes the scroll view mid-press.
-    weak var pointerOwner: NodeView? { didSet { followScrollerStyle() } }
+    weak var pointerOwner: NodeView? {
+        didSet {
+            followScrollerStyle()
+            if pointerOwner?.kind == "list" { lineScroll = Self.tableLine }
+        }
+    }
+    /// A `list` scrolls a line as AppKit's table does (LLP 1115.000 D8.2):
+    /// `NSTableView` sets its scroll view's line to its row height (`tile()`),
+    /// and a SwiftUI `List` keeps an untouched table's, whatever its rows'
+    /// heights; 24 points on macOS 27. Any other scroller keeps
+    /// `NSScrollView`'s 10, as a SwiftUI `ScrollView` and an `NSTextView` do.
+    private static let tableLine: CGFloat = {
+        let scroll = NSScrollView()
+        scroll.documentView = NSTableView()
+        return scroll.verticalLineScroll
+    }()
     package override func accessibilityChildrenInNavigationOrder() -> [any NSAccessibilityElementProtocol]? { treeNavigationOrder }
     // A Markdown field's atoms follow it among the scrolled children (`NodeView.withAtoms`).
     package override func accessibilityChildren() -> [Any]? {
@@ -164,6 +179,8 @@ package final class ChainingScrollView: NSScrollView {
     static weak var driverOwner: ChainingScrollView?
     /// Which axes scroll (the node's effective `overflow_x`/`overflow_y`).
     var collectionWillScroll: (() -> Void)?
+    /// A zoomable scroller's zoom (`ScrollZoomMac.swift`).
+    var zoom: ScrollZoomMac?
     var scrollsX = true
     var scrollsY = true
     /// `overscroll-behavior` per axis: what happens to a gesture this view
@@ -355,8 +372,8 @@ package final class ChainingScrollView: NSScrollView {
         }
         (superview as? NodeView)?.presenter?.personScrolls += 1 // a wheel's notch is no live scroll (Fragment.swift)
         // Precise deltas (a trackpad) are in points; a wheel's are in lines,
-        // of the height AppKit scrolls a line by (10 points unless set; it
-        // was 40 here, a browser's tick).
+        // of the height AppKit scrolls a line by (10 points, or a list's
+        // `tableLine`; it was 40 here, a browser's tick).
         let precise = event.hasPreciseScrollingDeltas
         var dx = precise ? event.scrollingDeltaX : event.deltaX * horizontalLineScroll
         var dy = precise ? event.scrollingDeltaY : event.deltaY * verticalLineScroll
@@ -414,11 +431,13 @@ package final class ChainingScrollView: NSScrollView {
 }
 
 extension NodeView {
-    /// Kernel frames include the gutter; the document starts at the clip.
+    /// Kernel frames include the gutter; the document starts at the clip. A
+    /// zoomable scroller's child is its document's box (`ScrollZoomMac.swift`).
     func frameInScrollDocument(_ frame: NSRect) -> NSRect {
         guard let clip = superview?.superview as? NSClipView,
               let scroll = clip.superview as? ChainingScrollView,
               scroll.documentView === superview else { return frame }
+        if scroll.zoom?.child === self { return NSRect(origin: .zero, size: frame.size) }
         let origin = scroll.kernelDocumentOrigin
         return frame.offsetBy(dx: -origin.x, dy: -origin.y)
     }

@@ -5,9 +5,15 @@
 // boolean attributes). Region anchors (comments) are not written: adoption
 // inserts its own.
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source', 'area', 'col', 'embed', 'wbr']);
-// An attribute value's `<` and `>` are references too, as HTML's serializer writes them: the render server's hero
-// image scan ends a tag at its first `>` (render.mjs `heroImage`).
-const esc = (s, attr) => String(s).replace(attr ? /[&"<>\r]/g : /[&<>\r]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' })[c]);
+// Text, or a quoted attribute value, as document.rs `escape` writes it: an attribute value's `<` and `>` are references
+// too, as in HTML's serializer. A NUL has no spelling the parser keeps, so a render with one is refused.
+export const esc = (s, quoted) => String(s).replace(quoted ? /[&"<>\r\0]/g : /[&<>\r\0]/g, c => {
+  if (c === '\0') throw new Error('a NUL character, which the HTML parser does not keep');
+  return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' }[c];
+});
+// An attribute as document.rs `attribute` writes it: nothing for `null`, and an empty value bare (the parser reads `name`
+// as `name=""`).
+const attr = (name, value) => (value === null ? '' : value === '' ? ` ${name}` : ` ${name}="${esc(value, true)}"`);
 
 let Trees = 0;
 class Node {
@@ -125,6 +131,8 @@ class Element extends Node {
   // Read only (symbols.js `tinted`): the class attribute's names.
   get classList() { const names = (this.getAttribute('class') ?? '').split(/\s+/).filter(Boolean); return Object.assign(names, { contains: c => names.includes(c) }); }
   set href(v) { this.setAttribute('href', v); }
+  // Reflected as a browser reflects it, so an icon symbols.js draws from its file is written with the file (element.rs).
+  set src(v) { this.setAttribute('src', v); }
   // Reflected as a browser reflects it, so a link renderMarkup sends out of the app is written with it.
   get target() { return this.getAttribute('target') ?? ''; }
   set target(v) { this.setAttribute('target', v); }
@@ -145,8 +153,8 @@ class Element extends Node {
     if (this.localName === 'template') return '';
     let out = `<${this.localName}`;
     const style = this.style.cssText;
-    for (const [k, v] of this.attrs) out += v === '' ? ` ${k}` : ` ${k}="${esc(v, true)}"`;
-    if (style) out += ` style="${esc(style, true)}"`;
+    for (const [k, v] of this.attrs) out += attr(k, v);
+    if (style) out += attr('style', style);
     out += '>';
     if (VOID.has(this.localName)) return out;
     return out + this.childNodes.map(c => c.html(font)).join('') + `</${this.localName}>`;
@@ -162,13 +170,45 @@ const fontPx = (value, inherited) => {
   return Number(m[1]) * (unit === 'em' ? inherited : unit === 'rem' ? 16 : 1);
 };
 
+// The hero `<img>`'s priority, which its preload carries too (document_before.rs `HeroImage::PRIORITY`).
+const HERO_PRIORITY = 'high';
+// The `visibility` values an element can set; any other (`unset`, `inherit`) takes its parent's.
+const VISIBILITIES = new Set(['visible', 'hidden', 'collapse']);
+
 /** A document for one render: `#exact-root` in a body, a head for metas. */
 export function createDocument(shell = '') {
-  const fonts = new Map();
+  // The shell's classes that set a font size, `display: none`, and a visibility (a static style is a class: emit.rs).
+  const fonts = new Map(), displays = new Map(), visibilities = new Map();
   for (const rule of shell.matchAll(/\.([\w-]+)\{([^}]+)\}/g)) {
     const size = /(?:^|;)font-size:([^;]+)(?:;|$)/.exec(rule[2]);
     if (size) fonts.set(rule[1], size[1]);
+    if (/(?:^|;)display:none(?:;|$)/.test(rule[2])) displays.set(rule[1], 'none');
+    const visibility = /(?:^|;)visibility:(visible|hidden|collapse)(?:;|$)/.exec(rule[2]);
+    if (visibility) visibilities.set(rule[1], visibility[1]);
   }
+  // `el`'s own value for `property`: its inline value, else its class's in `byClass` (a rendered element's one class
+  // is its static style's: tree.js).
+  const own = (el, property, byClass) => el.style.getPropertyValue(property) || byClass.get(el.getAttribute('class')) || '';
+  /** The page's hero in `el`'s subtree: its first shown image with a source, as document_before.rs `Before::scan` finds
+   * it. `null` when that image is lazy, which a row's is (LLP 1048.007 D5): the page opens with a list and has no
+   * hero; `undefined` when the subtree has no such image. A head (`template`), a popover or dialog (closed until a
+   * script opens it), a covered subtree (a route the stack covers is `inert`) and one with `display: none` hold none.
+   * `inherited` is the parent's `visibility`, which CSS inherits: a descendant may set it back to `visible`, and
+   * `unset` or `inherit` (a bound blank writes `unset`: tree.js) takes the parent's, as the kernel clears the row for
+   * them. A symbol (`data-symbol-source`) is an icon, no hero. */
+  const heroIn = (el, inherited = 'visible') => {
+    if (el.localName === 'template' || el.localName === 'dialog' || el.hasAttribute('popover') || el.hasAttribute('inert')
+      || own(el, 'display', displays) === 'none') return undefined;
+    const declared = own(el, 'visibility', visibilities);
+    const visibility = VISIBILITIES.has(declared) ? declared : inherited;
+    if (el.localName === 'img') {
+      const src = el.getAttribute('src') ?? '';
+      if (visibility !== 'visible' || !src || src.startsWith('data:') || el.hasAttribute('data-symbol-source')) return undefined;
+      return el.getAttribute('loading') === 'lazy' ? null : el;
+    }
+    for (const child of el.childNodes) if (child.nodeType === 1) { const hero = heroIn(child, visibility); if (hero !== undefined) return hero; }
+    return undefined;
+  };
   const doc = new Node(9);
   const root = new Element('div'); root.setAttribute('id', 'exact-root');
   const head = new Element('head'); const body = new Element('body');
@@ -181,6 +221,17 @@ export function createDocument(shell = '') {
     querySelector: sel => (/meta\[name="description"\]/.test(sel) ? head.childNodes.find(m => m.getAttribute?.('name') === 'description') ?? null : null),
     querySelectorAll: () => [],
     root, rootHTML: () => root.childNodes.map(c => c.html()).join(''),
+    /** Marks the hero `<img>` (`heroIn`) at high priority, first among its attributes as document.rs writes it, and
+     * returns its preload, which makes the `<img>`'s request: its URL, `crossorigin` and priority, as
+     * `HeroImage::preload` writes them. A page's likely largest paint is fetched early, as web.dev's LCP guidance has
+     * a hero image. '' when the page has none. Call it before `rootHTML`, which writes the mark. */
+    heroPreload: () => {
+      const hero = heroIn(root);
+      if (!hero) return '';
+      hero.attrs = new Map([['fetchpriority', HERO_PRIORITY], ...hero.attrs]);
+      return `<link rel="preload" as="image"${attr('href', hero.getAttribute('src'))}${attr('crossorigin', hero.getAttribute('crossorigin'))}`
+        + ` fetchpriority="${HERO_PRIORITY}">`;
+    },
   });
   return doc;
 }

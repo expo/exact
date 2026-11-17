@@ -24,7 +24,7 @@ const jsBuild = (plan, out) => {
   // (serve.mjs `buildTreeFile`), and the miss's, where the build wrote one.
   for (const name of ['index.html', 'shell.html', '404.html'].filter((name) => existsSync(`${out}/${name}`))) {
     const page = readFileSync(`${out}/${name}`, 'utf8');
-    writeFileSync(`${out}/${name}`, page.replace('<script type="module" src="./app.js"></script>', `<script>(${jsFixture})(${plan === 'fragment.plan'})</script><script type="module" src="./app.js"></script>`));
+    writeFileSync(`${out}/${name}`, page.replace(/<script type="module" data-entry src="[^"]*"><\/script>/, entry => `<script>(${jsFixture})(${plan === 'fragment.plan'})</script>${entry}`));
   }
   writeFileSync(out + '/navigation.js', navigationModule); // the host-seam cases import it
   // A bare plan has no bake to copy `manifest.json` from; the link-file case needs a file there.

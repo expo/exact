@@ -8,6 +8,10 @@
 #![cfg(unix)]
 use std::path::Path;
 use std::time::Duration;
+#[path = "it/scratch.rs"]
+#[allow(dead_code)]
+mod scratch;
+use scratch::Scratch;
 
 /// A component's states, actions and buttons, one of each per `j`.
 const EACH: usize = 16;
@@ -75,8 +79,7 @@ fn timed(path: &Path) -> (Duration, Vec<u8>) {
 #[test]
 fn four_times_the_uses_compile_in_about_four_times_as_long() {
     let uses = 250;
-    let dir = std::env::temp_dir().join(format!("contract-growth-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-growth-{}", std::process::id()));
     let (small_app, large_app) = (dir.join("small.contract"), dir.join("large.contract"));
     std::fs::write(&small_app, app(uses)).unwrap();
     std::fs::write(&large_app, app(uses * 4)).unwrap();
@@ -159,8 +162,7 @@ fn resource_clock_advice_grows_with_derives() {
 
 #[test]
 fn imported_names_grow_with_the_scope() {
-    let dir = std::env::temp_dir().join(format!("contract-import-growth-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-import-growth-{}", std::process::id()));
     let mut paths = Vec::new();
     for count in [500, 2000] {
         let shapes = (0..count)
@@ -196,8 +198,7 @@ fn scope_growth(dir: &Path, paths: &[std::path::PathBuf]) {
 
 #[test]
 fn file_scopes_share_the_programs_names() {
-    let dir = std::env::temp_dir().join(format!("contract-files-growth-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-files-growth-{}", std::process::id()));
     let mut paths = Vec::new();
     for count in [10, 40] {
         let mut source = String::new();
@@ -220,8 +221,7 @@ fn file_scopes_share_the_programs_names() {
 
 #[test]
 fn action_injects_grow_with_the_channels_they_reach() {
-    let dir = std::env::temp_dir().join(format!("contract-inject-growth-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("contract-inject-growth-{}", std::process::id()));
     let mut paths = Vec::new();
     for count in [200, 800] {
         let mut source = String::from("component Root\n  state n = 0\n");

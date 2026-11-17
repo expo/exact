@@ -27,14 +27,10 @@ fn active_background(node: &NodeRef<'_>, dark: bool, down: bool) -> Option<[u8; 
 
 /// The neutral look's button type (LLP 1115.000 D17), as the page's sheet
 /// sets it: the size the button inherits, or the one its `controlSize`
-/// names in rem (LLP 1069.011.001 D8), at weight 500 on a line 1.25 of it.
+/// names in rem (LLP 1069.011.001 D8), at weight 500 on its font's own line.
 /// A size or weight the author wrote is theirs.
 fn neutral_typography(style: &StyleProps, size: Option<f32>) -> StyleProps {
     let mut out = style.clone();
-    out.font_family = 0;
-    out.font_style = exact_kernel::FontStyle::Normal;
-    out.line_height = exact_kernel::LineHeight::Number(look::number(metric::CONTROL_LINE_HEIGHT));
-    out.letter_spacing = 0.0;
     if let Some(size) = size.filter(|_| !style.mask.has(StyleId::FontSize)) {
         out.font_size = size;
     }
@@ -1286,7 +1282,7 @@ mod tests {
     }
     #[test]
     fn synchronous_height_for_width_wraps_clamps_and_counts_padding_once() {
-        let engine = TextEngine::shared();
+        let engine = crate::text::fixtures::shared();
         let mut engine = engine.borrow_mut();
         let mut r = request();
         let natural = measure(&mut engine, &r);
@@ -1311,7 +1307,7 @@ mod tests {
     }
     #[test]
     fn semantic_subtitle_symbol_placement_sizes_and_authored_axes_share_the_measure() {
-        let engine = TextEngine::shared();
+        let engine = crate::text::fixtures::shared();
         let mut engine = engine.borrow_mut();
         let mut r = request();
         r.face.title = Some("Lock".into());
@@ -1336,3 +1332,7 @@ mod tests {
         assert!(measure(&mut engine, &r).height > large.height);
     }
 }
+
+#[cfg(test)]
+#[path = "button_leading_tests.rs"]
+mod leading_tests;

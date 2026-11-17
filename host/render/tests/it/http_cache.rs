@@ -24,8 +24,7 @@ impl DataSource for Data {
     }
 }
 
-#[test]
-fn request_pages_share_only_eligible_http_answers_within_their_server() {
+fn api() -> Api {
     super::warm_transport();
     let api = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = api.local_addr().unwrap();
@@ -59,12 +58,18 @@ fn request_pages_share_only_eligible_http_answers_within_their_server() {
             }
         }
     });
-    let api = Api {
+    Api {
         addr,
         stopped,
         counts,
         thread: Some(thread),
-    };
+    }
+}
+
+#[test]
+fn request_pages_share_only_eligible_http_answers_within_their_server() {
+    let api = api();
+    let addr = api.addr;
     let plan = contract::compile(&format!(
         r#"
 routes nav
@@ -87,7 +92,7 @@ component App
     for server_index in 0..2 {
         let server = Server::bind(
             Serve {
-                dist: dir.clone(),
+                dist: dir.to_path_buf(),
                 port: 0,
                 name: "Cache".into(),
                 origin: None,
@@ -118,7 +123,6 @@ component App
         assert_eq!(api.counts[0].load(Ordering::SeqCst), server_index + 1);
         assert_eq!(api.counts[1].load(Ordering::SeqCst), (server_index + 1) * 3);
     }
-    std::fs::remove_dir_all(dir).unwrap();
 }
 
 struct Api {
@@ -136,4 +140,46 @@ impl Drop for Api {
             result.unwrap();
         }
     }
+}
+
+#[test]
+fn a_render_prefetch_and_its_equal_read_have_separate_exchanges() {
+    use exact_runner::{Outcome, Request, RequestClass, RequestOut};
+    let api = api();
+    let executor = exact_render::Executor::start(&format!("net.fetch http://{}", api.addr));
+    for ticket in 1..=2 {
+        let mut request = Request::get(&format!("http://{}/private", api.addr));
+        request.prefetch = ticket == 1;
+        executor
+            .run(
+                RequestOut {
+                    completion: None,
+                    ticket,
+                    target: "render-prefetch".into(),
+                    forced: false,
+                    request,
+                    class: RequestClass::Read,
+                },
+                None,
+            )
+            .unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        let (got, outcome, timing) = loop {
+            executor.begin_pump();
+            if let Some(done) = executor.drain().pop() {
+                break done;
+            }
+            assert!(
+                std::time::Instant::now() < until,
+                "render fetch did not complete"
+            );
+            executor.wait(until);
+        };
+        assert_eq!(got, ticket);
+        assert!(!timing.unwrap().cached);
+        assert!(
+            matches!(outcome, Outcome::Response(r) if r.body == format!("\"answer {ticket}\"").as_bytes())
+        );
+    }
+    assert_eq!(api.counts[1].load(Ordering::SeqCst), 2);
 }

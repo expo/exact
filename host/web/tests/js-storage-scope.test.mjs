@@ -7,8 +7,8 @@
 // state (persist.js) and its durable store (rt.js `Store`); a release ships
 // them as written, keyed by the id alone. rt.js runs beside stand-ins for the
 // modules it imports, as js-link-press.test.mjs runs it.
-import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { appDigest, developmentStore } from '../../../scripts/agent-launch.mjs';
@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 const webJs = fileURLToPath(new URL('../../web-js/', import.meta.url)), web = fileURLToPath(new URL('../', import.meta.url));
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
+afterAll(() => rmSync(root, { recursive: true, force: true }));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
 function runtime(name, appDir) {
   const dir = resolve(root, name), ship = code => appDir ? developmentStore(code, appDir) : code;

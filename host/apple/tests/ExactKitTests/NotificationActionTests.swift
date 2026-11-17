@@ -47,7 +47,7 @@ private final class ActionResponse: UNTextInputNotificationResponse {
 /// out.
 final class NotificationActionTests: XCTestCase {
     private var sessions: [ExactSession] = []
-    private var kept: Data?
+    private var suite = ""
     private var restorePresenter: (() -> Void)?
 
     private let declared = """
@@ -74,7 +74,10 @@ final class NotificationActionTests: XCTestCase {
         presenter.registeredCategories = [:]
         // An XCTest process has no notification centre (`current()` traps): the categories are held here.
         NotificationPresenter.shared.categories = (read: { [unowned self] in $0(registered) }, write: { [unowned self] in registered = $0 })
-        kept = UserDefaults.standard.data(forKey: DeclaredCategories.key)
+        // Every test process shares the standard domain, where any session's
+        // data activation reconciles the ownership kept there.
+        suite = "exact.tests.notification-actions.\(UUID().uuidString)"
+        DeclaredCategories.defaults = UserDefaults(suiteName: suite)!
         DeclaredCategories.keep(["approve,note": DeclaredCategories.lists(declared)[0]])
     }
 
@@ -85,7 +88,8 @@ final class NotificationActionTests: XCTestCase {
         NotificationPresenter.shared.activate = nil
         NotificationPresenter.shared.boot = nil
         restorePresenter?()
-        UserDefaults.standard.set(kept, forKey: DeclaredCategories.key)
+        DeclaredCategories.defaults.removePersistentDomain(forName: suite)
+        DeclaredCategories.defaults = .standard
         super.tearDown()
     }
 

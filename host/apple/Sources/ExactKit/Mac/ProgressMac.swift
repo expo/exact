@@ -117,11 +117,11 @@ extension ControlHost {
     func progressObservation(_ node: NodeView) -> [String: Any]? {
         if let bar = bars[node.id] {
             return ["view": "NSProgressIndicator", "style": "bar", "value": bar.doubleValue, "max": bar.maxValue,
-                    "controlSize": bar.controlSize == .regular ? "regular" : "small", "size": [Agent.r2(bar.frame.width), Agent.r2(bar.frame.height)]]
+                    "controlSize": bar.controlSize == .regular ? "regular" : "small", "size": [InspectionValue.r2(bar.frame.width), InspectionValue.r2(bar.frame.height)]]
         }
         guard let s = spinners[node.id] else { return nil }
         return ["view": "NSProgressIndicator", "style": s.controlSize == .regular ? "regular" : "small", "animating": animating.contains(node.id),
-                "size": [Agent.r2(s.frame.width), Agent.r2(s.frame.height)]]
+                "size": [InspectionValue.r2(s.frame.width), InspectionValue.r2(s.frame.height)]]
     }
 }
 #endif

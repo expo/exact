@@ -156,6 +156,9 @@ impl<D: DataSource> Presenter<D> {
     pub fn reader_replaced(&mut self, backend: Box<dyn Backend>) {
         self.brush.replace_backend(backend);
         self.brush.forget_rows();
+        // Nor a source for a flight under way, nor any named definition.
+        self.host.reader_lost_flights();
+        self.brush.shared.recorded.clear();
         // Nor of what it was told of the scrollers: the new one asks again.
         self.reader = Default::default();
         // Nor of Back, the keyboard, the wake lock and the orientation lock,

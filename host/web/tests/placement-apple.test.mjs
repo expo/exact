@@ -1,9 +1,17 @@
 import {test, expect} from 'bun:test';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {need, notApplicable} from '../../../scripts/coverage.mjs';
 
-const swift=process.platform==='darwin' ? spawnSync('xcrun',['swift','--version'],{encoding:'utf8',env:process.env}) : null;
+// `swift` leaves a `TemporaryDirectory.*` in TMPDIR each time it hands a run to the frontend: each run gets a TMPDIR of its own, removed after.
+const xcrunSwift=(args,options={})=>{
+  const tmp=mkdtempSync(resolve(tmpdir(),'exact-swift-'));
+  try { return spawnSync('xcrun',['swift',...args],{encoding:'utf8',...options,env:{...(options.env??process.env),TMPDIR:tmp}}); }
+  finally { rmSync(tmp,{recursive:true,force:true}); }
+};
+const swift=process.platform==='darwin' ? xcrunSwift(['--version']) : null;
 const check=process.platform!=='darwin' ? notApplicable('the extracted Swift placement harness requires macOS and xcrun')
   : need('swift', swift.status===0 ? null : `xcrun swift does not work${process.env.DEVELOPER_DIR ? ` with DEVELOPER_DIR=${process.env.DEVELOPER_DIR}` : ''}: ${(swift.stderr||swift.error?.message||`exit ${swift.status}`).trim()}`);
 
@@ -39,7 +47,7 @@ ${branch}
 precondition(capture()); precondition(m.cleared == [1,2]); precondition(captured == 1)
 `;
   const env={...process.env};delete env.SDKROOT;
-  const r=spawnSync('xcrun',['swift','-'],{input:swift,encoding:'utf8',env,timeout:60000});
+  const r=xcrunSwift(['-'],{input:swift,env,timeout:60000});
   expect(r.status, r.stderr).toBe(0);
 },65000);
 
@@ -57,6 +65,6 @@ precondition(box(child).width==100);parent.placementHidden=true
 precondition(box(child)==Rect.zero)
 `;
   const env={...process.env};delete env.SDKROOT;
-  const r=spawnSync('xcrun',['swift','-'],{input:swift,encoding:'utf8',env,timeout:60000});
+  const r=xcrunSwift(['-'],{input:swift,env,timeout:60000});
   expect(r.status,r.stderr).toBe(0);
 },65000);

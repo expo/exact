@@ -15,5 +15,6 @@ test = false
 bench = false
 
 [dependencies]
+contract-checking = { path = "../checking" }
 contract-syntax = { path = "../syntax" }
 contract-types = { path = "../types" }

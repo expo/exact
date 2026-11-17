@@ -2,10 +2,12 @@
 // `androidIcons`): which resources are written, their pixels, the adaptive icon's XML and colour, and the refusals.
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { androidIcons } from './agent-android.mjs';
+import { apkChanges } from './agent-stdio.mjs';
 import { readPng } from './app-icons.mjs';
 import { encodePng } from './png.mjs';
 
@@ -18,6 +20,8 @@ const png = (dir, src, width, height, paint) => {
   writeFileSync(resolve(dir, src), encodePng({ width, height, data: samples }));
 };
 const files = (res) => existsSync(res) ? readdirSync(res, { recursive: true }).filter((path) => statSync(resolve(res, path)).isFile()).sort() : [];
+/** The build record's entry for an icon the APK packaged: the file and its digest. */
+const picked = (dir, src) => ({ file: resolve(dir, src), sha256: createHash('sha256').update(readFileSync(resolve(dir, src))).digest('hex') });
 const pixel = (image, x, y) => [...image.data.subarray((y * image.width + x) * 4, (y * image.width + x) * 4 + 4)];
 
 test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 dp one, with the glyph as its themed layer', () => inDir((dir) => {
@@ -29,7 +33,8 @@ test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 
   mkdirSync(resolve(res, 'drawable'), { recursive: true });
   writeFileSync(resolve(res, 'drawable/stale.png'), '');
   const icons = [{ src: 'assets/maskable.png', purpose: 'maskable' }, { src: 'assets/glyph.png', purpose: 'monochrome' }, { src: 'assets/banner.png' }];
-  assert.deepEqual(androidIcons({ icons }, dir, res), { icon: '@mipmap/exact_icon', banner: '@drawable/exact_banner' });
+  assert.deepEqual(androidIcons({ icons }, dir, res), { icon: '@mipmap/exact_icon', banner: '@drawable/exact_banner',
+    files: ['assets/maskable.png', 'assets/glyph.png', 'assets/banner.png'].map((src) => picked(dir, src)) });
   assert.deepEqual(files(res), ['drawable-nodpi/exact_icon_foreground.png', 'drawable-nodpi/exact_icon_monochrome.png',
     'drawable-xxxhdpi/exact_banner.png', 'mipmap-anydpi/exact_icon.xml', 'values/exact_icon.xml']);
   assert.equal(readFileSync(resolve(res, 'mipmap-anydpi/exact_icon.xml'), 'utf8'), [
@@ -63,8 +68,8 @@ test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 
 
 test('an app with no icons builds into a directory that does not exist yet', () => inDir((dir) => {
   const res = resolve(dir, 'build/app/icons/res');
-  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null });
-  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null });
+  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null, files: [] });
+  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null, files: [] });
   assert.deepEqual(files(res), []);
 }));
 
@@ -75,13 +80,13 @@ test('without a maskable a square any PNG is the legacy icon at 192 px, and with
   const res = resolve(dir, 'res');
   // A glyph without an adaptive icon has no layer to go in, and a maskable too small for it leaves the icon to `any`.
   for (const icons of [[{ src: 'assets/icon.png' }, { src: 'assets/glyph.png', purpose: 'monochrome' }], [{ src: 'assets/small-mask.png', purpose: 'maskable' }, { src: 'assets/icon.png' }]]) {
-    assert.deepEqual(androidIcons({ icons }, dir, res), { icon: '@mipmap/exact_icon', banner: null });
+    assert.deepEqual(androidIcons({ icons }, dir, res), { icon: '@mipmap/exact_icon', banner: null, files: [picked(dir, 'assets/icon.png')] });
     assert.deepEqual(files(res), ['mipmap-xxxhdpi/exact_icon.png']);
     const legacy = readPng(resolve(res, 'mipmap-xxxhdpi/exact_icon.png'));
     assert.deepEqual([legacy.width, legacy.height, pixel(legacy, 96, 96)], [192, 192, [10, 20, 30, 255]]);
   }
   // Dark icons are not Android's: color_scheme_dark.icons is never read.
-  assert.deepEqual(androidIcons({ color_scheme_dark: { icons: [{ src: 'assets/icon.png' }] } }, dir, res), { icon: null, banner: null });
+  assert.deepEqual(androidIcons({ color_scheme_dark: { icons: [{ src: 'assets/icon.png' }] } }, dir, res), { icon: null, banner: null, files: [] });
   assert.deepEqual(files(res), []);
 }));
 
@@ -117,9 +122,26 @@ test('an unchanged icon is not made again, and a new background colour makes it 
   androidIcons(manifest, dir, res);
   const first = made();
   Bun.sleepSync(20);
-  assert.deepEqual(androidIcons(manifest, dir, res), { icon: '@mipmap/exact_icon', banner: null });
+  assert.deepEqual(androidIcons(manifest, dir, res), { icon: '@mipmap/exact_icon', banner: null, files: [picked(dir, 'assets/maskable.png')] });
   assert.equal(made(), first);
   androidIcons({ ...manifest, background_color: '#000' }, dir, res);
   assert.notEqual(made(), first);
   assert.match(readFileSync(resolve(res, 'values/exact_icon.xml'), 'utf8'), /#FF000000/);
+}));
+
+test("an APK is stale when an icon it packaged changed or is gone, and not when one was only touched", () => inDir((dir) => {
+  png(dir, 'assets/icon.png', 192, 192, () => [10, 20, 30, 255]);
+  const { files: sources } = androidIcons({ icons: [{ src: 'assets/icon.png' }] }, dir, resolve(dir, 'res'));
+  const apk = resolve(dir, 'build/app-release.apk'), icon = resolve(dir, 'assets/icon.png');
+  mkdirSync(resolve(dir, 'build'));
+  writeFileSync(resolve(dir, 'build/exact-build.json'), JSON.stringify({ started: new Date().toISOString(), abis: ['arm64-v8a'], libraries: [resolve(dir, 'libapp.so')], workspace: dir, sources }));
+  const app = { dir };
+  assert.deepEqual(apkChanges(app, apk), []);
+  const later = new Date(Date.now() + 60_000);
+  utimesSync(icon, later, later);
+  assert.deepEqual(apkChanges(app, apk), [], 'the same bytes at a later time');
+  png(dir, 'assets/icon.png', 192, 192, () => [30, 20, 10, 255]);
+  assert.deepEqual(apkChanges(app, apk), [icon]);
+  rmSync(icon);
+  assert.deepEqual(apkChanges(app, apk), [icon]);
 }));

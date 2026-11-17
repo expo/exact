@@ -26,7 +26,11 @@ fn compare(name: &str, draw: impl Fn(&mut dyn Backend)) {
             "{name} scale={scale}: {mean}, {over}%"
         );
         assert!(
-            a.data().chunks_exact(4).any(|p| p != [37, 57, 79, 255]),
+            a.data()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| *p != [37, 57, 79, 255]),
             "fixture must draw"
         );
     }

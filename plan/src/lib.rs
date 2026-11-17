@@ -260,7 +260,9 @@ pub enum PlanError {
     FrameTimer {
         timer: u32,
     },
-    /// A mutation's result slot is row-owned, but mutation results are global.
+    /// A mutation's result slot is owned otherwise than the mutation: a
+    /// root mutation's is a root slot, a child's its arm's (LLP
+    /// 1035.005.004 D6).
     MutationSlotOwned {
         mutation: u32,
         slot: u32,
@@ -841,7 +843,7 @@ impl Plan {
     pub fn validate_mutation_slot(&self, mutation: MutationsId) -> Result<(), PlanError> {
         let row = self.mutation(mutation);
         let slot = self.slot(row.slot);
-        if slot.owner.is_some() {
+        if slot.owner != row.owner {
             return Err(PlanError::MutationSlotOwned {
                 mutation: mutation.0,
                 slot: row.slot.0,

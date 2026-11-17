@@ -48,10 +48,17 @@ const HOST_ROWS: [&str; 6] = [
 
 /// The rows `:active` takes, and the press paint's row each lowers to: the
 /// press's colour reaches the subtree, so `color` is one (LLP 1061 D7).
-const ACTIVE_ROWS: [(&str, &[exact_kernel::StyleId]); 4] = [
+const ACTIVE_ROWS: [(&str, &[exact_kernel::StyleId]); 5] = [
     (
         "background-color",
         &[exact_kernel::StyleId::PressBackgroundColor],
+    ),
+    (
+        "translate",
+        &[
+            exact_kernel::StyleId::PressTranslate,
+            exact_kernel::StyleId::PressTranslatePercent,
+        ],
     ),
     ("color", &[exact_kernel::StyleId::PressColor]),
     ("opacity", &[exact_kernel::StyleId::PressOpacityTo]),
@@ -156,7 +163,7 @@ pub(crate) fn refusal(state: &str, row: &Attr, values: bool) -> Option<LowerErro
         return Some(LowerError {
             id: "lower-state-row",
             message: format!(
-                "`{}` in `:{state}`: a state part takes paint rows only, so a state never lays out{why}; `:{state}` takes {}",
+                "`{}` in `:{state}`: a state part takes supported paint rows only, so a state never lays out{why}; `:{state}` takes {}",
                 row.name,
                 rows.iter().map(|r| format!("`{r}`")).collect::<Vec<_>>().join(", ")
             ),

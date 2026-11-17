@@ -263,6 +263,7 @@ pub(crate) fn measure(
     let metrics = TextMetrics {
         width: w / scale,
         height: h / scale,
+        pending: false,
         first_baseline: Some(baseline / scale),
     };
     let sane = |v: f32| v.is_finite() && v >= 0.0;

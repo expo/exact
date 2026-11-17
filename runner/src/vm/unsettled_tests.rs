@@ -108,3 +108,95 @@ fn row_call_work_and_depth_are_bounded_even_without_list_steps() {
         );
     }
 }
+
+fn accounted_row_sum(len: usize, caller_step: bool) -> (Result<Outcome, Trap>, Accounting) {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let ty = b.primitive(TypeKind::Number);
+    let unit = b.constant(&Value::Unit);
+    let (region, arms) = b.region(RegionKind::Each, None, None, 0, unit, unit, 1);
+    let mut body = Asm::default();
+    body.load_item(0).call(exact_plan::Stdlib::Sum);
+    let code = b.code(body);
+    let d = b.derive("sum", ty, code);
+    b.set_derive_unsettled(d, Some(arms[0]));
+    let plan = b.finish().unwrap();
+    let strings = intern(&plan);
+    let values = Value::list(vec![Value::Number(1.0); len]);
+    let frames = [Frame {
+        region: Some(region.0),
+        item: Some(values),
+        ..Frame::default()
+    }];
+    let env = Env {
+        plan: &plan,
+        strings: &strings,
+        router: None,
+        lists: None,
+        format: None,
+        geometry: None,
+        slots: &[],
+        derives: &[],
+        resources: (&[]).into(),
+        params: &[],
+        frames: &frames,
+        now_ms: 0.0,
+        pending_resources: (&[]).into(),
+        current_resources: (&[]).into(),
+        failed_resources: (&[]).into(),
+        failed_why: (&[]).into(),
+        pending_mutations: &[],
+        failed_mutations: &[],
+        store_dependent_derives: &[],
+        store_dependent_resources: (&[]).into(),
+    };
+    let mut caller = Asm::default();
+    caller.load_derive(d);
+    if caller_step {
+        let end = caller.label();
+        caller
+            .simple(Opcode::Pop)
+            .number(1.0)
+            .list(1)
+            .each_item(Opcode::Map, end)
+            .load_local(0)
+            .place(end);
+    }
+    let caller = caller.finish();
+    eval_accounted(&caller, &env, &[])
+}
+
+#[test]
+fn row_call_roster_steps_transfer_on_return_and_trap() {
+    let (outcome, accounting) = accounted_row_sum(65_535, true);
+    assert!(outcome.is_ok());
+    assert_eq!(
+        accounting,
+        Accounting {
+            calls: 1,
+            list_steps: 65_536,
+            call_depth: 0,
+        }
+    );
+
+    let (outcome, accounting) = accounted_row_sum(65_536, true);
+    assert!(matches!(outcome, Err(Trap::IterationLimit { .. })));
+    assert_eq!(
+        accounting,
+        Accounting {
+            calls: 1,
+            list_steps: 65_537,
+            call_depth: 0,
+        }
+    );
+
+    let (outcome, accounting) = accounted_row_sum(65_537, false);
+    assert!(matches!(outcome, Err(Trap::IterationLimit { .. })));
+    assert_eq!(
+        accounting,
+        Accounting {
+            calls: 1,
+            list_steps: 65_537,
+            call_depth: 0,
+        }
+    );
+}

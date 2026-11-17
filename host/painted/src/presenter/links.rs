@@ -64,7 +64,7 @@ impl<D: DataSource> Presenter<D> {
         let kernel = self.host.kernel();
         let node = kernel.node(id)?;
         let paragraph = self.paragraph(id)?;
-        let b = self.boxes.iter().find(|b| b.id == id)?;
+        let b = self.boxes.iter().find(|b| b.id == id)?.for_hit();
         let content = exact_kernel::svg::scene::content_box(kernel, &node);
         let down = kernel.text_line_offset(&node);
         let (mut px, mut py) = (x - b.rect.0, y - b.rect.1);
@@ -150,7 +150,7 @@ impl<D: DataSource> Presenter<D> {
             return None;
         }
         let parent = self.inline_block(id)?;
-        let mut painted = *self.boxes.iter().find(|b| b.id == parent)?;
+        let mut painted = self.boxes.iter().find(|b| b.id == parent)?.clone();
         let paragraph = self.brush.inline_text.get(&parent)?;
         painted.id = id;
         painted.with_scroll_rect(paragraph.local_frame(id)?)
@@ -221,9 +221,10 @@ impl<D: DataSource> Presenter<D> {
     /// A URL arriving from outside while the app runs (LLP 1133.023 D15
     /// item 3: Android's `onNewIntent`, a shortcut): its location, as a
     /// link's, goes to the navigation root's `navigate` when the root routes
-    /// it. The refusal, else `None`.
+    /// it, at its scheme's registered `protocol_handlers` template when there
+    /// is one (`app::incoming_location`). The refusal, else `None`.
     pub fn open_location(&mut self, href: &str, now_ms: f64) -> Option<String> {
-        let location = exact_route::location_of(href);
+        let location = crate::app::incoming_location_at(href, self.host.web_mount.as_ref());
         if !self.host.runner().route_matches(&location) {
             return Some(format!("open {location}: no route matches it"));
         }
@@ -241,6 +242,23 @@ impl<D: DataSource> Presenter<D> {
         self.host
             .dispatch_at(root, Event::Navigate(location), now_ms)
             .or(self.after_commit())
+    }
+
+    /// The launch URL of the first window to show a host that booted with
+    /// nothing showing it (LLP 1133.017 D7: Android's boot for a wake), read
+    /// as `EXACT_LAUNCH_URL` is at a boot. The refusal, else `None`.
+    pub fn launch_location(&mut self, href: &str, now_ms: f64) -> Option<String> {
+        let location = crate::app::incoming_location_at(href, self.host.web_mount.as_ref());
+        self.launch_at(&location, now_ms)
+    }
+
+    /// The router as a boot at `location` makes it ([`Runner::host_launch`]).
+    pub(crate) fn launch_at(&mut self, location: &str, now_ms: f64) -> Option<String> {
+        match self.host.host_launch(location, now_ms) {
+            Ok(true) => self.after_commit(),
+            Ok(false) => Some(format!("launch {location}: no route matches it")),
+            Err(error) => Some(error),
+        }
     }
 }
 
@@ -274,7 +292,7 @@ component App
   action follow(url: string)
     nav = go(nav, url)
   view
-    main navigationKey=`${current.id}` navigationBack="back" navigate=follow width="100%" height="100%"
+    main navigationKey=`${current.id}` navigationBack="back" navigate=follow width="100%" height="100%" testId="root"
       for e in stack(nav) key=e.id
         column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 padding=10 background-color="#fff"
           text "- [Note](/note/3) and [out](https://example.com) and [inert](ftp://x)" markup="markdown" testId=`reader-${e.name}` font-size=16
@@ -309,7 +327,7 @@ component App
 
     #[test]
     fn a_markdown_link_to_a_route_navigates_and_one_out_of_the_app_is_logged() {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(SRC),
             (),
             (400., 300.),
@@ -344,7 +362,7 @@ component App
 
     #[test]
     fn a_url_from_outside_goes_to_the_root_when_it_routes_it() {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(SRC),
             (),
             (400., 300.),
@@ -363,6 +381,17 @@ component App
             p.host.kernel().find_by_test_id("route-note").len(),
             notes + 1
         );
+        // The agent's `type <root> <url>` delivers a URL as one from outside.
+        let kernel = p.host.kernel();
+        let root = kernel
+            .node_by_key(kernel.find_by_test_id("root")[0])
+            .unwrap()
+            .id;
+        p.type_text(root, "shelf://note/9").unwrap();
+        assert_eq!(
+            p.host.kernel().find_by_test_id("route-note").len(),
+            notes + 2
+        );
         // A path no route matches is refused, and nothing moves.
         assert_eq!(
             p.open_location("/elsewhere", 30.).as_deref(),
@@ -370,7 +399,7 @@ component App
         );
         assert_eq!(
             p.host.kernel().find_by_test_id("route-note").len(),
-            notes + 1
+            notes + 2
         );
     }
 
@@ -405,7 +434,7 @@ component App
       button press=launch testId="launch" height=40
         text "Open a URL"
 "#;
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(source),
             (),
             (400., 300.),

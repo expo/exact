@@ -1,11 +1,11 @@
 # Recipe: theme: colours, light and dark, icons
 
 A role (`-exact-secondary-label`) follows light, dark and Increased Contrast with nothing
-written. A brand is `app.tamber` beside `app.contract`: tokens that a row names as it names a
+written. A brand is `app.forma` beside `app.contract`: tokens that a row names as it names a
 role.
 
-```tamber
-tamber brand
+```forma
+forma brand
 
 theme
   AccentColor = light-dark(#c8102e, #ff453a)
@@ -42,25 +42,25 @@ component App
 ```
 
 - **A role if the platform has one, a token if it is the brand** (`color="ink"`, or
-  `color="var(--ink)"`; `tamber import css tokens.css` writes a stylesheet's).
+  `color="var(--ink)"`; `forma import css tokens.css` writes a stylesheet's).
   `contract vocab color` lists the roles. From data, a `fn` names the token:
   `` fn tint(t: string): string = `type-${t}` ``.
 - **`light-dark(light, dark)`** gives a token both schemes. One colour on purpose (an ink on
-  the brand's fill, a ground under media) says `scheme=fixed`; an unmarked one is warned once,
-  at its line (`lower-colour-one-scheme`). A root `theme` block in `app.contract` cannot mark
-  it: move it to `app.tamber`.
+  the brand's fill, a ground under media) says `scheme=fixed`; an unmarked one is warned
+  (`lower-colour-one-scheme`; several share a line, `--json` each). An `app.contract`
+  root `theme` cannot mark it: move it to `app.forma`.
 - **`AccentColor`** is the app's tint: filled buttons, a plain button's text, the focus ring.
   A filled button's label stays white, so keep both sides at 3:1 under white: a pale dark
-  side is warned (`tamber-contrast`).
-- **Icons:** `app.tamber`'s `icons` block names `sf` for Apple and `svg` under `assets/`
+  side is warned (`forma-contrast`).
+- **Icons:** `app.forma`'s `icons` block names `sf` for Apple and `svg` under `assets/`
   elsewhere. Without `sf`, Apple draws a template path or rasterizes the SVG
   (watchOS needs `sf`); `-exact-symbol-rendering="multicolor"` keeps colours.
-  The web needs SVG (`tamber-icon-missing`). Prefer a role;
+  The web needs SVG (`forma-icon-missing`). Prefer a role;
   `sf/<name>` is blank on the web. Use `image "symbol:icon.play"`; `color` tints it,
   its font sizes it ([symbols](symbols.md)).
-- **The scheme:** `setScheme("light" | "dark" | "system")` sets the app's (in its action, and a
-  `mount` task for a kept one); `color-scheme`
-  fixes a subtree in one. Modes the person picks (Dim, Black) are axes ([a brand](tamber.md)).
-- **Check it:** `bun exact.mjs tamber check .` (`pair=` warns below 4.5:1); a drive or an
-  authored test says `prefer prefers-color-scheme dark` (then `light`) before an `expect` or
-  `screenshot`, or `check both` judges both schemes.
+- **The scheme:** `setScheme("light" | "dark" | "system")` sets it, kept from
+  a relaunch's first frame (`system` forgets it); `color-scheme` fixes a subtree in one.
+  Modes the person picks (Dim, Black) are axes ([a brand](forma.md)).
+- **Check it:** `bun exact.mjs forma check .` (`pair=` warns below 4.5:1); a drive or a test
+  says `prefer prefers-color-scheme dark` (then `light`) before an `expect` or
+  `screenshot`; `check both` judges both schemes.

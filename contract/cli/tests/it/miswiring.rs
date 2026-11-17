@@ -3,6 +3,8 @@
 //! host would refuse or ignore at run time; each names its repair, fails no
 //! build, and what the compiler cannot see through is given the benefit.
 
+use crate::scratch::Scratch;
+
 /// The ids and lines of the warnings `src` earns, after checking that it
 /// still compiles.
 fn warned(src: &str) -> Vec<(String, u32)> {
@@ -324,9 +326,7 @@ const IMAGE: &str = "lower-image-source";
 
 /// The warnings of a file that uses a package part (`exact:content`), as a build prints them.
 fn warned_file(name: &str, src: &str) -> Vec<(String, u32, String)> {
-    let dir = std::env::temp_dir().join(format!("exact-miswiring-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-miswiring-{name}-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, src).unwrap();
     let (result, warnings) = contract::compile_path_all_warned(&path, false);

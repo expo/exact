@@ -6,8 +6,12 @@
 
 use crate::envelope::{sha256_hex, FileCard};
 use std::collections::BTreeSet;
+#[cfg(not(test))]
+use std::fs::hard_link;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use tests::hard_link;
 
 /// Refuse an unqualified durable-store platform before touching its directory.
 pub(super) fn require_durable_store() -> Result<(), String> {
@@ -36,15 +40,60 @@ pub(super) fn sweep(dir: &Path) {
     }
 }
 
+/// Take `file`'s advisory lock without waiting, exclusive or shared;
+/// `Ok(false)` when another holder has it. std's `File::try_lock` is
+/// unsupported on Android, so there it is `flock(2)`, as std's is on Linux.
+pub(super) fn try_lock(file: &std::fs::File, exclusive: bool) -> std::io::Result<bool> {
+    #[cfg(target_os = "android")]
+    {
+        use std::os::fd::AsRawFd as _;
+        let kind = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
+        // SAFETY: `flock` reads only the descriptor, which `file` owns.
+        #[allow(unsafe_code)]
+        let done = unsafe { libc::flock(file.as_raw_fd(), kind | libc::LOCK_NB) };
+        if done == 0 {
+            return Ok(true);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let taken = if exclusive {
+            file.try_lock()
+        } else {
+            file.try_lock_shared()
+        };
+        match taken {
+            Ok(()) => Ok(true),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(false),
+            Err(std::fs::TryLockError::Error(e)) => Err(e),
+        }
+    }
+}
+
 /// A shared lock on an entry's `exact.json`, for a process that runs the
 /// entry without owning the store. [`remove_entry`] keeps an entry so held.
 pub(super) fn hold_entry(entry: &Path) -> Result<std::fs::File, String> {
     let path = entry.join("exact.json");
     let file =
         std::fs::File::open(&path).map_err(|e| format!("cannot open {}: {e}", path.display()))?;
-    file.try_lock_shared()
-        .map_err(|e| format!("cannot hold {}: {e}", path.display()))?;
-    Ok(file)
+    match try_lock(&file, false) {
+        Ok(true) => Ok(file),
+        Ok(false) => Err(format!(
+            "cannot hold {}: it is being removed",
+            path.display()
+        )),
+        Err(e) => Err(format!("cannot hold {}: {e}", path.display())),
+    }
 }
 
 /// Remove an entry unless a reader holds it ([`hold_entry`]); `false` when
@@ -53,7 +102,7 @@ pub(super) fn hold_entry(entry: &Path) -> Result<std::fs::File, String> {
 pub(super) fn remove_entry(entry: &Path) -> bool {
     let lock = std::fs::File::open(entry.join("exact.json"));
     if let Ok(file) = &lock {
-        if matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)) {
+        if matches!(try_lock(file, true), Ok(false)) {
             return false;
         }
     }
@@ -190,9 +239,8 @@ pub(super) fn temporary_name() -> String {
 }
 
 /// Content stored once by SHA-256 at `blobs/<digest>`. An entry's plan and
-/// assets are hard links to it (copies where a filesystem refuses links), so
-/// an asset unchanged across releases takes its bytes once however many
-/// entries name it, and finding what the store holds is a path, not a scan.
+/// assets are hard links to it where allowed, synced copies otherwise.
+/// Finding what the store holds is a path, not a scan.
 pub(super) struct Blobs(PathBuf);
 
 impl Blobs {
@@ -217,14 +265,19 @@ impl Blobs {
         write_atomic(&self.0.join(digest), bytes, true)
     }
 
-    /// Give an entry blob `digest` at `path`: a hard link, else a synced copy.
+    /// Give an entry blob `digest` at `path`: a hard link where allowed, else a synced copy.
     pub(super) fn place(&self, digest: &str, path: &Path) -> Result<(), String> {
+        // Android's app_neverallows.te forbids hard links for untrusted apps.
+        self.place_with_links(digest, path, !cfg!(target_os = "android"))
+    }
+
+    fn place_with_links(&self, digest: &str, path: &Path, link: bool) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("cannot make {}: {e}", parent.display()))?;
         }
         let blob = self.0.join(digest);
-        if std::fs::hard_link(&blob, path).is_ok() {
+        if link && hard_link(&blob, path).is_ok() {
             return Ok(());
         }
         std::fs::copy(&blob, path)
@@ -250,6 +303,66 @@ impl Blobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    std::thread_local! {
+        static LINK_CALLS: std::cell::Cell<(usize, usize, bool)> = const {
+            std::cell::Cell::new((0, 0, false))
+        };
+    }
+
+    pub(super) fn hard_link(source: &Path, target: &Path) -> std::io::Result<()> {
+        let (attempts, successes, refuse) = LINK_CALLS.get();
+        let result = if refuse {
+            Err(std::io::ErrorKind::PermissionDenied.into())
+        } else {
+            std::fs::hard_link(source, target)
+        };
+        LINK_CALLS.set((
+            attempts + 1,
+            successes + usize::from(result.is_ok()),
+            refuse,
+        ));
+        result
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn placement_links_only_when_allowed() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let store = std::env::temp_dir().join(temporary_name());
+        let blobs = Blobs::at(&store);
+        let digest = sha256_hex(b"plan");
+        blobs.put(&digest, b"plan").unwrap();
+        let blob = blobs.dir().join(&digest);
+        let platform_links = !cfg!(target_os = "android");
+        for (name, link, refuse) in [
+            ("copy", false, false),
+            ("copy-refused", false, true),
+            ("platform", platform_links, false),
+            ("platform-refused", platform_links, true),
+            ("refused", true, true),
+        ] {
+            LINK_CALLS.set((0, 0, refuse));
+            let placed = store.join("entries").join(name).join("app.plan");
+            if matches!(name, "platform" | "platform-refused") {
+                blobs.place(&digest, &placed).unwrap();
+            } else {
+                blobs.place_with_links(&digest, &placed, link).unwrap();
+            }
+            let (attempts, successes, _) = LINK_CALLS.get();
+            assert_eq!(attempts, usize::from(link), "{name}");
+            assert_eq!(std::fs::read(&placed).unwrap(), b"plan");
+            let source = std::fs::metadata(&blob).unwrap();
+            let entry = std::fs::metadata(&placed).unwrap();
+            let linked = (source.dev(), source.ino()) == (entry.dev(), entry.ino());
+            std::fs::remove_file(&placed).unwrap();
+            assert_eq!(linked, successes == 1, "{name}");
+            assert_eq!(std::fs::read(&blob).unwrap(), b"plan");
+        }
+        LINK_CALLS.set((0, 0, false));
+        std::fs::remove_dir_all(store).unwrap();
+    }
 
     #[test]
     fn oversized_card_is_refused_before_reading_its_bytes() {

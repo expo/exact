@@ -44,20 +44,24 @@ fn print_stdout(args: std::fmt::Arguments<'_>) {
 mod ambient;
 mod build;
 mod diff;
+mod forma;
+mod forma_contract;
+mod forma_explain;
+mod forma_export;
+mod forma_gen;
+mod forma_history;
+mod forma_import;
+mod forma_import_css;
+mod forma_ops;
+mod forma_packages;
+mod forma_param_lines;
+mod forma_rows;
+mod forma_serve;
 mod migrate;
-mod tamber;
-mod tamber_contract;
-mod tamber_explain;
-mod tamber_export;
-mod tamber_gen;
-mod tamber_history;
-mod tamber_import;
-mod tamber_import_css;
-mod tamber_ops;
-mod tamber_packages;
-mod tamber_param_lines;
-mod tamber_rows;
-mod tamber_serve;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/it/scratch.rs"]
+mod scratch;
 mod verify;
 mod vocab;
 
@@ -82,7 +86,7 @@ fn usage() -> String {
   {verify}
   contract vocab [--json] [--all] [<name> …]
   contract gallery <app> -o <dir>  (<app>: a directory or app.contract; <dir>: a build cache, never the app's tree)
-  contract tamber check <app> | eval <app> [--mode <axis>=<value>] | ir <app> [-o <tamber.json>] | fmt <app> [--check]  (<app>: a directory, app.contract or file.tamber; a flag before or after it)")
+  contract forma check <app> | eval <app> [--mode <axis>=<value>] | ir <app> [-o <forma.json>] | fmt <app> [--check]  (<app>: a directory, app.contract or file.forma; a flag before or after it)")
 }
 
 #[cfg(windows)]
@@ -104,6 +108,10 @@ fn main() -> ExitCode {
 }
 
 fn run() -> ExitCode {
+    if let Err(e) = contract::root::find_for_executable() {
+        eprintln!("contract: {e}");
+        return ExitCode::from(2);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--help" | "-h") if args.len() == 1 => {
@@ -120,7 +128,11 @@ fn run() -> ExitCode {
         Some("verify") => verify::run(&args[1..]),
         Some("vocab") => vocab::run(&args[1..]),
         Some("gallery") => gallery(&args[1..]),
-        Some("tamber") => tamber::run(&args[1..]),
+        Some("forma") => forma::run(&args[1..]),
+        Some("tamber") => {
+            eprintln!("contract: rename the tamber verb to forma: use `contract forma`");
+            ExitCode::from(2)
+        }
         // The union of tokens a binding may name follows the design's `exports` (LLP 1121 D7).
         Some("types") => types(&args[1..], "types", "app.d.ts", |path| {
             let (plan, _) = contract::compile_path_all_unchecked(path, false)

@@ -1,11 +1,11 @@
-//! A view's logical ancestors with their plan sites, for `{"op":"ancestors"}` (tamber/1.16 `inspect` `select`).
+//! A view's logical ancestors with their plan sites, for `{"op":"ancestors"}` (forma/1.16 `inspect` `select`).
 
 use super::error;
 use crate::{DataSource, Runner};
 use std::fmt::Write;
 
 /// `{"ancestors":[[view, site], …]}`: `id` and each logical ancestor to the root, innermost first, with its plan
-/// site or `null` (tamber/1.16 `inspect` `select`); a stale `id` is an error. Bounded by the kernel's depth.
+/// site or `null` (forma/1.16 `inspect` `select`); a stale `id` is an error. Bounded by the kernel's depth.
 pub(super) fn ancestors<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
     let kernel = runner.kernel();
     if kernel.node(id).is_none() {

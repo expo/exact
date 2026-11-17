@@ -47,12 +47,46 @@ let capabilities: [(name: String, target: String, define: String)] = [
 // above already uses — so a normal build is unchanged and a test build is
 // quick. `bun host/apple/build.mjs --test` sets it.
 let testing = ProcessInfo.processInfo.environment["EXACT_TESTS"] == "1"
+let intentFiles = testing || ProcessInfo.processInfo.environment["EXACT_APPLE_INTENT_FILES"] == "1"
+let intentFileSettings: [SwiftSetting] = intentFiles ? [.define("EXACT_INTENT_FILES")] : []
 // Inspect mode (LLP 1122 T2c, Inspect.swift) is a development build's: a
 // production one (`EXACT_UPDATE_TRUST=production`) compiles none of it, nor
 // the agent's private API (LLP 1035.003 §3): UIKit's alert views
 // (`Agent.shownButton`), AppKit's events made in a window (`AgentMouseMac`),
 // Core Animation's filter keys (`backdropRects`).
-let devTools: [SwiftSetting] = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == "production" ? [] : [.define("EXACT_INSPECT")]
+let devTools: [SwiftSetting] = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == "production" ? [] : [.define("EXACT_INSPECT"), .define("EXACT_AGENT")]
+// A production trust bake cannot enter agent mode (LLP 1069.007 D2), so its
+// ExactKit target does not compile the carrier or inspection implementation.
+// Development keeps the same sources and API it has always had.
+let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == "production" ? [
+    "ActivityAgent.swift",
+    "Agent.swift",
+    "AgentAccessibility.swift",
+    "AgentAddressedTap.swift",
+    "AgentMediaSession.swift",
+    "AgentNative.swift",
+    "AgentParts.swift",
+    "AgentSample.swift",
+    "AgentScrollProbe.swift",
+    "AgentSensors.swift",
+    "AgentSocketStartup.swift",
+    "IOS/AgentAimIOS.swift",
+    "IOS/AgentCheckIOS.swift",
+    "IOS/AgentFlatIOS.swift",
+    "IOS/AgentFrontIOS.swift",
+    "IOS/AgentIOS.swift",
+    "IOS/AgentMissIOS.swift",
+    "IOS/AgentMotionIOS.swift",
+    "IOS/AgentNativeIOS.swift",
+    "IOS/AgentPanIOS.swift",
+    "IOS/AgentPictureIOS.swift",
+    "IOS/AgentRevealIOS.swift",
+    "Mac/AgentMac.swift",
+    "Mac/AgentMouseMac.swift",
+    "Mac/AgentNativeMac.swift",
+    "Mac/AgentPictureInPictureMac.swift",
+    "Mac/AgentStdio.swift",
+] : []
 
 let gallery = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] != "production"
     && (testing || ProcessInfo.processInfo.environment["EXACT_WIDGET_GALLERY"] == "1")
@@ -63,6 +97,9 @@ let caltrainSettings: [SwiftSetting] = libName == "caltrain_apple" ? [.define("E
 
 let widgetCore = ProcessInfo.processInfo.environment["EXACT_WIDGET_CORE"] == "1"
 let sharedCore = ProcessInfo.processInfo.environment["EXACT_CORE_FRAMEWORK"]
+let watchSync = ProcessInfo.processInfo.environment["EXACT_WATCH_SYNC"] == "1"
+let watchSyncDependency: [Target.Dependency] = watchSync ? [.target(name: "ExactWatchSync")] : []
+let watchSyncSettings: [SwiftSetting] = watchSync ? [.define("EXACT_WATCH_SYNC")] : []
 let core: [Target] = [
     .systemLibrary(name: "CExact", path: "Sources/CExact"),
     // C, so its constructor runs before `main` and can read the process start and prewarm flag.
@@ -78,40 +115,41 @@ let core: [Target] = [
     // session's node model, for WidgetKit's archive. Linked by an app with
     // entries and its extension, never by a presenter.
     .target(name: "ExactSnapshot", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactSnapshot", swiftSettings: [.unsafeFlags(["-application-extension"])]),
-    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", swiftSettings: devTools + gallerySettings),
+    .target(name: "ExactKit", dependencies: [.target(name: "ExactCore"), .target(name: "CExact"), .target(name: "CExactLaunch")] + (gallery ? [.target(name: "ExactSnapshot")] : []), path: "Sources/ExactKit", exclude: agentSources + (intentFiles ? [] : ["IntentFiles.swift"]), swiftSettings: devTools + gallerySettings + intentFileSettings),
+    .target(name: "ExactWatchSync", dependencies: ["ExactCore", "CExact"], path: "Sources/ExactWatchSync"),
     .target(name: "ExactUpdates", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactUpdates"),
-    .target(name: "ExactGroupedLists", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactGroupedLists"),
-    .target(name: "ExactMarkdown", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactMarkdown"),
-    .target(name: "ExactSurfaces", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactSurfaces"),
-    .target(name: "ExactDrag", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactDrag"),
-    .target(name: "ExactMediaPicker", dependencies: ["ExactKit"], path: "Sources/ExactMediaPicker"),
-    .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession"),
-    .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals"),
-    .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips"),
+    .target(name: "ExactGroupedLists", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactGroupedLists", swiftSettings: devTools),
+    .target(name: "ExactMarkdown", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactMarkdown", swiftSettings: devTools),
+    .target(name: "ExactSurfaces", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactSurfaces", swiftSettings: devTools),
+    .target(name: "ExactDrag", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactDrag", swiftSettings: devTools),
+    .target(name: "ExactMediaPicker", dependencies: ["ExactKit"], path: "Sources/ExactMediaPicker", swiftSettings: devTools),
+    .target(name: "ExactAuthSession", dependencies: ["ExactKit"], path: "Sources/ExactAuthSession", swiftSettings: devTools),
+    .target(name: "ExactNumerals", dependencies: ["ExactKit"], path: "Sources/ExactNumerals", swiftSettings: devTools),
+    .target(name: "ExactTips", dependencies: ["ExactKit"], path: "Sources/ExactTips", swiftSettings: devTools),
     .target(name: "ExactPresence", dependencies: ["ExactKit", "CExact"], path: "Sources/ExactPresence"),
     .target(name: "ExactLaunchParts", dependencies: ["ExactKit"], path: launchParts,
             swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .target(name: "ExactComposition", dependencies: [.target(name: "ExactKit")] + (composition == "updating" ? [.target(name: "ExactUpdates")] : [])
-                + capabilities.map { .target(name: $0.target) },
+                + capabilities.map { .target(name: $0.target) } + watchSyncDependency,
             path: composition == "updating" ? "Sources/ExactUpdating" : "Sources/ExactEmbedded",
-            swiftSettings: capabilities.map { .define($0.define) }),
+            swiftSettings: capabilities.map { .define($0.define) } + watchSyncSettings),
 ]
 
 let executables: [Target] = [
     // The live watch driver owns its lifecycle; it has no ExactKit page-facts producer.
-    .executableTarget(name: "ExactWatch", dependencies: ["ExactCore", "ExactSnapshot"], path: "Sources/ExactWatch", swiftSettings: devTools),
+    .executableTarget(name: "ExactWatch", dependencies: [.target(name: "ExactCore"), .target(name: "ExactSnapshot")] + watchSyncDependency, path: "Sources/ExactWatch", swiftSettings: devTools + watchSyncSettings),
     .executableTarget(name: "ExactMac", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactMac"),
     .executableTarget(name: "ExactIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactIOS",
                      swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
-    .executableTarget(name: "ExactHostMac", dependencies: ["ExactKit", "ExactComposition"], path: "Sources/ExactHostMac"),
-    .executableTarget(name: "ExactHostIOS", dependencies: ["ExactKit", "ExactComposition"], path: "Sources/ExactHostIOS"),
+    .executableTarget(name: "ExactHostMac", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactHostMac"),
+    .executableTarget(name: "ExactHostIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactHostIOS"),
 ]
 
 // Host behaviour no other check can see: a wheel event's routing, asserted
 // as a decision rather than a drawn frame, so it needs no window, no run
 // loop, and no clock (LLP 1033 D4a).
 let tests: [Target] = [
-    .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactServices.swift", "ExactTamber.swift"], sources: ["ExactPackage.swift"]),
+    .target(name: "ExactPackage", path: "modules", exclude: ["ExactExtensions.swift", "ExactNativeModule.swift", "ExactNativeViews.swift", "ExactServices.swift", "ExactForma.swift"], sources: ["ExactPackage.swift"]),
     .target(name: "MediaCaptureImplementation", dependencies: ["ExactPackage"], path: "tests/MediaCaptureImplementation"),
     .target(name: "SignInImplementation", dependencies: ["ExactPackage"], path: "tests/SignInImplementation"),
     .target(name: "PasskeysImplementation", dependencies: ["ExactPackage"], path: "tests/PasskeysImplementation"),
@@ -123,9 +161,12 @@ let tests: [Target] = [
     // The video arm's media session coordinator (LLP 1098 D7), driven by the
     // tests over stand-in players; the arm itself is build.mjs's dylib.
     .target(name: "ExactNowPlaying", path: "videoarm", exclude: ["VideoArm.swift", "PictureInPicture.swift"], sources: ["NowPlaying.swift"]),
-    // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself.
-    .target(name: "ExactShare", path: "share"),
-    .testTarget(name: "ExactKitTests", dependencies: ["ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactPresence", "ExactSoundRender", "ExactNowPlaying", "ExactShare"], path: "tests/ExactKitTests",
+    // The share extension's Swift (LLP 1133.024 D4), which links no Exact runtime; build.mjs compiles the appex itself,
+    // with the reading of Safari's page details only for an app that maps `url`.
+    .target(name: "ExactShare", path: "share", exclude: ["SharePage.js"], swiftSettings: [.define("EXACT_SHARE_PAGE")]),
+    // The inbox as an app that maps no `url` compiles it, without `EXACT_SHARE_PAGE`.
+    .target(name: "ExactSharePlain", path: "tests/ExactSharePlain"),
+    .testTarget(name: "ExactKitTests", dependencies: ["ExactWatchSync", "ExactPackage", "MediaCaptureImplementation", "SignInImplementation", "PasskeysImplementation", "ExactWidgetTimeline", "ExactCore", "ExactSnapshot", "ExactKit", "ExactUpdates", "ExactGroupedLists", "ExactMarkdown", "ExactSurfaces", "ExactDrag", "ExactMediaPicker", "ExactAuthSession", "ExactNumerals", "ExactTips", "ExactPresence", "ExactSoundRender", "ExactNowPlaying", "ExactShare", "ExactSharePlain"], path: "tests/ExactKitTests",
                 resources: [.copy("ColorFixtures"), .copy("SnapshotFixtures")], swiftSettings: devTools + gallerySettings + caltrainSettings),
 ]
 
@@ -143,7 +184,7 @@ let iosFloor: String = {
 
 let package = Package(
     name: "Exact",
-    platforms: [.macOS(.v14), .iOS(iosFloor), .tvOS(iosFloor), .watchOS(.v10), .visionOS(.v1)],
+    platforms: [.macOS(.v14), .iOS(iosFloor), .tvOS(iosFloor), .watchOS("26.0"), .visionOS(.v1)],
     products: [.library(name: "ExactCore", type: widgetCore ? .dynamic : nil, targets: ["ExactCore"]), .library(name: "ExactSnapshot", type: widgetCore ? .static : nil, targets: ["ExactSnapshot"])] + (testing ? [.library(name: "ExactKit", targets: ["ExactKit"])] : [
         .library(name: "ExactKit", targets: ["ExactKit"]),
         .library(name: "ExactUpdates", targets: ["ExactUpdates"]),

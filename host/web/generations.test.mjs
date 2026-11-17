@@ -603,10 +603,11 @@ test('a kept file that cannot be read is answered absent at once', async () => {
 test('with two renames for a swap (no one-step exchange), a page\'s files are still one build\'s and no page goes unpinned', () => {
   // A process of its own: the exchange is chosen once a process.
   const r = spawnSync(process.execPath, ['-e', `
-    const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs'); const { join } = await import('node:path'); const { tmpdir } = await import('node:os');
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs'); const { join } = await import('node:path'); const { tmpdir } = await import('node:os');
     const { replaceBuild } = await import(${JSON.stringify(fileURLToPath(new URL('./serve.mjs', import.meta.url)))});
     const { servedFile } = await import(${JSON.stringify(fileURLToPath(new URL('./generations.mjs', import.meta.url)))});
     const root = mkdtempSync(join(tmpdir(), 'exact-generations-renames-')), dist = join(root, 'dist');
+    process.on('exit', () => rmSync(root, { recursive: true, force: true }));
     const build = (k) => { const d = join(root, 's' + k); mkdirSync(d); writeFileSync(join(d, 'index.html'), '<base href="/"><p>build ' + k + '</p>'); writeFileSync(join(d, 'app.js'), 'build ' + k);
       writeFileSync(join(d, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', files: [{ name: 'app.js', sha256: String(k) }] })); return d; };
     replaceBuild(build(0), dist);

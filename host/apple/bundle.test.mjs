@@ -1,8 +1,30 @@
 import { test, expect } from 'bun:test';
-import { mkdtempSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { closeSync, fstatSync, mkdtempSync, mkdirSync, existsSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { placeMacLibraries } from './bundle.mjs';
+import { placeMacDylibs, placeMacLibraries } from './bundle.mjs';
+
+test('replacing package and service dylibs preserves the old open inode', () => {
+  const root = mkdtempSync(join(tmpdir(), 'exact-dylibs-')), descriptors = [];
+  try {
+    const built = join(root, 'built.dylib');
+    const libraries = ['libPackage.dylib', 'libService.dylib'].map(load => ({ built, load }));
+    writeFileSync(built, 'first build');
+    placeMacDylibs(root, libraries);
+    for (const library of libraries) descriptors.push(openSync(join(root, library.load), 'r'));
+    writeFileSync(built, 'second build');
+    placeMacDylibs(root, libraries);
+    for (const [i, library] of libraries.entries()) {
+      const destination = join(root, library.load);
+      expect(statSync(destination).ino).not.toBe(fstatSync(descriptors[i]).ino);
+      expect(readFileSync(descriptors[i], 'utf8')).toBe('first build');
+      expect(readFileSync(destination, 'utf8')).toBe('second build');
+    }
+  } finally {
+    for (const descriptor of descriptors) closeSync(descriptor);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 // The Mac app and its sample host (LLP 1031 D10) carry the same prebuilt frameworks: the app's library and its
 // native modules' dynamic xcframeworks, which module code loads from `@loader_path/../Frameworks`.

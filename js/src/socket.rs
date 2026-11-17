@@ -136,7 +136,7 @@ impl Module {
                 .into_iter()
                 .for_each(|(resource, op)| store.stage_answer_socket(resource, op)),
             Err(why) => (self.logs).push((
-                None,
+                crate::Writer::Runtime,
                 format!("answer `{source}` failed: {why}; socket frames were refused"),
             )),
         }

@@ -5,19 +5,20 @@
  * Each drive and test run (`agent.mjs`, `verify`) appends a line to `<app>/.exact/runs.jsonl`: when, on which host and
  * target, on which clock, what ran, what it found, the commit, and the build it ran on, named by the digest of that
  * build's record (the web's `dist/.exact-build.json`, an Apple build's `receipt.json`). The driver refuses a build
- * older than its sources, so a run's build was fresh when it ran. A run is current while that build is still the
- * host's build and still fresh: the same checks the driver makes (`webChanges`, `nativeBuild`) say what made it stale.
+ * older than its sources, so a run's build was fresh when it ran. Retained receipts keep evidence current after
+ * temporary products are removed; the driver's input checks say what made it stale.
  * Linux, Windows, Android, tvOS and phone builds are not identified yet; their runs are listed as unchecked.
  *
  *   bun scripts/evidence.mjs [--app <name>] [--since <rev>] [--draft]
  *   bun scripts/evidence.mjs note <host> "<what was seen>" [--app <name>] [--device "<model, OS>"]
  */
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, utimesSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { platformCrateKind, resolveApp, webDist as defaultWebDist } from './app.mjs';
+import { pendingBuildInputs, platformCrateKind, resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { nativeBuild, receiptPath } from './agent-build.mjs';
-import { webChanges } from './agent-launch.mjs';
+import { within } from './paths.mjs';
+import { receiptChanges, webChanges } from './agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = realpathSync(fileURLToPath(new URL('..', import.meta.url)));
@@ -41,8 +42,15 @@ function buildRecord(app, host, { webDist, device } = {}) {
 export function recordRun(appName, { host, what, result, timing = 'agent', touch, device, sim, target, webDist, kind = 'run' }) {
   try {
     const app = resolveApp(appName), record = buildRecord(app, host, { webDist, device: device || !!target });
+    let receipt;
+    if (record) {
+      receipt = resolve(app.target, host === 'web' ? 'web-receipts' : 'native-receipts', digest(record), host === 'web' ? '.exact-build.json' : 'receipt.json');
+      mkdirSync(dirname(receipt), { recursive: true });
+      copyFileSync(record, receipt);
+      const info = statSync(record); utimesSync(receipt, info.atime, info.mtime);
+    }
     const line = { at: new Date().toISOString(), kind, host, target: target ?? (device ? 'device' : host === 'ios' ? sim ?? process.env.EXACT_SIM ?? 'simulator' : host === 'web' ? process.env.EXACT_WEB_BROWSER ?? 'chrome' : host),
-      timing, ...(touch && touch !== 'agent' ? { touch } : {}), what, result, commit: git(['rev-parse', '--short=10', 'HEAD']).trim(), build: record ? digest(record) : null };
+      timing, ...(touch && touch !== 'agent' ? { touch } : {}), what, result, commit: git(['rev-parse', '--short=10', 'HEAD']).trim(), build: record ? digest(record) : null, ...(receipt ? { receipt } : {}) };
     mkdirSync(resolve(app.dir, '.exact'), { recursive: true });
     appendFileSync(runsOf(app), JSON.stringify(line) + '\n');
   } catch { /* the record is advice */ }
@@ -55,10 +63,21 @@ export function runs(app) {
 }
 
 /** The host's build now: its id, and what changed since it was built ([] when fresh); null where unidentified. */
-function buildNow(app, host) {
+function buildNow(app, host, receipt) {
   if (host === 'web') {
-    const dist = defaultWebDist(app), marker = resolve(dist, '.exact-build.json');
+    const dist = receipt ? dirname(receipt) : defaultWebDist(app), marker = resolve(dist, '.exact-build.json');
     return existsSync(marker) ? { id: digest(marker), changed: webChanges(dist, app).all } : null;
+  }
+  if ((host === 'macos' || host === 'ios') && receipt) {
+    if (!existsSync(receipt)) return null;
+    const { build } = JSON.parse(readFileSync(receipt, 'utf8'));
+    const output = path => (build?.binary?.watchOutputs ?? [app.target]).some(root => within(root, path));
+    // Generated inputs belong to this completed build; evidence checks the sources that made them.
+    const binary = build?.binary && { ...build.binary, inputs: build.binary.inputs.filter(file => !output(file.path)),
+      directories: build.binary.directories.filter(dir => !output(dir.path)),
+      links: (build.binary.links ?? []).filter(link => !output(link.path)) };
+    return { id: digest(receipt), changed: [...(binary ? pendingBuildInputs({ ...build, binary }) : []),
+      ...receiptChanges(receipt, app, { hashed: true, retained: true })] };
   }
   if (host === 'macos' || host === 'ios') {
     const state = nativeBuild(host, app);
@@ -68,12 +87,13 @@ function buildNow(app, host) {
 }
 
 /** Each run with its standing: `current`, `stale` (and why), or `unchecked`. */
-export function standing(app, all = runs(app), now = (host) => buildNow(app, host)) {
+export function standing(app, all = runs(app), now = (host, receipt) => buildNow(app, host, receipt)) {
   const builds = new Map();
   return all.map((r) => {
     if (!r.build) return { ...r, standing: 'unchecked', why: ['web', 'macos', 'ios'].includes(r.host) ? 'a device build is not identified yet' : `a ${r.host} build is not identified yet` };
-    if (!builds.has(r.host)) builds.set(r.host, now(r.host));
-    const b = builds.get(r.host);
+    const key = r.receipt ?? r.host;
+    if (!builds.has(key)) builds.set(key, now(r.host, r.receipt));
+    const b = builds.get(key);
     if (!b) return { ...r, standing: 'stale', why: `no ${r.host} build is there now` };
     if (b.id !== r.build) return { ...r, standing: 'stale', why: 'a later build replaced the one it ran on' };
     if (b.changed.length) return { ...r, standing: 'stale', why: `${b.changed.slice(0, 3).join(', ')}${b.changed.length > 3 ? ` and ${b.changed.length - 3} more` : ''} changed after` };

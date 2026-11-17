@@ -76,8 +76,7 @@ extension TextLinePaint {
                 ctx.beginTransparencyLayer(auxiliaryInfo: nil)
             }
             for fill in g.fills {
-                ctx.setFillColor(fill.color)
-                if let path = fill.path { ctx.addPath(path); ctx.fillPath() } else { ctx.fill(fill.rect) }
+                fill.paint(in: ctx)
             }
             let children = g.children.sorted { groups[$0].first < groups[$1].first }
             var remaining = g.runs.sorted { offset($0) < offset($1) }

@@ -34,5 +34,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "geofence-fixture-data", "type": "geofence_fixture_data::Fences", "source": "geofence_fixture_data::Fences" } }
 }

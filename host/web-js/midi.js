@@ -16,6 +16,7 @@
 import { journal, clock, Sounds, Mutations, Resources, R, data, commit, time } from './rt.js';
 import { plain } from './format.js';
 import { grantWords } from './admission.js';
+import { watchPage } from './facts.js';
 
 const HOLD = 50, QUEUED = 1024, RECORD = 1024, SHOWN = 64, SENT = 128;
 const say = line => journal.push(`t=${clock.now} ${line}`);
@@ -54,6 +55,7 @@ function messages(data) {
   return split(data);
 }
 const noteOff = d => d.length === 3 && ((d[0] & 0xF0) === 0x80 || (d[0] & 0xF0) === 0x90 && d[2] === 0);
+const starts = d => d[0] === 0xFA || d[0] === 0xFB || d[0] === 0xF8 || (d[0] & 0xF0) === 0x90 && d[2] > 0;
 const noteKey = d => d.length === 3 && ((d[0] & 0xF0) === 0x80 || (d[0] & 0xF0) === 0x90) ? `${d[0] & 0x0F},${d[1]}` : null;
 const waits = (s, t) => s.by == null && s.at - HOLD > t, handed = (s, t) => s.by == null && s.at - HOLD <= t;
 const exempt = s => s.tick != null || noteOff(s.data) || s.data.length === 1 && s.data[0] === 0xFC;
@@ -358,6 +360,7 @@ function load() {
     .catch(err => say(`midi: unavailable: ${err.message}`));
 }
 function flush() {
+  if (Sounds.settling) Ops = Ops.filter(op => op.op !== 'send' || !starts(op.data));
   const open = inputsHeard(), clockIn = Sounds.clockInput?.(), forward = clockIn != null ? [clockIn] : [];
   if (open.join('\n') !== Open.join('\n') || open.length !== Open.length || forward.join('\n') !== OpenClock.join('\n')) { Ops.push({ op: 'open', inputs: open, clock: forward }); Open = open; OpenClock = forward; }
   if (clock.agent) Ops = [];
@@ -375,6 +378,7 @@ function apply(commands) {
 }
 /** `readers`: resource name → [its fields, {a port list's field: its port fields}]; `uses`: the plan uses MIDI (`uses::uses_midi`). */
 export function midi(readers, uses) {
+  watchPage(true);
   Readers = readers; Uses = uses; ReadsSent = Object.values(readers).some(([fields]) => fields.includes('sent'));
   // The grants are the data module's, which may load after the first frame: then the readers are asked again.
   const granted = () => (data.grants ?? '').split('\n').some(line => grantWords(line)[0] === 'device.midi');

@@ -15,7 +15,7 @@ use super::shape::{Entry, Plan, Row};
 use crate::paint::{rgba, Backend, Ink, Rect4, Shape, SvgPaint};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::style::roles;
-use exact_kernel::{ColorValue, StyleProps, SymbolSet, TextAlign, ViewId, WhiteSpace};
+use exact_kernel::{ColorValue, Direction, StyleProps, SymbolSet, TextAlign, ViewId, WhiteSpace};
 use std::rc::Rc;
 use tiny_skia::Transform;
 
@@ -109,7 +109,8 @@ const MENU_RULE: (f32, f32) = (1.0, 8.0);
 /// label, in the variant's colour: it names the items under it and takes no
 /// press.
 const MENU_HEADER: f32 = 32.0;
-/// Material's state layer under a press or a keyboard's focus.
+/// Material's state layer under a keyboard's focus, and under a press that
+/// shows no ripple.
 pub(in crate::presenter) const STATE_LAYER: f32 = 0.10;
 
 /// What a surface's look depends on besides what it says.
@@ -117,6 +118,8 @@ pub(in crate::presenter) const STATE_LAYER: f32 = 0.10;
 pub struct Inputs {
     /// The scheme is dark.
     pub dark: bool,
+    /// The presented element's computed direction.
+    pub direction: Direction,
     /// The system contrast theme, independent of light or dark appearance.
     pub contrast: Option<crate::presenter::ContrastPalette>,
     /// The person's font scale.
@@ -142,10 +145,14 @@ pub(in crate::presenter) struct Feedback {
     pub pressed: Option<usize>,
     pub focused: Option<usize>,
     pub hovered: Option<usize>,
+    /// A finger's ripple on a Material surface's target (LLP 1115.001 D9):
+    /// the target, the ripple, the instant and whether motion is removed.
+    /// It takes the place of the pressed target's state layer.
+    pub ripple: Option<(usize, crate::paint::ripple::Ripple, f64, bool)>,
 }
 
 /// A row as it can be touched: its box, the authored node it stands for,
-/// and the state layer a press shows.
+/// and the shape and colour its press and its focus show in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
     /// Its box in the surface, points.
@@ -155,6 +162,14 @@ pub struct Target {
     /// Whether it takes a press.
     pub enabled: bool,
     layer: (Shape, [u8; 4]),
+}
+
+impl Target {
+    /// A point of the surface as an offset into the shape its press shows in.
+    pub(in crate::presenter) fn held_at(&self, x: f32, y: f32) -> (f32, f32) {
+        let (left, top, ..) = self.layer.0.rect;
+        (x - left, y - top)
+    }
 }
 
 /// A surface measured: its size, its container and what it draws.
@@ -186,6 +201,24 @@ pub(in crate::presenter) fn paragraph(
     scale: f32,
     width: Option<f32>,
 ) -> Rc<Paragraph> {
+    directed_paragraph(
+        engine,
+        text,
+        Type(size, line, weight, tracking),
+        scale,
+        width,
+        Direction::Ltr,
+    )
+}
+
+pub(in crate::presenter) fn directed_paragraph(
+    engine: &mut TextEngine,
+    text: &str,
+    Type(size, line, weight, tracking): Type,
+    scale: f32,
+    width: Option<f32>,
+    direction: Direction,
+) -> Rc<Paragraph> {
     let style = StyleProps::default().with_rows(|rows| {
         rows.font_size = size * scale;
         rows.font_weight = weight;
@@ -195,21 +228,42 @@ pub(in crate::presenter) fn paragraph(
             Some(_) => WhiteSpace::Normal,
             None => WhiteSpace::Nowrap,
         };
-        rows.text_align = TextAlign::Left;
+        rows.direction = direction;
+        rows.text_align = TextAlign::Start;
     });
     engine.paragraph(&crate::paint::text_spec(&style, text), width)
 }
 
 /// One line, cut with an ellipsis where it is wider than `max`.
-fn label(engine: &mut TextEngine, text: &str, inputs: &Inputs, max: f32) -> Rc<Paragraph> {
-    let line = paragraph(
+fn label(engine: &mut TextEngine, row: &Row, inputs: &Inputs, max: f32) -> Rc<Paragraph> {
+    let line = directed_paragraph(
         engine,
-        text,
+        &row.title,
         LABEL_LARGE.emboldened(inputs.bold_text),
         inputs.font_scale,
         None,
+        row.direction,
     );
     line.ellipsized(max).unwrap_or(line)
+}
+
+/// Content width omits the offset from alignment or RTL truncation.
+pub(in crate::presenter) fn text_rect(p: &Paragraph, at: (f32, f32)) -> Rect4 {
+    let (left, right) = p
+        .layout_runs()
+        .flat_map(|run| run.glyphs)
+        .map(|g| (g.x, g.x + g.w))
+        .reduce(|(left, right), (x, end)| (left.min(x), right.max(end)))
+        .unwrap_or((0., p.width));
+    (at.0 + left, at.1, right - left, p.height)
+}
+
+/// Place a single line's glyph bounds at a physical anchor: 0 is its left
+/// edge, 0.5 its center, and 1 its right edge. RTL truncation can leave a
+/// nonzero left offset even when the paragraph reports its content width.
+pub(in crate::presenter) fn label_x(p: &Paragraph, anchor: f32, alignment: f32) -> f32 {
+    let (left, _, width, _) = text_rect(p, (0., 0.));
+    anchor - width * alignment - left
 }
 
 impl Layout {
@@ -219,7 +273,7 @@ impl Layout {
         self.items
             .iter()
             .filter_map(|item| match item {
-                Item::Text(p, at, _, source) => Some((*source, (at.0, at.1, p.width, p.height))),
+                Item::Text(p, at, _, source) => Some((*source, text_rect(p, *at))),
                 _ => None,
             })
             .chain(self.windows.iter().flat_map(|content| content.texts()))
@@ -231,12 +285,15 @@ impl Layout {
         match plan {
             Plan::Alert {
                 title,
+                title_direction,
                 message,
+                message_directions,
                 rows,
                 ..
             } => alert(
                 engine,
                 (title.as_deref(), message.as_deref()),
+                (*title_direction, message_directions),
                 rows,
                 pop,
                 inputs,
@@ -299,11 +356,13 @@ impl Layout {
             backend.push_clip(&container, ts);
             backend.push_clip(&Shape::rect(clip), ts);
         }
-        let lit = feedback.focused.into_iter().chain(
-            feedback
-                .pressed
-                .filter(|i| self.windows.is_none() && Some(*i) != feedback.focused),
-        );
+        let ripple = feedback.ripple.filter(|_| self.windows.is_none());
+        let lit = feedback
+            .focused
+            .into_iter()
+            .chain(feedback.pressed.filter(|i| {
+                self.windows.is_none() && Some(*i) != feedback.focused && ripple.is_none()
+            }));
         for target in lit.filter_map(|i| self.targets.get(i)) {
             let (shape, mut tint) = target.layer;
             if self.windows.is_some() {
@@ -320,6 +379,13 @@ impl Layout {
                 tint[3] = (f32::from(tint[3]) * STATE_LAYER).round() as u8;
             }
             backend.fill(&shape, tint, ts);
+        }
+        if let Some((target, ripple, now, still)) =
+            ripple.and_then(|(i, r, now, still)| Some((self.targets.get(i)?, r, now, still)))
+        {
+            let (shape, tint) = target.layer;
+            let wave = ripple.wave(shape.rect, now, still);
+            crate::paint::ripple::fill(backend, &shape, tint, wave, ts);
         }
         for item in &self.items {
             match item {
@@ -377,6 +443,7 @@ impl Layout {
                         color,
                         self.symbols,
                         self.symbol_weight,
+                        false,
                     );
                 }
             }
@@ -398,6 +465,7 @@ pub(in crate::presenter) fn symbol(
     color: [u8; 4],
     set: SymbolSet,
     weight: u16,
+    mirrored: bool,
 ) {
     // A role, an icon token's form, or `sf/` a role's Apple name (LLP 1121 D10).
     let Some(path) = exact_kernel::symbol_path_in(role, set) else {
@@ -414,7 +482,7 @@ pub(in crate::presenter) fn symbol(
         color
     };
     for d in path.d.split(';') {
-        glyph_in(backend, d, path, rect, paint, weight);
+        glyph_in(backend, d, path, rect, paint, weight, mirrored);
     }
     if group {
         backend.pop_opacity();
@@ -429,6 +497,7 @@ fn glyph_in(
     rect: Rect4,
     color: [u8; 4],
     weight: u16,
+    mirrored: bool,
 ) {
     let [_, _, bw, _] = crate::paint::view_box(symbol.view_box);
     let path = exact_kernel::svg::parse_d(d);
@@ -447,6 +516,13 @@ fn glyph_in(
         phase: 0.0,
     };
     let ts = crate::paint::fitted(symbol.view_box, rect);
+    let ts = if mirrored {
+        Transform::from_translate(2.0 * rect.0 + rect.2, 0.0)
+            .pre_scale(-1.0, 1.0)
+            .pre_concat(ts)
+    } else {
+        ts
+    };
     backend.svg_path(&paint, ts);
 }
 
@@ -456,6 +532,7 @@ fn glyph_in(
 fn alert(
     engine: &mut TextEngine,
     (title, message): (Option<&str>, Option<&str>),
+    (title_direction, message_directions): (Direction, &[Direction]),
     rows: &[Row],
     pop: ViewId,
     inputs: &Inputs,
@@ -466,22 +543,43 @@ fn alert(
     let inner = (width - 2.0 * DIALOG_PADDING).max(1.0);
     let mut items = Vec::new();
     let mut y = DIALOG_PADDING;
-    for (text, style, role, gap) in [
-        (title, HEADLINE_SMALL, Role::OnSurface, DIALOG_TITLE_GAP),
+    let title = title.into_iter().map(|text| {
         (
-            message,
-            BODY_MEDIUM,
-            Role::OnSurfaceVariant,
-            DIALOG_TEXT_GAP,
-        ),
-    ] {
-        let Some(text) = text else { continue };
-        let p = paragraph(
+            text.to_string(),
+            title_direction,
+            HEADLINE_SMALL,
+            Role::OnSurface,
+            DIALOG_TITLE_GAP,
+        )
+    });
+    let mut pieces = message.into_iter().flat_map(|text| text.split('\n'));
+    let mut remaining = message_directions.len();
+    let message = message_directions
+        .chunk_by(|a, b| a == b)
+        .map(|directions| {
+            let text = pieces
+                .by_ref()
+                .take(directions.len())
+                .collect::<Vec<_>>()
+                .join(" ");
+            remaining -= directions.len();
+            let gap = if remaining == 0 { DIALOG_TEXT_GAP } else { 0. };
+            (
+                text,
+                directions[0],
+                BODY_MEDIUM,
+                Role::OnSurfaceVariant,
+                gap,
+            )
+        });
+    for (text, direction, style, role, gap) in title.chain(message) {
+        let p = directed_paragraph(
             engine,
-            text,
+            &text,
             style.emboldened(inputs.bold_text),
             scale,
             Some(inner),
+            direction,
         );
         let height = p.height;
         items.push(Item::Text(p, (DIALOG_PADDING, y), role.color(dark), pop));
@@ -490,7 +588,7 @@ fn alert(
     // Each button's label and its box's size, then lines of them.
     let buttons: Vec<(Rc<Paragraph>, f32, f32)> = (rows.iter())
         .map(|row| {
-            let p = label(engine, &row.title, inputs, inner - 2.0 * BUTTON_PADDING);
+            let p = label(engine, row, inputs, inner - 2.0 * BUTTON_PADDING);
             let w = (p.width + 2.0 * BUTTON_PADDING).max(BUTTON_MIN.0);
             let h = (p.height + 20.0).max(BUTTON_MIN.1);
             (p, w.min(inner), h)
@@ -517,14 +615,22 @@ fn alert(
         for &i in line {
             let (p, w, h) = &buttons[i];
             let row = &rows[i];
-            let rect = (x, y + (tall - h) / 2.0, *w, *h);
+            let left = if inputs.direction == Direction::Rtl {
+                width - x - w
+            } else {
+                x
+            };
+            let rect = (left, y + (tall - h) / 2.0, *w, *h);
             let ink = match (row.enabled, row.destructive) {
                 (false, _) => Role::Disabled,
                 (true, true) => Role::Error,
                 (true, false) => Role::Primary,
             }
             .color(dark);
-            let at = (rect.0 + (w - p.width) / 2.0, rect.1 + (h - p.height) / 2.0);
+            let at = (
+                label_x(p, rect.0 + w / 2.0, 0.5),
+                rect.1 + (h - p.height) / 2.0,
+            );
             items.push(Item::Text(p.clone(), at, ink, row.node));
             targets[i] = Some(Target {
                 rect,
@@ -608,14 +714,15 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
                     let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
                     p.ellipsized(room(indent(row))).unwrap_or(p)
                 }
-                Entry::Item(row) => label(engine, &row.title, inputs, room(indent(row))),
-                Entry::Header(title, _) => {
-                    let p = paragraph(
+                Entry::Item(row) => label(engine, row, inputs, room(indent(row))),
+                Entry::Header(title, _, direction) => {
+                    let p = directed_paragraph(
                         engine,
                         title,
                         header.emboldened(inputs.bold_text && !desktop),
                         scale,
                         None,
+                        if desktop { Direction::Ltr } else { *direction },
                     );
                     p.ellipsized(room(0.)).unwrap_or(p)
                 }
@@ -638,13 +745,18 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
     for (entry, p) in entries.iter().zip(labels) {
         let (row, p) = match (entry, p) {
             (Entry::Item(row), Some(p)) => (row, p),
-            (Entry::Header(_, node), Some(p)) => {
+            (Entry::Header(_, node, _), Some(p)) => {
                 let tall = (p.height + 12.).max(if desktop { 28. } else { MENU_HEADER });
                 let ink = inputs.contrast.filter(|_| desktop).map_or_else(
                     || Role::OnSurfaceVariant.color(dark),
                     |palette| palette.text,
                 );
-                let at = (inset, y + (tall - p.height) / 2.0);
+                let x = if !desktop && inputs.direction == Direction::Rtl {
+                    label_x(&p, width - inset, 1.)
+                } else {
+                    label_x(&p, inset, 0.)
+                };
+                let at = (x, y + (tall - p.height) / 2.0);
                 items.push(Item::Text(p, at, ink, *node));
                 y += tall;
                 continue;
@@ -676,11 +788,22 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
             |p| if row.enabled { p.text } else { p.disabled },
         );
         if let Some(role) = lead(row) {
-            let at = (inset, y + (tall - symbol) / 2.0);
+            let x = if !desktop && inputs.direction == Direction::Rtl {
+                width - inset - symbol
+            } else {
+                inset
+            };
+            let at = (x, y + (tall - symbol) / 2.0);
             let rect = (at.0, at.1, symbol, symbol);
             items.push(Item::Symbol(role, rect, tint));
         }
-        let at = (inset + indent(row), y + (tall - p.height) / 2.0);
+        let x = inset + indent(row);
+        let x = if !desktop && inputs.direction == Direction::Rtl {
+            label_x(&p, width - x, 1.)
+        } else {
+            label_x(&p, x, 0.)
+        };
+        let at = (x, y + (tall - p.height) / 2.0);
         items.push(Item::Text(p, at, ink, row.node));
         let rect = if desktop {
             (4., y, width - 8., tall)
@@ -747,9 +870,14 @@ pub fn place(
     size: (f32, f32),
     window: (f32, f32),
     margins: (f32, f32),
+    direction: Direction,
 ) -> (f32, f32) {
     let (w, h) = size;
-    let across = [anchor.0, anchor.0 + anchor.2 - w, window.0 - w];
+    let across = if direction == Direction::Rtl {
+        [anchor.0 + anchor.2 - w, anchor.0, 0.0]
+    } else {
+        [anchor.0, anchor.0 + anchor.2 - w, window.0 - w]
+    };
     let x = (across.iter().copied())
         .find(|x| *x >= 0.0 && x + w <= window.0)
         .unwrap_or(across[1]);
@@ -769,11 +897,397 @@ pub fn place(
 mod tests {
     use super::*;
 
+    fn assert_text_bounds(layout: &Layout) {
+        let texts = layout.texts();
+        let painted = layout.items.iter().filter_map(|item| match item {
+            Item::Text(p, at, _, node) => Some((p, at, node)),
+            _ => None,
+        });
+        for ((node, rect), (p, at, painted_node)) in texts.iter().zip(painted) {
+            assert_eq!(node, painted_node);
+            let glyphs: Vec<_> = p.layout_runs().flat_map(|r| r.glyphs).collect();
+            let left = glyphs
+                .iter()
+                .map(|g| at.0 + g.x)
+                .fold(f32::INFINITY, f32::min);
+            let right = glyphs
+                .iter()
+                .map(|g| at.0 + g.x + g.w)
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                (rect.0 - left).abs() < 1.,
+                "text starts at {left}, accessibility at {rect:?}"
+            );
+            assert!(
+                (rect.0 + rect.2 - right).abs() < 1.,
+                "text ends at {right}, accessibility at {rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn alert_message_joins_adjacent_texts_with_the_same_direction() {
+        let mut engine = crate::text::fixtures::engine();
+        let inputs = Inputs {
+            dark: false,
+            direction: Direction::Rtl,
+            contrast: None,
+            font_scale: 1.,
+            bold_text: false,
+            window: (600., 800.),
+            room: 800.,
+        };
+        for (message, directions, expected) in [
+            (
+                "This cannot be undone.\nReally.",
+                vec![Direction::Ltr; 2],
+                vec!["This cannot be undone. Really."],
+            ),
+            ("نعم\nلا", vec![Direction::Rtl; 2], vec!["نعم لا"]),
+            (
+                "First.\nSecond.\nنعم\nلا\nLast.",
+                vec![
+                    Direction::Ltr,
+                    Direction::Ltr,
+                    Direction::Rtl,
+                    Direction::Rtl,
+                    Direction::Ltr,
+                ],
+                vec!["First. Second.", "نعم لا", "Last."],
+            ),
+        ] {
+            let layout = alert(
+                &mut engine,
+                (Some("Title"), Some(message)),
+                (Direction::Ltr, &directions),
+                &[],
+                1,
+                &inputs,
+            );
+            let messages: Vec<_> = layout
+                .items
+                .iter()
+                .skip(1)
+                .filter_map(|item| match item {
+                    Item::Text(p, at, ..) => Some((p, at)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(messages.len(), expected.len(), "{message}");
+            for ((p, _), expected) in messages.iter().zip(expected) {
+                let runs: Vec<_> = p.layout_runs().collect();
+                assert_eq!(runs.len(), 1, "short joined text fits one line");
+                assert_eq!(runs[0].text, expected);
+            }
+            assert_eq!(
+                layout.size.1,
+                DIALOG_PADDING * 2.
+                    + HEADLINE_SMALL.1
+                    + DIALOG_TITLE_GAP
+                    + BODY_MEDIUM.1 * messages.len() as f32
+                    + DIALOG_TEXT_GAP
+            );
+        }
+    }
+
+    #[test]
+    fn rtl_surfaces_keep_each_projected_labels_direction() {
+        let source = r#"component App
+  state changed = false
+  action change
+    changed = !changed
+  view
+    main direction="rtl"
+      dialog id="alert" role="alertdialog"
+        text "An English title" direction="ltr"
+        text "An English message" direction="ltr"
+        text "رسالة أخرى"
+        button press=change commandfor="alert" command="close"
+          text "Beginning of a very long English action ending here" direction="ltr"
+        button "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة" press=change commandfor="alert" command="close"
+        button "Cancel" commandfor="alert" command="close"
+      column id="menu" popover="auto"
+        column role="group" aria-label="Beginning of a very long English section ending here" direction="ltr"
+          button direction="rtl" press=change
+            text "Beginning of a very long English menu item ending here" direction="ltr"
+        column role="group" aria-label="بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة"
+          button "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة" press=change
+      select id="select"
+        option "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة" value="two"
+        option "Beginning of a very long English option ending here" direction="ltr" value="one"
+"#;
+        let (p, error) = crate::presenter::Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (300., 600.),
+            1.,
+            std::path::PathBuf::new(),
+            crate::presenter::PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let mut engine = TextEngine::from_font_files(
+            &[std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/fixtures/fonts/assets"
+            ))],
+            "DejaVu Sans",
+        );
+        let inputs = Inputs {
+            dark: false,
+            direction: Direction::Rtl,
+            contrast: None,
+            font_scale: 1.,
+            bold_text: false,
+            window: (300., 600.),
+            room: 600.,
+        };
+        let mut truncated = 0;
+        let mut prose = 0;
+        let mut rtl_truncated = 0;
+        for name in ["alert", "menu", "select"] {
+            let key = p.host.kernel().find_by_id(name)[0];
+            let id = p.host.kernel().node_by_key(key).unwrap().id;
+            let plan = if name == "select" {
+                p.select_plan(id)
+            } else {
+                p.surface_plan(id, name == "alert")
+            }
+            .unwrap();
+            let layout = Layout::of(&mut engine, &plan, id, &inputs);
+            assert_text_bounds(&layout);
+            for item in &layout.items {
+                let Item::Text(paragraph, _, _, _) = item else {
+                    continue;
+                };
+                for run in paragraph.layout_runs() {
+                    if run.text.starts_with("Beginning") {
+                        assert!(!run.rtl, "{name}: authored LTR label");
+                        assert!(
+                            run.glyphs.iter().any(|g| g.start == 0 && g.end > 0),
+                            "{name}: beginning kept"
+                        );
+                        let ellipsis = run
+                            .glyphs
+                            .iter()
+                            .find(|g| g.start == g.end)
+                            .expect("a long label is truncated");
+                        assert!(
+                            run.glyphs
+                                .iter()
+                                .filter(|g| g.start != g.end)
+                                .all(|g| g.x < ellipsis.x),
+                            "{name}: ellipsis at the end"
+                        );
+                        truncated += 1;
+                    } else if run.text.starts_with("بداية") {
+                        assert!(run.rtl, "{name}: authored RTL label");
+                        let first = run
+                            .glyphs
+                            .iter()
+                            .find(|g| g.start == 0 && g.end > 0)
+                            .expect("the first cluster survives truncation");
+                        let ellipsis = run
+                            .glyphs
+                            .iter()
+                            .find(|g| g.start == g.end)
+                            .expect("a long RTL label is truncated");
+                        assert!(
+                            run.glyphs.iter().all(|g| g.x <= first.x),
+                            "{name}: first cluster at the right"
+                        );
+                        assert!(
+                            run.glyphs
+                                .iter()
+                                .filter(|g| g.start != g.end)
+                                .all(|g| g.x > ellipsis.x),
+                            "{name}: ellipsis at the left"
+                        );
+                        rtl_truncated += 1;
+                    } else if run.text.starts_with("An English") {
+                        assert!(!run.rtl, "{name}: authored LTR prose");
+                        prose += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(truncated, 4);
+        assert_eq!(rtl_truncated, 4);
+        assert_eq!(prose, 2);
+    }
+
+    #[test]
+    fn truncated_rtl_surface_labels_fit_their_content_boxes() {
+        let mut engine = TextEngine::from_font_files(
+            &[std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/fixtures/fonts/assets"
+            ))],
+            "DejaVu Sans",
+        );
+        let row = Row {
+            node: 2,
+            title: "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة".into(),
+            direction: Direction::Rtl,
+            symbol: Some("checkmark".into()),
+            destructive: false,
+            enabled: true,
+            cancel: true,
+            checked: false,
+            opens: None,
+        };
+        for font_scale in [1., 2.] {
+            let inputs = Inputs {
+                dark: false,
+                direction: Direction::Rtl,
+                contrast: None,
+                font_scale,
+                bold_text: false,
+                window: (300., 600.),
+                room: 600.,
+            };
+            let entries = [
+                Entry::Header(row.title.clone(), 1, Direction::Rtl),
+                Entry::Item(row.clone()),
+            ];
+            let menu = menu(&mut engine, &entries, &inputs, false);
+            let alert = alert(
+                &mut engine,
+                (None, None),
+                (Direction::Rtl, &[]),
+                std::slice::from_ref(&row),
+                0,
+                &inputs,
+            );
+            for (layout, is_alert) in [(&menu, false), (&alert, true)] {
+                for item in &layout.items {
+                    let Item::Text(p, at, _, node) = item else {
+                        continue;
+                    };
+                    assert!(p
+                        .layout_runs()
+                        .flat_map(|r| r.glyphs)
+                        .any(|g| g.start == g.end));
+                    let (left, _, width, _) = text_rect(p, *at);
+                    let (start, end) = if is_alert {
+                        let (x, _, w, _) = layout.targets[0].rect;
+                        assert!(
+                            (left + width / 2. - (x + w / 2.)).abs() < 0.01,
+                            "alert label must be centered at scale {font_scale}: {left}, {width}, {x}, {w}"
+                        );
+                        (x + BUTTON_PADDING, x + w - BUTTON_PADDING)
+                    } else {
+                        let indent = if *node == 2 {
+                            MENU_SYMBOL + MENU_INSET
+                        } else {
+                            0.
+                        };
+                        (MENU_INSET, layout.size.0 - MENU_INSET - indent)
+                    };
+                    assert!(left >= start - 0.01, "label starts inside its content box");
+                    assert!(
+                        left + width <= end + 0.01,
+                        "label ends inside its content box at scale {font_scale}: {} > {end}",
+                        left + width
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rtl_select_menu_keeps_labels_and_symbols_at_its_widened_start() {
+        let mut engine = crate::text::fixtures::engine();
+        let entries = vec![
+            Entry::Header("Pick".into(), 1, Direction::Rtl),
+            Entry::Item(Row {
+                node: 2,
+                title: "One".into(),
+                direction: exact_kernel::Direction::Ltr,
+                symbol: None,
+                destructive: false,
+                enabled: true,
+                cancel: false,
+                checked: true,
+                opens: None,
+            }),
+            Entry::Separator,
+        ];
+        let inputs = Inputs {
+            dark: false,
+            direction: Direction::Rtl,
+            contrast: None,
+            font_scale: 1.,
+            bold_text: false,
+            window: (400., 800.),
+            room: 800.,
+        };
+        let mut layout = menu(&mut engine, &entries, &inputs, false);
+        assert!(layout.size.0 < 300.);
+        layout.widen(300., true);
+        for item in &layout.items {
+            match item {
+                Item::Symbol(_, rect, _) => assert_eq!(rect.0 + rect.2, 288.),
+                Item::Text(p, at, _, node) => {
+                    let bounds = text_rect(p, *at);
+                    let end = if *node == 1 { 288. } else { 252. };
+                    assert!((bounds.0 + bounds.2 - end).abs() < 0.01);
+                }
+                Item::Rule(rect, _) => assert_eq!(rect.2, 300.),
+            }
+        }
+        assert_eq!(layout.targets[0].rect.2, 300.);
+        assert_text_bounds(&layout);
+    }
+
+    #[test]
+    fn rtl_alert_text_aligns_each_line_at_the_inline_start() {
+        let mut engine = TextEngine::from_font_files(
+            &[std::path::Path::new(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/fixtures/fonts/assets"
+            ))],
+            "DejaVu Sans",
+        );
+        let inputs = Inputs {
+            dark: false,
+            direction: Direction::Rtl,
+            contrast: None,
+            font_scale: 1.,
+            bold_text: false,
+            window: (400., 800.),
+            room: 800.,
+        };
+        let layout = alert(
+            &mut engine,
+            (Some("عنوان"), Some("نعم\nلا")),
+            (Direction::Rtl, &[Direction::Rtl, Direction::Rtl]),
+            &[],
+            1,
+            &inputs,
+        );
+        assert_text_bounds(&layout);
+        let end = layout.size.0 - DIALOG_PADDING;
+        for item in &layout.items {
+            if let Item::Text(p, at, ..) = item {
+                for run in p.layout_runs() {
+                    let right = run.glyphs.iter().map(|g| g.x + g.w).fold(0., f32::max);
+                    assert!(
+                        (at.0 + right - end).abs() < 1.,
+                        "text ends at {}, expected {end}",
+                        at.0 + right
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn material_surface_paragraphs_measure_with_one_bold_text_step() {
         let row = Row {
             node: 2,
             title: "Action label".into(),
+            direction: exact_kernel::Direction::Ltr,
             symbol: Some("calendar".into()),
             destructive: false,
             enabled: true,
@@ -783,15 +1297,21 @@ mod tests {
         };
         let alert = Plan::Alert {
             title: Some("Headline".into()),
+            title_direction: Direction::Ltr,
             message: Some("Supporting text".into()),
+            message_directions: vec![Direction::Ltr],
             rows: vec![row.clone()],
             cancellable: true,
             outside: false,
         };
-        let menu = Plan::Menu(vec![Entry::Header("Section".into(), 1), Entry::Item(row)]);
-        let mut engine = TextEngine::new();
+        let menu = Plan::Menu(vec![
+            Entry::Header("Section".into(), 1, Direction::Ltr),
+            Entry::Item(row),
+        ]);
+        let mut engine = crate::text::fixtures::engine();
         for bold_text in [false, true, false] {
             let inputs = Inputs {
+                direction: Direction::Ltr,
                 dark: false,
                 contrast: None,
                 font_scale: 1.,

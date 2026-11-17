@@ -7,6 +7,9 @@
 //! source that can be moved to the thread and a TypeScript module that must
 //! be built there.
 
+mod calls;
+mod order;
+use order::{Running, Waiting};
 mod worker;
 use crate::envelope;
 use exact_plan::{Plan, Value};
@@ -279,6 +282,16 @@ pub struct Placed<D> {
     kept: HashMap<u64, Option<u64>>,
     deliveries: HashMap<u64, Arc<Mutex<Option<Outcome>>>>,
     delivery_waiters: HashSet<u64>,
+    /// What holds the Store on the owner while its reply is outstanding, and
+    /// what waits for it, in order (`order.rs`, LLP 1027.002 Change 2).
+    running: Option<Running>,
+    held: VecDeque<Waiting>,
+    /// A kept reply's delivery continuation, to its kept token.
+    deliveries_of: HashMap<u64, u64>,
+    /// Tests of the owner queue's own mechanics (coalesced retirements,
+    /// unqueued turns) queue several turns at once; production never does.
+    #[cfg(test)]
+    unordered: bool,
     stages: HashMap<(Key, Option<u64>), VecDeque<Stage>>,
     more: HashMap<Target, Vec<Request>>,
     next: u64,
@@ -346,6 +359,11 @@ impl<D: DataSource + 'static> Placed<D> {
             kept: HashMap::new(),
             deliveries: HashMap::new(),
             delivery_waiters: HashSet::new(),
+            running: None,
+            held: VecDeque::new(),
+            deliveries_of: HashMap::new(),
+            #[cfg(test)]
+            unordered: false,
             stages: HashMap::new(),
             more: HashMap::new(),
             next: 0,
@@ -360,6 +378,18 @@ impl<D: DataSource + 'static> Placed<D> {
     #[cfg(test)]
     pub(crate) fn staged_keys(&self) -> usize {
         self.stages.len()
+    }
+
+    /// The app's identity for a source that names none (`DataSource::app_id`'s
+    /// default), as `exact_logic::Swappable::named` gives one app.json's: a
+    /// generated host crate composes an unnamed data crate beside app.ts under
+    /// the module's identity (LLP 1153.003 D2), which `Mixed` requires both
+    /// sides to share. A source that names its own id keeps it.
+    pub fn named(mut self, app: &str) -> Self {
+        if self.app_id.is_empty() {
+            self.app_id = app.into();
+        }
+        self
     }
 
     /// The placement this was given (what `placement()` reports outside
@@ -384,202 +414,6 @@ impl<D: DataSource + 'static> Placed<D> {
             .checked_add(1)
             .ok_or_else(|| unavailable("placed tokens exhausted"))?;
         Ok(self.next)
-    }
-
-    fn record(&mut self, k: Key, recorded: Recorded) -> Result<Answer, DataError> {
-        let token = self.token()?;
-        let fetch = match &recorded {
-            Recorded::Resume { fetch, .. } => *fetch,
-            _ => None,
-        };
-        let instance = match &recorded {
-            Recorded::Answer { instance, .. } | Recorded::Resume { instance, .. } => {
-                instance.clone()
-            }
-        };
-        self.recorded.insert(token, recorded);
-        self.stages
-            .entry((k, fetch))
-            .or_default()
-            .push_back(Stage::Turn(token));
-        let mut request = Request::continuation(token);
-        request.fetch = fetch;
-        request.module = instance;
-        Ok(Answer::Later(request))
-    }
-
-    fn answer_with(
-        &mut self,
-        target: Option<Target>,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-    ) -> Result<Answer, DataError> {
-        if self.inline() {
-            return crate::answer(self.here()?, target, store, source, args);
-        }
-        self.sync_generation();
-        self.record(
-            key(target, source, args),
-            Recorded::Answer {
-                instance: self.generation.clone(),
-                target,
-                source: source.to_string(),
-                args: args.to_vec(),
-            },
-        )
-    }
-
-    fn parse_with(
-        &mut self,
-        target: Option<Target>,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Answer, DataError> {
-        if self.inline() {
-            return crate::parse(self.here()?, target, store, source, args, outcome);
-        }
-        let call_key = key(target, source, args);
-        // Without a fetch, only a single request can identify the reply (LLP 1162 D2).
-        let mut requests = self.stages.keys().filter(|(k, _)| *k == call_key);
-        let fetch = requests.next().and_then(|(_, fetch)| *fetch);
-        if requests.next().is_some() {
-            return Err(unavailable(format!(
-                "`{source}`: more than one request is in flight; the reply must name its fetch"
-            )));
-        }
-        self.parse_with_fetch(target, fetch, store, source, args, outcome)?
-            .ok_or_else(|| unavailable("the answer still has requests in flight"))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn parse_with_fetch(
-        &mut self,
-        target: Option<Target>,
-        fetch: Option<u64>,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Option<Answer>, DataError> {
-        self.parse_with_request(target, (fetch, None), store, source, args, outcome)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn parse_with_request(
-        &mut self,
-        target: Option<Target>,
-        request: (Option<u64>, Option<u64>),
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Option<Answer>, DataError> {
-        let (fetch, continuation) = request;
-        let call_key = key(target, source, args);
-        let k = (call_key.clone(), fetch);
-        let stage = self.stages.get_mut(&k).and_then(|stages| {
-            let pos = match continuation {
-                Some(token) => stages.iter().position(|s| match s {
-                    Stage::Turn(t) => *t == token,
-                    Stage::Yielded { outer, .. } => *outer == Some(token),
-                })?,
-                None => 0,
-            };
-            stages.remove(pos)
-        });
-        if self.stages.get(&k).is_some_and(VecDeque::is_empty) {
-            self.stages.remove(&k);
-        }
-        match stage {
-            Some(Stage::Turn(_)) => {
-                let mut more = Vec::new();
-                let answer = envelope::apply_optional(outcome, store, &mut self.logs, &mut more)?;
-                let Some(Answer::Later(request)) = answer else {
-                    return Ok(answer);
-                };
-                let request = self.yield_request(call_key.clone(), args, request)?;
-                if let Some(target) = target {
-                    let more = more
-                        .into_iter()
-                        .map(|r| self.yield_request(call_key.clone(), args, r))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if !more.is_empty() {
-                        self.more.insert(target, more);
-                    }
-                }
-                Ok(Some(Answer::Later(request)))
-            }
-            Some(Stage::Yielded { child, .. }) => {
-                if let Some(fetch) = fetch {
-                    self.sent.remove(&(call_key.clone(), fetch));
-                }
-                self.record(
-                    call_key,
-                    Recorded::Resume {
-                        instance: self.generation.clone(),
-                        fetch,
-                        continuation: child,
-                        target,
-                        source: source.to_string(),
-                        args: args.to_vec(),
-                        outcome,
-                    },
-                )
-                .map(Some)
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn yield_request(
-        &mut self,
-        k: Key,
-        args: &[Value],
-        mut request: Request,
-    ) -> Result<Request, DataError> {
-        if let Some(fetch) = request.fetch.filter(|fetch| {
-            request.has_effects() && self.inner.as_ref().is_some_and(|s| s.keeps_sent(*fetch))
-        }) {
-            self.sent.insert((k.clone(), fetch));
-        }
-        let child = request.continuation;
-        if let Some(child) = child {
-            if self
-                .inner
-                .as_ref()
-                .is_some_and(|s| s.host_continuation(child))
-            {
-                let token = self.token()?;
-                self.hosted.insert(token, child);
-                request.continuation = Some(token);
-            }
-        }
-        if let Some(due) = request.due_ms {
-            let resume = Recorded::Resume {
-                instance: self.generation.clone(),
-                fetch: request.fetch,
-                continuation: request.continuation,
-                target: k.0,
-                source: k.1.clone(),
-                args: args.to_vec(),
-                outcome: Dispatch::again_outcome(),
-            };
-            return self.record(k, resume).map(|answer| match answer {
-                Answer::Later(request) => request.due(due),
-                _ => unreachable!("a recorded turn"),
-            });
-        }
-        self.stages
-            .entry((k, request.fetch))
-            .or_default()
-            .push_back(Stage::Yielded {
-                outer: request.continuation,
-                child,
-            });
-        Ok(request)
     }
 }
 
@@ -950,13 +784,16 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     /// key whose recorded call hasn't been dispatched.
     fn forgotten(&mut self, store: &exact_runner::Store, in_flight: &[InFlight<'_>]) {
         let tokens: HashSet<u64> = in_flight.iter().filter_map(|f| f.continuation).collect();
-        self.recorded
-            .retain(|token, call| recorded_key(call).0.is_none() || tokens.contains(token));
-        self.hosted.retain(|token, _| tokens.contains(token));
         let live: HashMap<Key, Option<u64>> = in_flight
             .iter()
             .map(|f| (key(Some(f.target), f.source, f.args), f.continuation))
             .collect();
+        let held_live = self.held_live(&live);
+        self.recorded.retain(|token, call| {
+            recorded_key(call).0.is_none() || tokens.contains(token) || held_live.contains(token)
+        });
+        self.hosted.retain(|token, _| tokens.contains(token));
+        self.let_go(&live);
         let recorded = &self.recorded;
         let newer = |k: &Key| matches!(live.get(k), Some(Some(t)) if matches!(recorded.get(t), Some(Recorded::Answer { .. })));
         self.more
@@ -1031,6 +868,12 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                 self.hosted.remove(&token);
             }
             return dispatch;
+        }
+        if self.owner.is_some() && !self.unordered() {
+            self.sync_generation();
+            if !self.reserve(token) {
+                return Dispatch::Held;
+            }
         }
         let Some(recorded) = self.recorded.remove(&token) else {
             return match self.inner.as_mut() {
@@ -1123,6 +966,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             .into_iter()
             .map(|token| (token, DataSource::dispatch(self, token, store)))
             .collect();
+        if self.owner.is_some() {
+            self.sync_generation();
+            self.release_next(store, &mut out);
+        }
         let Some(inner) = self.inner.as_mut() else {
             return out;
         };
@@ -1144,10 +991,22 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
     }
 
     fn discard(&mut self, token: u64) {
+        if let Some(kept) = self.deliveries_of.get(&token).copied() {
+            self.delivery_ended(kept);
+            self.kept.remove(&kept);
+        }
         if self.deliveries.remove(&token).is_some() {
             self.delivery_waiters.remove(&token);
             return;
         }
+        self.turn_ended(token);
+        self.held
+            .retain(|w| !matches!(w, Waiting::Turn(t) if *t == token));
+        // The exact stage, so a later call with the same key cannot take it.
+        for stages in self.stages.values_mut() {
+            stages.retain(|s| !matches!(s, Stage::Turn(t) if *t == token));
+        }
+        self.stages.retain(|_, stages| !stages.is_empty());
         if let Some(child) = self.hosted.remove(&token) {
             if let Some(inner) = self.inner.as_mut() {
                 inner.discard(child);
@@ -1155,24 +1014,13 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             return;
         }
         match self.recorded.remove(&token) {
-            Some(recorded) => {
-                let fetch = match &recorded {
-                    Recorded::Resume { fetch, .. } => *fetch,
-                    _ => None,
-                };
-                let k = (recorded_key(&recorded), fetch);
-                if let Some(stages) = self.stages.get_mut(&k) {
-                    stages.pop_back();
-                    if stages.is_empty() {
-                        self.stages.remove(&k);
-                    }
-                }
-            }
+            Some(_) => {}
             None => {
+                // On an owner, a token not recorded here is ended or
+                // unknown: it is never the child's to hear.
                 if let Some(owner) = &self.owner {
                     owner.lock().unwrap().unqueued.remove(&token);
-                }
-                if let Some(inner) = self.inner.as_mut() {
+                } else if let Some(inner) = self.inner.as_mut() {
                     inner.discard(token);
                 }
             }
@@ -1286,6 +1134,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             .remove(&token)
             .ok_or_else(|| unavailable("unknown kept worker reply"))?;
         let Some(child) = child else {
+            // The delivery's envelope is back, whatever it holds: the Store
+            // is free before it is applied, so a failing apply cannot hold it.
+            self.delivery_ended(token);
             envelope::apply(outcome, store, &mut self.logs)?;
             return Ok(None);
         };
@@ -1300,14 +1151,9 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                 wake();
             }
         });
-        let unsent = owner.lock().unwrap().turn(Job::KeptReply {
-            token: child,
-            outcome,
-            snapshot: envelope::snapshot(store, &self.grants),
-            clock: store.clock_ms(),
-            reply,
-        });
-        drop(unsent);
+        drop(owner);
+        // It reads and writes the Store too: it takes its turn (`order.rs`).
+        self.deliver_in_turn((token, continuation, child), outcome, reply, store);
         Ok(Some(Request::continuation(continuation)))
     }
 
@@ -1323,6 +1169,15 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         self.here()?.module_landed(store, token, outcome)
     }
 
+    /// A worker's module makes none: its listener's fetch is refused (LLP
+    /// 1175 D6).
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        match (&self.owner, &mut self.inner) {
+            (None, Some(source)) => DataSource::take_reports(source),
+            _ => Vec::new(),
+        }
+    }
+
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         match self.inner.as_ref() {
             Some(inner) if self.owner.is_none() => inner.background_state(),
@@ -1330,7 +1185,8 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         }
     }
 
-    /// A replacement keeps its placement (LLP 1027.002 §6). A moved source
+    /// A replacement keeps its placement (LLP 1027.002 §6) and the name it
+    /// was given. A moved source
     /// has no `Self` left here to pair; a built one is replaced through its
     /// template.
     fn replacement(&self, plan: &[u8], receipt: &str, module: Vec<u8>) -> Result<Self, DataError> {
@@ -1339,12 +1195,14 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                 inner.replacement(plan, receipt, module)?,
                 self.placement,
                 Spawn::Build(*build),
-            )),
+            )
+            .named(&self.app_id)),
             (Some(inner), Spawn::Move(moved)) => Ok(Self::with_spawn(
                 inner.replacement(plan, receipt, module)?,
                 self.placement,
                 Spawn::Move(*moved),
-            )),
+            )
+            .named(&self.app_id)),
             (None, _) => Err(unavailable(
                 "a placed source is binary-bound once on its owner; rebuild it",
             )),

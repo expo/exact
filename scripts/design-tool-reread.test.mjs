@@ -1,8 +1,8 @@
-// The design read again after a peer's write (the third pass's #5) against a real `tamber serve`: a write that names
+// The design read again after a peer's write (the third pass's #5) against a real `forma serve`: a write that names
 // its tokens (an agent's set-token) is read again as describe, a resolve for each token it moved and each whose
 // entry moved (a package's token derived from the one the app's line set, which the event, of the app's file, does
 // not name), and hello, its rows shown with every other row as the last whole read had it; a hand edit, which names
-// no tokens, and a write that adds a token each read whole, each in one `resolve` (tamber/1.17's `tokens`; one per
+// no tokens, and a write that adds a token each read whole, each in one `resolve` (forma/1.17's `tokens`; one per
 // token took the clone's 267 3.6 s, at the one server behind each other).
 import { expect, onTestFinished, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
@@ -21,24 +21,24 @@ test('a peer\'s write is read again as only the tokens it moved, a package\'s de
   cpSync(resolve(ROOT, 'apps/theme-fixture/app.json'), join(app, 'app.json'));
   // brand, a token of the app's derived from it, and the package's reading.card set over to it, whose
   // reading.edge, the package's own line, derives from reading.card.
-  const design = `tamber t\n\ntheme\n  brand = #336699\n  accent = brand\n  reading.card = brand\n${FILLERS.map((f, i) => `  ${f} = #10101${i}\n`).join('')}`;
-  writeFileSync(join(app, 'app.tamber'), design);
+  const design = `forma t\n\ntheme\n  brand = #336699\n  accent = brand\n  reading.card = brand\n${FILLERS.map((f, i) => `  ${f} = #10101${i}\n`).join('')}`;
+  writeFileSync(join(app, 'app.forma'), design);
   const pkg = join(app, 'node_modules/@acme/reading');
   mkdirSync(pkg, { recursive: true });
   writeFileSync(join(pkg, 'package.json'), '{"name":"@acme/reading","version":"1.0.0","exports":{".":"./index.contract"}}');
   writeFileSync(join(pkg, 'index.contract'), 'component ReadingCard\n  view\n    column background-color="reading.card" border-color="reading.edge" border-width=1\n      text "x"\n');
-  writeFileSync(join(pkg, 'reading.tamber'), 'tamber reading\n\ntheme\n  reading.card = #112233\n  reading.edge = reading.card\n');
+  writeFileSync(join(pkg, 'reading.forma'), 'forma reading\n\ntheme\n  reading.card = #112233\n  reading.edge = reading.card\n');
   writeFileSync(join(app, 'app.contract'), `use ReadingCard from "@acme/reading"\ncomponent App\n  view\n    column background-color="accent" color="brand"\n${FILLERS.map(f => `      text "${f}" color="${f}"\n`).join('')}      ReadingCard()\n`);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
-  git('init', '-q'); git('add', 'app.json', 'app.tamber', 'app.contract'); git('commit', '-q', '-m', 'design');
+  git('init', '-q'); git('add', 'app.json', 'app.forma', 'app.contract'); git('commit', '-q', '-m', 'design');
   // Each request the tool sends the server, in order (the long poll's GET has no method).
   const asked = [];
   const tool = await proxied(app, request => { if (request.method) asked.push({ method: request.method, tokens: request.tokens ?? [request.token] }); });
   const said = signals('reread');
   onTestFinished(said.drop);
   try {
-    const token = (await (await fetch(`${tool.origin}/__tamber/token`)).json()).token;
-    const api = async body => (await (await fetch(`${tool.origin}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: JSON.stringify(body) })).json());
+    const token = (await (await fetch(`${tool.origin}/__forma/token`)).json()).token;
+    const api = async body => (await (await fetch(`${tool.origin}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: JSON.stringify(body) })).json());
     const all = (await api({ method: 'describe' })).ok.ir.tokens.map(t => t.name);
     expect(all).toEqual(expect.arrayContaining(['brand', 'accent', 'reading.card', 'reading.edge', ...FILLERS]));
     const settle = ['clock held changes 30s', 'clock data', 'clock +1', 'clock data', 'clock +1', 'clock data', 'tree'];
@@ -63,7 +63,7 @@ test('a peer\'s write is read again as only the tokens it moved, a package\'s de
     };
     // 1: the peer sets brand; 2: a hand edit of a filler; 3: the peer adds a token.
     await write(1, () => peer({ op: 'set-token', name: 'brand', when: [], value: '#cc3300' }));
-    await write(2, () => writeFileSync(join(app, 'app.tamber'), readFileSync(join(app, 'app.tamber'), 'utf8').replace('filler.a = #101010', 'filler.a = #202020')));
+    await write(2, () => writeFileSync(join(app, 'app.forma'), readFileSync(join(app, 'app.forma'), 'utf8').replace('filler.a = #101010', 'filler.a = #202020')));
     await write(3, () => peer({ op: 'add-token', name: 'filler.new', value: '#303030' }));
     await new Promise(ok => drive.once('exit', ok));
     expect(drive.exitCode, driveSaid).toBe(0);
@@ -79,7 +79,7 @@ test('a peer\'s write is read again as only the tokens it moved, a package\'s de
     expect(['brand', 'accent', 'reading.card', 'reading.edge'].map(t => cell(first, t))).toEqual(Array(4).fill('#336699ff'));
     // The peer's write: describe, the four tokens it moved (the package's derived one by its entry), hello; every row shown.
     expect(resolved(1)).toEqual(['accent', 'brand', 'reading.card', 'reading.edge']);
-    // One describe, one resolve of them all (tamber/1.17's `tokens`), and its hello.
+    // One describe, one resolve of them all (forma/1.17's `tokens`), and its hello.
     expect(count(1, 'describe')).toBe(1);
     expect(count(1, 'resolve')).toBe(1);
     expect(count(1, 'hello')).toBeGreaterThanOrEqual(1);
@@ -106,15 +106,15 @@ test('a batch whose reply passes 1 MiB (a stream\'s cap, not a fetch\'s) is read
   // Each is 60 long names, within a stack's 64.
   const stack = n => Array.from({ length: 60 }, (_, i) => `f${n}x${i}-${'y'.repeat(54)}`).join(', ');
   const faces = Array.from({ length: 180 }, (_, n) => `face${n}`);
-  writeFileSync(join(app, 'app.tamber'), `tamber t\n\ntheme\n  ink = #111111\n${faces.map((f, n) => `  ${f}: family = ${stack(n)}\n`).join('')}`);
+  writeFileSync(join(app, 'app.forma'), `forma t\n\ntheme\n  ink = #111111\n${faces.map((f, n) => `  ${f}: family = ${stack(n)}\n`).join('')}`);
   writeFileSync(join(app, 'app.contract'), `component App\n  view\n    column background-color="ink"\n${faces.map(f => `      text "x" font-family="${f}"\n`).join('')}`);
   const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: app });
   git('init', '-q'); git('add', '.'); git('commit', '-q', '-m', 'design');
   const asked = [], sizes = [];
   const tool = await proxied(app, request => { if (request.method) asked.push({ method: request.method, tokens: request.tokens ?? [request.token] }); });
   try {
-    const token = (await (await fetch(`${tool.origin}/__tamber/token`)).json()).token;
-    const reply = await (await fetch(`${tool.origin}/__tamber`, { method: 'POST', headers: { 'x-exact-tamber-token': token }, body: JSON.stringify({ method: 'resolve', tokens: ['ink', ...faces] }) })).text();
+    const token = (await (await fetch(`${tool.origin}/__forma/token`)).json()).token;
+    const reply = await (await fetch(`${tool.origin}/__forma`, { method: 'POST', headers: { 'x-exact-forma-token': token }, body: JSON.stringify({ method: 'resolve', tokens: ['ink', ...faces] }) })).text();
     sizes.push(reply.length);
     expect(reply.length).toBeGreaterThan(1 << 20);
     // (Two cells' subtrees: the whole tree of 180 rows of 4 KB stacks is past what a reply prints.)
@@ -138,11 +138,11 @@ test('what a read again resolves: the tokens each event since the kept read name
   const tok = (name, value, more = {}) => ({ name, kind: 'color', values: [value], entries: null, ...more });
   // Each token's resolve as the server gives it at describe's revision: its one tuple's value the entry's.
   const answersOf = tokens => tokens.map(t => ({ tuples: [{ value: t.values[0] }] }));
-  const described = (tokens, components = []) => ({ files: { 'app.tamber': 'r' }, packages: [], ir: { axes: [], tuples: 1, tokens, components } });
-  const base = [tok('brand', '#111'), tok('accent', '#111'), tok('edge', '#111', { file: 'p.tamber', package: 'p' }), tok('other', '#222')];
+  const described = (tokens, components = []) => ({ files: { 'app.forma': 'r' }, packages: [], ir: { axes: [], tuples: 1, tokens, components } });
+  const base = [tok('brand', '#111'), tok('accent', '#111'), tok('edge', '#111', { file: 'p.forma', package: 'p' }), tok('other', '#222')];
   const kept = keep('e1', 5, described(base), answersOf(base));
-  const moved = [tok('brand', '#333'), tok('accent', '#333'), tok('edge', '#333', { file: 'p.tamber', package: 'p' }), tok('other', '#222')];
-  const event = (seq, changed, epoch = 'e1') => heard({ event: 'changed', epoch, seq, changed: changed && changed.map(token => ({ file: 'app.tamber', token })) });
+  const moved = [tok('brand', '#333'), tok('accent', '#333'), tok('edge', '#333', { file: 'p.forma', package: 'p' }), tok('other', '#222')];
+  const event = (seq, changed, epoch = 'e1') => heard({ event: 'changed', epoch, seq, changed: changed && changed.map(token => ({ file: 'app.forma', token })) });
   // Before and at the kept read's seq, and another run's: not this read's. After it: brand, accent; edge by its entry.
   event(4, null); event(5, ['other']); event(9, null, 'e0'); event(6, ['brand']); event(7, ['accent']); heard({ event: 'committed', seq: 8 });
   expect([...again(kept, 'e1', described(moved), [])].sort()).toEqual(['accent', 'brand', 'edge']);
@@ -186,9 +186,9 @@ test('resolveAll: one resolve with tokens; asked again by name when a server ans
   // A server before 1.17 refuses `tokens` (no `token`): each by name, with the file asked.
   sent.length = 0;
   const old = async (_, body) => { sent.push(body); return body.tokens ? { error: 'refused', reply: { error: { message: '`token` is a string, and needed' } } } : ok(body.token); };
-  expect((await resolveAll(old, ['x', 'y'], { file: 'p.tamber' }, 1000, () => true)).map(r => r.reply.ok.token)).toEqual(['x', 'y']);
+  expect((await resolveAll(old, ['x', 'y'], { file: 'p.forma' }, 1000, () => true)).map(r => r.reply.ok.token)).toEqual(['x', 'y']);
   expect(sent.map(b => b.token ?? 'batch')).toEqual(['batch', 'x', 'y']);
-  expect(sent.every(b => b.file === 'p.tamber')).toBe(true);
+  expect(sent.every(b => b.file === 'p.forma')).toBe(true);
   // A batch that reached no server: each name's answer, nothing asked again.
   sent.length = 0;
   const gone = async (_, body) => { sent.push(body); return { error: 'no server', reply: {} }; };
@@ -201,7 +201,7 @@ test('resolveAll: one resolve with tokens; asked again by name when a server ans
   expect(sent.map(b => b.tokens.length)).toEqual([1024, 1024, 452]);
   expect(r2500.map(r => r.reply.ok.token)).toEqual(many);
   sent.length = 0;
-  const heavy = async (_, body) => { sent.push(body); return body.tokens.length > 2 ? { error: 'refused', reply: { error: { message: 'tamber-resolve-batch: one resolve answers at most 16 MiB', id: 'tamber-resolve-batch' } } } : batch(_, body).then(r => (sent.pop(), r)); };
+  const heavy = async (_, body) => { sent.push(body); return body.tokens.length > 2 ? { error: 'refused', reply: { error: { message: 'forma-resolve-batch: one resolve answers at most 16 MiB', id: 'forma-resolve-batch' } } } : batch(_, body).then(r => (sent.pop(), r)); };
   const r5 = await resolveAll(heavy, ['a', 'b', 'c', 'd', 'e'], {}, 1000, () => true);
   expect(r5.map(r => r.reply.ok.token)).toEqual(['a', 'b', 'c', 'd', 'e']);
   expect(sent.map(b => b.tokens.length)).toEqual([5, 3, 2, 1, 2]);

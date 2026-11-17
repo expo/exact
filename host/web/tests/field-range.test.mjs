@@ -21,6 +21,7 @@ const page = `<button id="outside">Outside</button><div id="exact-root"></div>
   import { runFocusCommands, controlEvent, onSelection } from './navigation.js';
   import { onValue, OnHooks, onSelectionChange } from './rt.js';
   import * as rt from './rt.js';
+  rt.useCommands({ preventDefault: commands.preventDefault, stopPropagation: commands.stopPropagation });
   window.rt = rt;
   window.bindSelection = field => onSelectionChange(field, 'selectionchange', record => window.seen.push(record), (name, f) => field.addEventListener(name, f));
   import './files.js';
@@ -67,7 +68,10 @@ async function inChrome(test) {
     await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
     await test(evaluate, call);
   } finally {
+    // Chrome writes its profile until it has exited.
+    const exited = child.exitCode === null && child.signalCode === null ? new Promise((ok) => child.once('exit', ok)) : null;
     child.kill();
+    await exited;
     server.close();
     rmSync(profile, { recursive: true, force: true });
   }

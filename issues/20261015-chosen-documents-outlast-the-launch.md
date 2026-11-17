@@ -25,11 +25,13 @@ the draft began from (D2a), and the document is watched (D1).
 `kept.drives.mjs` drives it; where the file is on this machine's disk,
 another program replaces it (a new file renamed over the path) mid-session.
 
-- **Linux** (the host built for macOS, headless): the editor's atomic save
-  lands and reads back at the same `doc:` path; after another program's
-  replacement, the save of a draft begun from the earlier file is refused
-  `ECHANGED`, the draft kept, and the path reads the other program's file.
-  That host has no inotify, so the watch's re-ask is not shown there.
+- **Linux**: the host built for macOS showed the editor's atomic save landing
+  and reading back at the same `doc:` path, then refused `ECHANGED` after
+  another program replaced the file. On 2026-11-14 the same fixture ran on
+  Linux 6.8 from an ext4 guest filesystem: inotify made the replacement appear
+  beneath the draft, the refused save kept the draft, and the other program's
+  file stayed on disk. `cargo test -p exact-painted --lib doc_watch` passed
+  there as well.
 - **The web**: the editor's atomic save, through the agent, which hands the
   page in-memory handles that no other program can reach. Over real handles
   in Chrome (`host/web/documents-kept.test.mjs`): a kept file saved by the
@@ -41,6 +43,49 @@ another program replaces it (a new file renamed over the path) mid-session.
   reads the editor's save after a relaunch; replaced by another program, it
   is forgotten at the next launch) and the watch. The fixture builds for
   macOS, but the drive was not run: the screen was locked.
+
+## Status (2026-11-14, macOS selected-file watch)
+
+Main's shipped FSEvents watch retains its recorded claim that watching the
+parent folder survives an atomic replace at a selected path. No measurement on
+this base contradicts it. Branch `fs/doc-watch` attempted a retained descriptor
+watch on `e7fe8fa07`, but it does not ship. Its E1 experiment observed directory
+`NOTE_WRITE` for rename-over and no vnode event on the replaced leaf; E2 observed
+three to five FSEvents deliveries in five trials per path-spelling cell on macOS
+27.0.1. Its last review also found a FIFO that could block shutdown, two
+descriptor-bound coordination races, a leaf that never re-armed after `EACCES`,
+a stale stamp across an unobserved removal and re-addition, and a write that
+could be announced twice. LLP 1069.010.000 retains that attempt's record; none
+of its descriptor-watch code ships.
+
+## Status (2026-11-14, Linux picker review)
+
+`Linux document pickers use the app's declared file types, and a declared
+suffix means the same on every host` fixes the portable suffix rule and sends
+the declared filters to Linux. This issue remains open for the real GNOME and
+KDE checks and the other work under "What remains (2026-10-26)".
+
+The JavaScript `readManifest` and Rust `Manifest::read` readers now refuse an
+invalid document extension or handler label for every build. The File System
+Access suffix grammar is the rule: a leading dot is optional in `app.json`, then
+both readers add it, lowercase the suffix, and give that canonical value to
+every consumer. Their tests share `scripts/fixtures/document-suffixes.json`.
+Compound suffixes such as `.tar.gz` remain valid. The JS target writes the
+canonical web manifest; the web picker and whole-filename drop matching consume
+it. Apple's metadata, Contract's picker bound and Linux compatibility metadata
+come from a canonical manifest as well.
+
+Linux sends extension-bearing handlers as bracketed, case-paired glob rules
+only, so an app-owned type does not depend on the desktop MIME database. A
+handler with MIME types and no extension sends MIME rules only. Compatibility
+metadata that is not JSON is refused with its parse cause in the journal; valid
+metadata with no `fileHandlers` remains the old unfiltered case. GTK's and KDE's
+current sources support this shape, but no real GNOME or KDE session has run it.
+Both Windows cross-target checks compile the portal module; the wire conversion
+is Unix-only. The portal parser continues to refuse a non-canonical suffix in
+embedded metadata rather than correcting it. Directory parses no handlers,
+because its request sends no filters, so unusable filter metadata cannot refuse
+a directory pick.
 
 ## The consumer
 
@@ -104,11 +149,18 @@ Recent list. Left:
 
 - **D4's hard rows by an editor**: built and driven on Linux and the web
   (Status, 2026-11-13); left: `kept.drives.mjs macos` run with the screen
-  unlocked, and the watch's re-ask on a real Linux.
+  unlocked. The watch's re-ask on real Linux passed on 2026-11-14.
 - **The Linux file chooser on a desktop**: `showOpenFilePicker`,
   `showDirectoryPicker` and `showSaveFilePicker` ask the desktop portal's
   `FileChooser` and keep what it answers (`host/painted/src/portal.rs`), tested
-  against a stand-in session bus only. Left: a pick on a real Linux desktop
-  (GNOME's and KDE's portals), and the chooser's types, since a Linux binary
-  does not carry the manifest's `file_handlers`.
+  against a stand-in session bus only. The Linux binary now carries the
+  manifest's `file_handlers`; Open and Save send extension globs, or MIME rules
+  when a handler declares no extension, and select the first filter, while
+  Directory sends none. A binary from before the handler metadata opens
+  unfiltered. The compatibility identity changes on Linux only; an empty handler
+  list adds no metadata. Left, on both a real GNOME portal and a real KDE portal:
+  make Open, Directory and Save picks; confirm the declared filters appear for
+  Open and Save; confirm an app-owned `drawing.board`, `Notes.MD` under a `.md`
+  filter, and a compound suffix are listed; relaunch and confirm a kept document
+  survives; revoke it and confirm the next relaunch forgets it.
 - **Exact Draw** (§7), in its own repository.

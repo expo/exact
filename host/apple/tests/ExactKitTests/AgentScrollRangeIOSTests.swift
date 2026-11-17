@@ -1,6 +1,7 @@
 #if os(iOS)
 import XCTest
 @testable import ExactKit
+import ExactSurfaces
 import UIKit
 
 /// The agent's `layout` reports each scroller's range beside its offset (LLP 1012 `rx`/`ry`): how far the offset
@@ -10,6 +11,9 @@ import UIKit
 final class AgentScrollRangeIOSTests: XCTestCase {
     private var window: UIWindow?
     private var session: ExactSession?
+    // A canvas places its children only in the overlay the surfaces module
+    // makes (LLP 1047.001 D4).
+    override class func setUp() { super.setUp(); ExactSurfaces.install() }
     override func tearDown() { session?.destroy(); session = nil; window?.isHidden = true; window = nil; super.tearDown() }
 
     /// What a person sees of a port past the bars over it: a bar across the

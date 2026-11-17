@@ -33,6 +33,18 @@ final class Canvas2DSpaceTests: XCTestCase {
         return try XCTUnwrap(r.image())
     }
 
+    func testMultiplyOverprintDrawsInCanvas2D() throws {
+        let image = try paint(.srgb8, [
+            (.fillColor, [52, 241, 236, 1]), (.fillRect, [0, 0, 4, 4]),
+            (.composite, [11]), (.fillColor, [253, 47, 124, 1]), (.fillRect, [0, 0, 4, 4]),
+        ])
+        let data = try XCTUnwrap(image.dataProvider?.data)
+        let px = try XCTUnwrap(CFDataGetBytePtr(data))
+        for (i, expected) in [52, 44, 115, 255].enumerated() {
+            XCTAssertEqual(Int(px[[2, 1, 0, 3][i]]), expected, accuracy: 1)
+        }
+    }
+
     func testADisplayP3CanvasesColoursAndPixelsAreP3() throws {
         let red: [(Canvas2DOp, [Double])] = [(.fillColor, [255, 0, 0, 1]), (.fillRect, [0, 0, 4, 4])]
         let p3 = try centre(paint(Canvas2DSpace(p3: true), red))

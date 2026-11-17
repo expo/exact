@@ -267,7 +267,7 @@ mod tests {
         .unwrap());
     }
 
-    fn app(name: &str, rule: &str) -> std::path::PathBuf {
+    fn app(name: &str, rule: &str) -> crate::TempDir {
         let dir =
             std::env::temp_dir().join(format!("exact-icon-rules-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -277,14 +277,14 @@ mod tests {
             r#"{"app":{"id":"dev.test.rules","name":"Rules"}}"#,
         )
         .unwrap();
-        std::fs::write(dir.join("app.tamber"), "tamber t\n\ntheme\n  ink = #000000\n\nicons\n  icon.ring = icon(svg \"icons/ring.svg\")\n").unwrap();
+        std::fs::write(dir.join("app.forma"), "forma t\n\ntheme\n  ink = #000000\n\nicons\n  icon.ring = icon(svg \"icons/ring.svg\")\n").unwrap();
         std::fs::write(dir.join("assets/icons/ring.svg"), format!(r#"<svg viewBox="0 0 24 24"><path fill-rule="{rule}" d="M2 2H22V22H2Z M8 8H16V16H8Z"/></svg>"#)).unwrap();
         std::fs::write(
             dir.join("app.contract"),
             "component App\n  view\n    image \"symbol:icon.ring\"\n",
         )
         .unwrap();
-        dir
+        crate::TempDir(dir)
     }
 
     /// The app's compatibility id, through this input's code path or (`main`)
@@ -375,13 +375,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(odd);
     }
 
-    /// C2 round 1 (Astra 2): a literal even-odd source with no tamber
+    /// C2 round 1 (Astra 2): a literal even-odd source with no forma
     /// declaration makes no `icons` row, and still needs the rule: the
     /// compatibility id reads the plan's literal sources too.
     #[test]
     fn a_literal_even_odd_source_needs_the_rule_without_a_declaration() {
-        let dir =
-            std::env::temp_dir().join(format!("exact-icon-rules-literal-{}", std::process::id()));
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-icon-rules-literal-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -440,8 +441,9 @@ mod tests {
             needed(&plain, compiled.as_ref(), Some(&out), &[]).is_err(),
             "an invalid baked plan fails"
         );
-        let game =
-            std::env::temp_dir().join(format!("exact-icon-rules-game-{}", std::process::id()));
+        let game = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-icon-rules-game-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&game);
         std::fs::create_dir_all(game.join("app")).unwrap();
         assert_eq!(
@@ -475,8 +477,9 @@ mod tests {
                 Ok(Value::record(vec![Value::list(vec![Value::str(self.0)])]))
             }
         }
-        let dir =
-            std::env::temp_dir().join(format!("exact-icon-rules-baked-{}", std::process::id()));
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-icon-rules-baked-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("out")).unwrap();
         std::fs::write(
@@ -533,8 +536,9 @@ mod tests {
     /// entry plan beside the app's.
     #[test]
     fn an_even_odd_icon_in_a_widget_alone_moves_the_id() {
-        let dir =
-            std::env::temp_dir().join(format!("exact-icon-rules-widget-{}", std::process::id()));
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-icon-rules-widget-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("app.contract"), "shape Props\n  title: string\ncomponent App\n  view\n    text \"app\"\ncomponent Card\n  props\n    title: string\n  view\n    image \"symbol:icon||0 0 24 24|evenodd:M2 2H22V22H2Z M8 8H16V16H8Z|\"\n").unwrap();

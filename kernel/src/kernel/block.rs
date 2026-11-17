@@ -77,7 +77,12 @@ pub struct HostBlock {
 /// host may give a route with no block of its own: its local insets (LLP
 /// 1123 D2, D9; `owner.rs`).
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Blocks(Vec<Held>, Vec<(u32, [f32; 4])>);
+pub(crate) struct Blocks(
+    Vec<Held>,
+    Vec<(u32, [f32; 4])>,
+    /// The owners in `.1`, for a lookup that finds no owner at once.
+    crate::sorted::SlotSet,
+);
 
 /// One node's block: the one in force, the host's or else the one the
 /// kernel implies (a top-layer box's, the viewport: HTML's top layer), its
@@ -99,6 +104,11 @@ impl Blocks {
     /// The block `slot` has, its host's or the kernel's.
     pub(crate) fn get(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).map(|b| b.block)
+    }
+
+    /// The block `slot`'s host gave it: a content owner's (LLP 1123 D2).
+    pub(crate) fn given(&self, slot: u32) -> Option<HostBlock> {
+        self.held(slot).and_then(|b| b.given)
     }
 
     /// Whether `slot` is the root of a layout of its own.
@@ -148,22 +158,29 @@ impl Blocks {
     /// `slot` gone: neither block stands, nor its local insets.
     pub(crate) fn remove(&mut self, slot: u32) {
         self.0.retain(|b| b.slot != slot);
-        self.1.retain(|(s, _)| *s != slot);
+        self.set_local(slot, None);
     }
 
     /// The local insets a host gave the owner whose root is `slot`.
     pub(crate) fn local(&self, slot: u32) -> Option<[f32; 4]> {
+        if !self.2.contains(slot) {
+            return None;
+        }
         self.1.iter().find(|(s, _)| *s == slot).map(|(_, l)| *l)
     }
 
     pub(crate) fn set_local(&mut self, slot: u32, local: Option<[f32; 4]>) {
         self.1.retain(|(s, _)| *s != slot);
         self.1.extend(local.map(|l| (slot, l)));
+        match local {
+            Some(_) => self.2.insert(slot),
+            None => self.2.remove(slot),
+        };
     }
 
-    /// Whether any owner has local insets.
-    pub(crate) fn has_locals(&self) -> bool {
-        !self.1.is_empty()
+    /// The owners whose hosts set local insets.
+    pub(crate) fn local_slots(&self) -> &crate::sorted::SlotSet {
+        &self.2
     }
 
     fn held(&self, slot: u32) -> Option<&Held> {
@@ -271,10 +288,10 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let edges = s.padding.resolve_or_zero(basis, resolve_calc)
         + s.border.resolve_or_zero(basis, resolve_calc);
     let content_box = s.box_sizing == BoxSizing::ContentBox;
-    let ceiling = |most: f32, edges: f32, own: Lpa, basis: f32| {
+    let ceiling = |most: f32, edges: f32, own: taffy::Dimension, basis: f32| {
         let most = (most - if content_box { edges } else { 0.0 }).max(0.0);
         let own = own.maybe_resolve(Some(basis), resolve_calc);
-        Lpa::length(own.map_or(most, |own: f32| own.min(most)))
+        taffy::Dimension::length(own.map_or(most, |own: f32| own.min(most)))
     };
     let unplaced = |inset: &mut Lpa, margin: &mut Lpa| {
         *inset = Lpa::auto();
@@ -345,6 +362,11 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
+        // Measure every reader again when a box gains or gives back a block, which
+        // changes the band its readers observe
+        if self.arena.blocks.given(slot).is_some() != block.is_some() {
+            self.arena.observations.invalidate();
+        }
         self.arena.blocks.set(slot, block);
         self.block_changed(slot, before);
         Ok(())
@@ -368,6 +390,12 @@ impl Kernel {
         // (its ancestors reparented), is styled again: `apply` reads that.
         for slot in moved {
             self.restyle_block(slot);
+        }
+        // Derive the raw readers again below each box that joined or left the top layer
+        for slot in std::mem::take(&mut self.arena.observations.targets.moved) {
+            if self.arena.is_live(slot) {
+                self.targets_moved(slot);
+            }
         }
     }
 
@@ -437,6 +465,7 @@ impl Kernel {
         if before.is_some() == block.is_some() {
             return;
         }
+        self.targets_moved(slot);
         if let Some(region) = &mut self.region {
             if !self.arena.top_layer_slots.contains(slot)
                 && self.arena.is_ancestor(region.binding.content.index, slot)
@@ -680,7 +709,7 @@ impl Kernel {
         Ok(())
     }
 
-    fn used_size(&self, slot: u32) -> (f32, f32) {
+    pub(super) fn used_size(&self, slot: u32) -> (f32, f32) {
         let shown = !self.arena.flags(slot).has(NodeFlags::HIDDEN);
         let tree = self.layout.as_deref().and_then(LayoutMirror::tree_ref);
         let (Some(block), Some(node), Some(tree)) = (

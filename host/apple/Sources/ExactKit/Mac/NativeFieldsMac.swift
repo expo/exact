@@ -169,9 +169,12 @@ extension NodeView {
     }
     /// A plain field's paragraph base direction: CSS `direction`, said either
     /// way as Apple text's is (`TextEngine.setBaseDirection`), so no first
-    /// strong character picks it (LLP 1001 §1).
+    /// strong character picks it (LLP 1001 §1). Where it is unsaid and the
+    /// document's text is natural, AppKit's text system resolves each
+    /// paragraph itself, as an `NSTextField`'s does (LLP 1060.000 D3).
     var fieldBaseDirection: NSWritingDirection {
-        style["direction"]?.string == "rtl" ? .rightToLeft : .leftToRight
+        if TextStyle.isNatural(style) { return .natural }
+        return style["direction"]?.string == "rtl" ? .rightToLeft : .leftToRight
     }
     var fieldAlignment: NSTextAlignment {
         switch style["text_align"]?.string {
@@ -207,11 +210,10 @@ extension NodeView {
         }
         applyTextChecking(editor)
     }
-    func applyFieldContent(_ payload: [String: Any]) {
-        let r = payload["rect"] as? [Double]
-        let box = r.flatMap { $0.count == 4 ? NSRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
-        applyKernelContentBox(box, padding: NodeView.sentPadding(payload))
-        let cell = box != nil && payload["cell"] as? Bool == true
+    func applyFieldContent(_ op: BatchOp) {
+        let box = op.contentRect
+        applyKernelContentBox(box, padding: op.contentPadding)
+        let cell = box != nil && op.fieldCell == true
         if cell != fieldInCell {
             fieldInCell = cell
             styleNativeField()

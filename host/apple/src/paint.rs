@@ -68,6 +68,19 @@ impl<D: DataSource> Host<D> {
                 self.paint.motion.shown(&self.engine, node, property),
             );
         }
+        // A moving filter's share of `currentcolor` follows the colour the
+        // node shows now (LLP 1003.002 D7).
+        if let Some(f) = self.engine.presented_filter(node) {
+            let text = match shown.get(Property::Color) {
+                Some(c) => crate::style::fixed(c),
+                None => self
+                    .runner
+                    .kernel()
+                    .node_by_key(node_key(node))
+                    .map_or_else(Default::default, |n| n.text_color()),
+            };
+            shown.filter = Some(exact_kernel::motion::filter_list(&f, text));
+        }
         shown
     }
 

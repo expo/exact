@@ -42,9 +42,10 @@ public enum AppFileWalk {
         return open(root, Array(parts.dropFirst()))
     }
 
-    /// A package can create its file destination. Check every existing component
-    /// without following links; a missing suffix gives it nothing to follow.
-    public static func destination(_ root: URL, _ names: [String]) -> URL? {
+    /// A package can create a destination of `kind`. Check every existing
+    /// component without following links; a missing suffix gives it nothing to
+    /// follow.
+    private static func destination(_ root: URL, _ names: [String], kind expected: mode_t) -> URL? {
         guard valid(names) else { return nil }
         var current = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard current >= 0 else { return nil }
@@ -57,7 +58,7 @@ public enum AppFileWalk {
             }
             let kind = info.st_mode & S_IFMT
             if index == names.count - 1 {
-                return kind == S_IFREG ? url : nil
+                return kind == expected ? url : nil
             }
             let next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             guard next >= 0 else { return nil }
@@ -65,5 +66,85 @@ public enum AppFileWalk {
             current = next
         }
         return nil
+    }
+
+    /// A package can create or replace a regular file, but not a directory.
+    public static func destination(_ root: URL, _ names: [String]) -> URL? {
+        destination(root, names, kind: S_IFREG)
+    }
+
+    /// A package can create, fill or empty a directory, but not a regular file.
+    public static func directory(_ root: URL, _ names: [String]) -> URL? {
+        destination(root, names, kind: S_IFDIR)
+    }
+
+    /// Empty and recreate the last directory below `root`, then hold the new
+    /// directory open. Every lookup and removal is relative to a checked
+    /// descriptor, so replacing an admitted ancestor cannot redirect either
+    /// the removal or a later `openat` by the caller.
+    public static func replaceDirectory(_ root: URL, _ names: [String]) -> FileHandle? {
+        guard valid(names) else { return nil }
+        var current = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard current >= 0 else { return nil }
+        defer { Darwin.close(current) }
+        for name in names.dropLast() {
+            var next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            if next < 0, errno == ENOENT, mkdirat(current, name, 0o700) == 0 {
+                next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            }
+            guard next >= 0 else { return nil }
+            Darwin.close(current)
+            current = next
+        }
+        guard let name = names.last else { return nil }
+        var info = stat()
+        if fstatat(current, name, &info, AT_SYMLINK_NOFOLLOW) == 0 {
+            guard info.st_mode & S_IFMT == S_IFDIR,
+                  let existing = openedDirectory(current, name), empty(existing.fileDescriptor) else { return nil }
+            try? existing.close()
+            guard unlinkat(current, name, AT_REMOVEDIR) == 0 else { return nil }
+        } else if errno != ENOENT {
+            return nil
+        }
+        guard mkdirat(current, name, 0o700) == 0,
+              let made = openedDirectory(current, name) else { return nil }
+        return made
+    }
+
+    private static func openedDirectory(_ parent: Int32, _ name: String) -> FileHandle? {
+        let fd = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    private static func names(_ directory: Int32) -> [String]? {
+        let copy = dup(directory)
+        guard copy >= 0 else { return nil }
+        guard let stream = fdopendir(copy) else { Darwin.close(copy); return nil }
+        defer { closedir(stream) }
+        var result: [String] = []
+        while let entry = readdir(stream) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+            }
+            if name != ".", name != ".." { result.append(name) }
+        }
+        return result
+    }
+
+    private static func empty(_ directory: Int32) -> Bool {
+        guard let children = names(directory) else { return false }
+        for name in children {
+            var info = stat()
+            guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return false }
+            if info.st_mode & S_IFMT == S_IFDIR {
+                guard let child = openedDirectory(directory, name), empty(child.fileDescriptor) else { return false }
+                try? child.close()
+                guard unlinkat(directory, name, AT_REMOVEDIR) == 0 else { return false }
+            } else if unlinkat(directory, name, 0) != 0 {
+                return false
+            }
+        }
+        return true
     }
 }

@@ -38,7 +38,7 @@ enum RasterFailure: Error, CustomStringConvertible, Equatable {
 enum RasterVariant {
     /// 8-bit sRGB (the budget's; this host plans none).
     static let srgb8: UInt32 = 1
-    /// 8-bit in the picture's own colour space.
+    /// 8-bit in the picture's own colour space or its named equivalent.
     static let own8: UInt32 = 2
     /// 16-bit float in the picture's own colour space.
     static let deep: UInt32 = 3
@@ -59,6 +59,13 @@ enum RasterVariant {
 /// to ImageIO here; its later internal decoder allocations are not measurable by
 /// our ledger and are not claimed to fit the Exact-owned storage budget.
 package struct RasterMetadata: Equatable, Sendable {
+    #if DEBUG
+    private static let testReadLock = NSLock()
+    nonisolated(unsafe) private static var testReads = 0
+    static var testHeaderReads: Int {
+        testReadLock.lock(); defer { testReadLock.unlock() }; return testReads
+    }
+    #endif
     static let encodedLimit = 64 * 1024 * 1024
     static let headerLimit = 256 * 1024
     package static let pixelLimit = 64 * 1024 * 1024
@@ -95,6 +102,9 @@ package struct RasterMetadata: Equatable, Sendable {
     }
 
     static func read(prefix: Data, encodedBytes: Int) throws -> Self {
+        #if DEBUG
+        testReadLock.lock(); testReads += 1; testReadLock.unlock()
+        #endif
         guard encodedBytes > 0, encodedBytes <= encodedLimit else { throw RasterFailure.encodedLimit }
         guard !prefix.isEmpty, prefix.count <= headerLimit, prefix.count <= encodedBytes else { throw RasterFailure.headerLimit }
         // An SVG, by its bytes (LLP 1011.001 D4): its root tag's size is the
@@ -118,12 +128,13 @@ package struct RasterMetadata: Equatable, Sendable {
         }
         let source = CGImageSourceCreateIncremental([kCGImageSourceShouldCache: false] as CFDictionary)
         CGImageSourceUpdateData(source, prefix as CFData, prefix.count == encodedBytes)
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         // ImageIO answers nothing from a partial JPEG that carries a gain map
         // (an iPhone HDR export, an Android Ultra HDR photo), where it does for
         // a plain one, nor from any partial HEIF (an iPhone photo); the JPEG's
         // frame header or the HEIF's `meta` box says what the plan needs.
         if prefix.count < encodedBytes,
-           (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])?[kCGImagePropertyPixelWidth] == nil {
+           properties?[kCGImagePropertyPixelWidth] == nil {
             if let jpeg = jpegHeader(prefix) {
                 return try validated(width: jpeg.width, height: jpeg.height, orientation: jpeg.orientation,
                                      encodedBytes: encodedBytes, headerBytes: prefix.count, deep: jpeg.depth > 8,
@@ -135,7 +146,7 @@ package struct RasterMetadata: Equatable, Sendable {
                                      hdr: heif.hdr || hasGainMap(source, prefix: prefix))
             }
         }
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+        guard let properties,
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
               let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
             // The whole file and still no size: no decoder here reads it.
@@ -490,12 +501,13 @@ final class RasterImage: @unchecked Sendable {
 
     static func decode(_ bytes: Data, metadata: RasterMetadata, plan: RasterDecodePlan,
                        charge: any RasterBackingCharge, sourceOwner: (any RasterSourceOwner)? = nil,
-                       file: FileHandle? = nil) throws -> RasterImage {
+                       file: FileHandle? = nil, recheckMetadata: Bool = true) throws -> RasterImage {
         guard bytes.count == metadata.encodedBytes, bytes.count <= RasterMetadata.encodedLimit else { throw RasterFailure.encodedLimit }
-        // A file can change between metadata inspection and worker admission.
-        // Recheck the actual bytes before asking ImageIO for any pixel buffer.
-        let actual = try RasterMetadata.read(prefix: bytes.prefix(RasterMetadata.headerLimit), encodedBytes: bytes.count)
-        guard actual == metadata else { throw RasterFailure.reservation }
+        // App and resolver files can change after inspection; private spools cannot.
+        if recheckMetadata {
+            let actual = try RasterMetadata.read(prefix: bytes.prefix(RasterMetadata.headerLimit), encodedBytes: bytes.count)
+            guard actual == metadata else { throw RasterFailure.reservation }
+        }
         let owner = RasterOwner(charge: charge, sourceOwner: sourceOwner)
         if metadata.svg { return try decodeSVG(bytes, metadata: metadata, plan: plan, owner: owner) }
         // This pool ends before the caller publishes the payload/completes its
@@ -597,14 +609,11 @@ final class RasterImage: @unchecked Sendable {
         return options as CFDictionary
     }
 
-    /// A decoded frame as Core Animation shares it: a thumbnail at the
-    /// planned size and storage is already the pixels a draw would make, and
-    /// is kept; anything else is drawn into a scratch bitmap and Core
-    /// Graphics' copy of it kept, as ImageIO does for a thumbnail — CG's image
-    /// data is memory Core Animation shares with the render server as it is,
-    /// where a bitmap of ours would be copied again at each first commit.
-    /// BGRA8 or RGBA16F premultiplied: Core Animation's own layouts, which it
-    /// shares without converting.
+    /// Keep an opaque 8-bit thumbnail whose size and storage fit the plan;
+    /// otherwise draw into a scratch bitmap and keep Core Graphics' owned
+    /// copy. ImageIO's backing and that copy can be shared with the render server.
+    /// A named equivalent RGB space avoids Core Animation's colour conversion;
+    /// other RGB profiles keep their colour management (LLP 1171 D19).
     static func normalized(_ thumbnail: CGImage, plan: RasterDecodePlan, adopt: Bool = true) -> CGImage? {
         // An HDR decode in a BT.2100 space is kept as ImageIO made it: Core
         // Animation tone-maps that to the layer's range, which it doesn't do
@@ -615,21 +624,26 @@ final class RasterImage: @unchecked Sendable {
            thumbnail.width <= plan.width + 1, thumbnail.height <= plan.height + 1,
            thumbnail.bytesPerRow * thumbnail.height <= plan.outputBytes { return thumbnail }
         let space = storageSpace(thumbnail.colorSpace, plan: plan)
-        if adopt, isAdoptable(thumbnail, plan: plan, space: space) { return thumbnail }
+        let picture: CGImage
+        if !plan.deep, plan.variant != RasterVariant.hdr,
+           let source = thumbnail.colorSpace, source.model == .rgb, source != space {
+            picture = thumbnail.copy(colorSpace: space) ?? thumbnail
+        } else { picture = thumbnail }
+        if adopt, isAdoptable(picture, plan: plan, space: space) { return picture }
         let bitmap = plan.deep
             ? CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
             : CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         return withScratch(plan.outputBytes, { scratch -> CGImage? in
             guard let context = CGContext(data: scratch, width: plan.width, height: plan.height,
                 bitsPerComponent: plan.deep ? 16 : 8, bytesPerRow: plan.stride, space: space, bitmapInfo: bitmap) else { return nil }
-            context.draw(thumbnail, in: CGRect(x: 0, y: 0, width: plan.width, height: plan.height))
+            context.draw(picture, in: CGRect(x: 0, y: 0, width: plan.width, height: plan.height))
             return context.makeImage()
         })
     }
 
-    /// The colour space a decode is kept in (LLP 1100 D5): an RGB picture's
-    /// own; sRGB for gray; Display P3, which contains print gamuts, for CMYK,
-    /// Lab and the rest (Core Animation shows only RGB contents).
+    /// The colour space a decode is kept in (LLP 1100 D5, LLP 1171 D19): an
+    /// RGB picture's own, or its proven named equivalent at 8 bits; sRGB for
+    /// gray; Display P3 for CMYK, Lab and the rest.
     static func storageSpace(_ source: CGColorSpace?, plan: RasterDecodePlan) -> CGColorSpace {
         let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
         // Extended: light above SDR white and colours outside P3 alike.
@@ -637,7 +651,7 @@ final class RasterImage: @unchecked Sendable {
         guard let source else { return srgb }
         let own: CGColorSpace
         switch source.model {
-        case .rgb: own = source
+        case .rgb: own = plan.deep ? source : RasterProfile.shared.namedSpace(source)
         case .monochrome: own = srgb
         default: own = CGColorSpace(name: CGColorSpace.displayP3)!
         }

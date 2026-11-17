@@ -3,11 +3,15 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, delimiter, dirname, resolve, sep } from 'node:path';
-import { resolveApp, buildBake, bakeTarget } from './app.mjs';
+import { basename, delimiter, dirname, isAbsolute, resolve, sep } from 'node:path';
+import { resolveApp, buildBake, bakeTarget, pendingBuildInputs } from './app.mjs';
 import { contractCompiler, snapshotOf, materializeSnapshot, disposeSnapshot } from './deploy.mjs';
+import { binaryInputFile } from './deploy-heads.mjs';
+import { binaryInputChanges } from './publisher.mjs';
+import { receiptChanges } from './agent-launch.mjs';
 import { pinned } from './test-workspace.mjs';
 
 // These cases run cargo (the filesystem tool, bakes, locks). A shell whose PATH
@@ -17,6 +21,174 @@ if (!(process.env.PATH ?? '').split(delimiter).includes(cargoBin)) process.env.P
 if (!Bun.which('cargo', { PATH: process.env.PATH })) throw new Error(`these tests need cargo: put it on PATH or in ${cargoBin}`);
 // The fixtures name their apps; a caller's EXACT_APP_DIR would redirect every one.
 delete process.env.EXACT_APP_DIR;
+
+function notificationServiceIdentity(service) {
+  const path = 'NotificationService.swift', bytes = readFileSync(resolve(service, path));
+  const size = Buffer.alloc(8); size.writeBigUInt64LE(BigInt(bytes.length));
+  return { tree: createHash('sha256').update(path).update(Buffer.from([0])).update(size).update(bytes).digest('hex'),
+    files: [{ path, sha256: createHash('sha256').update(bytes).digest('hex') }] };
+}
+
+function productionAppleReceiptFixture() {
+  const root = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/production-apple-receipt-'))));
+  const target = bakeTarget('linux'), id = 'com.exact.receipt';
+  const write = (name, bytes) => { const path = resolve(root, name); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
+  write('package.json', '{}\n');
+  write('app.json', JSON.stringify({ name: 'receipt', app: { id, name: 'Receipt' }, host: { ios: {} }, rust: false }));
+  write('app.contract', 'component App\n  view\n    text "Receipt"\n');
+  write('Cargo.toml', '[workspace]\nmembers=["linux"]\nresolver="2"\n');
+  write('linux/Cargo.toml', '[package]\nname="receipt-linux"\nversion="0.1.0"\nedition="2021"\n');
+  write('linux/src/main.rs', 'fn main() {}\n');
+  write('linux/build.rs', `fn main() {
+    println!("cargo:rerun-if-env-changed=FIXTURE_COMPAT");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    std::fs::write(out.join("compat.json"), std::env::var("FIXTURE_COMPAT").unwrap()).unwrap();
+    std::fs::write(out.join("artifacts.json"), r#"{"version":1,"artifacts":[],"sources":{}}"#).unwrap();
+    std::fs::write(out.join("app.plan"), b"fixture").unwrap();
+  }`);
+  for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']]) {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const manifest = { name: 'receipt', app: { id, name: 'Receipt' }, host: { ios: {} }, rust: false };
+  const app = { dir: root, workspace: root, target: resolve(root, 'target'), name: 'receipt', displayName: 'Receipt', id, manifest,
+    crate: kind => `receipt-${kind}` };
+  const bake = ({ selected = false } = {}) => {
+    const service = resolve(root, 'modules/apple/notification-service');
+    const notificationService = selected ? notificationServiceIdentity(service) : null;
+    const compat = { target, delivery: {}, inputs: { platform: 'ios', app: id, store: { L: '0' }, keys: {}, notificationService } };
+    return buildBake(app, 'ios', target, { kind: 'linux', profile: 'dev', output: resolve(root, 'bakes'),
+      env: { CARGO_NET_OFFLINE: 'true', EXACT_UPDATE_TRUST: 'development', EXACT_APPLE_EXTENSIONS: selected ? 'notifications' : '', FIXTURE_COMPAT: JSON.stringify(compat) } });
+  };
+  const evidence = receipt => JSON.parse(binaryInputFile(receipt).bytes);
+  const localChanges = receipt => {
+    const path = resolve(app.target, 'fixture-receipt.json'), completed = new Date('2100-01-01T00:00:00Z');
+    writeFileSync(path, JSON.stringify({ target: receipt.compat.target, started: completed.toISOString(), build: receipt }));
+    utimesSync(path, completed, completed);
+    return receiptChanges(path, app);
+  };
+  const relocatedChanges = async (receipt, change = () => {}) => {
+    const snapshot = snapshotOf(app, { dirty: true, compiler: contractCompiler(resolve(import.meta.dir, '..')) }, root);
+    const run = mkdtempSync(resolve(root, 'target/deploy-receipt-'));
+    try {
+      const staged = materializeSnapshot(snapshot, run, app), relocated = staged.app.dir;
+      change(relocated);
+      const relocatedApp = { ...app, dir: relocated, workspace: relocated, target: staged.app.target };
+      return await binaryInputChanges(null, relocatedApp, receipt.compat, undefined, evidence(receipt));
+    } finally {
+      disposeSnapshot(snapshot);
+      rmSync(run, { recursive: true, force: true });
+    }
+  };
+  return { root, app, bake, evidence, localChanges, relocatedChanges, write, dispose: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+test.skipIf(process.platform === 'win32')('production Apple receipts retain main module-root link behavior', async () => {
+  const fixture = productionAppleReceiptFixture(), { root, bake, evidence, localChanges, relocatedChanges } = fixture;
+  try {
+    const moduleRoot = resolve(root, 'modules/apple'), platformRoot = resolve(root, 'ios/modules');
+    const clean = () => {
+      for (const path of ['modules', 'ios', 'linked-apple', 'alias', 'real-apple', 'target/module-output'])
+        rmSync(resolve(root, path), { recursive: true, force: true });
+    };
+    const moduleLinks = receipt => receipt.binary.links.filter(row => [moduleRoot, platformRoot].includes(row.path));
+
+    clean();
+    mkdirSync(resolve(root, 'modules')); mkdirSync(resolve(root, 'linked-apple'));
+    writeFileSync(resolve(root, 'linked-apple/Native.swift'), 'struct Native {}\n');
+    symlinkSync(resolve(root, 'linked-apple'), moduleRoot, 'dir');
+    const linkedReceipt = bake();
+    assert.deepEqual(moduleLinks(linkedReceipt), []);
+    assert.deepEqual(evidence(linkedReceipt).links.filter(row => row.root === 'app' && row.path === 'modules/apple'), []);
+    assert.deepEqual(pendingBuildInputs(linkedReceipt), []);
+    assert.deepEqual(localChanges(linkedReceipt), []);
+    assert.deepEqual(await relocatedChanges(linkedReceipt, relocated => {
+      assert.equal(isAbsolute(readlinkSync(resolve(relocated, 'modules/apple'))), false);
+    }), []);
+
+    clean();
+    mkdirSync(moduleRoot, { recursive: true }); writeFileSync(resolve(moduleRoot, 'Native.swift'), 'struct Native {}\n');
+    const directoryReceipt = bake();
+    renameSync(moduleRoot, resolve(root, 'linked-apple')); symlinkSync('../linked-apple', moduleRoot, 'dir');
+    assert.deepEqual(pendingBuildInputs(directoryReceipt), []);
+    assert.deepEqual(localChanges(directoryReceipt), []);
+    assert.deepEqual(await relocatedChanges(directoryReceipt), []);
+
+    clean();
+    mkdirSync(resolve(root, 'modules'));
+    symlinkSync('../alias', moduleRoot, 'dir'); symlinkSync('modules/apple', resolve(root, 'alias'), 'dir');
+    const cyclicReceipt = bake();
+    assert.ok(cyclicReceipt.binary.missing.includes(moduleRoot));
+    assert.deepEqual(moduleLinks(cyclicReceipt), []);
+    assert.deepEqual(pendingBuildInputs(cyclicReceipt), []);
+    rmSync(resolve(root, 'alias')); mkdirSync(resolve(root, 'real-apple'));
+    writeFileSync(resolve(root, 'real-apple/Native.swift'), 'struct Native {}\n'); symlinkSync('real-apple', resolve(root, 'alias'), 'dir');
+    assert.ok(pendingBuildInputs(cyclicReceipt).includes(moduleRoot));
+    assert.ok(localChanges(cyclicReceipt).includes(moduleRoot));
+    assert.ok((await relocatedChanges(cyclicReceipt)).includes('app/modules/apple'));
+
+    clean();
+    mkdirSync(resolve(root, 'modules')); symlinkSync('../missing-a', moduleRoot, 'dir');
+    const danglingReceipt = bake();
+    assert.ok(danglingReceipt.binary.missing.includes(moduleRoot));
+    assert.deepEqual(moduleLinks(danglingReceipt), []);
+    rmSync(moduleRoot); symlinkSync('../missing-b', moduleRoot, 'dir');
+    assert.deepEqual(pendingBuildInputs(danglingReceipt), []);
+    assert.deepEqual(localChanges(danglingReceipt), []);
+    assert.deepEqual(await relocatedChanges(danglingReceipt), []);
+
+    clean();
+    mkdirSync(resolve(root, 'modules')); mkdirSync(resolve(root, 'target/module-output'), { recursive: true });
+    writeFileSync(resolve(root, 'target/module-output/Generated.swift'), 'struct Generated {}\n');
+    symlinkSync(resolve(root, 'target/module-output'), moduleRoot, 'dir');
+    const outputReceipt = bake();
+    assert.deepEqual(outputReceipt.binary.directories.find(row => row.path === moduleRoot)?.names, []);
+    assert.deepEqual(moduleLinks(outputReceipt), []);
+    assert.equal(evidence(outputReceipt).directories.some(row => row.root === 'app' && row.path === 'modules/apple'), false);
+    rmSync(moduleRoot); mkdirSync(moduleRoot); writeFileSync(resolve(moduleRoot, 'Native.swift'), 'struct Native {}\n');
+    assert.ok(pendingBuildInputs(outputReceipt).includes(moduleRoot));
+    assert.ok(localChanges(outputReceipt).includes(moduleRoot));
+    assert.deepEqual(await relocatedChanges(outputReceipt), []);
+
+    clean();
+    const absentReceipt = bake();
+    const moduleRoots = [platformRoot, moduleRoot];
+    assert.deepEqual(absentReceipt.binary.directories.filter(row => moduleRoots.includes(row.path)), []);
+    assert.deepEqual(absentReceipt.binary.links.filter(row => moduleRoots.includes(row.path)), []);
+    assert.deepEqual(absentReceipt.binary.missing.filter(path => moduleRoots.includes(path)).sort(), moduleRoots.sort());
+    assert.deepEqual(fixture.evidence(absentReceipt).absent.filter(row => ['ios/modules', 'modules/apple'].includes(row.path)).map(row => row.path).sort(), ['ios/modules', 'modules/apple']);
+    assert.deepEqual(pendingBuildInputs(absentReceipt), []);
+    assert.deepEqual(localChanges(absentReceipt), []);
+    assert.deepEqual(await relocatedChanges(absentReceipt), []);
+    mkdirSync(resolve(root, 'modules/apple/notification-service'), { recursive: true });
+    writeFileSync(resolve(root, 'modules/apple/notification-service/NotificationService.swift'), 'class NotificationService {}\n');
+    assert.ok(pendingBuildInputs(absentReceipt).includes(resolve(root, 'modules/apple')));
+    assert.ok(localChanges(absentReceipt).includes(resolve(root, 'modules/apple')));
+    assert.ok((await relocatedChanges(absentReceipt)).includes('app/modules/apple'));
+  } finally { fixture.dispose(); }
+}, 180_000);
+
+test('production Apple receipts retain compiler dependencies inside the notification service folder', async () => {
+  const fixture = productionAppleReceiptFixture(), { root, bake, evidence, localChanges, relocatedChanges, write } = fixture;
+  const hidden = resolve(root, 'modules/apple/notification-service/.shared-data'), name = 'app/modules/apple/notification-service/.shared-data';
+  try {
+    write('modules/apple/notification-service/NotificationService.swift', 'class NotificationService {}\n');
+    write('modules/apple/notification-service/.shared-data', 'compiled bytes');
+    write('linux/src/main.rs', 'static SERVICE: &[u8] = include_bytes!("../../modules/apple/notification-service/.shared-data");\nfn main() { assert!(!SERVICE.is_empty()); }\n');
+    for (const selected of [true, false]) {
+      const receipt = bake({ selected }), input = receipt.binary.inputs.find(row => row.path === hidden);
+      assert.equal(input?.name, name);
+      assert.ok(evidence(receipt).files.some(row => row.root === 'app' && row.path === 'modules/apple/notification-service/.shared-data'));
+      assert.deepEqual(pendingBuildInputs(receipt), []);
+      assert.deepEqual(localChanges(receipt), []);
+      writeFileSync(hidden, 'changed bytes!');
+      assert.ok(pendingBuildInputs(receipt).includes(name));
+      assert.ok(localChanges(receipt).includes(name));
+      writeFileSync(hidden, 'compiled bytes');
+      assert.ok((await relocatedChanges(receipt, relocated => writeFileSync(resolve(relocated, 'modules/apple/notification-service/.shared-data'), 'changed bytes!'))).includes(name));
+    }
+  } finally { fixture.dispose(); }
+}, 180_000);
 
 async function fixture(body) {
   const scratch = resolve(import.meta.dir, '../target');
@@ -45,7 +217,7 @@ async function fixture(body) {
   try {
     // These fixtures assert the workspaces' default target paths.
     delete process.env.CARGO_TARGET_DIR;
-    for (const path of ['scripts/app.mjs','scripts/app-icons.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/paths.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','scripts/grant-advice.mjs','host/apple/link.mjs','host/apple/privacy.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/__exact_launch_setting.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs','scripts/deploy-signing.mjs']) {
+    for (const path of ['scripts/app.mjs','scripts/variants.mjs','scripts/links.mjs','scripts/help.mjs','scripts/forma-design-path.mjs','scripts/app-icons.mjs','scripts/notification-service.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/tools.mjs','scripts/kept.mjs','scripts/paths.mjs','scripts/file-dependencies.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/document-utis.json','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/shader-libraries.mjs','host/apple/svg-filter.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','scripts/grant-advice.mjs','host/apple/link.mjs','host/apple/privacy.mjs','game/app/shells.mjs','game/inputs.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/__exact_launch_setting.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs','scripts/deploy-signing.mjs']) {
       write(path, readFileSync(resolve(import.meta.dir,'..',path)));
     }
     // The rustc wrapper the scripts' cargo calls run on a Mac (`withHostDeployment`), found beside the copied scripts.
@@ -652,7 +824,11 @@ test.each(['notes', 'planner'])('OS-specific folders resolve for %s without app-
     write('app.contract', 'use App from "./src/app.contract"\n');
     write('app.json', JSON.stringify({name,app:{id:`com.exact.${name}`,name}}));
     for (const p of ['ios','macos','web']) write(`${p}/Cargo.toml`, `[package]\nname="${name}-${p}"\nversion="0.1.0"\n`);
-    write('ios/modules/Input.swift'); write('macos/modules/Input.swift'); write('web/modules/index.js');
+    // Host crates the app writes are its authored workspace's (LLP 1153.003 D3).
+    const { patchLines } = await import('./app.mjs');
+    write('Cargo.toml', `[workspace]\nmembers = ["ios", "macos", "web"]\nresolver = "2"\n\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
+    write('rust-toolchain.toml', readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8'));
+    write('ios/modules/Input.swift'); write('ios/modules/notification-service/NotificationService.swift'); write('macos/modules/Input.swift'); write('web/modules/index.js');
     const app = resolveApp(`${name}-ios`);
     assert.equal(app.crate('ios'), `${name}-ios`); assert.equal(app.crate('macos'), `${name}-macos`);
     assert.deepEqual(app.modulesFor('ios').apple, [resolve(dir, 'ios/modules/Input.swift')]);
@@ -674,7 +850,7 @@ test.each(['notes', 'planner'])('OS-specific folders resolve for %s without app-
       utimesSync(source, built, built);
     }
     rmSync(resolve(dir, 'ios'), {recursive:true}); rmSync(resolve(dir, 'macos'), {recursive:true});
-    write('modules/apple/Input.swift');
+    write('modules/apple/Input.swift'); write('modules/apple/notification-service/NotificationService.swift');
     const shared = resolveApp(name);
     assert.equal(shared.crate('ios'), `${name}-apple`); assert.equal(shared.crate('macos'), `${name}-apple`);
     assert.equal(moduleDirectory(dir, 'ios'), resolve(dir, 'modules/apple'));
@@ -816,7 +992,7 @@ test('update refuses, before writing, a root the crates it adds cannot load in',
       ['[workspace]\nmembers = []\n[workspace.package]\nedition = "2021"\n', /Cargo\.toml has no version, license in \[workspace\.package\]/],
     ]) {
       writeFileSync(root, text);
-      assert.throws(() => createApp(dir, { update: true }), (e) => said.test(e.message) && /contract vocab gpu-module/.test(e.message), text);
+      assert.throws(() => createApp(dir, { update: true }), (e) => said.test(e.message) && /"An authored workspace"/.test(e.message), text);
       assert.deepEqual([readFileSync(root, 'utf8'), existsSync(resolve(dir, 'linux')), existsSync(resolve(dir, 'exact.mjs.tmp'))], [text, false, false], 'nothing written');
     }
   } finally { rmSync(scratch, { recursive: true, force: true }); }
@@ -1010,3 +1186,266 @@ test('the host target is the pinned toolchain\'s when rustup has no default', ()
     assert.equal(run.stdout.trim(), bakeTarget('linux'));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+// LLP 1153.003 D1: an app's own crates join the workspace exact2 generates, which keeps writing every host crate.
+test('a crate beside app.json joins the generated workspace by naming it, and one that names none is refused with the line to add', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { ensureShells } = await import('./app-shells.mjs');
+  const scratch = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-members-'))), dir = resolve(scratch, 'field-log'), was = process.env.EXACT_APP_DIR, target = process.env.CARGO_TARGET_DIR;
+  const crate = (path, name, workspace, dependency = 'exact-runner') => {
+    mkdirSync(resolve(dir, path, 'src'), { recursive: true });
+    writeFileSync(resolve(dir, path, 'Cargo.toml'), `[package]\nname = "${name}"\nversion.workspace = true\nedition.workspace = true\n${workspace ? `workspace = "${workspace}"\n` : ''}publish = false\n\n[dependencies]\n${dependency}.workspace = true\n`);
+    writeFileSync(resolve(dir, path, 'src/lib.rs'), '');
+  };
+  try {
+    createApp(dir, { with: ['ios'] });
+    delete process.env.CARGO_TARGET_DIR;
+    process.env.EXACT_APP_DIR = dir;
+    crate('data', 'field-log-data', null);
+    assert.throws(() => resolveApp(), /data\/Cargo\.toml: a crate beside app\.json joins the app's generated workspace\. Add, under \[package\], workspace = "\.\.\/\.exact\/shells" \(a GPU crate: workspace = "\.\.\/\.exact\/gpu"\)/);
+    assert.throws(() => ensureShells(dir), /a crate beside app\.json joins the app's generated workspace/);
+    crate('data', 'field-log-data', '../.exact/shells');
+    // A host crate links an app's crate only as the data crate rust.data names (LLP 1153.003 D2), so a member with
+    // none named is refused with the line to add.
+    const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    assert.throws(() => ensureShells(dir), /field-log-data beside app\.json joins the app's generated workspace, and app\.json names no rust\.data: [^]*\n  "rust": \{ "data": \{ "crate": "field-log-data", "type": "field_log_data::<Type>", "source": "field_log_data::<Type>::new\(…\)" \} \}\n/);
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, rust: { data: { crate: 'field-log-data', type: 'field_log_data::FieldLog' } } }));
+    const { workspace } = ensureShells(dir);
+    const shell = readFileSync(resolve(workspace, 'Cargo.toml'), 'utf8');
+    assert.match(shell, /^members = \["web", "apple", "module", "\.\.\/\.\.\/data"\]$/m);
+    assert.match(shell, /^exact-runner = \{ path = "[^"]*\/runner" \}$/m);
+    const loads = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: workspace, encoding: 'utf8' });
+    assert.equal(loads.status, 0, loads.stderr);
+    assert.deepEqual(JSON.parse(loads.stdout).packages.map(p => p.name).sort(), ['field-log-apple', 'field-log-data', 'field-log-module', 'field-log-web']);
+    const app = resolveApp();
+    assert.deepEqual([app.generated, app.workspace, app.target], [true, workspace, resolve(dir, 'target')]);
+    // Cargo run in the member finds exact2's toolchain and the app's target directory, written beside app.json (D1.5).
+    const toolchain = spawnSync('rustup', ['show', 'active-toolchain'], { cwd: resolve(dir, 'data'), encoding: 'utf8' });
+    if (toolchain.status === 0) assert.match(toolchain.stdout, new RegExp(`^${readFileSync(resolve(import.meta.dir, '../rust-toolchain.toml'), 'utf8').match(/channel = "([^"]+)"/)[1].replaceAll('.', '\\.')}`));
+    const inMember = spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: resolve(dir, 'data'), encoding: 'utf8' });
+    assert.equal(inMember.status, 0, inMember.stderr);
+    assert.equal(JSON.parse(inMember.stdout).target_directory, resolve(dir, 'target'));
+    assert.match(readFileSync(resolve(dir, '.gitignore'), 'utf8'), /^\/rust-toolchain\.toml\n\/\.cargo\/config\.toml$/m);
+    // A crate that takes a generated host crate's name is the authored workspace's (D3).
+    crate('helper', 'field-log-web', '../.exact/shells');
+    assert.throws(() => ensureShells(dir), /field-log-web is a host crate's name, and exact2 writes the app's host crates under \.exact\/shells\//);
+    rmSync(resolve(dir, 'helper'), { recursive: true });
+    // A GPU crate alone joins the GPU workspace, and the host crates stay generated (D1.2).
+    rmSync(resolve(dir, 'data'), { recursive: true });
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    crate('gpu', 'field-log-gpu', '../.exact/gpu', 'exact-gpu');
+    assert.deepEqual([resolveApp().generated, resolveApp().workspace], [true, workspace]);
+    assert.match(readFileSync(resolve(ensureShells(dir).workspace, 'Cargo.toml'), 'utf8'), /^members = \["web", "apple"\]$/m);
+    // A crate naming another workspace beside one that joins a generated one is refused.
+    crate('data', 'field-log-data', '../elsewhere');
+    mkdirSync(resolve(dir, 'elsewhere'));
+    assert.throws(() => resolveApp(), /app crates declare different Cargo workspaces/);
+  } finally {
+    if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
+    if (target !== undefined) process.env.CARGO_TARGET_DIR = target;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test('host data and GPU lock refreshes preserve compatible captured versions', async () => {
+  const { GPU_LOCK, lockShells, staleLock } = await import('./app-shells.mjs');
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/lock-refresh-'))));
+  try {
+    for (const [kind, file] of [['data', 'Cargo.lock'], ['gpu', GPU_LOCK]]) {
+      const workspace = resolve(dir, kind), member = resolve(workspace, 'member'), captured = resolve(dir, file);
+      mkdirSync(resolve(member, 'src'), { recursive: true });
+      writeFileSync(resolve(member, 'src/lib.rs'), '');
+      writeFileSync(resolve(workspace, 'Cargo.toml'), '[workspace]\nmembers = ["member"]\nresolver = "2"\n');
+      const manifest = (json, width) => writeFileSync(resolve(member, 'Cargo.toml'), `[package]\nname = "fixture-${kind}"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nserde_json = "${json}"\nunicode-width = "${width}"\n`);
+      manifest('=1.0.154', '=0.2.2');
+      lockShells(dir, workspace, captured);
+      // Keep a captured lock even when the SDK eventually holds these versions too.
+      writeFileSync(captured, readFileSync(resolve(workspace, 'Cargo.lock')));
+      const before = readFileSync(captured, 'utf8');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // Both the SDK's serde_json 1.0.151 and unicode-width 0.1.14 fit these ranges.
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), before);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), before);
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      // A changed requirement still lets Cargo update a captured version.
+      manifest('=1.0.151', '=0.1.14');
+      assert.match(lockShells(dir, workspace, captured), /resolved\n/);
+      const packages = Bun.TOML.parse(readFileSync(captured, 'utf8')).package;
+      for (const [name, version] of [['serde_json', '1.0.151'], ['unicode-width', '0.1.14']])
+        assert.deepEqual(packages.filter(p => p.name === name).map(p => p.version), [version]);
+      const older = readFileSync(captured, 'utf8');
+      manifest('1', '>=0.1.14, <=0.2.2');
+      assert.match(lockShells(dir, workspace, captured), /current; no changes$/);
+      assert.equal(readFileSync(captured, 'utf8'), older);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  assert.ok(staleLock('error: cannot update the lock file /app/Cargo.lock because --locked was passed to prevent this'));
+  assert.ok(staleLock('error: the lock file /app/Cargo.lock needs to be updated but --locked was passed to prevent this'));
+  assert.ok(!staleLock('error: failed to download `rustix v1.1.5`\n\nCaused by:\n  attempting to make an HTTP request, but --offline was specified'));
+}, 120_000);
+
+// LLP 1153.003 D1.4, a game's rule (LLP 1046.011 D2): an app captures a lock only when its crates leave exact2's.
+test('a generated workspace captures no lock until a dependency leaves exact2\'s, and keeps a captured one across a rewrite', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { ensureShells, settleLock, lockShells } = await import('./app-shells.mjs');
+  const scratch = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-member-lock-'))), dir = resolve(scratch, 'field-log');
+  const sdk = readFileSync(resolve(import.meta.dir, '../Cargo.lock'), 'utf8');
+  // A version this machine's Cargo cache holds and exact2's lock does not: itoa beside exact2's.
+  const held = /name = "itoa"\nversion = "([^"]+)"/.exec(sdk)[1];
+  const cache = resolve(process.env.CARGO_HOME ?? resolve(homedir(), '.cargo'), 'registry/cache');
+  const other = (existsSync(cache) ? readdirSync(cache).flatMap(index => readdirSync(resolve(cache, index))) : [])
+    .map(file => /^itoa-(1\.\d+\.\d+)\.crate$/.exec(file)?.[1]).find(version => version && version !== held);
+  const data = (deps = '') => writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]\nname = "field-log-data"\nversion.workspace = true\nedition.workspace = true\nworkspace = "../.exact/shells"\npublish = false\n\n[dependencies]\nexact-runner.workspace = true\n${deps}`);
+  try {
+    createApp(dir);
+    const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, rust: { data: { crate: 'field-log-data', type: 'field_log_data::FieldLog' } } }));
+    mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'data/src/lib.rs'), '');
+    data();
+    const { workspace } = ensureShells(dir);
+    settleLock(dir, workspace);
+    assert.match(lockShells(dir, workspace), /resolves against exact2's lock; the app's crates there add nothing, so it commits no Cargo\.lock of its own/);
+    assert.equal(existsSync(resolve(dir, 'Cargo.lock')), false);
+    if (other) {
+      data(`itoa = "=${other}"\n`);
+      assert.throws(() => settleLock(dir, workspace), new RegExp(`the app's crates need versions exact2's lock does not hold \\(itoa ${other.replaceAll('.', '\\.')} [^)]*\\)\\. An app whose crates add dependencies commits a lock of its own: \`bun exact\\.mjs lock\``));
+      assert.match(lockShells(dir, workspace), /Cargo\.lock: captured \(\d+ packages\); commit it/);
+      const captured = readFileSync(resolve(dir, 'Cargo.lock'), 'utf8');
+      assert.match(captured, new RegExp(`name = "itoa"\nversion = "${other.replaceAll('.', '\\.')}"`));
+      settleLock(dir, workspace);
+      // A rewrite of the shell (here, its stamp as a moved checkout leaves it) keeps the captured lock.
+      writeFileSync(resolve(workspace, '.stamp.json'), '{}\n');
+      assert.equal(ensureShells(dir).wrote, true);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8'), captured);
+      // A dependency changed since the capture is the lock's to settle, never a build's.
+      data(`itoa = "=${held}"\n`);
+      assert.throws(() => settleLock(dir, workspace), /Cargo\.lock does not match the app's crates [^]*`bun exact\.mjs lock` in /);
+      assert.match(lockShells(dir, workspace), new RegExp(`Cargo\\.lock: resolved\nitoa ${other.replaceAll('.', '\\.')} → ${held.replaceAll('.', '\\.')}`));
+    }
+    data('rustls-platform-verifier = "=0.7.1"\n');
+    assert.match(lockShells(dir, workspace), /Cargo\.lock: (?:resolved|captured)|resolves against exact2's lock/);
+    const locked = Bun.TOML.parse(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8')).package;
+    assert.deepEqual(locked.filter(p => p.name === 'rustls-platform-verifier').map(p => p.version), ['0.7.1']);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 180_000);
+
+// LLP 1153.003 D2: a data crate the manifest names is linked by generated host crates whose build script is one line,
+// with no exact-js (no Hermes) without app.ts, and composed with the TypeScript module beside it.
+test('rust.data generates host crates over the data crate, composed with app.ts when there is one', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { ensureShells } = await import('./app-shells.mjs');
+  const scratch = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-rust-data-'))), dir = resolve(scratch, 'pins');
+  try {
+    createApp(dir, { with: ['ios', 'linux', 'android'] });
+    mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'data/Cargo.toml'), '[package]\nname = "pins-data"\nversion.workspace = true\nedition.workspace = true\nworkspace = "../.exact/shells"\npublish = false\n\n[dependencies]\nexact-runner.workspace = true\n');
+    writeFileSync(resolve(dir, 'data/src/lib.rs'), '');
+    const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
+    const declare = data => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...manifest, rust: { data } }, null, 2));
+    declare({ crate: 'other-data', type: 'other_data::Pins' });
+    assert.throws(() => ensureShells(dir), /rust\.data\.crate is other-data, which is not a crate beside app\.json that joins the app's workspace/);
+    declare({ crate: 'pins-data', type: 'pins_data::Pins', source: 'pins_data::Pins::new(3)' });
+    rmSync(resolve(dir, 'app.ts'));
+    const { workspace } = ensureShells(dir);
+    const read = file => readFileSync(resolve(workspace, file), 'utf8');
+    assert.match(read('Cargo.toml'), /^members = \["web", "apple", "linux", "android", "module", "\.\.\/\.\.\/data"\]$/m);
+    for (const kind of ['web', 'apple', 'linux', 'android']) {
+      assert.equal(read(`${kind}/build.rs`), `fn main() {\n    exact_bake::host::app("${kind}", "../../..", pins_data::Pins::new(3));\n}\n`);
+      assert.match(read(`${kind}/Cargo.toml`), /^pins-data = \{ path = "\.\.\/\.\.\/\.\.\/data" \}$/m);
+      assert.doesNotMatch(read(`${kind}/Cargo.toml`), /exact-js/);
+    }
+    // The web's module exports the same source; the dev driver bakes with `default()`, so a source given is none.
+    assert.match(read('module/src/lib.rs'), /^exact_logic_abi::export!\(pins_data::Pins, pins_data::Pins::new\(3\)\);$/m);
+    assert.equal(existsSync(resolve(workspace, 'web/src/bin/pins-dev.rs')), false);
+    // The Android library links the update store only at deploy.store.android "A" (LLP 1030.006 D3).
+    assert.doesNotMatch(read('android/Cargo.toml'), /exact-painted-update/);
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8')), deploy: { ...manifest.deploy, store: { ...manifest.deploy?.store, android: 'A' } } }, null, 2));
+    ensureShells(dir);
+    assert.match(read('android/Cargo.toml'), /^exact-painted-update = \{ path = "[^"]*host\/painted-update" \}$/m);
+    assert.doesNotMatch(read('linux/Cargo.toml'), /exact-painted-update/);
+    declare({ crate: 'pins-data', type: 'pins_data::Pins', source: 'pins_data::Pins::new(3)' });
+    ensureShells(dir);
+    const loads =spawnSync('cargo', ['metadata', '--no-deps', '--offline', '--format-version', '1'], { cwd: workspace, encoding: 'utf8' });
+    assert.equal(loads.status, 0, loads.stderr);
+    // With app.ts beside it, the crates compose the two: Rust answers its RUST_SOURCES, app.ts the rest.
+    writeFileSync(resolve(dir, 'app.ts'), 'export const grants = "";\n');
+    assert.equal(ensureShells(dir).wrote, true);
+    assert.match(read('web/build.rs'), /exact_js_bake::build_beside\([^]*&pins_data::Pins::new\(3\),\n\s*pins_data::RUST_SOURCES,/);
+    assert.match(read('apple/src/lib.rs'), /exact_data::Mixed::new\([^]*TYPESCRIPT_SOURCES,\n\s*pins_data::RUST_SOURCES,/);
+    // A data crate that names no app takes the module's identity, which `Mixed` requires both sides to share.
+    for (const file of ['web/build.rs', 'apple/src/lib.rs']) assert.match(read(file), /Placed::new\(pins_data::Pins::new\(3\), [^)]+\)\.named\(&app\)/);
+    assert.match(read('linux/Cargo.toml'), /^exact-js = /m);
+    // Without rust.data, the module member goes with it.
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest, null, 2));
+    rmSync(resolve(dir, 'data'), { recursive: true });
+    ensureShells(dir);
+    assert.equal(existsSync(resolve(workspace, 'module')), false);
+    assert.match(read('web/build.rs'), /exact_js_bake::build\(/);
+  } finally { rmSync(scratch, { recursive: true, force: true }); }
+}, 180_000);
+
+// LLP 1153.003 D5.1: a GPU module links nothing of the host's, so its crates resolve in a generated workspace of their
+// own, with a lock of their own captured by the host's rule.
+test('a GPU crate builds in .exact/gpu, apart from the host\'s graph, and captures Cargo.gpu.lock only when it leaves exact2\'s', async () => {
+  const { createApp } = await import('../game/new.mjs');
+  const { GPU_LOCK, ensureGpuShells, ensureShells, lockShells } = await import('./app-shells.mjs');
+  const scratch = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-gpu-workspace-'))), dir = resolve(scratch, 'field-log'), was = process.env.EXACT_APP_DIR, target = process.env.CARGO_TARGET_DIR;
+  const sdk = readFileSync(resolve(import.meta.dir, '../Cargo.lock'), 'utf8');
+  const held = /name = "itoa"\nversion = "([^"]+)"/.exec(sdk)[1];
+  const cache = resolve(process.env.CARGO_HOME ?? resolve(homedir(), '.cargo'), 'registry/cache');
+  const other = (existsSync(cache) ? readdirSync(cache).flatMap(index => readdirSync(resolve(cache, index))) : [])
+    .map(file => /^itoa-(1\.\d+\.\d+)\.crate$/.exec(file)?.[1]).find(version => version && version !== held);
+  // The recipe's manifest (docs/recipes/gpu-module.md).
+  const gpu = (deps = '', workspace = '../.exact/gpu') => writeFileSync(resolve(dir, 'gpu/Cargo.toml'), `[package]\nname = "field-log-gpu"\nversion.workspace = true\nedition.workspace = true\nlicense.workspace = true\npublish = false\nworkspace = "${workspace}"\n\n[lib]\ncrate-type = ["cdylib", "rlib"]\n\n[dependencies]\nexact-gpu.workspace = true\n${deps}\n[target.'cfg(target_arch = "wasm32")'.dependencies]\nwasm-bindgen.workspace = true\nwasm-bindgen-futures.workspace = true\nweb-sys.workspace = true\n`);
+  try {
+    createApp(dir, { with: ['macos'] });
+    delete process.env.CARGO_TARGET_DIR;
+    process.env.EXACT_APP_DIR = dir;
+    mkdirSync(resolve(dir, 'gpu/src'), { recursive: true });
+    writeFileSync(resolve(dir, 'gpu/src/lib.rs'), '');
+    // A GPU crate that names the host's workspace is pointed at its own.
+    gpu('', '../.exact/shells');
+    assert.throws(() => ensureShells(dir), /gpu\/Cargo\.toml: field-log-gpu is a GPU module, which resolves apart from the host's crates: set package\.workspace = "\.\.\/\.exact\/gpu"/);
+    gpu();
+    const app = resolveApp(), workspace = app.workspace, own = resolve(dir, '.exact/gpu');
+    assert.equal(app.gpuWorkspace, own);
+    assert.equal(app.hasGpu, true);
+    const manifest = readFileSync(resolve(own, 'Cargo.toml'), 'utf8');
+    assert.match(manifest, /^members = \["\.\.\/\.\.\/gpu"\]$/m);
+    assert.match(manifest, /^wgpu-hal = \{ path = "[^"]*\/vendor\/wgpu-hal" \}$/m);
+    assert.match(manifest, /^wasm-bindgen = "=\d+\.\d+\.\d+"$/m);
+    const names = at => JSON.parse(spawnSync('cargo', ['metadata', '--locked', '--offline', '--format-version', '1'], { cwd: at, encoding: 'utf8', maxBuffer: 1 << 28 }).stdout).packages.map(p => p.name);
+    assert.ok(names(own).includes('field-log-gpu'));
+    assert.ok(names(own).includes('exact-gpu'));
+    // The host's graph holds neither the GPU crate nor wgpu.
+    assert.equal(names(workspace).some(name => name === 'field-log-gpu' || name === 'exact-gpu' || name === 'wgpu'), false);
+    assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /resolves against exact2's lock; the app's crates there add nothing, so it commits no Cargo\.gpu\.lock of its own/);
+    assert.equal(existsSync(resolve(dir, GPU_LOCK)), false);
+    // mln-rs 0.0.11 needs these versions in the same GPU graph (#426).
+    gpu('rustls-platform-verifier = "=0.7.1"\nwasm-bindgen = "=0.2.130"\n');
+    assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /resolves against exact2's lock|Cargo\.gpu\.lock: captured/);
+    const locked = Bun.TOML.parse(readFileSync(resolve(own, 'Cargo.lock'), 'utf8')).package;
+    for (const [name, version] of [['rustls-platform-verifier', '0.7.1'], ['wasm-bindgen', '0.2.130']]) {
+      assert.deepEqual(locked.filter(p => p.name === name).map(p => p.version), [version]);
+    }
+    if (other) {
+      gpu(`itoa = "=${other}"\n`);
+      assert.match(lockShells(dir, own, resolve(dir, GPU_LOCK)), /Cargo\.gpu\.lock: captured \(\d+ packages\); commit it/);
+      assert.match(readFileSync(resolve(dir, GPU_LOCK), 'utf8'), new RegExp(`name = "itoa"\nversion = "${other.replaceAll('.', '\\.')}"`));
+      // The host's lock is untouched: it captures nothing of the GPU crate's.
+      assert.equal(existsSync(resolve(dir, 'Cargo.lock')), false);
+      assert.equal(readFileSync(resolve(workspace, 'Cargo.lock'), 'utf8').includes(`name = "itoa"\nversion = "${other}"`), false);
+    }
+    // Without a GPU crate the workspace goes.
+    rmSync(resolve(dir, 'gpu'), { recursive: true });
+    assert.equal(ensureGpuShells(dir), null);
+    assert.equal(existsSync(own), false);
+  } finally {
+    if (was === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = was;
+    if (target !== undefined) process.env.CARGO_TARGET_DIR = target;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}, 300_000);

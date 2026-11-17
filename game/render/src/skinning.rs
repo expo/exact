@@ -760,8 +760,10 @@ pub(crate) mod tests {
         skin.encode(&mut encoder, None);
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         for (a, b) in actual.iter().zip(expected.to_cols_array()) {
             assert!((a - b).abs() < 1e-5, "{actual:?}");
@@ -998,8 +1000,10 @@ pub(crate) mod tests {
                 skin.encode(&mut encoder, None);
                 gpu.queue.submit([encoder.finish()]);
                 let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-                    .chunks_exact(4)
-                    .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|v| f32::from_ne_bytes(*v))
                     .collect();
                 let expected = Mat4::from_scale_rotation_translation(
                     parent.scale,
@@ -1135,8 +1139,10 @@ pub(crate) mod tests {
         skin.encode(&mut encoder, None);
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<_> = read(&gpu, &skin.palette.raw, 64)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         let expected = Mat4::from_rotation_z(std::f32::consts::FRAC_PI_4)
             * Mat4::from_translation(Vec3::new(1., 0., 2.));
@@ -1416,8 +1422,10 @@ mod normal_tests {
         }
         gpu.queue.submit([encoder.finish()]);
         let actual: Vec<f32> = super::tests::read(&gpu, &output, 16)
-            .chunks_exact(4)
-            .map(|v| f32::from_ne_bytes(v.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| f32::from_ne_bytes(*v))
             .collect();
         let expected = (a * 0.75 + b * 0.25)
             .inverse()

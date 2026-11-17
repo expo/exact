@@ -30,8 +30,9 @@ const wire = value => {
   return value;
 };
 const result = r => ({changes:String(r.changes),lastInsertRowid:String(r.lastInsertRowid)});
-// `compressImage`'s edit from a request's record (LLP 1133.019 D15); a null field is an absent one.
-const edit = args => Object.fromEntries(['rotate','flip','crop'].filter(k=>args[k]!=null).map(k=>[k,args[k]]));
+// The fields of a request's record that `keys` names, a null one absent: `compressImage`'s edit (LLP 1133.019
+// D15), `type`, and `maxBytes` and `quality`, either of which may be unsaid (LLP 1069.002 A1.12).
+const present = (args, keys) => Object.fromEntries(keys.filter(k=>args[k]!=null).map(k=>[k,args[k]]));
 function base64(bytes) { let text='';for (let i=0;i<bytes.length;i+=16384)text+=String.fromCharCode(...bytes.subarray(i,i+16384));return btoa(text); }
 export function createStorageRequests(appId, admitted) {
   const services = new Map(), key = storageKey(appId); let disposed = false;
@@ -53,9 +54,9 @@ export function createStorageRequests(appId, admitted) {
   };
   const check = () => { if(disposed)throw new Error('storage source unloaded'); };
   return {
-    /** A canvas capture's PNG at the app file `path` (LLP 1056 D9, as amended for #188), as `fs.atomicWriteFile`
+    /** A canvas capture's encoded file at `path` (LLP 1056 D9, as amended for #188), as `fs.atomicWriteFile`
      *  writes it, under `scope` (the app's grants, or a source's narrower ones). */
-    async writePng(path, png, scope = null, active = () => true) {
+    async writeCapture(path, bytes, scope = null, active = () => true) {
       check();
       scope ??= admitted;
       const invalid = grantError(scope); if (invalid) throw new Error(invalid);
@@ -65,7 +66,7 @@ export function createStorageRequests(appId, admitted) {
         check();
         return active() ? undefined : new DOMException("the capture's ticket is no longer held", 'AbortError');
       };
-      return target.put(new Response(png), png.byteLength, null, refusal, refusal);
+      return target.put(new Response(bytes), bytes.byteLength, null, refusal, refusal);
     },
     async run(payload, scope = null) {
       try {
@@ -133,7 +134,7 @@ export function createStorageRequests(appId, admitted) {
               if(typeof args.destination!=='string'||!args.destination.startsWith('app:/'))throw new Error('portable storage needs an app:/ destination');
               value=await fs[op.slice(3)](args.path,args.destination);break;
             case 'fs.compressImage':
-              value=await fs.compressImage(args.path,args.destination,{...edit(args),maxDimension:args.maxDimension,maxBytes:args.maxBytes,...(args.type==null?{}:{type:args.type})});break;
+              value=await fs.compressImage(args.path,args.destination,{...present(args,['rotate','flip','crop','maxBytes','quality','type']),maxDimension:args.maxDimension});break;
             case 'fs.transformImage': {
               // The record is D14's options beside the two paths (LLP 1133.019 D17).
               const {path,destination,...options}=args;

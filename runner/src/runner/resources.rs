@@ -33,11 +33,15 @@ pub(crate) struct ResourceRow {
     /// consumes it (LLP 1027.005 D3).
     pub(super) kept_admitted: bool,
     pub(super) member: Option<each::Member>,
+    /// An instance's request for a resource a child declares (`owned.rs`).
+    pub(super) owned: Option<super::owned::OwnedRow>,
     /// While a boot from a rendered page settles, a list's answers for the
     /// elements it makes (LLP 1048.000 D6). Boxed: every commit copies each
     /// row, and only a list's row during a boot holds them.
     pub(super) page_answers: Option<Box<each::PageAnswers>>,
     pub(super) inspection: crate::perf::ResourceWork,
+    /// HTTP inputs recorded only by a document renderer, for selective test revalidation.
+    pub(super) render_urls: Vec<String>,
 }
 
 impl<D: DataSource> Runner<D> {
@@ -45,6 +49,8 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn resource_row(&self, i: usize) -> &exact_plan::ResourcesRow {
         if let Some(member) = &self.resources[i].member {
             &member.row
+        } else if let Some(owned) = &self.resources[i].owned {
+            &self.plan.resources[owned.site]
         } else {
             &self.plan.resources[i]
         }

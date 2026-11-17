@@ -36,7 +36,7 @@ export async function buildingServer({app, host, port, gate, origins}) {
     producers.set(producer, state);
     status.set({...extra, phase:[...producers.values()].includes('failed') ? 'failed' : !listening || [...producers.values()].includes('build') ? 'build' : 'ready'});
   };
-  const server = httpServer((req, res) => {
+  const server = httpServer({ maxHeaderSize: 128 * 1024 }, (req, res) => {
     if (!gate.check(req).allowed) { res.writeHead(421); res.end(); return; }
     const row = status.get();
     if (req.url === '/__exact/ready') {

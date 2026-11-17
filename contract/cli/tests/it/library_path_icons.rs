@@ -93,12 +93,12 @@ fn each_moved_svgs_d_is_its_path_functions_string_byte_for_byte() {
         // Named under its namespace in its package's design, with no `sf`
         // (Apple draws the path, not an SF Symbol).
         let design =
-            std::fs::read_to_string(repo().join(format!("packages/{package}/{package}.tamber")))
+            std::fs::read_to_string(repo().join(format!("packages/{package}/{package}.forma")))
                 .unwrap();
         let line = format!("  {package}.{name} = icon(svg \"{name}.svg\")\n");
         assert!(
             design.contains(&line),
-            "{package}.tamber has no `{}`",
+            "{package}.forma has no `{}`",
             line.trim()
         );
     }

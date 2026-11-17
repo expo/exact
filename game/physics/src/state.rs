@@ -35,7 +35,7 @@ crate::types::record!(Entry {
     body,
     collider,
     pose,
-} unnamed {} named { extra_handles });
+} named { extra_handles });
 impl Entry {
     pub fn bh(&self) -> Option<RigidBodyHandle> {
         self.body_handle

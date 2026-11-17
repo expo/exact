@@ -20,7 +20,9 @@ fn gpu() -> Option<Gpu> {
 fn mean_luminance(p: &fixture::Pixels) -> f32 {
     let sum: f64 = p
         .data
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|c| f64::from(luminance([c[0], c[1], c[2]])))
         .sum();
     (sum / f64::from(p.width * p.height)) as f32

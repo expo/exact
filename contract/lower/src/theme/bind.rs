@@ -11,19 +11,19 @@ use super::*;
 /// said and binds none (`None`). The compiler's fold and the design
 /// server's write check's ([`rows::check`]).
 pub(crate) fn fold(
-    design: &tamber::Design,
+    design: &forma::Design,
     synthetic: &mut Vec<scan::Synthetic>,
-    refuse: &mut dyn FnMut(&tamber::Diagnostic, &[scan::Synthetic]),
-) -> Option<tamber::Folding> {
+    refuse: &mut dyn FnMut(&forma::Diagnostic, &[scan::Synthetic]),
+) -> Option<forma::Folding> {
     loop {
         let mut checked = design.clone();
         for (i, s) in synthetic.iter().enumerate() {
-            let at = |value: String| tamber::At {
+            let at = |value: String| forma::At {
                 value,
                 line: SYNTHETIC + i as u32,
                 col: 1,
             };
-            checked.tokens.push(tamber::Token {
+            checked.tokens.push(forma::Token {
                 name: at(format!("~{i}")),
                 kind: None,
                 value: at(s.expr.clone()),
@@ -31,10 +31,10 @@ pub(crate) fn fold(
                 meta: Vec::new(),
             });
         }
-        match tamber::check_design(checked, &vocab()) {
+        match forma::check_design(checked, &vocab()) {
             Ok(f) => return Some(f),
             Err(all) => {
-                let loose = |d: &tamber::Diagnostic| {
+                let loose = |d: &forma::Diagnostic| {
                     d.line >= SYNTHETIC && !synthetic[(d.line - SYNTHETIC) as usize].strict
                 };
                 for d in all.iter().filter(|d| !loose(d)) {
@@ -62,7 +62,7 @@ pub(crate) fn fold(
 /// crate cannot fold it.
 pub(crate) fn profiles(
     sink: &mut dyn Refusals,
-    design: &mut tamber::Design,
+    design: &mut forma::Design,
     origin: &Origin,
 ) -> Vec<Profiled> {
     use std::collections::{BTreeSet, HashMap, HashSet};
@@ -72,7 +72,7 @@ pub(crate) fn profiles(
     let mut out: Vec<Profiled> = Vec::new();
     // (one past the checker's bounds is left as written, for the check
     // to refuse as the design server's does: Astra's round 2)
-    let bounded = |t: &tamber::Token| tamber::within_bounds(&t.value.value);
+    let bounded = |t: &forma::Token| forma::within_bounds(&t.value.value);
     // The tokens with no `when` naming a name whole, by its identity: each
     // is a profile's once the name is.
     let mut naming: HashMap<_, Vec<usize>> = HashMap::new();
@@ -103,7 +103,7 @@ pub(crate) fn profiles(
         }
         // A `when` that holds at the default modes would be the default's.
         let axes = &design.axes;
-        let defaults = |w: &tamber::When| {
+        let defaults = |w: &forma::When| {
             w.conds.iter().all(|(a, v)| {
                 axes.iter()
                     .any(|x| x.name.value == *a && x.values.first() == Some(v))
@@ -137,7 +137,7 @@ pub(crate) fn profiles(
         let values = std::iter::once(&t.value)
             .filter(|_| !profile)
             .chain(t.whens.iter().map(|w| &w.value));
-        let names = |v: &tamber::At<String>| scan::words(&v.value).any(|w| taken.contains(&key(w)));
+        let names = |v: &forma::At<String>| scan::words(&v.value).any(|w| taken.contains(&key(w)));
         if values.into_iter().any(names) {
             let span = sink.span(origin, t.name.line, t.name.col);
             sink.push(LowerError {
@@ -172,7 +172,7 @@ pub(crate) trait Sink: Refusals {
     /// Whether a refusal at `span` saying `text` was said already.
     fn said(&self, span: Span, text: &str) -> bool;
     /// The plan's axes and kept tokens, of `entries`.
-    fn plan(&mut self, entries: &[ThemeEntry], folding: &tamber::Folding);
+    fn plan(&mut self, entries: &[ThemeEntry], folding: &forma::Folding);
     /// The kernel's value of each of `entries`.
     fn stacks(&mut self, entries: &[ThemeEntry]) -> Vec<String>;
 }
@@ -185,7 +185,7 @@ pub(crate) trait Sink: Refusals {
 /// ([`rows::check`]) one binding.
 pub(crate) fn bind(
     sink: &mut dyn Sink,
-    folding: &tamber::Folding,
+    folding: &forma::Folding,
     exprs: &[String],
     profiled: &[Profiled],
     origin: &Origin,
@@ -233,7 +233,7 @@ pub(crate) fn bind(
         // (LLP 1095 D4's reach): it has one value, whatever the modes.
         if role.is_some() && !slices.is_empty() {
             sink.push(LowerError {
-                id: "tamber-role-axis",
+                id: "forma-role-axis",
                 message: format!("`{name}` overrides a role and varies by an app axis: a role has one value, which the hosts' own surfaces read; vary a token the rows name instead (LLP 1121 D5)"),
                 span: sink.span(origin, at.line, at.col),
             });
@@ -270,7 +270,7 @@ pub(crate) fn bind(
     MOTION.with(|m| {
         *m.borrow_mut() = entries
             .iter()
-            .filter(|e| matches!(e.kind, tamber::Kind::Duration | tamber::Kind::Easing))
+            .filter(|e| matches!(e.kind, forma::Kind::Duration | forma::Kind::Easing))
             .map(|e| (e.name.clone(), e.value.clone()))
             .collect()
     });
@@ -278,7 +278,7 @@ pub(crate) fn bind(
     MEASURES.with(|m| {
         *m.borrow_mut() = entries
             .iter()
-            .filter(|e| e.kind != tamber::Kind::Color && kind_code(e.kind).is_some())
+            .filter(|e| e.kind != forma::Kind::Color && kind_code(e.kind).is_some())
             .map(|e| {
                 let mut values = vec![e.value.clone()];
                 for v in &e.slices {
@@ -340,7 +340,7 @@ fn admitted(
     sink: &mut dyn Sink,
     name: &str,
     role: Option<&(u8, String)>,
-    value: &tamber::Folded,
+    value: &forma::Folded,
     (line, col): (u32, u32),
     origin: &Origin,
 ) -> bool {
@@ -358,7 +358,7 @@ fn admitted(
             format!("`{name}` is drawn in the app's tint: a theme sets the tint with `AccentColor`"),
         )),
         Some((id, _)) if *id == roles::accent() => match value {
-            tamber::Folded::Host(tamber::Host::Role(row))
+            forma::Folded::Host(forma::Host::Role(row))
                 if roles::role(row).is_some_and(roles::tint) =>
             {
                 Some(refuse("lower-theme-tint", format!("`{name}=\"{row}\"` names a role drawn in the tint itself: the tint is a colour, a platform colour or another role")))
@@ -380,7 +380,7 @@ fn admitted(
 pub(super) struct Lowering<'a, 'b> {
     pub(super) l: &'a mut Lowerer<'b>,
     pub(super) synthetic: &'a [scan::Synthetic],
-    pub(super) retention: &'a tamber::Retention,
+    pub(super) retention: &'a forma::Retention,
 }
 
 impl Refusals for Lowering<'_, '_> {
@@ -399,7 +399,7 @@ impl Sink for Lowering<'_, '_> {
             .iter()
             .any(|e| e.span == span && e.message.contains(text))
     }
-    fn plan(&mut self, entries: &[ThemeEntry], folding: &tamber::Folding) {
+    fn plan(&mut self, entries: &[ThemeEntry], folding: &forma::Folding) {
         for axis in &folding.design.axes {
             let values: Vec<&str> = axis.values.iter().map(String::as_str).collect();
             self.l.b.axis(&axis.name.value, &values);

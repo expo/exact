@@ -2,14 +2,15 @@
 // `--exact-layout-transition` row the web host writes (css.rs
 // `layout_transition_css`): a spring there is the private `spring(k, c, m)`
 // (LLP 1081 D5 keeps it), whose commas must not split it, lowered to `linear()`.
-import { test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // shared.js beside a stand-in for focus.js, which imports host/web/navigation.js as a build places it.
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-shared-curve-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(fileURLToPath(new URL('../../web-js/shared.js', import.meta.url)), resolve(dir, 'shared.js'));
 writeFileSync(resolve(dir, 'focus.js'), 'export const hold = () => null, within = (held, f) => f();\n');
 const { curve } = await import(resolve(dir, 'shared.js'));

@@ -126,6 +126,7 @@ fn paint(p: &mut Painter, k: &Kernel) -> crate::paint::Frame {
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
             paths: &|_| None,
+            filters: &|_| None,
             scroll: &BTreeMap::new(),
             page: (0., 0.),
             images: &BTreeMap::new(),
@@ -143,7 +144,7 @@ fn paint(p: &mut Painter, k: &Kernel) -> crate::paint::Frame {
 }
 #[test]
 fn unchanged_giant_and_sibling_typing_copy_hash_and_shape_no_giant_source() {
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     // Twice the giant bar: any whole-source copy, hash or shape is counted
     let text = "word é\n".repeat(16384);
     assert!(text.len() >= 2 * 65536);
@@ -180,7 +181,7 @@ fn unchanged_giant_and_sibling_typing_copy_hash_and_shape_no_giant_source() {
 }
 #[test]
 fn identified_exact_offers_share_anonymous_geometry_without_hot_source_work() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let k = tree(e.clone(), "alpha beta é中\nnext line");
     for offer in [
         AxisOffer::Definite(320.),
@@ -212,7 +213,7 @@ fn identified_exact_offers_share_anonymous_geometry_without_hot_source_work() {
 
 #[test]
 fn paint_only_revision_refreshes_pixels_without_copy_hash_or_shape() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let mut k = tree(e.clone(), "MMMM é colored text");
     let mut p = Painter::new(e.clone(), 1., Box::new(Raster::new()));
     let a = paint(&mut p, &k);
@@ -242,7 +243,7 @@ fn paint_only_revision_refreshes_pixels_without_copy_hash_or_shape() {
 
 #[test]
 fn independent_domains_owner_reuse_and_text_revisions_cannot_alias() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let mut a = tree(e.clone(), "i");
     let b = tree(e.clone(), "WWWWWWWW");
     assert_eq!(a.node(2).unwrap().key, b.node(2).unwrap().key);
@@ -277,15 +278,38 @@ fn independent_domains_owner_reuse_and_text_revisions_cannot_alias() {
 
 #[test]
 fn evicted_identity_and_replaced_catalog_do_not_reuse_stale_bindings() {
-    let e = TextEngine::shared();
-    let k = tree(e.clone(), "canonical catalog paragraph");
+    let assets = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/fixtures/fonts"
+    ));
+    let plan = contract::compile_path(&assets.join("app.contract")).unwrap();
+    let family = plan
+        .stacks
+        .iter()
+        .position(|s| {
+            s.members
+                .iter()
+                .any(|id| plan.stack_member(id).family.is_some())
+        })
+        .unwrap() as u16;
+    let e = TextEngine::shared_for_plan(&plan, assets);
+    let mut k = tree(e.clone(), "canonical catalog paragraph");
+    let mut style = StyleProps::default().with_rows(|rows| rows.font_family = family);
+    style.mask.set(StyleId::FontFamily);
+    apply(
+        &mut k,
+        &[Op::SetStyle {
+            id: 2,
+            patch: Box::new(style),
+        }],
+    );
     let want = request(&k, e.clone(), 2, AxisOffer::Definite(320.));
+    assert!(want.width > 0.);
     e.borrow_mut().paragraphs.clear();
     reset();
     assert_eq!(request(&k, e.clone(), 2, AxisOffer::Definite(320.)), want);
     assert!(work().copied > 0 && work().hashed > 0);
-    let plan = contract::compile("component App\n  view\n    text \"font catalog\"\n").unwrap();
-    e.borrow_mut().install_plan(&plan, Path::new(""));
+    e.borrow_mut().install_plan(&plan, assets);
     reset();
     assert_eq!(request(&k, e.clone(), 2, AxisOffer::Definite(320.)), want);
     assert!(work().copied > 0 && work().hashed > 0);
@@ -297,7 +321,7 @@ fn evicted_identity_and_replaced_catalog_do_not_reuse_stale_bindings() {
 
 #[test]
 fn stamp_shortcuts_are_bounded_replace_revisions_and_do_not_pin_cold_storage() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let mut k = Kernel::with_monospace();
     for id in 1..=300 {
         apply(
@@ -328,7 +352,7 @@ fn stamp_shortcuts_are_bounded_replace_revisions_and_do_not_pin_cold_storage() {
 
 #[test]
 fn pixel_oracle_after_appearance_scale_width_and_metric_changes() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let mut k = tree(e.clone(), "Áj Italic source\nMMMM colored words");
     let mut p = Painter::new(e.clone(), 1., Box::new(Raster::new()));
     let _ = paint(&mut p, &k);
@@ -390,7 +414,7 @@ fn pixel_oracle_after_appearance_scale_width_and_metric_changes() {
 
 #[test]
 fn identified_latest_definite_handoffs_keep_the_existing_64_identity_bound() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     e.borrow_mut().paragraphs.set_target(0);
     let mut k = Kernel::with_monospace();
     for id in 1..=70 {
@@ -432,7 +456,7 @@ fn identified_latest_definite_handoffs_keep_the_existing_64_identity_bound() {
 
 #[test]
 fn new_width_reuses_shape_without_owned_source_copy_or_hash() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let k = tree(
         e.clone(),
         "exact canonical metric source repeated over widths",
@@ -448,7 +472,7 @@ fn new_width_reuses_shape_without_owned_source_copy_or_hash() {
 
 #[test]
 fn retained_identified_600_to_632_reuses_giant_shape() {
-    let e = TextEngine::shared();
+    let e = crate::text::fixtures::shared();
     let text = "office café e\u{301} العربية 漢字 🧪 word ".repeat(2048);
     assert!(text.len() >= 65536);
     let mut k = tree(e.clone(), "");

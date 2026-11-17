@@ -18,7 +18,7 @@ import { copyStaticTreeIfPresent, syncStaticTree } from '../host/web/serve.mjs';
 test.each([
   ['host/web-js/build.mjs', "// Launch modules' web services", '\nif (devReload)', '', ['assets', 'deck'], false],
   ['host/windows/build.mjs', "  for (const name of ['assets','deck'])", '\n  copyShaders', '', ['assets', 'deck'], true],
-  ['host/apple/watch.mjs', '    for (const entry of entries) copyFileSync', '\n    const appInfo', '', ['assets', 'deck'], false],
+  ['host/apple/watch.mjs', '  for (const entry of entries) copyFileSync', '\n  const appInfo', '', ['assets', 'deck'], false],
   ['host/apple-painted/build.mjs', "  writeFileSync(resolve(bundle, 'Contents/Info.plist')", "\n  run('codesign'", 'Contents/Resources', ['assets'], true],
   ['scripts/agent-android.mjs', "  copyStaticTreeIfPresent(resolve(app.dir, 'assets')", "\n  // The modules' shader text", 'assets/app', ['assets'], false],
 ])('%s packages static files without Finder metadata', async (file, start, end, prefix, folders, reused) => {
@@ -489,40 +489,46 @@ test.each(['rlib', 'staticlib', 'executable', 'windows-executable', 'build-scrip
   } finally { rmSync(root, {recursive:true, force:true}); }
 });
 
-test.each([null, 'intermediate', 'output/intermediate'])('copied wasm with build directory %s requires unique compiler evidence', async split => {
-  const { unitDepInfo } = await import('./app.mjs');
-  const root = mkdtempSync(resolve(tmpdir(), 'exact-wasm-dep-'));
+test.each(['wasm', 'executable', 'windows-executable'].flatMap(kind => [null, 'intermediate', 'output/intermediate'].map(split => [kind, split])))('copied %s with build directory %s requires unique compiler evidence', async (kind, split) => {
+  const { compilerPaths, unitDepInfo } = await import('./app.mjs');
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-copied-dep-'));
   try {
     const metadata = {target_directory:resolve(root, 'output'), build_directory:resolve(root, split ?? 'output'),
       packages:[{id:'game-id', name:'game-gpu'}]};
-    const dir = resolve(metadata.target_directory, 'wasm32-unknown-unknown/web'), src = resolve(root, 'gpu/src/lib.rs');
+    const executable = kind !== 'wasm', extension = executable ? (kind === 'windows-executable' ? '.exe' : '') : '.wasm';
+    const folder = executable ? 'release' : 'wasm32-unknown-unknown/web', name = 'game_gpu' + extension;
+    const dir = resolve(metadata.target_directory, folder), src = resolve(root, executable ? 'gpu/src/main.rs' : 'gpu/src/lib.rs');
     mkdirSync(dir, {recursive:true});
-    const artifact = resolve(dir, 'game_gpu.wasm');
-    writeFileSync(artifact, 'selected wasm');
-    const message = {package_id:'game-id', filenames:[artifact], target:{name:'game_gpu', src_path:src}};
+    const artifact = resolve(dir, executable ? 'game-gpu' + extension : name);
+    writeFileSync(artifact, 'selected product');
+    const message = {package_id:'game-id', filenames:[artifact], executable:executable ? artifact : null, target:{name:executable ? 'game-gpu' : 'game_gpu', src_path:src}};
     const unit = (hash, bytes, source = src) => {
-      const out = resolve(metadata.build_directory, 'wasm32-unknown-unknown/web/build/game-gpu', hash, 'out');
+      const out = resolve(metadata.build_directory, folder, 'build/game-gpu', hash, 'out');
       mkdirSync(out, {recursive:true});
-      writeFileSync(resolve(out, 'game_gpu.wasm'), bytes);
+      writeFileSync(resolve(out, name), bytes);
       const dep = resolve(out, 'game_gpu.d');
-      writeFileSync(dep, `${dep}: ${source}\n# env-dep:EXACT_GAME_PARANOID=0\n`);
+      writeFileSync(dep, `${dep}: ${source} ${root}/gpu/src/nested.rs\n# env-dep:EXACT_GAME_PARANOID=0\n`);
       return dep;
     };
-    unit('deadbeef', 'another wasm');
+    unit('deadbeef', 'another product');
     assert.throws(() => unitDepInfo(message, root, metadata), /no matching rustc unit/);
-    const expected = unit('a11ce', 'selected wasm', resolve(root, 'old/lib.rs'));
+    const expected = unit('a11ce', 'selected product', resolve(root, 'old/lib.rs'));
     assert.throws(() => unitDepInfo(message, root, metadata), /no matching rustc unit/);
-    unit('a11ce', 'selected wasm');
+    unit('a11ce', 'selected product');
     writeFileSync(expected, `${artifact}: ${src}\n`);
     assert.throws(() => unitDepInfo(message, root, metadata), /no matching rustc unit/);
-    unit('a11ce', 'selected wasm');
-    const deps = resolve(metadata.build_directory, 'wasm32-unknown-unknown/web/deps'), stale = resolve(deps, 'game_gpu.d'); // another toolchain's unit: the JS target's stable GPU build
-    mkdirSync(deps, {recursive:true}); writeFileSync(resolve(deps, 'game_gpu.wasm'), 'stable wasm'); writeFileSync(stale, `${stale}: ${src}\n`);
+    unit('a11ce', 'selected product');
+    const deps = resolve(metadata.build_directory, folder, 'deps'), stale = resolve(deps, 'game_gpu.d');
+    mkdirSync(deps, {recursive:true}); writeFileSync(resolve(deps, name), 'another toolchain'); writeFileSync(stale, `${stale}: ${src}\n`);
     assert.equal(unitDepInfo(message, root, metadata), expected);
+    assert.deepEqual(compilerPaths(readFileSync(expected, 'utf8'), root), [src, resolve(root, 'gpu/src/nested.rs')]);
     assert.match(readFileSync(expected, 'utf8'), /env-dep:EXACT_GAME_PARANOID=0/);
-    unit('aabbcc', 'selected wasm');
+    unit('aabbcc', 'selected product');
     assert.throws(() => unitDepInfo(message, root, metadata), /ambiguous rustc unit/);
-    writeFileSync(resolve(deps, 'game_gpu.wasm'), 'selected wasm'); assert.equal(unitDepInfo(message, root, metadata), stale, 'the unit Cargo copied out of deps/');
+    if (!executable) {
+      writeFileSync(resolve(deps, name), 'selected product');
+      assert.equal(unitDepInfo(message, root, metadata), stale, 'the unit Cargo copied out of deps/');
+    }
   } finally { rmSync(root, {recursive:true, force:true}); }
 });
 
@@ -1094,7 +1100,7 @@ impl Game for BuildInputs {
           packages: ['web', 'gpu'].map(kind => ({ id: kind, name: app.crate(kind), manifest_path: resolve(app.workspace, kind, 'Cargo.toml') })),
           resolve: { nodes: ['web', 'gpu'].map(id => ({ id, deps: [] })) } });
         return app;
-      }, buildBake(app, platform, target, { env }) {
+      }, buildBake(app, platform, target, { env, capture }) {
         const started = Date.now();
         const source = resolve(app.dir, 'app.contract');
         const header = Buffer.alloc(36);
@@ -1130,7 +1136,9 @@ impl Game for BuildInputs {
         }
         receipt.embedded.assets = serve.listAssets(app.dir);
         writeFileSync(resolve(env.EXACT_BAKE_OUTPUT, platform + '-' + target + '.json'), JSON.stringify(receipt));
-        return { started, binary: { sha256: 'fixture', inputs: [] } };
+        const built = { started, products: [], binary: { sha256: 'fixture', inputs: [] } };
+        capture?.(built);
+        return built;
       } }));
       process.argv = [process.execPath, ${JSON.stringify(resolve(import.meta.dir, '../host/web/build.mjs'))}, ${JSON.stringify(dir)}, '--bake'];
       await import(${JSON.stringify(resolve(import.meta.dir, '../host/web/build.mjs'))});

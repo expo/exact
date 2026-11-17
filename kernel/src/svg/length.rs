@@ -175,10 +175,11 @@ impl Viewport<'_> {
 
     /// A CSS length in user units, with percentages against the SVG basis.
     /// `None` preserves `auto`, including an undefined environment length,
-    /// so the reader can apply the property's initial value.
+    /// so the reader can apply the property's initial value. A size keyword
+    /// is `auto` on geometry (LLP 1001.001 D3, "SVG").
     pub fn resolve(&self, d: Dimension, basis: f32) -> Option<f32> {
         match d.resolve(self.env) {
-            Dimension::Auto => None,
+            Dimension::Auto | Dimension::Keyword(_) => None,
             d => Some(d.at_basis(self.env, basis)),
         }
     }

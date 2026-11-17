@@ -72,6 +72,11 @@ struct StyleRow {
     codec: String,
     #[serde(rename = "admitsAuto", default)]
     admits_auto: bool,
+    /// Which size keywords a dimension row takes: `"size"` (`min-content`,
+    /// `max-content`, `fit-content`; CSS Box Sizing 3 §3.2) or `"basis"`
+    /// (those and `content`; CSS Flexbox 1 §7.2.3).
+    #[serde(rename = "sizeKeywords", default)]
+    size_keywords: Option<String>,
     /// A dimension row CSS gives no percentage (`column-width`).
     #[serde(rename = "refusesPercent", default)]
     refuses_percent: bool,
@@ -633,7 +638,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     // ---- StyleId / StyleCodec --------------------------------------------
     writeln!(w, "/// Wire codec of a style row.").unwrap();
     writeln!(w, "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]").unwrap();
-    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, AutoI32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
+    writeln!(w, "pub enum StyleCodec {{ Dimension, LineHeight, F32, U8, U16, U32, I32, AutoI32, ColorValue, KeywordColor, Vec2, Tracks, Placement, Transitions, Animations, ClipPath, ShapeOutside, AspectRatio, Paint, DashArray, Transform, TransformOrigin, PaintOrder, Marker, Filter, BackgroundImage, BackdropFilter, BoxShadow, TextShadow, FontVariations, FontFeatures, MaskImage, CornerShape, RotateAxis, SymbolPalette, DragTimeline, AnimationTimeline, AnimationRange, TimelineScope, SafeAreaProperties, TimelineName, ViewTimelineInset, PositionTryFallbacks, Enum }}").unwrap();
     writeln!(w, "/// One style row; the discriminant is the mask bit.").unwrap();
     writeln!(w, "#[repr(u8)]").unwrap();
     writeln!(
@@ -800,6 +805,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
         }
         writeln!(w, "    }}").unwrap();
     }
+    write_admits_size_keyword(w, schema);
     writeln!(w, "}}").unwrap();
     let idents: Vec<String> = schema.styles.iter().map(|r| pascal(&r.field)).collect();
     let rows: Vec<(&str, &str)> = idents

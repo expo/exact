@@ -42,6 +42,30 @@ internal fun fontAt(b: IntBuffer, i: Int): Font {
  * changed are recorded again, and HWUI's damage is the nodes that changed (a row, a group), not the window.
  */
 internal class Structure {
+    /** A deferred row: op 15 at [at] in [b], then its slots' and layers' sets from
+     * [sets] to [end]. [made]: made, or freed before it was. */
+    class Later(val b: IntBuffer, val at: Int, val sets: Int) {
+        var end = sets
+        var made = false
+        /** Its top where the last stream drew it, in the feed's group (NaN: no stream drew it yet). */
+        var top = Float.NaN
+        /** Tracks and clocks (ops 31, 33) that came for its layers while it waited, in order. */
+        val after = ArrayList<IntArray>(0)
+    }
+
+    companion object {
+        /** Seconds of travel within which a new row is made on the main thread rather than the worker. */
+        const val NEAR_S = 0.033f
+        /** How far from the view, in its heights, a row's platform view exists: the way the scroll goes, and the other. */
+        const val NEAR_AHEAD = 1f
+        const val NEAR_BEHIND = 0.5f
+        /** How much farther, in view heights, a row keeps the view it has (so a small scroll back and forth makes none). */
+        const val NEAR_KEEP = 0.5f
+
+        /** Px between a feed's rows that still count as one reach of drawn rows. */
+        const val REACH_GAP = 64f
+    }
+
     private var words = IntArray(1024)
     private var size = 0
     /** Each group's id and its rows' range in the stream (after GROUP_BEGIN, up to GROUP_END). */
@@ -76,6 +100,8 @@ internal class Structure {
         46 -> i + 1
         47, 49 -> i + 2
         48 -> i + 10
+        50, 51 -> i + 2 + b.get(i + 1)
+        52 -> i + 3
         else -> throw IllegalStateException("op ${b.get(i)} at $i")
     }
 
@@ -122,6 +148,7 @@ internal class Structure {
                     put(21)
                 }
                 28 -> { opaque = true; copy(b, i, j) }
+                50, 51, 52 -> { opaque = true; copy(b, i, j) }
                 else -> copy(b, i, j)
             }
             i = j

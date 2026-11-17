@@ -266,9 +266,9 @@ fn mix_edit(name: &str, text: &str) -> Option<String> {
             }
             (depth == 0).then_some(start + k + 1)
         })?;
-        let design = format!("tamber t\n\ntheme\n  mixed = {}\n", &text[start..end]);
-        let folds = exact_tamber::parse(&design)
-            .is_ok_and(|d| exact_tamber::check_design(d, &crate::theme::vocab()).is_ok());
+        let design = format!("forma t\n\ntheme\n  mixed = {}\n", &text[start..end]);
+        let folds = exact_forma::parse(&design)
+            .is_ok_and(|d| exact_forma::check_design(d, &crate::theme::vocab()).is_ok());
         if folds {
             break (start, end);
         }
@@ -279,7 +279,7 @@ fn mix_edit(name: &str, text: &str) -> Option<String> {
         format!("{}mixed{}", &text[..start], &text[end..]),
     );
     Some(format!(
-        "declare the mix as a token in app.tamber's `theme` (a new app.tamber's first line is `tamber <name>`), `mixed = {mix}`, and write `\"{written}\"` for `\"{text}\"` in `{name}`: the build folds `color-mix()` only over the design's tokens, as `color-mix(in srgb, <token> 35%, transparent)`, and a mix of colours alone is no colour a host reads"
+        "declare the mix as a token in app.forma's `theme` (a new app.forma's first line is `forma <name>`), `mixed = {mix}`, and write `\"{written}\"` for `\"{text}\"` in `{name}`: the build folds `color-mix()` only over the design's tokens, as `color-mix(in srgb, <token> 35%, transparent)`, and a mix of colours alone is no colour a host reads"
     ))
 }
 

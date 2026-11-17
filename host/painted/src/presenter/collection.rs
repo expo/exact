@@ -233,7 +233,7 @@ impl Cursor {
     }
 }
 impl State {
-    fn scroll_event(&mut self, view: ViewId, key: NodeKey) {
+    pub(super) fn scroll_event(&mut self, view: ViewId, key: NodeKey) {
         if !self.scroll_events.contains(&(view, key)) {
             self.scroll_events.retain(|(id, _)| *id != view);
             self.scroll_events.push_back((view, key));
@@ -804,6 +804,7 @@ impl<D: DataSource> Presenter<D> {
             height: (port.1 + max.1) as f64,
             client_width: port.0 as f64,
             client_height: port.1 as f64,
+            zoom: self.reported_zoom(view),
         })
     }
 
@@ -1314,6 +1315,21 @@ impl<D: DataSource> Presenter<D> {
                                 } as f64,
                             })
                     })
+                    .chain(snapshot.fixed.iter().enumerate().map(|(side, fixed)| {
+                        RowMeasurement {
+                            view: fixed.view,
+                            epoch: 1,
+                            size: self
+                                .host
+                                .kernel()
+                                .collection_fixed_sizes(
+                                    snapshot.view,
+                                    &snapshot.fixed[0].roots,
+                                    &snapshot.fixed[1].roots,
+                                )
+                                .expect("fixed collection layout")[side],
+                        }
+                    }))
                     .collect(),
                 focus_view: self.focus.filter(|_| {
                     let snapshots = all.get_or_init(|| self.host.collections());

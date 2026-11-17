@@ -20,7 +20,7 @@ const PICK: &str = r#"component App
 "#;
 
 fn boot(source: &str, viewport: (f32, f32)) -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         viewport,

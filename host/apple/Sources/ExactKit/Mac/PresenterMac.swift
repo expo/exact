@@ -45,6 +45,7 @@ package final class Presenter {
     /// A view's props were written (`NodeView.props`' own observer).
     func propsChanged(_ view: NodeView) {
         chrome.note(view.id, props: view.props)
+        AriaCarriers.note(view, of: self)
         if view.disabled { view.showFieldFocus(false) }
         view.syncDisabledLook()
         view.relook() // a look holds on no disabled node (LLP 1121 D8)
@@ -90,6 +91,7 @@ package final class Presenter {
     var videoVisibility: VideoVisibilityHost?
     lazy package var collections = CollectionHost(self)
     lazy var stickies = StickyHost(self)
+    let tableGrid = TableGrid()
     /// Heavy leaves held while their rows are far or flying (LLP 1068 §5.1).
     lazy var leaves = HeavyLeaves(self)
     lazy package var selection = TextSelection(self)
@@ -681,6 +683,7 @@ package final class Presenter {
         hoveredInline = nil
         hoveredNodes = []; hovered = nil
         chrome = ChromeIndex()
+        AriaCarriers.forget(presenter: self)
         scrollers.removeAll()
         pendingScrolls.removeAll()
         heightBindings.removeAll()
@@ -714,7 +717,7 @@ package final class Presenter {
         viewport.syncElasticity()
         viewport.acceptDocumentFit()
     }
-    var onPress, onClose: ((UInt32) -> Void)?
+    var onPress, onClose, onCancel: ((UInt32) -> Void)?
     var onChange: ((UInt32, String) -> Void)?
     /// Images' intrinsic sizes, several at once under one layout.
     var onIntrinsic: (([(UInt32, CGSize?)]) -> Void)?
@@ -790,7 +793,7 @@ package final class Presenter {
     /// boxes where the viewer sees them (LLP 1051.000 D1).
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
     var onListIndex: ((UInt32, String) -> Int?)?
-    var onListText: ((UInt32, (String, Int, Int)?, (String, Int, Int)?) -> String)?
+    var onListText: ((UInt32, (String, Int, Int, Bool?)?, (String, Int, Int, Bool?)?) -> String)?
     private(set) var listViews: [UInt32: NodeView] = [:]
     /// Views this batch renewed for another list item (RenewMac.swift), and the accessibility watch that allows it.
     var renewing = Set<UInt32>(), rowReuseWatch: [NSKeyValueObservation] = []
@@ -1226,18 +1229,23 @@ package final class Presenter {
             case .flight: beginFlight(op)
             case .land: if let f = flights[id] { landFlight(f) }
             case .rank:
-                if let rank = op.payload["rank"] as? NSNumber { views[id]?.setRank(rank.int64Value) }
+                if let rank = op.rank { views[id]?.setRank(rank) }
+            case .layoutHits, .layoutHitsWithdrawn: break
             case .sticky: stickies.apply(id, op.payload)
             case .fragments: views[id]?.applyColumns(op.payload)
+            case .table: tableGrid.apply(id, op.payload)
             case .unknown: blocks.applied(op)
             case .renew: renew(id)
             case .destroy:
                 elements.destroyed(id)
                 blocks.destroyed(id)
                 stickies.forget(id)
+                tableGrid.forget(id)
                 forgetFlight(id)
                 views[id]?.holdGone()
                 if endExit(id) { continue }
+                // A route that left with its exit to play stays for it (RouteTransitionMac.swift).
+                if navigation.transitions.keeps(id) { beginExit(id); continue }
                 release(id, forget: true)?.removeFromSuperview()
             case .roots:
                 dialogs.children(root, op.ids.compactMap { views[UInt32($0)] })
@@ -1253,7 +1261,7 @@ package final class Presenter {
                 guard let v = views[id] else { continue }
                 applyFrame(v, NSRect(x: op.x, y: op.y, width: op.w, height: op.h))
             case .fieldContent:
-                views[id]?.applyFieldContent(op.payload)
+                views[id]?.applyFieldContent(op)
             case .content:
                 if let v = views[id] {
                     v.content = CGSize(width: op.w, height: op.h)
@@ -1266,7 +1274,7 @@ package final class Presenter {
                 case "translate": v.translatePx = CGPoint(x: x, y: CGFloat(op.y)); v.translatePercent = CGPoint(x: CGFloat(op.w), y: CGFloat(op.h)); v.applyTransform()
                 case "layout": v.layoutOffset = CGPoint(x: x, y: CGFloat(op.y)); v.layoutResize = CGSize(width: CGFloat(op.w), height: CGFloat(op.h)); v.applyTransform(); v.applySurface()
                 case "scale": v.scale = x; v.applyTransform()
-                case "rotate": v.rotate = x; v.applyTransform()
+                case "rotate": v.rotate = x; v.rotationAxis = [op.y, op.w, op.h]; v.applyTransform()
                 case "opacity": v.presentedAlpha = x; v.alphaValue = v.disabledShown ? x * NodeView.disabledOpacity : x; v.refreshPressOpacity()
                 case "flight": presentFlight(id, x)
                 default: break
@@ -1302,6 +1310,7 @@ package final class Presenter {
             guard let node = views[id] else { continue }
             if !collections.owns(node.id) { node.restoreScrollPosition(authored: authored.contains { $0.isDescendant(of: node) }) }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
+            node.settleZoom() // the zoom, then the batch's offsets in its extent (LLP 1057.001.000 D2)
             node.applyPendingScroll()
             node.resnap()
         }

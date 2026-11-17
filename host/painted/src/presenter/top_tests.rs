@@ -211,7 +211,7 @@ fn a_surface_touch_after_a_surface_key_restores_the_opener_ringless() {
 }
 
 fn boot() -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(APP),
         (),
         (400., 800.),
@@ -444,6 +444,7 @@ fn the_shape_rule_is_the_one_the_apple_hosts_follow() {
         rows,
         cancellable,
         outside,
+        ..
     }) = plan("confirm")
     else {
         panic!("confirm is an alert");
@@ -491,6 +492,7 @@ fn the_shape_rule_is_the_one_the_apple_hosts_follow() {
         rows,
         cancellable,
         outside,
+        ..
     }) = plan("notice")
     else {
         panic!("notice is an alert");
@@ -925,23 +927,23 @@ fn a_long_press_opens_the_context_menu_a_node_names_where_the_finger_is() {
     let at = (held.0 + 120.0, held.1 + 10.0);
     assert_eq!(p.pointer_down(at.0, at.1, 0.0), Ok(true));
     let before = p.long_presses();
+    assert_ne!(p.reader_module(at.0, at.1, 1.0)[12], 0);
     assert!(p.long_press(at.0, at.1, 500.0));
     assert_eq!(p.long_presses(), before.wrapping_add(1));
-    // Its `contextmenu` ran first, then the menu opened at the finger.
     assert_eq!(text(&p, "aimed"), "row");
     assert_eq!(p.surface().map(|s| s.kind), Some(SurfaceKind::Menu));
     let (_, _, frame, _) = told(&mut p)[0];
     assert_eq!((frame[0], frame[1]), (at.0 as i32, at.1 as i32));
-    // The finger lifts on nothing: the row's own press does not run.
     let _ = p.pointer_up(at.0, at.1, 600.0);
     assert_eq!(text(&p, "said"), "nothing");
-    // The platform's long-press click was asked for.
     assert!(
         !p.long_press(at.0, at.1, 700.0),
         "not while a surface is open"
     );
+    assert_eq!(p.reader_module(at.0, at.1, 1.0)[12], 0);
     let poke = p.rect_of(id(&p, "poke")).unwrap();
     choose(&mut p, "menu-share");
+    assert_eq!(p.reader_module(poke.0 + 5., poke.1 + 5., 1.0)[12], 0);
     assert!(
         !p.long_press(poke.0 + 5.0, poke.1 + 5.0, 800.0),
         "a node that names none"
@@ -1460,3 +1462,38 @@ fn mouse_invocation_keeps_the_nearest_press_handler() {
 
 #[path = "top_typography_tests.rs"]
 mod typography;
+
+#[test]
+fn rtl_alert_buttons_follow_the_dialog_direction() {
+    for direction in ["rtl", "ltr"] {
+        let source = APP
+            .replace("main navigationKey", "main direction=\"rtl\" navigationKey")
+            .replace(
+                "dialog id=\"confirm\"",
+                &format!("dialog direction=\"{direction}\" id=\"confirm\""),
+            );
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(&source),
+            (),
+            (400., 800.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.serve_windows(Box::new(Pixels(Rc::new(RefCell::new(Vec::new())))));
+        p.frame();
+        tap(&mut p, "ask").unwrap();
+        let open = p.top.open.as_ref().unwrap();
+        let targets = &open.layout.targets;
+        assert_eq!(targets[0].rect.0 > targets[1].rect.0, direction == "rtl");
+        let target = targets[1];
+        let serial = open.serial;
+        let (x, y, w, h) = target.rect;
+        p.surface_event(serial, 0, x + w / 2., y + h / 2., 1.);
+        p.surface_event(serial, 1, x + w / 2., y + h / 2., 2.);
+        p.run_commands(|| ());
+        assert_eq!(text(&p, "said"), "removed");
+    }
+}

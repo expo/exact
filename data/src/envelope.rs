@@ -49,7 +49,7 @@ pub fn encode_optional(
             ])
         })
         .collect();
-    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "topics": local.take_topics(), "writes": writes, "logs": logs});
+    let mut body = json!({"turn": 1, "reads": local.reads(), "draws": local.entropy_draws(), "topics": local.take_topics(), "announced": local.take_announced(), "writes": writes, "logs": logs});
     match result {
         Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
@@ -134,6 +134,11 @@ pub fn apply_optional(
         .unwrap_or_default();
     for topic in &topics {
         store.observe_topic(topic);
+    }
+    for topic in json["announced"].as_array().into_iter().flatten() {
+        if let Some(topic) = topic.as_str() {
+            store.announce_topic(topic);
+        }
     }
     // Draws of randomness cross as draws (LLP 1069.005 D2), each a read too
     let draws = json["draws"].as_u64().unwrap_or(0);

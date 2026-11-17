@@ -7,6 +7,16 @@ import QuartzCore
 import ExactCore
 
 extension ExactSession {
+    /// A barless launch may still be transferring its navigation owner.
+    /// Work queued by the first apply must not load a library in that gap.
+    func afterBootOwner(_ work: @escaping () -> Void) {
+        #if os(iOS)
+        presenter.navigation.afterBootOwner(work)
+        #else
+        work()
+        #endif
+    }
+
     func firstDrawn(generation drawnGeneration: Int, token: UInt64) {
         guard state != .destroyed, generation == drawnGeneration else { return }
         if firstDrawMs == nil { firstDrawMs = ExactEnv.wall() }
@@ -14,6 +24,16 @@ extension ExactSession {
         ExactLaunch.shared.drawn(self)
         guard activatedGeneration != drawnGeneration else { return }
         activatedGeneration = drawnGeneration
+        app.replicateStore?()
+        #if os(iOS)
+        if presenter.navigation.bootOwnerDrawn({ [weak self] in self?.queueFirstDraw(drawnGeneration, token: token) }) { return }
+        #endif
+        queueFirstDraw(drawnGeneration, token: token)
+    }
+
+    private func queueFirstDraw(_ drawnGeneration: Int, token: UInt64) {
+        // A draw held for the boot owner can be released by the session's own teardown.
+        guard state != .destroyed, generation == drawnGeneration else { return }
         if runtime.evaluatesFromDraw, preparedGeneration != drawnGeneration { return evaluateFromDraw(drawnGeneration, token: token) }
         DispatchQueue.main.async { [weak self] in
             guard let self, state != .destroyed, generation == drawnGeneration else { return }

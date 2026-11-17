@@ -1,7 +1,7 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import process from 'node:process';
@@ -48,10 +48,14 @@ test.skipIf(process.platform === 'win32')('a detached sweep ignores the callerâ€
 }, 30_000);
 
 test.skipIf(process.platform === 'win32')('a unit no build has read for a week goes; one read since the last sweep stays', async () => {
-  const t = target(), now = Date.now();
+  const t = target(), now = Date.now(), b = resolve(t, 'debug/.fingerprint', `b-${B}`, 'lib-b');
   try {
+    const written = statSync(b, { bigint: true }).mtimeNs;
     assert.deepEqual(await sweep(t, now), {}); // first sight: everything is new
-    readFileSync(resolve(t, 'debug/.fingerprint', `b-${B}`, 'lib-b')); // a build considers b
+    // Only the access time is reset: Cargo compares inputs against these mtimes to the nanosecond.
+    assert.equal(statSync(b, { bigint: true }).mtimeNs, written);
+    assert.equal(statSync(b).atimeMs, 86_400_000);
+    readFileSync(b); // a build considers b
     const old = new Date(now - 8 * DAY);
     utimesSync(resolve(t, 'debug/incremental/a-2ajo1mk2vrgcf/s-old'), old, old);
     utimesSync(resolve(t, 'debug/incremental/a-2ajo1mk2vrgcf'), old, old);

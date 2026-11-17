@@ -390,7 +390,10 @@ impl NodeArena {
         }
         let own = self.style(slot);
         let neutral_tab_root = self.neutral_tab_root(slot);
-        let title_mask = mask(TITLE_ROWS);
+        let mut title_mask = mask(TITLE_ROWS);
+        if crate::style::metrics::column() == crate::style::metrics::Column::Neutral {
+            title_mask = title_mask.union(mask(&crate::TextStyle::ROWS));
+        }
         let text_style = |child: Option<u32>| {
             let at = child.unwrap_or(slot);
             let mut style = self.computed_rows(at, title_mask);

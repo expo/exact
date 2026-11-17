@@ -7,7 +7,7 @@ use exact_render::{Serve, Server};
 use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Response, Store};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
@@ -127,10 +127,11 @@ impl DataSource for Posts {
 }
 
 /// A dist: the web host's shell, a script and an image.
-pub(super) fn dist(name: &str) -> PathBuf {
+pub(super) fn dist(name: &str) -> super::Dist {
     let dir =
         std::env::temp_dir().join(format!("exact-render-serve-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
+    let dir = super::Dist(dir);
     std::fs::create_dir_all(dir.join("assets")).unwrap();
     let shell = Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/index.html");
     std::fs::copy(shell, dir.join("shell.html")).unwrap();
@@ -138,6 +139,8 @@ pub(super) fn dist(name: &str) -> PathBuf {
     std::fs::write(dir.join("module-binary.js"), "binary").unwrap();
     std::fs::write(dir.join("module-prelude.js"), "prelude").unwrap();
     std::fs::write(dir.join("app.js"), "module").unwrap();
+    let table = r#"{"routes":[],"files":{"large.wasm":"large.wasm"}}"#; // LLP 1153.004
+    std::fs::write(dir.join("routes.json"), table).unwrap();
     std::fs::write(
         dir.join("big.js"),
         "export const words = ['the same words, again'];\n".repeat(200),
@@ -149,8 +152,9 @@ pub(super) fn dist(name: &str) -> PathBuf {
 
 pub(super) fn start(name: &str, renders: usize, queue: usize, deadline: u64) -> Served {
     super::warm_transport();
+    let dist = dist(name);
     let serve = Serve {
-        dist: dist(name),
+        dist: dist.to_path_buf(),
         port: 0,
         name: "Blog".into(),
         origin: Some("https://blog.test".into()),
@@ -161,7 +165,9 @@ pub(super) fn start(name: &str, renders: usize, queue: usize, deadline: u64) -> 
         lifetime: Duration::from_secs(120),
         generations: None,
     };
-    run(serve)
+    let mut served = run(serve);
+    served.dist = Some(dist);
+    served
 }
 
 /// A test's server, drained when the test ends: its workers and their
@@ -171,6 +177,8 @@ pub(super) struct Served {
     pub(super) addr: SocketAddr,
     stopper: exact_render::Stopper,
     serving: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    /// Removed after the server stops.
+    dist: Option<super::Dist>,
 }
 
 impl Drop for Served {
@@ -193,6 +201,7 @@ pub(super) fn serving<D: exact_runner::DataSource + 'static>(
         addr,
         stopper,
         serving,
+        dist: None,
     }
 }
 
@@ -309,7 +318,7 @@ fn each_route_answers_by_its_policy() {
     // Beside it, every device the app does not grant is denied (LLP 1069.008 D6).
     assert_eq!(
         header(&headers, "permissions-policy"),
-        Some("microphone=(), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), serial=(), hid=(), usb=()")
+        Some("bluetooth=(), microphone=(), camera=(), geolocation=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), window-management=(), serial=(), hid=(), usb=()")
     );
     // The page's one inline script that runs, the capture script, by hash.
     let capture = {
@@ -318,6 +327,13 @@ fn each_route_answers_by_its_policy() {
         exact_data::envelope::base64(&digest)
     };
     assert!(csp.contains(&format!("'sha256-{capture}'")), "{csp}");
+    let scheme = {
+        use sha2::{Digest, Sha256};
+        exact_data::envelope::base64(&Sha256::digest(
+            include_str!("../../../web/scheme.js").trim_end().as_bytes(),
+        ))
+    };
+    assert!(csp.contains(&format!("'sha256-{scheme}'")), "{csp}");
     assert!(body.contains(&format!("<script>{}</script>", exact_render::capture())));
     let scripts = csp
         .split(';')
@@ -597,8 +613,9 @@ impl DataSource for Feed {
 #[test]
 fn a_page_whose_data_answered_later_is_adopted_with_what_is_pending() {
     super::warm_transport();
+    let dist = dist("feed");
     let serve = Serve {
-        dist: dist("feed"),
+        dist: dist.to_path_buf(),
         port: 0,
         name: "Feed".into(),
         origin: None,
@@ -881,8 +898,9 @@ fn a_file_the_dist_lacks_is_a_plain_404() {
 #[test]
 fn a_drained_server_answers_what_it_took_and_stops() {
     super::warm_transport();
+    let dist = dist("drain");
     let serve = Serve {
-        dist: dist("drain"),
+        dist: dist.to_path_buf(),
         port: 0,
         name: "Blog".into(),
         origin: None,
@@ -1068,6 +1086,7 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
             "public, max-age=31536000, immutable",
         ),
         ("/stages/large.0000000000000000.wasm".into(), "no-cache"),
+        ("/large.wasm".into(), "public, max-age=31536000, immutable"),
     ] {
         let (status, headers, body) = fetch_bytes(addr, &format!("HEAD {url} HTTP/1.1\r\n\r\n"));
         assert_eq!((status, body.len()), (200, 0));
@@ -1086,7 +1105,7 @@ fn large_static_files_stream_with_lengths_validators_and_head() {
 }
 
 /// The JavaScript runtime's shell, as host/web-js/build.mjs writes it.
-pub(super) const JS_SHELL: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+pub(super) const JS_SHELL: &str = "<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{margin:0}</style>\n<div id=\"exact-root\"></div>\n<script type=\"module\" data-entry src=\"./app.js\"></script>\n";
 
 /// A chunked body, its chunks joined.
 #[test]
@@ -1098,7 +1117,7 @@ fn a_connection_is_kept_for_the_next_request() {
     let dir = dist("kept");
     std::fs::write(dir.join("shell.html"), JS_SHELL).unwrap();
     let served = run(Serve {
-        dist: dir,
+        dist: dir.to_path_buf(),
         port: 0,
         name: "Blog".into(),
         origin: Some("https://blog.test".into()),
@@ -1234,7 +1253,7 @@ component Site
     let dir = dist("navigation-kernel-fallback");
     std::fs::write(dir.join("shell.html"), JS_SHELL).unwrap();
     let serve = Serve {
-        dist: dir,
+        dist: dir.to_path_buf(),
         port: 0,
         name: "Cards".into(),
         origin: None,
@@ -1281,7 +1300,7 @@ fn a_navigation_gets_the_head_before_the_render_and_the_rest_after() {
     let dir = dist("flush");
     std::fs::write(dir.join("shell.html"), JS_SHELL).unwrap();
     let served = run(Serve {
-        dist: dir,
+        dist: dir.to_path_buf(),
         port: 0,
         name: "Blog".into(),
         origin: Some("https://blog.test".into()),
@@ -1435,7 +1454,7 @@ fn hidden_build_files_are_not_http_assets() {
         std::fs::write(path, "fixture asset").unwrap();
     }
     let server = run(Serve {
-        dist: dir,
+        dist: dir.to_path_buf(),
         port: 0,
         name: "Blog".into(),
         origin: None,

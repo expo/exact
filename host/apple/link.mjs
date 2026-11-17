@@ -40,6 +40,9 @@ export function appleProduction(app, platform, args = []) {
   return { optimize, profile: optimize === 'speed' ? 'release' : optimize };
 }
 
+/** Whether an Apple face needs the file bridge and its supportedContentTypes initializer. */
+export const hasFileParameters = intents => Object.values(intents?.tools ?? {}).some(f => (!f.doors || f.doors.includes('apple')) && Object.values(f.parameters ?? {}).some(p => p.type === 'file'));
+
 /** A Linux builder can target an ARM simulator on another machine, independently of its host CPU. */
 export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (process.platform === 'linux' ? 'arm64' : process.arch)) {
   const cpu = arch === 'arm64' ? 'arm64' : ['x64', 'x86_64'].includes(arch) ? 'x86_64' : null;
@@ -80,9 +83,10 @@ export function deploymentTargets(app) {
  * triple by a target flag of their own (Package.swift's
  * `EXACT_LAUNCH_PARTS_TARGET`), and the rest keeps the floor. Swift Build (a
  * Mac) puts its generated `-target` after a target's flags, so there the whole
- * package compiles at the app's minimum. */
+ * package compiles at the app's minimum. File faces also use the app's minimum:
+ * their supportedContentTypes initializer requires iOS 18. */
 export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? 'development', platform = process.platform) =>
-  trust === 'production' || app.manifest.launch?.length && platform !== 'linux' ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
+  trust === 'production' || hasFileParameters(app.manifest.intents) || app.manifest.launch?.length && platform !== 'linux' ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
 
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */

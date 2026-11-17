@@ -107,8 +107,11 @@ fn raw_symbols_prerender_as_nonfetching_decorative_images() {
     assert_eq!(doc.matches("src=\"data:image/svg+xml,").count(), 3, "{doc}");
     assert!(!doc.contains("src=\"symbol:"), "{doc}");
     assert_eq!(doc.matches("width='28' height='28'").count(), 3, "{doc}");
-    assert_eq!(doc.matches("data-symbol-path=\"\"").count(), 3, "{doc}");
-    assert_eq!(doc.matches("alt=\"\"").count(), 3, "{doc}");
+    assert_eq!(
+        doc.matches("<img alt data-symbol-path ").count(),
+        3,
+        "{doc}"
+    );
 }
 
 /// A role's natural size is the neutral look's `symbol-scale` ems, as the
@@ -202,7 +205,7 @@ fn caltrain_document_is_the_first_batch_as_html() {
     // The canvas's surface element comes first, as the glue creates it.
     let sky = doc.find("data-testid=\"sky\"").unwrap();
     assert!(doc[sky..].split_once('>').unwrap().1.starts_with(
-        "<canvas data-surface=\"\" style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>"
+        "<canvas data-surface style=\"position:absolute;inset:0;width:100%;height:100%;display:block;z-index:-1\"></canvas>"
     ));
 }
 
@@ -1004,11 +1007,11 @@ component App
                 .id
         };
         let row = opening(&doc.root, id("rows").into());
-        assert!(row.contains("data-exact-list=\"\""), "{row}");
+        assert!(row.contains(" data-exact-list "), "{row}");
         assert!(row.contains(&format!("role=\"{role}\"")), "{row}");
         assert!(!row.contains("data-exact-estimated-item-width"), "{row}");
         let strip = opening(&doc.root, id("strip").into());
-        assert!(strip.contains("data-exact-list=\"\""), "{strip}");
+        assert!(strip.contains(" data-exact-list "), "{strip}");
         assert!(
             strip.contains("data-exact-estimated-item-width=\"180\""),
             "{strip}"

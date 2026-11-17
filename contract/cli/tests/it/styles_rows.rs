@@ -545,6 +545,41 @@ fn user_select_text_and_all_compile_and_contain_is_refused_by_name() {
     assert!(!error.contains("unknown attribute"), "{error}");
 }
 
+#[test]
+fn normalized_css_literals_keep_keyword_and_codec_validation() {
+    for (value, id) in [
+        ("contain", "lower-css-user-select"),
+        ("invalid", "lower-attr-value"),
+    ] {
+        let source = format!(
+            "component App\n  view\n    Child(mode=\"{value}\")\ncomponent Child\n  props\n    mode: enum<\"{value}\", \"none\">\n  view\n    text \"hi\" user-select=mode\n"
+        );
+        let error = contract::compile(&source).expect_err(&source);
+        assert_eq!(error.id, id, "{error}");
+        assert!(error.message.contains(value), "{error}");
+    }
+}
+
+#[test]
+fn shared_css_literals_keep_keyword_and_codec_validation() {
+    for (name, value, id) in [
+        ("user-select", "contain", "lower-css-user-select"),
+        ("resize", "invalid", "lower-attr-value"),
+    ] {
+        for choice in [
+            "(on ? mode : mode)",
+            "match picked { case some(p) => mode, case none => mode }",
+        ] {
+            let source = format!(
+                "component App\n  view\n    Child()\ncomponent Child\n  state on = false\n  state picked = some(0)\n  derive mode = \"{value}\"\n  derive choice = {choice}\n  view\n    text \"hi\" {name}=(on ? choice : choice)\n"
+            );
+            let error = contract::compile(&source).expect_err(&source);
+            assert_eq!(error.id, id, "{error}");
+            assert!(error.message.contains(value), "{error}");
+        }
+    }
+}
+
 /// @ref LLP 1053.000 D4 — every platform material by name, and `none`; others refused.
 #[test]
 fn a_material_is_a_name_in_the_table_or_none() {

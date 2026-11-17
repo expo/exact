@@ -460,6 +460,114 @@ class OverflowClipTests: XCTestCase {
         }
     }
 
+    func testPercentagePolygonFollowsTheBoxAndClipsChildren() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        let root = NodeView(id: 1, kind: "view", presenter: p)
+        root.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        root.applyStyle(["background_color": [255, 255, 255, 255]])
+        #if os(iOS)
+        let window = UIWindow(frame: root.bounds)
+        window.addSubview(root); window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        #else
+        let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = root
+        defer { window.close() }
+        #endif
+        let n = NodeView(id: 2, kind: "view", presenter: p)
+        root.addSubview(n)
+        n.applyStyle(["clip_path": ["shape": "polygon", "values": [0, 0, 0, 25, 0, 100, 0, 0, 0, 50, 0, 100], "rule": "nonzero"]])
+        let child = NodeView(id: 3, kind: "view", presenter: p)
+        child.applyStyle(["background_color": [0, 0, 255, 255]])
+        n.container.addSubview(child)
+        for size in [CGSize(width: 80, height: 60), CGSize(width: 160, height: 100)] {
+            n.frame = CGRect(origin: .zero, size: size)
+            child.frame = CGRect(x: 0, y: 0, width: size.width, height: 20)
+            #if os(iOS)
+            root.layoutIfNeeded()
+            #else
+            root.layoutSubtreeIfNeeded()
+            #endif
+            let path = try XCTUnwrap(n.clipPath)
+            XCTAssertEqual(path.boundingBoxOfPath.size, size)
+            XCTAssertFalse(path.contains(CGPoint(x: 2, y: 2)))
+            XCTAssertTrue(path.contains(CGPoint(x: size.width / 2, y: 15)))
+            let image = try pixels(root)
+            XCTAssertEqual(image(CGPoint(x: 2, y: 2)), [255, 255, 255, 255])
+            XCTAssertEqual(image(CGPoint(x: size.width / 2, y: 15)), [0, 0, 255, 255])
+            XCTAssertEqual(image(CGPoint(x: size.width / 2, y: size.height / 2)), [255, 255, 255, 255])
+            XCTAssertFalse(hit(root, CGPoint(x: 2, y: 2)) === child)
+        }
+        n.applyStyle(["background_color": [255, 0, 0, 255]])
+        XCTAssertNil(n.clipPath)
+    }
+
+    func testBasicClipFollowsIntermediateSurfaceSizes() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        for overflow in ["visible", "hidden"] {
+            let p = Presenter()
+            let root = NodeView(id: 3, kind: "view", presenter: p)
+            root.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+            root.applyStyle(["background_color": [255, 255, 255, 255]])
+            #if os(iOS)
+            let window = UIWindow(frame: root.bounds)
+            window.addSubview(root); window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            #else
+            let window = NSWindow(contentRect: root.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = root
+            defer { window.close() }
+            #endif
+            let n = NodeView(id: 1, kind: "view", presenter: p)
+            root.addSubview(n)
+            n.frame = CGRect(x: 0, y: 0, width: 100, height: 100)
+            n.applyStyle(["overflow_x": .string(overflow), "overflow_y": .string(overflow), "border_width": 8,
+                "border_color_top": [255, 0, 0, 255],
+                "clip_path": ["shape": "inset", "values": [0, 25, 0, 25, 0, 25, 0, 25,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]])
+            let child = NodeView(id: 2, kind: "view", presenter: p)
+            child.frame = root.bounds
+            child.applyStyle(["background_color": [0, 0, 255, 255]])
+            n.container.addSubview(child)
+            for width: CGFloat in [100, 150, 175, 200, 175, 150, 100] {
+                n.layoutResize = CGSize(width: width - 100, height: width - 100)
+                n.applySurface()
+                let box = CGRect(x: width / 4, y: width / 4, width: width / 2, height: width / 2)
+                XCTAssertEqual(try XCTUnwrap(n.clipPath).boundingBoxOfPath, box)
+                let image = try pixels(root)
+                XCTAssertEqual(image(CGPoint(x: width / 2, y: width / 2)), [0, 0, 255, 255])
+                XCTAssertEqual(image(CGPoint(x: width * 0.8, y: width / 2)), [255, 255, 255, 255])
+                XCTAssertEqual(image(CGPoint(x: width * 0.7, y: width * 0.7)), [0, 0, 255, 255])
+                XCTAssertTrue(hit(n, CGPoint(x: width * 0.7, y: width * 0.7)) === child, "overflow: \(overflow), width: \(width)")
+                XCTAssertFalse(hit(n, CGPoint(x: width * 0.8, y: width / 2)) === child)
+            }
+        }
+    }
+
+    func testRoundedInsetsAndOvalsResolveAtTheReferenceSize() throws {
+        let size = CGSize(width: 120, height: 80)
+        let inset: BatchValue = ["shape": "inset", "values": [
+            0, 10, 0, 5, 0, 10, 0, 5,
+            0, 20, 8, 0, 0, 20, 8, 0,
+            12, 0, 0, 30, 12, 0, 0, 30
+        ]]
+        let path = try XCTUnwrap(ClipPath.path(inset, size: size))
+        XCTAssertEqual(path.boundingBoxOfPath, CGRect(x: 6, y: 8, width: 108, height: 64))
+        XCTAssertFalse(path.contains(CGPoint(x: 7, y: 9)))
+        XCTAssertTrue(path.contains(CGPoint(x: 60, y: 40)))
+        let circle: BatchValue = ["shape": "circle", "values": [0, 50, 0, 50, 0, 40, 0, 40]]
+        let c = try XCTUnwrap(ClipPath.path(circle, size: size))
+        XCTAssertEqual(c.boundingBoxOfPath.width, hypot(120, 80) / sqrt(2) * 0.8, accuracy: 0.001)
+        let ellipse: BatchValue = ["shape": "ellipse", "values": [0, 50, 0, 50, 0, 40, 0, 30]]
+        XCTAssertEqual(try XCTUnwrap(ClipPath.path(ellipse, size: size)).boundingBoxOfPath,
+                       CGRect(x: 12, y: 16, width: 96, height: 48))
+    }
+
     private func hit(_ root: NodeView, _ point: CGPoint) -> AnyObject? {
         #if os(iOS)
         root.hitTest(point, with: nil)
@@ -476,7 +584,7 @@ class OverflowClipTests: XCTestCase {
         Capture.draw(root, scale: 1, into: bitmap)
         let image = try XCTUnwrap(bitmap.image?.cgImage)
         #else
-        let rep = try XCTUnwrap(Capture.paintOrderBitmap(of: root, scale: 1))
+        let rep = try XCTUnwrap(Capture.picture(of: root, scale: 1))
         let image = try XCTUnwrap(rep.cgImage)
         #endif
         let context = try XCTUnwrap(CGContext(data: nil, width: 200, height: 200, bitsPerComponent: 8,

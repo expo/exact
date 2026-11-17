@@ -329,42 +329,49 @@ fn recovery_keeps_call_errors_a_refused_state_did_not_cause() {
 
 /// A refused `fn` or action that shadows a roster function leaves its calls
 /// to the roster's: what the roster says about them is the refusal's
-/// consequence, not the author's mistake.
+/// consequence, not the author's mistake. An action is refused by its line:
+/// one whose body alone is refused stays declared.
 #[test]
 fn recovery_suppresses_roster_fallbacks_of_a_refused_callable() {
-    for (source, repair) in [
+    for (source, refused, from, to) in [
         (
             "fn floor(s: string): string =\ncomponent App\n  view\n    text floor(\"hello\")\n",
+            "syntax-expected-expression",
+            "=\n",
             "= s\n",
         ),
         (
             "fn floor(s: string, t: string): string =\ncomponent App\n  view\n    text floor(\"a\", \"b\")\n",
+            "syntax-expected-expression",
+            "=\n",
             "= s\n",
         ),
         (
-            "component App\n  state n = \"\"\n  action floor(s: string)\n    n =\n  view\n    button \"go\" press=floor(\"hello\")\n",
-            "= s\n",
+            "component App\n  state n = \"\"\n  action floor(s: string) writes n\n    n = s\n  view\n    button \"go\" press=floor(\"hello\")\n",
+            "syntax-writes-clause",
+            " writes n",
+            "",
         ),
     ] {
         let found = compile_all(source);
         assert_eq!(
             found.iter().map(|(id, _, _)| id.as_str()).collect::<Vec<_>>(),
-            ["syntax-expected-expression"],
+            [refused],
             "{source}\n{found:#?}"
         );
-        let repaired = source.replacen("=\n", repair, 1);
+        let repaired = source.replacen(from, to, 1);
         assert!(contract::compile(&repaired).is_ok(), "{repaired}");
     }
     // Another call of the same roster function, outside the refused
     // action's component, is still checked.
-    let source = "component App\n  state n = \"\"\n  action floor(s: string)\n    n =\n  view\n    column\n      button \"go\" press=floor(\"hello\")\n      Child()\ncomponent Child\n  view\n    text floor(\"hello\").toString()\n";
+    let source = "component App\n  state n = \"\"\n  action floor(s: string) writes n\n    n = s\n  view\n    column\n      button \"go\" press=floor(\"hello\")\n      Child()\ncomponent Child\n  view\n    text floor(\"hello\").toString()\n";
     let found = compile_all(source);
     assert_eq!(
         found
             .iter()
             .map(|(id, _, _)| id.as_str())
             .collect::<Vec<_>>(),
-        ["syntax-expected-expression", "type-argument"],
+        ["syntax-writes-clause", "type-argument"],
         "{source}\n{found:#?}"
     );
 }
@@ -373,10 +380,16 @@ fn recovery_suppresses_roster_fallbacks_of_a_refused_callable() {
 /// the same name is that component's mistake.
 #[test]
 fn recovery_hides_a_refused_member_only_in_its_component() {
-    for (member, usage, id) in [
-        ("state gone =", "text gone", "type-unknown-name"),
+    for (member, refused, usage, id) in [
         (
-            "action count\n    n =",
+            "state gone =",
+            "syntax-expected-expression",
+            "text gone",
+            "type-unknown-name",
+        ),
+        (
+            "action count writes n\n    n = 1",
+            "syntax-writes-clause",
             "text count([1]).toString()",
             "type-refused-idiom",
         ),
@@ -390,7 +403,7 @@ fn recovery_hides_a_refused_member_only_in_its_component() {
                 .iter()
                 .map(|(id, _, _)| id.as_str())
                 .collect::<Vec<_>>(),
-            ["syntax-expected-expression", id],
+            [refused, id],
             "{source}\n{found:#?}"
         );
         let own = format!("component App\n  state n = 0\n  {member}\n  view\n    {usage}\n");
@@ -400,8 +413,38 @@ fn recovery_hides_a_refused_member_only_in_its_component() {
                 .iter()
                 .map(|(id, _, _)| id.as_str())
                 .collect::<Vec<_>>(),
-            ["syntax-expected-expression"],
+            [refused],
             "{own}\n{found:#?}"
         );
     }
+}
+
+/// An action whose body is refused keeps its line's declaration: a handler
+/// naming it is checked against its signature, not resolved to another
+/// component's action of the same name (#705). The passes after the syntax
+/// then say what they would of the repaired source: `Pill`'s `press=` gives
+/// a `MouseEvent`, not its action's `PointerEvent`.
+#[test]
+fn a_refused_action_body_keeps_the_action_in_scope() {
+    let source = "routes nav\n  home \"/\"\n\ncomponent R1\n  action follow(url: string)\n    let s = url.replace(\"a\", \"\")\n  view\n    main testId=\"root\" navigationKey=`${top(nav).id}` navigate=follow width=\"100%\" height=\"100%\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` position=\"absolute\" inset=0\n          Pill()\n\ncomponent Pill\n  action follow(e: PointerEvent)\n    let x = 1\n  view\n    button press=follow testId=\"p\"\n      text \"p\"\n";
+    let found = compile_all(source);
+    assert_eq!(
+        found
+            .iter()
+            .map(|(id, line, _)| (id.as_str(), *line))
+            .collect::<Vec<_>>(),
+        [("syntax-method-call", 6), ("analyze-handler-arity", 17)],
+        "{found:#?}"
+    );
+    // Its signature still checks what calls it.
+    let called = "component App\n  state n = \"\"\n  action set(s: string)\n    n =\n  view\n    button \"go\" press=set(1)\n";
+    let found = compile_all(called);
+    assert_eq!(
+        found
+            .iter()
+            .map(|(id, _, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        ["syntax-expected-expression", "type-argument"],
+        "{found:#?}"
+    );
 }

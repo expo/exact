@@ -618,6 +618,8 @@ pub(super) fn transition_values() -> Vec<String> {
         "d 1s, 200ms ease",
         "d 1s, opacity 1s",
         "opacity 1s, d 2s",
+        "filter 1s, d 2s",
+        "all -exact-spring(180, 12, 1)",
         "opacity 1s",
         "1s opacity",
         "translate 1s",
@@ -663,7 +665,15 @@ pub(super) fn transition_values() -> Vec<String> {
     let properties = exact_motion::Property::ALL
         .into_iter()
         .flat_map(|p| [p.name(), p.css_name()])
-        .chain(["all", "border-color", "d", "width", "", "opacity scale"]);
+        .chain([
+            "all",
+            "border-color",
+            "d",
+            "filter",
+            "width",
+            "",
+            "opacity scale",
+        ]);
     let easings = [
         "linear",
         "ease",

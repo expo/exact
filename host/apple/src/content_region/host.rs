@@ -100,6 +100,146 @@ impl<D: DataSource> Host<D> {
             Err(e) => self.finish(Batch::new(), Some(format!("region completion: {e:?}"))),
         }
     }
+    /// Return a current worker request to native layout. A superseded answer
+    /// cannot retire a successor registration or its accepted publication.
+    pub fn fallback_region_text(&mut self, id: u64) -> String {
+        if self
+            .pending_region_request()
+            .is_none_or(|(current, _)| current != id)
+        {
+            return self.finish(Batch::new(), None);
+        }
+        let mut batch = Batch::new();
+        let error = self
+            .retire_region(&mut batch, "incomplete text flow uses native layout")
+            .and_then(|()| self.layout(&mut batch))
+            .err();
+        self.finish(batch, error)
+    }
+    fn retire_region(&mut self, batch: &mut Batch, reason: &str) -> Result<(), String> {
+        self.runner
+            .kernel_mut()
+            .set_content_region(None)
+            .map_err(|e| format!("region native fallback: {e:?}"))?;
+        let region = self.content_region.take().unwrap();
+        batch.region(&format!("{{\"op\":\"region\",\"disabled\":\"{reason}\"}}"));
+        if let Some(native) = region.native {
+            let headers = native.selected.map_or_else(Vec::new, |a| a.headers);
+            for header in &headers {
+                if self.runner.kernel().node_by_key(header.key).is_none() {
+                    self.mirror.remove(&header.id);
+                    if header.inline_owner.is_none() {
+                        batch.destroy(header.id);
+                    }
+                }
+            }
+            // Native projection suppressed creates and edits while B was pending.
+            // Replay the live subtree before ordinary layout publishes its flow.
+            let order: Vec<_> = self
+                .preorder()
+                .into_iter()
+                .filter(|id| {
+                    self.runner.kernel().node(*id).is_some_and(|n| {
+                        within(self.runner.kernel(), n.key, region.binding.content)
+                            || headers.iter().any(|h| h.key == n.key)
+                    })
+                })
+                .collect();
+            let handlers = self.runner.handlers();
+            for id in &order {
+                if self.mirror.get(id).is_none_or(|m| m.style.is_empty()) {
+                    self.create(*id, handlers.get(id).map_or(&[], Vec::as_slice), batch);
+                } else {
+                    self.update(*id, batch);
+                }
+            }
+            for id in order {
+                self.emit_children(id, batch);
+            }
+            if let Some(owner) = self.runner.kernel().node_by_key(region.binding.owner) {
+                self.emit_children(owner.id, batch);
+            }
+            self.emit_paragraphs(batch);
+            self.collections_json.clear();
+            self.collection_heads = None;
+        }
+        Ok(())
+    }
+    fn unsupported_region_paint(&self) -> bool {
+        use exact_kernel::{StyleId as S, WrapFlow};
+        let Some(region) = self.content_region.as_ref().filter(|r| r.native.is_none()) else {
+            return false;
+        };
+        let kernel = self.runner.kernel();
+        let mut stack: Vec<_> = kernel
+            .roots()
+            .into_iter()
+            .filter_map(|id| kernel.node(id).map(|n| n.key))
+            .collect();
+        while let Some(node) = stack.pop().and_then(|key| kernel.node_by_key(key)) {
+            let owner = node.key == region.binding.owner;
+            let content = within(kernel, node.key, region.binding.content);
+            let exclusion = node.layout_position() == exact_kernel::PositionType::Absolute
+                && node.style.wrap_flow == WrapFlow::Both
+                && (content
+                    || node
+                        .parent
+                        .and_then(|id| kernel.node(id))
+                        .is_some_and(|parent| within(kernel, region.binding.owner, parent.key)));
+            if owner || content || exclusion {
+                // The opaque surface draws only text over the owner/page ground.
+                if !matches!(
+                    node.node_type,
+                    NodeType::View | NodeType::Text | NodeType::ScrollView
+                ) || exclusion
+                    && (node.node_type != NodeType::View || !node.children().is_empty())
+                    || !node.looks().is_empty()
+                    || node.props.str(PropId::BackgroundMaterial).is_some()
+                    // The worker draws glyph fills only; a stroke is inherited.
+                    || node.computed_row(S::TextStrokeWidth, |s| s.text_stroke_width > 0.)
+                    // It clips lines to the owner and the scroll port alone.
+                    || content
+                        && node.node_type != NodeType::ScrollView
+                        && style::effective_overflow(&node) != (Overflow::Visible, Overflow::Visible)
+                    || [
+                        S::BackgroundColor,
+                        S::BackgroundImage,
+                        S::BackgroundClip,
+                        S::BoxShadow,
+                        S::BackdropFilter,
+                        S::BorderStyleTop,
+                        S::BorderStyleRight,
+                        S::BorderStyleBottom,
+                        S::BorderStyleLeft,
+                        S::OutlineWidth,
+                        S::OutlineStyle,
+                        S::TextShadow,
+                        S::Opacity,
+                        S::Visibility,
+                        S::Translate,
+                        S::Scale,
+                        S::Rotate,
+                        S::Transform,
+                        S::ClipPath,
+                        S::Filter,
+                    ]
+                    .into_iter()
+                    .any(|id| {
+                        !(owner && id == S::BackgroundColor)
+                            && node.computed_row(id, |s| s.mask.has(id))
+                    })
+                {
+                    return true;
+                }
+            }
+            stack.extend(
+                node.children()
+                    .into_iter()
+                    .filter_map(|id| kernel.node(id).map(|n| n.key)),
+            );
+        }
+        false
+    }
     pub(super) fn region_layout(
         &mut self,
         root: ViewId,
@@ -107,6 +247,14 @@ impl<D: DataSource> Host<D> {
         batch: &mut Batch,
     ) -> Result<(), String> {
         self.native_prepare_candidate()?;
+        if self.unsupported_region_paint() {
+            return self.region_native_layout(
+                root,
+                offer,
+                batch,
+                "unsupported content paint uses native views",
+            );
+        }
         let Some(region) = self.content_region.as_mut() else {
             return Ok(());
         };
@@ -136,30 +284,21 @@ impl<D: DataSource> Host<D> {
                 .chain(&receipt.shell.flow_changed)
                 .copied(),
         );
-        // @ref LLP 1043.000 §3 D7 — the opt-in worker surface is opaque and
-        // has a separate paragraph artifact. Retire it before any flowed ink:
-        // ordinary native views own the region until its next registration.
-        // This costs a normal O(tree) layout once, never stale cached pixels.
-        if receipt.shell.flow_changed.iter().any(|key| {
-            self.runner
-                .kernel()
-                .node_by_key(*key)
-                .is_some_and(|n| !n.flow_shapes().is_empty())
-        }) {
-            self.runner
-                .kernel_mut()
-                .set_content_region(None)
-                .map_err(|e| format!("region flow fallback: {e:?}"))?;
-            self.content_region = None;
-            batch.region("{\"op\":\"region\",\"disabled\":\"flowed text uses native fragments\"}");
-            self.runner.count_kernel_layout();
-            let receipt = self
-                .runner
-                .kernel_mut()
-                .compute_layout(root, offer)
-                .map_err(|e| format!("region flow layout: {e:?}"))?;
-            self.record_layout(&receipt);
-            return Ok(());
+        if region.native.is_some()
+            && receipt.shell.flow_changed.iter().any(|key| {
+                self.runner
+                    .kernel()
+                    .node_by_key(*key)
+                    .is_some_and(|n| !n.flow_shapes().is_empty())
+            })
+        {
+            // Native projections do not retain flow geometry with selected A.
+            return self.region_native_layout(
+                root,
+                offer,
+                batch,
+                "native flow uses ordinary views",
+            );
         }
         // Final shell/native flow is published by emit_layout against its mirror.
         region.observe(self.runner.kernel(), receipt)?;
@@ -174,6 +313,25 @@ impl<D: DataSource> Host<D> {
         let region = self.content_region.as_ref().unwrap();
         batch.region(&region.json(self.runner.kernel()));
         result
+    }
+    fn region_native_layout(
+        &mut self,
+        root: ViewId,
+        offer: Offer,
+        batch: &mut Batch,
+        reason: &str,
+    ) -> Result<(), String> {
+        self.retire_region(batch, reason)?;
+        self.runner.count_kernel_layout();
+        let receipt = self
+            .runner
+            .kernel_mut()
+            .compute_layout(root, offer)
+            .map_err(|e| format!("region native layout: {e:?}"))?;
+        self.runner.report_flow_skipped(&receipt.flow_skipped);
+        self.runner.moved(&receipt.changed);
+        self.record_layout(&receipt);
+        Ok(())
     }
 }
 
@@ -356,10 +514,15 @@ impl<D: DataSource> Host<D> {
         let collection_wire = collections
             .iter()
             .try_fold(2usize, |n, c| {
+                let roots = c
+                    .fixed
+                    .iter()
+                    .try_fold(0usize, |n, f| n.checked_add(f.roots.len()))?;
                 c.rows
                     .len()
                     .checked_add(1)
                     .and_then(|rows| rows.checked_mul(1024))
+                    .and_then(|bytes| roots.checked_mul(12).and_then(|r| bytes.checked_add(r)))
                     .and_then(|bytes| n.checked_add(bytes))
             })
             .ok_or("native collection wire overflow")?;

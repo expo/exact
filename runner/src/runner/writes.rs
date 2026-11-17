@@ -84,7 +84,7 @@ impl<D: DataSource> Runner<D> {
             .records
             .iter()
             .map(|w| {
-                let name = self.plan.str(self.plan.mutations[w.mutation].name);
+                let name = self.mutation_name(w.mutation);
                 (w.id, name, w.landed.is_some())
             })
             .collect()
@@ -99,7 +99,7 @@ impl<D: DataSource> Runner<D> {
         args: &[Value],
     ) -> Option<u64> {
         let m = target.mutation()?;
-        if self.plan.mutations[m].refreshes.len == 0 {
+        if self.mutation_row(m).refreshes.len == 0 {
             return None;
         }
         // Recorded before the older sends end, so ending them does not ask
@@ -116,7 +116,7 @@ impl<D: DataSource> Runner<D> {
             args: args.to_vec(),
             landed: None,
         });
-        if self.plan.mutations[m].mode == MutationMode::Newest {
+        if self.mutation_row(m).mode == MutationMode::Newest {
             self.end_pending(m, Some(id));
         }
         Some(id)
@@ -129,7 +129,7 @@ impl<D: DataSource> Runner<D> {
         let mut pending = (self.writes.records.iter().enumerate())
             .filter(|(_, r)| r.mutation == m && r.landed.is_none())
             .map(|(i, _)| i);
-        match (target, self.plan.mutations[m].mode) {
+        match (target, self.mutation_row(m).mode) {
             (Target::Sent(_, n), _) => pending.find(|i| self.writes.records[*i].send == n),
             (_, MutationMode::Queue) => pending.next(),
             _ => pending.next_back(),
@@ -338,11 +338,7 @@ impl<D: DataSource> Runner<D> {
         }
         let names: Vec<String> = writes
             .iter()
-            .map(|w| {
-                self.plan
-                    .str(self.plan.mutations[w.mutation].name)
-                    .to_string()
-            })
+            .map(|w| self.mutation_name(w.mutation).to_string())
             .collect();
         let list: Vec<Write<'_>> = writes
             .iter()

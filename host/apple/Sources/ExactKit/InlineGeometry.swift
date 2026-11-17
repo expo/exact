@@ -54,7 +54,7 @@ extension Presenter {
                 ancestor = view.superview
             }
             guard start <= end, node.window != nil, !node.cssVisibilityHidden, let rect = node.readerAtomFrame(Int(start), Int(end)) else { return nil }
-            return Agent.box(rect, of: node, viewport: viewport)
+            return InspectionGeometry.box(rect, of: node, viewport: viewport)
         }
         guard start <= end, let node = views[id], node.window != nil, !node.isHidden, !node.fieldComposing,
               let field = node.textArea, end <= node.fieldText.utf16.count else { return nil }
@@ -145,17 +145,18 @@ extension Presenter {
         }
         guard !result.isNull, !result.isInfinite else { return nil }
         if start == end { result.size.width = 0 }
-        return Agent.box(result, of: field, viewport: viewport)
+        return InspectionGeometry.box(result, of: field, viewport: viewport)
     }
 
     func inlineFrame(_ id: UInt32) -> CGRect? {
         guard let run = inlineText(id), let owner = textHost(id), owner.window != nil else { return nil }
-        let rect = owner.inlineRects(run).map { Agent.box($0, of: owner, viewport: viewport) }
+        let rect = owner.inlineRects(run).map { InspectionGeometry.box($0, of: owner, viewport: viewport) }
             .reduce(CGRect.null) { $0.union($1) }
         return rect.isNull ? nil : rect
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     func inlineLayout() -> [[String: Any]] {
         presenter.inlineOwners.keys.sorted().compactMap { id in
@@ -164,8 +165,79 @@ extension Agent {
         }
     }
 }
+#endif
 
 extension NodeView {
+    /// The glyph that `index` is in, in `line`'s coordinates: its left and
+    /// right, whether it runs right to left, and the inline boxes' room
+    /// kerned after it (`exactEdgeRoom`), which its advance includes.
+    static func glyph(_ line: CTLine, at index: Int) -> (lo: CGFloat, hi: CGFloat, rtl: Bool, room: CGFloat)? {
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let range = CTRunGetStringRange(run), count = CTRunGetGlyphCount(run)
+            guard count > 0, index >= range.location, index < range.location + range.length else { continue }
+            var indices = [CFIndex](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var advances = [CGSize](repeating: .zero, count: count)
+            CTRunGetStringIndices(run, CFRange(), &indices)
+            CTRunGetPositions(run, CFRange(), &positions)
+            CTRunGetAdvances(run, CFRange(), &advances)
+            // The glyph whose characters start nearest at or before it.
+            guard let g = indices.indices.filter({ indices[$0] <= index }).max(by: { indices[$0] < indices[$1] }) else { return nil }
+            let a = positions[g].x, b = a + advances[g].width
+            let room = (CTRunGetAttributes(run) as NSDictionary)[NSAttributedString.Key.exactEdgeRoom] as? CGFloat ?? 0
+            return (min(a, b), max(a, b), CTRunGetStatus(run).contains(.rightToLeft), room)
+        }
+        return nil
+    }
+
+    /// Where the inline box over UTF-16 `extent` is across `line`, in the
+    /// line's coordinates: its glyphs, less the room kerned on them
+    /// (`exactEdgeRoom`), and the room beside its runs where the line draws
+    /// it (`placedRooms`): all of each inner run's and, at its own start and
+    /// end, `before` and `after` of it, beside its text. With `hangs`, the
+    /// line's trailing white space hangs and has none. Pieces that touch are
+    /// one.
+    static func boxSpans(_ line: CTLine, _ extent: NSRange, before: CGFloat, after: CGFloat, hangs: Bool) -> [ClosedRange<CGFloat>] {
+        var pieces: [(CGFloat, CGFloat)] = []
+        // Past the line's width under an `ltr` base, left of its pen under `rtl` (CoreText's).
+        let trailing = hangs ? CGFloat(CTLineGetTrailingWhitespaceWidth(line)) : 0
+        let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - trailing
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { continue }
+            var indices = [CFIndex](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var advances = [CGSize](repeating: .zero, count: count)
+            CTRunGetStringIndices(run, CFRange(), &indices)
+            CTRunGetPositions(run, CFRange(), &positions)
+            CTRunGetAdvances(run, CFRange(), &advances)
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            let room = attributes[NSAttributedString.Key.exactEdgeRoom] as? CGFloat ?? 0
+            let rtlBase = (attributes[NSAttributedString.Key.paragraphStyle] as? NSParagraphStyle)?.baseWritingDirection == .rightToLeft
+            let reach = (0..<count).max { positions[$0].x + advances[$0].width < positions[$1].x + advances[$1].width }
+            for i in 0..<count where NSLocationInRange(indices[i], extent) {
+                let a = positions[i].x, b = a + advances[i].width
+                let (lo, hi) = (min(a, b), max(a, b) - (i == reach ? room : 0))
+                if trailing > 0, hi > lo, rtlBase ? lo < -0.001 : lo > width - 0.001 { continue }
+                pieces.append((lo, hi))
+            }
+        }
+        for room in TextEngine.placedRooms(line) where NSIntersectionRange(room.run.range, extent) == room.run.range {
+            let w = min(room.width, room.start && room.run.range.location == extent.location ? before
+                        : !room.start && NSMaxRange(room.run.range) == NSMaxRange(extent) ? after : room.width)
+            guard w > 0 else { continue }
+            let lo = room.textLeft ? room.x : room.x + room.width - w
+            pieces.append((lo, lo + w))
+        }
+        var merged: [ClosedRange<CGFloat>] = []
+        for (lo, hi) in pieces.sorted(by: { $0.0 < $1.0 }) where hi >= lo {
+            if let last = merged.last, lo <= last.upperBound + 0.01 {
+                merged[merged.count - 1] = last.lowerBound...max(last.upperBound, hi)
+            } else { merged.append(lo...hi) }
+        }
+        return merged
+    }
+
     func inlineBounds(_ run: InlineText) -> CGRect? {
         let rect = inlineRects(run).reduce(CGRect.null) { $0.union($1) }
         return rect.isNull ? nil : rect
@@ -177,15 +249,28 @@ extension NodeView {
         // Source ranges precede whitespace collapse and inserted hyphens.
         let start = spec.source.collapsed(run.range.location), end = spec.source.collapsed(NSMaxRange(run.range))
         let fit = props["fitScale"].flatMap(Float.init) ?? 1
-        return shapedRects(start, end, empty: run.range.length == 0, font: text.font(run.run(dark: drawsDark).scaled(fit)) as CTFont)
+        let r = run.lightRun
+        // A run with no text: the room kerned after its place (`Spec.roomPast`).
+        let past = run.range.length == 0 ? inlineText.filter(\.paints).firstIndex { $0.id == run.id }
+            .flatMap { spec.runs.indices.contains($0) ? spec.roomPast($0) : nil } : nil
+        return shapedRects(start, end, empty: run.range.length == 0, font: text.font(run.run(dark: drawsDark).scaled(fit)) as CTFont,
+                           reach: (r.backgroundBefore, r.backgroundAfter, r.backgroundAbove, r.backgroundBelow), past: past ?? 0)
     }
 
     /// The fragments of the shaped text `start..<end` as the paragraph lays it
-    /// out, each its line's slice of `font`'s content area.
-    func shapedRects(_ start: Int, _ end: Int, empty: Bool, font: CTFont, line onlyLine: Int? = nil) -> [CGRect] {
+    /// out, each its line's slice of `font`'s content area. With `reach`, an
+    /// inline box's reach past its text (`InlineBackground.reach`), each its
+    /// slice of that box's border box instead (CSS 2 §10.6.1, §8.6), as
+    /// WebKit's `getClientRects` answers (`boxSpans`), every slice `above`
+    /// and `below` its content area. An empty range's box stands either side
+    /// of its place, `past` before the end of the room kerned on the
+    /// character before it.
+    func shapedRects(_ start: Int, _ end: Int, empty: Bool, font: CTFont, line onlyLine: Int? = nil,
+                     reach: (before: CGFloat, after: CGFloat, above: CGFloat, below: CGFloat)? = nil, past: CGFloat = 0) -> [CGRect] {
         guard let paragraph = paragraphLayout() else { return [] }
         let spec = paragraphSpec(), box = paragraphBox()
-        let (above, below) = CSSLineBox.content(font, scale: paragraph.lineScale)
+        let (ascent, descent) = CSSLineBox.content(font, scale: paragraph.lineScale)
+        let (above, below) = (ascent + (reach?.above ?? 0), descent + (reach?.below ?? 0))
         #if os(iOS) || os(tvOS)
         let scale = traitCollection.displayScale
         #else
@@ -204,19 +289,27 @@ extension NodeView {
             let y = TextEngine.paintedLine(paragraph.baselines[index], top: box.minY, scale: scale, lineScale: paragraph.lineScale) - above
             let spans: [ClosedRange<CGFloat>]
             if empty {
-                let caret = CTLineGetOffsetForStringIndex(line, lo, nil)
-                spans = [caret...caret]
+                // After the glyph before it, whose advance has its room, as the painter places it.
+                let anchor = lo > range.location ? Self.glyph(line, at: lo - 1) : nil
+                let rtl = anchor?.rtl == true
+                let place = anchor.map { rtl ? $0.lo + past : $0.hi - past } ?? CTLineGetOffsetForStringIndex(line, lo, nil)
+                let (before, after) = rtl ? (reach?.after ?? 0, reach?.before ?? 0) : (reach?.before ?? 0, reach?.after ?? 0)
+                spans = [place - before...place + after]
+            } else if let reach {
+                spans = Self.boxSpans(line, NSRange(location: start, length: end - start), before: reach.before, after: reach.after,
+                                      hangs: spec.whiteSpace != 1 && spec.whiteSpace != 4)
+                if spans.isEmpty { return [] }
             } else { spans = TextEngine.selectionSpans(line, range: NSRange(location: lo, length: hi - lo)) }
             return spans.compactMap { span in
                 var rect = CGRect(x: x + span.lowerBound, y: y, width: span.upperBound - span.lowerBound, height: above + below)
                 // An empty inline box keeps its insertion point and font height.
                 // A nonempty run covering only hanging wrap space has no fragment.
-                if !empty && spec.whiteSpace != 1 && spec.whiteSpace != 4 {
+                // Hanging white space has no fragment: past the line's width
+                // under an `ltr` base, left of its pen under `rtl` (CoreText's).
+                if !empty && reach == nil && spec.whiteSpace != 1 && spec.whiteSpace != 4 {
                     let trailing = CGFloat(CTLineGetTrailingWhitespaceWidth(line))
                     let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - trailing
-                    let left = spec.direction == 1 ? x + trailing : x
-                    let right = left + width
-                    let start = max(rect.minX, left), end = min(rect.maxX, right)
+                    let start = max(rect.minX, x), end = min(rect.maxX, x + width)
                     guard end > start else { return nil }
                     rect.origin.x = start; rect.size.width = end - start
                 }

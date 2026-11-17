@@ -27,6 +27,260 @@ fn scene(batch: &str) -> serde_json::Value {
 }
 
 #[test]
+fn a_circle_grows_from_a_zero_underlying_radius() {
+    for (radius, lowered) in [
+        ("", false),
+        ("r=0", false),
+        (r#"r="0%""#, false),
+        (r#"r="calc(0% + 0px)""#, false),
+        (r#"r="calc(-10% - 2px)""#, false),
+        (r#"r="0vw""#, false),
+        ("r=3", true),
+        (r#"r="50%""#, true),
+        (r#"r="calc(10% - 1px)""#, true),
+        (r#"r="calc(-10% + 10px)""#, true),
+        (r#"r="1vw""#, true),
+    ] {
+        let app = format!(
+            r#"keyframes grow
+  from r=0
+  to r=12
+component App
+  view
+    svg width=34 height=34
+      circle testId="disc" cx=17 cy=17 {radius} animation="grow 720ms linear both"
+"#
+        );
+        let (mut host, initial) = Host::boot(
+            &contract::compile(&app).unwrap().encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            100.,
+            100.,
+        )
+        .unwrap();
+        if lowered {
+            assert!(scene(&initial).to_string().contains("\"k\":\"r\""));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&initial).unwrap()["motion"],
+                false
+            );
+            continue;
+        }
+        let key = host.runner.kernel().find_by_test_id("disc")[0];
+        let node = exact_kernel::motion::motion_node(key);
+        for (at, expected) in [(360., 6.), (1000., 12.)] {
+            let batch = host.tick(at);
+            let els = scene(&batch)["els"].as_array().unwrap().clone();
+            assert_eq!(els.len(), 1, "{radius} at {at}: the disc is drawn");
+            let path = els[0]["p"].as_array().unwrap();
+            assert_eq!(path[1].as_f64().unwrap(), expected);
+            assert_eq!(
+                host.engine
+                    .sampled_value(node, exact_motion::Property::R)
+                    .unwrap()
+                    .x,
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn a_blended_svg_samples_its_animated_backdrop() {
+    for mode in ["normal", "multiply"] {
+        let app = format!(
+            r##"keyframes fade
+  from opacity=1
+  to opacity=0
+component App
+  view
+    svg width=100 height=100
+      rect testId="backdrop" width=100 height=100 fill="#34f1ec" animation="fade 1s linear infinite"
+      rect width=50 height=50 fill="#fd2f7c" mix-blend-mode="{mode}"
+"##
+        );
+        let (host, _) = Host::boot(
+            &contract::compile(&app).unwrap().encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            100.,
+            100.,
+        )
+        .unwrap();
+        let key = host.runner.kernel().find_by_test_id("backdrop")[0];
+        let node = ((key.generation as u64) << 32) | key.index as u64;
+        assert_eq!(host.engine.node_sampled(node), mode == "multiply", "{mode}");
+    }
+}
+
+#[test]
+fn a_referenced_blend_reclaims_the_local_backdrops_animation() {
+    let app = r##"keyframes fade
+  from opacity=1
+  to opacity=0.2
+component App
+  state blend = "normal"
+  action overprint
+    blend = "multiply"
+  view
+    column
+      svg width=0 height=0
+        defs
+          rect id="ink" width=50 height=50 mix-blend-mode=blend
+      svg width=100 height=100
+        rect testId="backdrop" width=100 height=100 animation="fade 1s linear infinite"
+        use href="#ink"
+      button testId="blend" press=overprint
+        text "Blend"
+"##;
+    let (mut host, _) = Host::boot(
+        &contract::compile(app).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        200.,
+        200.,
+    )
+    .unwrap();
+    let key = host.runner.kernel().find_by_test_id("backdrop")[0];
+    let node = ((key.generation as u64) << 32) | key.index as u64;
+    assert!(!host.engine.node_sampled(node));
+    host.tick(250.);
+    let k = host.runner.kernel();
+    let button = k.node_by_key(k.find_by_test_id("blend")[0]).unwrap().id;
+    host.dispatch_at(button, Event::Press, 250.);
+    assert!(host.engine.node_sampled(node));
+    let opacity = |host: &Host<NoData>| {
+        host.engine
+            .sampled_value(node, exact_motion::Property::Opacity)
+            .unwrap()
+            .x
+    };
+    assert!((opacity(&host) - 0.8).abs() < 0.01);
+    host.tick(500.);
+    assert!((opacity(&host) - 0.6).abs() < 0.01);
+}
+
+#[test]
+fn a_cross_svg_mask_blend_reclaims_a_filtered_siblings_animation() {
+    let app = r##"keyframes fade
+  from opacity=1
+  to opacity=0.2
+component App
+  state blend = "normal"
+  state moving = false
+  action start
+    moving = true
+  action overprint
+    blend = "multiply"
+  view
+    column
+      svg width=0 height=0
+        defs
+          mask id="ink" maskUnits="userSpaceOnUse" x=0 y=0 width=100 height=100
+            rect width=100 height=100 fill="#ffffff" mix-blend-mode=blend
+      svg width=100 height=100
+        g filter="blur(2px)"
+          rect testId="backdrop" width=100 height=100 animation=(moving ? "fade 1s linear infinite" : "none")
+        rect width=100 height=100 mask="url(#ink)"
+      button testId="start" press=start
+        text "Start"
+      button testId="blend" press=overprint
+        text "Blend"
+"##;
+    let (mut host, _) = Host::boot(
+        &contract::compile(app).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        200.,
+        200.,
+    )
+    .unwrap();
+    host.svg.box_motion = true;
+    host.engine.set_lowered_properties(&svg::lowered(true));
+    let k = host.runner.kernel();
+    let start = k.node_by_key(k.find_by_test_id("start")[0]).unwrap().id;
+    host.dispatch_at(start, Event::Press, 0.);
+    let key = host.runner.kernel().find_by_test_id("backdrop")[0];
+    let node = ((key.generation as u64) << 32) | key.index as u64;
+    assert!(!host.engine.node_sampled(node));
+    host.tick(250.);
+    let k = host.runner.kernel();
+    let button = k.node_by_key(k.find_by_test_id("blend")[0]).unwrap().id;
+    host.dispatch_at(button, Event::Press, 250.);
+    assert!(host.engine.node_sampled(node));
+    let opacity = |host: &Host<NoData>| {
+        host.engine
+            .sampled_value(node, exact_motion::Property::Opacity)
+            .unwrap()
+            .x
+    };
+    assert!((opacity(&host) - 0.8).abs() < 0.01);
+    host.tick(500.);
+    assert!((opacity(&host) - 0.6).abs() < 0.01);
+}
+
+#[test]
+fn a_blended_use_reclaims_its_external_animation_and_resends_the_consumer() {
+    let app = r##"keyframes fade
+  from opacity=1
+  to opacity=0.2
+component App
+  state blend = "normal"
+  action overprint
+    blend = "multiply"
+  view
+    column
+      svg width=100 height=100
+        rect id="ink" testId="ink" width=100 height=100 fill="#fd2f7c" animation="fade 1s linear infinite"
+      svg testId="consumer" width=100 height=100
+        rect width=100 height=100 fill="#34f1ec"
+        use href="#ink" mix-blend-mode=blend
+      button testId="blend" press=overprint
+        text "Blend"
+"##;
+    let (mut host, _) = Host::boot(
+        &contract::compile(app).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        200.,
+        300.,
+    )
+    .unwrap();
+    let k = host.runner.kernel();
+    let key = k.find_by_test_id("ink")[0];
+    let node = exact_kernel::motion::motion_node(key);
+    let consumer = k.node_by_key(k.find_by_test_id("consumer")[0]).unwrap().id;
+    let button = k.node_by_key(k.find_by_test_id("blend")[0]).unwrap().id;
+    assert!(!host.engine.node_sampled(node));
+    host.tick(250.);
+    host.dispatch_at(button, Event::Press, 250.);
+    assert!(host.engine.node_sampled(node));
+    for (at, opacity) in [(500., 0.6), (750., 0.4)] {
+        let batch: serde_json::Value = serde_json::from_str(&host.tick(at)).unwrap();
+        let scene = &batch["ops"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| op["op"] == "svg" && op["id"] == consumer)
+            .expect("consumer rebuilt on the source's sample")["scene"];
+        fn has_opacity(v: &serde_json::Value, expected: f64) -> bool {
+            match v {
+                serde_json::Value::Object(o) => {
+                    o.get("o")
+                        .and_then(|o| o.as_f64())
+                        .is_some_and(|o| (o - expected).abs() < 0.01)
+                        || o.values().any(|v| has_opacity(v, expected))
+                }
+                serde_json::Value::Array(a) => a.iter().any(|v| has_opacity(v, expected)),
+                _ => false,
+            }
+        }
+        assert!(has_opacity(scene, opacity), "{scene}");
+    }
+}
+
+#[test]
 fn an_inline_svg_reports_its_cost_limit_once_per_node_lifetime() {
     let app = r##"component App
   state shown = true
@@ -676,4 +930,78 @@ fn an_unrelated_commit_does_not_rebuild_a_played_morphs_scene() {
         played,
         "the original morph continues"
     );
+}
+
+#[test]
+fn computed_svg_clip_changes_cross_as_paths_and_refuse_basic_shapes_with_a_note() {
+    let app = r#"component App
+  state clip = "url(#cut)"
+  action change
+    clip = "path('M50 50H100V100H50Z')"
+  action basic
+    clip = "inset(25%)"
+  view
+    column
+      svg width=100 height=100
+        defs
+          clipPath id="cut"
+            rect width=50 height=50
+        rect width=100 height=100 clip-path=clip
+      button "Change" testId="change" press=change
+      button "Basic" testId="basic" press=basic
+"#;
+    let (mut host, batch) = Host::boot(
+        &contract::compile(app).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        200.,
+        300.,
+    )
+    .unwrap();
+    let before = scene(&batch)["els"][0]["cl"].clone();
+    assert!(before.is_object());
+    let id = |host: &Host<NoData>, name: &str| {
+        let k = host.runner.kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    let change = id(&host, "change");
+    let batch = host.dispatch_at(change, Event::Press, 0.);
+    let after = scene(&batch)["els"][0]["cl"].clone();
+    assert!(after.is_object());
+    assert_ne!(before, after);
+    let basic = id(&host, "basic");
+    let batch = host.dispatch_at(basic, Event::Press, 0.);
+    assert!(scene(&batch)["els"][0]["cl"].is_null());
+    assert!(host
+        .runner
+        .journal()
+        .any(|line| line.contains("basic-shape clip-path")));
+    let batch = host.dispatch_at(change, Event::Press, 0.);
+    assert_eq!(scene(&batch)["els"][0]["cl"], after);
+}
+
+#[test]
+fn a_pixel_clip_keeps_circle_geometry_on_the_sampled_clock() {
+    for (clip, played) in [("none", true), ("path('M0 0H50V100H0Z')", false)] {
+        let app = format!(
+            r#"keyframes move
+  from cx=20
+  to cx=80
+component App
+  view
+    svg width=100 height=100
+      circle testId="circle" cx=20 cy=50 r=20 animation="move 1s linear infinite" clip-path="{clip}"
+"#
+        );
+        let (_, batch) = Host::boot(
+            &contract::compile(&app).unwrap().encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            100.,
+            100.,
+        )
+        .unwrap();
+        let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        assert_eq!(batch["motion"], !played, "{clip}");
+    }
 }

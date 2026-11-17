@@ -213,6 +213,33 @@ fn a_boxs_background_reaches_its_padding_and_the_boxes_inside_it() {
     assert_eq!(reach(6), NONE);
 }
 
+/// Above and below its text a box's background covers its own padding and
+/// border, and no more: its block padding moves no line (CSS 2 §10.6.1),
+/// and the boxes inside it add none, as theirs stand out of it.
+#[test]
+fn a_boxs_background_reaches_its_block_padding_which_moves_no_line() {
+    let plain = verse(&[], &[]);
+    let k = verse(
+        &[
+            (StyleId::PaddingTop, "3px"),
+            (StyleId::PaddingBottom, "12px"),
+            (StyleId::BorderStyleTop, "solid"),
+            (StyleId::BorderWidthTop, "2px"),
+            // No style: no width.
+            (StyleId::BorderWidthBottom, "4px"),
+        ],
+        &[(StyleId::PaddingTop, "0.5em")],
+    );
+    let reach = |id| k.node(id).unwrap().inline_background_block_reach();
+    assert_eq!(reach(3), (5.0, 12.0));
+    assert_eq!(reach(4), (8.0, 0.0));
+    assert_eq!(reach(2), (0.0, 0.0));
+    assert_eq!(reach(6), (0.0, 0.0));
+    let height = |k: &Kernel| k.node(2).unwrap().frame.height;
+    assert_eq!(height(&k), height(&plain));
+    assert_eq!(width(&k), width(&plain));
+}
+
 /// Start and end are the paragraph's, in which hosts lay its runs out: in
 /// a right-to-left paragraph a box's right side is its start, before its
 /// first run; a box's own `direction` reorders nothing without

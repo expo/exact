@@ -6,12 +6,12 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // live host's DOM at the same URL once the runtime is ready. A difference
 // names the view. What the browser owns after layout — a symbol's sized
 // source, a surface's pixel size, focus — is left out of both sides.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { open, assertWebDistApp } from '../../../scripts/agent.mjs';
 import { cdpBrowser, chromium, DESKTOP_INPUT, refuseStale, webChanges, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { hermesBundle, hermesTarget, resolveApp } from '../../../scripts/app.mjs';
@@ -61,10 +61,10 @@ const [width, height] = [390, 844]; // the page viewport documents render at
 /** The shell the renderer is given: host/web/index.html in this run's look (look.mjs), which is the dist's (one
  * built in another look is stale, above), so the renderer resolves a role in the column the live page does. */
 let shellFile;
+afterAll(() => { if (shellFile) rmSync(dirname(shellFile), { recursive: true, force: true }); });
 function shellInLook() {
   if (!shellFile) {
     const dir = mkdtempSync(resolve(tmpdir(), 'exact-document-shell-'));
-    process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
     writeFileSync(shellFile = resolve(dir, 'index.html'), withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8')));
   }
   return shellFile;
@@ -496,7 +496,8 @@ check(`the render server's page is the document, and the runtime adopts it`, asy
 // adopts it, and the module's realm runs under the server's CSP: its two
 // inline scripts are admitted by hash, nothing else is.
 weatherlightCheck(`a TypeScript app's served document is adopted, with its module running under the CSP`, async () => {
-  const out = mkdtempSync(resolve(tmpdir(), 'exact-weatherlight-'));
+  // The build's lock and kept generations go beside its output (serve.mjs `replaceBuild`): the output sits in a directory of its own.
+  const out = resolve(mkdtempSync(resolve(tmpdir(), 'exact-weatherlight-')), 'dist');
   try {
     const build = spawnSync('bun', ['host/web/build.mjs', 'weatherlight', '--wasm'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20,
       env: { ...process.env, EXACT_WEB_DIST: out, EXACT_UPDATE_TRUST: process.env.EXACT_UPDATE_TRUST ?? 'development' } });
@@ -529,7 +530,7 @@ weatherlightCheck(`a TypeScript app's served document is adopted, with its modul
       server.stop();
     }
   } finally {
-    rmSync(out, { recursive: true, force: true });
+    rmSync(dirname(out), { recursive: true, force: true });
   }
 }, 900000);
 

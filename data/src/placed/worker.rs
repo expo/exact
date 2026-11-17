@@ -14,6 +14,7 @@ impl<D: DataSource + 'static> Placed<D> {
         self.delivery_waiters.clear();
         self.stages.clear();
         self.more.clear();
+        self.clear_order();
         if let Some(owner) = &self.owner {
             owner.lock().unwrap().unqueued.clear();
         }

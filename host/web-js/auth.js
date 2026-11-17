@@ -11,6 +11,26 @@ import { trimGrant, grantWords } from "./admission.js";
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
 const CALLBACK = "/.exact/auth/callback";
+const authWindowName = () => 'exact-auth-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+const AUTH_RESERVATION_MS = 10 * 60 * 1000;
+const authReservations = () => ((globalThis.exact ??= {}).authReservations ??= new Map());
+const prepareAuthWindow = () => {
+  if (navigator.userActivation && !navigator.userActivation.isActive) return null;
+  const id = authWindowName(), popup = window.open('about:blank', id, 'popup,width=520,height=680');
+  if (!popup) return null;
+  const reservation = { window: popup, timer: null };
+  authReservations().set(id, reservation);
+  reservation.timer = setTimeout(() => cancelAuthWindow(id), AUTH_RESERVATION_MS);
+  reservation.timer?.unref?.();
+  return id;
+};
+const cancelAuthWindow = id => {
+  const reservation = authReservations().get(id);
+  if (!reservation) return;
+  authReservations().delete(id);
+  clearTimeout(reservation.timer);
+  try { reservation.window.close(); } catch {}
+};
 
 // ---------------------------------------------------------------- URLs (auth.rs `Url`)
 function parse(text) {
@@ -71,8 +91,8 @@ function checkGrants(s, grants) {
   return null;
 }
 
-/** D3: scheme, host and path exactly the request's, no userinfo, `state`
- * exactly once and equal. The reason never carries the URL. */
+/** D3: scheme, host and path exactly the request's, no userinfo. A sign-in
+ * carries its exact `state`; a logout carries no code or error and may omit state. */
 function accept(s, got) {
   const want = parse(s.callback), u = parse(got);
   if (!want) return "the request's callback is unreadable";
@@ -82,6 +102,8 @@ function accept(s, got) {
   if (u.authority?.toLowerCase() !== want.authority?.toLowerCase()) return "the callback's host is not the request's";
   if (u.path !== want.path) return "the callback's path is not the request's";
   const states = pairs(u.query).filter(([n]) => n === "state").map(([, v]) => v);
+  if (s.logout && pairs(u.query).some(([n]) => n === "code" || n === "error")) return "the logout return carries a code or error";
+  if (s.logout && states.length === 0) return null;
   return states.length === 1 ? (same(states[0], s.state) ? null : "the callback's state is not the request's") : states.length ? "the callback carries state more than once" : "the callback carries no state";
 }
 
@@ -93,7 +115,7 @@ function summary(s) {
   for (const [n, v] of pairs(u?.query)) { out.params.push(n); if (n === "client_id" || n === "request_uri") out[n] = v; }
   // The drive's declared fixture server: its URL is shown whole, for an authored test's `authorize` (LLP 1146 D4).
   if (out.origin && out.origin === fixtureOrigin()) out.url = s.url;
-  return Object.assign(out, { callback: unsafeCallback(parse(s.callback)) ? "<redacted callback>" : s.callback, state: s.state, ephemeral: s.ephemeral });
+  return Object.assign(out, { callback: unsafeCallback(parse(s.callback)) ? "<redacted callback>" : s.callback, state: s.state, logout: s.logout, ephemeral: s.ephemeral });
 }
 
 /** The auth fixture the drive declared (`?authFixture=`, LLP 1146 D4), only under the agent. */
@@ -118,6 +140,8 @@ const bent = s => /^\s*https?:/i.test(s) && /[\\\t\n\r]/.test(s);
 export function install(grants, target) {
   (globalThis.exact ??= {}).auth = { holds, answer };
   globalThis.authCallback = () => location.origin + CALLBACK;
+  globalThis.prepareAuthSession = () => prepareAuthWindow();
+  globalThis.cancelAuthSession = prepared => { if (typeof prepared === "string" && prepared) cancelAuthWindow(prepared); };
   if (!clock.agent && typeof requestAnimationFrame === "function") {
     // The glue is in the page before any press: the popup opens in the press's own call stack.
     requestAnimationFrame(() => setTimeout(() => { Glue = import("./auth-glue.js").then(() => globalThis.exact.authHost); Glue.then(g => { Glue = g; }); }));
@@ -129,12 +153,12 @@ export function install(grants, target) {
   // `auth.apple` and `auth.google` lines (D8), never the app's `auth.session` lines, and never a list the package
   // supplies. It may adopt the window the provider's button opened at the press (D5).
   globalThis.exact.authSession = { open: ({ url, callback, state, cancelled }) => start(url, { callback, state }, `sign-in ${nextTicket()}`, s => checkDerived(s, grants), cancelled) };
-  function start(url, o, name, check, cancelled) { let release; (globalThis.__exact_ordinary ?? (f => f()))(() => new Promise(r => { release = r; })); const session = new Promise((resolve, reject) => {
-    if (typeof o.callback !== "string" || typeof o.state !== "string" || !o.state) return reject(new TypeError("openAuthSession(url, {callback, state}): callback is authCallback() and state a non-empty string"));
+  function start(url, o, name, check, cancelled) { let release; const prepared = o.prepared; (globalThis.__exact_ordinary ?? (f => f()))(() => new Promise(r => { release = r; })); const session = new Promise((resolve, reject) => {
+    if (typeof o.callback !== "string" || typeof o.state !== "string" || !o.state || (o.logout !== undefined && typeof o.logout !== "boolean") || (o.prepared !== undefined && (typeof o.prepared !== "string" || !o.prepared))) return reject(new TypeError("openAuthSession(url, {callback, state, logout, prepared}): callback is authCallback(), state and prepared non-empty strings and logout a boolean"));
     const ticket = nextTicket();
     const done = (status, body) => { if (status === 200) resolve(body); else { const e = new Error(body || "the auth session failed"); Object.defineProperty(e, "status", { value: status, enumerable: true }); reject(e); } };
     const refuse = (status, why) => { say(`auth ${ticket}: answered ${status}: ${why}`); done(status, why); };
-    const s = { url: String(url), callback: o.callback, state: o.state, ephemeral: !!o.ephemeral };
+    const s = { url: String(url), callback: o.callback, state: o.state, logout: !!o.logout, prepared: o.prepared, ephemeral: !!o.ephemeral };
     // A browser reads a backslash in an http(s) URL as a slash and drops tabs
     // and newlines, so such a URL can hide userinfo from parse(): refuse it unechoed.
     if (bent(s.url)) return refuse(502, "the authorization URL is not a plain http: or https: URL");
@@ -166,14 +190,14 @@ export function install(grants, target) {
     Glue.arm({ ticket }, {
       agent: false, log: say, active: t => Live.some(x => x.ticket === t),
       call: req => {
-        if (req.op === "arm") return req.popup === false ? (report = [428, "popup blocked"], { settled: true }) : { present: { url: s.url, callback: s.callback, state: s.state } };
+        if (req.op === "arm") return req.popup === false ? (report = [428, "popup blocked"], { settled: true }) : { present: { url: s.url, callback: s.callback, state: s.state, logout: s.logout, prepared: s.prepared } };
         if (req.op === "done") { const why = req.url != null ? accept(s, req.url) : null; report = req.url != null ? (why ? [502, why] : [200, req.url]) : [req.status, req.message ?? ""]; }
         return {};
       },
       deliver: t => { if (report) settle(t, ...report); },
     });
     l.close = () => {};
-  }); return session.finally(() => release()); } // (a rejection still goes unhandled where no one awaits it, as before)
+  }); return session.finally(() => { if (prepared) cancelAuthWindow(prepared); release(); }); } // (a rejection still goes unhandled where no one awaits it, as before)
 }
 
 /** The providers whose sign-in this runtime opens, by authorization origin, and the line that grants a client. */

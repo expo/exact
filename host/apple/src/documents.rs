@@ -17,9 +17,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 /// The calls [`answer`] answers.
-const OPS: [&str; 8] = [
+const OPS: [&str; 9] = [
     "openDocument",
     "documentPermission",
+    "documentFolder",
     "mintDocument",
     "forgetDocuments",
     "keptDocuments",
@@ -51,7 +52,9 @@ fn store_file(app_id: &str) -> Option<PathBuf> {
 ///   every handle the session minted that its app does not keep.
 /// - `documentPermission` (`{"path"}`): `{"granted": true}` when the path
 ///   resolves for the session, what a native host answers to
-///   `requestPermission` (LLP 1069.010.000 D7).
+///   `requestPermission` (LLP 1069.010.000 D7). `documentFolder`
+///   (`{"path"}`): `{"folder": "/…"}`, where a picker's `startIn` opens
+///   (LLP 1173 D2), or `{}` when the session holds no such document.
 /// - `keptDocuments`, as the session's data activates: `{"keep": false}`
 ///   for an app that keeps nothing; else the records this launch has yet to
 ///   find (`restore`: `n`, `bookmark`, `device`, `inode`), which the host
@@ -123,6 +126,10 @@ fn documents<D: exact_runner::DataSource>(
         "documentPermission" => {
             serde_json::json!({ "granted": documents::resolve(&path, owner).is_ok() }).to_string()
         }
+        "documentFolder" => match documents::folder(&path, owner) {
+            Some(folder) => reply("folder", &folder.to_string_lossy()),
+            None => "{}".into(),
+        },
         "mintDocument" => match documents::mint(std::path::Path::new(&path), owner) {
             Some(doc) => reply("doc", &doc),
             None => error(&format!("{path} is not a file or folder")),

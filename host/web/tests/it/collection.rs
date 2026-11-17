@@ -232,20 +232,18 @@ component App
 fn real_browser_collection_feedback_and_navigation() {
     use std::{path::Path, process::Command};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = std::env::temp_dir().join(format!("exact-collection-browser-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-collection-browser");
     // Bake the constant data: the carrier wasm supplies only the host, never a
     // fixture-specific data implementation or an authored scroll event handler.
     let baked = contract::bake(exact_plan::Plan::decode(&plan()).unwrap(), NoData).unwrap();
     std::fs::write(dir.join("app.plan"), baked.encode()).unwrap();
     let output = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
         .arg("host/web/tests/collection.mjs")
-        .env("EXACT_COLLECTION_TEST", &dir)
+        .env("EXACT_COLLECTION_TEST", &*dir)
         .current_dir(root)
         .output()
         .unwrap();
     eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-    std::fs::remove_dir_all(dir).unwrap();
     assert!(
         output.status.success(),
         "{}\n{}",
@@ -290,20 +288,17 @@ component App
         ),
     ] {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let dir =
-            std::env::temp_dir().join(format!("exact-collection-edges-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::TestDir::new("exact-collection-edges");
         let baked = contract::bake(contract::compile(&source).unwrap(), NoData).unwrap();
         std::fs::write(dir.join("app.plan"), baked.encode()).unwrap();
         let output = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
             .arg("host/web/tests/collection.mjs")
-            .env("EXACT_COLLECTION_TEST", &dir)
+            .env("EXACT_COLLECTION_TEST", &*dir)
             .env("EXACT_COLLECTION_EDGES", case)
             .current_dir(root)
             .output()
             .unwrap();
         eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-        std::fs::remove_dir_all(dir).unwrap();
         assert!(
             output.status.success(),
             "{}\n{}",
@@ -333,19 +328,17 @@ component App
           text `${x.index}` height=32
 "#;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = std::env::temp_dir().join(format!("exact-collection-jump-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-collection-jump");
     let baked = contract::bake(contract::compile(source).unwrap(), NoData).unwrap();
     std::fs::write(dir.join("app.plan"), baked.encode()).unwrap();
     let output = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
         .arg("host/web/tests/collection.mjs")
-        .env("EXACT_COLLECTION_TEST", &dir)
+        .env("EXACT_COLLECTION_TEST", &*dir)
         .env("EXACT_COLLECTION_JUMP", "1")
         .current_dir(root)
         .output()
         .unwrap();
     eprintln!("{}", String::from_utf8_lossy(&output.stdout));
-    std::fs::remove_dir_all(dir).unwrap();
     assert!(
         output.status.success(),
         "{}\n{}",

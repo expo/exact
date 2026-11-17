@@ -6,8 +6,9 @@
 //! the individual transform properties `translate`, `scale`, `rotate`, and
 //! `opacity`. Names, units, identity values, and interpolation are CSS's:
 //! `translate` is two lengths in points, `scale` one number, `rotate` an angle
-//! in degrees, `opacity` a number; each interpolates componentwise and
-//! linearly (CSS Transitions §4, "animation type: by computed value"). The
+//! in degrees with an optional axis, and `opacity` a number. Rotation
+//! keyframes interpolate through [`crate::rotation`]; the others interpolate
+//! componentwise (CSS Transitions §4, "animation type: by computed value"). The
 //! numeric `height` trial adds a scalar in pixels, with host-owned admission
 //! and layout (LLP 1041 §8.12). Its CSS initial `auto` has no numeric value.
 //! SVG 2's `stroke-dashoffset` and `r` are scalars in user units (LLP 1055 D6),
@@ -41,6 +42,8 @@
 //! and the paths at its two ends live beside it ([`crate::path`]). It is
 //! named by `transition` (never `@keyframes` yet), so it is outside
 //! [`Property::ALL`]; a `transition` row carries it by its own code.
+//! `filter` is the same (LLP 1003.002): its slot holds a progress, and the
+//! two lists at its ends are [`crate::filter::FilterValue`]s.
 
 /// One animatable property.
 #[repr(u8)]
@@ -50,7 +53,7 @@ pub enum Property {
     Translate = 0,
     /// `scale: <n>`, uniform; one is the natural size.
     Scale = 1,
-    /// `rotate: <angle>`, in degrees.
+    /// `rotate`: degrees in x, its optional axis in y/z/w.
     Rotate = 2,
     /// `opacity: <n>`, zero to one.
     Opacity = 3,
@@ -110,15 +113,20 @@ pub enum Property {
     /// running transition's progress from one path to the next; the paths
     /// are [`crate::path::PathValue`]s the engine keeps beside it.
     D = 28,
+    /// CSS `filter` (LLP 1003.002). Its slot's value is a running
+    /// transition's progress from one list to the next; the lists are
+    /// [`crate::filter::FilterValue`]s the engine keeps beside it.
+    Filter = 29,
 }
 
 impl Property {
     /// The property numbered `slot` (its discriminant): every property,
-    /// [`Property::Layout`] and [`Property::D`] included.
+    /// [`Property::Layout`], [`Property::D`] and [`Property::Filter`] included.
     pub(crate) fn from_slot(slot: u32) -> Property {
         match slot {
             27 => Property::Layout,
             28 => Property::D,
+            29 => Property::Filter,
             slot => Property::ALL[slot as usize],
         }
     }
@@ -159,8 +167,13 @@ impl Property {
     pub const COUNT: usize = 27;
 
     /// How many properties the engine has slots for: the wire's, then
-    /// [`Property::Layout`] and [`Property::D`].
-    pub const SLOTS: usize = Property::COUNT + 2;
+    /// [`Property::Layout`], [`Property::D`] and [`Property::Filter`].
+    pub const SLOTS: usize = Property::COUNT + 3;
+
+    /// The properties `transition` names that no keyframe carries, so
+    /// outside [`Property::ALL`]: a path's `d` and `filter`, each a list
+    /// the engine moves as a progress (LLP 1055.000 D15, LLP 1003.002).
+    pub const TRANSITION_ONLY: [Property; 2] = [Property::D, Property::Filter];
 
     /// The paint properties: repainted, never laid out. A native host's
     /// paint pass owns them (LLP 1062 D2): CSS's box colours and
@@ -213,6 +226,7 @@ impl Property {
             Property::FontVariationSettings => "font-variation-settings",
             Property::Layout => "layout",
             Property::D => "d",
+            Property::Filter => "filter",
         }
     }
 
@@ -286,10 +300,11 @@ impl Property {
     /// How many components the value carries: four for `translate` (its x
     /// and y lengths, then its x and y percentages of the box, which CSS
     /// interpolates componentwise as a `calc()`), three for `box-shadow`'s
-    /// geometry and for a variation axis, four for a colour and for `layout`'s box, else one.
+    /// geometry and for a variation axis, four for rotation, colour and
+    /// `layout`'s box, else one.
     pub fn components(self) -> usize {
         match self {
-            Property::Translate => 4,
+            Property::Translate | Property::Rotate => 4,
             Property::BoxShadow | Property::FontVariationSettings => 3,
             Property::Layout => 4,
             p if p.is_color() => 4,

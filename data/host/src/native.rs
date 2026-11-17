@@ -267,13 +267,19 @@ fn image(
         record["height"] = json!(file.height);
         return Ok(record);
     }
-    let number = |k: &str| {
-        args[k]
+    // `maxBytes` and `quality` (A1.12) may be absent; null is absent.
+    let number = |k: &str| match &args[k] {
+        Value::Null => Ok(None),
+        v => v
             .as_f64()
-            .ok_or_else(|| format!("storage: {k} must be a number"))
+            .map(Some)
+            .ok_or_else(|| format!("storage: {k} must be a number")),
     };
-    let (max_dimension, max_bytes) =
-        exact_data::image::check_limits(number("maxDimension")?, number("maxBytes")?)?;
+    let limits = exact_data::image::check_limits(
+        number("maxDimension")?.ok_or("storage: maxDimension must be a number")?,
+        number("maxBytes")?,
+        number("quality")?,
+    )?;
     // `type` (A1.11): absent is a JPEG.
     let format = match &args["type"] {
         Value::Null => exact_data::image::Format::Jpeg,
@@ -288,13 +294,13 @@ fn image(
         from,
         to,
         ImageRequest {
-            max_dimension,
-            max_bytes,
+            max_dimension: limits.max_dimension,
+            max_bytes: limits.max_bytes,
             format: match format {
                 exact_data::image::Format::Jpeg => fs_image::ImageFormat::Jpeg,
                 exact_data::image::Format::Png => fs_image::ImageFormat::Png,
             },
-            options: options(&["rotate", "flip", "crop"]),
+            options: options(&["rotate", "flip", "crop", "quality"]),
             transform: false,
         },
     )?;

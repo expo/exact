@@ -6,7 +6,8 @@ import { answering, files, ownSignal } from './ts-fetch.js';
 // `exactBodyFrom` (LLP 1108 D6 R2), with Hermes's checks and words
 // (js/src/binary.js `fileRefusal`): the app file at that path is the body, read from the
 // page's store as a Blob (a picked file is its own File; nothing becomes a
-// string), under `fs.read`, at most 64 MiB. A refusal is a FetchError before
+// string), under `fs.read`; a file the app wrote is read whole, at most 64 MiB
+// (LLP 1133.008.000 D4). A refusal is a FetchError before
 // anything is sent. `files.appId` is the module's, set by ts-data.js.
 export const methodOf = (input, init) => String(init.method ?? (typeof Request === 'function' && input instanceof Request ? input.method : 'GET')).toUpperCase();
 const pathRefusal = (name, path) => {
@@ -93,7 +94,7 @@ export async function fromFile(input, init, redirect, started, origin = 'app', a
     const spent = clock.now() - started;
     if (ms !== undefined && spent >= ms) throw new FetchError('Timeout', `the request timed out after ${ms} ms`);
     const left = ms === undefined ? undefined : Math.max(1, Math.ceil(ms - spent));
-    const sent = { ...rest, signal, ...(from ? { body } : {}), ...(left === undefined ? {} : { exactTimeout: left }) }, expires = ms === undefined ? null : { at: started + ms, ms };
+    const sent = { ...rest, signal, ...(to ? { exactBodyTo: init.exactBodyTo } : {}), ...(from ? { body } : {}), ...(left === undefined ? {} : { exactTimeout: left }) }, expires = ms === undefined ? null : { at: started + ms, ms };
     if (!to) return await fetchWith(tsGrantSet, input, sent, expires, redirect, undefined, origin, true, forced);
     // A 2xx body goes to the file, counted as it arrives, within the deadline;
     // any other reply is read as usual, at most 1 MiB, and the file is untouched.

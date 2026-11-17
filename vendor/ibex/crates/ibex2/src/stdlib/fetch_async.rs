@@ -333,6 +333,11 @@ impl FetchTask {
             Err(HostError::InvalidArgument(
                 "asynchronous fetch requires finite allocation limits".into(),
             ))
+        } else if request.body_file.is_some() {
+            // Its body is an upload held in memory (Exact patch 46).
+            Err(HostError::InvalidArgument(
+                "asynchronous fetch takes no file body".into(),
+            ))
         } else {
             prepare_body(request)
         };
@@ -899,7 +904,7 @@ impl WorkerService for BoundedWorkerPool {
             .as_ref()
             .ok_or_else(|| HostError::Failed("HTTP workers retired".into()))?;
         self.occupied
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 (n < self.capacity).then_some(n + 1)
             })
             .map_err(|_| HostError::Failed("HTTP worker capacity exhausted".into()))?;

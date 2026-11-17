@@ -59,7 +59,7 @@ test('package directory freshness ignores tests and keeps production entries and
     expect(changed()).toContain(dirname(source));
     expect(watched([source])).toEqual([source]);
     utimesSync(dirname(source), old, old);
-    const design = resolve(pkg, 'photos.tamber');
+    const design = resolve(pkg, 'photos.forma');
     expect(watched([design])).toEqual([design]);
     write(design);
     utimesSync(pkg, edited, edited);
@@ -152,7 +152,7 @@ test('a linked build is checked against what the bake it links read, not a later
   const dir = mkdtempSync(resolve(import.meta.dir, '../target/linked-receipt-'));
   try {
     const app = resolve(dir, 'app'), pkg = resolve(dir, 'packages/photos'), linked = resolve(app, 'target/linked');
-    const source = resolve(pkg, 'index.contract'), design = resolve(pkg, 'photos.tamber');
+    const source = resolve(pkg, 'index.contract'), design = resolve(pkg, 'photos.forma');
     const old = new Date(0), built = new Date(Date.now() - 60_000);
     mkdirSync(pkg, {recursive:true}); mkdirSync(linked, {recursive:true});
     for (const path of [source, resolve(pkg, 'package.json'), resolve(app, 'app.json')]) { writeFileSync(path, '{}'); utimesSync(path, old, old); }
@@ -237,7 +237,7 @@ test('optional package inputs keep the bake revision through test edits and chan
   mkdirSync(scratch, {recursive:true});
   const dir = mkdtempSync(resolve(scratch, 'optional-package-'));
   try {
-    const out = resolve(dir, 'out'), pkg = resolve(dir, 'packages/photos'), design = resolve(pkg, 'photos.tamber');
+    const out = resolve(dir, 'out'), pkg = resolve(dir, 'packages/photos'), design = resolve(pkg, 'photos.forma');
     mkdirSync(out); mkdirSync(resolve(pkg, 'test'), {recursive:true});
     const source = resolve(pkg, 'index.contract'), manifest = resolve(pkg, 'package.json'), drive = resolve(pkg, 'test/drives.mjs');
     for (const path of [source, manifest, drive]) writeFileSync(path, 'before');
@@ -266,7 +266,7 @@ test.skipIf(process.platform === 'win32')('a linked bake reuses an absent packag
   const dir = mkdtempSync(resolve(scratch, 'linked-package-'));
   try {
     const baked = resolve(dir, 'bakes/macos-target.baked'), executable = resolve(dir, 'baker');
-    const design = resolve(dir, 'photos.tamber');
+    const design = resolve(dir, 'photos.forma');
     mkdirSync(baked, {recursive:true}); mkdirSync(resolve(dir, 'data'));
     writeFileSync(resolve(dir, 'data/Cargo.toml'), '');
     writeFileSync(resolve(baked, 'app.plan'), 'plan'); writeFileSync(resolve(baked, 'compat.json'), '{}');
@@ -694,6 +694,26 @@ test('replacing a watched file with an old directory invalidates freshness', asy
     expect(watchedNewer(since, [root], directories)).toEqual([]);
     rmSync(root); mkdirSync(root); utimesSync(root, new Date(0), new Date(0));
     expect(watchedNewer(since, [root], directories)).toContain(root);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test.skipIf(process.platform === 'win32')('output exclusions are resolved once per collector and refreshed for the next collector', async () => {
+  const {buildInputCollector} = await import('./cargo-dep-info.mjs');
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'collector-outputs-')));
+  try {
+    const first = resolve(dir, 'first'), second = resolve(dir, 'second'), output = resolve(dir, 'output');
+    for (const path of [first, second]) { mkdirSync(path); writeFileSync(resolve(path, 'source'), 'source'); }
+    const outputs = [];
+    const collect = () => buildInputCollector({outputs, nameOf:path=>path, hashes:{of:()=> 'digest'}, replaced:new Set()});
+    const collector = collect();
+    symlinkSync(first, output, 'dir'); outputs.push(output);
+    collector.add(dir);
+    expect([...collector.inputs.keys()]).toEqual([resolve(second, 'source')]);
+    rmSync(output); symlinkSync(second, output, 'dir');
+    collector.add(first);
+    expect(collector.inputs.has(resolve(first, 'source'))).toBe(false);
+    const next = collect(); next.add(dir);
+    expect([...next.inputs.keys()]).toEqual([resolve(first, 'source')]);
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
 

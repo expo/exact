@@ -13,6 +13,9 @@ serde_json = "1.0"
 sha2 = "0.10"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# A Rust-only app's source on its own owner (`rust.placement`, LLP 1027.002): the generated entry names
+# `exact_logic::exact_data::Placed`. Native only, as a Rust worker is.
+exact-data = { path = "../data" }
 wasmi = { version = "2.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
 # The version wasmi 2.0 validates with, so an app links one copy.
 wasmparser = { version = "0.228", default-features = false, features = ["std", "validate", "features"] }

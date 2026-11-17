@@ -1023,7 +1023,7 @@ fn a_grouped_alerts_long_message_paints_in_its_box_and_the_wheel_scrolls_it() {
     let text = id(&p, "message");
     let message = p.host().kernel().node(text).unwrap().parent.unwrap();
     let painted =
-        |p: &mut Presenter<()>, id: ViewId| *p.boxes().iter().find(|b| b.id == id).unwrap();
+        |p: &mut Presenter<()>, id: ViewId| p.boxes().iter().find(|b| b.id == id).unwrap().clone();
     let held = painted(&mut p, message).rect;
     let clip = painted(&mut p, text)
         .clip

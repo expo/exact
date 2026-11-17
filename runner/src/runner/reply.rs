@@ -53,6 +53,31 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
         timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let binding = self.request_completion(ticket);
+        let completion = match &binding {
+            Some(binding) => binding.completion(outcome, timing),
+            None => Completion::Reply { outcome, timing },
+        };
+        let capability = binding.as_ref().and_then(CompletionReply::delivery);
+        match capability {
+            Some(capability) => self.deliver(capability, completion),
+            // Unissued, consumed or retired requests keep their integer
+            // protocol during carry (LLP 1172.019 §2 item 1).
+            None => self.deliver_reply(ticket, completion),
+        }
+    }
+
+    pub(super) fn deliver_reply(
+        &mut self,
+        ticket: u64,
+        completion: Completion,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (Completion::Reply { outcome, timing }
+        | Completion::Subscription { outcome, timing }
+        | Completion::DurableOperation { outcome, timing }) = completion
+        else {
+            unreachable!("callback dispatched by deliver")
+        };
         // A let-go request's reply: it has ended, and an abort names it no more.
         self.retired_fetches.retain(|r| r.1 != ticket);
         let answering = std::mem::replace(&mut self.churn.answering, true);
@@ -266,7 +291,7 @@ impl<D: DataSource> Runner<D> {
         let failed_end = matches!(outcome, Outcome::Failed { .. });
         let ty = match p.target {
             Target::Resource(i) => self.resource_row(i).ty,
-            Target::Mutation(m) | Target::Sent(m, _) => self.plan.mutations[m].ty,
+            Target::Mutation(m) | Target::Sent(m, _) => self.mutation_row(m).ty,
         };
         self.store.take_topics();
         self.snapshot_sockets();
@@ -333,10 +358,7 @@ impl<D: DataSource> Runner<D> {
                 let contents = self.note_reads(i, reads_before, draws_before);
                 self.module_work.reply_reader = Some((i, contents));
             }
-            // A module's source that data code read: the answer is asked
-            // again when that source's answer changes (LLP 1133.002 D14).
-            let module = (p.keepable.as_ref()).and_then(|r| self.module_topic(&r.body));
-            for topic in self.store.take_topics().into_iter().chain(module) {
+            for topic in self.store.take_topics() {
                 if !self.resources[i].watching.contains(&topic) {
                     self.resources[i].watching.push(topic);
                 }
@@ -498,7 +520,7 @@ impl<D: DataSource> Runner<D> {
                 // leaves the slot and the failure (LLP 1161.000 D4).
                 if self.conclude_send(p.target) {
                     self.failed_mut[m] = None;
-                    self.slots[slot] = Value::some(value);
+                    self.land_send(m, slot, Value::some(value));
                 }
                 self.landed.push(m);
                 // The reply landed: what the mutation changed is asked again

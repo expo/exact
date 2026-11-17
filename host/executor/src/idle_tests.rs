@@ -175,6 +175,7 @@ fn check_worker_start(core: &Core, woke: &std::sync::mpsc::Receiver<()>, bound: 
     assert!(core.idle.lock().unwrap().is_some());
     core.run(
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),
@@ -194,6 +195,7 @@ fn check_worker_start(core: &Core, woke: &std::sync::mpsc::Receiver<()>, bound: 
     ));
     core.run(
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 2,
             target: "test".into(),
@@ -221,6 +223,7 @@ fn an_idle_pool_is_not_woken() {
     let (core, woke) = core();
     core.run(
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),

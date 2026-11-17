@@ -63,8 +63,8 @@ final class PictureInPictureWindow: NSObject, NSWindowDelegate {
         panel.title = titled ? title : "Picture in Picture"
         panel.isFloatingPanel = true
         panel.isRestorable = false // the author opens it; a relaunch does not
-        // A drive's panel never shows over the person's apps (`Agent.windowsBehind`).
-        panel.level = Agent.windowsBehind ? .agentBehind : .floating
+        // A drive's panel never shows over the person's apps (`AgentLink.windowsBehind`).
+        panel.level = AgentLink.windowsBehind ? .agentBehind : .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
@@ -144,7 +144,7 @@ final class PictureInPictureWindow: NSObject, NSWindowDelegate {
             if !titled { panel.maxSize = NSSize(width: Self.screen.width * 0.75, height: Self.screen.height * 0.75) }
             // Chromium's window fades in.
             panel.alphaValue = titled ? 1 : 0
-            if Agent.windowsBehind { panel.orderFront(nil) } else { panel.orderFrontRegardless() }
+            if AgentLink.windowsBehind { panel.orderFront(nil) } else { panel.orderFrontRegardless() }
             if !titled { NSAnimationContext.runAnimationGroup { $0.duration = 0.25; panel.animator().alphaValue = 1 } }
             say("enter")
         } else {

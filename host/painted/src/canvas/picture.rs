@@ -1,6 +1,6 @@
 //! What a reader copies a picture from: a decoded image, or a canvas's
 //! rasterized drawing (Canvas 2D, LLP 1056), both premultiplied RGBA.
-use super::{pending, Recorder, Shape, ANIMATED, CLIP_RRECT, IMAGE, IMAGE_DEF, RESTORE};
+use super::{with_pending, Recorder, Shape, ANIMATED, CLIP_RRECT, IMAGE, IMAGE_DEF, RESTORE};
 use crate::image::Bitmap;
 use crate::paint::Rect4;
 use std::sync::{Arc, Weak};
@@ -167,7 +167,7 @@ impl Recorder {
                 self.string(&path);
             }
         }
-        pending().insert(id, image.clone());
+        with_pending(|p| p.insert(id, image.clone()));
         id
     }
 }

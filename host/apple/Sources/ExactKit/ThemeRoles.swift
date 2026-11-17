@@ -39,10 +39,10 @@ package enum ThemeRoles {
     /// The boot's table (`{"op": "roles"}`), the last plan's replaced, for
     /// the presenter at `root` (none: the last to apply's); whether it changed.
     @discardableResult
-    static func apply(_ batch: Batch, root: PlatformView? = nil) -> Bool {
+    static func apply(_ op: BatchOp?, root: PlatformView? = nil) -> Bool {
         let table = root.map(table(of:)) ?? last
         last = table
-        guard let op = batch.ops.last(where: { $0.op == .roles }), op.style != table.style else { return false }
+        guard let op, op.style != table.style else { return false }
         table.style = op.style
         generation += 1
         return true

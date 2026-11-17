@@ -635,6 +635,9 @@ final class RouteSheetMacTests: XCTestCase {
     /// on the sheet's two buttons are stops after them, as an AppKit
     /// sheet's are; a key at one of them leaves the focus on it.
     func testWithKeyboardNavigationOnTheSheetsButtonsAreStopsAfterTheRoutes() throws {
+        // AppKit's own key-view loop, which takes the sheet's buttons and wraps to the first field, follows the system's
+        // Keyboard Navigation (Full Keyboard Access); AppleKeyboardUIMode in the test's own defaults does not turn it on.
+        try XCTSkipUnless(NSApplication.shared.isFullKeyboardAccessEnabled, "System Settings' Keyboard Navigation is off on this Mac")
         KeyboardNavigation.agent = true
         addTeardownBlock { KeyboardNavigation.agent = nil }
         let f = try make()

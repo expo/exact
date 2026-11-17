@@ -67,7 +67,7 @@ internal class Requests(private val activity: ExactActivity) {
         if (sound == null && (0 until ops.length()).any { ops.getJSONObject(it).getInt("kind") == 1 }) {
             val info = activity.packageManager.getApplicationInfo(activity.packageName, android.content.pm.PackageManager.GET_META_DATA)
             val policy = SoundPolicy.of(info.metaData?.getString("dev.exact.audioSession") ?: "ambient")
-            sound = SoundOutput(activity, policy).also { if (!foreground) it.foreground(false) }
+            sound = SoundOutput(activity, { AssetRoot.of(activity) }, policy).also { if (!foreground) it.foreground(false) }
         }
         sound?.apply(body)
     }
@@ -94,7 +94,8 @@ internal class Requests(private val activity: ExactActivity) {
                     AUTH -> {
                         val (url, next) = string(words, body)
                         val (callback, after) = string(words, next)
-                        Auth.open(activity, id, url, callback, string(words, after).first)
+                        val (state, end) = string(words, after)
+                        Auth.open(activity, id, url, callback, state, end < i && words[end] != 0)
                     }
                     AUTH_END -> Auth.end(words[body])
                     HAPTIC -> haptic(words[body])
@@ -116,6 +117,7 @@ internal class Requests(private val activity: ExactActivity) {
                     SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
                     SOUND -> sounds(string(words, body).first)
                     FILES -> files(id, words, body)
+                    ASSETS -> { sound?.reroot(); activity.assetsMoved() }
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
@@ -127,13 +129,6 @@ internal class Requests(private val activity: ExactActivity) {
 
     /** The session's orientation lock (LLP 1133.029 D6), on this activity. */
     private val orientation = Orientation(activity) { w, at -> string(w, at) }
-
-    /** The string at [at]: its bytes' count, then UTF-8 padded to whole words. And the index after it. */
-    private fun string(w: IntArray, at: Int): Pair<String, Int> {
-        val n = w[at]
-        val bytes = ByteArray(n) { k -> (w[at + 1 + k / 4] ushr (8 * (k % 4))).toByte() }
-        return String(bytes, Charsets.UTF_8) to at + 1 + (n + 3) / 4
-    }
 
     /** The pickers that are up, by their requests' ids, and what closes each: none has answered yet. */
     private val picking = HashMap<Int, () -> Unit>()
@@ -284,7 +279,8 @@ internal class Requests(private val activity: ExactActivity) {
     }
 
     companion object {
-        /** No activity can open UI, but process-owned waits still receive their cleanup. */
+        /** No activity can open UI, but process-owned waits still receive their cleanup, and the extensions, which
+         * outlive the activity, still answer their calls: one that needs an activity says so in its answer. */
         fun detached(words: IntArray) {
             var i = 0
             while (i + 3 <= words.size) {
@@ -295,8 +291,17 @@ internal class Requests(private val activity: ExactActivity) {
                     FILES -> Exact.answer(id, "file picker: activity unavailable")
                     AUTH -> Exact.answer(id, "cancelled")
                     AUTH_END -> Auth.end(words[body])
+                    MODULE -> Extensions.call(id, string(words, body).first)
+                    PRESENCE -> Presence.check(string(words, body).first)
                 }
             }
+        }
+
+        /** The string at [at]: its bytes' count, then UTF-8 padded to whole words. And the index after it. */
+        private fun string(w: IntArray, at: Int): Pair<String, Int> {
+            val n = w[at]
+            val bytes = ByteArray(n) { k -> (w[at + 1 + k / 4] ushr (8 * (k % 4))).toByte() }
+            return String(bytes, Charsets.UTF_8) to at + 1 + (n + 3) / 4
         }
 
         private const val TAG = "exact"
@@ -323,6 +328,7 @@ internal class Requests(private val activity: ExactActivity) {
         const val AUTH = 17
         const val AUTH_END = 19
         const val FILES = 18
+        const val ASSETS = 20
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         private const val DISMISSED_MS = 500L
     }

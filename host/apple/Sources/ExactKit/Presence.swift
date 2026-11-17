@@ -19,7 +19,7 @@ extension ExactSession {
     /// Route a check and its answer through the generation that requested it.
     /// `issued` is the generation whose batch asked: the call number is its
     /// runner's, so the answer goes nowhere once that generation has ended.
-    func presenceOp(_ op: [String: Any], issued: GenerationStamp) {
+    func presenceOp(_ op: [String: Any], issued: SessionLease) {
         guard let call = (op["call"] as? NSNumber)?.uint64Value else { return }
         let answer = { (fields: [String: Any]) in
             var fields = fields

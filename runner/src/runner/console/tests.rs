@@ -117,6 +117,38 @@ fn console_lines_reach_the_sink_once_with_their_method_and_the_journal_as_before
     );
 }
 
+/// LLP 1175 D5: an unjournaled line (an uncancelled error event's, whose
+/// journal line is the runtime's own) reaches the sink once, in order with
+/// the app's lines, and never the journal.
+#[test]
+fn an_unjournaled_line_reaches_only_the_sink() {
+    let mut r = runner();
+    let written = sink(&mut r);
+    let lines = [
+        Log.mark("before"),
+        "console: Uncaught Error: lost".to_string(),
+        Error.mark_unjournaled("Uncaught Error: lost"),
+        Log.mark("after"),
+    ];
+    say(&mut r, &lines);
+    assert_eq!(
+        written.take(),
+        [
+            (Log, "before".to_string()),
+            (Error, "Uncaught Error: lost".to_string()),
+            (Log, "after".to_string()),
+        ]
+    );
+    assert_eq!(
+        journaled(&r),
+        [
+            "console: before",
+            "console: Uncaught Error: lost",
+            "console: after"
+        ]
+    );
+}
+
 /// Lines journaled before a sink is installed are held no longer than the
 /// journal keeps them, and written once, in order, when one is; with a sink
 /// installed nothing is held, so nothing is dropped.
@@ -313,7 +345,7 @@ fn a_method_survives_its_mark() {
     for m in [Log, Info, Warn, Error, Debug] {
         assert_eq!(Console::named(m.name()), Some(m));
         let marked = m.mark("a: b");
-        assert_eq!(Console::unmark(&marked), Some((m, "a: b")));
+        assert_eq!(Console::unmark(&marked), Some((m, true, "a: b")));
     }
     assert_eq!(Console::unmark("console: plain"), None);
     assert_eq!(Console::unmark("console.trace: x"), None);

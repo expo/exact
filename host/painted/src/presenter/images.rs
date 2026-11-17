@@ -108,6 +108,12 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(super) fn apply_reports(&mut self, reports: Vec<crate::image::Report>) -> bool {
+        // A poster's picture is no natural size, but it paints (LLP 1042.001 D5).
+        let posters = !self.images.posters_changed.is_empty();
+        if posters {
+            self.dirty = true;
+            self.image_paint_pending = true;
+        }
         let any = !reports.is_empty();
         if any {
             if let Some(e) = self.host.set_intrinsics(reports) {
@@ -125,7 +131,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // After the sizes.
         let loads = self.deliver_image_loads();
-        any || loads
+        any || loads || posters
     }
 
     pub(super) fn sync_images(&mut self) -> Option<String> {
@@ -157,8 +163,11 @@ impl<D: DataSource> Presenter<D> {
         }
         if self.images.order.as_ref().is_none_or(|(e, _)| *e != epoch) {
             let kernel = self.host.kernel();
-            let order = if kernel.has_type(NodeType::Image) {
-                kernel.preorder_where(&self.host.roots(), |t, _| t == NodeType::Image)
+            let order = if kernel.has_type(NodeType::Image) || kernel.has_type(NodeType::Video) {
+                kernel.preorder_where(&self.host.roots(), |t, props| {
+                    t == NodeType::Image
+                        || t == NodeType::Video && props.str(PropId::Poster).is_some()
+                })
             } else {
                 Vec::new()
             };
@@ -262,8 +271,9 @@ impl<D: DataSource> Presenter<D> {
         self.images.order = Some((order_epoch, live));
         let mut reports = reports;
         reports.extend(self.pictures_out());
-        self.dirty |= !reports.is_empty();
-        self.image_paint_pending |= !reports.is_empty();
+        let painted = !reports.is_empty() || !self.images.posters_changed.is_empty();
+        self.dirty |= painted;
+        self.image_paint_pending |= painted;
         self.images.settled = self.images.settled_at(epoch, reports.is_empty());
         if reports.is_empty() {
             return None;

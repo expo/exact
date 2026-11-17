@@ -218,6 +218,7 @@ pub fn open(len: usize, compat: &str, plan: &[u8]) -> u32 {
     };
     match Client::open(Some(Path::new(&base)), Path::new(&assets), compat, plan) {
         Ok(client) => {
+            ibex2::process::wait_at_exit(exact_update::client::remove_agent_store);
             refresh(&client);
             *lock(&CLIENT) = Some(client);
             let mut generations = lock(&GENERATIONS);
@@ -725,10 +726,10 @@ mod tests {
         });
         let compat = compat.to_string();
         for block_head in [true, false] {
-            let base = std::env::temp_dir().join(format!(
+            let base = crate::TempDir(std::env::temp_dir().join(format!(
                 "exact-apple-stalled-{}-{block_head}",
                 std::process::id()
-            ));
+            )));
             let _ = std::fs::remove_dir_all(&base);
             let plan = caltrain::build().unwrap().encode();
             let mut client =
@@ -839,10 +840,10 @@ mod tests {
         let compat = COMPAT.replace("next-launch", "app-decides");
         let plan = caltrain::build().unwrap().encode();
         for selected in [false, true] {
-            let base = std::env::temp_dir().join(format!(
+            let base = crate::TempDir(std::env::temp_dir().join(format!(
                 "exact-apple-pending-{}-{selected}",
                 std::process::id()
-            ));
+            )));
             let _ = std::fs::remove_dir_all(&base);
             let mut client = Client::open_at(&base, &base, &compat, &plan, Some(ORIGIN)).unwrap();
             let stage = |client: &mut Client, seq| {
@@ -954,8 +955,9 @@ mod tests {
     #[test]
     fn boot_refusal_refreshes_the_cached_delivery_stream() {
         let _test = lock(&TEST_STORE);
-        let base =
-            std::env::temp_dir().join(format!("exact-apple-refusal-cache-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-refusal-cache-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let client = Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
         *lock(&CLIENT) = Some(client);
@@ -980,7 +982,9 @@ mod tests {
     #[test]
     fn selected_plan_and_assets_are_verified_once_and_shared_by_later_sessions() {
         let _test = lock(&TEST_STORE);
-        let base = std::env::temp_dir().join(format!("exact-apple-pinned-{}", std::process::id()));
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-apple-pinned-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&base);
         let plan_bytes = b"verified plan";
         let asset_bytes = b"verified asset";

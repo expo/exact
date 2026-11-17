@@ -53,7 +53,8 @@ final class ScrollOriginMacTests: XCTestCase {
 
     func testABoxWithNothingToScrollKeepsItsContentAtItsTop() throws {
         let p = fixture(y: 100.25, content: 22.75)
-        XCTAssertEqual(window.backingScaleFactor, 2, "the alignment this guards is a 2x display's")
+        // The alignment this guards is a 2x display's; a 1x one (a headless Mac's virtual display) has none.
+        guard window.backingScaleFactor == 2 else { throw XCTSkip("a 2x display's alignment; this display is \(window.backingScaleFactor)x") }
         let clip = try XCTUnwrap(p.views[3]?.scroll?.contentView)
         // The content grows to fill the box while it is laid out off the grid.
         settle(p, y: 100.25, content: 45.5)

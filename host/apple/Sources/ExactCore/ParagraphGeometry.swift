@@ -16,16 +16,17 @@ extension TextEngine {
     }
 
     /// A broken line as CSS finishes it, for every Apple path that makes one
-    /// from a range (layout, rasters, regions). A line that ends at a soft
-    /// hyphen (U+00AD) shows a hyphen there, as the browser does; CoreText
-    /// breaks there but keeps the character invisible. With `justify` (CSS
+    /// from a range (layout, rasters, regions): its inline boxes' room is
+    /// where it draws it (`placingRooms`). A line that ends at a soft hyphen
+    /// (U+00AD) shows a hyphen there, as the browser does; CoreText breaks
+    /// there but keeps the character invisible. With `justify` (CSS
     /// `text-align: justify` at that width) every line but the paragraph's
     /// last and one ending in a forced break fills the width
     /// (`text-align-last: auto`). Indices stay the source's, so hit testing,
     /// selection and later layouts read the same ranges. The reader diary
     /// found both missing only on Apple.
     package static func finishedLine(_ line: CTLine, source: NSAttributedString, range: CFRange, justify width: Double?) -> CTLine {
-        let line = inkedSoftHyphen(line, source: source, range: range)
+        let line = placingRooms(inkedSoftHyphen(line, source: source, range: range), source: source, range: range)
         return width.map { justified(line, source: source, range: range, width: $0) } ?? line
     }
 
@@ -38,10 +39,11 @@ extension TextEngine {
     /// size, so a `pre-wrap` "Say " is as wide as "Say" and its space, as
     /// Chrome measures it. `pre`'s (4) count.
     package static func uncountedTrailingWidth(_ line: CTLine, whiteSpace: Int, source: NSAttributedString, room: CGFloat) -> CGFloat {
-        // The start room of a run the next line starts with (`exactBreakRoom`).
+        // The start room of a run the next line starts with (`exactBreakRoom`),
+        // less the room drawn left of its glyphs, which it counts (`leftRoom`).
         let range = CTLineGetStringRange(line)
         return trailingSpaces(line, whiteSpace: whiteSpace, source: source, room: room)
-            + breakRoom(endingAt: range.location + range.length, in: source)
+            + breakRoom(endingAt: range.location + range.length, in: source) - leftRoom(line)
     }
 
     private static func trailingSpaces(_ line: CTLine, whiteSpace: Int, source: NSAttributedString, room: CGFloat) -> CGFloat {
@@ -202,22 +204,24 @@ extension TextEngine {
     /// text size spilled left over its neighbour (round 13's weather: the
     /// "High" header ran into "Low") where the web spills right.
     package static func penOffset(_ line: CTLine, flush: CGFloat, room: Double, rtl: Bool, whiteSpace: Int = 0, source: NSAttributedString? = nil) -> CGFloat {
+        // Room drawn left of the line's glyphs (`leftRoom`) moves them right of its start.
+        let left = leftRoom(line)
         // A left-aligned left-to-right line starts at its box's start edge
-        if flush == 0 && !rtl { return 0 }
+        if flush == 0 && !rtl { return left }
         let counted = source.map { countedTrailingWidth(line, whiteSpace: whiteSpace, source: $0, room: CGFloat(room)) } ?? 0
         // The room beside the line's ink (CoreText's offset for a right flush)
-        let slack = CGFloat(CTLineGetPenOffsetForFlush(line, 1, room))
-        guard slack - counted >= 0 else { return rtl ? slack : 0 }
+        let slack = CGFloat(CTLineGetPenOffsetForFlush(line, 1, room)) - left
+        guard slack - counted >= 0 else { return (rtl ? slack : 0) + left }
         // The start room of the run the next line starts with is kerned on
         // this line's last glyph, and is the next line's (`exactBreakRoom`).
         let range = CTLineGetStringRange(line)
         let leaves = rtl ? 0 : source.map { breakRoom(endingAt: range.location + range.length, in: $0) } ?? 0
-        return CGFloat(CTLineGetPenOffsetForFlush(line, flush, room)) - counted * flush + (rtl ? counted : 0) + leaves * flush
+        return CGFloat(CTLineGetPenOffsetForFlush(line, flush, room)) - counted * flush + (rtl ? counted : 0) + leaves * flush + left * (1 - flush)
     }
 }
 
-/// Where each line of a paragraph starts, from its start edge (which `rtl`
-/// puts on the right): CSS `text-indent` on the first line, and a Markdown
+/// Where each line of a paragraph starts, from its start edge (which a
+/// right-to-left base puts on the right): CSS `text-indent` on the first line, and a Markdown
 /// list item's head indent on each of its lines, the first one's less the
 /// marker hung before it — the `padding-left` and outside marker the web
 /// lays the same item out with (LLP 1045 D4). Measure, layout, paint, hits
@@ -225,6 +229,9 @@ extension TextEngine {
 package struct LineInsets {
     package var textIndent: CGFloat = 0
     package var rtl = false
+    /// Natural text's paragraphs (LLP 1060.000 D3), UTF-16 starts in order,
+    /// each with its own base; empty, every line's base is `rtl`.
+    package var bases: [(start: Int, rtl: Bool)] = []
     /// The indented paragraphs (each ends after its newline), UTF-16
     /// [start, end), in order: the first line's inset and the others'.
     package var heads: [(start: Int, end: Int, first: CGFloat, rest: CGFloat)] = []
@@ -238,6 +245,7 @@ package struct LineInsets {
     package init(_ spec: Spec, marker: (CFRange) -> CGFloat) {
         textIndent = spec.firstLineIndent; rtl = spec.direction == 1
         edgeStarts = Self.edgeStarts(spec.runs)
+        if spec.natural { bases = TextEngine.naturalBases(spec.runs.map(\.text).joined(), fallback: spec.direction) }
         guard spec.runs.contains(where: { $0.indent != 0 }) else { return }
         var open: (start: Int, first: CGFloat, rest: CGFloat)?
         var at = 0
@@ -270,7 +278,15 @@ package struct LineInsets {
         if lo > 0, location < heads[lo - 1].end {
             width += location == heads[lo - 1].start ? heads[lo - 1].first : heads[lo - 1].rest
         }
-        return (rtl ? 0 : width, width)
+        return (rtl(at: location) ? 0 : width, width)
+    }
+
+    /// Whether the line that starts at UTF-16 `location` has a right-to-left
+    /// base: its paragraph's in natural text, else the paragraph's `rtl`.
+    package func rtl(at location: Int) -> Bool {
+        var lo = 0, hi = bases.count
+        while lo < hi { let mid = (lo + hi) / 2; if bases[mid].start <= location { lo = mid + 1 } else { hi = mid } }
+        return lo > 0 ? bases[lo - 1].rtl : rtl
     }
 }
 
@@ -300,8 +316,8 @@ extension Paragraph {
         let flush: CGFloat = align == 1 ? 0.5 : align == 2 ? 1 : 0
         // CSS `text-indent` and a list item's indent: the line aligns in
         // what its inset leaves.
-        let inset = insets.at(CTLineGetStringRange(lines[index]).location)
-        return inset.left + TextEngine.penOffset(lines[index], flush: flush, room: Double(width - inset.width), rtl: insets.rtl,
+        let location = CTLineGetStringRange(lines[index]).location, inset = insets.at(location)
+        return inset.left + TextEngine.penOffset(lines[index], flush: flush, room: Double(width - inset.width), rtl: insets.rtl(at: location),
                                                  whiteSpace: shape?.spec.whiteSpace ?? 0, source: shape?.attributed)
     }
 

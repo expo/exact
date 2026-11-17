@@ -44,6 +44,25 @@ pub enum Lowered {
         /// The frames; the last is the target.
         values: Vec<Value>,
     },
+    /// A spring the engine holds until the browser presents it (LLP
+    /// 1003.001 D9, "The web"): play these frames from the animation's own
+    /// ready time, not pinned, and report that time
+    /// ([`Motion::present_curve`]).
+    Held {
+        /// The node.
+        view: ViewId,
+        /// The property.
+        property: Property,
+        /// Seconds before the first frame, from the ready time.
+        delay: f64,
+        /// Seconds from the first frame to the last.
+        duration: f64,
+        /// The frames; the last is the target.
+        values: Vec<Value>,
+        /// When the engine releases the hold at its commit if no ready time
+        /// came ([`exact_motion::HOLD_DEADLINE`]), on its clock, seconds.
+        due: f64,
+    },
     /// Stop playing: the property is no longer under a spring (the style is
     /// its value, or a CSS transition is).
     Cancel {
@@ -139,6 +158,20 @@ pub trait Motion {
     fn commit(&mut self, kernel: &Kernel, receipts: &[CommitReceipt], now: f64) -> Vec<Lowered>;
     /// Lower what changed at the current clock.
     fn lower_current(&mut self, kernel: &Kernel) -> Vec<Lowered>;
+    /// Turn the first-frame rule on (the page's clock owns time) or off
+    /// (the agent's), as at a boot (LLP 1003.001 D7, D9).
+    fn set_start_on_frame(&mut self, on: bool);
+    /// Whether the browser will present anything: not while the page is
+    /// hidden or frozen, when every hold is released at its commit (D9,
+    /// "The bound"). The next lowering re-emits the released springs.
+    fn set_presentable(&mut self, presentable: bool);
+    /// The browser made a held spring's animation ready at `at`, engine
+    /// seconds: start the engine's curve there. Whether it was held.
+    fn present_curve(&mut self, kernel: &Kernel, view: ViewId, property: Property, at: f64)
+        -> bool;
+    /// Release what waited [`exact_motion::HOLD_DEADLINE`] by `now` for a
+    /// ready time that has not come.
+    fn release_overdue(&mut self, now: f64);
 }
 
 impl dyn Motion + '_ {
@@ -260,6 +293,16 @@ impl Motion for Still {
     fn lower_current(&mut self, _: &Kernel) -> Vec<Lowered> {
         Vec::new()
     }
+
+    fn set_start_on_frame(&mut self, _: bool) {}
+
+    fn set_presentable(&mut self, _: bool) {}
+
+    fn present_curve(&mut self, _: &Kernel, _: ViewId, _: Property, _: f64) -> bool {
+        false
+    }
+
+    fn release_overdue(&mut self, _: f64) {}
 }
 
 /// The spring engine, for an entry that links motion (`exact-web-capabilities`
@@ -281,6 +324,12 @@ pub struct Springs {
     /// One explicit trial owner, bound to its arena generation. Unsupported
     /// styles retire its slot; a later eligible style can adopt it again.
     height_owner: Option<(NodeKey, ViewId)>,
+    /// Springs lowered held, by their curve (the descriptor without its
+    /// start, which moves with the clock while held): lowered once.
+    held: BTreeMap<(u64, Property), SpringDescriptor>,
+    /// Springs the browser presented, at their ready time: the started op's
+    /// `at`, so the page's pin writes the start the browser chose.
+    presented: BTreeMap<(u64, Property), f64>,
 }
 
 impl Springs {
@@ -581,23 +630,96 @@ impl Motion for Springs {
         out
     }
 
+    fn set_start_on_frame(&mut self, on: bool) {
+        let at = self.engine.now();
+        let set = self.engine.set_start_on_frame(on, at);
+        debug_assert!(set.is_ok(), "the engine's clock is finite");
+    }
+
+    fn set_presentable(&mut self, presentable: bool) {
+        let set = self.engine.set_presentable(presentable);
+        debug_assert!(set.is_ok(), "the engine's clock is finite");
+        self.note_released();
+    }
+
+    fn present_curve(
+        &mut self,
+        kernel: &Kernel,
+        view: ViewId,
+        property: Property,
+        at: f64,
+    ) -> bool {
+        let Some(node) = Self::node_of(kernel, view) else {
+            return false;
+        };
+        if !at.is_finite()
+            || !self
+                .engine
+                .present_curve(node, property, at)
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        self.presented.insert((node, property), at);
+        true
+    }
+
+    fn release_overdue(&mut self, now: f64) {
+        let released = self.engine.release_overdue(now.max(self.engine.now()));
+        debug_assert!(released.is_ok(), "the engine's clock is finite");
+        self.note_released();
+    }
+
     // Stale photo cleanup may lower surviving old tokens at the existing clock,
     // but must neither seek time nor import unrelated targets/owner changes.
     fn lower_current(&mut self, kernel: &Kernel) -> Vec<Lowered> {
+        // Only lowered springs wait for the browser's ready time; what else a
+        // commit began, the browser starts itself (LLP 1003.001 D9).
+        let released = self.engine.release_held_but_springs();
+        debug_assert!(released.is_ok(), "the engine's clock is finite");
         let now = self.engine.now();
         let mut out = Vec::new();
         for p in self.engine.frame() {
             let key = (p.node, p.property);
             let Some(view) = self.view_of(kernel, p.node) else {
                 self.playing.remove(&key);
+                self.held.remove(&key);
                 continue;
             };
             if self.engine.is_held(p.node, p.property) {
                 self.playing.remove(&key);
+                self.held.remove(&key);
                 continue;
             }
             match self.engine.spring_descriptor(p.node, p.property) {
+                Some(descriptor) if self.engine.curve_start(p.node, p.property).is_none() => {
+                    // Held: lowered once, unpinned, for the browser to start.
+                    let curve = SpringDescriptor {
+                        start: 0.0,
+                        ..descriptor
+                    };
+                    if self.held.get(&key) == Some(&curve) {
+                        continue;
+                    }
+                    let (Some(frames), Some(due)) = (
+                        self.engine.spring_frames(p.node, p.property),
+                        self.engine.held_deadline(),
+                    ) else {
+                        continue;
+                    };
+                    self.held.insert(key, curve);
+                    self.playing.remove(&key);
+                    out.push(Lowered::Held {
+                        view,
+                        property: p.property,
+                        delay: (frames.start - now).max(0.0),
+                        duration: frames.duration,
+                        values: frames.values,
+                        due,
+                    });
+                }
                 Some(descriptor) => {
+                    self.held.remove(&key);
                     if self.playing.get(&key).map(|(d, _)| d) == Some(&descriptor) {
                         continue;
                     }
@@ -611,30 +733,55 @@ impl Motion for Springs {
                         .expect("a running spring descriptor has frames");
                     self.playing
                         .insert(key, (descriptor, frames.start + frames.duration));
+                    // Started at the browser's ready time: the op's `at` is
+                    // that instant, so the page pins what it already chose.
+                    let at = self.presented.remove(&key).unwrap_or(now);
                     out.push(Lowered::Start {
                         view,
                         property: p.property,
-                        at: now,
-                        delay: (frames.start - now).max(0.0),
+                        at,
+                        delay: (frames.start - at).max(0.0),
                         duration: frames.duration,
                         values: frames.values,
                     });
                 }
                 None => {
                     // A cancelled spring can have the same target. Until its
-                    // end, its browser frames would keep overriding the style.
-                    if let Some((previous, end)) = self.playing.remove(&key) {
-                        if now < end || p.value != previous.target {
-                            out.push(Lowered::Cancel {
-                                view,
-                                property: p.property,
-                            });
-                        }
+                    // end (a held one's is unknown), its browser frames would
+                    // keep overriding the style.
+                    let held = self.held.remove(&key).is_some();
+                    let playing = self.playing.remove(&key);
+                    if held
+                        || playing
+                            .is_some_and(|(previous, end)| now < end || p.value != previous.target)
+                    {
+                        out.push(Lowered::Cancel {
+                            view,
+                            property: p.property,
+                        });
                     }
                 }
             }
         }
         out
+    }
+}
+
+impl Springs {
+    /// Springs lowered held that the engine released at their commit: their
+    /// started op is pinned at the curve's own start, so the page shows the
+    /// engine's timing, not the ready time the browser would choose.
+    fn note_released(&mut self) {
+        for key in self.held.keys() {
+            if let Some(start) = self.engine.curve_start(key.0, key.1) {
+                self.presented.insert(*key, start);
+            }
+        }
+    }
+
+    /// A node's motion key, from its live view.
+    fn node_of(kernel: &Kernel, view: ViewId) -> Option<u64> {
+        kernel.node(view).map(|n| motion_node(n.key))
     }
 }
 
@@ -667,6 +814,84 @@ mod tests {
         fn query(&mut self, name: &str, _: &[DataValue]) -> Result<DataValue, DataError> {
             Err(DataError::UnknownSource(name.into()))
         }
+    }
+
+    /// LLP 1003.001 D9, "The web": on the page's clock a spring a commit
+    /// begins is lowered held (no `at`), the browser's ready time starts it
+    /// and the batch pins it there; an easing the browser runs itself is
+    /// never held; a hidden page and the deadline release at the commit.
+    #[test]
+    fn a_held_spring_starts_at_the_browsers_ready_time() {
+        crate::link::link_for_tests();
+        let source = "component App\n  state on = false\n  action toggle\n    on = not on\n  view\n    column\n      button press=toggle testId=\"toggle\"\n        text \"Toggle\"\n      text \"Spring\" testId=\"spring\" translate=(on ? \"100px 0px\" : \"0px 0px\") opacity=(on ? 0.5 : 1) transition=\"translate -exact-spring(180, 12, 1), opacity 300ms linear\"\n";
+        let boot = || {
+            let (mut host, _) = crate::Host::boot(
+                &contract::compile(source).unwrap().encode(),
+                NoData,
+                Default::default(),
+                "/",
+            )
+            .unwrap();
+            host.set_start_on_frame(true);
+            let kernel = host.runner().kernel();
+            let id = |name| {
+                kernel
+                    .node_by_key(kernel.find_by_test_id(name)[0])
+                    .unwrap()
+                    .id
+            };
+            let (toggle, spring) = (id("toggle"), id("spring"));
+            (host, toggle, spring)
+        };
+        let animate = |batch: &str| {
+            batch
+                .split("{\"op\":\"animate\"")
+                .skip(1)
+                .find(|op| op.contains("\"translate\""))
+                .map(str::to_owned)
+        };
+        let (mut host, toggle, spring) = boot();
+        let batch = host.dispatch_at(toggle, Event::Press, 100.0);
+        let held = animate(&batch).expect("the spring is lowered");
+        assert!(
+            held.contains("\"held\":true") && !held.contains("\"at\""),
+            "{held}"
+        );
+        assert!(held.contains("\"due\":2100"), "{held}");
+        // Only the spring waits: the opacity easing is the browser's own.
+        assert_eq!(host.springs().engine().held_since(), Some(0.1));
+        let pinned = host
+            .present_curve(spring, Property::Translate, 140.0, 150.0)
+            .expect("it was held");
+        let op = animate(&pinned).expect("the started op");
+        assert!(op.contains("\"at\":140"), "pinned at the ready time: {op}");
+        assert_eq!(host.springs().engine().held_since(), None);
+        assert!(host
+            .present_curve(spring, Property::Translate, 160.0, 160.0)
+            .is_none());
+
+        // A hidden page releases at the commit.
+        let (mut host, toggle, _) = boot();
+        host.dispatch_at(toggle, Event::Press, 100.0);
+        let hidden = exact_runner::Page {
+            hidden: true,
+            ..host.runner().page()
+        };
+        let op = animate(&host.set_page(hidden)).expect("re-emitted");
+        assert!(op.contains("\"at\":100") && !op.contains("held"), "{op}");
+        host.dispatch_at(toggle, Event::Press, 200.0);
+        assert_eq!(
+            host.springs().engine().held_since(),
+            None,
+            "nothing held while hidden"
+        );
+
+        // The deadline releases at the commit.
+        let (mut host, toggle, _) = boot();
+        host.dispatch_at(toggle, Event::Press, 100.0);
+        assert!(animate(&host.release_overdue(1000.0)).is_none());
+        let op = animate(&host.release_overdue(2100.0)).expect("re-emitted at its deadline");
+        assert!(op.contains("\"at\":100"), "{op}");
     }
 
     #[test]

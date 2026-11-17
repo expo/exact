@@ -154,9 +154,9 @@ extension NodeView {
     var stepperObservation: [String: Any]? {
         guard let stepper else { return nil }
         let f = stepper.frame
-        let point = { (x: CGFloat, y: CGFloat) in [Agent.r2(x), Agent.r2(y)] }
+        let point = { (x: CGFloat, y: CGFloat) in [InspectionValue.r2(x), InspectionValue.r2(y)] }
         // The up arrow is the top half of the control, the down arrow the bottom (the node is flipped).
-        return ["frame": [f.minX, f.minY, f.width, f.height].map { Agent.r2($0) },
+        return ["frame": [f.minX, f.minY, f.width, f.height].map { InspectionValue.r2($0) },
                 "increment": point(f.midX, f.minY + f.height / 4), "decrement": point(f.midX, f.maxY - f.height / 4),
                 "value": stepper.doubleValue, "min": stepper.minValue, "max": stepper.maxValue, "step": stepper.increment,
                 "enabled": stepper.isEnabled, "shown": !stepper.isHidden]

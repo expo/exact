@@ -66,8 +66,9 @@ fn get(addr: SocketAddr, target: &str, headers: &str) -> (u16, Vec<(String, Stri
 #[test]
 fn a_page_is_rendered_for_its_reader_s_viewport_and_kept_per_class() {
     super::warm_transport();
+    let dist = dist("viewport");
     let serve = Serve {
-        dist: dist("viewport"),
+        dist: dist.to_path_buf(),
         port: 0,
         name: "Page".into(),
         origin: None,

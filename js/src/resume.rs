@@ -127,6 +127,7 @@ impl Module {
             .as_deref()
             .map_or(String::new(), |s| s.clock_ms().to_string());
         self.host.store = store.as_mut().map(|s| &mut **s as *mut Store);
+        self.host.turn = Some(Module::reporter(key.0, source));
         self.host.answer_ops.clear();
         if let Some(store) = store.as_deref() {
             self.host.socket_buffered = socket::snapshot(&self.streams, store);
@@ -184,9 +185,16 @@ impl Module {
                 return Err(DataError::UnknownSource(source.to_string()));
             };
             let reply = Module::decode_reply(sig, engine, source, &text)?;
-            Ok(Module::step(sig, engine, source, reply, self.host.baking))
+            Ok(Module::step(
+                sig,
+                engine,
+                source,
+                reply,
+                self.host.deferring(),
+            ))
         })();
         self.host.store = None;
+        self.host.turn = None;
         if let Some(error) = self.retire_oom() {
             return Err(error);
         }
@@ -362,7 +370,13 @@ impl Module {
                 let text = Module::settle_reply(engine, &id, "").map_err(threw)?;
                 reply = Module::decode_reply(sig, engine, source, &text)?;
             }
-            Ok(Module::step(sig, engine, source, reply, self.host.baking))
+            Ok(Module::step(
+                sig,
+                engine,
+                source,
+                reply,
+                self.host.deferring(),
+            ))
         })();
         self.host.store = None;
         if let Some(error) = self.retire_oom() {
@@ -377,7 +391,7 @@ impl Module {
         let staged = self.stage_sockets(store, ops);
         if let Err(why) = &staged {
             (self.logs).push((
-                None,
+                crate::Writer::Runtime,
                 format!("mapper `{source}` failed: {why}; socket frames were refused"),
             ));
         }

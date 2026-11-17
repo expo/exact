@@ -1,4 +1,4 @@
-import { listItem, syncListItemRoles, sheetLeaves, sheetFrame, useSheets, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { listItem, syncListItemRoles, sheetLeaves, sheetFrame, useSheets, clearBar, useClearBars, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
@@ -142,6 +142,9 @@ host.pointerEvent = null;
 host.pointerDepth = 0;
 // keyEvent: the keydown (or wheel, beforeunload, clipboard event) a handler is running for, which its `preventDefault()` command prevents; pointerEvent: the pointer's down or up, which only its `stopPropagation()` reaches (its default is the browser's), from its own batch alone (`pointerDepth`, `send`)
 host.wasm = null;
+// The module's own exports, which a stage imports; `host.wasm` is what the page calls (boot.js `guardedExports`).
+host.exports = null;
+host.trapped = null;
 host.memory = null;
 host.inputReady = false;
 host.inputHandlers = undefined;
@@ -413,6 +416,11 @@ export function assetNamespace(cards) {
     otf: "font/otf"
   };
   for (const [name, card] of cards) {
+    // A file the page reads when asked (dev.js `later`) loads from its generation's URL.
+    if (card.read) {
+      assets.set(name, card);
+      continue;
+    }
     const type = types[name.split(".").pop().toLowerCase()];
     assets.set(name, {
       ...card,
@@ -654,7 +662,7 @@ export function loadStage(name) {
   }
   load = { loaded: false };
   stageLoads.set(name, load);
-  return load.promise = WebAssembly.instantiateStreaming(fetch(new URL(host.stages[name], import.meta.url)), { primary: host.wasm }).then(() => {
+  return load.promise = WebAssembly.instantiateStreaming(fetch(new URL(host.stages[name], import.meta.url)), { primary: host.exports }).then(() => {
     load.loaded = true;
   }, (error) => {
     stageLoads.delete(name);
@@ -853,6 +861,9 @@ globalThis.exact = {
   get wasm() {
     return host.wasm;
   },
+  get trapped() {
+    return host.trapped;
+  },
   assetURL: localAssetURL,
   stages: () => Object.fromEntries(Object.keys(host.stages).map((name) => [name, stageLoaded(name) ? "loaded" : "staged"])),
   writeIn,
@@ -901,8 +912,10 @@ const hostGo = (location) => {
   applyBatch(batch);
   return batch;
 };
-// Any plan the wasm host runs may present a sheet (navigation/routes.js `sheetFrame`).
+// Any plan the wasm host runs may present a sheet and give a route a transparent bar (navigation/routes.js `sheetFrame`,
+// `clearBar`).
 useSheets(sheetFrame);
+useClearBars(clearBar);
 // the runner's own `go` (LLP 1115.000 D4.3): Forward, and a link to a route (input-glue.js)
 navigation.connect(root, navigate, log, (id) => {
   if (host.inputReady) {

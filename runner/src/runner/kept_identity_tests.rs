@@ -2,8 +2,8 @@
 //! 2026-10-10): `feeds(gen, account)`, where `account` reads the store.
 use super::*;
 use crate::{Answer, Outcome, Request, Store};
-use exact_kernel::{Kernel, NodeType};
-use exact_plan::{asm::Asm, builder::PlanBuilder, Plan, TypeKind, Value};
+use exact_kernel::{Kernel, NodeType, PropId};
+use exact_plan::{asm::Asm, builder::PlanBuilder, BindingKind, BindingsRow, Plan, TypeKind, Value};
 
 #[derive(Default)]
 struct Source {
@@ -117,6 +117,48 @@ fn plan_with(through_derive: bool, key_is_context: bool, account_reads_store: bo
     b.finish().unwrap()
 }
 
+/// `account(version)` and `feeds(account) with version`: both build-time
+/// answers name `"alice"`, so returning to the account fallback keeps the
+/// feed identity equal while its input is not yet known.
+fn plan_with_versioned_account() -> Plan {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let number = b.primitive(TypeKind::Number);
+    let zero = b.constant(&Value::Number(0.));
+    let version = b.slot("version", number, zero);
+    let mut v = Asm::new();
+    v.load_slot(version);
+    let v = b.code(v);
+    let account = b.resource(
+        "account",
+        "account",
+        &[v],
+        string,
+        Some(&Value::str("alice")),
+    );
+    b.set_resource_reader(account, true);
+    b.set_resource_initial_args(account, &[Value::Number(0.)]);
+    let mut a = Asm::new();
+    a.load_resource(account);
+    let a = b.code(a);
+    let feeds = b.resource(
+        "feeds",
+        "feeds",
+        &[a, v],
+        string,
+        Some(&Value::str("loading")),
+    );
+    b.set_resource_reader(feeds, true);
+    b.set_resource_context(feeds, 1);
+    b.set_resource_initial_args(feeds, &[Value::str("alice"), Value::Number(0.)]);
+    let mut body = Asm::new();
+    body.load_param(0).store_slot(version);
+    let body = b.code(body);
+    b.action("version", &[("value", number)], &[version], body);
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    b.finish().unwrap()
+}
+
 /// `feeds(gen, key)` with the key read from a root `state key = ""` that
 /// the action `key` sets, as an app sets the signed-in user's id once its
 /// session answers.
@@ -183,6 +225,59 @@ fn plan_keyed_with(gated: bool, compiled: bool) -> Plan {
     b.finish().unwrap()
 }
 
+fn binding(kind: BindingKind, id: u16, expr: exact_plan::Code) -> BindingsRow {
+    BindingsRow {
+        kind,
+        id,
+        expr,
+        written: true,
+    }
+}
+
+fn password_plan(initial: &str, mount_control: bool) -> Plan {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let initial_value = b.constant(&Value::str(initial));
+    let password = b.slot("password", string, initial_value);
+    let mut identity = Asm::new();
+    identity.load_slot(password);
+    let identity = b.code(identity);
+    let feeds = b.resource(
+        "feeds",
+        "feeds",
+        &[identity],
+        string,
+        Some(&Value::str("loading")),
+    );
+    b.set_resource_reader(feeds, true);
+    b.set_resource_initial_args(feeds, &[Value::str(initial)]);
+    let mut body = Asm::new();
+    body.load_param(0).store_slot(password);
+    let body = b.code(body);
+    b.action("password", &[("value", string)], &[password], body);
+    if mount_control {
+        let password_type = b.constant(&Value::str("password"));
+        let mut value = Asm::new();
+        value.load_slot(password);
+        let value = b.code(value);
+        b.node(
+            NodeType::Control as u8,
+            None,
+            None,
+            0,
+            &[
+                binding(BindingKind::Prop, PropId::Type as u16, password_type),
+                binding(BindingKind::Prop, PropId::Value as u16, value),
+            ],
+            &[],
+            None,
+        );
+    } else {
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    }
+    b.finish().unwrap()
+}
+
 fn launch(through_derive: bool, snapshot: Vec<(String, Vec<u8>)>) -> Runner<Source> {
     launch_plan(plan(through_derive), snapshot)
 }
@@ -232,9 +327,9 @@ fn a_sign_in_rekeeps_both_and_the_next_launch_shows_the_signed_in_answers() {
     let next = launch(false, r.store.snapshot());
     shows(&next, "account", "alice");
     shows(&next, "feeds", "feeds of alice");
-    assert!(next.journal().any(
-        |l| l.contains("feeds shows its kept answer from the last session, kept for [0,\"alice\"]")
-    ));
+    assert!(next
+        .journal()
+        .any(|l| l.contains("feeds shows its kept answer from the last session")));
 }
 
 #[test]
@@ -332,14 +427,74 @@ fn a_compiled_value_of_a_resource_that_reads_no_store_is_a_known_identity() {
 }
 
 #[test]
-fn a_long_identity_is_journaled_shortened_with_a_mark() {
-    let line = super::lines::kept_shown("feeds", &"x".repeat(300));
-    assert!(
-        line.ends_with(&format!("kept for {}…", "x".repeat(200))),
-        "{line}"
+fn kept_identity_diagnostics_never_include_values() {
+    use sha2::{Digest, Sha256};
+
+    let kept = "Q7mZ4pL9vR2xN8cK6tH3sW5yF1dB0jU4eI7oP9aS2gD8";
+    let current = "V6nC1qX8rM3kT9wH5fJ2zL7pA4sE0uY6iO1dG8bR3cK9mN";
+    let mut launches = vec![launch_plan(
+        password_plan("", false),
+        vec![feeds_kept(&[Value::str(kept)], "kept result")],
+    )];
+    launches.push(launch_plan(
+        password_plan(kept, true),
+        vec![feeds_kept(&[Value::str(kept)], "kept result")],
+    ));
+    let mut assigned = launch_plan(
+        password_plan(kept, false),
+        vec![feeds_kept(&[Value::str(kept)], "kept result")],
     );
-    let line = super::lines::kept_shown("feeds", "[0]");
-    assert!(line.ends_with("kept for [0]"), "{line}");
+    assigned.act("password", vec![Value::str(current)]).unwrap();
+    launches.push(assigned);
+    let mut cleared = launch_plan(
+        password_plan(kept, true),
+        vec![feeds_kept(&[Value::str(kept)], "kept result")],
+    );
+    cleared.act("password", vec![Value::str("")]).unwrap();
+    launches.push(cleared);
+
+    let hash = |value: &str| {
+        Sha256::digest(value.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let mut forbidden = Vec::new();
+    for value in [kept, current] {
+        forbidden.push(value.to_string());
+        forbidden.extend(
+            value
+                .as_bytes()
+                .windows(8)
+                .map(|part| String::from_utf8(part.to_vec()).unwrap()),
+        );
+        forbidden.push(value.len().to_string());
+        forbidden.push(hash(value));
+    }
+    for r in launches {
+        let journal = r.journal().collect::<Vec<_>>().join("\n");
+        let logs = crate::agent::logs(&r, 0);
+        assert!(
+            journal.contains("state password")
+                || journal.contains("kept answer is waiting")
+                || journal.contains("shows its kept answer from the last session"),
+            "{journal}"
+        );
+        for value in &forbidden {
+            assert!(
+                !journal.contains(value) && !logs.contains(value),
+                "forbidden identifying value or measurement {value:?}\njournal:\n{journal}\nlogs:\n{logs}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_shown_kept_answer_names_only_its_resource() {
+    assert_eq!(
+        super::lines::kept_shown("feeds"),
+        "feeds shows its kept answer from the last session"
+    );
 }
 
 #[test]
@@ -363,7 +518,7 @@ fn a_refused_kept_answer_is_journaled_with_why() {
     let lines = refused(&r);
     assert!(
         lines.iter().any(|l| l.ends_with(
-            "account did not use its kept answer: kept for [1], this launch asks for [0]: identifying argument 1 is 0"
+            "account did not use its kept answer: identifying argument 1 differs from the one it was kept for"
         )),
         "{lines:?}"
     );
@@ -376,7 +531,7 @@ fn a_refused_kept_answer_is_journaled_with_why() {
     let lines = refused(&r);
     assert!(
         lines.iter().any(|l| l.ends_with(
-            "feeds did not use its kept answer: kept for [0,\"nobody\"], this launch asks for [0,\"public\"]: identifying argument 2 is \"public\", reading resource account = \"public\" (a store reader with no admitted device answer)"
+            "feeds did not use its kept answer: identifying argument 2 differs from the one it was kept for, reading resource account (a store reader with no admitted device answer)"
         )),
         "{lines:?}"
     );
@@ -420,7 +575,7 @@ fn a_kept_answer_waits_for_an_empty_identity_and_shows_at_its_match_before_readi
     // The id arrives before the data source is ready.
     r.act("key", vec![Value::str("alice")]).unwrap();
     shows(&r, "feeds", "kept feeds of alice");
-    let shown = "feeds shows its kept answer from the last session, kept for [0,\"alice\"]";
+    let shown = "feeds shows its kept answer from the last session";
     assert_eq!(lines_with(&r, shown).len(), 1);
     // Readiness asks it, as it asks a seed shown at boot.
     r.data.ready = true;
@@ -465,7 +620,7 @@ fn a_known_mismatch_consumes_a_waiting_kept_answer_and_names_the_argument() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].ends_with(
-            "feeds did not use its kept answer: kept for [0,\"alice\"], this launch asks for [0,\"bob\"]: identifying argument 2 is \"bob\", reading state key = \"bob\""
+            "feeds did not use its kept answer: identifying argument 2 differs from the one it was kept for, reading state key"
         ),
         "{lines:?}"
     );
@@ -507,7 +662,36 @@ fn a_mismatch_names_a_resource_input_and_its_kept_answer() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].ends_with(
-            ": identifying argument 2 is \"carol\", reading resource account = \"carol\" (holding an admitted kept answer)"
+            "feeds did not use its kept answer: identifying argument 2 differs from the one it was kept for, reading resource account (holding an admitted kept answer)"
+        ),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn an_admitted_seed_with_an_unknown_unchanged_identity_names_its_input() {
+    let mut r = launch_plan(
+        plan_with_versioned_account(),
+        vec![
+            (
+                kept::kept_name("account"),
+                kept::encode(&[Value::Number(0.)], &Value::str("alice")),
+            ),
+            feeds_kept(&[Value::str("alice")], "feeds of alice"),
+        ],
+    );
+    shows(&r, "account", "alice");
+    shows(&r, "feeds", "feeds of alice");
+
+    r.act("version", vec![Value::Number(1.)]).unwrap();
+
+    shows(&r, "account", "alice");
+    shows(&r, "feeds", "loading");
+    let lines = lines_with(&r, "feeds did not use its kept answer");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].ends_with(
+            "feeds did not use its kept answer: identifying argument 1 is not yet known, reading resource account (a store reader with no admitted device answer)"
         ),
         "{lines:?}"
     );
@@ -587,10 +771,7 @@ fn a_kept_answer_idle_through_readiness_is_compared_when_its_gate_opens() {
     shows(&r, "feeds", "");
     let lines = lines_with(&r, "feeds did not use its kept answer");
     assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(
-        lines[0].ends_with("reading state key = \"bob\""),
-        "{lines:?}"
-    );
+    assert!(lines[0].ends_with("reading state key"), "{lines:?}");
     assert_eq!(r.take_requests().len(), 1);
     // Still empty: it waits, and the id's arrival admits it.
     let mut r = opened_after_readiness("");

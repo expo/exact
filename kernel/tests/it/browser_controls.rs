@@ -672,6 +672,7 @@ impl TextMeasurer for ChromeFieldMeasurer {
         TextMetrics {
             width,
             height,
+            pending: false,
             first_baseline: Some(height * 0.8),
         }
     }

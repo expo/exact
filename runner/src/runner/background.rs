@@ -11,6 +11,7 @@ use crate::request::{Outcome, Request, RequestOut};
 /// The round out for the module's background work, if any.
 #[derive(Default)]
 pub(super) struct Background {
+    pub(super) completion: Option<super::CompletionReply>,
     module: Option<super::ModuleInstance>,
     /// The runner ticket of the round the host holds.
     ticket: Option<u64>,
@@ -53,8 +54,10 @@ impl<D: DataSource> Runner<D> {
         let ticket = self.next_ticket;
         self.next_ticket += 1;
         self.background.ticket = Some(ticket);
+        self.background.completion = None;
         self.background.module = self.data.module_identity("").map(|m| m.instance());
         self.requests.push(RequestOut {
+            completion: None,
             class: crate::RequestClass::Ordered,
             ticket,
             target: NAME.into(),
@@ -92,6 +95,7 @@ impl<D: DataSource> Runner<D> {
     /// promise reactions did is the module's; nothing Contract sees changed.
     pub(super) fn background_landed(&mut self, outcome: Outcome) {
         self.background.ticket = None;
+        self.background.completion = None;
         let landed = self.data.background_landed(&self.store, outcome);
         self.take_data_logs();
         match landed {
@@ -126,6 +130,7 @@ impl<D: DataSource> Runner<D> {
     /// already has completes on disk; what still waits in the module is
     /// named (D5).
     pub(super) fn drop_background(&mut self) {
+        self.background.completion = None;
         if self.background.ticket.take().is_some() {
             let waiting = self.data.background_state().map_or(0, |s| s.queued);
             self.background.rounds = 0;
@@ -140,6 +145,7 @@ impl<D: DataSource> Runner<D> {
     /// `console` lines also queued for the host (LLP 1027.009 D2).
     pub(super) fn take_data_logs(&mut self) {
         self.hear_aborted();
+        self.take_reports();
         for line in self.data.take_logs() {
             self.journal_module_line(line);
         }

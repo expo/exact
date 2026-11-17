@@ -689,13 +689,17 @@ try {
       await files.putBlob('app:/data/picked.jpg',new File([photo],'picked.jpg',{type:'image/jpeg'}));
       files.close();
       const sent=[], fetchBefore=globalThis.fetch;
-      globalThis.fetch=async(url,init)=>{sent.push({url:String(url),body:init.body,headers:init.headers});return new Response('stored');};
+      globalThis.fetch=async(url,init)=>{
+        sent.push({url:String(url),body:init.body,headers:init.headers});
+        return Object.defineProperty(new Response('stored'),'url',{value:String(url)});
+      };
       try {
         const host={grantSet:storageIdentity.grantSet,controllers:new Set(),bodyFile:(path,grants)=>requestBody(storageIdentity.appId,grants,path)};
         const op=(path,headers=[])=>({op:'request',ticket:1,method:'POST',url:'https://example.test/upload',headers,body:'',bodyFrom:path,cache:'default',scope:null});
         const typed=await runRequest(op('app:/data/photo.jpg',[['content-type','image/jpeg']]),host);
         const picked=await runRequest(op('app:/data/picked.jpg'),host);
         if(typed.kind!==0||picked.kind!==0||sent.length!==2)throw new Error(`exactBodyFrom on the page: ${typed.kind} ${picked.kind} ${sent.length}`);
+        for(const reply of [typed,picked])if(reply.status!==200||new TextDecoder().decode(reply.body)!=='stored')throw new Error('exactBodyFrom: the upload reply changed');
         // The file's bytes as a Blob with no type, so the browser adds no Content-Type; the author's headers as they were.
         for(const one of sent)if(!(one.body instanceof Blob)||one.body.type!==''||await hash(await one.body.arrayBuffer())!==await hash(photo))throw new Error('exactBodyFrom: the body is not the file as an untyped Blob');
         if(JSON.stringify(sent[0].headers)!=='[["content-type","image/jpeg"]]'||sent[1].headers.length)throw new Error('exactBodyFrom: the headers changed');

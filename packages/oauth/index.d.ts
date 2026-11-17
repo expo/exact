@@ -119,10 +119,14 @@ export interface OAuthSignIn {
 export interface OAuthSignOut {
   /** Also end the person's sign-in at the provider (OpenID Connect RP-Initiated Logout 1.0), so that the next sign-in
    *  shows the provider's page instead of completing as the same account. The browser opens the provider's end-session
-   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider must send the
-   *  person back to the callback with that `state`, so register the callback as a post-logout redirect URI. Send it from
-   *  a press, as `signIn`. The session is forgotten and revoked either way; a browser step that does not finish, or a
-   *  provider that names no end-session endpoint, is answered as `ok` with code "end_session" and a sentence in `error`. */
+   *  endpoint with the ID token as `id_token_hint`, `client_id`, the callback and `state`; the provider may omit `state`
+   *  when it sends the person back, but its return must carry neither `code` nor `error`; the runner and Android
+   *  complete their oldest live logout. The web completes the popup's own logout or, after severance, only the live
+   *  logout holding the identity that the callback read from that popup. An unaddressed state-less return completes nothing. Register the callback as a
+   *  post-logout redirect URI. Send it from a press, as `signIn`. On the web that press reserves the provider window
+   *  while sign-out waits for the store lease. The app session ends and its revocable token is revoked under that lease before the browser opens. A browser step that
+   *  does not finish is answered as `ok` with code "end_session" and a sentence in `error`; a later end-session
+   *  sign-out retries that login. A provider that names no end-session endpoint gives the same answer but cannot be retried. */
   endSession?: boolean;
 }
 
@@ -150,7 +154,7 @@ export interface OAuthProvider {
   session(store: OAuthStore): Promise<OAuthSession>;
   /** Opens the provider's sign-in, then exchanges and keeps the tokens. Send it from a press. With `authorize`, the app's own sign-in sends the authorization request instead. */
   signIn(store: OAuthStore, options?: OAuthSignIn): Promise<OAuthResult>;
-  /** Forgets the session, then asks the provider to revoke it. With `endSession`, also ends the person's sign-in at the provider. */
+  /** Takes and ends the current session and revokes that login under one store lease. A revoke with no reply, a 429, or a 5xx response is retried only by a later sign-out in this runtime; any other reply drops the token. With `endSession`, opens the provider after releasing the lease and retains a failed provider logout for a later end-session press. */
   signOut(store: OAuthStore, options?: OAuthSignOut): Promise<OAuthResult>;
   /** `fetch` with the access token, to an origin in `apis`; refreshes once on 401 (`expiredStatus`). Answers the `Response`.
    *  A request refused after its sign-in ended is not sent again: it throws `OAuthError` `signed_out`, or

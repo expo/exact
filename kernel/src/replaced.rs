@@ -54,8 +54,8 @@ pub(crate) fn apply_zoom(arena: &NodeArena, slot: u32, s: &mut taffy::Style) {
     dim(&mut s.size.width);
     dim(&mut s.size.height);
     for size in [&mut s.min_size, &mut s.max_size] {
-        lpa(&mut size.width);
-        lpa(&mut size.height);
+        dim(&mut size.width);
+        dim(&mut size.height);
     }
     for rect in [&mut s.padding, &mut s.border] {
         for side in [

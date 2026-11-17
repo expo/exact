@@ -11,6 +11,7 @@ struct RoleRow {
     press: bool,
     ends: bool,
     tab_entry: Option<String>,
+    type_ahead: bool,
 }
 
 fn validate_roles(schema: &Schema) {
@@ -78,6 +79,7 @@ fn write_roles(w: &mut String, rows: &[RoleRow]) {
         "pub member_tags: &'static [&'static str], pub descendants: bool,\n",
         "pub axis: RoleAxis, pub orientation: bool, pub wraps: bool,\n",
         "pub press: bool, pub ends: bool, pub tab_entry: Option<PropId>,\n",
+        "pub type_ahead: bool,\n",
         "}\n",
         "/// Keys Exact supplies for painted composite roles (LLP 1166.000 D1).\n",
         "pub const ROLE_KEYS: &[RoleKeys] = &[\n",
@@ -90,9 +92,9 @@ fn write_roles(w: &mut String, rows: &[RoleRow]) {
             _ => unreachable!(),
         };
         writeln!(w,
-            "RoleKeys {{ role: {:?}, member_roles: &{:?}, member_tags: &{:?}, descendants: {}, axis: RoleAxis::{}, orientation: {}, wraps: {}, press: {}, ends: {}, tab_entry: {entry} }},",
+            "RoleKeys {{ role: {:?}, member_roles: &{:?}, member_tags: &{:?}, descendants: {}, axis: RoleAxis::{}, orientation: {}, wraps: {}, press: {}, ends: {}, tab_entry: {entry}, type_ahead: {} }},",
             row.role, row.member_roles, row.member_tags, row.scope == "descendants",
-            pascal(&row.axis), row.orientation, row.wraps, row.press, row.ends
+            pascal(&row.axis), row.orientation, row.wraps, row.press, row.ends, row.type_ahead
         ).unwrap();
     }
     w.push_str("];\n");

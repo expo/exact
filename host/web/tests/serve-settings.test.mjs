@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { need } from '../../../scripts/coverage.mjs';
 import { WEB_TOOLCHAIN } from '../../../scripts/app.mjs';
+import { builtFile } from '../../web-js/content-names.mjs';
 
 const serve = resolve(import.meta.dir, '../serve.mjs'), build = resolve(import.meta.dir, '../build.mjs');
 const changed = 'import.meta.env.API_BASE_URL was built as "http://a.example" (environment) and is "http://b.example" (environment) here';
@@ -73,7 +74,7 @@ test('serve builds a changed setting again beside its sources, and refuses a cop
     server = await served(dist, port, { ...env, API_BASE_URL: 'http://b.example' });
     expect(server.listening, server.log()).toBe(true);
     expect(server.log()).toContain(`${changed}: building it again`);
-    const module = await (await fetch(`http://127.0.0.1:${port}/app.js`)).text();
+    const module = await (await fetch(`http://127.0.0.1:${port}/${builtFile(dist, 'app.js')}`)).text();
     expect(module).toContain('http://b.example');
     expect(module).not.toContain('http://a.example');
     // Another build with other settings replaces it while it serves (a test run's, for its own API): the next
@@ -82,7 +83,7 @@ test('serve builds a changed setting again beside its sources, and refuses a cop
     expect(other.status, other.stderr).toBe(0);
     expect((await fetch(`http://127.0.0.1:${port}/`, { headers: { accept: 'text/html' } })).status).toBe(200);
     expect(server.log()).toContain('the build has other settings than this server (API_BASE_URL): building it again');
-    expect(await (await fetch(`http://127.0.0.1:${port}/app.js`)).text()).toContain('http://b.example');
+    expect(await (await fetch(`http://127.0.0.1:${port}/${builtFile(dist, 'app.js')}`)).text()).toContain('http://b.example');
   } finally {
     await stop(server?.child);
     rmSync(root, { recursive: true, force: true });

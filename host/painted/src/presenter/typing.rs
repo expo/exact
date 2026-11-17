@@ -17,9 +17,16 @@ impl<D: DataSource> Presenter<D> {
             if node.props.bool(PropId::Disabled) == Some(true) {
                 return Err(format!("view {id} is disabled"));
             }
-            let error =
-                self.host
-                    .dispatch_at(id, Event::Navigate(text.to_owned()), self.host.now());
+            // A path as written; a URL with a scheme as the platform delivers
+            // one from outside, as Apple's `typedLocation`.
+            let location = if has_scheme(text) {
+                crate::app::incoming_location_at(text, self.host.web_mount.as_ref())
+            } else {
+                text.to_owned()
+            };
+            let error = self
+                .host
+                .dispatch_at(id, Event::Navigate(location), self.host.now());
             let after = self.after_commit();
             if let Some(error) = error.or(after) {
                 return Err(error);
@@ -754,7 +761,8 @@ impl<D: DataSource> Presenter<D> {
             self.remote_key(id, (name, code, repeat), now_ms);
             return;
         }
-        if !self.display.allows(self.host.kernel(), id) {
+        // Nor do a flight's controls take a key, as they take no press.
+        if !self.display.allows(self.host.kernel(), id) || self.host.flying(id) {
             return;
         }
         if self
@@ -806,10 +814,17 @@ impl<D: DataSource> Presenter<D> {
         if self.key_click(id, name, now_ms) {
             return;
         }
+        // Before Space presses: during a menu's type-ahead it is one more letter.
+        if self.type_ahead_key(id, name, now_ms) {
+            return;
+        }
         let Some(node) = self.host.kernel().node(id) else {
             return;
         };
         let role = node.props.str(PropId::AccessibilityRole);
+        // An `href` with no role is a link: a run in a line of text lowers
+        // with none.
+        let link = role == Some("link") || role.is_none() && node.props.link().is_some();
         // A native button presses under any role, a tab's or a menu item's
         // (LLP 1069.011.000 D1); any other pressable as a button does, unless
         // it is a link (chat F14).
@@ -821,12 +836,26 @@ impl<D: DataSource> Presenter<D> {
                 .runner()
                 .handlers_of(id)
                 .contains(&EventKind::Press);
-        if (role == Some("button") || native || pressable && role != Some("link"))
-            && matches!(name, " " | "Enter")
-            || role == Some("link") && name == "Enter"
+        // Read before the press, whose handler may remove it.
+        let href = node
+            .props
+            .link()
+            .filter(|_| name == "Enter")
+            .map(str::to_string);
+        if (role == Some("button") || native || pressable && !link) && matches!(name, " " | "Enter")
+            || link && name == "Enter"
         {
             self.note_press(id);
-            self.activate_with(id, now_ms, false);
+            // A link with no `press` has only its default action, as a
+            // pointer's press on it has.
+            if pressable || href.is_none() {
+                self.activate_with(id, now_ms, false);
+            }
+            // Enter on an `a[href]` follows it after its press, as a click's
+            // default action follows its listeners (LLP 1038 §7).
+            if let Some(href) = href {
+                self.follow(id, &href, now_ms);
+            }
             return;
         }
         // A radio's arrows and Space (x2apps survey #2).
@@ -923,6 +952,15 @@ impl<D: DataSource> Presenter<D> {
             self.chosen.remove(&id);
         }
     }
+}
+
+/// Whether `text` begins with a URL scheme (RFC 3986 §3.1) and its colon.
+fn has_scheme(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(scheme, _)| {
+        let mut chars = scheme.chars();
+        chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
 }
 
 #[cfg(test)]

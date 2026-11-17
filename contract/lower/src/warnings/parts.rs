@@ -21,8 +21,8 @@
 //! component of the author's own is the benefit of the doubt.
 
 use crate::LowerError;
-use contract_syntax::{Expr, Node};
-use contract_types::Checked;
+use contract_checking::Checking;
+use contract_syntax::Expr;
 
 /// The most characters the circle holds across its 68 points.
 const HOLDS: usize = 7;
@@ -33,19 +33,17 @@ const PROPS: [&str; 5] = ["label", "tint", "press", "disabled", "testId"];
 
 /// Every `RoundButton` call whose literal label has more characters than the
 /// circle holds.
-pub(super) fn round_button_label(checked: &Checked<'_>) -> Vec<LowerError> {
-    let components = &checked.file.components;
-    let is_part = components
-        .iter()
-        .any(|c| c.name == "RoundButton" && c.props.iter().map(|p| p.name.as_str()).eq(PROPS));
+pub(super) fn round_button_label(checking: &Checking<'_>) -> Vec<LowerError> {
+    let components = || checking.declarations();
+    let is_part = components()
+        .any(|c| c.name() == "RoundButton" && c.props().iter().map(|p| p.name.as_str()).eq(PROPS));
     let mut out = Vec::new();
     if !is_part {
         return out;
     }
-    for component in components {
-        let mut stack: Vec<&Node> = component.view.iter().rev().collect();
-        while let Some(node) = stack.pop() {
-            if let Node::Use { name, args, .. } = node {
+    for (index, _) in components().enumerate() {
+        for node in checking.authored(index).walk() {
+            if let Some((_, name, args)) = node.component_use() {
                 let label = args.iter().rev().find(|a| a.name == "label");
                 if let (true, Some(Expr::Str(label, span))) =
                     (name == "RoundButton", label.map(|a| &a.value))
@@ -63,9 +61,6 @@ pub(super) fn round_button_label(checked: &Checked<'_>) -> Vec<LowerError> {
                     }
                 }
             }
-            for arm in node.child_lists().into_iter().rev() {
-                stack.extend(arm.iter().rev());
-            }
         }
     }
     out
@@ -75,31 +70,27 @@ pub(super) fn round_button_label(checked: &Checked<'_>) -> Vec<LowerError> {
 const EMPTY_PROPS: [&str; 3] = ["symbol", "title", "message"];
 
 /// Every `EmptyState` call written inside a `list` of the same component.
-pub(super) fn empty_state_in_list(checked: &Checked<'_>) -> Vec<LowerError> {
-    let components = &checked.file.components;
-    let is_part = components
-        .iter()
-        .any(|c| c.name == "EmptyState" && c.props.iter().map(|p| p.name.as_str()).eq(EMPTY_PROPS));
+pub(super) fn empty_state_in_list(checking: &Checking<'_>) -> Vec<LowerError> {
+    let components = || checking.declarations();
+    let is_part = components().any(|c| {
+        c.name() == "EmptyState" && c.props().iter().map(|p| p.name.as_str()).eq(EMPTY_PROPS)
+    });
     let mut out = Vec::new();
     if !is_part {
         return out;
     }
-    for component in components {
-        let mut stack: Vec<(&Node, bool)> =
-            component.view.iter().rev().map(|n| (n, false)).collect();
-        while let Some((node, in_list)) = stack.pop() {
-            if let (Node::Use { name, span, .. }, true) = (node, in_list) {
+    for (index, _) in components().enumerate() {
+        for (node, in_list) in checking.authored(index).walk_with(false, |node, in_list| {
+            *in_list || node.element().is_some_and(|(tag, _, _)| tag == "list")
+        }) {
+            if let (Some((_, name, _)), true) = (node.component_use(), in_list) {
                 if name == "EmptyState" {
                     out.push(LowerError {
                         id: "lower-empty-state-in-list",
                         message: "`EmptyState` inside a `list` is drawn as one of its rows; it centres in the screen in place of the list: `if items.length == 0 and not pending(items)`, the `EmptyState`, `else` the `list` (pattern list-detail)".into(),
-                        span: *span,
+                        span: node.span(),
                     });
                 }
-            }
-            let in_list = in_list || matches!(node, Node::Element { tag, .. } if tag == "list");
-            for arm in node.child_lists().into_iter().rev() {
-                stack.extend(arm.iter().rev().map(|n| (n, in_list)));
             }
         }
     }
@@ -115,10 +106,10 @@ const SUMMARY_PROPS: [&str; 5] = ["label", "value", "detail", "progress", "symbo
 /// expense-tracker, habit-tracker). A card-less first section
 /// (`background-color="transparent"`) is the place the one-screen pattern
 /// gives it. Read as `empty_state_in_list` reads its part.
-pub(super) fn summary_card_in_list(checked: &Checked<'_>) -> Vec<LowerError> {
-    let components = &checked.file.components;
-    let is_part = components.iter().any(|c| {
-        c.name == "SummaryCard" && c.props.iter().map(|p| p.name.as_str()).eq(SUMMARY_PROPS)
+pub(super) fn summary_card_in_list(checking: &Checking<'_>) -> Vec<LowerError> {
+    let components = || checking.declarations();
+    let is_part = components().any(|c| {
+        c.name() == "SummaryCard" && c.props().iter().map(|p| p.name.as_str()).eq(SUMMARY_PROPS)
     });
     let mut out = Vec::new();
     if !is_part {
@@ -130,48 +121,46 @@ pub(super) fn summary_card_in_list(checked: &Checked<'_>) -> Vec<LowerError> {
         Grouped,
         Card,
     }
-    for component in components {
-        let mut stack: Vec<(&Node, In)> =
-            component.view.iter().rev().map(|n| (n, In::Page)).collect();
-        while let Some((node, at)) = stack.pop() {
-            if let (Node::Use { name, span, .. }, In::Card) = (node, at) {
-                if name == "SummaryCard" {
-                    out.push(LowerError {
-                        id: "lower-summary-card-in-list",
-                        message: "`SummaryCard` in a grouped list's section is a grey card inside its white cell: put it above the `list`, or in a first `section background-color=\"transparent\"`, which has no card (pattern one-screen)".into(),
-                        span: *span,
-                    });
-                }
-            }
-            let at = match node {
-                Node::Element { tag, attrs, .. } if tag == "list" => {
-                    let grouped = attrs
-                        .iter()
-                        .rev()
-                        .find(|a| a.name == "appearance")
-                        .is_some_and(|a| matches!(&a.value, Expr::Str(v, _) if v == "auto"));
-                    if grouped {
-                        In::Grouped
-                    } else {
-                        In::Page
+    for (index, _) in components().enumerate() {
+        for (node, at) in
+            checking
+                .authored(index)
+                .walk_with(In::Page, |node, at| match node.element() {
+                    Some(("list", _, attrs)) => {
+                        let grouped = attrs
+                            .iter()
+                            .rev()
+                            .find(|a| a.name == "appearance")
+                            .is_some_and(|a| matches!(&a.value, Expr::Str(v, _) if v == "auto"));
+                        if grouped {
+                            In::Grouped
+                        } else {
+                            In::Page
+                        }
                     }
-                }
-                Node::Element { tag, attrs, .. } if tag == "section" && at == In::Grouped => {
-                    let cardless = attrs
-                        .iter()
-                        .rev()
-                        .find(|a| a.name == "background-color")
-                        .is_some_and(|a| matches!(&a.value, Expr::Str(v, _) if v == "transparent"));
-                    if cardless {
-                        In::Page
-                    } else {
-                        In::Card
+                    Some(("section", _, attrs)) if *at == In::Grouped => {
+                        let cardless = attrs
+                            .iter()
+                            .rev()
+                            .find(|a| a.name == "background-color")
+                            .is_some_and(
+                                |a| matches!(&a.value, Expr::Str(v, _) if v == "transparent"),
+                            );
+                        if cardless {
+                            In::Page
+                        } else {
+                            In::Card
+                        }
                     }
-                }
-                _ => at,
-            };
-            for arm in node.child_lists().into_iter().rev() {
-                stack.extend(arm.iter().rev().map(|n| (n, at)));
+                    _ => *at,
+                })
+        {
+            if let (Some((_, "SummaryCard", _)), In::Card) = (node.component_use(), at) {
+                out.push(LowerError {
+                    id: "lower-summary-card-in-list",
+                    message: "`SummaryCard` in a grouped list's section is a grey card inside its white cell: put it above the `list`, or in a first `section background-color=\"transparent\"`, which has no card (pattern one-screen)".into(),
+                    span: node.span(),
+                });
             }
         }
     }

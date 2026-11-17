@@ -188,10 +188,7 @@ impl RegionState {
     }
 }
 pub(crate) fn same(a: &RegionTextRequest, b: &RegionTextRequest) -> bool {
-    a.ticket() == b.ticket()
-        && a.stamp() == b.stamp()
-        && a.offer() == b.offer()
-        && a.catalog() == b.catalog()
+    a == b
 }
 fn unique(kernel: &Kernel, name: &str) -> Result<NodeKey, String> {
     if name.is_empty() {
@@ -426,6 +423,8 @@ pub(crate) fn projection_size(
             // price their storage before that clone, even if the wire skips them.
             match node.computed(id) {
                 RowValue::ClipPath(p) => {
+                    bytes = add_wire(bytes, p.shape_value_count(), 96)?;
+
                     for (_, values) in p.commands() {
                         bytes = add_wire(bytes, values.len(), 96)?
                             .checked_add(64)
@@ -463,6 +462,8 @@ pub(crate) fn projection_size(
             }
             match node.style.get(id) {
                 RowValue::ClipPath(p) => {
+                    bytes = add_wire(bytes, p.shape_value_count(), 96)?;
+
                     for (_, values) in p.commands() {
                         bytes = add_wire(bytes, values.len(), 96)?
                             .checked_add(64)

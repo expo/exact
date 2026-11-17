@@ -644,16 +644,21 @@ impl Gen<'_> {
         match self.rng.weighted(&[2, 2, 3, 2, 2, 3]) {
             0 => {
                 let (at, off) = (num(self), number(*self.rng.pick(OFFSETS)));
-                format!("formatTime({at}, {off}, \"short\")")
+                let style = *self.rng.pick(&["\"short\"", "\"2-digit\""]);
+                format!("formatTime({at}, {off}, {style})")
             }
             1 => {
                 let (at, off) = (num(self), number(*self.rng.pick(OFFSETS)));
-                let style = *self.rng.pick(&["\"medium\"", "\"month-year\"", "\"iso\""]);
+                let style =
+                    *self
+                        .rng
+                        .pick(&["\"medium\"", "\"month-year\"", "\"month-day\"", "\"iso\""]);
                 format!("formatDate({at}, {off}, {style})")
             }
             // LLP 1116 D8: `decimal`, `percent` and `currency` beside
-            // `compact`, over counts and the halves and signed zero of
-            // `DECIMALS`, each style rounding at its own cut.
+            // `compact`, and `decimal` at a fixed number of fraction digits,
+            // over counts and the halves and signed zero of `DECIMALS`, each
+            // style rounding at its own cut.
             2 => {
                 let style = *self.rng.pick(&[
                     "\"compact\"",
@@ -663,6 +668,9 @@ impl Gen<'_> {
                     "\"currency\", \"USD\"",
                     "\"currency\", \"JPY\"",
                     "\"currency\", \"CHF\"",
+                    "\"decimal\", 0",
+                    "\"decimal\", 2",
+                    "\"decimal\", 4",
                 ]);
                 let n = match self.rng.below(3) {
                     0 => number(*self.rng.pick(COUNTS)),

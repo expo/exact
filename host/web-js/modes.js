@@ -23,6 +23,7 @@ let Axes = [], Classes = {}, Texts = [], Vars = {}, Accent = [], Names = {}, Win
 let Design = null, Structure = null, Rules = null, AccentRules = null;
 const key = d => Axes.map(([a, values], i) => `${a}=${values[d[i]]}`).join(",");
 const rendering = () => typeof document === "undefined" || !!globalThis.__exactRender;
+const observing = () => !!globalThis.MutationObserver?.prototype.takeRecords && !!globalThis.CSS?.escape;
 
 /** The digits `text`'s pins make over `base` (`bridge::pinned`): `null` for
  * none, or one naming no axis or value, or an axis twice. */
@@ -68,32 +69,70 @@ const mark = (b, sets) => {
 /** The boundaries under `root`, in document order (the render DOM has no
  * selectors). */
 function boundaries(root, out = []) {
-  if (!rendering()) return root.querySelectorAll("[data-x-b]");
+  if (!rendering() && observing()) return root.querySelectorAll("[data-x-b]");
   for (const c of root.childNodes ?? []) if (c.nodeType === 1) { if (c.getAttribute("data-x-b") != null) out.push(c); boundaries(c, out); }
   return out;
 }
 const around = b => { for (let e = b.parentElement; e; e = e.parentElement) if (e.$xd) return e.$xd; return Win; };
 
-function apply() {
-  Pending = false;
+/** Give baked token properties back to their classes on browser and drive DOMs. */
+function clear(e, c) {
+  if (e.$xc) return;
+  e.$xc = true;
   // A page rendered ahead wrote its classes inline (rt.js `adopt`): a baked
   // value gives way to the class's `var()`; one that is a `var()` (a
   // symbol's, emit.rs) stays.
-  if (!rendering()) {
-    for (const c in Vars) for (const e of document.getElementsByClassName(c)) {
-      if (e.$xc) continue;
-      e.$xc = true;
-      // A boundary whose accent names the accent declares the companion by
-      // its tuple (`data-x-accent`), as its class does not.
-      for (const p of e.getAttribute("data-x-accent") == null ? Vars[c] : [...Vars[c], "--exact-accent"]) { const v = e.style.getPropertyValue(p); if (v && !v.includes("var(--x-")) e.style.removeProperty(p); }
+  // An accent-naming token's companion comes from its tuple, not its class.
+  for (const p of e.getAttribute("data-x-accent") == null ? Vars[c] : [...Vars[c], "--exact-accent"]) { const v = e.style.getPropertyValue(p); if (v && !v.includes("var(--x-")) e.style.removeProperty(p); }
+}
+
+let Watch = null, Bounds = new Set(), Records = [], TokenClasses = [], Selector = "";
+/** Discover only added subtrees and changed elements after the first pass.
+ * Observer delivery also schedules a pass: an exit can finish after the last commit. */
+function discover() {
+  const root = document.getElementById("exact-root") ?? document;
+  let order = false;
+  const visit = e => {
+    if (e.nodeType !== 1 || !e.isConnected) return;
+    if (e !== root && root.contains(e) && e.hasAttribute("data-x-b")) { Bounds.add(e); order = true; }
+    if (e.$xc) return;
+    // Table order, not DOM class order, decides which baked properties give way.
+    const c = TokenClasses.find(c => e.classList.contains(c));
+    if (c == null) return;
+    clear(e, c);
+  };
+  const subtree = e => { if (!e.isConnected) return; visit(e); if (e.firstElementChild) for (const b of e.querySelectorAll(Selector)) visit(b); };
+  if (!Watch) {
+    TokenClasses = Object.keys(Vars);
+    Selector = ["[data-x-b]", ...TokenClasses.map(c => `.${CSS.escape(c)}`)].join(",");
+    Watch = new MutationObserver(records => { for (const r of records) Records.push(r); schedule(); });
+    Watch.observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "data-x-b"] });
+    subtree(document);
+  } else {
+    const records = Records.concat(Watch.takeRecords()); Records = [];
+    for (const r of records) {
+      if (r.type === "attributes") visit(r.target);
+      else for (const e of r.addedNodes) if (e.nodeType === 1) subtree(e);
     }
   }
+  for (const b of Bounds) if (!root.contains(b) || !b.hasAttribute("data-x-b")) { Bounds.delete(b); delete b.$xd; }
+  // An existing boundary may have moved, even when membership did not change.
+  if (order) Bounds = new Set([...Bounds].sort((a, b) => a.compareDocumentPosition(b) & 4 ? -1 : 1));
+  return Bounds;
+}
+
+function apply() {
+  Pending = false;
+  const cached = !rendering() && observing();
+  // The agent's drive DOM has neither selectors nor mutation delivery.
+  if (!rendering() && !cached) for (const c in Vars) for (const e of document.getElementsByClassName(c)) clear(e, c);
+  const list = cached ? discover() : boundaries(document.getElementById("exact-root") ?? document);
   // Every token is a property in a development build: its boundaries take
   // the empty tuple too, so one naming the accent resolves there.
   const tuples = Axes.length > 0 || Design != null;
   if (tuples) set(document.documentElement, key(Win));
   // Document order: a boundary's tuple is known before those inside it.
-  for (const b of boundaries(document.getElementById("exact-root") ?? document)) {
+  for (const b of list) {
     const base = around(b), pin = b.getAttribute("data-x-pin");
     let d = pin == null || UNSETS.test(pin) ? base : pinned(pin, base);
     if (!d) { if (b.$xbad !== pin) say(`invalid -exact-mode value ${JSON.stringify(pin)}: an axis of the app's design and one of its values, each axis once; unset`); b.$xbad = pin; d = base; }
@@ -310,6 +349,7 @@ function setTokens(frame) {
  * install `exact.design`. */
 export function modes(axes, classes, texts, vars, accent, names, devDesign, devStructure) {
   Axes = axes; Classes = classes; Texts = texts; Vars = vars; Accent = accent; Names = names ?? {}; Win = axes.map(() => 0);
+  Watch?.disconnect(); Watch = null; Bounds.clear(); Records = [];
   // dev-only {
   if (devDesign != null && typeof document !== "undefined") { Design = devDesign; Structure = devStructure; Rules = null; Object.assign(globalThis.exact ??= {}, { design, designDigest: devDesign }); }
   // A dev reload's checkpoint (dev.mjs `capture`) carries the window's modes the design still has.

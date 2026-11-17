@@ -37,6 +37,7 @@ impl<D: DataSource> Presenter<D> {
                 rect: whole,
                 range: [offset, max, 0.],
                 set: (0, 0),
+                grid: [0; 4],
                 name,
                 value: String::new(),
                 hint: String::new(),
@@ -55,6 +56,17 @@ impl<D: DataSource> Presenter<D> {
                 let (Some(text), Some((_, rect))) = (text, texts.next()) else {
                     continue;
                 };
+                let mut rect = *rect;
+                if id == SUPPORTING {
+                    for (_, next) in texts.by_ref() {
+                        let right = (rect.0 + rect.2).max(next.0 + next.2);
+                        let bottom = (rect.1 + rect.3).max(next.1 + next.3);
+                        rect.0 = rect.0.min(next.0);
+                        rect.1 = rect.1.min(next.1);
+                        rect.2 = right - rect.0;
+                        rect.3 = bottom - rect.1;
+                    }
+                }
                 let id = b.unique(id);
                 b.out.push(Node {
                     id,
@@ -65,6 +77,7 @@ impl<D: DataSource> Presenter<D> {
                     rect: [rect.0, rect.1, rect.2, rect.3],
                     range: [0.0; 3],
                     set: (0, 0),
+                    grid: [0; 4],
                     name: text.clone(),
                     value: String::new(),
                     hint: String::new(),
@@ -79,7 +92,7 @@ impl<D: DataSource> Presenter<D> {
             for entry in entries {
                 match entry {
                     Entry::Item(_) => items += 1,
-                    Entry::Header(title, node) => headers.push((items, title, *node)),
+                    Entry::Header(title, node, _) => headers.push((items, title, *node)),
                     Entry::Separator => {}
                 }
             }

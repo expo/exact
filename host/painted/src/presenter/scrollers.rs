@@ -62,11 +62,18 @@ pub struct Scroller {
 pub struct Under {
     /// The scrollers there, innermost first. Each one's `axes` are those it
     /// takes part on for a drag from this point: an `overscroll-behavior`
-    /// other than `auto` ends the chain on its axis.
+    /// other than `auto` ends the chain on its axis. A zoomable container
+    /// is there with no axes while it has no travel.
     pub chain: Vec<Scroller>,
     /// The axes (sideways; up and down) a gesture of the presenter's own
     /// there would take.
     pub claims: (bool, bool),
+    /// Whether the claim on up and down is the top sheet's drag and no
+    /// gesture's. The sheet takes a drag as a parent intercepts one: a
+    /// shell leaves it with a hosted view that asked its parents not to
+    /// (Android's `requestDisallowInterceptTouchEvent`), which a gesture's
+    /// claim is not subject to.
+    pub sheet: bool,
     /// The text field the shell hosts that a touch there is for, when the
     /// node hit is one (LLP 1115.001 D8): the touch is then that field's,
     /// and the presenter hears of the focus it takes, not of the touch.
@@ -108,6 +115,11 @@ const DISMISS_INTERACTIVE: i32 = 128;
 /// reader's pull to refresh (`scroll_drag.rs`).
 const REFRESH: i32 = 16;
 const REFRESHING: i32 = 32;
+/// Bit 8: a zoomable container, whose pinch and pan are the reader's
+/// (LLP 1057.001.000 §5); bit 9, in a touch's answer only: a double tap
+/// there zooms it (D5).
+const ZOOM: i32 = 256;
+const DOUBLE_TAP: i32 = 512;
 
 fn scrolls(o: Overflow) -> bool {
     matches!(o, Overflow::Scroll | Overflow::Auto)
@@ -222,6 +234,9 @@ impl<D: DataSource> Presenter<D> {
                 contained(node.style.overscroll_behavior_x),
                 contained(node.style.overscroll_behavior_y),
             );
+            // A zoomable container is under the touch with no travel too:
+            // its pinch and double tap are the reader's (LLP 1057.001.000 §5).
+            let zooms = crate::paint::zoom::range(&node).is_some();
             let parent = self.scroll_parent(id).or_else(|| {
                 node.node_type
                     .is_svg_element()
@@ -232,7 +247,7 @@ impl<D: DataSource> Presenter<D> {
                 s.axes.1 |= self.pulls_to_refresh(id, &limits);
                 s.axes = (s.axes.0 && open.0, s.axes.1 && open.1);
                 open = (open.0 && !cut.0, open.1 && !cut.1);
-                if s.axes.0 || s.axes.1 {
+                if s.axes.0 || s.axes.1 || zooms {
                     if let Some(b) = self.box_of(id) {
                         s.port = shown(b.rect, b.clip);
                     }
@@ -247,6 +262,7 @@ impl<D: DataSource> Presenter<D> {
             chain.push(page);
         }
         let mut claims = self.claims_at(hit);
+        let mut sheet = false;
         // A sheet's scrim takes every drag; on the sheet, a drag up or down
         // that no scroller of its own takes moves it (`stage/touch.rs`).
         match self.stage_claims(x, y) {
@@ -254,19 +270,22 @@ impl<D: DataSource> Presenter<D> {
                 return Under {
                     chain: Vec::new(),
                     claims: (true, true),
+                    sheet: false,
                     field: None,
                 }
             }
             Some(true) => {
                 let route = self.top_sheet().map(|(id, _)| id);
                 chain.retain(|s| s.id != PAGE && route.is_some_and(|r| self.is_inside(s.id, r)));
-                claims.1 |= !chain.iter().any(|s| s.axes.1);
+                sheet = !claims.1 && !chain.iter().any(|s| s.axes.1);
+                claims.1 |= sheet;
             }
             None => {}
         }
         Under {
             chain,
             claims,
+            sheet,
             field: self.hosted_at(hit),
         }
     }
@@ -550,26 +569,33 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// [`Presenter::scrollers_at`] for a reader, in its pixels (`scale` to a
-    /// point): the claims (bit 0 sideways, bit 1 up and down), a count, the
+    /// point): the claims (bit 0 sideways, bit 1 up and down, bit 2 the
+    /// latter is a sheet's drag alone: [`Under::sheet`]), a count, the
     /// hosted text field the touch is for (0: none; LLP 1115.001 D8), and
     /// eleven words a scroller: id, flags (bit 0 it takes a sideways drag
     /// from here, bit 1 one up or down, bit 2 it has rows the reader can
     /// move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its
     /// `refreshing` is true, bit 6 a drag of it puts the keyboard away and
-    /// bit 7 the keyboard follows that drag), revision, then as float bits its offset
+    /// bit 7 the keyboard follows that drag, bit 8 it zooms, bit 9 a double
+    /// tap from here zooms it), revision, then as float bits its offset
     /// (x, y), its farthest offset (x, y) and its port (x, y, width, height). The reader is told
     /// of each from now on ([`Presenter::reader_scrollers`]).
     pub fn reader_under(&mut self, x: f32, y: f32, scale: f32) -> Vec<i32> {
         self.scroll_end_release_all();
         let under = self.scrollers_at(x / scale, y / scale);
         let mut out = vec![
-            i32::from(under.claims.0) | i32::from(under.claims.1) << 1,
+            i32::from(under.claims.0)
+                | i32::from(under.claims.1) << 1
+                | i32::from(under.sheet) << 2,
             under.chain.len() as i32,
             under.field.unwrap_or(0) as i32,
         ];
+        let tapped =
+            (self.hit(x / scale, y / scale)).and_then(|hit| self.double_tap_container(hit));
         for s in &under.chain {
             let rev = self.reader_revision(s);
-            out.extend([s.id as i32, self.reader_flags(s), rev as i32]);
+            let tap = if tapped == Some(s.id) { DOUBLE_TAP } else { 0 };
+            out.extend([s.id as i32, self.reader_flags(s) | tap, rev as i32]);
             let px = [s.offset.0, s.offset.1, s.max.0, s.max.1];
             out.extend(px.iter().chain(&s.port).map(|v| bits(v * scale)));
         }
@@ -653,9 +679,14 @@ impl<D: DataSource> Presenter<D> {
         } else {
             REFRESH
         };
+        let zoom = node
+            .as_ref()
+            .filter(|_| s.id != PAGE)
+            .is_some_and(|n| crate::paint::zoom::range(n).is_some());
         (if s.axes.0 { X } else { 0 })
             | (if s.axes.1 { Y } else { 0 })
             | (if s.node { NODE } else { 0 })
+            | (if zoom { ZOOM } else { 0 })
             | (if barless { BARLESS } else { 0 })
             | dismiss
             | refresh
@@ -675,6 +706,52 @@ fn shown(r: Rect4, clip: Option<Rect4>) -> [f32; 4] {
 
 fn bits(v: f32) -> i32 {
     v.to_bits() as i32
+}
+
+impl<D: DataSource> Presenter<D> {
+    /// The module view under a point of the Android reader (pixels), for
+    /// its hit reply (`Native.under` in `host/android/canvas` has the
+    /// words): its id, border box, allocation slot and generation, the
+    /// long-press count, the painter's session token, the painted origin of
+    /// its content box and the node a long press there would give to.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_module(&mut self, x: f32, y: f32, scale: f32) -> [i32; 13] {
+        let module = self.hit(x / scale, y / scale).filter(|id| {
+            // A video with `controls` takes its gestures as a module's view does (LLP 1042.001 D4).
+            self.host.kernel().node(*id).is_some_and(|node| {
+                (node.node_type == NodeType::NativeView
+                    || (node.node_type == NodeType::Video
+                        && node.props.bool(PropId::Controls) == Some(true)))
+                    && self.host.retained_action_eligible(node.key)
+            })
+        });
+        let painted = module.and_then(|id| self.box_of(id));
+        let rect = painted.as_ref().map(|b| b.rect).unwrap_or_default();
+        let node = module.and_then(|id| self.host.kernel().node(id));
+        let content = painted
+            .zip(node.as_ref())
+            .and_then(|(b, node)| b.native_content(self.host.kernel(), node));
+        let key = node.as_ref().map(|node| node.key);
+        // Player rounds the mapped content origin before drawing the native RenderNode.
+        let content = content.unwrap_or_default();
+        let origin = |v: f32| bits((v * scale + 0.5).floor());
+        let session = self.brush.native_session;
+        [
+            module.unwrap_or(0) as i32,
+            bits(rect.0 * scale),
+            bits(rect.1 * scale),
+            bits(rect.2 * scale),
+            bits(rect.3 * scale),
+            key.map_or(0, |key| key.index as i32),
+            key.map_or(0, |key| key.generation as i32),
+            self.long_presses() as i32,
+            session as i32,
+            (session >> 32) as i32,
+            origin(content.0),
+            origin(content.1),
+            (self.context_menu_at(x / scale, y / scale)).map_or(0, |v| v.0 as i32),
+        ]
+    }
 }
 
 #[cfg(test)]

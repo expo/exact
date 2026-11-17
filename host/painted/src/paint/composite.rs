@@ -65,6 +65,7 @@ impl Painter {
         let mut painter = self.apart(f.width, f.height);
         let mut apart = Walk {
             scene: walk.scene,
+            hit_space: None,
             boxes: Vec::new(),
             text: BTreeMap::new(),
             fields: HashMap::new(),
@@ -88,12 +89,26 @@ impl Painter {
         }
         // Hit boxes map from the picture to the page as the canvas does.
         let identity = [1., 0., 0., 0., 1., 0., 0., 0., 1.];
+        let (hit_ts, hit_clip) = walk.hit_space.unwrap_or((ts, clip));
+        let hit_h = placement::compose(identity, hit_ts, f.x - offset.0, f.y - offset.1);
         let h = placement::compose(identity, ts, f.x - offset.0, f.y - offset.1);
         let Some(inverse) = placement::inverse(h) else {
             return;
         };
         let planes = [[0., 0., 1.]; 2];
         for mut b in apart.boxes {
+            let mut hit = b.for_hit();
+            hit.map_clips(placement::inverse(hit_h).unwrap_or(inverse));
+            b.map_clips(inverse);
+            hit.projective = Some((
+                placement::inverse(hit_h).unwrap_or(inverse),
+                hit.rect,
+                hit.clip,
+                planes,
+            ));
+            hit.rect = placement::clipped_bounds(&hit_h, planes, hit.rect);
+            hit.clip = hit_clip;
+            b.hit = Some(hit.geometry());
             b.projective = Some((inverse, b.rect, b.clip, planes));
             b.rect = placement::clipped_bounds(&h, planes, b.rect);
             b.clip = clip;
@@ -153,6 +168,7 @@ mod tests {
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
             paths: &|_| None,
+            filters: &|_| None,
             scroll: &BTreeMap::new(),
             page: (0., 0.),
             images: &BTreeMap::new(),

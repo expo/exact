@@ -52,6 +52,8 @@ public final class LiveModel {
     }
     @ObservationIgnored private var shown = false
 
+    public func storeChanged() { run("store") { try $0.session.storeChanged() } }
+
     public func press(_ node: UInt32) {
         run("press") { try $0.session.press(node, at: $0.now()) }
     }

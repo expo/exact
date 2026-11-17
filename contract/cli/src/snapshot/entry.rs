@@ -102,6 +102,11 @@ pub fn compile_entries(
     if let Some(watch) = watch {
         match crate::compile_watch(app, &watch) {
             Ok(mut plan) => {
+                if watch.sync.selected() {
+                    let phone = crate::compile_path(&path).map_err(|e| vec![e])?;
+                    crate::watch_sync::plans(&watch.sync, &phone, &plan)
+                        .map_err(|m| refusal("watch-sync", m, Span::default()))?;
+                }
                 plan.app_id.clone_from(&manifest.id);
                 entries.insert(
                     WATCH_KIND.to_owned(),

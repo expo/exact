@@ -238,7 +238,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
 fn hug(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let own = arena.style(slot);
     if !own.written.has(StyleId::MaxWidth) {
-        s.max_size.width = Lpa::percent(1.0);
+        s.max_size.width = taffy::Dimension::percent(1.0);
     }
     if own.written.has(StyleId::Width) {
         return;

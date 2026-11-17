@@ -1,6 +1,6 @@
 // scripts/stage12-gate.mjs: the command line, a screen's ops, the pixel
 // diff and its allowlist, and that every line says WAITS-ON before its parts.
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
 import { encodePng } from './png.mjs';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -8,6 +8,10 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { ADOPTED, APP_PLACED, KEYBOARD_UP, keyboardInset, keyboardRedrive, BEFORE_USES, RENDERED, RETIRED, STAGES, appPlaced, declares, useStage, allowOf, beforeDrift, cloneConform, flakyOf, durationMs, slotCheckTimes, conformFailures, conformRead, conformReport, conformSame, renderedIds, renderedLibrary, viewportTop, BASELINE_TAG, comparePixels, expected, lines, releaseIdentity, parse, pixelDiff, RESTYLE, SCREENS, screenOps, WEB_NOISE, readExact, mutationFails, MUTATION, drivePlan, s13cPlan, renderedComponents, sdkOf } from './stage12-gate.mjs';
 import { READS, apart, caseReads, cases as exactCases, inspectDrive, locate, matches, newTokens, packageParams, readsOf, same } from './s13c-restyle.mjs';
+
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 test('the command line', () => {
   expect(parse(['baseline', '--copy', '/c'])).toBe('baseline needs --copy and --out');
@@ -151,7 +155,7 @@ test('the composer\'s caret strip comes from its field\'s layout', () => {
 });
 
 test('before and after compare shot for shot, strict, with both allowlists', () => {
-  const dir = mkdtempSync(join(tmpdir(), 's12e-'));
+  const dir = scratch('s12e-');
   const img = (name, f) => { const data = new Uint8Array(4 * 4 * 4); for (let i = 0; i < 16; i++) data.set(f(i % 4, Math.floor(i / 4)), i * 4); const p = join(dir, name); writeFileSync(p, encodePng({ width: 4, height: 4, data })); return p; };
   const black = () => [0, 0, 0, 255];
   const before = { shots: [{ host: 'web', scheme: 'light', screen: 'discover', ok: true, png: img('b1.png', black), allow: [] },
@@ -164,7 +168,7 @@ test('before and after compare shot for shot, strict, with both allowlists', () 
 });
 
 test('the before differs from the baseline\'s tag only in its lock', () => {
-  const dir = mkdtempSync(join(tmpdir(), 's12e-git-'));
+  const dir = scratch('s12e-git-');
   const git = (...a) => spawnSync('git', a, { cwd: dir, encoding: 'utf8' });
   git('init', '-q'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
   writeFileSync(join(dir, 'Cargo.lock'), 'a'); writeFileSync(join(dir, 'app.contract'), 'a');
@@ -212,7 +216,7 @@ test('the restyle line expects the value, or its change from the base drive, in 
 });
 
 test('release identity: every source compared and identical in every run, but library-gate\'s own and the named alike failures', () => {
-  const dir = mkdtempSync(join(tmpdir(), 's12e-rel-'));
+  const dir = scratch('s12e-rel-');
   const row = (source, status, run = 'a..b') => ({ run, commits: ['Stage 12 E: x'], source, status });
   const file = rows => { const f = join(dir, `${Math.random()}.json`); writeFileSync(f, JSON.stringify(rows)); return f; };
   const sources = ['apps/a/app.contract', 'apps/expose/app.contract'];
@@ -257,7 +261,7 @@ test('conform on the clone: nothing beyond the baseline, flakes bounded (theme2 
   expect(conformFailures(out)).toEqual(['FAIL app tap a: layout b.w: wasm 1 js 2 (delta 1 px, tolerance 0.5 px)', 'FAIL app clock +1: screenshot: 1.50% of pixels differ']);
   const run = (...fails) => ({ summary: `${fails.length} failures across 1 targets`, compared: 3, failures: fails });
   const scripted = seq => { const q = { before: [...seq.before], after: [...seq.after] }; return (copy, side) => q[side].shift() ?? null; };
-  const work = () => mkdtempSync(join(tmpdir(), 's12e-clone-'));
+  const work = () => scratch('s12e-clone-');
   const copies = { before: 'b', after: 'a' };
   // A subset: holds.
   expect(cloneConform(copies, scripted({ before: [run('FAIL x 1'), run('FAIL x 1')], after: [run('FAIL x 1')] }), work(), '').ok).toBe(true);
@@ -293,7 +297,7 @@ test('the components a source map\'s view nodes come from, by declared name', ()
 });
 
 test('a conform report\'s failures, keyed without the checkout\'s path', () => {
-  const dir = mkdtempSync(join(tmpdir(), 's12e-conf-'));
+  const dir = scratch('s12e-conf-');
   const f = join(dir, 'report.json');
   writeFileSync(f, JSON.stringify({ targets: { a: {}, b: {} }, failures: [{ target: 'a', step: 'contract-build', what: '/Users/x/exact2/host/t.contract:0:0 [id] m' }] }));
   expect(conformReport(f, '/Users/x/exact2')).toEqual({ targets: 2, failures: ['a | contract-build | <checkout>/host/t.contract:0:0 [id] m'] });
@@ -314,7 +318,7 @@ test('the slot check\'s times, from rt1\'s tests\' lines, in milliseconds', () =
 });
 
 test('a boot flake in conform: rerun alone three times, at most two, never twice running, and QUEUE\'d (theme2 03:25)', () => {
-  const work = mkdtempSync(join(tmpdir(), 's12e-flaky-'));
+  const work = scratch('s12e-flaky-');
   const base = { failures: ['synthetic-tabs | contract-build | x'] };
   const added = ['synthetic-startend | boot | state slots.atEnd: wasm true js false'];
   const queue = "- **Conformance's `startend` fixture fails now and then on the JS target under load** (…)";
@@ -328,7 +332,7 @@ test('a boot flake in conform: rerun alone three times, at most two, never twice
   r = flakyOf(added, base, work, () => true, queue);
   expect([r.flaky, r.failing]).toEqual([[], added]);
   // A rerun that fails is a failure; so is a target the base fails, or no QUEUE line.
-  const fresh = () => mkdtempSync(join(tmpdir(), 's12e-flaky-'));
+  const fresh = () => scratch('s12e-flaky-');
   expect(flakyOf(added, base, fresh(), (t, n) => n < 2, queue).failing).toEqual(added);
   expect(flakyOf(['synthetic-tabs | boot | y'], base, fresh(), () => true, "- **Conformance's `tabs` fixture fails now and then").failing).toEqual(['synthetic-tabs | boot | y']);
   // A QUEUE line merely mentioning the name is no entry for it.
@@ -435,14 +439,14 @@ test('stage 13 C\'s reads: each against its own token\'s value, so a use moved t
 // runs when EXACT_GATE_DRIVES=1; the gate's restyle line runs it on every
 // run with Linux among its hosts and writes what it caught.
 test.skipIf(process.env.EXACT_GATE_DRIVES !== '1')('the mutation: a package\'s use of one length swapped for another fails its case, naming that token', () => {
-  const failed = mutationFails(mkdtempSync(join(tmpdir(), 'iosfix-s13c-mutation-')), 'linux');
+  const failed = mutationFails(scratch('iosfix-s13c-mutation-'), 'linux');
   expect([...new Set(failed.map(r => `${r.key} ${r.row}`))]).toEqual([`${MUTATION.token} ${MUTATION.row}`]);
 }, 900_000);
 
 test('the inventory reads any legal token or param name: dotted more than once, hyphenated, a literal default', () => {
-  const root = mkdtempSync(join(tmpdir(), 'iosfix-s13c-inventory-'));
+  const root = scratch('iosfix-s13c-inventory-');
   for (const pkg of ['lists', 'cards', 'actions']) cpSync(join(import.meta.dir, '..', 'packages', pkg), join(root, 'packages', pkg), { recursive: true });
-  const cards = join(root, 'packages/cards/cards.tamber'), row = join(root, 'packages/lists/list-row.contract');
+  const cards = join(root, 'packages/cards/cards.forma'), row = join(root, 'packages/lists/list-row.contract');
   writeFileSync(cards, `${readFileSync(cards, 'utf8').trimEnd()}\n  cards.header.frame: length = 37px\n  cards.extra-ink: color = #123456\n`);
   writeFileSync(row, readFileSync(row, 'utf8').replace(/(\n  params\n)/, '$1    extra-tint: color = "lists.switch-on" control = "token"\n    literal: color = "#abcdef" control = "token"\n'));
   expect(newTokens(root).filter(t => ['cards.header.frame', 'cards.extra-ink'].includes(t.name))).toEqual([{ name: 'cards.header.frame', kind: 'length' }, { name: 'cards.extra-ink', kind: 'color' }]);
@@ -507,7 +511,7 @@ test('only a full run writes the gate record; --only goes to a scratch file unle
 // End to end, under a HOME of its own (cargo's homes kept), so no real record can be touched even if this
 // rule breaks: a run of one cheap line (`no-forks`) writes its scratch file and leaves the record alone.
 test('an --only run leaves the gate record untouched', () => {
-  const home = mkdtempSync(join(tmpdir(), 'stage12-gate-home-'));
+  const home = scratch('stage12-gate-home-');
   const record = join(home, 'x2theme', STAGES.s12.out);
   mkdirSync(join(home, 'x2theme'), { recursive: true });
   writeFileSync(record, 'a gate record\n');
@@ -519,7 +523,6 @@ test('an --only run leaves the gate record untouched', () => {
   expect(readFileSync(said, 'utf8')).toContain('no-forks');
   expect(readFileSync(record, 'utf8')).toBe('a gate record\n');
   rmSync(said, { force: true });
-  rmSync(home, { recursive: true, force: true });
 }, 900_000);
 
 test('stage 15 B\'s adoption proof: the copy\'s own files place an export, and its own declarations go', () => {

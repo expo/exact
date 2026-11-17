@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A link's box, pressable with the system's ripple; its content is placed in it. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/exact_widget_view"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:foreground="?android:attr/selectableItemBackground" />

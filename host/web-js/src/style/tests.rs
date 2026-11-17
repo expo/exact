@@ -115,12 +115,10 @@ fn a_bound_theme_name_writes_its_entry() {
 /// expression, bound, read their folded colours as the kernel does.
 #[test]
 fn a_bound_design_name_and_synthetic_token_write_their_values() {
-    let dir = std::env::temp_dir().join(format!("exact-web-js-tamber-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-web-js-forma");
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  brand = #c8102e\n  surface.card = #000000\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  brand = #c8102e\n  surface.card = #000000\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  state c: string = \"brand\"\n  view\n    column\n      text \"a\" color=c\n      text \"b\" color=\"light-dark(brand, surface.card)\"\n").unwrap();
@@ -191,7 +189,7 @@ fn mapped_clears_and_invalid_values_keep_declarations_but_none_removes_them() {
     for (id, invalid) in [
         (StyleId::ZIndex, "2.5"),
         (StyleId::Cursor, "not-a-cursor"),
-        (StyleId::ClipPath, "circle(20%)"),
+        (StyleId::ClipPath, "rect(0 0 10px 10px)"),
         (StyleId::ColorScheme, "orange"),
         (StyleId::CornerShape, "-apple-continuous"),
     ] {
@@ -347,6 +345,23 @@ fn a_bound_placeholder_colour_writes_the_private_property() {
     let writes = style_writes(StyleId::PlaceholderColor as u16, false, true).unwrap();
     assert_eq!(writes.len(), 1);
     assert_eq!(writes[0].name, "--exact-placeholder-color");
+    let map = writes[0].map.unwrap();
+    assert_eq!(
+        run(
+            &format!("v=>({map})(JSON.parse(v))"),
+            &["null", "\"unset\"", "\"#123456\""]
+        ),
+        serde_json::json!([null, "initial", "#123456"])
+    );
+}
+
+/// LLP 1035.001 D11: a bound `::backdrop` colour writes the private property
+/// that neutral.css's `::backdrop` rule reads; cleared, the scrim returns.
+#[test]
+fn a_bound_backdrop_colour_writes_the_private_property() {
+    let writes = style_writes(StyleId::BackdropColor as u16, false, true).unwrap();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].name, "--exact-backdrop-color");
     let map = writes[0].map.unwrap();
     assert_eq!(
         run(
@@ -685,5 +700,84 @@ fn a_bound_side_is_written_as_its_author_wrote_it() {
             Ok((sheets.to_string(), "px".to_string())),
             "{row:?}"
         );
+    }
+}
+
+#[test]
+fn bound_basic_clips_reach_css() {
+    let writes = style_writes(StyleId::ClipPath as u16, false, true).unwrap();
+    let values = [
+        "polygon(0% 25%, 100% 0%, 50% 100%)",
+        "inset(4px round 8px)",
+        "circle(30%)",
+        "ellipse(30% 40%)",
+    ];
+    assert_eq!(
+        run(writes[0].map.unwrap(), &values),
+        serde_json::json!(values)
+    );
+}
+
+#[test]
+fn computed_basic_clip_admission_matches_the_kernel() {
+    let values = [
+        "circle()",
+        "ellipse()",
+        "circle(30% at right bottom)",
+        "ellipse(closest-side farthest-side at 25% 60%)",
+        "inset(4px round 8px)",
+        "inset(10% 20% 30% 5px round 8px 20% 3px / 10% 5px)",
+        "polygon(0 0)",
+        "polygon(evenodd,0 0,100% 0,0 100%)",
+        "polygon(0 0,)",
+        "polygon(1 0)",
+        "circle(-2px)",
+        "circle(1em)",
+        "circle(calc(10% + 1px))",
+        "circle(10% at left right)",
+        "circle(10% at top 20px)",
+        "inset(0 round -1px)",
+        "inset(1pxround 2px)",
+        "inset(0 round 1px / 2px / 3px)",
+        "circle(1.px)",
+        "circle(1e39px)",
+    ];
+    let map = style_writes(StyleId::ClipPath as u16, false, true).unwrap()[0]
+        .map
+        .unwrap();
+    let actual = run(map, &values);
+    let expected: Vec<_> = values
+        .iter()
+        .map(|s| {
+            if exact_kernel::clip::ClipPath::parse(s).is_some() {
+                *s
+            } else {
+                "unset"
+            }
+        })
+        .collect();
+    assert_eq!(actual, serde_json::json!(expected));
+}
+
+#[test]
+fn svg_children_emit_basic_clip_css_on_both_web_targets() {
+    for tag in [
+        "rect width=100 height=80",
+        "g",
+        "text \"Hello\"",
+        "svg x=40 y=30",
+    ] {
+        let plan = contract::compile(&format!(
+            "component App\n  view\n    svg\n      {tag} clip-path=\"inset(25%)\"\n"
+        ))
+        .unwrap();
+        let output = crate::emit::emit(&plan, false, false).unwrap();
+        assert!(output.css.contains("clip-path:inset(25%"), "{}", output.css);
+        let sites = crate::emit::Sites::new(&plan).unwrap();
+        let (kernel, _) = static_tree(&plan, &sites).unwrap();
+        let css = exact_web::host::template::parts(&kernel, &plan, 2)
+            .unwrap()
+            .css;
+        assert!(css.contains("clip-path:inset(25%"), "{css}");
     }
 }

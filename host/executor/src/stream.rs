@@ -140,17 +140,29 @@ fn opened(
                         .aborted()
                         .then(|| failed(FailureKind::Aborted, "native request aborted"))
                 };
-                super::body::prepare(shared, &request, &ended)
+                let place = held.as_mut().and_then(upload::Held::place);
+                super::body::prepare(shared, &request, &ended, place.as_ref())
                     .and_then(|roots| {
-                        super::body::resolve(roots.as_ref(), grants, &mut request, &ended)
+                        super::body::resolve(
+                            roots.as_ref(),
+                            grants,
+                            &mut request,
+                            &ended,
+                            place,
+                            abort.signal(),
+                        )
                     })
-                    .and_then(|()| {
+                    .and_then(|file| {
                         // An upload's place in the budget, held until its
-                        // exchange ends (`open` reads it whole), is its body's.
+                        // exchange ends, is its body's: an inline one's
+                        // copies, or a file's reader (LLP 1133.008.000 D4).
                         if let Some(held) = held.as_mut() {
-                            held.keep(request.body.len().saturating_mul(COPIES));
+                            held.keep(match file {
+                                Some(_) => super::body::READ_BOUND,
+                                None => request.body.len().saturating_mul(COPIES),
+                            });
                         }
-                        open(Ok(&b), request, forced, &abort, sent, shared)
+                        open(Ok(&b), request, file, forced, &abort, sent, shared)
                     })
                     .map(|opened| (opened, b))
             }
@@ -417,6 +429,7 @@ pub fn socket_closed(code: u16, reason: &str) -> String {
 fn open(
     bindings: Result<&ibex2::host::Bindings, &str>,
     request: Request,
+    file: Option<ibex2::stdlib::fetch::BodyFile>,
     forced: bool,
     abort: &AbortController,
     sent: Option<Sent>,
@@ -436,6 +449,7 @@ fn open(
     let upload = request.upload_progress;
     let timeout = request.timeout_ms.filter(|_| upload);
     let mut req = fetch_request(request, forced);
+    req.body_file = file;
     super::cache::observe(shared, &mut req);
     if !upload && !req.headers.has("accept") {
         req.headers.set("accept", "text/event-stream");
@@ -661,7 +675,7 @@ mod long_poll;
 #[path = "socket.rs"]
 mod socket;
 #[path = "upload.rs"]
-mod upload;
+pub(super) mod upload;
 
 #[cfg(test)]
 #[path = "stream_tests.rs"]

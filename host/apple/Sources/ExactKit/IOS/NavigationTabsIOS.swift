@@ -25,7 +25,10 @@ import UIKit
 /// straight to the app's delegate.
 final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
     weak var host: NavigationHost?
-    weak var app: UITabBarControllerDelegate?
+    /// The app's delegate, held strongly until the app gives another or nil,
+    /// or the container leaves Exact (`NavigationHost.tabController`), as
+    /// `NavigationDelegateProxy.app` is.
+    var app: UITabBarControllerDelegate?
 
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         if app?.tabBarController?(tabs, shouldSelect: controller) == false { return false }
@@ -52,9 +55,8 @@ final class TabDelegateProxy: NSObject, UITabBarControllerDelegate {
         super.responds(to: selector) || (app?.responds(to: selector) ?? false)
     }
 
-    override func forwardingTarget(for selector: Selector!) -> Any? {
-        app?.responds(to: selector) == true ? app : nil
-    }
+    // Send the app's delegate each call Exact does not implement, as `NavigationDelegateProxy` does
+    override func forwardingTarget(for selector: Selector!) -> Any? { app }
 }
 
 extension NavigationHost {
@@ -98,7 +100,7 @@ extension NavigationHost {
         let owned = askTabContainer(tabs, selected: p.at)
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
-            let container = UITabBarController()
+            let container = TabController()
             tabProxy.host = self
             if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
                 buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
@@ -218,6 +220,7 @@ extension NavigationHost {
 
     private func hideTabBar(_ container: UITabBarController) {
         if #available(iOS 18.0, tvOS 18.0, *) { container.setTabBarHidden(true, animated: false) } else { container.tabBar.isHidden = true }
+        (container as? TabController)?.syncBarAccessibility()
     }
 
     /// Rows below the panels stay in CSS flow while UIKit's container fills the page: the root's
@@ -266,6 +269,7 @@ extension NavigationHost {
         } else {
             tabs.setTabBarHidden(hidden, animated: animated)
         }
+        (tabs as? TabController)?.syncBarAccessibility()
     }
 
     /// Before installing: a root that gains, loses or changes its tabs gets
@@ -302,7 +306,10 @@ extension NavigationHost {
             if let container = tabController, tabOwner === container, !ExactEnv.authoredChrome {
                 let hidden = authored || tabs.tablist.style["display"]?.string == "none"
                 if #available(iOS 18.0, tvOS 18.0, *) { setTabBarHidden(hidden, in: container, animated: false) }
-                else { container.tabBar.isHidden = hidden }
+                else {
+                    container.tabBar.isHidden = hidden
+                    (container as? TabController)?.syncBarAccessibility()
+                }
                 tablistHidBar = hidden && !authored
             }
         }
@@ -761,8 +768,9 @@ extension NavigationHost {
         releaseMore()
         if tabsHatched, tabController != nil { presenter.session?.natives.tabsHatch(tabController, event: 1) }
         if tabController == nil, tabOwner != nil { presenter.session?.natives.tabsHatch(nil, event: 3) }
+        // Leave the slot of a container the app owns as it is; Exact's own container's is emptied as
+        // `tabController` changes
         if let holder = tabOwner {
-            (holder as? UITabBarController)?.delegate = nil
             holder.willMove(toParent: nil)
             holder.view.removeFromSuperview()
             holder.removeFromParent()
@@ -788,6 +796,10 @@ extension NavigationHost {
     /// authored tablist's covers.
     func batchApplied(_ batch: Batch, rowsOnly: Bool) {
         if !rowsOnly || syncOwed { sync(batch) }
+        else if batch.ops.isEmpty {
+            // Page facts can carry no ops after UIKit sized an inactive owner.
+            fitOwner()
+        }
         presenter.modals.inheritFromAncestors()
         followAuthoredTablist()
     }

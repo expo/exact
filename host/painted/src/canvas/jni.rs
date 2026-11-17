@@ -11,6 +11,9 @@
 // FFI to the JNI, jnigraphics and AHardwareBuffer APIs.
 #![allow(unsafe_code)]
 
+#[path = "jni_agent.rs"]
+pub mod jni_agent;
+
 #[path = "jni_bytes.rs"]
 mod byte_arrays;
 pub use byte_arrays::{bytes, utf8};
@@ -25,6 +28,8 @@ mod jni_keys;
 pub mod jni_picture;
 #[path = "jni_scroll.rs"]
 mod jni_scroll;
+#[path = "jni_start.rs"]
+mod jni_start;
 #[path = "jni_pad.rs"]
 mod pad;
 
@@ -32,15 +37,17 @@ mod pad;
 /// compat the app's build script writes to `OUT_DIR` (`app.plan`,
 /// `compat.json`). `hatches = …` is the app's [`crate::hatches::Install`]
 /// when it has hatches (`hatches::install_with_reader`, so the reader's
-/// Kotlin ones hear them too).
+/// Kotlin ones hear them too). `updates = …` is the update store's opener
+/// (`exact_painted_update::open`) when the bake has a store; the reader
+/// passes the store's base at `start` (LLP 1030.006 D3).
 #[macro_export]
 macro_rules! canvas_jni {
-    ($data:ty) => {
-        $crate::canvas_jni!($data, hatches = None);
-    };
-    ($data:ty, hatches = $hatches:expr) => {
+    (@main $data:ty, $hatches:expr, $updates:expr) => {
         #[global_allocator]
         static EXACT_ALLOCATOR: $crate::canvas::jni::Allocator = $crate::canvas::jni::Allocator;
+
+        $crate::canvas_jni_tls!();
+        include!(concat!(env!("OUT_DIR"), "/transfers.rs"));
 
         mod exact_canvas_jni {
             #![allow(clippy::missing_safety_doc, unsafe_code)]
@@ -54,6 +61,24 @@ macro_rules! canvas_jni {
             const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
             const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
 
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_environment(
+                env: *mut JNIEnv,
+                _class: jclass,
+                values: $crate::canvas::jni_sys::jbyteArray,
+            ) {
+                // The reader calls once before starting host threads. Copy through JNI:
+                // Android's Os.setenv may belong to another libc under ARM translation.
+                let values = $crate::canvas::jni::utf8(env, values);
+                for entry in values.split('\0') {
+                    if let Some((name, value)) = entry.split_once('=') {
+                        if !name.is_empty() {
+                            std::env::set_var(name, value);
+                        }
+                    }
+                }
+            }
+
             fn pipeline_cache() {
                 use std::hash::{Hash, Hasher};
                 let mut key = std::collections::hash_map::DefaultHasher::new();
@@ -66,6 +91,10 @@ macro_rules! canvas_jni {
 
             fn hatches() -> Option<$crate::hatches::Install> {
                 $hatches
+            }
+
+            fn updates() -> Option<$crate::delivery::Opener> {
+                $updates
             }
 
             /// How long after boot the library's read-only pages are let go of
@@ -135,149 +164,7 @@ macro_rules! canvas_jni {
                 true
             }
 
-            #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_start(
-                env: *mut JNIEnv,
-                _class: jclass,
-                width: jint,
-                height: jint,
-                scale: jfloat,
-                dir: jstring,
-                live: jboolean,
-            ) -> jboolean {
-                static LOG: std::sync::Once = std::sync::Once::new();
-                LOG.call_once($crate::android::redirect_stdio);
-                // The activity was made again in this process: its reader
-                // adopts the host that runs. Nothing boots, and the
-                // environment, which other threads read by now, is left alone.
-                if adopt_running((width as u32, height as u32), scale) {
-                    return JNI_TRUE;
-                }
-                // The reader hosts the app's text fields (LLP 1115.001 D8).
-                $crate::canvas::field::attach(env, scale);
-                $crate::canvas::legacy::attach(env);
-                $crate::canvas::presence::attach(env);
-                let dir = string(env, dir);
-                pipeline_cache();
-                std::env::set_var("HOME", &dir);
-                std::env::set_var("XDG_DATA_HOME", format!("{dir}/data"));
-                std::env::set_var("EXACT_ASSETS", format!("{dir}/app"));
-                $crate::app::show_material_look();
-                std::env::set_var("EXACT_FONTS", "/system/fonts");
-                std::env::set_var("EXACT_FONT", "Roboto");
-                std::env::set_var("BENCH_LIVE", if live == JNI_TRUE { "1" } else { "0" });
-                match Host::boot(PLAN, COMPAT, (width as u32, height as u32), scale, hatches()) {
-                    Ok(h) => {
-                        HOST.with(|slot| *slot.borrow_mut() = Some(h));
-                        RUNNING.store(true, std::sync::atomic::Ordering::Release);
-                        $crate::android::release_library_pages_after(RELEASE_AFTER);
-                        JNI_TRUE
-                    }
-                    Err(e) => {
-                        $crate::android::log(&format!("exact: boot: {e}"));
-                        JNI_FALSE
-                    }
-                }
-            }
-
-            /// What a booting thread hands the thread that runs the host: the
-            /// host and its first frame. The
-            /// host's `Rc`s move with it whole; nothing on the booting thread
-            /// keeps one (its image and executor threads hold only `Send` state).
-            struct Booted(Host, Option<Vec<u32>>);
-            // SAFETY: see above: the booting thread lets go of all of it.
-            unsafe impl Send for Booted {}
-            static BOOTED: std::sync::Mutex<Option<Result<Booted, String>>> =
-                std::sync::Mutex::new(None);
-            static READY: std::sync::Condvar = std::sync::Condvar::new();
-            thread_local! {
-                /// The first frame a booting thread painted, returned by the next `frame`.
-                static PRIMED: RefCell<Option<Vec<u32>>> = const { RefCell::new(None) };
-            }
-
-            /// `start`, on a thread of its own: the host boots and paints its first
-            /// frame while the reader sets up; `adopt` takes it.
-            #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_startAsync(
-                env: *mut JNIEnv,
-                _class: jclass,
-                width: jint,
-                height: jint,
-                scale: jfloat,
-                dir: jstring,
-                live: jboolean,
-            ) {
-                static LOG: std::sync::Once = std::sync::Once::new();
-                LOG.call_once($crate::android::redirect_stdio);
-                // A host runs already (the activity was made again): nothing
-                // boots, and `adopt` adopts that one at this size.
-                if RUNNING.load(std::sync::atomic::Ordering::Acquire) {
-                    *ADOPT.lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some((width as u32, height as u32, scale));
-                    return;
-                }
-                $crate::canvas::field::attach(env, scale);
-                $crate::canvas::legacy::attach(env);
-                $crate::canvas::presence::attach(env);
-                // The environment is set here, before any other thread reads it.
-                let dir = string(env, dir);
-                pipeline_cache();
-                std::env::set_var("HOME", &dir);
-                std::env::set_var("XDG_DATA_HOME", format!("{dir}/data"));
-                std::env::set_var("EXACT_ASSETS", format!("{dir}/app"));
-                $crate::app::show_material_look();
-                std::env::set_var("EXACT_FONTS", "/system/fonts");
-                std::env::set_var("EXACT_FONT", "Roboto");
-                std::env::set_var("BENCH_LIVE", if live == JNI_TRUE { "1" } else { "0" });
-                std::thread::Builder::new()
-                    .name("exact-boot".into())
-                    .spawn(move || {
-                        let booted = $crate::android::trace(c"exact boot", || {
-                            Host::boot(PLAN, COMPAT, (width as u32, height as u32), scale, hatches()).map(
-                                |mut h| {
-                                    h.set_borrowed(true);
-                                    let first = $crate::canvas::agent::after_turn(h.frame());
-                                    h.roles_here(false);
-                                    Booted(h, first)
-                                },
-                            )
-                        });
-                        *BOOTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(booted);
-                        READY.notify_all();
-                    })
-                    .expect("boot thread");
-            }
-
-            /// Take the host `startAsync` booted, waiting for it; whether it booted.
-            #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_adopt(
-                _env: *mut JNIEnv,
-                _class: jclass,
-            ) -> jboolean {
-                let again = ADOPT.lock().unwrap_or_else(|e| e.into_inner()).take();
-                if let Some((width, height, scale)) = again {
-                    return flag(adopt_running((width, height), scale));
-                }
-                let mut slot = BOOTED.lock().unwrap_or_else(|e| e.into_inner());
-                while slot.is_none() {
-                    slot = READY.wait(slot).unwrap_or_else(|e| e.into_inner());
-                }
-                match slot.take().expect("booted") {
-                    Ok(Booted(mut h, first)) => {
-                        h.set_borrowed(false);
-                        h.roles_here(true);
-                        HOST.with(|s| *s.borrow_mut() = Some(h));
-                        RUNNING.store(true, std::sync::atomic::Ordering::Release);
-                        PRIMED.with(|p| *p.borrow_mut() = first);
-                        $crate::android::release_library_pages_after(RELEASE_AFTER);
-                        JNI_TRUE
-                    }
-                    Err(e) => {
-                        $crate::android::log(&format!("exact: boot: {e}"));
-                        JNI_FALSE
-                    }
-                }
-            }
+            $crate::canvas_jni_start!();
 
             /// The device's settings, whole (LLP 1115.001 D3.1): before
             /// `start`, from any thread, and on the host's thread again
@@ -535,9 +422,32 @@ macro_rules! canvas_jni {
                 line: $crate::canvas::jni_sys::jbyteArray,
             ) -> $crate::canvas::jni_sys::jbyteArray {
                 let line = $crate::canvas::jni::utf8(env, line);
-                let reply = with(|h| h.agent(&line));
+                let reply = with(|h| $crate::canvas::jni::jni_agent::run(env, h, &line));
                 let reply = reply.unwrap_or_else(|| r#"{"error":"no host on this thread"}"#.into());
                 $crate::canvas::jni::bytes(env, reply.as_bytes())
+            }
+
+            /// The token of the picture the last `frame` painted, which the
+            /// reader reports with its present; 0 when none is wanted (LLP
+            /// 1003.001 D9).
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_presentToken(
+                _env: *mut JNIEnv,
+                _class: jclass,
+            ) -> jlong {
+                with(|h| h.picture()).unwrap_or(0) as jlong
+            }
+
+            /// The picture `token` was presented at `at` (`System.nanoTime`):
+            /// whether a turn is now wanted.
+            #[no_mangle]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_picturePresented(
+                _env: *mut JNIEnv,
+                _class: jclass,
+                token: jlong,
+                at: jlong,
+            ) -> jboolean {
+                flag(with(|h| h.picture_presented(token as u64, at)).unwrap_or(false))
             }
 
             #[no_mangle]
@@ -555,6 +465,7 @@ macro_rules! canvas_jni {
             ) -> jintArray {
                 let mut fds = with(|h| h.fds()).unwrap_or([-1, -1]).to_vec();
                 fds.push(with(|h| h.acquire_fd()).unwrap_or(-1));
+                fds.push(with(|h| h.update_fd()).unwrap_or(-1));
                 let arr = ((**env).NewIntArray.expect("jni"))(env, fds.len() as i32);
                 ((**env).SetIntArrayRegion.expect("jni"))(env, arr, 0, fds.len() as i32, fds.as_ptr());
                 arr
@@ -727,6 +638,30 @@ macro_rules! canvas_jni {
                     generation: generation as u32,
                 };
                 with(|h| h.module_event(id as u32, key, session as u64, &kind, payload));
+            }
+
+            /// A media element's event, or (an empty `event`) its state (LLP 1042.001 D7).
+            #[no_mangle]
+            #[allow(clippy::too_many_arguments)]
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_media(
+                env: *mut JNIEnv,
+                _class: jclass,
+                id: jint,
+                slot: jint,
+                generation: jint,
+                session: jlong,
+                event: jstring,
+                payload: jstring,
+                state: jstring,
+            ) {
+                let event = string(env, event);
+                let payload = string(env, payload);
+                let state = string(env, state);
+                let key = $crate::canvas::ModuleKey {
+                    index: slot as u32,
+                    generation: generation as u32,
+                };
+                with(|h| h.media(id as u32, key, session as u64, &event, &payload, &state));
             }
 
             $crate::canvas_jni_scroll!();
@@ -1172,22 +1107,34 @@ macro_rules! canvas_jni {
                 with(|h| h.feed().map_or(0, |v| v as jint)).unwrap_or(0)
             }
 
-            /// What `ExactTamber(view)` asks (LLP 1121 D12), a JSON request,
-            /// and its answer (`Host::tamber_json`, `host/painted/src/tamber.rs`),
+            /// What `ExactForma(view)` asks (LLP 1121 D12), a JSON request,
+            /// and its answer (`Host::forma_json`, `host/painted/src/forma.rs`),
             /// on the host's thread; both by UTF-16, so a name crosses whole.
             #[no_mangle]
-            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_tamber(
+            pub unsafe extern "system" fn Java_dev_exact_canvas_Native_forma(
                 env: *mut JNIEnv,
                 _class: jclass,
                 request: jstring,
             ) -> jstring {
                 let request = $crate::canvas::field::text(env, request);
-                let reply = with(|h| h.tamber_json(&request));
+                let reply = with(|h| h.forma_json(&request));
                 let reply = reply.unwrap_or_else(|| r#"{"error":"no host on this thread"}"#.into());
                 $crate::canvas::field::java(env, &reply)
             }
 
         }
+    };
+    ($data:ty) => {
+        $crate::canvas_jni!(@main $data, None, None);
+    };
+    ($data:ty, hatches = $hatches:expr) => {
+        $crate::canvas_jni!(@main $data, $hatches, None);
+    };
+    ($data:ty, updates = $updates:path) => {
+        $crate::canvas_jni!(@main $data, None, Some($updates));
+    };
+    ($data:ty, hatches = $hatches:expr, updates = $updates:path) => {
+        $crate::canvas_jni!(@main $data, $hatches, Some($updates));
     };
 }
 
@@ -1412,18 +1359,19 @@ pub unsafe fn canvas_buffer(env: *mut JNIEnv, view: u32) -> jobject {
 /// # Safety
 /// `env` is the JNI call's.
 pub unsafe fn image_buffer(env: *mut JNIEnv, id: u32) -> jobject {
-    let mut pending = super::pending();
-    let Some(super::Picture::Bitmap(bitmap)) = pending.get(&id) else {
-        return std::ptr::null_mut();
-    };
-    let Some(buffer) = bitmap.hardware() else {
-        return std::ptr::null_mut();
-    };
-    let object = AHardwareBuffer_toHardwareBuffer(env, buffer);
-    if !object.is_null() {
-        pending.remove(&id);
-    }
-    object
+    super::with_pending(|pending| {
+        let Some(super::Picture::Bitmap(bitmap)) = pending.get(&id) else {
+            return std::ptr::null_mut();
+        };
+        let Some(buffer) = bitmap.hardware() else {
+            return std::ptr::null_mut();
+        };
+        let object = AHardwareBuffer_toHardwareBuffer(env, buffer);
+        if !object.is_null() {
+            pending.remove(&id);
+        }
+        object
+    })
 }
 
 /// Picture `id` into the `HardwareBuffer` `buffer` (RGBA_8888, CPU-writable):

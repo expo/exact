@@ -93,7 +93,24 @@ pub type NativeCall = std::sync::Arc<dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 
 /// JSON body and the reply to send when it is done.
 pub type NativeHandler = std::sync::Arc<dyn Fn(Vec<u8>, crate::Reply) + Send + Sync>;
 
+thread_local! {
+    static LIBRARY_LOAD_TIME: std::cell::Cell<std::time::Duration> = const {
+        std::cell::Cell::new(std::time::Duration::ZERO)
+    };
+}
+
 impl Native {
+    /// The host's library mapping inside this thread's synchronous calls
+    /// (LLP 1067.000.001 D7), excluded only from a turn's wall backstop.
+    pub fn record_library_load(time: std::time::Duration) {
+        LIBRARY_LOAD_TIME.with(|total| total.set(total.get().saturating_add(time)));
+    }
+
+    /// Cumulative mapping time on the calling thread, independent of its source.
+    pub fn library_load_time() -> std::time::Duration {
+        LIBRARY_LOAD_TIME.with(std::cell::Cell::get)
+    }
+
     /// Fill the slot (activation) or empty it (unload).
     pub fn set(&self, handler: Option<NativeHandler>) {
         *self.0.handler.lock().unwrap_or_else(|e| e.into_inner()) = handler;
@@ -307,6 +324,32 @@ pub struct Overlaid {
     pub value: Value,
     /// The ids of answered writes still to show.
     pub keep: Vec<u64>,
+}
+
+/// A data module's report (LLP 1175 D3): a plain HTTP request a listener for
+/// its global's error events made while it was dispatched. No answer waits
+/// for it. The runner runs it as module work ([`DataSource::take_reports`]),
+/// with the authority its own records give `by`.
+#[derive(Debug)]
+pub struct Report {
+    /// The source's token for the reply ([`DataSource::module_delivery`]).
+    pub token: u64,
+    /// The request, with no reach yet: the runner stamps it.
+    pub request: crate::request::Request,
+    /// Whose turn the listener interrupted.
+    pub by: Reporter,
+}
+
+/// Whose turn a report was made in, as the source knows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reporter {
+    /// The answer for this target was running when the event was dispatched.
+    Answer(Target),
+    /// A tool's handler was running.
+    Tool,
+    /// No answer was: a background round, a module turn, or a step of an
+    /// answer outside its own turn.
+    None,
 }
 
 /// What a request answers: a runtime resource row, a plan mutation, or one
@@ -637,7 +680,10 @@ data_source! {
     /// go. A call this source set aside is dropped unless `let_go` names it;
     /// after a `refused` commit, one whose request is in flight again is put
     /// back instead, and its replacement dropped. A source that forwards
-    /// `background` forwards this and `module_landed`.
+    /// `background` forwards this and `module_landed`. `store` is the Store
+    /// as committed when the requests were let go, read-only and outside a
+    /// worker's ordered set (LLP 1027.002 Change 2): nothing here may depend on
+    /// what a turn still in flight could change.
     fn keep_sent(
         &mut self,
         store: &Store,
@@ -678,6 +724,15 @@ data_source! {
     ) -> Result<(), DataError> {
         let _ = (store, token, outcome);
         Ok(())
+    }
+
+    /// The reports the module made since the last take (LLP 1175 D3). The
+    /// runner takes them after every call into the source and runs each as
+    /// module work, its reply delivered under its token
+    /// ([`DataSource::module_delivery`]). A source that forwards
+    /// `module_landed` forwards this.
+    fn take_reports(&mut self) -> Vec<Report> {
+        Vec::new()
     }
 
     /// The module's background storage now, or `None` for a source that

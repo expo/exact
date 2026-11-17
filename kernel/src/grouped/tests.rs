@@ -85,7 +85,7 @@ fn row(
     }
     ops.extend([style(target, values, authored), Op::AttachRoot { id: 1 }]);
     k.apply(0, 1, &ops).unwrap();
-    k.grouped_row(&k.node(1).unwrap())
+    k.grouped_row(&k.node(1).unwrap(), &|_| false)
 }
 
 #[test]
@@ -161,6 +161,64 @@ fn sheet_boxes_and_a_rows_minimum_height_keep_standard_cells() {
 }
 
 #[test]
+fn a_rows_markdown_text_keeps_its_views() {
+    for column in [false, true] {
+        for lines in [1, 2] {
+            for markdown in 3..3 + lines as ViewId {
+                let mut k = Kernel::with_monospace();
+                let mut ops = vec![];
+                for (id, node_type) in [
+                    (1, NodeType::View),
+                    (3, NodeType::Text),
+                    (4, NodeType::Text),
+                ] {
+                    ops.push(Op::CreateView { id, node_type });
+                }
+                if column {
+                    ops.push(style(
+                        1,
+                        &[
+                            (StyleId::Display, "flex"),
+                            (StyleId::FlexDirection, "column"),
+                        ],
+                        false,
+                    ));
+                }
+                ops.extend([
+                    Op::SetProp {
+                        id: 3,
+                        prop: PropId::Text,
+                        value: "A **bold** word".into(),
+                    },
+                    Op::SetProp {
+                        id: 4,
+                        prop: PropId::Text,
+                        value: "Detail".into(),
+                    },
+                    Op::SetProp {
+                        id: markdown,
+                        prop: PropId::Markup,
+                        value: "markdown".into(),
+                    },
+                    Op::SetChildren {
+                        id: 1,
+                        children: (3..3 + lines as ViewId).collect(),
+                    },
+                    Op::AttachRoot { id: 1 },
+                ]);
+                k.apply(0, 1, &ops).unwrap();
+                let r = k.grouped_row(&k.node(1).unwrap(), &|_| false);
+                assert!(
+                    r.custom,
+                    "column={column}, lines={lines}, markdown text={markdown}"
+                );
+                assert_eq!((r.title, r.secondary), (None, None));
+            }
+        }
+    }
+}
+
+#[test]
 fn custom_radio_rows_keep_their_selection_target_and_checked_state() {
     for (property, value) in [
         (StyleId::Height, "80"),
@@ -210,7 +268,7 @@ fn custom_radio_rows_keep_their_selection_target_and_checked_state() {
                     ],
                 )
                 .unwrap();
-                let row = k.grouped_row(&k.node(1).unwrap());
+                let row = k.grouped_row(&k.node(1).unwrap(), &|_| false);
                 assert!(row.custom);
                 assert!(!row.pressable, "the row itself has no press handler");
                 assert_eq!(row.accessory, Accessory::Radio(3, checked));
@@ -272,13 +330,492 @@ fn a_standard_rows_switch_is_its_toggle_only_in_a_grouped_list() {
         ]);
         k.apply(0, 1, &ops).unwrap();
         let grouped = list_style.is_some();
-        assert_eq!(k.grouped_toggle(4), grouped.then_some(6), "{list_style:?}");
+        assert_eq!(
+            k.grouped_toggle(4, &|_| false),
+            grouped.then_some(6),
+            "{list_style:?}"
+        );
         for other in [1, 2, 3, 5, 6, 8] {
             assert_eq!(
-                k.grouped_toggle(other),
+                k.grouped_toggle(other, &|_| false),
                 None,
                 "{other} is no row of a section's group"
             );
+        }
+    }
+}
+
+#[test]
+fn markdown_rows_keep_their_accessories() {
+    // Whether the row is a column, its children, and its nested column's.
+    let shapes: [(bool, &[ViewId], &[ViewId]); 4] = [
+        (false, &[5, 3], &[]),
+        (false, &[3, 5], &[]),
+        (false, &[3, 4, 5], &[]),
+        (false, &[2, 5], &[3, 4]),
+    ];
+    for (kind, accessory_type, expected) in [
+        (NodeType::Control, "checkbox", Accessory::Toggle(5)),
+        (NodeType::Control, "radio", Accessory::Radio(5, true)),
+        (NodeType::Image, "chevron.forward", Accessory::Disclosure),
+        (NodeType::Image, "checkmark", Accessory::Checkmark),
+        (NodeType::Pressable, "detail", Accessory::Detail(5)),
+    ] {
+        for (column, parts, lines) in shapes {
+            if parts.first() == Some(&5) && accessory_type != "radio" {
+                continue;
+            }
+            for markdown in [None, Some(3), Some(4)] {
+                let mut k = Kernel::with_monospace();
+                let mut ops = vec![];
+                for (id, node_type) in [
+                    (1, NodeType::View),
+                    (2, NodeType::View),
+                    (3, NodeType::Text),
+                    (4, NodeType::Text),
+                    (5, kind),
+                    (6, NodeType::Image),
+                    (10, NodeType::List),
+                    (11, NodeType::View),
+                    (12, NodeType::View),
+                ] {
+                    ops.push(Op::CreateView { id, node_type });
+                }
+                let direction = if column { "column" } else { "row" };
+                let prop = |id, prop, value: &str| Op::SetProp {
+                    id,
+                    prop,
+                    value: value.into(),
+                };
+                ops.extend([
+                    style(
+                        1,
+                        &[
+                            (StyleId::Display, "flex"),
+                            (StyleId::FlexDirection, direction),
+                        ],
+                        false,
+                    ),
+                    style(
+                        2,
+                        &[
+                            (StyleId::Display, "flex"),
+                            (StyleId::FlexDirection, "column"),
+                        ],
+                        false,
+                    ),
+                    prop(3, PropId::Text, "A **bold** title"),
+                    prop(4, PropId::Text, "A *slanted* line"),
+                    prop(5, PropId::Type, accessory_type),
+                    Op::SetProp {
+                        id: 5,
+                        prop: PropId::Checked,
+                        value: true.into(),
+                    },
+                    prop(
+                        5,
+                        PropId::ImageSource,
+                        &format!("symbol:sf/{accessory_type}"),
+                    ),
+                    prop(6, PropId::ImageSource, "symbol:sf/info.circle"),
+                    prop(10, PropId::ListStyle, "inset-grouped"),
+                    Op::SetChildren {
+                        id: 10,
+                        children: vec![11],
+                    },
+                    Op::SetChildren {
+                        id: 11,
+                        children: vec![12],
+                    },
+                    Op::SetChildren {
+                        id: 12,
+                        children: vec![1],
+                    },
+                    Op::SetChildren {
+                        id: 2,
+                        children: lines.to_vec(),
+                    },
+                    Op::SetChildren {
+                        id: 1,
+                        children: parts.to_vec(),
+                    },
+                ]);
+                if accessory_type == "detail" {
+                    ops.push(Op::SetChildren {
+                        id: 5,
+                        children: vec![6],
+                    });
+                }
+                if let Some(id) = markdown {
+                    ops.push(prop(id, PropId::Markup, "markdown"));
+                }
+                ops.push(Op::AttachRoot { id: 10 });
+                k.apply(0, 1, &ops).unwrap();
+                let row = k.grouped_row(&k.node(1).unwrap(), &|_| false);
+                let shown = markdown.is_some_and(|id| parts.contains(&id) || lines.contains(&id));
+                let note = format!("column row={column}, parts={parts:?}, Markdown={markdown:?}, accessory={accessory_type}");
+                assert_eq!(row.custom, shown, "{note}");
+                let title = (!shown).then_some("A **bold** title");
+                assert_eq!(row.title.as_deref(), title, "{note}");
+                let accessory = if parts.contains(&5) {
+                    expected
+                } else {
+                    Accessory::None
+                };
+                assert_eq!(row.accessory, accessory, "the cell's accessory: {note}");
+                assert_eq!(
+                    k.grouped_toggle(1, &|_| false),
+                    (parts.contains(&5) && accessory_type == "checkbox").then_some(5),
+                    "{note}"
+                );
+                if shown && parts.contains(&5) {
+                    // A platform cover removes only the replaced accessory's
+                    // flex slot. The model still names it on the next read.
+                    k.set_host_cover(5, Some(crate::HostCover::Whole)).unwrap();
+                    k.set_host_cover(1, Some(crate::HostCover::Edges([0.0, 40.0, 0.0, 0.0])))
+                        .unwrap();
+                    k.compute_layout(10, crate::Offer::definite(320.0, 600.0))
+                        .unwrap();
+                    assert_eq!(k.node(5).unwrap().frame.width, 0.0, "{note}");
+                    assert_eq!(
+                        k.grouped_row(&k.node(1).unwrap(), &|_| false)
+                            .accessory_view,
+                        Some(5)
+                    );
+                    k.set_host_cover(5, None).unwrap();
+                    k.set_host_cover(1, None).unwrap();
+                    k.apply(1, 2, &[style(1, &[(StyleId::Height, "80")], true)])
+                        .unwrap();
+                    let authored = k.grouped_row(&k.node(1).unwrap(), &|_| false);
+                    assert!(authored.custom);
+                    assert_eq!(
+                        authored.accessory,
+                        if accessory_type == "radio" {
+                            expected
+                        } else {
+                            Accessory::None
+                        },
+                        "an authored box keeps its control"
+                    );
+                    assert_eq!(k.grouped_toggle(1, &|_| false), None);
+                }
+            }
+        }
+    }
+}
+
+/// A text that is more than one label (inline runs, a link, a press of its
+/// own) keeps its row's parts as they are written, whatever the accessory
+/// and whether or not the title is Markdown. One that is not shown
+/// (`display: none`) changes nothing: the row is the standard row it is
+/// without it.
+#[test]
+fn a_text_that_stands_alone_keeps_each_part_of_its_row() {
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Alone {
+        No,
+        Run,
+        Link,
+        Press,
+    }
+    for (accessory_type, kind, expected) in [
+        ("checkbox", NodeType::Control, Accessory::Toggle(5)),
+        ("radio", NodeType::Control, Accessory::Radio(5, false)),
+        ("chevron.forward", NodeType::Image, Accessory::Disclosure),
+    ] {
+        for markdown in [false, true] {
+            for alone in [Alone::No, Alone::Run, Alone::Link, Alone::Press] {
+                // The title is the text that stands alone, or the value beside it is.
+                // `hidden`: what would stand alone is a `display: none` run of that text.
+                for (text, hidden) in [(3, false), (4, false), (3, true), (4, true)] {
+                    if hidden && alone == Alone::No {
+                        continue;
+                    }
+                    let own = if hidden { 6 } else { text };
+                    let mut k = Kernel::with_monospace();
+                    let mut ops = vec![];
+                    for (id, node_type) in [
+                        (1, NodeType::View),
+                        (2, NodeType::View),
+                        (3, NodeType::Text),
+                        (4, NodeType::Text),
+                        (5, kind),
+                        (6, NodeType::Text),
+                        (10, NodeType::List),
+                        (11, NodeType::View),
+                    ] {
+                        ops.push(Op::CreateView { id, node_type });
+                    }
+                    let mut props = vec![
+                        (3, PropId::Text, "**Home**"),
+                        (4, PropId::Text, "Help"),
+                        (5, PropId::Type, accessory_type),
+                        (5, PropId::ImageSource, "symbol:sf/chevron.forward"),
+                        (6, PropId::Text, "Documentation"),
+                        (10, PropId::ListStyle, "inset-grouped"),
+                    ];
+                    if markdown {
+                        props.push((3, PropId::Markup, "markdown"));
+                    }
+                    if alone == Alone::Link {
+                        props.push((own, PropId::Href, "https://example.com"));
+                    }
+                    for (id, prop, value) in props {
+                        ops.push(Op::SetProp {
+                            id,
+                            prop,
+                            value: value.into(),
+                        });
+                    }
+                    let mut children = vec![
+                        (10, vec![11]),
+                        (11, vec![2]),
+                        (2, vec![1]),
+                        (1, vec![3, 4, 5]),
+                    ];
+                    if alone == Alone::Run || hidden {
+                        children.push((text, vec![6]));
+                    }
+                    if hidden {
+                        ops.push(style(6, &[(StyleId::Display, "none")], true));
+                    }
+                    for (id, children) in children {
+                        ops.push(Op::SetChildren { id, children });
+                    }
+                    ops.push(Op::AttachRoot { id: 10 });
+                    k.apply(0, 1, &ops).unwrap();
+                    let acts = |id: ViewId| alone == Alone::Press && id == own;
+                    let row = k.grouped_row(&k.node(1).unwrap(), &acts);
+                    let note = format!(
+                        "{accessory_type}, Markdown={markdown}, {alone:?} on {text}, hidden={hidden}"
+                    );
+                    let alone = if hidden { Alone::No } else { alone };
+                    assert_eq!(row.custom, markdown || alone != Alone::No, "{note}");
+                    if alone == Alone::No {
+                        // Markdown alone keeps the text and the platform's accessory.
+                        assert_eq!(row.accessory, expected, "{note}");
+                        assert_eq!(row.accessory_view, Some(5), "{note}");
+                        assert_eq!(
+                            k.grouped_toggle(1, &acts),
+                            (accessory_type == "checkbox").then_some(5),
+                            "{note}"
+                        );
+                        continue;
+                    }
+                    // Its row's cell replaces no part: only a radio's target stays,
+                    // which a tap on the row checks.
+                    let kept = match expected {
+                        radio @ Accessory::Radio(..) => radio,
+                        _ => Accessory::None,
+                    };
+                    assert_eq!(row.accessory, kept, "{note}");
+                    assert_eq!(row.accessory_view, None, "{note}");
+                    assert_eq!(k.grouped_toggle(1, &acts), None, "{note}");
+                    let list = k.grouped_list_with(10, &acts).unwrap();
+                    assert_eq!(list.sections[0].rows[0], row, "{note}");
+                    if alone == Alone::Press {
+                        // A host that does not say so sees one label.
+                        assert_eq!(
+                            k.grouped_list(10).unwrap().sections[0].rows[0].accessory_view,
+                            Some(5)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An image with a press of its own keeps its row's parts as they are
+/// written, whether it is where the accessory or the leading symbol would
+/// be and whether or not the title is Markdown: a cell's chevron or icon
+/// would press nothing. One that is not shown changes nothing.
+#[test]
+fn an_image_with_a_press_of_its_own_keeps_each_part_of_its_row() {
+    for markdown in [false, true] {
+        // The image is the row's last part (4), or its first (2).
+        for image in [4, 2] {
+            for (presses, hidden) in [(false, false), (true, false), (true, true)] {
+                let mut k = Kernel::with_monospace();
+                let mut ops = vec![];
+                for (id, node_type) in [
+                    (1, NodeType::Pressable),
+                    (image, NodeType::Image),
+                    (3, NodeType::Text),
+                    (10, NodeType::List),
+                    (11, NodeType::View),
+                    (12, NodeType::View),
+                ] {
+                    ops.push(Op::CreateView { id, node_type });
+                }
+                let mut props = vec![
+                    (3, PropId::Text, "**Profile**"),
+                    (image, PropId::ImageSource, "symbol:sf/chevron.right"),
+                    (10, PropId::ListStyle, "inset-grouped"),
+                ];
+                if markdown {
+                    props.push((3, PropId::Markup, "markdown"));
+                }
+                for (id, prop, value) in props {
+                    ops.push(Op::SetProp {
+                        id,
+                        prop,
+                        value: value.into(),
+                    });
+                }
+                if hidden {
+                    ops.push(style(image, &[(StyleId::Display, "none")], true));
+                }
+                let parts = if image == 4 { vec![3, 4] } else { vec![2, 3] };
+                for (id, children) in [(10, vec![11]), (11, vec![12]), (12, vec![1]), (1, parts)] {
+                    ops.push(Op::SetChildren { id, children });
+                }
+                ops.push(Op::AttachRoot { id: 10 });
+                k.apply(0, 1, &ops).unwrap();
+                let acts = |id: ViewId| presses && id == image;
+                let row = k.grouped_row(&k.node(1).unwrap(), &acts);
+                let note = format!(
+                    "image {image}, Markdown={markdown}, presses={presses}, hidden={hidden}"
+                );
+                let alone = presses && !hidden;
+                assert_eq!(row.custom, markdown || alone, "{note}");
+                assert_eq!(
+                    k.grouped_list_with(10, &acts).unwrap().sections[0].rows[0],
+                    row
+                );
+                if alone {
+                    // The cell replaces no part of it.
+                    assert_eq!(row.accessory, Accessory::None, "{note}");
+                    assert_eq!(row.accessory_view, None, "{note}");
+                    assert_eq!(row.symbol, None, "{note}");
+                    continue;
+                }
+                let shown = !hidden;
+                let (accessory, view) = if image == 4 && shown {
+                    (Accessory::Disclosure, Some(4))
+                } else {
+                    (Accessory::None, None)
+                };
+                assert_eq!(row.accessory, accessory, "{note}");
+                assert_eq!(row.accessory_view, view, "{note}");
+                let symbol = (image == 2 && shown).then(|| "chevron.right".to_owned());
+                assert_eq!(row.symbol, symbol, "{note}");
+            }
+        }
+    }
+}
+
+/// An accessory with `visibility: hidden` or `collapse`, written on it, on
+/// its row or on the symbol of a detail button, keeps each part of its row
+/// as written, in a Markdown row and in a plain one; shown again, the cell
+/// draws it again.
+#[test]
+fn a_hidden_accessory_keeps_each_part_of_its_row() {
+    for (kind, accessory_type, expected) in [
+        (NodeType::Control, "checkbox", Accessory::Toggle(5)),
+        (NodeType::Control, "radio", Accessory::Radio(5, false)),
+        (NodeType::Image, "chevron.forward", Accessory::Disclosure),
+        (NodeType::Image, "checkmark", Accessory::Checkmark),
+        (NodeType::Pressable, "detail", Accessory::Detail(5)),
+    ] {
+        for markdown in [false, true] {
+            // The radio leads its row or ends it, as every other accessory does.
+            for parts in [vec![3, 5], vec![5, 3]] {
+                if parts[0] == 5 && accessory_type != "radio" {
+                    continue;
+                }
+                // The node that says it: the accessory, its row, or a detail button's symbol.
+                for says in [5, 1, 6] {
+                    if says == 6 && accessory_type != "detail" {
+                        continue;
+                    }
+                    let mut k = Kernel::with_monospace();
+                    let mut ops = vec![];
+                    for (id, node_type) in [
+                        (1, NodeType::View),
+                        (3, NodeType::Text),
+                        (5, kind),
+                        (6, NodeType::Image),
+                        (10, NodeType::List),
+                        (11, NodeType::View),
+                        (12, NodeType::View),
+                    ] {
+                        ops.push(Op::CreateView { id, node_type });
+                    }
+                    let mut props = vec![
+                        (3, PropId::Text, "**Notifications**".to_owned()),
+                        (5, PropId::Type, accessory_type.to_owned()),
+                        (
+                            5,
+                            PropId::ImageSource,
+                            format!("symbol:sf/{accessory_type}"),
+                        ),
+                        (6, PropId::ImageSource, "symbol:sf/info.circle".to_owned()),
+                        (10, PropId::ListStyle, "inset-grouped".to_owned()),
+                    ];
+                    if markdown {
+                        props.push((3, PropId::Markup, "markdown".to_owned()));
+                    }
+                    for (id, prop, value) in props {
+                        ops.push(Op::SetProp {
+                            id,
+                            prop,
+                            value: value.as_str().into(),
+                        });
+                    }
+                    let mut children = vec![(10, vec![11]), (11, vec![12]), (12, vec![1])];
+                    children.push((1, parts.clone()));
+                    if accessory_type == "detail" {
+                        children.push((5, vec![6]));
+                    }
+                    for (id, children) in children {
+                        ops.push(Op::SetChildren { id, children });
+                    }
+                    ops.push(Op::AttachRoot { id: 10 });
+                    k.apply(0, 1, &ops).unwrap();
+                    for (batch, visibility) in
+                        (2..).zip(["hidden", "visible", "collapse", "visible"])
+                    {
+                        k.apply(
+                            0,
+                            batch,
+                            &[style(says, &[(StyleId::Visibility, visibility)], true)],
+                        )
+                        .unwrap();
+                        let row = k.grouped_row(&k.node(1).unwrap(), &|_| false);
+                        let note = format!(
+                            "{accessory_type}, Markdown={markdown}, parts={parts:?}, {visibility} on {says}"
+                        );
+                        assert_eq!(
+                            k.grouped_list(10).unwrap().sections[0].rows[0],
+                            row,
+                            "{note}"
+                        );
+                        if visibility == "visible" {
+                            assert_eq!(row.custom, markdown, "{note}");
+                            assert_eq!(row.accessory, expected, "{note}");
+                            assert_eq!(row.accessory_view, Some(5), "{note}");
+                            assert_eq!(
+                                k.grouped_toggle(1, &|_| false),
+                                (accessory_type == "checkbox").then_some(5),
+                                "{note}"
+                            );
+                            continue;
+                        }
+                        // The cell replaces no part: only a radio's target stays, as in
+                        // any row that keeps its views.
+                        assert!(row.custom, "{note}");
+                        let kept = match expected {
+                            radio @ Accessory::Radio(..) => radio,
+                            _ => Accessory::None,
+                        };
+                        assert_eq!(row.accessory, kept, "{note}");
+                        assert_eq!(row.accessory_view, None, "{note}");
+                        assert_eq!(row.title, None, "{note}");
+                        assert_eq!(k.grouped_toggle(1, &|_| false), None, "{note}");
+                    }
+                }
+            }
         }
     }
 }

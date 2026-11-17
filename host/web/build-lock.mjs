@@ -35,10 +35,14 @@ function kernel() {
         return handle;
       },
       take(handle, exclusive) {
-        // Lock byte 64, beyond the PID: Windows byte locks also deny reads, so diagnostic reads stay outside it.
-        // `OVERLAPPED.Offset` is 16 bytes into the structure on 64-bit Windows; the event and high offset stay zero.
+        // Lock the byte at 4 GiB. An exclusive lock denies reads of its range through every handle but the one that
+        // took it, this process's others included, and `readFileSync` asks for more bytes than the PID holds, so a
+        // lock just past the PID fails the holder's own read of the file (EBUSY). No read of a file this small
+        // reaches 4 GiB, and locking beyond the end of a file is not an error (LockFileEx, Remarks:
+        // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex).
+        // `OVERLAPPED.OffsetHigh` is 20 bytes into the structure on 64-bit Windows; `Offset` and the event stay zero.
         const overlapped = new Uint8Array(32);
-        new DataView(overlapped.buffer).setUint32(16, 64, true);
+        new DataView(overlapped.buffer).setUint32(20, 1, true);
         if (symbols.LockFileEx(handle, LOCKFILE_FAIL_IMMEDIATELY + (exclusive ? LOCKFILE_EXCLUSIVE_LOCK : 0), 0, 1, 0, overlapped)) return true;
         // Read the error in a second call: bun:ffi returns none, and nothing between the calls is expected to set it
         const code = symbols.GetLastError();

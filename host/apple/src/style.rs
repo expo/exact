@@ -26,6 +26,7 @@ use exact_motion::Property;
 use std::fmt::Write as _;
 
 mod axes;
+pub(crate) use axes::{font_axes_json, font_features_json};
 #[cfg(test)]
 mod crossing_tests;
 #[cfg(test)]
@@ -160,6 +161,8 @@ pub(crate) fn style_json_rows(
         out.push_str("\":");
         let wrote = match style.get(id) {
             RowValue::ShapeOutside(_) => false, // LLP 1043.000 M3
+            // The kernel's own (LLP 1123 D5): the lengths that read them are sent resolved
+            RowValue::SafeAreaProperties(_) => false,
             // Layout only (LLP 1053 G1): the kernel sizes the box.
             RowValue::AspectRatio(_) => false,
             RowValue::PositionTryFallbacks(v) => {
@@ -203,6 +206,20 @@ pub(crate) fn style_json_rows(
             RowValue::ColorValue(c) => {
                 push_color_value(&mut out, c);
                 systems.extend(c.system_name().map(|s| (name, s)));
+                true
+            }
+            RowValue::ClipPath(p) if p.shape_value_count() > 0 => {
+                let (shape, values) = p.shape_data().unwrap();
+                let values = values.iter().map(|n| num(*n)).collect::<Vec<_>>().join(",");
+                let rule = if p.rule() == exact_kernel::FillRule::Evenodd {
+                    "evenodd"
+                } else {
+                    "nonzero"
+                };
+                let _ = write!(
+                    out,
+                    "{{\"shape\":\"{shape}\",\"values\":[{values}],\"rule\":\"{rule}\"}}"
+                );
                 true
             }
             RowValue::ClipPath(p) => {
@@ -529,6 +546,12 @@ fn push_length(out: &mut String, d: Dimension, env: Option<&exact_kernel::Env>) 
 fn push_dimension(out: &mut String, d: Dimension) {
     match d {
         Dimension::Auto => out.push_str("\"auto\""),
+        // A size keyword crosses as its CSS, which Swift reads as no length.
+        Dimension::Keyword(k) => {
+            out.push('"');
+            out.push_str(k.css());
+            out.push('"');
+        }
         Dimension::Points(p) => push_num(out, p),
         Dimension::Percent(p) => {
             out.push_str("{\"pct\":");
@@ -776,26 +799,36 @@ pub fn style_json_for(node: &NodeRef<'_>, env: &Env) -> (String, Vec<Skipped>) {
 }
 
 /// Presented paint over the rows while it moves (LLP 1055.000 D6, LLP
-/// 1062): one slot per [`Property::PAINT`]; `None` shows the row.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Shown(pub [Option<exact_motion::Value>; Property::PAINT.len()]);
+/// 1062): one slot per [`Property::PAINT`], and the `filter` a transition
+/// moves (LLP 1003.002 D8); `None` shows the row.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Shown {
+    paint: [Option<exact_motion::Value>; Property::PAINT.len()],
+    /// The presented `filter`.
+    pub filter: Option<exact_kernel::svg::filter::FilterList>,
+}
 
 impl Shown {
     /// The presented value of one paint property.
     pub fn get(&self, property: Property) -> Option<exact_motion::Value> {
         let i = Property::PAINT.iter().position(|p| *p == property)?;
-        self.0[i]
+        self.paint[i]
+    }
+
+    /// Whether anything is presented over the rows.
+    pub fn moving(&self) -> bool {
+        self.paint.iter().any(Option::is_some) || self.filter.is_some()
     }
 
     /// Set one paint property's presented value.
     pub fn set(&mut self, property: Property, value: Option<exact_motion::Value>) {
         if let Some(i) = Property::PAINT.iter().position(|p| *p == property) {
-            self.0[i] = value;
+            self.paint[i] = value;
         }
     }
 }
 
-fn fixed(v: exact_motion::Value) -> ColorValue {
+pub(crate) fn fixed(v: exact_motion::Value) -> ColorValue {
     // LLP 1100 D2: Oklab motion keeps its gamut frame by frame.
     if v.oklab {
         let (linear, alpha) = v.linear_srgb();
@@ -805,8 +838,13 @@ fn fixed(v: exact_motion::Value) -> ColorValue {
     ColorValue::Fixed(exact_kernel::Color(u32::from_be_bytes([r, g, b, a])))
 }
 
-/// The presented colour, background, tint and shadow over `computed`'s rows.
+/// The presented colour, background, tint, shadow and filter over
+/// `computed`'s rows.
 fn paint_over(computed: &mut StyleProps, shown: &Shown) {
+    if let Some(f) = &shown.filter {
+        computed.filter = f.clone();
+        computed.mask.set(StyleId::Filter);
+    }
     if let Some(c) = shown.get(Property::Color) {
         computed.text_color = fixed(c);
         computed.mask.set(StyleId::TextColor);
@@ -1009,13 +1047,17 @@ fn style_json_shown(
             .union(StyleMask::of(StyleId::ColorScheme))
     };
     let mut computed = node.computed_style(rows.union(node.style.written));
-    // PlaceholderColor's initial payload is an unread sentinel; absence
-    // selects the platform placeholder colour, including after a clear. So
-    // for the pressed paint: a cleared row is no pressed look (LLP 1061 D7).
-    computed.mask =
-        computed.mask.union(computed.written.minus(
-            StyleMask::of(StyleId::PlaceholderColor).union(crate::looks::press_paint_rows()),
-        ));
+    // PlaceholderColor's and BackdropColor's initial payloads are unread
+    // sentinels; absence selects the platform's placeholder colour or dim,
+    // including after a clear. So for the pressed paint: a cleared row is no
+    // pressed look (LLP 1061 D7).
+    computed.mask = computed.mask.union(
+        computed.written.minus(
+            StyleMask::of(StyleId::PlaceholderColor)
+                .union(StyleMask::of(StyleId::BackdropColor))
+                .union(crate::looks::press_paint_rows()),
+        ),
+    );
     computed.mask.set(StyleId::TextColor);
     paint_over(&mut computed, shown);
     if own && shown.get(Property::Color).is_some() && says_moving_color(node) {
@@ -1120,6 +1162,15 @@ fn style_json_shown(
         };
     }
     json = crate::looks::with_looks(json, node, env, current);
+    // Natural text (LLP 1060.000 D3): Swift resolves each paragraph's base
+    // where `direction` is the layout direction alone.
+    if node.is_natural_text() {
+        json = if json == "{}" {
+            "{\"direction_natural\":true}".into()
+        } else {
+            "{\"direction_natural\":true,".to_owned() + &json[1..]
+        };
+    }
     // @ref LLP 1053.000.000.000 D2 — an auto glass group's spacing rides the
     // string the host compares, so a gap, direction or display change sends it.
     if let Some(points) = glass_auto_spacing(node) {

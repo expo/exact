@@ -55,6 +55,10 @@ export const GLOBAL = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.carg
 
 /** The parity smokes whose Linux leg the async lane runs (`scripts/smoke.mjs`): each drives `<smoke>-gallery`. */
 export const PARITY = ['svg', 'motion'];
+/** `exact-game-apple` is its own workspace root, which no other check compiles (#559): Greybox, a game without data, is
+ * generated as its build generates it (its check), and the shared shell is compiled and linted for iOS in that
+ * workspace. */
+export const gameAppleLeg = 'bun game/app/shells.mjs game/games/greybox --check && CARGO_TARGET_DIR=game/games/greybox/target cargo clippy --manifest-path game/games/greybox/.shells/Cargo.toml -p exact-game-apple --target aarch64-apple-ios --locked --offline -- -D warnings';
 /** A parity smoke's Linux leg, as a shell line: the gallery's development build, then the smoke on a fresh web build. */
 export const parityLeg = smoke => `cargo build --profile host-dev -p ${smoke}-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs ${smoke} --hosts linux`;
 
@@ -118,7 +122,7 @@ export function xctestClasses(root, host, because) {
  *              runs them
  *   `xctest`   the Swift host tests (`host`: macos or ios), `build.mjs --test`
  *   `touch`    real touches on an iOS simulator, `smoke-touch.mjs --build`
- *   `compile`  the tvOS or watchOS build (`host`), installed on nothing
+ *   `compile`  the tvOS or watchOS build (`host`), installed on nothing, or the shared game Apple shell's check
  *   `conform`  the web JS target against the wasm runner and the Linux host, for one app (`app`)
  *   `parity`   a gallery (`app`) painted by the Linux host against Chrome's picture of it, `smoke.mjs <smoke> --hosts linux`
  *   `drive`    a standalone module drive (`file`, `args`), including its fixture build and browser launch
@@ -151,6 +155,8 @@ export function suites(repo) {
   const caltrain = appBuild(repo, 'apps/caltrain', ['apple']);
   out.push({ id: 'touch:ios', kind: 'touch', host: 'ios', roots: [...apple, 'js:scripts/smoke-touch.mjs', 'test:host/apple/link.test.mjs', ...caltrain] });
   for (const host of ['tvos', 'watchos']) out.push({ id: `compile:${host}`, kind: 'compile', host, roots: [...apple, ...caltrain] });
+  // `exact-game-apple` is in no workspace's metadata: its directory, what it depends on, and the game it is checked in.
+  out.push({ id: 'compile:game-apple', kind: 'compile', host: 'ios', command: ['sh', '-c', gameAppleLeg], roots: ['dir:game/app/apple', 'pkg:exact-apple', 'pkg:exact-logic', 'pkg:exact-runner', 'pkg:ibex2-sqlite', 'js:game/app/shells.mjs', 'dir:game/games/greybox'] });
   for (const app of WEB_APPS) {
     const dir = repo.appNames.get(app);
     if (!dir) continue;
@@ -235,6 +241,7 @@ export class Repo {
     /** name → { name, dir, manifest, targets, deps: [{ name, kinds }] } for every package with a path here;
      * `manifest` is its workspace's when it is a member of one */
     this.packages = new Map();
+    this.defaultMembers = [];
     for (const manifest of WORKSPACES) {
       if (!listed.has(manifest)) continue;
       // Resolved metadata includes path dependencies outside either workspace, including patched crates.
@@ -264,6 +271,7 @@ export class Repo {
       this.packages.set(p.name, pkg);
       byId.set(p.id, pkg);
     }
+    if (manifest === 'Cargo.toml') this.defaultMembers = (data.workspace_default_members ?? []).map(id => byId.get(id)?.name).filter(Boolean);
     for (const node of data.resolve?.nodes ?? []) {
       const pkg = byId.get(node.id);
       for (const d of pkg ? node.deps : []) {
@@ -574,7 +582,7 @@ function references(graph, file, literals, pkgDir, as) {
         // A container, or the code's own directory or one above it, is where its paths start; a build script reads
         // the one above it (an app's crate builds its app).
         if ((!test && CONTAINERS.has(target)) || (as !== 'build' && (own === target || own.startsWith(`${target}/`)))) return;
-        // (`tamber tool` serves apps/design-tool, a path into one app; a table of hosts names each platform's, and a
+        // (`forma tool` serves apps/design-tool, a path into one app; a table of hosts names each platform's, and a
         // tool for games names game/ to make one)
         if (!reaches(target) && !/^(?:apps|examples|packages)\//.test(unitOf(target)) && !/^include_(?:str|bytes)!$/.test(call)) return;
         // Skip a directory of tests named by code other than a test: it names it to run the tests there (`build.mjs
@@ -820,7 +828,7 @@ export function commands(selected) {
     if (s.kind === 'app') for (const f of s.files) out.push(['bun', 'scripts/agent.mjs', s.host, '--app', s.app, '--test', f]);
     else if (s.kind === 'xctest') out.push(['bun', 'host/apple/build.mjs', '--test', ...(s.host === 'ios' ? ['--ios'] : []), ...(only ? ['--only', only.join(',')] : [])]);
     else if (s.kind === 'touch') out.push(['bun', 'scripts/smoke-touch.mjs', '--build']);
-    else if (s.kind === 'compile') out.push(['bun', 'host/apple/build.mjs', `--${s.host}`, '--no-install']);
+    else if (s.kind === 'compile') out.push(s.command ?? ['bun', 'host/apple/build.mjs', `--${s.host}`, '--no-install']);
     else if (s.kind === 'parity') out.push(['sh', '-c', parityLeg(s.smoke)]);
     else if (s.kind === 'drive') out.push(['bun', s.file, ...s.args]);
   }

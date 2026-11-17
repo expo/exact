@@ -28,6 +28,10 @@ sha2 = "0.10"
 ed25519-dalek = { version = "2.1", default-features = false }
 serde_json = "1.0"
 
+# `flock(2)`, which std's `File::try_lock` does not offer on Android.
+[target.'cfg(target_os = "android")'.dependencies]
+libc = "0.2"
+
 # The tests drive the store over an in-memory origin: they build heads with the
 # JSON reader the crate already has and sign them with the crate's own
 # verifier's signing half. Nothing new enters the lock file.

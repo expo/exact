@@ -4,6 +4,43 @@ use std::path::PathBuf;
 
 #[test]
 #[cfg(unix)]
+fn source_capture_skips_nested_dot_directories_in_apps_and_mounts() {
+    let parent = Scratch::new(&std::env::temp_dir()).unwrap();
+    let app = parent.0.join("app");
+    let shared = parent.0.join("shared");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{"typescript":{"sources":{"shared":"../shared"}}}"#,
+    )
+    .unwrap();
+    for root in [&app, &shared] {
+        std::fs::create_dir_all(root.join("backend/priv")).unwrap();
+        std::fs::write(root.join("backend/.settings.json"), "{}").unwrap();
+    }
+    let before = sources(&app).unwrap();
+    assert!(before.contains_key(std::path::Path::new("backend/.settings.json")));
+    assert!(before.contains_key(std::path::Path::new("shared/backend/.settings.json")));
+    for root in [&app, &shared] {
+        for cache in ["backend/.elixir_ls/build/lib/app", "server/.venv/bin"] {
+            let dir = root.join(cache);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("cache.json"), "{}").unwrap();
+            std::os::unix::fs::symlink(root.join("backend/priv"), dir.join("priv")).unwrap();
+            std::os::unix::fs::symlink("missing-python", dir.join("python")).unwrap();
+        }
+    }
+    assert_eq!(sources(&app).unwrap(), before);
+    for link in ["backend/helper.ts", "backend/.linked"] {
+        std::os::unix::fs::symlink(app.join("backend/priv"), app.join(link)).unwrap();
+        assert!(sources(&app).unwrap_err().contains("source links"));
+        std::fs::remove_file(app.join(link)).unwrap();
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn source_capture_skips_module_xcframeworks_with_versioned_slices() {
     let app = Scratch::new(&std::env::temp_dir()).unwrap();
     std::fs::write(app.0.join("app.ts"), "export const grants = '';\n").unwrap();
@@ -29,6 +66,11 @@ fn source_capture_skips_module_xcframeworks_with_versioned_slices() {
         }
     }
     assert_eq!(sources(&app.0).unwrap(), before);
+    let service = app.0.join("modules/apple/notification-service");
+    std::fs::create_dir_all(&service).unwrap();
+    std::os::unix::fs::symlink("../../../app.ts", service.join("helper.ts")).unwrap();
+    assert!(sources(&app.0).unwrap_err().contains("source links"));
+    std::fs::remove_file(service.join("helper.ts")).unwrap();
     // Skipping binary bundles must not admit source links beside them.
     std::os::unix::fs::symlink("../../app.ts", app.0.join("modules/apple/helper.ts")).unwrap();
     assert!(sources(&app.0).unwrap_err().contains("source links"));
@@ -163,10 +205,19 @@ fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
     let javascript =
         serde_json::json!({"appId":"test.mixed","grants":"net.fetch https://example.test/"});
     assert_eq!(
-        super::mixed_grants(&javascript, Some(&Rust)).unwrap(),
+        super::mixed_grants(&javascript, Some(&Rust), None).unwrap(),
         Some("fs.read app:/data/rust")
     );
-    assert!(super::mixed_grants(&serde_json::json!({"appId":"wrong"}), Some(&Rust)).is_err());
+    assert!(super::mixed_grants(&serde_json::json!({"appId":"wrong"}), Some(&Rust), None).is_err());
+    assert_eq!(
+        super::mixed_grants(&javascript, Some(&()), None).unwrap(),
+        Some("")
+    );
+    // Under a variant the Rust source names the base app and the module the variant (LLP 1030.008 D2).
+    let variant = serde_json::json!({"appId":"test.mixed.dev","grants":""});
+    assert!(super::mixed_grants(&variant, Some(&Rust), None).is_err());
+    assert!(super::mixed_grants(&variant, Some(&Rust), Some("test.mixed")).is_ok());
+    assert!(super::mixed_grants(&variant, Some(&Rust), Some("test.other")).is_err());
 }
 
 #[test]
@@ -900,7 +951,7 @@ fn development_trust_refreshes_editor_declarations_in_a_one_shot_bake() {
         );
         assert_eq!(
             std::fs::read_to_string(&beside).unwrap(),
-            if refresh {
+            if refresh && std::env::var("EXACT_WEB_TYPES").as_deref() != Ok("private") {
                 "fresh source signature"
             } else {
                 "old source signature"
@@ -919,4 +970,22 @@ fn development_trust_refreshes_editor_declarations_in_a_one_shot_bake() {
             "unchanged declarations must not trigger an editor watcher"
         );
     }
+}
+
+#[test]
+fn private_checks_keep_editor_declarations() {
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "sources_tests::development_trust_refreshes_editor_declarations_in_a_one_shot_bake",
+        ])
+        .env("EXACT_WEB_TYPES", "private")
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
 }

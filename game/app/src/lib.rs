@@ -1,4 +1,5 @@
 //! The bake for a Contract game UI, optionally with one linked Rust data source.
+use exact_bake::host::{apple_host, empty_entry, Shape};
 use std::{env, fs, path::PathBuf};
 
 /// Bake a host from the declaration produced by its GPU build, without linking gameplay.
@@ -10,8 +11,8 @@ pub fn bake_declaration(platform: &str, app_dir: &str) {
 /// Bake a game without a data crate for the Apple shell such games share
 /// (`exact-game-apple`, game/app/apple), which its crate depends on: the entry
 /// only defines the plan and compat.json that shell reads, so the game's own
-/// Apple crate compiles no host. A game the shared entry does not fit bakes as
-/// `bake_declaration` does.
+/// Apple crate compiles no host. `game/app/shells.mjs` (`sharesAppleEntry`)
+/// generates this call only for a game the shared entry fits.
 pub fn bake_shared_declaration(app_dir: &str) {
     require_declaration(app_dir);
     bake_source("apple", app_dir, (), "()", "Default::default()", true);
@@ -55,6 +56,16 @@ pub fn bake(platform: &str, app_dir: &str) {
     bake_source(platform, app_dir, (), "()", "Default::default()", false);
 }
 
+/// A game's host crates: the manifest its GPU build resolved into `.shells/`, the Rust replacement off, the packages
+/// composed without hatches, and the plain Apple host.
+const GAME: Shape<'static> = Shape {
+    manifest: ".shells",
+    replacement: false,
+    composed: false,
+    apple_linked: false,
+    shortcuts: true,
+};
+
 fn bake_source<D: contract::DataSource>(
     platform: &str,
     app_dir: &str,
@@ -63,140 +74,31 @@ fn bake_source<D: contract::DataSource>(
     constructor: &str,
     shared: bool,
 ) {
-    let platform = if platform == "apple" {
-        if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("ios") {
-            "ios"
-        } else {
-            "macos"
-        }
-    } else {
-        platform
-    };
-    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    // The Android shell is a cdylib only on Android (`exact_painted::canvas_jni!`); off it the library is empty.
-    if platform == "android" && env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("android") {
-        fs::write(out.join("entry.rs"), "").unwrap();
-        return;
-    }
-    let app = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join(app_dir);
-    println!("cargo:rerun-if-env-changed=EXACT_ASSET_ROOTS");
-    for path in [
-        "app.json",
-        ".shells/app.json",
-        "assets",
-        "deck",
-        "gpu/shaders",
-    ] {
-        let path = app.join(path);
-        // A nonexistent watch path makes Cargo rebuild every invocation.
-        if path.exists() {
-            println!("cargo:rerun-if-changed={}", path.display());
-        }
-    }
-    // The plan reads the whole Contract source graph, not just its root. Keep
-    // Cargo's build-script fingerprint aligned with the compiler's imports so
-    // an edit to a component file reruns this bake.
-    contract::rerun_if_changed(&app.join("app.contract"));
-    let manifest = contract::Manifest::read(&app.join(".shells"))
-        .unwrap_or_else(|e| panic!("resolved app.json: {e}"));
-    let mut plan = contract::compile_path(&app.join("app.contract"))
-        .unwrap_or_else(|e| panic!("app.contract: {e}"));
-    // A button shortcut on a key the game's `Actions` bind (LLP 1132 D11).
-    for warning in contract::shortcut_findings(&app.join("app.contract")).unwrap_or_default() {
-        println!("cargo:warning={}", warning.to_string().replace('\n', " "));
-    }
-    if plan.app_id.is_empty() {
-        plan.app_id = manifest.id.clone();
-    }
-    let grants = data.grants().to_string();
-    let baked = contract::bake(plan, data).unwrap_or_else(|e| panic!("bake: {e}"));
-    fs::write(out.join("app.plan"), baked.encode()).unwrap();
-    let target = env::var("TARGET").unwrap();
-    // Android's Canvas host is the Linux host's presenter under Android's own Canvas, so its
-    // cohort is Linux's for this target (as apps/caltrain/android/build.rs computes it).
-    let cohort = if platform == "android" {
-        "linux"
-    } else {
-        platform
-    };
-    let compat = exact_bake::compatibility_id(&app, cohort, &target, &manifest, Some(&grants))
-        .unwrap_or_else(|e| panic!("compatibility id: {e}"));
-    assert_eq!(
-        compat.inputs["rustMode"], "off",
-        "generated game hosts require app.json rust: false"
+    exact_bake::host::bake(
+        platform,
+        app_dir,
+        &GAME,
+        data,
+        data_type,
+        constructor,
+        |entry| {
+            // The shared shell holds this game's host: the entry it would compile names nothing
+            // of the game but its app id (`SHARED_ENTRY`). shells.mjs decided that from the build's
+            // environment before Cargo ran; a build in another environment finds otherwise.
+            shared.then(|| {
+            let own = empty_entry(entry.constructor, entry.inputs, "app_id()")
+                .map(|e| format!("{e}\n{}\n", apple_host("plan()", "compat()")));
+            assert!(
+                own.as_deref() == Ok(SHARED_ENTRY),
+                "this game's Apple entry is not exact-game-apple's (preloads, a link set without SQLite, \
+                 EXACT_NATIVE_SOURCE or EXACT_RUST_BUNDLE), but its .shells workspace was generated in \
+                 another environment to share it; a build through exact.mjs or host/apple/build.mjs \
+                 generates it for its own"
+            );
+            SHARED_SHELL.to_string()
+        })
+        },
     );
-    fs::write(out.join("compat.json"), compat.to_json()).unwrap();
-    // What the APK's build reads beside the plan: its capabilities and derived permissions.
-    if platform == "android" {
-        contract::native::android_reach(&app, &baked, &out)
-            .unwrap_or_else(|e| panic!("android reach: {e}"));
-    }
-    let entry = runtime_entry(data_type, constructor, &compat.inputs).unwrap();
-    let linked = if platform == "web" {
-        contract::web_linked(&baked, &compat.inputs)
-    } else {
-        String::new()
-    };
-    // The packages' Linux or Windows implementations (LLP 1133.022 D10 item 5).
-    let packages = if matches!(platform, "linux" | "windows") {
-        contract::native::plan_packages(&app, &baked, &target)
-            .unwrap_or_else(|e| panic!("packages: {e}"))
-    } else {
-        String::new()
-    };
-    let composed = "exact_painted::Composed { packages: exact_packages(), ..Default::default() }";
-    let windows = format!(
-        "fn main() {{ std::process::exit(exact_windows::run_composed::<AppData>({:?}, {}, PLAN, COMPAT, {composed})); }}",
-        manifest.name,
-        manifest.windows_window().unwrap_or_else(|e| panic!("app.json: {e}"))
-    );
-    let linux = format!(
-        "fn main() {{ std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, {composed})); }}"
-    );
-    let host = match platform {
-        "web" => "exact_web::host!(AppData, PLAN, COMPAT, app_data);",
-        "macos" | "ios" => &apple_host("PLAN", "COMPAT"),
-        "linux" => &linux,
-        // canvas_jni! embeds OUT_DIR's plan and compat itself.
-        "android" => "exact_painted::canvas_jni!(crate::AppData);",
-        "windows" => &windows,
-        _ => panic!("unsupported game app platform: {platform}"),
-    };
-    // The shared shell holds this game's host when the entry it would compile names
-    // nothing of the game but its app id (`SHARED_ENTRY`); otherwise (a production link
-    // set by plan, preloads) the game compiles its own, and exact-game-apple goes unused.
-    if shared
-        && empty_entry(constructor, &compat.inputs, "app_id()")
-            .is_ok_and(|e| format!("{e}\n{}\n", apple_host("plan()", "compat()")) == SHARED_ENTRY)
-    {
-        fs::write(out.join("entry.rs"), SHARED_SHELL).unwrap();
-        return;
-    }
-    let embedded = if platform == "android" {
-        ""
-    } else {
-        r#"const PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.plan"));
-const COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));"#
-    };
-    fs::write(
-        out.join("entry.rs"),
-        format!(
-            r#"
-{embedded}
-{entry}
-{linked}
-{packages}
-{host}
-"#
-        ),
-    )
-    .unwrap();
-}
-
-/// The Apple host's exports over `AppData`, with the plan and compat.json
-/// named by the Rust expressions `plan` and `compat`.
-fn apple_host(plan: &str, compat: &str) -> String {
-    format!("exact_apple::host!(AppData, {plan}, {compat}, None, std::ptr::null(), app_data);")
 }
 
 /// exact-game-apple's entry: a game's own, with the app id read from its compat.json.
@@ -213,45 +115,30 @@ pub static EXACT_GAME_PLAN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ap
 pub static EXACT_GAME_COMPAT: &str = include_str!(concat!(env!("OUT_DIR"), "/compat.json"));
 "#;
 
-fn runtime_entry(
-    data_type: &str,
-    constructor: &str,
-    inputs: &serde_json::Value,
-) -> Result<String, String> {
-    if data_type != "()" {
-        return contract::rust_entry(data_type, constructor, "off", inputs);
-    }
-    // Native storage asks the source's identity before the runner binds the plan.
-    let app = inputs["app"]
-        .as_str()
-        .ok_or("game runtime needs an app id")?;
-    empty_entry(constructor, inputs, &format!("{app:?}"))
-}
-
-/// The entry over a game's empty data source, which names the app by `app`, a
-/// Rust expression of type `&str`.
-fn empty_entry(constructor: &str, inputs: &serde_json::Value, app: &str) -> Result<String, String> {
-    let entry =
-        contract::rust_entry_naming("ExactEmptyData", constructor, "off", inputs, Some(app))?;
-    Ok(format!(
-        r#"#[derive(Default)]
-struct ExactEmptyData;
-impl exact_runner::DataSource for ExactEmptyData {{
-    fn app_id(&self) -> &str {{ {app} }}
-    fn query(&mut self, source: &str, args: &[exact_runner::Value])
-        -> Result<exact_runner::Value, exact_runner::DataError>
-    {{
-        exact_runner::DataSource::query(&mut (), source, args)
-    }}
-}}
-{entry}"#
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use exact_bake::host::runtime_entry;
     use exact_runner::Value;
+
+    /// Removes its directory when dropped, so a failing test leaves nothing behind.
+    struct TempDir(std::path::PathBuf);
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl AsRef<std::path::Path> for TempDir {
+        fn as_ref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn a_game_without_data_names_its_runtime_storage() {
@@ -259,7 +146,7 @@ mod tests {
             let inputs = serde_json::json!({
                 "app": "dev.exact.kept-game", "platform": platform, "linked": []
             });
-            let entry = runtime_entry("()", "Default::default()", &inputs).unwrap();
+            let entry = runtime_entry("()", "Default::default()", "off", &inputs).unwrap();
             assert!(entry.contains("fn app_id(&self) -> &str { \"dev.exact.kept-game\" }"));
             if platform == "web" {
                 assert!(
@@ -272,7 +159,7 @@ mod tests {
                     || entry.contains("type AppData = ExactEmptyData;")
             );
             assert_eq!(
-                runtime_entry("Source", "source()", &inputs).unwrap(),
+                runtime_entry("Source", "source()", "off", &inputs).unwrap(),
                 contract::rust_entry("Source", "source()", "off", &inputs).unwrap()
             );
         }
@@ -291,7 +178,9 @@ mod tests {
 
     #[test]
     fn contract_source_graph_includes_imported_sources() {
-        let dir = std::env::temp_dir().join(format!("game-contract-watch-{}", std::process::id()));
+        let dir = TempDir(
+            std::env::temp_dir().join(format!("game-contract-watch-{}", std::process::id())),
+        );
         fs::create_dir_all(&dir).unwrap();
         let root = dir.join("app.contract");
         let imported = dir.join("personal-inventory.contract");
@@ -376,7 +265,8 @@ mod tests {
 
     #[test]
     fn game_declaration_checks_names_and_arity_in_unmounted_branches() {
-        let dir = std::env::temp_dir().join(format!("game-declaration-{}", std::process::id()));
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("game-declaration-{}", std::process::id())));
         fs::create_dir_all(dir.join(".shells")).unwrap();
         fs::write(
             dir.join(".shells/surfaces.json"),

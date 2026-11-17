@@ -1,6 +1,8 @@
 //! LLP 1162.001: a `source` declared in `app.contract` is checked, written to
 //! the plan's `fetches` table, and left out of the data module's types.
 
+use crate::scratch::Scratch;
+
 const APP: &str = r#"shape Current
   temperature_2m: number
 
@@ -93,8 +95,7 @@ fn a_declaration_that_names_no_origin_or_disagrees_with_its_call_is_refused() {
 
 #[test]
 fn a_declaration_outside_the_root_file_is_refused() {
-    let dir = std::env::temp_dir().join(format!("exact-declared-root-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-declared-root-{}", std::process::id()));
     std::fs::write(
         dir.join("app.contract"),
         "use Card from \"./card.contract\"\ncomponent App\n  view\n    Card()\n",

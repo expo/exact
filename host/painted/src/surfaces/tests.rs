@@ -60,6 +60,7 @@ fn surface_work_scope_is_refused_before_presenter_effects() {
     let request = |ticket, mut request: exact_runner::Request| {
         request.grants = Some("surface.read other".into());
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket,
             target: "save".into(),
@@ -88,6 +89,7 @@ fn surface_work_scope_is_refused_before_presenter_effects() {
     allowed.grants = Some("surface.read world".into());
     surfaces.enqueue(
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 8,
             target: "save".into(),
@@ -143,7 +145,29 @@ fn deferred_restore_keeps_bytes_until_commit_and_late_refusal_is_once() {
         assert!(!c.restore_input);
     }
 }
-pub(super) fn fixture() -> (PathBuf, Value) {
+/// A compiled probe module, its directory removed when dropped.
+pub(super) struct Probe(PathBuf);
+
+impl Drop for Probe {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+    }
+}
+
+impl std::ops::Deref for Probe {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Probe {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+pub(super) fn fixture() -> (Probe, Value) {
     let dir = std::env::temp_dir().join(format!(
         "exact-gpu-loader-{}-{:?}",
         std::process::id(),
@@ -256,7 +280,7 @@ const unsigned char* gpu_out_ptr(void) { return (const unsigned char*)(output ? 
     let compat = json!({"id":"cohort", "inputs":{"app":"test.app"}, "embedded":{"gpu":{
             "name":path.file_name().unwrap().to_str().unwrap(),"sha256":digest,
             "app":"test.app","cohort":"cohort","trust":"production"}}});
-    (path, compat)
+    (Probe(path), compat)
 }
 #[test]
 fn module_identity_refuses_stale_foreign_and_missing_bakes_before_loading() {
@@ -809,7 +833,10 @@ fn opted_in_idle_canvas_reports_on_a_wake_without_a_render() {
   frames: option<number>
   fps: option<number>
 component App
-  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  state perfHud = false
+  action toggle
+    perfHud = not perfHud
+  resource metrics = exactCanvasPerformance("world") when perfHud as shape Metrics
   view
     canvas surface=world width=50 height=50
 "#;
@@ -827,6 +854,9 @@ component App
         p.surfaces.abis[""].symbol::<unsafe extern "C" fn() -> u32>(b"test_performance_reads")
     };
     assert_eq!(unsafe { reads() }, 0);
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    p.sync_surfaces();
     assert_eq!(p.surfaces.performance_due_in_ms(), Some(0.));
     assert!(p.wake_due_ms().is_some());
     assert!(p.pump(0.).is_none());
@@ -854,11 +884,22 @@ component App
     p.surfaces.hidden = false;
     assert!(p.pump(0.).is_none());
     assert_eq!(unsafe { reads() }, 2);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    p.sync_surfaces();
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    assert!(p.surfaces.canvases.values().all(|c| !c.performance));
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 2);
     let view = *p.surfaces.canvases.keys().next().unwrap();
     p.surfaces.retire(view, &mut p.host);
     assert_eq!(p.surfaces.performance_due_in_ms(), None);
     assert!(p.pump(0.).is_none());
     assert_eq!(unsafe { reads() }, 2);
+    p.host.runner_mut().act("toggle", vec![]).unwrap();
+    assert_eq!(
+        p.host.runner().resource("metrics"),
+        Some(&exact_plan::Value::record(vec![exact_plan::Value::NONE; 2]))
+    );
     drop(p);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

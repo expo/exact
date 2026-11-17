@@ -119,7 +119,7 @@ pub(in crate::image) fn decode<R: Read + Seek>(
         if cancelled() {
             return Err(Refusal::Stale);
         }
-        for pixel in pixels.data_mut().chunks_exact_mut(4) {
+        for pixel in pixels.data_mut().as_chunks_mut::<4>().0 {
             let alpha = pixel[3];
             for channel in &mut pixel[..3] {
                 *channel = (*channel).min(alpha);

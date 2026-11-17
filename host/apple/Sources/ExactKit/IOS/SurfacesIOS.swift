@@ -58,11 +58,20 @@ enum ViewPresentation {
         sequence(first: controller.presentingViewController, next: { $0?.presentingViewController })
             .contains { $0 === ancestor }
     }
-    static func controller(for view: UIView, fallbackToWindow: Bool = false) -> UIViewController? {
+    static func controller(for view: UIView, fallbackToWindow: Bool = false, layout: Bool = false) -> UIViewController? {
         if let sheet = PopoverLayer.containing(view)?.sheet { return sheet }
         var responder: UIResponder? = view
         while let current = responder {
-            if let controller = current as? UIViewController { return controller }
+            if !layout, let node = current as? NodeView { node.presenter?.navigation.finishBootOwner() }
+            if !layout, let view = current as? ExactView { view.session.presenter.navigation.finishBootOwner() }
+            if let holder = current as? PlainTab, holder.bootContent, let route = holder.route {
+                if !layout { holder.host?.finishBootOwner(); return controller(for: view, fallbackToWindow: fallbackToWindow, layout: true) }
+                return route
+            }
+            if let controller = current as? UIViewController {
+                if !layout, let route = controller as? RouteController, route.bootSurface != nil { route.host?.finishBootOwner() }
+                return controller
+            }
             responder = current.next
         }
         return fallbackToWindow ? view.window?.rootViewController : nil
@@ -70,16 +79,19 @@ enum ViewPresentation {
 
     /// The controllers on the responder chain from the owner, nearest first:
     /// its containment ancestors, then those presenting it.
-    static func controllers(for view: UIView) -> [UIViewController] {
-        guard let controller = controller(for: view) else { return [] }
-        return sequence(first: controller as UIResponder, next: { $0.next }).compactMap { $0 as? UIViewController }
+    static func controllers(for view: UIView, layout: Bool = false) -> [UIViewController] {
+        guard let controller = controller(for: view, layout: layout) else { return [] }
+        return sequence(first: controller as UIResponder, next: { responder in
+            if let route = responder as? RouteController, let surface = route.bootSurface { return surface.next }
+            return responder.next
+        }).compactMap { $0 as? UIViewController }
     }
 
     /// The owner, followed through presentations that are not being dismissed;
     /// nil out of a window, where UIKit refuses to present and calls back nothing.
     static func presenter(for view: UIView) -> UIViewController? {
+        var owner = controller(for: view, fallbackToWindow: true, layout: false)
         guard view.window != nil else { return nil }
-        var owner = controller(for: view, fallbackToWindow: true)
         while let presented = owner?.presentedViewController, !presented.isBeingDismissed { owner = presented }
         return owner?.viewIfLoaded?.window == nil ? nil : owner
     }
@@ -88,9 +100,9 @@ enum ViewPresentation {
     /// is the popover layer, not the clipped card or the window around it.
     static func root(of view: UIView) -> UIView? {
         if let layer = PopoverLayer.containing(view), layer.sheet != nil { return layer }
-        return controllers(for: view).first {
+        return controllers(for: view, layout: true).first {
             $0.parent == nil || $0.parent is UINavigationController || $0.parent is PlainTab || $0.parent is UITabBarController
-        }?.viewIfLoaded ?? view.window
+        }.map { ($0 as? RouteController)?.surface ?? $0.view } ?? view.window
     }
 }
 #endif

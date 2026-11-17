@@ -91,6 +91,8 @@ abstract class ExactExtension(val context: ExtensionContext) {
 
     /** The view's node is gone. */
     open fun destroyView(view: android.view.View) {}
+    /** The hosted view's activity lifecycle, separate from the session's foreground fact (LLP 1133.021). */
+    open fun viewLifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {}
 
     /**
      * View [id] of [session] was displayed or hidden, by the origin of the commit that did it (`app`, `tool` or
@@ -171,12 +173,33 @@ class ExtensionContext internal constructor(val application: Context, private va
     val data: java.io.File get() = root(0)
     val cache: java.io.File get() = root(1)
     val temporary: java.io.File get() = root(2)
+    /**
+     * Whether those directories are a drive's store and not the app's own, which holds under the agent whether or not
+     * the drive bound this extension (`--bind`, [agent]). What an implementation keeps outside them (a job, a record
+     * in the app's private files) it keeps apart from the app's by this, never by [agent]. A library with no such
+     * entry point is not this build's, and the question throws: the app's storage is never assumed.
+     */
+    val scratch: Boolean get() = Native.scratchStorage()
     private fun root(index: Int): java.io.File =
         java.io.File(try { Native.appRoot(index) } catch (e: UnsatisfiedLinkError) { null } ?: application.cacheDir.path)
 
     /** Who made the call being answered now, `app`, `tool` or `wake`, read at [ExactExtension.later]'s entry: a
      * capture's first lease is refused to a tool's read (LLP 1133.009 D6). */
     var origin = "app"
+        internal set
+
+    /** The calling source's grants, captured before returning from later; retries retain this ceiling. */
+    var authority = ""
+        internal set
+
+    /**
+     * Whether the call being answered now has a person's activation, read at [ExactExtension.later]'s entry: the app
+     * made it within a few seconds of a press or a key the session heard, HTML's
+     * [transient activation](https://html.spec.whatwg.org/multipage/interaction.html#transient-activation). A timer's
+     * or an answer's code inside that window has it too, as on the web; a tool's or a wake's call never does. It says
+     * nothing of whether an activity shows now ([visible]).
+     */
+    var userActivation = false
         internal set
 
     /** The number the runner gave the send being answered now, which a later [ExactExtension.cancel] names; null for
@@ -279,12 +302,18 @@ class ExtensionContext internal constructor(val application: Context, private va
     /**
      * Raise the interface's wake event [event] with [args] for the platform's own [id] (LLP 1133.017 D8): the events
      * of one id are one wake, run with the wake's origin, and [ended] hears its outcome once, on the main thread:
-     * `completed`, `expired`, `superseded`, `refused`, or `unheard` when no handler hears it. Its one channel to the
-     * runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/modules/wakes.rs`).
+     * `completed`, `expired`, `superseded`, `refused`, or `unheard` when no handler hears it. With no activity
+     * showing, `completed` says the store's writes are on disk too, and a wake whose writes are not is `expired`.
+     * Its one channel to the runner is [changed], as on Apple (`exact-wake:`, `runner/src/runner/modules/wakes.rs`).
      */
     fun wake(event: String, args: JSONArray, id: String, ended: (String) -> Unit = {}) {
         this.ended[id] = ended
         changed("exact-wake:" + JSONObject().put("extension", name).put("event", event).put("args", args).put("id", id))
+    }
+
+    /** The platform ended custody of this wake, including one still queued for delivery. */
+    fun expireWake(id: String) {
+        changed("exact-wake-expired:" + JSONObject().put("extension", name).put("id", id))
     }
 
     /** Every `img` showing picture [source] is emptied and fires `error`, and no reply in flight draws (LLP 1133.019
@@ -295,6 +324,18 @@ class ExtensionContext internal constructor(val application: Context, private va
     fun changedPicture(source: String) = Exact.pictureChanged(source, false)
 
     fun log(line: String) { Log.i("exact", line) }
+
+    /** A line for the session's journal, which the agent's `logs` reads. Main thread. */
+    fun journal(line: String) = Exact.journal(line)
+
+    /**
+     * The intent a tap on what this extension posts starts (a notification's content intent or action, LLP 1133.004
+     * D6; LLP 1133.004.000 D4): the app's unexported alias, which comes forward and opens [navigate] as a link's
+     * location, or, without one, raises the interface's event [event] with [args] with a person's origin, once the
+     * session can hear it. A `PendingIntent` made from it is the app's alone to send.
+     */
+    fun activation(event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
+        Activations.intent(application, name, event, args, navigate)
 
     /**
      * The platform's dialog for [permissions], in one request (`Activity.requestPermissions`), then [done], on the main
@@ -375,6 +416,35 @@ class ExtensionContext internal constructor(val application: Context, private va
     companion object {
         /** The embedder's decision on leaving the app ([leave]); null lets every URL go. */
         @JvmStatic var leaving: ((String, String) -> Boolean)? = null
+
+        /** [ExtensionContext.activation] for extension [extension] with no session: a receiver's, which posts what an
+         * extension scheduled while the app was not running. */
+        @JvmStatic fun activation(context: Context, extension: String, event: String, args: JSONArray, navigate: String? = null): android.content.Intent =
+            Activations.intent(context, extension, event, args, navigate)
+
+        /**
+         * The intent a notification's action starts (LLP 1133.004 stage 2): [event] of [extension] with [args], the
+         * name of [action] (a declared action's record) and the reply written into `args[chosen]`, raised only while
+         * the plan declares [action]; the notification [tag], [id] is closed. Activities only: Android shows a
+         * background action in the foreground (LLP 1133.004.000 D5). An action with a text field reads its reply
+         * under [Activations.REPLY].
+         */
+        @JvmStatic fun action(context: Context, extension: String, event: String, args: JSONArray, chosen: Int, action: JSONObject, tag: String, id: Int): android.content.Intent =
+            Activations.action(context, extension, event, args, chosen, action, tag, id)
+
+        /** The `RemoteInput` key of an action's text field. */
+        const val REPLY = Activations.REPLY
+
+        /**
+         * The app's session for a platform callback that may run with no activity (a job, a worker, a receiver;
+         * LLP 1133.017 D7, D10): [ready] hears, on the main thread, whether the process's host has booted, its data
+         * module is active and its `"start": "load"` extensions are made. Where no activity has set the process up,
+         * the host boots here with no view, hidden as a stopped activity's is, and an activity made later adopts
+         * it; with no first pixel to wait for, its data module activates at once. A wake raised in it
+         * ([wake]) ends `completed` only once the store's writes are on disk, so the caller may give its job back at
+         * the wake's outcome.
+         */
+        @JvmStatic fun session(context: Context, ready: (Boolean) -> Unit) = Headless.session(context, ready)
     }
 
     /** [requestPermissions] for [name], keeping the history [permission] reads. */
@@ -486,21 +556,23 @@ internal object Extensions {
         }
     }
 
-    /** The activity was made: the host binds the names of the extensions the APK carries. */
-    fun bind(activity: Activity) {
+    /** The process's host is set up, by the activity [context] or with none: the host binds the names of the
+     * extensions the APK carries. */
+    fun bind(context: Context) {
+        val app = context.applicationContext
         if (application == null) {
-            val dm = activity.applicationContext.getSystemService(android.hardware.display.DisplayManager::class.java)
+            val dm = app.getSystemService(android.hardware.display.DisplayManager::class.java)
             dm?.registerDisplayListener(displays, android.os.Handler(android.os.Looper.getMainLooper()))
-            told = angle(activity)
+            told = angle(context as? Activity)
+            application = app
         }
-        if (application == null) application = activity.applicationContext
-        Presence.application = activity.applicationContext
-        AudioFocus.application = activity.applicationContext
+        Presence.application = app
+        AudioFocus.application = app
         if (roster.isNotEmpty()) Exact.bindExtensions(roster.keys.joinToString("\n"))
     }
 
     /**
-     * Request [id]'s call, the runner's body: `{"extension", "source"|"send", "args", "preferred"?}`, `{"extension",
+     * Request [id]'s call, the runner's body: `{"extension", "source"|"send", "args", "preferred"?, "userActivation"?}`, `{"extension",
      * "release", "args"?}`, `{"extension", "preferred"}`, `{"extension", "dispose"}`, `{"extension", "foreground"}`, or
      * `{"extension", "view", "displayed"|"bound", "origin"}` (a package view's report, LLP 1133.008 D8 item 2),
      * `{"extension", "surface", "displayed", "origin"}` (a canvas its input feeds, LLP 1133.013 D6),
@@ -553,6 +625,8 @@ internal object Extensions {
                 }
                 declared.isNotEmpty() -> {
                     extension.context.origin = request.optString("origin").ifEmpty { "app" }
+                    extension.context.authority = request.optString("authority")
+                    extension.context.userActivation = request.optBoolean("userActivation")
                     extension.context.request = if (request.has("request")) request.getInt("request") else null
                     extension.later(declared, request.optJSONObject("args") ?: JSONObject(), request.opt("preferred"), reply)
                 }
@@ -571,7 +645,11 @@ internal object Extensions {
                     reply(JSONObject())
                 }
                 request.has("woke") -> {
-                    val (woke, outcome) = request.getString("woke") to request.optString("outcome", "completed")
+                    val woke = request.getString("woke")
+                    // With no activity showing, Android may kill the process once the wake's job is given back: what
+                    // the handler committed is on disk first, or the wake did not complete.
+                    val outcome = request.optString("outcome", "completed")
+                        .let { if (it == "completed" && !visible && !Exact.drainStore()) "expired" else it }
                     extension.context.ended.remove(woke)?.invoke(outcome)
                     extension.woke(woke, outcome)
                     reply(JSONObject())
@@ -648,6 +726,9 @@ internal object Extensions {
         }
         override fun update(view: android.view.View, props: JSONObject) { extension(name)?.update(view, props) }
         override fun events(view: android.view.View, emit: (String, String) -> Unit) { emits[view] = emit }
+        override fun lifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {
+            extension(name)?.viewLifecycle(view, event, state)
+        }
         override fun destroy(view: android.view.View) { emits.remove(view); extension(name)?.destroyView(view) }
     }
 

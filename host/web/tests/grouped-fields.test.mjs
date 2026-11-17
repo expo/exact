@@ -2,7 +2,7 @@
 // visible field (its 1 px line, 8 px corners, at least 36 px tall, the browser's focus ring) that fits its row, in light
 // and dark, at a phone's width and a desktop's. `appearance="none"` stays the author's bare box: no line, no corners,
 // its text's height. The app is compiled from Contract and built for the JS target, as `exact` builds one.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 const wasmDist = resolve(process.env.EXACT_WEB_DIST ?? resolve(ROOT, 'host/web/dist'));
@@ -54,7 +58,7 @@ const FORM = `component Form
 
 /** Compile the form for the JS target or load it into the prebuilt wasm host, then drive Chrome. */
 async function inChrome(test, source = FORM, target = 'js') {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-grouped-fields-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-grouped-fields-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, source);
   const compile = spawnSync(compiler, ['build', contract, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   if (compile.status !== 0) throw new Error(compile.stderr);

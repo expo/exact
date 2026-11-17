@@ -751,3 +751,87 @@ export async function realTap({ ask, touches, id, at, rel, drag, abandon }) {
     await new Promise((r) => setTimeout(r, 16));
   }
 }
+
+/**
+ * Two real touches on view `id` from one aim, the tap's, taken twice: a
+ * two-finger pinch (`realPinch`) or a finger's double tap
+ * (`realDoubleTap`). `request(aim)` is the runner's request; the window's
+ * dispatch log must show exactly two new touches, both in the session, each
+ * beginning and ending.
+ */
+async function twoTouches({ ask, touches, id, at, what, request, reply, ms, abandon }) {
+  const transport = (message) => Object.assign(new Error(message), { transport: true });
+  const aimReq = { op: 'tap', id, aim: at ? { at } : true };
+  await touches.cloak?.clear();
+  const first = await ask(aimReq);
+  if (first.error) throw new Error(first.error);
+  const fg = await touches.ask({ op: 'foreground' });
+  if (fg.error) throw transport(`${what}: the touch runner: ${fg.error}`);
+  if (fg.state !== 'runningForeground') throw new Error(`${what}: the app is ${fg.state}, not in the foreground`);
+  const aim = await ask(aimReq);
+  if (aim.error) throw new Error(aim.error);
+  if (!sameAim(first.aim, aim.aim)) throw new Error(`${what}: the screen rotated or moved since aim`);
+  const a = aim.aim;
+  if (!a.fixed || !a.fixedAxes) throw new Error(`${what}: the aim has no screen coordinate axes; rebuild the iOS app`);
+  const injected = await touches.ask(request(a), RUNNER_MS + ms);
+  if (injected.error) throw transport(`${what}: the touch runner: ${injected.error}`);
+  const deadline = Date.now() + 1000;
+  const seen = [];
+  let cursor = a.seq;
+  for (;;) {
+    const page = await within(ask({ op: 'tap', log: cursor }), Math.max(deadline - Date.now(), 1), () => null);
+    if (!page) {
+      const why = `${what}: the dispatch log did not answer within 1 s of the touches; the app's carrier and the touch runner were stopped`;
+      abandon?.(why);
+      touches.end?.();
+      throw transport(why);
+    }
+    if (page.error || page.lost) throw new Error(`${what}: the dispatch log: ${page.error ?? `dropped entries past seq ${cursor}`}`);
+    seen.push(...page.log);
+    if (page.log.length) cursor = page.log[page.log.length - 1].seq;
+    if (page.truncated) continue;
+    const ids = [...new Set(seen.map((e) => e.touch))];
+    if (ids.length > 2) throw new Error(`${what}: ${ids.length} touches after seq ${a.seq}, not two: ${JSON.stringify(seen.slice(0, 8))}`);
+    const fingers = ids.map((t) => ({ began: seen.find((e) => e.touch === t && e.phase === 'began'), ended: seen.find((e) => e.touch === t && e.phase === 'ended') }));
+    if (ids.length === 2 && fingers.every((f) => f.began && f.ended)) {
+      for (const { began } of fingers) {
+        if (began.session !== a.session || began.generation !== a.generation) throw new Error(`${what}: a touch landed ${began.session == null ? `on ${began.view}, outside every session` : `in session ${began.session}`}, not in ${a.session}`);
+      }
+      return {
+        tapped: id, at: a.at, ...reply, delivery: 'platform',
+        touches: fingers.map(({ began, ended }) => ({ node: began.node, from: began.at, to: ended.at, began: began.t, ended: ended.t, moved: seen.filter((e) => e.touch === began.touch && e.phase === 'moved').length })),
+        injected: injected.injected,
+      };
+    }
+    if (Date.now() >= deadline) throw new Error(`${what}: the dispatch log did not show two touches begin and end within 1 s (log: ${JSON.stringify(seen.slice(0, 8))}); ${SETTLE_FIRST}`);
+    await new Promise((r) => setTimeout(r, 16));
+  }
+}
+
+/**
+ * A real two-finger pinch on view `id` (LLP 1057.001.000 §6): the fingers lie
+ * level about the target's middle or `at` (a point in it), 80 points apart,
+ * and spread to 80 × `scale` apart over 400 ms, as UIKit's own recognizers
+ * read a pinch.
+ */
+export function realPinch({ ask, touches, id, at, scale, abandon }) {
+  const what = `pinch #${id}`, from = 40, to = 40 * scale;
+  return twoTouches({ ask, touches, id, at, what, abandon, ms: 500, reply: { pinch: scale }, request: (a) => {
+    for (const half of [from, to]) {
+      for (const side of [-1, 1]) {
+        const point = [a.at[0] + side * half, a.at[1]];
+        if (!reaches(a, point)) throw new Error(`${what}: a finger would be at (${point}), ${outside(a)}`);
+      }
+    }
+    const [[rx, ry]] = a.fixedAxes;
+    const finger = (half, side) => [a.fixed[0] + side * half * rx, a.fixed[1] + side * half * ry];
+    return { op: 'pinch', display: a.display, screen: [finger(from, -1), finger(from, 1)], screenTo: [finger(to, -1), finger(to, 1)], over: 0.4 };
+  } });
+}
+
+/** A finger's double tap on view `id`, at its middle or `at` in it (LLP 1057.001.000 §6): two taps, the second
+ *  down 150 ms after the first. */
+export function realDoubleTap({ ask, touches, id, at, abandon }) {
+  return twoTouches({ ask, touches, id, at, what: `dblclick touch #${id}`, abandon, ms: 300, reply: { dblclick: 'touch' },
+    request: (a) => ({ op: 'tap', double: true, point: a.point, screen: a.fixed, display: a.display }) });
+}

@@ -1,14 +1,12 @@
 # Rules
 
-Speed is the constraint. Everything below exists to keep the edit-to-verified loop
-under a minute, and to stop this repo accreting the apparatus that made its
-predecessor unshippable.
+Speed is the constraint. Keep the edit-to-verified loop under 30 seconds.
 
 Each rule is **[check]** (enforced in CI) or **[review]** (enforced by a human).
 
 ## Budgets — every budget is a trade, not a limit
 
-- **6 blocking checks, 65s total.** A seventh requires deleting one, same PR. **[check]**
+- **1 blocking check, 30s warm.** A second requires deleting this one, same PR. **[check]**
 - **15 documents in the working set** (`llp/current/`). A 16th requires archiving one:
   removing its link. The corpus itself is uncapped. **[check]**
 - **10 documents in the foundation** (`llp/foundation/`). **[check]**
@@ -21,21 +19,22 @@ A limit gets exceptions. A trade doesn't: it forces someone to name what matters
 
 - **Every check reports all failures in one run.** Fail-fast is banned. A check that
   surfaces one defect per run turns N bugs into N x runtime. **[check]**
-- **Nothing blocks on anything slower than 60 seconds.** Slow verification runs
-  asynchronously, per-commit, on fleet hardware, attributed to the breaking commit.
+- **Nothing blocks on anything slower than 30 seconds warm.** Slow verification runs
+  hourly on fleet hardware, over the commits since the last run. New failures are
+  bisected to the breaking commit.
   Run everything; block on almost nothing. **[review]**
 - **Fix loops get 3 rounds.** Then stop and either escalate to a human decision or
   descope the target. Never "iterate until green." **[review]**
 
 ## Time budgets
 
-Tracked every commit. A regression is a P0 with a name on it.
+Gate per change; other budgets hourly. Regressions are named P0s.
 
 | | |
 |---|---|
 | Touch one line, rebuild that crate | 30s |
 | Test what you changed | 60s |
-| Blocking gate suite | 65s |
+| Blocking gate suite | 30s |
 | Full build, warm cache | 5 min |
 | Dev restart, request to present | 100ms p50 |
 | Cold start to interactive first frame | 100ms p50 |
@@ -76,13 +75,17 @@ Tracked every commit. A regression is a P0 with a name on it.
   lane's work into yours. Use a temporary commit.
 - Kill only PIDs you recorded at launch. Never by name or pattern.
 
-## The six checks
+## The gate (30 s)
 
-`build` · `test` · `lint` · `caps` · `boot` · `workspace`
+`bun scripts/gate.mjs`
 
-`caps` enforces the budgets above. `boot` counts the module graph reachable before first
-pixel and fails when it grows — a count, so it cannot flake the way a timer does.
-`workspace` is `cargo check --workspace --all-targets --keep-going`, with the pinned Bun:
-the others compile only `default-members`.
+Format, caps, boot, incremental default-member checking and small unit suites.
+Print timings and total; report all failures. The budget is warm after a
+one-crate edit.
 
-Everything else runs async.
+## The hourly lane
+
+`scripts/async.mjs` checks origin/main hourly: the full checks, wasm, affected
+suites, difftest, app drives, XCTests and platform builds. Every suite runs at
+least daily. Bisect new failures with `affected.mjs`; obstructed probes report a
+range without blame. Fix forward.

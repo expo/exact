@@ -435,6 +435,80 @@ fn a_choice_of_literal_families_resolves_each_arm_to_its_stack() {
 }
 
 #[test]
+fn shared_font_choices_preserve_baseline_plan_bytes() {
+    // Captured with the pre-admission compiler at 7f4abbc2b (LLP 1172.013 step 4).
+    let baseline = include_bytes!("../fixtures/shared-font-choice.plan");
+    for face in ["\"serif\"", "`serif`"] {
+        let plan = contract::compile(&format!(
+            "component App\n  view\n    Child()\ncomponent Child\n  state on = false\n  derive face = {face}\n  derive choice = on ? face : face\n  view\n    text \"hi\" font-family=choice\n",
+        ))
+        .unwrap();
+        // Bytes 16..24 are the schema digest, which moves with every schema edit and says nothing
+        // about this program; the rest of the plan must be the baseline's.
+        let encoded = plan.encode();
+        assert_eq!(encoded.len(), baseline.len(), "{face}");
+        assert_eq!(encoded[..16], baseline[..16], "{face}");
+        assert_eq!(encoded[24..], baseline[24..], "{face}");
+        assert_eq!(plan.derives.len(), 2, "{face}");
+    }
+}
+
+#[test]
+fn an_ascribed_generic_family_uses_its_plan_stack() {
+    let app = AppDir::new(
+        r#"font "Fixture Sans" = "assets/DejaVuSans.ttf"
+component App
+  view
+    Child(face="serif")
+component Child
+  props
+    face: enum<"Fixture Sans", "serif">
+  view
+    text "hi" font-family=face
+"#,
+    );
+    let runner = Runner::boot(
+        app.compile().unwrap(),
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let kernel = runner.kernel();
+    assert_eq!(kernel.node(kernel.roots()[0]).unwrap().style.font_family, 4);
+    assert!(runner.runtime_font_stacks().is_empty());
+}
+
+#[test]
+fn shared_and_ascribed_literal_families_use_declared_stacks() {
+    let app = AppDir::new(&format!(
+        "{DECLARATION}component App\n  view\n    Child(face=\"Fixture Sans\")\ncomponent Child\n  props\n    face: enum<\"Fixture Sans\", \"serif\">\n  state on = false\n  state picked = some(0)\n  derive shared = \"Fixture Sans\"\n  derive ternary = on ? shared : shared\n  derive matched = match picked {{ case some(p) => shared, case none => shared }}\n  derive checked = shared == \"Fixture Sans\" ? \"serif\" : shared\n  derive nested = on ? ternary : ternary\n  derive template = `Fixture Sans`\n  derive templated = on ? template : template\n  view\n    column\n      text \"a\" font-family=ternary testId=\"ternary\"\n      text \"b\" font-family=matched testId=\"match\"\n      text \"c\" font-family=face testId=\"ascribed\"\n      text \"d\" font-family=checked testId=\"condition\"\n      text \"e\" font-family=nested testId=\"nested\"\n      text \"f\" font-family=templated testId=\"template\"\n"
+    ));
+    let runner = Runner::boot(
+        app.compile().unwrap(),
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let kernel = runner.kernel();
+    for (id, expected) in [
+        ("ternary", 8),
+        ("match", 8),
+        ("ascribed", 8),
+        ("condition", 4),
+        ("nested", 8),
+        ("template", 8),
+    ] {
+        let node = kernel.node_by_key(kernel.find_by_test_id(id)[0]).unwrap();
+        assert_eq!(node.style.font_family, expected, "{id}");
+    }
+    assert!(runner.runtime_font_stacks().is_empty());
+}
+
+#[test]
 fn a_state_string_can_name_an_installed_family_at_runtime() {
     for source in [
         "state family = \"Arial\"",

@@ -257,3 +257,90 @@ fn bundled_stacks_keep_each_familys_descriptors_and_raster() {
         assert_eq!(actual.path, expected.path);
     }
 }
+
+#[test]
+fn normal_metrics_follow_font_stretch_in_either_query_order() {
+    use exact_plan::builder::{Face, PlanBuilder};
+    use exact_plan::StackMemberKind;
+    let mut builder = PlanBuilder::from_plan(
+        contract::compile("component App\n  view\n    text \"fixture\"\n").unwrap(),
+    );
+    let family = builder.font_family(
+        "WidthFaces",
+        &[
+            Face {
+                source: "narrow",
+                weight: [400, 400],
+                stretch: [750, 750],
+                italic: false,
+            },
+            Face {
+                source: "wide",
+                weight: [400, 400],
+                stretch: [1000, 1000],
+                italic: false,
+            },
+        ],
+    );
+    let family = builder
+        .font_stack(&[(StackMemberKind::Family, Some(family))])
+        .0 as u16;
+    let plan = builder.finish().unwrap();
+    let assets = Assets::selected(
+        Path::new("").into(),
+        Arc::new(|name| {
+            Ok(match name {
+                "narrow" => Some(Arc::from(ARABIC)),
+                "wide" => Some(Arc::from(PLATFORM)),
+                _ => None,
+            })
+        }),
+    );
+    for widths in [[75., 100.], [100., 75.]] {
+        let mut engine = TextEngine::with_catalog(fixture().with_assets(&plan, &assets));
+        for width in widths {
+            let mut s = spec(family, "بيت");
+            s.strut.stretch = width;
+            let expected = if width == 75. {
+                32. * 2.112
+            } else {
+                32. * 2384. / 2048.
+            };
+            assert!(
+                (engine.normal_line_height(&s.strut) - expected).abs() < 0.001,
+                "width {width}"
+            );
+        }
+    }
+}
+
+#[test]
+fn svg_family_ids_resolve_in_the_pictures_own_catalog() {
+    let loaded = exact_svg_file::load(r#"<svg><text font-family="MissingExactFont, monospace">Mono</text><text font-family="serif">Serif</text></svg>"#).unwrap();
+    let scene = loaded.scene(200.0, 40.0);
+    let mut catalog = fixture();
+    fonts::set_generic(
+        &mut catalog.fonts.collection,
+        fontique::GenericFamily::Monospace,
+        "Roboto Flex",
+    );
+    fonts::set_generic(
+        &mut catalog.fonts.collection,
+        fontique::GenericFamily::Serif,
+        "Inter",
+    );
+    let mut engine = TextEngine::with_catalog(catalog);
+    engine.install_runtime(9, &["Inter".into()]);
+    let text = engine.for_svg(&loaded.document.fonts);
+    let mut text = text.borrow_mut();
+    for (item, generic) in scene.items.iter().zip([6, 4]) {
+        let exact_kernel::svg::scene::Kind::Text(item) = &item.kind else {
+            panic!("text")
+        };
+        let run = &item.chunks[0].runs[0];
+        let face = text
+            .resolved_face_id(run.style.font_family, 400, false)
+            .expect("fixture generic face");
+        assert_eq!(Some(face), text.resolved_face_id(generic, 400, false));
+    }
+}

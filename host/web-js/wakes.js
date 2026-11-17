@@ -4,9 +4,10 @@
 // invocation of origin `wake`, delivered once, in order, one at a time, each as its own commit. The page cannot tell
 // one request from another, so an invocation owns every answer that went out after its delivery, `then`s and queued
 // sends included, and a request the server holds (`heldAsks`, which `inflight` leaves out); not a stream, which is a
-// view's (a resource's live answer the boot or the view opened meanwhile). The origin of every call is `wake` until
-// that settles (`busy`), the least privileged in flight, as an emitted event's `device` is. Nothing it started is cancelled at the deadline: the invocation ends `expired`, and
-// what it started settles under the app's origin. A wake in a hidden page fires no timer (`clock.stopped`); under the
+// view's (a resource's live answer the boot or the view opened meanwhile). Its handlers' commits, and the replies, `then`s
+// and queued sends they start, are of origin `wake`, and data code takes `wake` while any of that work still waits,
+// the least privileged in flight, as an emitted event's `device` is. Nothing it started is cancelled at the deadline: the invocation ends `expired`, and
+// what it started settles under the origin it was started with, which a reply, a `then` and a queued send each restore. A wake in a hidden page fires no timer (`clock.stopped`); under the
 // agent the wake hides the page (`exactPage().visibilityState`) and shows it again after, as the platform's background.
 //
 // Registrations (§10): a keyed list declared with a `kind` keeps, beside each entry's options, its runs, attempts and

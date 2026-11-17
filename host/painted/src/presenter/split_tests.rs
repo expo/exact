@@ -53,7 +53,7 @@ fn boot(width: f32, split: &str) -> Presenter<()> {
     boot_source(width, &APP.replace("SPLIT", split))
 }
 fn boot_source(width: f32, source: &str) -> Presenter<()> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (width, 800.),

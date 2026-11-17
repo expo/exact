@@ -172,8 +172,7 @@ async function settled() {
   catch (error) { retainTrap(error); return []; }
 }
 
-function size(el) {
-  const r = el.getBoundingClientRect();
+function size(el, r = el.getBoundingClientRect()) {
   return { w: Math.max(r.width, 1), h: Math.max(r.height, 1), s: devicePixelRatio || 1 };
 }
 
@@ -195,6 +194,14 @@ function lifecycle(code) {
 document.addEventListener("visibilitychange", () => lifecycle(document.hidden ? 0 : 1));
 window.addEventListener("pagehide", () => lifecycle(0));
 window.addEventListener("pageshow", event => lifecycle(event.persisted || !document.hidden ? 1 : 0));
+// A browser starts audio only in a user gesture, so any trusted press in the page is told to every surface inside
+// it, as the Contract sound player resumes its own (sound-glue.js): a press on a Contract control never reaches the
+// canvas, and a game whose controls are those has sound from its first press.
+const activated = (event) => {
+  if (!event.isTrusted || trapped() || recoveringDevice) return;
+  for (const entry of surfaces.values()) if (entry.id && !entry.terminal) gpu?.gpu_lifecycle(entry.id, 4);
+};
+for (const type of ["pointerdown", "keydown", "touchend"]) document.addEventListener(type, activated, true);
 
 // A homography maps child-local points to canvas points. CSS adds the child's
 // kernel offset after its transform, so subtract that offset in homogeneous space.
@@ -295,7 +302,7 @@ function fallback(entry) {
   if (api.recovery?.code === "no-adapter") { entry.unsupported = refusal(api.recovery.error); showRefusal(entry); }
   entry.terminal = true;
   entry.wants = false;
-  if (entry.performance && publishers.get(entry.name) === entry) surfaceRecord(entry.name, null, true);
+  if (publishers.get(entry.name) === entry) surfaceRecord(entry.name, null, true);
   schedulePerformance();
   for (const row of entry.children ?? []) restoreChild(row);
   entry.children = undefined;
@@ -498,10 +505,6 @@ padPoller(() => [...surfaces.values()].find(e => e.pads && live(e.view) === e &&
 // forgets the baseline, for positional values, and when an argument is gone, which only a whole bind returns to its
 // default. What was sent becomes the baseline only once the module accepts it.
 function bindValues(entry, module, values, at, whole = false) {
-  // The canvas's size goes first: a stamped bind may tick a new world, which
-  // frames itself for its canvas before its first tick (`Game::first_frame`).
-  const r = entry.host.getBoundingClientRect();
-  if (r.width > 0 && r.height > 0 && module.gpu_size && !module.gpu_size(entry.id, r.width, r.height)) console.error("exact gpu:", module.gpu_error());
   const named = values !== null && typeof values === "object" && !Array.isArray(values);
   const last = named && !whole ? entry.bound : null;
   const object = (keys, wire) => `{${keys.map(k => `${JSON.stringify(k)}:${wire.get(k)}`).join(",")}}`;
@@ -521,14 +524,22 @@ function bindValues(entry, module, values, at, whole = false) {
   entry.bound = named ? {values, wire} : null;
   return true;
 }
+// The canvas's size in points, at creation and then from the ResizeObserver, after layout. A bind reads no geometry:
+// in the middle of a batch that would force the layout of everything the batch wrote so far.
+function tellSize(entry, module, r = entry.host.getBoundingClientRect()) {
+  if (r.width > 0 && r.height > 0 && module.gpu_size && !module.gpu_size(entry.id, r.width, r.height)) console.error("exact gpu:", module.gpu_error());
+}
 // Creation/binding is a hard result. Staging never publishes or attaches listeners.
 function create(entry, module, carry) {
-  const { w, h, s } = size(entry.host);
+  const r = entry.host.getBoundingClientRect(), { w, h, s } = size(entry.host, r);
   entry.el.width = Math.max(1, Math.round(w * s));
   entry.el.height = Math.max(1, Math.round(h * s));
   entry.id = module.gpu_create(entry.name, entry.el, entry.el.width, entry.el.height);
   if (!entry.id) throw new Error(`surface ${entry.name}: create: ${module.gpu_error()}`);
   module.gpu_lifecycle(entry.id, hidden ? 0 : 1);
+  // The canvas's size goes before the first bind: a stamped bind may tick a new world, which frames itself for its
+  // canvas before its first tick (`Game::first_frame`).
+  tellSize(entry, module, r);
   if (!bindValues(entry, module, entry.values, exact.now?.(), true)) throw new Error(`surface ${entry.name}: bind: ${module.gpu_error()}`);
   if (carry !== undefined) {
     entry.carry = carry;
@@ -540,12 +551,11 @@ function create(entry, module, carry) {
   }
 }
 function attach(entry) {
-  entry.performance = publishers.get(entry.name) === entry && !!exact.wasm.exact_canvas_performance_requested?.(exact.writeIn(entry.name));
-  if (entry.performance) gpu.gpu_performance_reporting?.(entry.id, true);
-  schedulePerformance();
+  entry.performance = false;
+  syncPerformance();
   // A canvas that rested draws again at its new size, at the present time (its last frame's is
   // the start of its rest); one that now wants more frames gets them.
-  entry.observer = new ResizeObserver(() => { if (entry.id && !entry.terminal) { render(entry, entry.wants ? frameAt ?? performance.now() : performance.now()); flush(); if (entry.wants) schedule(); } });
+  entry.observer = new ResizeObserver(() => { if (entry.id && !entry.terminal) { tellSize(entry, gpu); render(entry, entry.wants ? frameAt ?? performance.now() : performance.now()); flush(); if (entry.wants) schedule(); } });
   entry.observer.observe(entry.el);
   entry.wantsInput = gpu.gpu_wants_input(entry.id);
   entry.hdr = gpu.gpu_high_dynamic_range?.(entry.id) === true;
@@ -612,6 +622,16 @@ function performanceRecord(entry) {
   if (!entry.performance || !entry.id || entry.terminal || live(entry.view) !== entry || publishers.get(entry.name) !== entry) return;
   const metrics = gpu.gpu_performance?.(entry.id, performance.now());
   if (metrics != null) surfaceRecord(entry.name, metrics, true);
+}
+function syncPerformance() {
+  for (const entry of surfaces.values()) {
+    if (!entry.id || entry.terminal) continue;
+    const enabled = publishers.get(entry.name) === entry && !!exact.wasm.exact_canvas_performance_requested?.(exact.writeIn(entry.name));
+    if (enabled === !!entry.performance) continue;
+    entry.performance = enabled;
+    gpu.gpu_performance_reporting?.(entry.id, enabled);
+  }
+  schedulePerformance();
 }
 function schedulePerformance() {
   const enabled = !hidden && !trapped() && [...publishers.values()].some(e => e.performance && e.id && !e.terminal && live(e.view) === e);
@@ -702,6 +722,7 @@ function listen(entry) {
   // world's deltas never stop at the canvas or screen edge though the position
   // stays put; unlocked it is the position's change, as on every other host. A
   // down or up carries none.
+  const modifiers = (event) => ({ shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, altKey: event.altKey, metaKey: event.metaKey });
   const lockable = () => (el.dataset.pointerLock ?? entry.el.dataset?.pointerLock) === "true";
   const last = new Map(); // each pointer's last point on the canvas
   on("pointerleave", (event) => { if (document.pointerLockElement !== el) last.delete(event.pointerId); });
@@ -734,7 +755,7 @@ function listen(entry) {
     if (!fallsThrough(event)) return;
     if (phase === "down") { if (!editable(document.activeElement)) el.focus({ preventScroll: true }); try { el.setPointerCapture(event.pointerId); } catch {} }
     if (phase === "down" && event.pointerType === "mouse" && lockable() && document.pointerLockElement !== el) Promise.resolve(el.requestPointerLock?.()).catch(() => {});
-    send(event, { t: "pointer", phase, id: event.pointerId, ...pointerAt(event, phase), kind: event.pointerType || "mouse", buttons: event.buttons });
+    send(event, { t: "pointer", phase, id: event.pointerId, ...pointerAt(event, phase), kind: event.pointerType || "mouse", buttons: event.buttons, ...modifiers(event) });
   });
   on("lostpointercapture", event => {
     const button = controls.get(event.pointerId);
@@ -743,7 +764,8 @@ function listen(entry) {
   on("wheel", (event) => {
     if (!fallsThrough(event)) return;
     event.preventDefault();
-    send(event, { t: "wheel", dx: event.deltaX, dy: event.deltaY, ...point(event) });
+    // A trackpad pinch arrives here as the browser delivers it: a wheel with ctrlKey set.
+    send(event, { t: "wheel", dx: event.deltaX, dy: event.deltaY, ...point(event), ...modifiers(event) });
   }, { passive: false });
   // A restored keydown (including a queued one) still owns its future keyup.
   const held = entry.heldKeys ??= new Set();
@@ -892,6 +914,7 @@ function worlds(request) {
 const api = {
   deviceLost() { if (recoveringDevice) lossDuringRecovery = true; else queueMicrotask(() => recoverDevice()); },
   drainRecords,
+  syncPerformance,
   agent,
   settled,
   async surfaceWork(name, mode, bytes, active) {
@@ -1050,7 +1073,7 @@ const api = {
       const old = publishers.get(name);
       if (old && (!old.el.isConnected || exact.views.get(old.view) !== old.host || surfaces.get(old.view) !== old)) {
         if (surfaces.get(old.view) === old) this.destroy(old.view);
-        else { publishers.delete(name); surfaceRecord(name, null); if (old.performance) surfaceRecord(name, null, true); }
+        else { publishers.delete(name); surfaceRecord(name, null); surfaceRecord(name, null, true); }
       }
       entry = { view, host, el, name, values, id: 0, wants: false, wantsInput: false, logCursor: 0, terminal: terminalDevice }; surfaces.set(view, entry);
       const carried = planCarries.get(name);
@@ -1059,8 +1082,8 @@ const api = {
       const publisher = publishers.get(name);
       const publisherRegistered = publisher && surfaces.get(publisher.view) === publisher
         && exact.views.get(publisher.view) === publisher.host;
+      // Each canvas of a surface runs its own world; the first live one alone publishes the surface's record (LLP 1046.003).
       if (!publisher || !publisherRegistered || !publisher.el.isConnected) publishers.set(name, entry);
-      else console.error(`exact gpu: surface ${name}: duplicate live publisher ignored`);
       ensure(entry); return; }
     entry.values = values;
     if (entry.id && !entry.terminal) {
@@ -1083,7 +1106,7 @@ const api = {
     if (entry) { entry.observer?.disconnect(); entry.unlisten?.(); entry.id = 0; }
     surfaces.delete(view);
     schedulePerformance();
-    if (entry && publishers.get(entry.name) === entry) { publishers.delete(entry.name); surfaceRecord(entry.name, null); if (entry.performance) surfaceRecord(entry.name, null, true); }
+    if (entry && publishers.get(entry.name) === entry) { publishers.delete(entry.name); surfaceRecord(entry.name, null); surfaceRecord(entry.name, null, true); }
   },
   // A plan restart reassigns view ids. Unique surface names can carry across it;
   // duplicate instances are ambiguous and are deliberately left fresh.
@@ -1102,13 +1125,17 @@ const api = {
   // A validated asset generation can reach existing surfaces without replacing their worlds.
   async reloadAssets(cards, names, current = () => true) {
     await ready;
+    // A file the page reads when asked (dev.js `later`) and has not asked for yet reaches surfaces when they request
+    // it. One it has is read before the swap, which does not yield.
+    const asked = names.filter(name => { const old = exact.devAssets?.get(name); return !old?.read || old.bytes || old.held.reading; });
+    const bytes = new Map(await Promise.all(asked.map(async name => [name, cards.get(name)?.read ? await cards.get(name).read() : cards.get(name)?.bytes])));
     return exact.mutate(() => {
       if (!current()) return false;
-      for (const name of names) if (!name.startsWith('assets/') || (!cards.get(name)?.bytes || cards.get(name).bytes.length > 64 * 1024 * 1024)) throw new Error(`missing surface asset ${name}`);
+      for (const name of names) if (!name.startsWith('assets/') || !cards.get(name) || (asked.includes(name) && (!bytes.get(name) || bytes.get(name).length > 64 * 1024 * 1024))) throw new Error(`missing surface asset ${name}`);
       for (const entry of surfaces.values()) if (entry.id && !entry.terminal) {
-        for (const name of names) {
+        for (const name of asked) {
           cancelAssets(entry, new Set([name.slice(7)]));
-          if (!gpu.gpu_asset(entry.id, name.slice(7), cards.get(name).bytes)) throw new Error(gpu.gpu_error());
+          if (!gpu.gpu_asset(entry.id, name.slice(7), bytes.get(name))) throw new Error(gpu.gpu_error());
         }
         messages(entry);
       }

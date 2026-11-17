@@ -21,7 +21,8 @@ import Photos
 public final class PhotosModule: ExactPackage {
     /// Before each `photoAssets` fetch: the app may add predicates and
     /// `includeAssetSourceTypes`; the sort, the limit and the image
-    /// predicate are the module's.
+    /// predicate are the module's, and a page's key is joined to the
+    /// app's predicate after this.
     public static var fetchOptions: ((PHFetchOptions) -> Void)?
     /// Before each picture request: `deliveryMode`, `isNetworkAccessAllowed`
     /// and `resizeMode` are the module's.
@@ -60,7 +61,7 @@ public final class PhotosModule: ExactPackage {
         }
         switch name {
         case "photoLibraryStatus": reply(status())
-        case "photoAssets": reply(["assets": assets(args)])
+        case "photoAssets": reply(assets(args))
         case "copyPhotoAsset": copy(args, reply)
         case "addToPhotoLibrary": add(args, reply)
         case "managePhotoSelection":
@@ -126,13 +127,18 @@ public final class PhotosModule: ExactPackage {
         ["available": true, "state": "prompt", "access": library.access, "addState": "prompt", "apple": NSNull(), "android": NSNull()]
     }
 
-    private func assets(_ args: [String: Any]) -> [[String: Any]] {
-        let limit = (args["limit"] as? NSNumber)?.intValue ?? 60
-        return library.newest(limit).map { a in
+    private func assets(_ args: [String: Any]) -> [String: Any] {
+        let limit = min(500, max(1, (args["limit"] as? NSNumber)?.intValue ?? 60))
+        let after: PageCursor.Key?
+        do { after = try PageCursor.key("agent", args["cursor"]) } catch { return PageCursor.refused }
+        let (page, more) = library.page(limit, after: after)
+        let assets = page.map { a -> [String: Any] in
             ["id": a.id, "mediaType": "image", "width": a.width, "height": a.height, "creationDate": a.created,
              "favorite": false, "picture": "photos:\(a.id)",
              "apple": ["mediaSubtypes": [String](), "burstIdentifier": NSNull(), "hasAdjustments": false], "android": NSNull()]
         }
+        let cursor = more ? page.last.map { PageCursor.text("agent", .init(date: $0.created, id: $0.id)) } : nil
+        return ["assets": assets, "cursor": cursor ?? NSNull()]
     }
 
     private func copy(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) {
@@ -160,5 +166,37 @@ public final class PhotosModule: ExactPackage {
         context.changed("photos.photoAssets")
         // The new photo's id where the app may read it (D6): not under add-only access.
         reply(["asset": library.visible.contains(asset.id) ? asset.id : NSNull()])
+    }
+}
+
+/// `photoAssets`' cursor (LLP 1133.019 D1), opaque to the app: the sort key
+/// of the last photo a page answered, tagged with the library that sorted
+/// it. The next page answers what sorts after the key, so photos added
+/// newer do not move it, and a key whose photo is gone still places it.
+enum PageCursor {
+    struct Key {
+        /// The creation date in the library's own unit; nil sorts last.
+        let date: Double?
+        let id: String
+    }
+
+    struct Malformed: Error {}
+
+    static let refused: [String: Any] = ["error": "SyntaxError", "message": "not a cursor photoAssets answered here"]
+
+    static func text(_ library: String, _ key: Key) -> String {
+        // A Double's description reads back as the same Double.
+        Data("\(library)\n\(key.date.map { "\($0)" } ?? "")\n\(key.id)".utf8).base64EncodedString()
+    }
+
+    /// Nil for the first page: no cursor, or an empty one.
+    static func key(_ library: String, _ given: Any?) throws -> Key? {
+        guard let given = given as? String, !given.isEmpty else { return nil }
+        guard let data = Data(base64Encoded: given), let text = String(data: data, encoding: .utf8) else { throw Malformed() }
+        let parts = text.split(separator: "\n", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0] == library, !parts[2].isEmpty else { throw Malformed() }
+        if parts[1].isEmpty { return Key(date: nil, id: String(parts[2])) }
+        guard let date = Double(parts[1]), date.isFinite else { throw Malformed() }
+        return Key(date: date, id: String(parts[2]))
     }
 }

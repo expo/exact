@@ -19,6 +19,7 @@
 //! field (`dev.mjs`, `exact deploy`), and a field that has no value yet is
 //! `null`, so the id is stable until the thing exists.
 
+use crate::path_crates::path_crates;
 use contract::Manifest;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -152,7 +153,7 @@ pub fn typescript_runtime_of(bundle: &[u8], grants: &str) -> u32 {
 const DOMAIN: &str = "exact2 compatibility id v1\n";
 
 /// The id and the inputs it digests.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Compat {
     /// 16 bytes of the domain-separated SHA-256 over the canonical inputs, lowercase hex.
     pub id: String,
@@ -166,6 +167,10 @@ pub struct Compat {
     /// When a staged bundle applies (`deploy.activate`): `next-launch` or
     /// `app-decides` — policy the binary's store follows (LLP 1030.000 D4).
     pub activate: String,
+    /// Seconds between foreground checks (`deploy.check.interval`), when the
+    /// manifest names it: what a painted host reads (LLP 1030.006 D5); the
+    /// Apple hosts read it from Info.plist.
+    pub check_interval: Option<serde_json::Number>,
     /// The exact target the binary-producing Cargo bake received.
     pub target: String,
     /// Embedded bundle provenance and its complete static roster, and
@@ -196,11 +201,19 @@ impl Compat {
         canonical(&self.inputs, &mut s);
         s.push_str(",\"delivery\":");
         canonical(
-            &serde_json::json!({
-                "activate": self.activate,
-                "channel": self.channel,
-                "origin": self.origin.clone().map_or(serde_json::Value::Null, serde_json::Value::String),
-            }),
+            &match &self.check_interval {
+                Some(interval) => serde_json::json!({
+                    "activate": self.activate,
+                    "channel": self.channel,
+                    "checkInterval": interval,
+                    "origin": self.origin.clone().map_or(serde_json::Value::Null, serde_json::Value::String),
+                }),
+                None => serde_json::json!({
+                    "activate": self.activate,
+                    "channel": self.channel,
+                    "origin": self.origin.clone().map_or(serde_json::Value::Null, serde_json::Value::String),
+                }),
+            },
             &mut s,
         );
         s.push_str(",\"target\":");
@@ -278,29 +291,33 @@ pub fn compatibility_id_sources_with_entries(
         rust_grants,
         entries,
         None,
+        &serde_json::Value::Null,
     )
 }
 
-/// The compiled module's sha256 (`module.sha256`) to pin in this platform's
-/// compatibility id when it has a store; none without one. Metadata without
-/// the hash is refused either way. This cohort pin does not prohibit a signed
-/// module pair that the installed executor admits.
-pub fn stored_module<'a>(
-    meta: &'a serde_json::Value,
-    manifest: &Manifest,
-    platform: &str,
-) -> Result<Option<&'a str>, String> {
-    let module = meta["module"]["sha256"]
-        .as_str()
-        .ok_or("missing module hash")?;
-    Ok((manifest.store(platform) != "0").then_some(module))
+/// `deploy.store.<platform>`, but `"0"` for a Mac App Store build (`EXACT_APPSTORE`,
+/// which `host/apple/build.mjs --appstore` sets): App Review Guideline 2.4.5(vii)
+/// allows updates only through the store, so it links no update store and app.json
+/// keeps its value for the Developer ID build (LLP 1030.005 D3).
+fn store_level(manifest: &Manifest, platform: &str) -> String {
+    let appstore = std::env::var_os("EXACT_APPSTORE").is_some_and(|v| v == "1");
+    store_level_of(manifest, platform, appstore)
 }
 
-/// As [`compatibility_id_sources_with_entries`], with an optional compiled-module
-/// pin. When supplied, `module` enters the id as `typescriptModule`, so changing
-/// it changes the baked cohort. Signed delivery may carry a replacement module
-/// pair within an installed cohort, subject to its runtime, identity, grants
-/// and module policy; this helper does not decide candidate admission.
+/// [`store_level`] with the Mac App Store build's switch given.
+pub(crate) fn store_level_of(manifest: &Manifest, platform: &str, appstore: bool) -> String {
+    if appstore && platform == "macos" {
+        return "0".into();
+    }
+    manifest.store(platform)
+}
+
+/// As [`compatibility_id_sources_with_entries`], with the TypeScript module's
+/// receipt and environment. A receipt requires `module.sha256`; with a store,
+/// it enters the cohort as `typescriptModule`. This helper does not admit
+/// replacement module pairs: delivery checks runtime, identity, grants and
+/// module policy. Android also records `hermesBytecode` in the cohort because
+/// a device discovers a version mismatch only after download (LLP 1030.006 D4).
 #[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_pinned(
     app_dir: &Path,
@@ -310,12 +327,14 @@ pub fn compatibility_id_pinned(
     grants: Option<&str>,
     rust_grants: Option<&str>,
     entries: Option<&std::collections::BTreeMap<String, contract::snapshot::Entry>>,
-    module: Option<&str>,
+    module: Option<&serde_json::Value>,
+    settings: &serde_json::Value,
 ) -> Result<Compat, String> {
     // Cargo must rebake even when only the explicit trust selection changes.
     // External apps call this same entrypoint from their own build scripts.
     if std::env::var_os("OUT_DIR").is_some() {
         println!("cargo:rerun-if-env-changed=EXACT_UPDATE_TRUST");
+        println!("cargo:rerun-if-env-changed=EXACT_APPSTORE");
         println!("cargo:rerun-if-env-changed=EXACT_VERSION");
         println!("cargo:rerun-if-env-changed=EXACT_BUILD_NUMBER");
         println!("cargo:rerun-if-env-changed=EXACT_TYPESCRIPT_PLACEMENT");
@@ -330,7 +349,14 @@ pub fn compatibility_id_pinned(
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
     let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
-    let preloads = crate::preload::checked(app_dir, manifest, ceiling.as_deref().or(grants))?;
+    // Android uses the Linux bake; its launch parts read the build fallback (LLP 1153.002 D2).
+    let preloads = crate::preload::checked(
+        app_dir,
+        manifest,
+        ceiling.as_deref().or(grants),
+        settings,
+        platform != "web",
+    )?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage
     // 14 C2) its icons' fill rules read below.
@@ -356,8 +382,16 @@ pub fn compatibility_id_pinned(
     if let Some(rust) = rust_grants {
         source_scopes(&mut compat, grants.unwrap_or(""), rust);
     }
-    if let Some(module) = module {
-        compat.inputs["typescriptModule"] = serde_json::Value::String(module.into());
+    if let Some(meta) = module {
+        let sha = meta["module"]["sha256"]
+            .as_str()
+            .ok_or("missing module hash")?;
+        if compat.inputs["store"]["L"] != "0" {
+            compat.inputs["typescriptModule"] = serde_json::Value::String(sha.into());
+        }
+        if target.contains("android") {
+            compat.inputs["hermesBytecode"] = meta["bytecodeVersion"].clone();
+        }
         compat.id = compatibility_digest(&compat.inputs);
     }
     // The origins its declared sources carry are the binary's grants too
@@ -369,7 +403,16 @@ pub fn compatibility_id_pinned(
             compat.id = compatibility_digest(&compat.inputs);
         }
     }
+    let sync = manifest.watch()?.map(|w| w.sync).unwrap_or_default();
+    contract::watch_sync::grants(&sync, compat.inputs["grantCeiling"].as_str().unwrap_or(""))?;
+    compat.inputs["watchSync"] = contract::watch_sync::identity(&sync, plan.as_ref())?;
+    compat.id = compatibility_digest(&compat.inputs);
     crate::reach::derive(app_dir, platform, plan.as_ref(), &mut compat)?;
+    localizations(platform, &mut compat);
+    crate::sandbox::derive(app_dir, platform, plan.as_ref(), &mut compat);
+    if target.contains("android") {
+        crate::channels::derive(app_dir, &manifest.json, &mut compat)?;
+    }
     // The plans that ship, each resolved once (the receipt writes the entry
     // plans): an even-odd icon in any moves the id (stage 14 C2,
     // icon_rules.rs), and one that binds `atomFaces` names its record's
@@ -379,6 +422,17 @@ pub fn compatibility_id_pinned(
     let out = std::env::var_os("OUT_DIR").map(std::path::PathBuf::from);
     let other = crate::icon_rules::shipped(app_dir, plan.as_ref(), out.as_deref())?;
     let ships = other.as_ref().or(plan.as_ref());
+    // From the plan that ships, which the APK's build reads: a TypeScript
+    // bake's marks the resources its module answers, which link the host's
+    // I/O, and the `app.contract` plan alone does not.
+    if let (true, Some(ships)) = (target.contains("android"), ships) {
+        compat.inputs["androidLinked"] = android_linked(
+            ships,
+            compat.inputs["grantCeiling"].as_str(),
+            &contract::native::app_text(app_dir),
+        );
+        compat.id = compatibility_digest(&compat.inputs);
+    }
     crate::icon_rules::apply(&mut compat, ships, entries)?;
     crate::atom_faces::apply(&mut compat, ships, entries);
     if !target.contains("watchos") {
@@ -413,22 +467,61 @@ pub fn compatibility_id_pinned(
     Ok(compat)
 }
 
+/// What an APK is composed from beyond the compatibility inputs' other
+/// fields (LLP 1030.006 D4a): the plan's capabilities (`uses.txt`, which
+/// decides what the reader links), the Android permissions its grant lines
+/// and the source's use of module names derive (`permissions.txt`), and the
+/// package extensions it binds a Kotlin implementation for. A generation
+/// that needs more than this is a new APK; the hatch words are `hatches`.
+pub(crate) fn android_linked(
+    plan: &exact_plan::Plan,
+    ceiling: Option<&str>,
+    source: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "uses": android_uses(plan),
+        "permissions": contract::native::android_permissions(plan, ceiling, source),
+        "extensions": plan_extensions(plan),
+    })
+}
+
+/// What the APK links for the plan, by name, as its build reads it
+/// (`contract::native::android_reach`).
+pub(crate) fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
+    contract::native::android_uses(plan)
+}
+
+/// The package extensions the plan's modules, views and events name, sorted.
+pub(crate) fn plan_extensions(plan: &exact_plan::Plan) -> Vec<String> {
+    let names = plan
+        .modules
+        .iter()
+        .map(|m| m.extension)
+        .chain(plan.views.iter().map(|v| v.extension))
+        .chain(plan.module_events.iter().map(|e| e.extension));
+    let names: std::collections::BTreeSet<String> =
+        names.map(|name| plan.str(name).to_string()).collect();
+    names.into_iter().collect()
+}
+
 /// The faced tools this platform's binary compiles a door for (LLP 1133.023
-/// D8): each one's signature and face join the id, so a plan that changes
-/// one is a binary change. tvOS (an `ios` bake for a tvOS target) and the
-/// web compile none.
+/// D8), and on the Mac those its tools helper lists (LLP 1111.000 D1): each
+/// one's signature and face join the id, so a plan that changes one is a
+/// binary change. tvOS (an `ios` bake for a tvOS target) and the web
+/// compile none.
 fn faces(compat: &mut Compat, plan: &exact_plan::Plan, platform: &str, target: &str) {
-    let door = match platform {
+    let doors: &[&str] = match platform {
         _ if target.contains("tvos") => return,
-        "ios" | "macos" => "apple",
-        "android" => "android",
+        "ios" => &["apple"],
+        "macos" => &["apple", "mcp"],
+        "android" => &["android"],
         _ => return,
     };
     let faced: Vec<serde_json::Value> = (0..plan.tools.len())
         .filter_map(|i| {
             let face: serde_json::Value = serde_json::from_str(plan.str(plan.tools[i].face)).ok()?;
-            let doors = face["doors"].as_array()?;
-            doors.iter().any(|d| d == door).then(|| serde_json::json!({ "signature": contract::faces::tool_signature(plan, i), "face": face }))
+            let named = face["doors"].as_array()?;
+            named.iter().any(|d| doors.iter().any(|door| d == door)).then(|| serde_json::json!({ "signature": contract::faces::tool_signature(plan, i), "face": face }))
         })
         .collect();
     if !faced.is_empty() {
@@ -464,6 +557,21 @@ fn source_scopes(compat: &mut Compat, javascript: &str, rust: &str) {
     compat.inputs["javascriptGrants"] = serde_json::Value::String(javascript.into());
     compat.inputs["rustGrants"] = serde_json::Value::String(rust.into());
     compat.id = compatibility_digest(&compat.inputs);
+}
+
+/// The Apple bundle lists the strings tables as its localizations
+/// (`localizationKeys` in `host/apple/build.mjs`), and the system and
+/// `SessionFacts.viewerLocale` choose the app's table from that list, so the
+/// tables' names are in the id there (LLP 1030 D3a); their text is not. An
+/// app with one table records nothing, so its id did not move when this was
+/// added.
+fn localizations(platform: &str, compat: &mut Compat) {
+    let tables = compat.reach["locales"].as_array().map_or(0, Vec::len);
+    if tables > 1 && matches!(platform, "ios" | "macos") {
+        compat.inputs["localizations"] =
+            serde_json::json!({"base": compat.reach["base"], "locales": compat.reach["locales"]});
+        compat.id = compatibility_digest(&compat.inputs);
+    }
 }
 
 pub(crate) fn compatibility_digest(inputs: &serde_json::Value) -> String {
@@ -518,7 +626,23 @@ fn compatibility_with_trust(
     {
         return Err("the web host links no updater; deploy.store.web must be \"0\"".into());
     }
-    let store = manifest.store(platform);
+    // An Android library bakes through the Linux host's code generation (it
+    // is that host's presenter under the reader's Canvas), so its callers
+    // name `linux`; its record names `android`, whose host settings, hatch
+    // words and store level are its own (LLP 1030.006 D2). An absent
+    // `deploy.store.android` is "0", not the native default of "A": Android
+    // apps shipped binary-only, and "A" asks a production build for keys and
+    // a stream.
+    let android = target.contains("android");
+    let platform = if android { "android" } else { platform };
+    let store = if android {
+        match manifest.json.pointer("/deploy/store/android") {
+            None => "0".to_string(),
+            Some(value) => value.as_str().unwrap_or("").to_string(),
+        }
+    } else {
+        store_level(manifest, platform)
+    };
     if !matches!(store.as_str(), "0" | "A") {
         return Err(format!("deploy.store.{platform} must be \"0\" or \"A\""));
     }
@@ -549,8 +673,11 @@ fn compatibility_with_trust(
     // app that names none has nothing to replace, so it links none
     // (LLP 1047.001 D7, as `web_rust_mode` already does on the web). The
     // policy is still validated.
+    // The APK links no Rust executor (`rules/DEFERRED.md` keeps Android below
+    // the replaceable Rust module), so its record admits no Rust pair whatever
+    // the manifest's policy (LLP 1030.006 D1).
     let rust_mode = match manifest.rust_mode(platform, trust == "development")? {
-        _ if rust_module.is_none() => "off",
+        _ if rust_module.is_none() || android => "off",
         mode => mode,
     };
     let mut executors = executors(app_dir, platform);
@@ -630,7 +757,12 @@ fn compatibility_with_trust(
         // A binary that replaces its Rust module binds the module's ABI,
         // target and grants above, never the source it was first built
         // from: an edit there is an update, not a new cohort (LLP 1029.000 §7).
-        "dataCrate": if rust_mode == "off" { data_crate(app_dir)? } else { Value::Null },
+        "dataCrate": if rust_mode == "off" {
+            let named = manifest.rust_data()?.map(|data| data.krate);
+            data_crate(app_dir, named.as_deref())?
+        } else {
+            Value::Null
+        },
         // Each shader's reflected interface digest (LLP 1030 D8) — entry
         // points, bindings, layouts, inputs, outputs, overrides, never the
         // text — so a colour edit does not move the id and a binding edit
@@ -643,6 +775,10 @@ fn compatibility_with_trust(
             tags if tags.is_empty() => Value::Null,
             tags => json!({ "appleAbi": 3, "webAbi": 1, "tags": tags }),
         },
+        // The service extension is app-authored native code in the installed
+        // cohort, not a replaceable module. Its complete tree therefore moves
+        // compatibility when an ordinary build replaces its executable.
+        "notificationService": notification_service(app_dir, platform, target)?,
         // @ref LLP 1075.003.000.001 §4.3 — the hatch words this platform's
         // module is built to handle, from app.json: the cohort's capability.
         "hatches": match contract::native::hatches_on(manifest, platform)? {
@@ -653,7 +789,7 @@ fn compatibility_with_trust(
         "capabilities": {
             "backgroundModes": list("backgroundModes"),
             "urlSchemes": list("urlSchemes"),
-            "associatedDomains": host.get("associatedDomains").and_then(|v| v.as_bool()).map_or(Value::Null, Value::Bool),
+            "associatedDomains": host.get("associatedDomains").filter(|v| v.is_array()).cloned().unwrap_or(Value::Null),
             // @ref LLP 1096 D8 — the Apple audio session, baked into the binary.
             "audioSession": manifest.json.get("audio_session").cloned().unwrap_or(Value::Null),
         },
@@ -670,10 +806,40 @@ fn compatibility_with_trust(
         "store": { "L": store, "acceptedKinds": if binary_only { vec![] } else { kinds } },
         "app": manifest.id,
     });
+    // A variant's base identity, which a Rust source naming its own id names
+    // (LLP 1030.008 D2); absent otherwise, so no other app's id moves.
+    if let Some(variant) = manifest.json.get("variant") {
+        inputs["variant"] = variant.clone();
+    }
     if matches!(platform, "macos" | "ios") {
         if let Some(handlers) = manifest.json.get("protocol_handlers") {
             if !handlers.as_array().is_some_and(Vec::is_empty) {
                 inputs["protocolHandlers"] = handlers.clone();
+            }
+        }
+    }
+    if platform != "web" {
+        let base = manifest
+            .json
+            .pointer("/host/web/base")
+            .and_then(Value::as_str)
+            .unwrap_or("/");
+        if base != "/" {
+            if let Some(origin) = manifest.json.pointer("/app/origin").and_then(Value::as_str) {
+                inputs["webMount"] = serde_json::json!({"origin": origin, "base": base});
+            }
+        }
+    }
+    if let Some(links) = crate::links::claims(&manifest.json, platform) {
+        inputs["links"] = links;
+    }
+    // Linux has no bundle beside the executable. Its portal picker reads the
+    // same declared file types from the compatibility metadata the binary
+    // already carries (LLP 1030 D2; LLP 1069.010 D2).
+    if platform == "linux" && !target.contains("android") {
+        if let Some(handlers) = manifest.json.get("file_handlers") {
+            if !handlers.as_array().is_some_and(Vec::is_empty) {
+                inputs["fileHandlers"] = handlers.clone();
             }
         }
     }
@@ -716,6 +882,12 @@ fn compatibility_with_trust(
     if hermes {
         inputs["typescriptRuntime"] = json!(TYPESCRIPT_RUNTIME);
     }
+    // The data crate the manifest names (LLP 1153.003 D2), which an entry's
+    // source must be (`contract::rust_entry`). Only apps that name one carry
+    // the key, so no other app's id moves.
+    if let Some(data) = manifest.rust_data()? {
+        inputs["rustData"] = json!({ "crate": data.krate, "type": data.ty, "source": data.source });
+    }
     let id = compatibility_digest(&inputs);
     let version = |name: &str, default: &str| match std::env::var(name) {
         Ok(value) => Ok(value),
@@ -728,17 +900,18 @@ fn compatibility_with_trust(
         channel,
         origin,
         activate: manifest.activate(),
+        check_interval: manifest
+            .json
+            .pointer("/deploy/check/interval")
+            .and_then(Value::as_number)
+            .filter(|interval| interval.as_f64().is_some_and(|i| i.is_finite() && i > 0.0))
+            .cloned(),
         target: target.into(),
         embedded: json!({ "trust": trust,
             "version": version("EXACT_VERSION", "0.1.0")?,
             "buildNumber": version("EXACT_BUILD_NUMBER", "1")? }),
         reach: serde_json::Value::Null,
-        // Android shells also use the Linux bake; the target names the host.
-        painter: manifest.painter(if target.contains("android") {
-            "android"
-        } else {
-            platform
-        })?,
+        painter: manifest.painter(platform)?,
         game: manifest
             .json
             .get("game")
@@ -783,31 +956,207 @@ fn executors(app_dir: &Path, platform: &str) -> Vec<String> {
     out
 }
 
+/// The convention-defined iOS notification service target and its complete
+/// source identity. Other Apple hosts neither advertise nor package it.
+fn notification_service(
+    app_dir: &Path,
+    platform: &str,
+    target: &str,
+) -> Result<serde_json::Value, String> {
+    let selected = std::env::var("EXACT_APPLE_EXTENSIONS").ok();
+    if std::env::var_os("OUT_DIR").is_some() {
+        println!("cargo:rerun-if-env-changed=EXACT_APPLE_EXTENSIONS");
+    }
+    if platform != "ios" || target.contains("-tvos") || target.contains("-watchos") {
+        return Ok(serde_json::Value::Null);
+    }
+    if selected
+        .as_deref()
+        .is_some_and(|kinds| !kinds.split(',').any(|kind| kind == "notifications"))
+    {
+        return Ok(serde_json::Value::Null);
+    }
+    let dir = app_dir.join("modules/apple/notification-service");
+    let directory_exists = match std::fs::metadata(&dir) {
+        Ok(metadata) => metadata.is_dir(),
+        Err(error) if notification_service_is_absent(&error) => false,
+        Err(error) => return Err(format!("modules/apple/notification-service: {error}")),
+    };
+    if let Some(out) = std::env::var_os("OUT_DIR") {
+        if let Some(path) = crate::receipt::watch::notification_service_tree(
+            &dir,
+            &[PathBuf::from(out)],
+            selected.as_deref(),
+            platform,
+            target,
+        ) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+    if !directory_exists {
+        return Ok(serde_json::Value::Null);
+    }
+    for name in [
+        "modules",
+        "modules/apple",
+        "modules/apple/notification-service",
+    ] {
+        match std::fs::symlink_metadata(app_dir.join(name)) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "{name}: is a symbolic link; notification service sources cannot be symbolic links"
+                ));
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Ok(serde_json::Value::Null),
+            Err(error) => return Err(format!("{name}: {error}")),
+        }
+    }
+    let (tree, files) = notification_service_identity(&dir)?;
+    Ok(serde_json::json!({
+        "bundleSuffix": "notifications",
+        "bundleName": "ExactNotificationService",
+        "principalClass": "ExactNotificationService.NotificationService",
+        "tree": tree,
+        "files": files,
+    }))
+}
+
+fn notification_service_is_absent(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    ) {
+        return true;
+    }
+    #[cfg(target_vendor = "apple")]
+    if error.raw_os_error() == Some(62) {
+        return true;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if error.raw_os_error() == Some(40) {
+        return true;
+    }
+    false
+}
+
+/// Swift sources anywhere below the convention root and its one top-level
+/// privacy manifest, ordered by the UTF-8 bytes of their `/`-joined names.
+/// Links are refused instead of acquiring source bytes from outside the app.
+fn notification_service_identity(dir: &Path) -> Result<(String, Vec<serde_json::Value>), String> {
+    let mut paths = Vec::new();
+    walk_notification_service(dir, dir, &mut paths)?;
+    paths.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let mut tree = Sha256::new();
+    let mut files = Vec::with_capacity(paths.len());
+    for (name, path) in paths {
+        let bytes = std::fs::read(&path).map_err(|e| format!("{name}: {e}"))?;
+        tree.update(name.as_bytes());
+        tree.update([0]);
+        tree.update((bytes.len() as u64).to_le_bytes());
+        tree.update(&bytes);
+        files.push(serde_json::json!({
+            "path": name,
+            "sha256": hex(&Sha256::digest(&bytes)),
+        }));
+    }
+    Ok((hex(&tree.finalize()), files))
+}
+
+fn walk_notification_service(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = entry.path();
+        let name = entry.file_name().into_string().map_err(|name| {
+            format!(
+                "{} contains a non-UTF-8 source name",
+                name.to_string_lossy()
+            )
+        })?;
+        if name.starts_with('.') || name == "target" {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(root)
+            .expect("a read_dir child stays below its root")
+            .components()
+            .map(|part| part.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| format!("{} contains a non-UTF-8 source name", path.display()))?
+            .join("/");
+        let kind = entry.file_type().map_err(|e| format!("{relative}: {e}"))?;
+        if kind.is_symlink() {
+            return Err(format!(
+                "{relative} is a symbolic link; notification service sources cannot be symbolic links"
+            ));
+        }
+        if kind.is_dir() {
+            walk_notification_service(root, &path, out)?;
+        } else if kind.is_file() {
+            if !relative.ends_with(".swift") && relative != "PrivacyInfo.xcprivacy" {
+                return Err(format!(
+                    "{relative} is an unsupported notification service resource; use Swift sources and a top-level PrivacyInfo.xcprivacy"
+                ));
+            }
+            out.push((relative, path));
+        } else {
+            return Err(format!(
+                "{relative} is not a regular notification service source file"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// The data crate's source-input digest (LLP 1030 D3a): its tree, the trees
 /// of the path crates it is built from, the workspace lockfile, the
 /// toolchain — never its compiled output, which a `wasm32` build can keep
 /// while the native build moved. It reads every arm of a `cfg(target_*)`
 /// branch, so the bake need not refuse one (LLP 1030 D3a, amended
-/// 2026-11-12). A `data/` without a `Cargo.toml` is no
-/// crate: TypeScript modules there are the bundle's, and an edit to them is
+/// 2026-11-12). The crate is the one beside app.json that `rust.data`
+/// names, else `data/` (LLP 1030.007 D3). A `data/` without a `Cargo.toml` is
+/// no crate: TypeScript modules there are the bundle's, and an edit to them is
 /// an update, not a new cohort.
-fn data_crate(app_dir: &Path) -> Result<serde_json::Value, String> {
-    let dir = app_dir.join("data");
+fn data_crate(app_dir: &Path, named: Option<&str>) -> Result<serde_json::Value, String> {
+    let dir = named
+        .and_then(|name| crate_beside(app_dir, name))
+        .unwrap_or_else(|| app_dir.join("data"));
     if !dir.join("Cargo.toml").is_file() {
         return Ok(serde_json::Value::Null);
     }
+    // Cargo may create a lockfile that the source digest must already include.
+    let dependencies = path_crates(&dir)?;
     let (tree, files) = tree_digest(&dir)?;
     let watch = std::env::var_os("OUT_DIR").is_some();
     if watch {
         println!("cargo:rerun-if-changed={}", dir.display());
     }
-    let mut crates = serde_json::Map::new();
-    for (name, path) in path_crates(&dir)? {
+    let mut trees = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for (name, path) in dependencies {
         if watch {
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        crates.insert(name, serde_json::Value::String(tree_digest(&path)?.0));
+        trees.entry(name).or_default().push(tree_digest(&path)?.0);
     }
+    // Two path crates can share a package name (two versions; one Cargo
+    // left out of the resolve). Each tree counts, in digest order, so the id
+    // does not depend on where the crates are.
+    let crates: serde_json::Map<_, _> = trees
+        .into_iter()
+        .map(|(name, mut trees)| {
+            trees.sort();
+            let value = match trees.as_slice() {
+                [tree] => serde_json::Value::from(tree.as_str()),
+                _ => serde_json::Value::from(trees),
+            };
+            (name, value)
+        })
+        .collect();
     let lockfile = lockfile(app_dir).map(|p| {
         std::fs::read(&p)
             .map(|b| hex(&Sha256::digest(&b)))
@@ -829,6 +1178,11 @@ fn data_crate(app_dir: &Path) -> Result<serde_json::Value, String> {
 
 /// The digest of every file under `dir` and how many there are.
 fn tree_digest(dir: &Path) -> Result<(String, usize), String> {
+    let (tree, files) = tree_identity(dir)?;
+    Ok((tree, files.len()))
+}
+
+fn tree_identity(dir: &Path) -> Result<(String, Vec<PathBuf>), String> {
     let mut files = Vec::new();
     walk(dir, dir, &mut files)?;
     files.sort();
@@ -840,110 +1194,7 @@ fn tree_digest(dir: &Path) -> Result<(String, usize), String> {
         h.update((bytes.len() as u64).to_le_bytes());
         h.update(&bytes);
     }
-    Ok((hex(&h.finalize()), files.len()))
-}
-
-/// The path crates the data crate at `dir` is built from, by package name
-/// and directory: the closure of its normal and build path dependencies as
-/// `cargo metadata` declares them, less exact2's own crates (everything in
-/// this checkout outside `apps/`), whose changes the id's other inputs name.
-/// Registry and git dependencies are pinned by the lockfile. `--no-deps`
-/// lists only workspace members; a closure that leaves the workspace asks
-/// Cargo again with the full graph.
-fn path_crates(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
-    let exact = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .canonicalize()
-        .map_err(|e| format!("exact2 checkout: {e}"))?;
-    let own = |path: &Path| path.starts_with(&exact) && !path.starts_with(exact.join("apps"));
-    let start = dir
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
-    for members_only in [true, false] {
-        let packages = metadata(dir, members_only)?;
-        let mut found = std::collections::BTreeMap::new();
-        let mut queue = vec![start.clone()];
-        let mut complete = true;
-        while let Some(at) = queue.pop() {
-            let Some((_, deps)) = packages.get(&at) else {
-                complete = false;
-                break;
-            };
-            for dep in deps {
-                if dep == &start || own(dep) || found.contains_key(dep) {
-                    continue;
-                }
-                let name = packages
-                    .get(dep)
-                    .map_or_else(String::new, |(n, _)| n.clone());
-                found.insert(dep.clone(), name);
-                queue.push(dep.clone());
-            }
-        }
-        if complete {
-            let mut out: Vec<(String, PathBuf)> = found.into_iter().map(|(p, n)| (n, p)).collect();
-            out.sort();
-            return Ok(out);
-        }
-    }
-    Err(format!(
-        "cargo metadata does not list the path dependencies of {}",
-        dir.display()
-    ))
-}
-
-/// `cargo metadata`'s packages, by canonical directory: each one's name and
-/// the directories of its normal and build path dependencies.
-type Packages = std::collections::HashMap<PathBuf, (String, Vec<PathBuf>)>;
-
-fn metadata(dir: &Path, members_only: bool) -> Result<Packages, String> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut command = std::process::Command::new(cargo);
-    command
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--offline",
-            "--manifest-path",
-        ])
-        .arg(dir.join("Cargo.toml"));
-    if members_only {
-        command.arg("--no-deps");
-    }
-    let output = command
-        .output()
-        .map_err(|e| format!("cargo metadata: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata for {}: {}",
-            dir.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    let meta: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("cargo metadata: {e}"))?;
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut packages = Packages::new();
-    for package in meta["packages"].as_array().into_iter().flatten() {
-        let Some(manifest) = package["manifest_path"].as_str() else {
-            continue;
-        };
-        let Some(at) = Path::new(manifest).parent() else {
-            continue;
-        };
-        let deps = package["dependencies"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|d| d["kind"].as_str() != Some("dev"))
-            .filter_map(|d| d["path"].as_str())
-            .map(|p| canonical(Path::new(p)))
-            .collect();
-        let name = package["name"].as_str().unwrap_or_default().to_string();
-        packages.insert(canonical(at), (name, deps));
-    }
-    Ok(packages)
+    Ok((hex(&h.finalize()), files))
 }
 
 /// The toolchain's version line (`$RUSTC --version`), asked once per process and per
@@ -986,8 +1237,52 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-/// The nearest `Cargo.lock` at or above `app_dir` (the workspace's).
+/// The directory beside app.json whose `Cargo.toml` names the package `name`
+/// (the app's own crates, LLP 1153.003 D1.1).
+fn crate_beside(app_dir: &Path, name: &str) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(app_dir)
+        .ok()?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.is_dir())
+        .collect();
+    dirs.sort();
+    dirs.into_iter().find(|dir| {
+        std::fs::read_to_string(dir.join("Cargo.toml"))
+            .is_ok_and(|text| package_name(&text).as_deref() == Some(name))
+    })
+}
+
+/// `[package] name` of a Cargo manifest, read without a TOML parser.
+fn package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+        } else if in_package {
+            let value = line
+                .strip_prefix("name")
+                .and_then(|rest| rest.trim_start().strip_prefix('='));
+            if let Some(value) = value {
+                return Some(
+                    value
+                        .trim()
+                        .trim_matches(|c| c == '"' || c == '\'')
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// The lock the data crate is built against: the app's own workspace's,
+/// else the generated workspace's (`.exact/shells/Cargo.lock`, which an app
+/// outside exact2 builds against), else the nearest one above the app.
 fn lockfile(app_dir: &Path) -> Option<PathBuf> {
+    let generated = app_dir.join(".exact/shells/Cargo.lock");
+    if !app_dir.join("Cargo.lock").is_file() && generated.is_file() {
+        return Some(generated);
+    }
     let mut dir = app_dir.canonicalize().ok()?;
     loop {
         let candidate = dir.join("Cargo.lock");
@@ -1100,3 +1395,18 @@ pub(crate) fn canonical(v: &serde_json::Value, out: &mut String) {
 #[cfg(test)]
 #[path = "compat_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compat_faces_tests.rs"]
+mod faces_tests;
+
+#[cfg(test)]
+#[path = "compat_notification_service_tests.rs"]
+mod notification_service_tests;
+
+#[cfg(test)]
+#[path = "compat_file_handlers_tests.rs"]
+mod file_handlers_tests;
+#[cfg(test)]
+#[path = "compat_watch_sync_tests.rs"]
+mod watch_sync_tests;

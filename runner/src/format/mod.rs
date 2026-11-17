@@ -42,6 +42,7 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
             let style = match style(2)? {
                 "medium" => Style::Medium,
                 "month-year" => Style::MonthYear,
+                "month-day" => Style::MonthDay,
                 "iso" => Style::Iso,
                 _ => return None,
             };
@@ -60,9 +61,10 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
             };
             day_label(num(0)?, num(1)?, num(2)?, mode)
         }
-        Stdlib::FormatNumber => match style(1)? {
-            "compact" => compact(num(0)?),
-            other => styled(num(0)?, other, style(2).unwrap_or(""))?,
+        Stdlib::FormatNumber => match (style(1)?, num(2)) {
+            ("compact", _) => compact(num(0)?),
+            ("decimal", Some(d)) => decimal_digits(num(0)?, digits(d, 100)? as usize),
+            (other, _) => styled(num(0)?, other, style(2).unwrap_or(""))?,
         },
         Stdlib::ToFixed => to_fixed(num(0)?, digits(num(1)?, 100)?),
         Stdlib::FormatDecimal => format_decimal(num(0)?, digits(num(1)?, 20)?),
@@ -96,11 +98,13 @@ fn date_wall(input: &Value, offset: f64) -> Option<f64> {
 enum Style {
     Medium,
     MonthYear,
+    MonthDay,
     Iso,
 }
 
 /// `Sep 26, 2026` (`{ dateStyle: "medium" }`), `September 2026`
-/// (`{ month: "long", year: "numeric" }`) or `2026-09-26` (LLP 1102 §3.4: the
+/// (`{ month: "long", year: "numeric" }`), `Sep 26` (`{ month: "short", day:
+/// "numeric" }`) or `2026-09-26` (LLP 1102 §3.4: the
 /// date part of `toISOString`) of a wall time in range. `en-US`'s short months are the first three letters of
 /// the long ones.
 fn date(wall: f64, style: Style) -> String {
@@ -122,6 +126,12 @@ fn date(wall: f64, style: Style) -> String {
         return out;
     }
     let name = MONTHS[month as usize - 1];
+    if style == Style::MonthDay {
+        out.push_str(&name[..3]);
+        out.push(' ');
+        push_number(f64::from(day), &mut out);
+        return out;
+    }
     if style == Style::MonthYear {
         out.push_str(name);
     } else {
@@ -354,8 +364,22 @@ const CURRENCIES: [(&str, &str, u32); 24] = [
 ///
 /// `None` for a style or code the compiler would have refused.
 fn styled(n: f64, style: &str, code: &str) -> Option<Value> {
+    styled_in(n, style, code, None)
+}
+
+/// `formatNumber(n, "decimal", digits)`: [`styled`]'s `decimal` with exactly
+/// `digits` fraction digits (`minimumFractionDigits` and
+/// `maximumFractionDigits` both `digits`).
+fn decimal_digits(n: f64, digits: usize) -> Value {
+    styled_in(n, "decimal", "", Some(digits)).expect("decimal is a style")
+}
+
+fn styled_in(n: f64, style: &str, code: &str, digits: Option<usize>) -> Option<Value> {
     let (symbol, min, max, shift) = match style {
-        "decimal" => ("", 0, 3, 0),
+        "decimal" => match digits {
+            Some(d) => ("", d, d, 0),
+            None => ("", 0, 3, 0),
+        },
         "percent" => ("", 0, 0, 2),
         "currency" => {
             let &(_, symbol, digits) = CURRENCIES.iter().find(|c| c.0 == code)?;

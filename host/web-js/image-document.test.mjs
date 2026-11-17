@@ -34,7 +34,7 @@ test('Rust-rendered images keep asynchronous decoding through adoption', async (
   for (const image of images) expect(image.match(/decoding="async"/g)).toHaveLength(1);
   expect(images.map(image => image.includes('loading="lazy"'))).toEqual([false, false, true, true]);
   expect(images.map(image => image.includes('fetchpriority="high"'))).toEqual([true, false, false, false]);
-  expect(html).toContain('<link rel="preload" as="image" href="assets/hero.png">');
+  expect(html).toContain('<link rel="preload" as="image" href="assets/hero.png" fetchpriority="high">');
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEklEQVR4nGN44ODwHxkzoAsAAEE1EvnzbXFzAAAAAElFTkSuQmCC', 'base64');
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;

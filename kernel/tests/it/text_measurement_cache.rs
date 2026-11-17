@@ -134,6 +134,7 @@ fn vertical_offers_remain_part_of_the_measurement_key() {
                     _ => 17.0,
                 },
                 height: 20.0,
+                pending: false,
                 first_baseline: Some(15.0),
             }
         }

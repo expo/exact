@@ -258,7 +258,7 @@ impl Modes {
     /// part (a style is `normal` or `italic`, a weight a whole number, a
     /// family a stack the plan declares), so the declaration a row writes
     /// is found by its property: a token reaches a text with no element
-    /// children only (`tamber-inherited-axis`), whose own rows these are.
+    /// children only (`forma-inherited-axis`), whose own rows these are.
     fn type_rows(&self, plan: &Plan, node: &exact_plan::NodesRow, p: &mut Parts) {
         if self.types.is_empty() {
             return;

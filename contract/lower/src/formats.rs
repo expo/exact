@@ -35,12 +35,14 @@
 //! | `days` | today, yesterday and tomorrow, in a label's case |
 //! | `weekdayDate`, `weekdayYear` | `formatDay`'s `"section"` dates (CLDR's `MMMEd` and `yMMMEd`, LLP 1168.000 D5): a template, then its twelve month names and its seven weekday names, Sunday's first; the template's first text, or the names that begin it, with a capital |
 //! | `weekdayLabels` | `"section"`'s weekdays, Sunday's first, with a capital |
+//! | `monthDay` | `formatDate`'s `"month-day"` (`{ month: "short", day: "numeric" }`): a template, then its month names |
+//! | `time2Digit`, `time2Digit12`, `time2Digit23` | `formatTime`'s `"2-digit"` (`{ hour: "2-digit", minute: "2-digit" }`), as `time`: a locale's own pattern and day periods, not the short time's hour padded |
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// The record's fields, in order.
-pub const FIELDS: [&str; 30] = [
+pub const FIELDS: [&str; 38] = [
     "digits",
     "decimal",
     "group",
@@ -71,6 +73,14 @@ pub const FIELDS: [&str; 30] = [
     "weekdayYear",
     "weekdayYearNames",
     "weekdayLabels",
+    "monthDay",
+    "monthDayNames",
+    "time2Digit",
+    "time2DigitPeriods",
+    "time2Digit12",
+    "time2Digit12Periods",
+    "time2Digit23",
+    "time2Digit23Periods",
 ];
 
 type Locales = BTreeMap<String, serde_json::Map<String, serde_json::Value>>;

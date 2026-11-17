@@ -186,8 +186,8 @@ check('a hover look composes over the base, under the press paint', async () => 
     await evaluate(`Object.assign(document.getElementById('card').style, { backgroundColor: '#eeeeee', borderRightColor: '#123456' })`);
     expect(await look()).toEqual(['rgb(0, 0, 255)', 'rgb(18, 52, 86)', '0.60']);
     // A live edit of the look beneath (its sheet, not the node's style) is what the press eases over now.
-    // (The look beneath: the node's own background-color, which the paint, a layer over it, leaves as it is.)
-    const beneath = () => evaluate(`getComputedStyle(document.getElementById('card')).backgroundColor`);
+    // (The look beneath: what the paint's background-color is written from, its value at 0.)
+    const beneath = () => evaluate(`(() => { const said = document.adoptedStyleSheets.flatMap(s => [...s.cssRules]).find(r => r.selectorText?.includes('data-exact-painting'))?.style.getPropertyValue('background-color') ?? ''; return 'rgb(' + [...said.matchAll(/calc\\((\\d+) \\+/g)].map(m => m[1]).join(', ') + ')'; })()`);
     expect(await beneath()).toBe('rgb(255, 255, 0)');
     await evaluate(`(s => { s.textContent = s.textContent.replace('255,255,0', '0,255,255'); })(document.getElementById('exact-looks'))`);
     await evaluate('new Promise(ok => setTimeout(ok, 0))');

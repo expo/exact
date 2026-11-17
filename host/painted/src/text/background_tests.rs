@@ -1,4 +1,7 @@
-use super::{backgrounds::InlineBackground, *};
+use super::{
+    backgrounds::{InlineBackground, InlinePaint},
+    *,
+};
 use crate::paint::Shape;
 use exact_kernel::{Dimension, Direction, Env, StyleProps, WhiteSpace};
 
@@ -35,6 +38,9 @@ fn background(id: u32) -> Option<InlineBackground> {
         id,
         radii: [const { Dimension::Points(3.0) }; 4],
         reach: exact_kernel::InlineEdges::default(),
+        above: 0.0,
+        below: 0.0,
+        border: None,
         outer: Vec::new(),
     })
 }
@@ -42,9 +48,23 @@ fn background(id: u32) -> Option<InlineBackground> {
 fn fills(p: &Paragraph, backgrounds: &[Option<InlineBackground>]) -> Vec<Shape> {
     p.inline_backgrounds(backgrounds, &Env::default())
         .into_iter()
-        .map(|(s, c)| {
-            assert_eq!(c, GRAY);
-            s
+        .map(|paint| match paint {
+            InlinePaint::Fill(s, c) => {
+                assert_eq!(c, GRAY);
+                s
+            }
+            InlinePaint::Border(..) => panic!("no border: {paint:?}"),
+        })
+        .collect()
+}
+
+/// Each paint as (shape, colour), a border's in its top colour.
+fn paints(p: &Paragraph, backgrounds: &[Option<InlineBackground>]) -> Vec<(Shape, [u8; 4])> {
+    p.inline_backgrounds(backgrounds, &Env::default())
+        .into_iter()
+        .map(|paint| match paint {
+            InlinePaint::Fill(s, c) => (s, c),
+            InlinePaint::Border(s, b) => (s, b.colors[0]),
         })
         .collect()
 }
@@ -285,7 +305,7 @@ fn inline_background_zero_radius_keeps_the_square_path() {
     let expected: Vec<_> = p
         .run_backgrounds(&[Some(GRAY), Some(GRAY)])
         .into_iter()
-        .map(|(r, c)| (Shape::rect(r), c))
+        .map(|(r, c)| InlinePaint::Fill(Shape::rect(r), c))
         .collect();
     assert_eq!(actual, expected);
     assert_eq!(actual.len(), 1);
@@ -508,6 +528,35 @@ fn a_background_covers_its_padding_and_not_its_margin() {
     assert!((m.2 - b.2).abs() < 0.05, "{b:?} {m:?}");
 }
 
+/// Above and below its text a box's background covers its padding and
+/// border too, which move no line (CSS 2 §10.6.1): Chrome paints
+/// `<span style="padding:3px 0 12px;background:#ddd">code</span>` 15 px
+/// taller than its font's content area, from 3 px above it. A square box
+/// with block padding alone still paints its padded rect.
+#[test]
+fn a_background_covers_its_block_padding() {
+    let mut e = engine();
+    let p = e.paragraph(&spec(&["a ", "code", " b"]), None);
+    let bare = fills(&p, &[None, background(1), None])[0].rect;
+    let padded = background(1).map(|b| InlineBackground {
+        above: 3.0,
+        below: 12.0,
+        ..b
+    });
+    let tall = fills(&p, &[None, padded.clone(), None]);
+    assert_eq!(tall.len(), 1);
+    let t = tall[0].rect;
+    assert!((t.1 - (bare.1 - 3.0)).abs() < 0.05, "{bare:?} {t:?}");
+    assert!((t.3 - (bare.3 + 15.0)).abs() < 0.05, "{bare:?} {t:?}");
+    assert_eq!((t.0, t.2), (bare.0, bare.2), "no wider: {bare:?} {t:?}");
+    let square = padded.map(|b| InlineBackground {
+        radii: [const { Dimension::Points(0.0) }; 4],
+        ..b
+    });
+    let s = fills(&p, &[None, square, None])[0].rect;
+    assert_eq!(s, t, "{s:?} {t:?}");
+}
+
 /// Boxes inside one another each paint their own background into their own
 /// padding, the inner over the outer (CSS 2 Appendix E), as Chrome 154
 /// paints `a <span style="padding:0 2px;background:red;border-radius:4px">p<span
@@ -552,9 +601,10 @@ fn nested_boxes_each_paint_their_own_padding() {
         outer: vec![outer.clone()],
         ..background(9).unwrap()
     };
-    let shapes = e
-        .paragraph(&s, None)
-        .inline_backgrounds(&[None, Some(outer), Some(inner), None], &Env::default());
+    let shapes = paints(
+        &e.paragraph(&s, None),
+        &[None, Some(outer), Some(inner), None],
+    );
     assert_eq!(shapes.len(), 2, "{shapes:?}");
     let (o, i) = (shapes[0].0.rect, shapes[1].0.rect);
     assert_eq!(shapes[0].1, GRAY, "the outer box paints first");
@@ -588,4 +638,127 @@ fn a_boxs_room_breaks_a_ligature_across_it() {
     assert_eq!(advancing.len(), 2, "{:?}", line.glyphs);
     let (f, i) = (advancing[0], advancing[1]);
     assert!((i.x - (f.x + f.w) - 3.0).abs() < 0.05, "{f:?} {i:?}");
+}
+
+/// A paragraph of `texts` in `direction`, its second run with `room` (its
+/// start, its end) beside its text.
+fn boxed(
+    e: &mut TextEngine,
+    texts: &[&str],
+    direction: Direction,
+    width: Option<f32>,
+    room: (f32, f32),
+) -> std::rc::Rc<Paragraph> {
+    let mut s = spec(texts);
+    s.direction = direction;
+    s.runs[1].edges = exact_kernel::InlineEdges {
+        start: room.0,
+        end: room.1,
+    };
+    e.paragraph(&s, width)
+}
+
+/// An inline box's start and end follow its own direction, its
+/// paragraph's, whatever the direction of its text, and its first and last
+/// fragments are in visual order (CSS 2 §8.6, §9.10; CSS Writing Modes 3
+/// §2.1): in a right-to-left paragraph its start room is right of its text
+/// and its end room left of it, as Chrome draws `<p dir=rtl>אב <span
+/// style="padding:0 3px 0 7px">גדה</span> וז</p>` and the same span
+/// holding "abc"; in a left-to-right one the other way about, a Hebrew
+/// span's start left of its last letter, its leftmost.
+#[test]
+fn a_boxs_rooms_are_on_its_own_sides_whatever_its_texts_direction() {
+    let mut e = engine();
+    // Each case: its texts, its direction, and the run's glyphs (by byte in
+    // the line) that have its start room and its end room beside them.
+    for (texts, direction, start_at, end_at) in [
+        (["אב ", "גדה", " וז"], Direction::Rtl, 5, 9),
+        (["אב ", "abc", " גד"], Direction::Rtl, 7, 5),
+        (["ab ", "אבג", " cd"], Direction::Ltr, 7, 3),
+        (["ab ", "abc", " cd"], Direction::Ltr, 3, 5),
+    ] {
+        let p = boxed(&mut e, &texts, direction, None, (3.0, 7.0));
+        let line = p.layout_runs().next().unwrap();
+        let glyphs: Vec<_> = line.glyphs.iter().filter(|g| g.w > 0.0).collect();
+        let at = |byte: u32| glyphs.iter().position(|g| g.start == byte).unwrap();
+        let gap = |left: usize| glyphs[left + 1].x - (glyphs[left].x + glyphs[left].w);
+        let rtl = direction == Direction::Rtl;
+        let (s, n) = (at(start_at), at(end_at));
+        let (start_gap, end_gap) = if rtl {
+            (gap(s), gap(n - 1))
+        } else {
+            (gap(s - 1), gap(n))
+        };
+        let case = format!("{texts:?} {direction:?}: {glyphs:?}");
+        assert!((start_gap - 3.0).abs() < 0.05, "{case}: start {start_gap}");
+        assert!((end_gap - 7.0).abs() < 0.05, "{case}: end {end_gap}");
+        // And nowhere else.
+        let inside: f32 = (0..glyphs.len() - 1).map(gap).sum();
+        assert!((inside - 10.0).abs() < 0.05, "{case}: {inside}");
+    }
+}
+
+/// Each fragment of a wrapped box holds its glyphs, its padding past them
+/// on its own start and end sides: a right-to-left paragraph's Hebrew,
+/// Arabic and Latin boxes keep their last letters inside them.
+#[test]
+fn a_wrapped_boxs_fragments_hold_its_glyphs_in_a_right_to_left_paragraph() {
+    let mut e = engine();
+    let reach = exact_kernel::InlineEdges {
+        start: 6.0,
+        end: 6.0,
+    };
+    for texts in [
+        ["מילה ", "טקסט ארוך שעובר בין שורות", " סוף"],
+        ["كلمة ", "نص طويل يمتد عبر السطور", " نهاية"],
+        ["Wrap ", "a run that wraps across lines", " end"],
+    ] {
+        let p = boxed(&mut e, &texts, Direction::Rtl, Some(180.0), (9.0, 9.0));
+        let box_ = background(1).map(|b| InlineBackground {
+            reach,
+            radii: [const { Dimension::Points(0.0) }; 4],
+            ..b
+        });
+        let rects: Vec<_> = fills(&p, &[None, box_, None])
+            .into_iter()
+            .map(|s| s.rect)
+            .collect();
+        let lines: Vec<_> = p.layout_runs().collect();
+        let first = lines
+            .iter()
+            .position(|l| l.glyphs.iter().any(|g| g.run() == 1));
+        let last = lines
+            .iter()
+            .rposition(|l| l.glyphs.iter().any(|g| g.run() == 1));
+        let (first, last) = (first.unwrap(), last.unwrap());
+        assert!(last > first, "{texts:?} wraps");
+        for (i, line) in lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.glyphs.iter().any(|g| g.run() == 1))
+        {
+            let ink: Vec<_> = line
+                .glyphs
+                .iter()
+                .filter(|g| g.run() == 1 && g.w > 0.0 && !line.text[g.range()].trim().is_empty())
+                .collect();
+            let lo = ink.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
+            let hi = ink
+                .iter()
+                .map(|g| g.x + g.w)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let mine: Vec<_> = rects
+                .iter()
+                .filter(|r| r.1 < line.line_y && line.line_y < r.1 + r.3)
+                .collect();
+            let case = format!("{texts:?} line {i}: {lo}..{hi} in {mine:?}");
+            assert_eq!(mine.len(), 1, "{case}");
+            let r = mine[0];
+            // Its start on its first line's right, its end on its last's left.
+            let right = if i == first { hi + 6.0 } else { hi };
+            let left = if i == last { lo - 6.0 } else { lo };
+            assert!((r.0 - left).abs() < 0.05, "{case}: left");
+            assert!((r.0 + r.2 - right).abs() < 0.05, "{case}: right");
+        }
+    }
 }

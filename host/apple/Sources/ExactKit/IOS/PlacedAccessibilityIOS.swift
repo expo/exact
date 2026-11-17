@@ -93,7 +93,7 @@ extension UIView {
 /// adjusting it, is done by UIKit's; where UIKit's leaves activation to
 /// VoiceOver, VoiceOver taps the activation point here, which the canvas
 /// maps back through the placement to the control.
-final class PlacedElement: UIAccessibilityElement, AgentOwned {
+final class PlacedElement: UIAccessibilityElement, InspectionOwned {
     private(set) weak var native: NSObject?
     private weak var control: UIView?
     init(standingFor native: NSObject, in control: UIView) {
@@ -101,7 +101,7 @@ final class PlacedElement: UIAccessibilityElement, AgentOwned {
         self.control = control
         super.init(accessibilityContainer: control)
     }
-    var agentViewId: UInt32? { control.map { UInt32($0.tag) } }
+    var inspectionViewId: UInt32? { control.map { UInt32($0.tag) } }
     override var accessibilityLabel: String? { get { native?.accessibilityLabel } set {} }
     override var accessibilityHint: String? { get { native?.accessibilityHint } set {} }
     override var accessibilityValue: String? { get { native?.accessibilityValue } set {} }

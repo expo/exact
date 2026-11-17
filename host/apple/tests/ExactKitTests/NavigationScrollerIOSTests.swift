@@ -52,6 +52,27 @@ final class NavigationScrollerIOSTests: XCTestCase {
         settle(session)
     }
 
+    func testACompletedProjectedTransitionDoesNotMakeContentUpdatesOweNavigation() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "native navigation completion needs a scene") }
+        let session = try fixture(scene), p = session.presenter
+        try press(session, "open-detail")
+        let navigation = p.navigation
+        let stack = try XCTUnwrap(navigation.navigation), top = try XCTUnwrap(stack.topViewController)
+        let before = navigation.syncCalls
+        navigation.navigationController(stack, didShow: top, animated: false)
+        XCTAssertNil(navigation.restDifference)
+        XCTAssertFalse(navigation.syncOwed, "UIKit finished the stack already projected")
+        let field = try node(session, "field")
+        let batch = wireBatch([["op": "style", "id": Int(field.id), "style": ["opacity": 0.9]]])
+        XCTAssertTrue(p.onlyListRows(batch))
+        p.apply(batch)
+        XCTAssertEqual(navigation.syncCalls, before)
+        stack.popViewController(animated: true)
+        settle(session)
+        XCTAssertEqual(navigation.activeRoute?.node.props["testId"], "route-home", "native Back still reaches the router")
+        XCTAssertNil(navigation.restDifference)
+    }
+
     func testTheContainerKeepsItsAuthoredFrameAndScrollsWithItsOuterScroller() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "authored navigation scrolling needs UIKit containment") }
         let session = try fixture(scene)

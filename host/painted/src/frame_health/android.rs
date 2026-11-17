@@ -188,7 +188,7 @@ impl Reader {
     /// dropped before the reader took them.
     pub fn window_frames(&mut self, words: &[i64], dropped: u64) {
         self.window.dropped = self.window.dropped.saturating_add(dropped);
-        for f in words.chunks_exact(WINDOW_WORDS) {
+        for f in words.as_chunks::<WINDOW_WORDS>().0 {
             let [intended, vsync, total, deadline] =
                 [f[0], f[1], f[2], f[3]].map(|w| w.max(0) as u64);
             if intended == 0 {

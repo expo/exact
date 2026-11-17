@@ -32,6 +32,7 @@ pub fn rank(id: &str, message: &str) -> u8 {
         | "lower-role-keys"
         | "lower-scroll-grows"
         | "lower-flex-on-block"
+        | "lower-border-unstyled"
         | "lower-width-padding"
         | "lower-swipe-wiring"
         | "lower-transform-drag-ineligible"
@@ -61,14 +62,14 @@ pub fn web_only(id: &str, message: &str) -> bool {
         }
 }
 
-/// A warning that is information, not a problem: `tamber-unreachable` names
+/// A warning that is information, not a problem: `forma-unreachable` names
 /// a control whose host draws the platform's own look, and `style-undrawn` a
 /// style a host the app ships does not draw (LLP 1159.000 D4), each of which
 /// the author should know of and cannot change (LLP 1121 D9, amended
 /// 2026-10-30). A build counts it apart, and verify and `test` do not count
 /// it (`scripts/app-cli.mjs` `information`).
 pub fn information(id: &str) -> bool {
-    id == "tamber-unreachable" || id == "style-undrawn"
+    id == "forma-unreachable" || id == "style-undrawn"
 }
 
 /// The first [`crate::MAX_WARNINGS`] of `out` by rank, source order kept

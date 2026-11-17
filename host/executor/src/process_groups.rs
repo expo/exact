@@ -22,7 +22,7 @@ use serde_json::{json, Value as Json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 /// After a quit's signal, the longest it waits before `SIGKILL` (D2).
@@ -35,7 +35,31 @@ static RECORDS: Mutex<()> = Mutex::new(());
 static REAPED: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
 /// Every executor's live groups, with their kill signal and grace, for the
 /// process's exit.
-static LIVE: Mutex<Vec<(i32, String, f64)>> = Mutex::new(Vec::new());
+static LIVE: Mutex<Vec<Arc<Group>>> = Mutex::new(Vec::new());
+
+/// Every owner that may still signal the group retains its leader. The
+/// waiter only observes exit; the last owner reaps, after all signalling.
+pub(super) struct Group {
+    pub(super) pid: i32,
+    signal: String,
+    grace: f64,
+}
+
+impl Group {
+    pub(super) fn new(pid: i32, signal: &str, grace: f64) -> Arc<Self> {
+        Arc::new(Self {
+            pid,
+            signal: signal.to_string(),
+            grace,
+        })
+    }
+}
+
+impl Drop for Group {
+    fn drop(&mut self) {
+        let _ = os::wait(self.pid);
+    }
+}
 
 /// Where this app records its children's groups: its cache directory.
 fn records(shared: &Shared) -> Option<PathBuf> {
@@ -44,11 +68,9 @@ fn records(shared: &Shared) -> Option<PathBuf> {
 
 /// An exclusive lock beside record file `path`, held while it is read and
 /// written: every instance of the app shares the file, and two writers
-/// would each drop the other's entries. `None` where it cannot be had.
+/// would each drop the other's entries. `None` where it cannot be had, as
+/// when the app's cache directory does not exist: only [`remember`] makes it.
 fn lock_records(path: &Path) -> Option<std::fs::File> {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
     let file = (std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -66,9 +88,6 @@ fn read_records(path: &Path) -> Vec<Json> {
 }
 
 fn write_records(path: &Path, entries: &[Json]) {
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
     if std::fs::write(&tmp, Json::Array(entries.to_vec()).to_string()).is_ok() {
         let _ = std::fs::rename(&tmp, path);
@@ -99,16 +118,20 @@ fn recorder_alive(entry: &Json) -> bool {
 /// Record group `pgid`, which a child just started, with its quit signal
 /// and grace. The same write drops this process's groups that have ended,
 /// so a restarting child costs one write per incarnation.
-pub(super) fn remember(shared: &Shared, pgid: i32, signal: &str, grace: f64) {
+pub(super) fn remember(shared: &Shared, pgid: i32, signal: &str, grace: f64) -> Arc<Group> {
+    let group = Group::new(pgid, signal, grace);
     reap_once(shared);
-    (shared.processes.groups.lock().unwrap()).insert(pgid, (signal.to_string(), grace));
-    LIVE.lock().unwrap().push((pgid, signal.to_string(), grace));
+    (shared.processes.groups.lock().unwrap()).insert(pgid, group.clone());
+    LIVE.lock().unwrap().push(group.clone());
     INSTALLED.store(std::process::id(), Ordering::Relaxed);
     os::wait_at_exit(end_at_exit);
     let Some(path) = records(shared) else {
-        return;
+        return group;
     };
     let (recorder, recorder_start) = me();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let _guard = RECORDS.lock().unwrap();
     let _file = lock_records(&path);
     let mut entries = read_records(&path);
@@ -127,13 +150,14 @@ pub(super) fn remember(shared: &Shared, pgid: i32, signal: &str, grace: f64) {
         "recorderStart": recorder_start,
     }));
     write_records(&path, &entries);
+    group
 }
 
 /// Group `pgid` has ended: this process stops quitting it. Its record goes
 /// at the next [`remember`] or quit, or the next launch finds it ended.
 pub(super) fn forget(shared: &Shared, pgid: i32) {
     shared.processes.groups.lock().unwrap().remove(&pgid);
-    LIVE.lock().unwrap().retain(|(g, ..)| *g != pgid);
+    LIVE.lock().unwrap().retain(|g| g.pid != pgid);
 }
 
 /// The process that installed [`end_at_exit`]: a child another library
@@ -149,14 +173,14 @@ fn end_at_exit() {
     let Ok(mut live) = LIVE.try_lock() else {
         return;
     };
-    let live: Vec<(i32, String, f64)> = std::mem::take(&mut *live)
+    let live: Vec<_> = std::mem::take(&mut *live)
         .into_iter()
-        .filter(|(pid, ..)| os::group_alive(*pid))
-        .map(|(pid, signal, grace)| (pid, signal, grace.min(QUIT_LIMIT_MS)))
+        .map(|g| {
+            let grace = g.grace.min(QUIT_LIMIT_MS);
+            (g, grace)
+        })
         .collect();
-    for (pid, signal, _) in &live {
-        let _ = os::signal_group(*pid, os::signal_number(signal).unwrap_or(os::SIGTERM));
-    }
+    signal(&live);
     escalate(&live);
 }
 
@@ -176,7 +200,7 @@ pub(super) fn reap_once(shared: &Shared) {
 /// End what the app's crashed launches left (D9), keeping the records of
 /// processes that still run.
 pub(super) fn reap(shared: &Shared) {
-    let Some(path) = records(shared) else {
+    let Some(path) = records(shared).filter(|path| path.exists()) else {
         return;
     };
     let _guard = RECORDS.lock().unwrap();
@@ -195,43 +219,44 @@ pub(super) fn reap(shared: &Shared) {
             kept.push(entry);
             continue;
         }
-        for member in survivors(&entry) {
-            let _ = os::signal_process(member, os::SIGKILL);
+        if let Some((pgid, survivor)) = survivor(&entry) {
+            for member in os::group_members(pgid) {
+                let _ = os::signal_process_if(member, os::SIGKILL, &survivor);
+            }
         }
     }
     write_records(&path, &kept);
 }
 
-/// The members of a recorded group that are still the app's children: see
-/// the module's comment. None when the group id names another's group, or
-/// nothing tells the app's members apart.
-fn survivors(entry: &Json) -> Vec<i32> {
+/// A recorded group's id and the test of its members that are still the
+/// app's children: see the module's comment. None when the group id names
+/// another's group, or nothing tells the app's members apart. The test
+/// holds for a pid only while it is in the group, and is made as each member
+/// is signalled (`signal_process_if`): a member that exits after the listing
+/// and whose pid is reused is not signalled.
+fn survivor(entry: &Json) -> Option<(i32, impl Fn(i32) -> bool)> {
     let (Some(pgid), Some(start)) = (entry["pgid"].as_i64(), entry["start"].as_u64()) else {
-        return Vec::new();
+        return None;
     };
     let pgid = pgid as i32;
     if pgid <= 1 {
-        return Vec::new();
+        return None;
     }
-    let later = |m: &i32| os::start_time(*m).is_some_and(|t| t >= start);
-    match os::start_time(pgid) {
+    let session = match os::start_time(pgid) {
         // The leader lives: it is the recorded one only if it started then.
-        Some(leader) if leader == start => {
-            os::group_members(pgid).into_iter().filter(later).collect()
-        }
-        Some(_) => Vec::new(),
+        Some(leader) if leader == start => None,
+        Some(_) => return None,
         // The leader is gone: only a session the app led tells its members.
         None => {
             let session = entry["session"].as_i64().filter(|s| *s > 1);
-            match session.filter(|s| Some(*s) == entry["recorder"].as_i64()) {
-                Some(session) => (os::group_members(pgid).into_iter())
-                    .filter(|m| os::session_of(*m).map(i64::from) == Some(session))
-                    .filter(later)
-                    .collect(),
-                None => Vec::new(),
-            }
+            Some(session.filter(|s| Some(*s) == entry["recorder"].as_i64())?)
         }
-    }
+    };
+    Some((pgid, move |m: i32| {
+        os::group_of(m) == Some(pgid)
+            && os::start_time(m).is_some_and(|t| t >= start)
+            && session.is_none_or(|s| os::session_of(m).map(i64::from) == Some(s))
+    }))
 }
 
 /// Escalations a quit left running, which the process's exit waits for.
@@ -243,18 +268,18 @@ static ESCALATING: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
 /// gets `SIGKILL`. The process's exit waits for that (at most 5 s), so a
 /// quit's children end before it does.
 pub(super) fn quit(shared: &Shared, grace_ms: f64) {
-    let live: Vec<(i32, String, f64)> = (shared.processes.groups.lock().unwrap().drain())
-        .map(|(pid, (signal, grace))| (pid, signal, grace.min(grace_ms).min(QUIT_LIMIT_MS)))
-        .filter(|(pid, ..)| os::group_alive(*pid))
+    let live: Vec<_> = (shared.processes.groups.lock().unwrap().drain())
+        .map(|(_, group)| {
+            let grace = group.grace.min(grace_ms).min(QUIT_LIMIT_MS);
+            (group, grace)
+        })
         .collect();
-    (LIVE.lock().unwrap()).retain(|(g, ..)| !live.iter().any(|(l, ..)| l == g));
+    (LIVE.lock().unwrap()).retain(|g| !live.iter().any(|(l, _)| l.pid == g.pid));
     if live.is_empty() {
         prune(records(shared).as_deref());
         return;
     }
-    for (pid, signal, _) in &live {
-        let _ = os::signal_group(*pid, os::signal_number(signal).unwrap_or(os::SIGTERM));
-    }
+    signal(&live);
     *ESCALATING.0.lock().unwrap() += 1;
     os::wait_at_exit(wait_for_escalations);
     let path = records(shared);
@@ -280,7 +305,7 @@ fn quit_thread(body: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
 }
 
 /// Escalate a quit's groups, prune their records, and stop counting it.
-fn finish_quit(live: &[(i32, String, f64)], path: Option<&Path>) {
+fn finish_quit(live: &[(Arc<Group>, f64)], path: Option<&Path>) {
     escalate(live);
     prune(path);
     let mut n = ESCALATING.0.lock().unwrap();
@@ -290,7 +315,7 @@ fn finish_quit(live: &[(i32, String, f64)], path: Option<&Path>) {
 
 /// Drop this process's entries whose groups have ended.
 fn prune(path: Option<&Path>) {
-    let Some(path) = path else {
+    let Some(path) = path.filter(|path| path.exists()) else {
         return;
     };
     let _guard = RECORDS.lock().unwrap();
@@ -309,16 +334,16 @@ fn prune(path: Option<&Path>) {
 }
 
 /// Wait out each group's grace, then `SIGKILL` what is left of it.
-fn escalate(live: &[(i32, String, f64)]) {
+fn escalate(live: &[(Arc<Group>, f64)]) {
     let started = Instant::now();
     loop {
         let elapsed = started.elapsed().as_secs_f64() * 1000.0;
         let mut waiting = false;
-        for (pid, _, grace) in live {
-            if os::group_alive(*pid) {
+        for (group, grace) in live {
+            if os::group_alive(group.pid) {
                 waiting = true;
                 if elapsed >= *grace {
-                    let _ = os::signal_group(*pid, os::SIGKILL);
+                    let _ = os::signal_group(group.pid, os::SIGKILL);
                 }
             }
         }
@@ -346,13 +371,20 @@ fn wait_for_escalations() {
     }
 }
 
-/// End group `pgid` from this thread: `signal`, then `SIGKILL` after
-/// `grace` (at most 5 s) if any member is left. A one-shot's group, which
-/// may outlive its leader, ends before its answer.
-pub(super) fn end(pgid: i32, signal: &str, grace: f64) {
-    if !os::group_alive(pgid) {
-        return;
+/// End the retained group from this thread: its signal, then `SIGKILL`
+/// after its grace (at most 5 s) if any member is left. A one-shot's group
+/// ends before its answer.
+pub(super) fn end(group: &Arc<Group>) {
+    let live = [(group.clone(), group.grace.min(QUIT_LIMIT_MS))];
+    signal(&live);
+    escalate(&live);
+}
+
+fn signal(live: &[(Arc<Group>, f64)]) {
+    for (group, _) in live {
+        if os::group_alive(group.pid) {
+            let signal = os::signal_number(&group.signal).unwrap_or(os::SIGTERM);
+            let _ = os::signal_group(group.pid, signal);
+        }
     }
-    let _ = os::signal_group(pgid, os::signal_number(signal).unwrap_or(os::SIGTERM));
-    escalate(&[(pgid, signal.to_string(), grace.min(QUIT_LIMIT_MS))]);
 }

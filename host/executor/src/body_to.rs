@@ -21,16 +21,19 @@
 //! reach twice it.
 //!
 //! Time: the writes run on the worker between the transport's reads, so the
-//! deadline and an abort stop the body at its next chunk; a write stalled on
-//! the disk holds this request's worker until it returns.
-use super::body;
+//! deadline and an abort stop the body at its next chunk or before the rename
+//! is admitted. An admitted rename cannot be cancelled. A disk operation stalled
+//! on the worker holds it until it returns.
+use super::{asynch, body, Deadline, Shared};
 use exact_runner::{
     FailureKind, HttpScheduling, Outcome, Request, BODY_TO_HELD_BYTES, BODY_WRITTEN,
     MAX_BODY_TO_BYTES,
 };
 use ibex2::boundary::HostError;
+use ibex2::stdlib::abort::AbortController;
 use ibex2::stdlib::app_fs::Staged;
 use ibex2::stdlib::fetch::{over_limit, Body, Response, StreamingResponse};
+use ibex2::stdlib::fetch_async::aborted;
 
 /// What one read of the body takes before it is written.
 const CHUNK: usize = 64 << 10;
@@ -81,6 +84,7 @@ pub(super) fn receive(
     staged: Option<Staged>,
     limit: usize,
     within: bool,
+    admit: impl FnOnce() -> Result<(), HostError>,
 ) -> Result<Response, HostError> {
     let (body, headers) = match staged {
         Some(mut staged) if r.ok() => {
@@ -93,7 +97,7 @@ pub(super) fn receive(
                 staged.write_all(&chunk[..n])?;
                 written += n as u64;
             }
-            staged.publish()?;
+            staged.publish_if(admit)?;
             let mut headers = r.headers;
             headers.set(BODY_WRITTEN, &written.to_string());
             (Vec::new(), headers)
@@ -114,6 +118,24 @@ pub(super) fn receive(
         url: r.url,
         redirected: r.redirected,
     })
+}
+
+/// Admit a worker's rename after the file sync, without holding the state
+/// lock over either disk operation.
+pub(super) fn admit(
+    shared: &Shared,
+    ticket: u64,
+    abort: &AbortController,
+    deadline: Option<&Deadline>,
+) -> Result<(), HostError> {
+    let mut state = shared.state.lock().unwrap();
+    if state.retired || deadline.is_some_and(Deadline::passed) || abort.signal().aborted() {
+        return Err(aborted());
+    }
+    if !asynch::claim(&mut state, (ticket, 0), asynch::Claim::Publishing) {
+        return Err(aborted());
+    }
+    Ok(())
 }
 
 /// `body` read into one buffer of `cap` bytes, allocated once and never

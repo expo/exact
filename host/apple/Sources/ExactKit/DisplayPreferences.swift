@@ -149,7 +149,9 @@ enum DisplayPreferences {
     #if os(macOS)
     static var systemDark: Bool {
         if let fixed = ExactEnv.fixedAppearance { return fixed.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+        #if EXACT_AGENT
         if let agent = Agent.systemAppearance { return agent.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua }
+        #endif
         guard let app = NSApp else { return false }
         let dark = app.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         guard app.appearance == nil else { return followedDark ?? dark }

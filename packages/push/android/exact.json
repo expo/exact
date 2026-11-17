@@ -1,0 +1,35 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/push@^1.0",
+  "platform": "android",
+  "targets": [
+    "android"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "com.google.firebase:firebase-messaging:26.0.1",
+    "com.google.android.gms:play-services-base:18.9.0"
+  ],
+  "manifest": {
+    "services": [
+      { "name": "exact.push.PushService", "actions": ["com.google.firebase.MESSAGING_EVENT"] }
+    ],
+    "metadata": [
+      { "name": "firebase_messaging_auto_init_enabled", "value": "false" },
+      { "name": "firebase_messaging_installation_id_enabled", "value": "true" },
+      { "name": "com.google.firebase.messaging.default_notification_channel_id", "value": "default" },
+      { "name": "com.google.firebase.messaging.default_notification_icon", "resource": "@drawable/exact_notification" }
+    ]
+  },
+  "artifacts": [],
+  "class": "exact.push.PushModule"
+}

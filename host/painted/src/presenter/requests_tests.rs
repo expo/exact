@@ -78,7 +78,7 @@ component App
 "#;
 
 fn boot() -> Presenter<Nothing> {
-    let (p, error) = Presenter::boot_with(
+    let (p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(APP),
         Nothing,
         (400., 800.),
@@ -347,7 +347,7 @@ fn a_shell_made_again_is_told_the_orientation_lock_anew() {
     let plan = crate::test_plan(
         "component App\n  view\n    main orientationlock=\"landscape\"\n      text \"Wide\"\n",
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &plan,
         Nothing,
         (400., 800.),
@@ -387,7 +387,7 @@ const DATES: &str = r##"component App
 #[test]
 fn a_date_or_time_controls_press_asks_the_shell_for_its_picker_and_its_answer_is_the_value() {
     let boot = || {
-        Presenter::boot_with(
+        Presenter::boot_with_fixture_fonts(
             &crate::test_plan(DATES),
             Nothing,
             (400., 800.),
@@ -470,7 +470,7 @@ fn a_date_or_time_controls_press_asks_the_shell_for_its_picker_and_its_answer_is
 
 #[test]
 fn a_reload_drops_the_answer_of_a_picker_left_up() {
-    let (mut p, _) = Presenter::boot_with(
+    let (mut p, _) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(DATES),
         Nothing,
         (400., 800.),
@@ -564,7 +564,7 @@ fn auth_presenter() -> (Presenter<Signer>, Vec<u8>) {
       text "Sign in"
 "#,
     );
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &plan,
         Signer,
         (400., 800.),
@@ -624,9 +624,10 @@ fn auth_reload_retires_old_reader_ids_before_reusing_a_runner_ticket() {
         );
         assert_eq!((requests[1].0, requests[1].1), (17, id));
         assert_eq!(
-            strings(&requests[1].2, 0),
+            strings(&requests[1].2[..requests[1].2.len() - 1], 0),
             ["https://as.test/a", "app.test:/cb", "s1"]
         );
+        assert_eq!(requests[1].2.last(), Some(&0), "a sign-in is not logout");
         assert!(p.answer_request(id, Some("cancelled")));
         let (_, exact_runner::Outcome::Response(response)) =
             p.host.runner_mut().take_request_refusal(true).unwrap()
@@ -791,7 +792,7 @@ fn file_picker_plan(accept: &str) -> Vec<u8> {
 }
 
 fn file_picker(accept: &str) -> Presenter<Nothing> {
-    let mut p = Presenter::boot_with(
+    let mut p = Presenter::boot_with_fixture_fonts(
         &file_picker_plan(accept),
         Nothing,
         (400., 800.),

@@ -34,9 +34,18 @@ impl DataSource for Capture {
         let [surface, path] = args else {
             return Err(DataError::BadArguments("surface and path".into()));
         };
-        Ok(Answer::Later(Request::capture_canvas(
+        let path = path.as_str().unwrap_or("");
+        // A `.jpg` path asks for a JPEG, as the TypeScript source does.
+        let media_type = if path.ends_with(".jpg") {
+            "image/jpeg"
+        } else {
+            ""
+        };
+        Ok(Answer::Later(Request::capture_canvas_as(
             surface.as_str().unwrap_or(""),
-            path.as_str().unwrap_or(""),
+            path,
+            media_type,
+            None,
         )))
     }
     fn parse(
@@ -48,7 +57,10 @@ impl DataSource for Capture {
     ) -> Result<Answer, DataError> {
         let (record, path) = match exact_runner::canvas_capture::captured_image(&outcome) {
             Ok(c) => (
-                format!("{} {}x{} @{}", c.path, c.width, c.height, c.scale),
+                format!(
+                    "{} {}x{} @{} {}",
+                    c.path, c.width, c.height, c.scale, c.media_type
+                ),
                 c.path,
             ),
             Err(e) => (e, String::new()),

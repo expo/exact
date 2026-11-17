@@ -17,6 +17,7 @@ mod symbol;
 use exact_kernel::svg::Paint;
 use exact_kernel::SortedMap;
 use exact_kernel::{Kernel, NodeFacts, NodeRef, NodeType, ObjectFit, PropId, PropValue, StyleId};
+pub use semantic::{attributes_by_data, tags_by_data};
 pub(super) use svg::svg_props;
 pub use svg::{attribute_rows, svg_props_of};
 
@@ -74,20 +75,20 @@ pub fn folds(
 /// flex button becomes one only where its height is its content's: none of
 /// its own, nothing to grow into, and not stretched across a row by `outer`.
 fn content_tall(b: &NodeFacts<'_>, outer: Option<&NodeFacts<'_>>) -> bool {
-    use exact_kernel::{AlignItems, AlignSelf, Dimension, Display, FlexDirection, PositionType};
+    use exact_kernel::{AlignItems, AlignSelf, Display, FlexDirection, PositionType};
     let s = b.style;
     let Some(o) = outer.map(|o| o.style) else {
         return false;
     };
-    let sized = s.height != Dimension::Auto
-        || s.min_height != Dimension::Auto
+    let sized = !s.height.is_content_sized()
+        || !s.min_height.is_content_sized()
         || s.rare.aspect_ratio != Default::default()
         || s.position_type == PositionType::Absolute;
     !sized
         && match (o.display, o.flex_direction) {
             (Display::Block, _) => true,
             (Display::Flex, FlexDirection::Column | FlexDirection::ColumnReverse) => {
-                s.flex_grow == 0.0 && s.flex_basis == Dimension::Auto
+                s.flex_grow == 0.0 && s.flex_basis.is_content_sized()
             }
             (Display::Flex, _) => match s.align_self {
                 AlignSelf::Auto => {
@@ -878,6 +879,9 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::Value => "value",
             PropId::ScrollTop => "scrollTop",
             PropId::ScrollLeft => "scrollLeft",
+            // This host draws a zoomable scroller at zoom 1 and drops a
+            // write; it says so once (`Host::open`, LLP 1057.001.000 §5).
+            PropId::ScrollZoom => continue,
             PropId::ScrollFollowEnd => "scrollFollowEnd",
             PropId::ViewportFit => "viewportFit",
             PropId::InteractiveWidget => "interactiveWidget",
@@ -969,6 +973,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::RequiresLinearPlayback => "requiresLinearPlayback",
             PropId::PreferredPeakBitRate => "preferredPeakBitRate",
             PropId::PreferredForwardBufferDuration => "preferredForwardBufferDuration",
+            PropId::PreferredMaximumResolution => "preferredMaximumResolution",
+            PropId::StartsOnFirstEligibleVariant => "startsOnFirstEligibleVariant",
             PropId::AutomaticallyWaitsToMinimizeStalling => "automaticallyWaitsToMinimizeStalling",
             PropId::PreventsDisplaySleepDuringVideoPlayback => {
                 "preventsDisplaySleepDuringVideoPlayback"
@@ -1322,7 +1328,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
     // (`noreferrer`, say), which keeps its own (LLP 1141.002 D1).
     if element(node) == "a" {
         let need: &[&str] = match out.get("target").map(String::as_str) {
-            Some("_blank") => &["noopener"],
+            Some(t) if t.eq_ignore_ascii_case("_blank") => &["noopener"],
             Some(_) => &[],
             None if out.get("href").is_some_and(|h| leaves_app(h)) => {
                 out.insert("target".into(), "_blank".into());

@@ -116,7 +116,7 @@ enum Payload {
     Svg(Rc<exact_kernel::svg::Scene>),
 }
 enum TextCommand {
-    Begin(f32, Vec<(Shape, [u8; 4])>),
+    Begin(f32, Vec<crate::text::backgrounds::InlinePaint>),
     Ink(super::text_shadow::TextInk),
     End(f32),
 }
@@ -196,6 +196,9 @@ impl Picture {
                 return Err(
                     "content capture refuses input controls inside retained content".into(),
                 );
+            }
+            if zoom::range(&node).is_some() {
+                return Err("content capture refuses a zoomable scroller".into());
             }
             let axes = effective_overflow(&node);
             if axes.0 != Overflow::Visible || axes.1 != Overflow::Visible {
@@ -395,7 +398,7 @@ impl Picture {
                 };
                 cost += 2 * usize::from(opacity < 1.)
                     + 2 * usize::from(clips)
-                    + 2 * usize::from(!node.style.rare.clip_path.commands().is_empty())
+                    + 2 * usize::from(node.style.rare.clip_path.has_path())
                     + 2 * usize::from(scroll_offset.is_some());
             }
             command_cost = command_cost
@@ -553,6 +556,9 @@ impl Painter {
                     max: (0., 0.),
                 };
             }
+        }
+        if let Some(bounds) = self.zoom_bounds(kernel, node) {
+            return bounds;
         }
         if node.node_type == NodeType::TextInput {
             if let Some(field) = self.field_text.get(&node.id) {
@@ -819,20 +825,24 @@ impl<'a> Replay<'a> {
         let mut clip = outer_clip;
         let mut clips = Vec::new();
         let mut css_clips = Vec::new();
+        let mut hit_starts = Vec::new();
         for command in &self.picture.commands {
             match *command {
                 Command::Enter(i) => {
                     let n = &self.picture.nodes[i];
                     let r = &self.nodes[i];
                     let g = &r.geometry;
+                    hit_starts.push(walk.boxes.len());
                     // Containing-block transforms were refused before prepare.
                     let parent = r.transform;
                     if r.live_hit {
                         walk.boxes.push(PaintedBox {
+                            shape_clips: Vec::new(),
                             pointer_hit: n.pointer_hit,
                             projective: None,
                             affine: Some((parent, g.outer.rect)),
-                            press: 1.,
+                            unpress: Transform::identity(),
+                            hit: None,
                             id: n.id,
                             rect: bbox(parent, g.outer.rect),
                             clip,
@@ -847,9 +857,9 @@ impl<'a> Replay<'a> {
                     }
                     // @ref LLP 1043.000 §3 D7 — retain the same CSS outline
                     // through trunk's parent-first projection and replay.
-                    if !n.css_clip.commands().is_empty() {
+                    if n.css_clip.has_path() {
                         css_clips.push(painter.backend.push_css_clip(
-                            &n.css_clip,
+                            &n.css_clip.resolved(g.outer.rect.2, g.outer.rect.3),
                             parent.pre_translate(g.outer.rect.0, g.outer.rect.1),
                         ));
                     }
@@ -891,11 +901,13 @@ impl<'a> Replay<'a> {
                                         if *alpha < 1. {
                                             painter.backend.push_opacity(*alpha);
                                         }
-                                        for (shape, color) in fills {
-                                            let mut shape = *shape;
-                                            shape.rect.0 += g.content.0;
-                                            shape.rect.1 += g.content.1;
-                                            painter.backend.fill(&shape, *color, parent);
+                                        for paint in fills {
+                                            super::inline::paint_inline(
+                                                &mut *painter.backend,
+                                                paint,
+                                                (g.content.0, g.content.1),
+                                                parent,
+                                            );
                                         }
                                     }
                                     TextCommand::Ink(ink) => painter.paint_text_ink(
@@ -918,6 +930,14 @@ impl<'a> Replay<'a> {
                 }
                 Command::Leave(i) => {
                     let n = &self.picture.nodes[i];
+                    let r = &self.nodes[i];
+                    let (x, y, w, h) = r.geometry.outer.rect;
+                    shape::clip_hits(
+                        &mut walk.boxes[hit_starts.pop().unwrap()..],
+                        &n.css_clip.resolved(w, h),
+                        r.transform.pre_translate(x, y),
+                        r.transform.pre_translate(x, y),
+                    );
                     if n.opacity <= 0. {
                         continue;
                     }
@@ -925,7 +945,7 @@ impl<'a> Replay<'a> {
                         painter.backend.pop_clip();
                         clip = clips.pop().unwrap();
                     }
-                    if !n.css_clip.commands().is_empty() && css_clips.pop().unwrap() {
+                    if n.css_clip.has_path() && css_clips.pop().unwrap() {
                         painter.backend.pop_clip();
                     }
                     if n.opacity < 1. {
@@ -945,7 +965,8 @@ mod hit_tests {
         for degrees in [0.0, 45.0] {
             let ts = Transform::from_rotate_at(degrees, 50.0, 50.0);
             let rect = (0.0, 0.0, 100.0, 100.0);
-            let b = PaintedBox {
+            let mut b = PaintedBox {
+                shape_clips: Vec::new(),
                 pointer_hit: true,
                 id: 1,
                 rect: bbox(ts, rect),
@@ -953,11 +974,24 @@ mod hit_tests {
                 scroll: None,
                 projective: None,
                 affine: Some((ts, rect)),
-                press: 1.,
+                unpress: Transform::identity(),
+                hit: None,
             };
             assert!(b.contains(50.0, 50.0));
             assert!(!b.contains(200.0, 200.0));
             assert_eq!(b.contains(b.rect.0 + 1.0, b.rect.1 + 1.0), degrees == 0.0);
+            let css = exact_kernel::clip::ClipPath::parse("inset(25%)").unwrap();
+            shape::clip_hits(
+                std::slice::from_mut(&mut b),
+                &css.resolved(100., 100.),
+                ts,
+                ts,
+            );
+            for (x, y, hit) in [(5., 5., false), (50., 50., true), (95., 95., false)] {
+                let mut point = Point::from_xy(x, y);
+                ts.map_point(&mut point);
+                assert_eq!(b.contains(point.x, point.y), hit);
+            }
         }
     }
 }

@@ -132,12 +132,12 @@ fn select(value: &Expr, card: bool) -> Expr {
 /// A shadow track needs the card's underlying value and paint target on every host.
 pub(crate) fn check_animations(
     attrs: &[Attr],
-    keyframes: &std::collections::BTreeMap<String, Vec<Property>>,
+    keyframes: &std::collections::BTreeMap<String, exact_motion::Keyframes>,
 ) -> Result<(), crate::LowerError> {
     let shadows = |name: &str| {
         keyframes
             .get(name)
-            .is_some_and(|rows| rows.contains(&Property::BoxShadow))
+            .is_some_and(|rows| rows.properties().contains(&Property::BoxShadow))
     };
     if !keyframes.keys().any(|name| shadows(name)) {
         return Ok(());

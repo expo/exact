@@ -63,7 +63,8 @@ final class VideoLoadingTests: XCTestCase {
                 if request == 2 {
                     player.command("load", seconds: 0)
                 } else {
-                    p.apply(wireBatch([["op": "props", "id": 1, "set": ["src": server.url + "?source=\(request)"]]]))
+                    let source = request == 0 ? server.url : server.url.replacingOccurrences(of: "movie.mp4", with: "playlist.m3u8")
+                    p.apply(wireBatch([["op": "props", "id": 1, "set": ["src": source + "?source=\(request)"]]]))
                 }
                 XCTAssertEqual(player.state()["hdr"] as? Bool, false)
                 p.apply(wireBatch([["op": "props", "id": 1, "set": ["volume": String(Double(request) / 2)]]]))

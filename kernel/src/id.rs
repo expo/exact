@@ -80,6 +80,8 @@ impl NodeFlags {
     /// whole subtree is published again (a moved subtree's descendants keep
     /// the frames and hidden bits of where they were).
     pub const ATTACHED: NodeFlags = NodeFlags(1 << 8);
+    /// Published text geometry depends on a host estimate (LLP 1051.000 D5).
+    pub const TEXT_PENDING: NodeFlags = NodeFlags(1 << 9);
 
     /// Whether every bit of `flag` is set.
     pub const fn has(self, flag: NodeFlags) -> bool {

@@ -318,7 +318,7 @@ fn uniforms(
 /// the same distance along each axis (occluder.wgsl).
 pub(crate) fn boxed(vertices: &[Vertex], indices: &[u32]) -> bool {
     let at = |i: u32| Vec3::from_array(vertices[i as usize].position);
-    indices.chunks_exact(3).all(|t| {
+    indices.as_chunks::<3>().0.iter().all(|t| {
         let n = (at(t[1]) - at(t[0]))
             .cross(at(t[2]) - at(t[0]))
             .normalize_or_zero()
@@ -341,7 +341,7 @@ pub(crate) fn inscribed(vertices: &[Vertex], indices: &[u32]) -> f32 {
     let key = |p: Vec3| p.to_array().map(f32::to_bits);
     let mut edges = std::collections::HashMap::new();
     let mut radius = f32::INFINITY;
-    for t in indices.chunks_exact(3) {
+    for t in indices.as_chunks::<3>().0 {
         let [a, b, c] = [at(t[0]), at(t[1]), at(t[2])];
         let n = (b - a).cross(c - a);
         if n.length_squared() <= f32::EPSILON * f32::EPSILON {

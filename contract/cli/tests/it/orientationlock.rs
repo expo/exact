@@ -4,6 +4,7 @@
 //! popover, and a literal type the manifest's `orientation` leaves no room
 //! for.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropId};
 use exact_plan::Value;
 use exact_runner::{DataError, DataSource, Runner};
@@ -66,12 +67,10 @@ fn a_literal_outside_the_words_is_refused_and_other_names_point_here() {
 /// An app directory with `app.json` (its `orientation`, if any) and
 /// `app.contract`, compiled by path as a host's bake compiles it.
 fn bake(name: &str, orientation: Option<&str>, src: &str) -> Result<(), String> {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = Scratch::new(format!(
         "exact-orientationlock-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let orientation = orientation.map_or(String::new(), |o| format!(",\"orientation\":\"{o}\""));
     std::fs::write(
         dir.join("app.json"),

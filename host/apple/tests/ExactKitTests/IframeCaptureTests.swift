@@ -162,10 +162,11 @@ final class IframeCaptureTests: XCTestCase {
         return seen.records.first { $0.event == "capture" }?.record
     }
 
-    private func temporary(_ name: String) -> URL {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-capture-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-        return folder.appendingPathComponent(name)
-    }
+    /// The pictures' folder, removed after the class.
+    private static let folder = FileManager.default.temporaryDirectory.appendingPathComponent("iframe-capture-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+    override class func tearDown() { try? FileManager.default.removeItem(at: folder); super.tearDown() }
+
+    private func temporary(_ name: String) -> URL { Self.folder.appendingPathComponent(name) }
 
     /// The written PNG's pixels as RGBA, and its size.
     private func pixels(_ file: URL) throws -> (width: Int, height: Int, at: (Double, Double) -> [Int]) {

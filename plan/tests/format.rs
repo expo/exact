@@ -519,7 +519,7 @@ fn loading_is_a_validation_pass() {
 }
 
 #[test]
-fn mutations_require_a_global_option_slot_of_their_result_type() {
+fn mutations_require_an_option_slot_of_their_result_type_owned_as_they_are() {
     let mut b = PlanBuilder::new(0xdead_beef, 0x1234);
     let number = b.primitive(TypeKind::Number);
     let string = b.primitive(TypeKind::String);
@@ -566,10 +566,25 @@ fn mutations_require_a_global_option_slot_of_their_result_type() {
         },
     );
 
-    let mut row_owned = valid;
+    let mut row_owned = valid.clone();
     row_owned.slots[0].owner = Some(owner);
     assert_refused(
-        row_owned,
+        row_owned.clone(),
+        PlanError::MutationSlotOwned {
+            mutation: 0,
+            slot: 0,
+        },
+    );
+    // A child's mutation owns its slot with the same arm (LLP 1035.005.004 D6).
+    let mut owned = row_owned;
+    owned.mutations[0].owner = Some(owner);
+    assert!(owned
+        .validate_mutation_slot(exact_plan::MutationsId(0))
+        .is_ok());
+    let mut stray = valid;
+    stray.mutations[0].owner = Some(owner);
+    assert_refused(
+        stray,
         PlanError::MutationSlotOwned {
             mutation: 0,
             slot: 0,
@@ -1041,12 +1056,17 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// terminal (LLP 1030 D3a). Executable instance expressions add `owner` and
 /// `unsettled` to derives; those hosts must also rebuild for the new rows.
 /// `formatDay` takes `"section"` (LLP 1168.000 D5), which a runner before it
-/// does not print: every host rebuilds for it.
+/// does not print: every host rebuilds for it. `formatTime` takes
+/// `"2-digit"`, `formatDate` `"month-day"` and `formatNumber` a `decimal`
+/// digit count (expo/exact#491), and a table's format data gains their
+/// fields: every host rebuilds for them. A child's requests add `owner` and
+/// `late` to resources (LLP 1035.005.004 D1, D2), and its mutations add
+/// `owner` and `then_args` to mutations (D6): every host rebuilds for them.
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xf2bc_9538_fd30_6275,
+        FORMAT_DIGEST, 0xb75d_cd8f_1cc9_7715,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

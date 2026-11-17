@@ -17,7 +17,7 @@ extension ExactView {
            !(afterMenu && String(describing: type(of: responder)).hasPrefix("_UITypeSelect")) { return }
         func occupied(_ view: UIView) -> Bool {
             if view !== self, view.isFirstResponder { return true }
-            if let controller = view.next as? UIViewController, controller.isFirstResponder { return true }
+            if ViewPresentation.controllers(for: view, layout: true).contains(where: { $0.isFirstResponder }) { return true }
             return view.subviews.contains(where: occupied)
         }
         guard !occupied(window) else { return }

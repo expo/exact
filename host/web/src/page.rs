@@ -315,7 +315,18 @@ pub fn checkpoint<D: DataSource>(runner: &Runner<D>, location: &str) -> String {
         push_value(value, &mut json);
         json.push(']');
     }
-    json.push_str("],\"pending\":");
+    json.push(']');
+    if !runner.delivery().production {
+        json.push_str(",\"urls\":[");
+        for (i, urls) in checkpoint.urls.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            push_names(urls, &mut json);
+        }
+        json.push(']');
+    }
+    json.push_str(",\"pending\":");
     push_names(&checkpoint.pending, &mut json);
     for (field, indices) in [("open", &checkpoint.open), ("readers", &checkpoint.readers)] {
         if !indices.is_empty() {
@@ -486,6 +497,10 @@ pub fn read_checkpoint(text: &str) -> Result<Checkpoint, String> {
                 }
                 json.expect(b']')?;
             }
+            "urls" => {
+                checkpoint.urls =
+                    read_list(&mut json, |json| read_list(json, |json| json.string()))?
+            }
             "pending" => checkpoint.pending = read_list(&mut json, |json| json.string())?,
             "open" => checkpoint.open = read_list(&mut json, read_index)?,
             "readers" => checkpoint.readers = read_list(&mut json, read_index)?,
@@ -573,11 +588,11 @@ impl<D: DataSource> crate::Host<D> {
         // on a wall clock (the renderer's time, LLP 1048.000 D5): the glue
         // marks the digest ` driven` under the agent, as the JS runtime starts
         // a drive at zero. The digest still covers the page as it is.
-        let (page_digest, driven) = match page_digest.strip_suffix(" driven") {
-            Some(digest) => (digest, true),
-            None => (page_digest, false),
-        };
-        let checkpoint = match read_checkpoint(page) {
+        let (page_digest, driver) = page_digest
+            .split_once(" driven")
+            .map_or((page_digest, None), |(digest, facts)| (digest, Some(facts)));
+        let driven = driver.is_some();
+        let mut checkpoint = match read_checkpoint(page) {
             Ok(checkpoint) if driven => Checkpoint {
                 now_ms: 0.0,
                 ..checkpoint
@@ -591,6 +606,21 @@ impl<D: DataSource> crate::Host<D> {
                 return Ok((host, batch));
             }
         };
+        // The agent carries affected answer indices beside the digest, leaving the rendered bytes intact.
+        if let Some(indices) = driver.and_then(|s| s.strip_prefix(':')) {
+            for index in indices.split(',').filter(|s| !s.is_empty()) {
+                let index = index
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&i| i < checkpoint.answers.len())
+                    .ok_or_else(|| {
+                        crate::HostError::Runner(exact_runner::RunnerError::InvalidFaults(
+                            "invalid checkpoint answer index".into(),
+                        ))
+                    })?;
+                checkpoint.open.push(index);
+            }
+        }
         // A page served at another path (a static host's 404.html, or its
         // fallback to `/`) isn't this location's document: render fresh.
         let Some(launch) = page_launch(launch, &checkpoint.location) else {
@@ -736,11 +766,10 @@ impl Murmur128 {
             self.block(&tail);
             self.fill = 0;
         }
-        let mut blocks = bytes.chunks_exact(16);
-        for block in &mut blocks {
+        let (blocks, rest) = bytes.as_chunks::<16>();
+        for block in blocks {
             self.block(block);
         }
-        let rest = blocks.remainder();
         self.tail[..rest.len()].copy_from_slice(rest);
         self.fill = rest.len();
     }

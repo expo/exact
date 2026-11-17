@@ -76,7 +76,7 @@ final class RegionViewportHits: @unchecked Sendable {
             // Upper-bound lookup is the hit rule, not the conservative ink rule.
             guard bottom >= 0, top <= row.box.height,
                   let lo = p.lineIndex(at: max(0,top)),
-                  let hi = p.lineIndex(at: min(row.box.height,bottom)) else { continue }
+                  let hi = p.lineIndex(at: min(row.box.height,bottom), lastInBand: true) else { continue }
             guard lo <= hi else { continue }
             // Zero-height/overlapping lines cannot turn admission into a full scan.
             for i in lo...hi {

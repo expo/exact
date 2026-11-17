@@ -61,40 +61,6 @@ fn fresh_clock(server: &Server, definitions: Vec<Definition>) -> (Preloads, Arc<
 }
 
 #[test]
-fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
-    for asynchronous in [false, true] {
-        let server = Server::new();
-        let release = held_plan(&server, "/early", b"early");
-        let set = launch(&server, vec![definition(&server, "/early")]);
-        server.seen(1);
-        let control = set.control();
-        assert_eq!(control.take_journal()[0].outcome, Event::Sent);
-        let (core, woke) = server.core(asynchronous, true);
-        adopt(&core, set);
-        for ticket in 1..=2 {
-            core.run(job(ticket, server.request("/early")), None)
-                .unwrap();
-        }
-        {
-            let state = core.shared.state.lock().unwrap();
-            assert_eq!(effect_count(&state), 0);
-            assert!(state.running.is_empty());
-            assert!(state.completed[0].is_empty());
-        }
-        release.send(()).unwrap();
-        for expected in 1..=2 {
-            let (ticket, outcome, timing) = collect(&core, &woke);
-            assert_eq!(ticket, expected);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"early"));
-        }
-        assert_eq!(server.count(), 1);
-        assert_eq!(control.take_journal()[0].outcome, Event::Taken);
-        assert!(control.take_journal().is_empty());
-    }
-}
-
-#[test]
 fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
     for asynchronous in [false, true] {
         for named in [false, true] {
@@ -535,22 +501,6 @@ fn grants_refuse_the_first_hop_and_redirects_and_the_journal_contains_only_origi
 }
 
 #[test]
-fn replacing_the_http_cache_clears_the_pending_bit_a_control_holds() {
-    let first = Server::new();
-    let denied = Server::new();
-    let set = launch(&first, vec![definition(&denied, "/private")]);
-    complete_set(&set);
-    let control = set.control();
-    let location = set.destination.clone();
-    let (core, _) = first.core(false, true);
-    adopt(&core, set);
-    assert!(location.journal_pending.load(Ordering::Acquire));
-    core.enable_http_cache();
-    assert!(control.take_journal().is_empty());
-    assert!(!location.journal_pending.load(Ordering::Acquire));
-}
-
-#[test]
 fn before_first_commit_takes_only_a_complete_equal_reply_and_never_waits() {
     for asynchronous in [false, true] {
         let server = Server::new();
@@ -745,7 +695,7 @@ fn a_taking_source_checks_its_own_grants_and_adoption_is_before_dispatch() {
 }
 
 #[test]
-fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() {
+fn forgetting_a_post_waiter_keeps_its_effect_place_until_the_launch_exchange_completes() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/post", b"held");
@@ -763,11 +713,14 @@ fn forgetting_a_post_waiter_releases_its_ticket_and_keeps_the_launch_exchange() 
             let state = core.shared.state.lock().unwrap();
             (state.counts, state.bytes, state.jobs[0].len())
         };
-        assert_eq!(counts, [0, 0]);
-        assert_eq!(bytes, [0, 0]);
-        assert_eq!(jobs, 0);
+        assert_eq!(counts, [1, 0]);
+        assert!(bytes[0] > 0);
+        assert_eq!(bytes[1], 0);
+        assert_eq!(jobs, 1);
         release.send(()).unwrap();
         ready(&core, 1);
+        assert_eq!(core.shared.state.lock().unwrap().counts, [0, 0]);
+        assert!(core.drain().is_empty());
         assert!(ask(&core, &woke, job(2, request)).1);
         assert_eq!(server.count(), 1);
     }
@@ -1014,7 +967,7 @@ fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters
 }
 
 #[test]
-fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it() {
+fn a_post_preload_waiter_keeps_its_effect_place_until_the_held_reply_is_drained() {
     for asynchronous in [false, true] {
         let server = Server::new();
         let release = held_plan(&server, "/preload", b"held");
@@ -1047,13 +1000,15 @@ fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it()
         {
             let state = core.shared.state.lock().unwrap();
             assert_eq!(effect_count(&state), 16);
-            assert!(state.fenced.is_empty());
+            assert_eq!(state.fenced.front().unwrap().ticket(), 17);
             assert!(state.completed[0].iter().any(|r| r.ticket == 1 && r.cached));
         }
+        assert_eq!(collect(&core, &woke).0, 1);
+        assert!(core.shared.state.lock().unwrap().fenced.is_empty());
         for release in releases {
             release.send(()).unwrap();
         }
-        for ticket in 1..=17 {
+        for ticket in 2..=17 {
             assert_eq!(collect(&core, &woke).0, ticket);
         }
     }
@@ -1497,3 +1452,18 @@ fn launch_fetches_and_preloads_keep_the_sources_scope_at_redirects() {
     assert_eq!(first.count(), 2);
     assert_eq!(outside.count(), 0);
 }
+
+#[path = "prefetch_tests.rs"]
+mod prefetch;
+
+#[path = "preload_exchange_tests.rs"]
+mod exchange;
+
+#[path = "preload_journal_tests.rs"]
+mod journal;
+
+#[path = "preload_refresh_tests.rs"]
+mod refresh;
+
+#[path = "preload_env_tests.rs"]
+mod env;

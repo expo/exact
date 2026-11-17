@@ -204,12 +204,12 @@ public final class SpeechRecognitionModule: ExactPackage {
         let leaves = context.agent ? !local && s["local"] as? Bool != true : engine == "sfSpeechRecognizer" && !local
         let r = Recognition(id: "recognition-\(context.session)-\(next)", input: input, args: args, leavesDevice: leaves, module: self)
         r.engineWord = engine
-        if let path = args["transcript"] as? String, let url = context.file(path) { r.transcript = (path, url) }
+        if let path = args["transcript"] as? String, context.directory(path) != nil { r.transcript = path }
         // `processLocally` where the recognizer cannot keep audio on the device (D9) opens nothing.
         let refused = local && s["local"] as? Bool != true
         r.prepareTranscript()
         recognitions[r.id] = r
-        say("\(r.id): \(input == "track" ? "on \(args["track"]!)" : "of \(args["path"]!)")\(r.transcript.map { ", transcript \($0.path)" } ?? ""), \(leaves ? "may leave the device" : "on the device"), \(engine)")
+        say("\(r.id): \(input == "track" ? "on \(args["track"]!)" : "of \(args["path"]!)")\(r.transcript.map { ", transcript \($0)" } ?? ""), \(leaves ? "may leave the device" : "on the device"), \(engine)")
         if refused { r.finish("service-not-allowed"); return reply(r.info()) }
         if input == "track" {
             do {
@@ -306,7 +306,7 @@ public final class SpeechRecognitionModule: ExactPackage {
 
     public func destroy(_ done: @escaping () -> Void) {
         let group = DispatchGroup()
-        for r in recognitions.values where r.state != "ended" {
+        for r in recognitions.values {
             group.enter()
             r.abort("aborted") { _ in group.leave() }
         }
@@ -328,7 +328,7 @@ final class Recognition: ExactTrackConsumer {
     var state = "starting", audio = false, sound = false, speech = false
     var results: [[String: Any]] = [], finalCount = 0, interim: [String: Any]?
     var error: String?, message: String?
-    var transcript: (path: String, url: URL)?
+    var transcript: String?
     var files = 0, fileSize = 0
     var subscription: ExactSubscription?
     var engine: RecognitionEngine? {
@@ -340,12 +340,14 @@ final class Recognition: ExactTrackConsumer {
     let began: Double
     var cursor: Double, heard = 0
     private unowned let module: SpeechRecognitionModule
+    private let context: ExactPackageContext
     private let writer: DispatchQueue
+    private var transcriptDirectory: ExactPackageDirectory?
     private var waiting: [([String: Any]) -> Void] = []
     private var stopping = false
 
     init(id: String, input: String, args: [String: Any], leavesDevice: Bool, module: SpeechRecognitionModule) {
-        self.id = id; self.input = input; self.leavesDevice = leavesDevice; self.module = module
+        self.id = id; self.input = input; self.leavesDevice = leavesDevice; self.module = module; context = module.context
         continuous = args["continuous"] as? Bool == true
         interimResults = args["interimResults"] as? Bool == true
         history = max(1, min(SpeechRecognitionModule.maxHistory, (args["history"] as? Double).map { Int($0) } ?? SpeechRecognitionModule.history))
@@ -357,7 +359,7 @@ final class Recognition: ExactTrackConsumer {
     // MARK: values
 
     func info() -> [String: Any] {
-        ["id": id, "leavesDevice": leavesDevice, "finalCount": finalCount, "transcript": transcript?.path ?? NSNull(), "files": files,
+        ["id": id, "leavesDevice": leavesDevice, "finalCount": finalCount, "transcript": transcript ?? NSNull(), "files": files,
          "error": state == "ended" ? error ?? NSNull() : NSNull()]
     }
 
@@ -371,7 +373,7 @@ final class Recognition: ExactTrackConsumer {
     func result(_ index: Int, _ alternatives: [(String, Double)], _ start: Double?, _ end: Double?) -> [String: Any] {
         ["index": index, "alternatives": alternatives.prefix(maxAlternatives).map { ["transcript": $0.0, "confidence": $0.1] },
          "start": start ?? NSNull(), "end": end ?? NSNull(),
-         "apple": module.context.agent ? NSNull() : ["engine": engineWord]]
+         "apple": context.agent ? NSNull() : ["engine": engineWord]]
     }
 
     /// A final result (best first): numbered, kept in the window, appended to the transcript; a text over 16 KB
@@ -404,24 +406,19 @@ final class Recognition: ExactTrackConsumer {
 
     /// The directory, emptied as the recognition starts, so a replacement leaves no stale file.
     func prepareTranscript() {
-        guard let url = transcript?.url else { return }
-        writer.async {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        }
+        guard let path = transcript else { return }
+        writer.async { self.transcriptDirectory = self.context.replaceDirectory(path) }
     }
 
     private func write(_ result: [String: Any]) {
-        guard let url = transcript?.url, var line = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return }
+        guard transcript != nil, var line = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) else { return }
         line.append(0x0A)
         if files == 0 || fileSize + line.count > SpeechRecognitionModule.fileBytes { files += 1; fileSize = 0 }
         fileSize += line.count
-        let file = url.appendingPathComponent(String(format: "%05d.jsonl", files - 1)), id = id, say = module.say
+        let file = String(format: "%05d.jsonl", files - 1), id = id, context = context
         writer.async {
-            if let handle = try? FileHandle(forWritingTo: file) {
-                handle.seekToEndOfFile(); handle.write(line); try? handle.close()
-            } else if !FileManager.default.createFile(atPath: file.path, contents: line) {
-                DispatchQueue.main.async { say("\(id): \(file.lastPathComponent) not written") }
+            guard self.transcriptDirectory?.append(line, to: file) == true else {
+                return DispatchQueue.main.async { context.log("speech-recognition: \(id): \(file) not written") }
             }
         }
     }
@@ -437,7 +434,10 @@ final class Recognition: ExactTrackConsumer {
         engine = nil; source = nil
         module.say("\(id): ended\(error.map { " (\($0))" } ?? "")\(message.map { ": \($0)" } ?? ""), \(finalCount) final results")
         module.announce()
-        writer.async { [self] in DispatchQueue.main.async { [self] in let i = info(); for f in waiting { f(i) }; waiting = [] } }
+        writer.async { [self] in
+            transcriptDirectory = nil
+            DispatchQueue.main.async { [self] in let i = info(); for f in waiting { f(i) }; waiting = [] }
+        }
     }
 
     /// Answered once the recognition has ended and its files are finished.
@@ -450,7 +450,7 @@ final class Recognition: ExactTrackConsumer {
         whenDone(reply)
         guard state != "ended", !stopping else { return }
         stopping = true
-        if module.context.agent {
+        if context.agent {
             if let interim, let alts = interim["alternatives"] as? [[String: Any]] {
                 final(alts.map { ($0["transcript"] as? String ?? "", $0["confidence"] as? Double ?? 0) }, interim["start"] as? Double, interim["end"] as? Double)
             }

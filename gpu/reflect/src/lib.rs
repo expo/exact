@@ -26,6 +26,12 @@
 //! not the shader's. Every generated name is checked against every other;
 //! a collision or an unsupported shape is a build error, never a comment.
 //!
+//! Buffer entries disable dynamic offsets by default. To bind one with offsets,
+//! build a layout with `exact_gpu::dynamic_offset(shader::S)` in place of `shader::S`:
+//! it preserves the reflected fields and enables `has_dynamic_offset`. This
+//! is the surface's binding choice, so `GROUP_n` and the interface digest
+//! remain unchanged. A non-buffer entry panics (a compile error in a `const`).
+//!
 //! Generated code names `::exact_gpu::wgpu`, so it compiles wherever
 //! `exact-gpu` does — natively and on the web alike.
 //!

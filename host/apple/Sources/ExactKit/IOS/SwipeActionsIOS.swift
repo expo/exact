@@ -307,9 +307,9 @@ package final class SwipeActionsHost {
         init(_ view: UIView) { self.view = view }
     }
 
-    private final class Cell: UITableViewCell, AgentOwned {
+    private final class Cell: UITableViewCell, InspectionOwned {
         weak var control: NodeView?
-        var agentViewId: UInt32? { isAccessibilityElement ? control?.id : nil } // LLP 1080.002 D5
+        var inspectionViewId: UInt32? { isAccessibilityElement ? control?.id : nil } // LLP 1080.002 D5
         override func accessibilityActivate() -> Bool {
             control?.accessibilityActivate() ?? super.accessibilityActivate()
         }

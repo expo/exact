@@ -208,6 +208,10 @@ impl Executor {
     pub fn retry_reader(&self) -> exact_runner::RetryReader {
         self.core.retry_reader()
     }
+    /// The session's live driver faults for individual long-poll attempts.
+    pub fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        self.core.set_fetch_fault(fault);
+    }
     /// Each listener's address and connections, by its stream ticket, live.
     pub fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         self.core.listen_reader()
@@ -256,6 +260,8 @@ pub trait Io {
     fn socket_reader(&self) -> exact_runner::SocketReader;
     /// [`Executor::retry_reader`].
     fn retry_reader(&self) -> exact_runner::RetryReader;
+    /// [`Executor::set_fetch_fault`].
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault);
     /// [`Executor::listen_reader`]; none by default.
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         std::sync::Arc::new(|_| None)
@@ -312,6 +318,9 @@ impl Io for Executor {
     }
     fn retry_reader(&self) -> exact_runner::RetryReader {
         Executor::retry_reader(self)
+    }
+    fn set_fetch_fault(&self, fault: exact_runner::runner::faults::FetchFault) {
+        Executor::set_fetch_fault(self, fault)
     }
     fn listen_reader(&self) -> exact_runner::listen::ListenReader {
         Executor::listen_reader(self)
@@ -415,7 +424,9 @@ mod resource_tests {
 
     #[test]
     fn the_declared_resources_are_the_bundle_folder_beside_the_executable() {
-        let app = std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id()));
+        let app = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-resources-{}.app", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&app);
         std::fs::create_dir_all(&app).unwrap();
         let executable = Some(app.join("App"));

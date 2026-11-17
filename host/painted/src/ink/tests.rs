@@ -16,7 +16,13 @@ fn open() -> Option<Ink> {
 fn compare(a: &Pixmap, b: &Pixmap) {
     let mut sum = 0u64;
     let mut over = 0;
-    for (a, b) in a.data().chunks_exact(4).zip(b.data().chunks_exact(4)) {
+    for (a, b) in a
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.data().as_chunks::<4>().0)
+    {
         let differences: Vec<_> = a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).collect();
         sum += differences.iter().map(|d| *d as u64).sum::<u64>();
         over += usize::from(differences.iter().any(|d| *d > 32));

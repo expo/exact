@@ -55,6 +55,7 @@ pub fn pages<D: DataSource>(
         }
         ticket += 1;
         let out = RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket,
             target: format!("{route} pages"),

@@ -346,6 +346,8 @@ final class ShortcutHost: NSObject, NSMenuItemValidation {
     /// The commands in the app menu or Help: the app's, not the window's
     /// (`enabled`).
     private var appWide: Set<UInt32> = []
+    /// The command that is Settings… (LLP 1030.004 D5).
+    private var settingsItem: UInt32?
     init(presenter: Presenter) { self.presenter = presenter }
     func attach(_ file: ShortcutMenu, application: ShortcutMenu? = nil, navigation: ShortcutMenu? = nil,
                 edit: ShortcutMenu? = nil, view: ShortcutMenu? = nil, window: ShortcutMenu? = nil, help: ShortcutMenu? = nil) {
@@ -387,7 +389,7 @@ final class ShortcutHost: NSObject, NSMenuItemValidation {
                       && declarations(node).contains(where: { $0.matches(event) && $0.permits(event.window?.firstResponder) })
                       && presenter?.shortcutAdmits(node, key: NodeView.keyName(event), held: KeyCodes.held(event.modifierFlags), focus: focus) == true
               }) else { return false }
-        if !event.isARepeat && !view.disabled { presenter?.pressShortcut(view) }
+        if !event.isARepeat && !view.disabled && !(view.id == settingsItem && openSettings(view)) { presenter?.pressShortcut(view) }
         return true
     }
     fileprivate func menuEquivalent(_ item: NSMenuItem, matching event: NSEvent? = nil) -> String {
@@ -414,6 +416,7 @@ final class ShortcutHost: NSObject, NSMenuItemValidation {
         var live: Set<UInt32> = []
         var chords: [(NSMenuItem, Shortcut?)] = []
         appWide = []
+        settingsItem = nil
         for view in nodes() {
             // A platform alternative does not create a second menu item.
             let shortcut = declarations(view).first(where: { $0.modifiers.contains(.command) })
@@ -463,6 +466,7 @@ final class ShortcutHost: NSObject, NSMenuItemValidation {
                 }
             } else if shortcut?.key == ",", shortcut?.modifiers == .command, applicationMenu != nil {
                 item.title = "Settings…"
+                settingsItem = view.id
                 application.append(item)
             } else if navigationMenu != nil, let shortcut, isNavigation(view, shortcut: shortcut) {
                 navigation.append(item)
@@ -774,7 +778,20 @@ final class ShortcutHost: NSObject, NSMenuItemValidation {
         if let event = NSApp.currentEvent, event.type == .keyDown,
            event.isARepeat || (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
             || presenter?.endedComposition(event) == true { return }
-        if let view = presenter?.views[id] { presenter?.pressShortcut(view, appWide: appWide.contains(id)) }
+        guard let view = presenter?.views[id] else { return }
+        if id == settingsItem, openSettings(view) { return }
+        presenter?.pressShortcut(view, appWide: appWide.contains(id))
+    }
+
+    /// A Settings… link that names no `target` opens the window named
+    /// `settings` at its route, or brings it forward where it is (LLP
+    /// 1030.004 D5). An authored `target`, or a command that runs an
+    /// action, is pressed as any other.
+    private func openSettings(_ view: NodeView) -> Bool {
+        guard view.props["target"] == nil, let url = view.defaultLink, url.hasPrefix("/"), !url.hasPrefix("//"),
+              let session = presenter?.session, let open = session.openWindow, session.runtime.routeMatches(url) else { return false }
+        open(url, "settings", true)
+        return true
     }
 }
 #endif

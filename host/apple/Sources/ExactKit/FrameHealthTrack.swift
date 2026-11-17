@@ -10,7 +10,8 @@ import AppKit
 /// offset change with its arrival time and phase, in a fixed ring, under a lease. It is fed only from the scroll
 /// callbacks the host already has (iOS `scrollViewDidScroll`, the Mac clip's bounds change): no display link, timer
 /// or observer of its own, so tracking a fling never changes how the app schedules frames. It exists only while an
-/// agent leases it, where #1141's capture lease may be taken (`FrameHealth.enabled`, not a virtual clock).
+/// agent leases it, where #1141's capture lease may be taken (`FrameHealth.leaseBlocked`), and on an on-demand
+/// collector its lease is a demand, as the capture's is.
 final class FrameHealthTrack {
     static let capacity = 4096, maximumBytes = 4000, format = "exact.frame-health.track/1"
     /// A gap this long between two rows starts a new run: no comparable predecessor, interval 0 (as a sampler
@@ -106,9 +107,7 @@ extension FrameHealth {
             guard duration.isFinite, duration >= 1, duration <= 120_000, duration.rounded() == duration else {
                 return ["error": "perf frames track start takes a node and a lease of 1–120000 ms."]
             }
-            guard enabled, !virtual else {
-                return ["format": FrameHealthTrack.format, "available": false, "track": false, "reason": unavailableCode ?? "virtual-clock"]
-            }
+            if let leaseBlocked { return ["format": FrameHealthTrack.format, "available": false, "track": false, "reason": leaseBlocked] }
             guard let node, let scroller else { return ["format": FrameHealthTrack.format, "error": "no-scroller", "reason": "The node has no native scroller to track."] }
             let replaced = track != nil
             let started = FrameHealthTrack(node: node, scroller: scroller, now: now, durationMs: duration, maximumFramesPerSecond: maximumFramesPerSecond)
@@ -117,6 +116,12 @@ extension FrameHealth {
             if let scroll = scroller as? ChainingScrollView { started.last = Self.trackAxis(scroll).at }
             #endif
             track = started
+            // On an on-demand collector the lease is a demand, as the card's showing is
+            updateCapture(at: now)
+            if let blocked {
+                track = nil
+                return ["format": FrameHealthTrack.format, "available": false, "track": false, "reason": blocked]
+            }
             return ["format": FrameHealthTrack.format, "available": true, "track": true, "node": node, "replaced": replaced,
                 "capacity": FrameHealthTrack.capacity, "leaseMs": Int(duration), "maximumReplyBytes": FrameHealthTrack.maximumBytes]
         case "read", "stop":
@@ -125,7 +130,10 @@ extension FrameHealth {
             if cursor != nil, asked == nil { return ["error": "perf frames track read: the cursor is a row count a read returned."] }
             // `stop` freezes the track: feeds end at once, and what is left is read to the end, page by page, from the
             // ring as it stands. The read that answers `more: false` releases it.
-            if action == "stop" { track.frozen = true }
+            if action == "stop", !track.frozen {
+                track.frozen = true
+                updateCapture(at: now)
+            }
             var page = track.page(from: asked, lease: now, extra: track.frozen ? ["stopped": true] : [:])
             if track.frozen, page["more"] as? Bool == false { self.track = nil }
             page["more"] = nil
@@ -135,9 +143,11 @@ extension FrameHealth {
         }
     }
 
-    /// A lease ends at the first feed or read after its deadline, never by a timer; its rows go with it.
+    /// A lease ends at the first feed, frame or read after its deadline, never by a timer; its rows go with it.
     func expireTrack(at now: Double) {
-        if let track, now >= track.until { self.track = nil }
+        guard let track, now >= track.until else { return }
+        self.track = nil
+        if !track.frozen { updateCapture(at: now) }
     }
 
     #if canImport(UIKit)
@@ -146,7 +156,7 @@ extension FrameHealth {
         guard let track, track.tracks(scroll), !track.frozen else { return }
         guard enabled else { self.track = nil; return }
         let now = CACurrentMediaTime()
-        if now >= track.until { self.track = nil; return }
+        if now >= track.until { expireTrack(at: now); return }
         let (offset, phase) = scroll.scrollSample
         track.record(offset, phase: Character(phase), at: now)
     }
@@ -158,7 +168,7 @@ extension FrameHealth {
         guard let track, track.tracks(scroll), !track.frozen else { return }
         guard enabled else { self.track = nil; return }
         let now = CACurrentMediaTime()
-        if now >= track.until { self.track = nil; return }
+        if now >= track.until { expireTrack(at: now); return }
         let (at, range) = Self.trackAxis(scroll)
         guard track.last.map({ abs($0 - at) > 0.001 }) ?? true else { return }
         var phase = scroll.trackPhase

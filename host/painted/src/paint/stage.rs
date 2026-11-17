@@ -129,11 +129,13 @@ impl Painter {
                     tape.replay(self.backend.as_mut(), &mut self.text.borrow_mut(), *ts)
                 }
                 Item::Hit(id, rect) => walk.boxes.push(PaintedBox {
+                    shape_clips: Vec::new(),
                     id: *id,
                     pointer_hit: true,
                     projective: None,
                     affine: Some((Transform::identity(), *rect)),
-                    press: 1.,
+                    unpress: Transform::identity(),
+                    hit: None,
                     rect: *rect,
                     clip: None,
                     scroll: None,

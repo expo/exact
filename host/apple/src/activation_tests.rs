@@ -403,12 +403,14 @@ fn app_side_writes_publish_without_reasking_a_time_varying_reader() {
     if std::env::var("EXACT_WP12_WRITER_TEST").as_deref() != Ok("1") {
         // Environment is fixed before the child starts; parallel tests in
         // this process never observe a changed app group or writer identity.
-        let root = std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id()));
+        let root = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-wp12-self-{}", std::process::id())),
+        );
         std::fs::create_dir_all(&root).unwrap();
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "host::activation_tests::app_side_writes_publish_without_reasking_a_time_varying_reader", "--test-threads=1"])
             .env("EXACT_WP12_WRITER_TEST", "1")
-            .env("EXACT_APP_GROUP_ROOT", &root)
+            .env("EXACT_APP_GROUP_ROOT", &*root)
             .env("EXACT_APP_GROUP_APP", app)
             .env("EXACT_WIDGET_WRITER", app)
             .output().unwrap();

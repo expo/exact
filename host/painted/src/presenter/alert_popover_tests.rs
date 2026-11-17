@@ -24,7 +24,7 @@ const APP: &str = r#"component App
 "#;
 
 fn boot(source: &str) -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (480., 400.),
@@ -1011,4 +1011,36 @@ fn a_dialog_popover_shown_from_a_focused_page_control_focuses_its_first_stop() {
         expected.push(Some(id(&p, "sooner")));
     }
     assert_eq!(actual, expected);
+}
+
+/// LLP 1035.001 D11: a modal dialog's `::backdrop` colour is what lies over the
+/// page beneath it, in place of the scrim; `transparent` lays nothing.
+#[test]
+fn a_dialogs_backdrop_colour_replaces_the_scrim() {
+    let source = |backdrop: &str| {
+        format!(
+            r##"component App
+  view
+    column width="100%" height="100%" background-color="#FFFFFF"
+      button "Open" testId="open" commandfor="box" command="show-modal" width=120 height=30
+      dialog id="box" testId="box" width=100 height=40
+{backdrop}        text "Hi"
+"##
+        )
+    };
+    let page = |backdrop: &str| {
+        let mut p = boot(&source(backdrop));
+        tap(&mut p, "open");
+        let c = p.frame().pixel(400, 380).unwrap();
+        (c.red(), c.green(), c.blue())
+    };
+    let (r, g, b) = page("");
+    assert!(r == g && g == b && r < 240, "the scrim: {r} {g} {b}");
+    let (r, g, b) = page("        ::backdrop\n          background-color=\"#FF000080\"\n");
+    assert!(
+        r >= 254 && (126..=129).contains(&g) && g == b,
+        "{r} {g} {b}"
+    );
+    let (r, g, b) = page("        ::backdrop\n          background-color=\"transparent\"\n");
+    assert_eq!((r, g, b), (255, 255, 255));
 }

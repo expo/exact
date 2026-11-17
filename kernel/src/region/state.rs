@@ -189,11 +189,7 @@ impl RegionState {
         payload: Rc<dyn Any>,
     ) -> Result<bool, LayoutError> {
         // Purpose and reservation belong to this private Arc, never inferred from tuple equality.
-        if !self
-            .pending
-            .as_ref()
-            .is_some_and(|p| Arc::ptr_eq(&p.0, &request.0))
-        {
+        if self.pending.as_ref() != Some(request) {
             return Ok(false);
         }
         if !metrics.is_valid() {
@@ -277,7 +273,10 @@ impl RegionState {
             return Err(LayoutError::ContentRegion("region belongs to another root"));
         }
         // Preflight Auto flex axes before any shell mutation, as in the default path.
-        if arena.style(self.binding.owner.index).height == Dimension::Auto
+        if arena
+            .style(self.binding.owner.index)
+            .height
+            .is_content_sized()
             && ![outer.width, outer.height].into_iter().all(
                 |axis| matches!(axis, crate::AxisOffer::Definite(n) if n.is_finite() && n >= 0.),
             )

@@ -512,6 +512,10 @@ function agentReply(request) {
           };
         }
         pageChanged();
+        // `presented` is the runner's latch, not a page bit (LLP 1069.000 D6)
+        if (request.page?.presented !== undefined && host.wasm.exact_prefer_presented) {
+          applyBatch(JSON.parse(readOut(host.wasm.exact_prefer_presented(String(request.page.presented) === "true" ? 2 : 1))));
+        }
         foldChanged();
         if (request.page?.["gpu-tier"]) {
           globalThis.exact.gpu?.retier?.(request.page["gpu-tier"]);

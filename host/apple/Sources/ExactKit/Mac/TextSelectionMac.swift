@@ -24,7 +24,8 @@ package final class TextSelection {
         var row: Int
         var paragraph: Int
         var offset: Int
-        var tuple: (String, Int, Int) { (key, paragraph, offset) }
+        var fixed: Bool? = nil
+        var tuple: (String, Int, Int, Bool?) { (key, paragraph, offset, fixed) }
         var order: (Int, Int, Int) { (row, paragraph, offset) }
     }
     private weak var list: NodeView?
@@ -44,8 +45,22 @@ package final class TextSelection {
         shown = nil; ordered = nil
         indices.removeAll(keepingCapacity: true)
         positions.removeAll(keepingCapacity: true)
+        if allListText {
+            if let list, presenter?.views[list.id] === list {
+                if let snapshot = presenter?.collections.entries[list.id]?.snapshot {
+                    if snapshot.count > 0 || !snapshot.fixed.isEmpty { return }
+                } else if let a = logicalAnchor, let b = logicalFocus,
+                          presenter?.onListIndex?(list.id, a.key) != nil,
+                          presenter?.onListIndex?(list.id, b.key) != nil { return }
+            }
+            list = nil; logicalAnchor = nil; logicalFocus = nil; allListText = false; anchor = nil; focus = nil
+            return
+        }
         if let list, var a = logicalAnchor, var b = logicalFocus {
-            if let ai = presenter?.onListIndex?(list.id, a.key), let bi = presenter?.onListIndex?(list.id, b.key) {
+            let count = presenter?.collections.entries[list.id]?.snapshot.count ?? 0
+            let ai = a.fixed.map { $0 ? count : -1 } ?? presenter?.onListIndex?(list.id, a.key)
+            let bi = b.fixed.map { $0 ? count : -1 } ?? presenter?.onListIndex?(list.id, b.key)
+            if let ai, let bi {
                 a.row = ai; b.row = bi; logicalAnchor = a; logicalFocus = b
             } else {
                 self.list = nil; logicalAnchor = nil; logicalFocus = nil; allListText = false
@@ -156,13 +171,14 @@ package final class TextSelection {
     /// The paragraphs under `view` in order, selectable or not, as the
     /// runner's text projection walks a row: a hidden view and a region's
     /// own are left out, and an inline run is its paragraph's.
-    private func texts(in view: NSView, _ found: (NodeView) -> Void) {
+    private func texts(in view: NSView, withinList: Bool = false, _ found: (NodeView) -> Void) {
         if view.isHidden { return }
         if let node = view as? NodeView {
+            if withinList && presenter?.collections.owns(node.id) == true { return }
             if presenter?.session?.regions.owns(node) == true { return }
             if node.isParagraph { found(node); return }
         }
-        for child in view.subviews { texts(in: child, found) }
+        for child in view.subviews { texts(in: child, withinList: withinList, found) }
     }
 
     private func invalidate() {
@@ -647,6 +663,7 @@ package final class TextSelection {
     /// it shrinks it from the nearer end); after a double click it still
     /// grows by word, and a Shift double click makes it do so.
     private func shiftClick(_ node: NodeView, clicks: Int, point: NSPoint, index: Int) {
+        if allListText { selectAll(in: list?.window) }
         let ends = list != nil ? (logicalAnchor?.order, logicalFocus?.order)
             : (anchor.flatMap { place($0, anchorIndex) }, focus.flatMap { place($0, focusIndex) })
         guard let at = place(node, index), let a = ends.0, let f = ends.1 else { begin(node, clicks: clicks, point: point, index: index); return }
@@ -695,7 +712,29 @@ package final class TextSelection {
     /// when the command is one of these, whether or not anything could move.
     func modify(_ command: Selector) -> Bool {
         guard let move = Self.moves[NSStringFromSelector(command)] else { return false }
-        guard let from = focus, anchor != nil, from.window != nil, from.readerParagraph == nil, place(from, focusIndex) != nil else { return true }
+        // A document edge is the data's logical edge, not the first or last
+        // row mounted; after Select All the focus starts at the logical end.
+        var edge = false, toStart = false
+        if case .documentEdge(let step) = move { edge = true; toStart = step < 0 }
+        if allListText || edge, let list, let scroll = list.scroll {
+            // Mount the data's edge before choosing the edge paragraph. A
+            // textless trail can fill the port and retire every data row.
+            // Fixed paragraphs stay mounted on either side of this window.
+            let clip = scroll.contentView
+            let maximum = max(0, (clip.documentView?.frame.height ?? 0) - clip.bounds.height)
+            let snapshot = presenter?.collections.entries[list.id]?.snapshot
+            let dataEnd = snapshot.map { $0.extent - ($0.fixed.last?.size ?? 0) }
+            let offset = toStart ? 0 : dataEnd.map { min(maximum, max(0, list.contentBox().minY + CGFloat($0) - clip.bounds.height)) } ?? maximum
+            clip.scroll(to: CGPoint(x: clip.bounds.minX, y: offset))
+            scroll.reflectScrolledClipView(clip)
+            presenter?.collections.changed(list.id, user: true)
+            presenter?.settlePump(); presenter?.collections.settle()
+            if allListText {
+                focus = toStart ? paragraphs.first { logicalList($0) === list } : paragraphs.last { logicalList($0) === list }
+                focusIndex = toStart ? 0 : focus.map(length) ?? 0
+            }
+        }
+        guard let from = focus, anchor != nil || logicalAnchor != nil, from.window != nil, from.readerParagraph == nil, place(from, focusIndex) != nil else { return true }
         let (node, index) = target(move, from: from, focusIndex)
         gesture += 1; pendingBegin = false; deferredDrag = nil; deferredEnd = nil
         unit = .character; anchorAtomic = false; allListText = false; dragged = true
@@ -713,7 +752,7 @@ package final class TextSelection {
     private func target(_ move: Move, from node: NodeView, _ index: Int) -> (NodeView, Int) {
         let text = node.paragraphSpec().runs.map(\.text).joined() as NSString, count = text.length
         let index = min(max(0, index), count)
-        let reach = paragraphs.filter { $0.readerParagraph == nil && (list == nil || $0.isDescendant(of: list!)) }
+        let reach = paragraphs.filter { $0.readerParagraph == nil && (list == nil || logicalList($0) === list) }
         let here = reach.firstIndex { $0 === node }
         func beside(_ step: Int) -> NodeView? { here.flatMap { reach.indices.contains($0 + step) ? reach[$0 + step] : nil } }
         /// Past this paragraph's end: the near end of the one beside it.
@@ -778,13 +817,22 @@ package final class TextSelection {
         presenter?.session?.follow(url)
     }
 
+    private func logicalList(_ node: NodeView) -> NodeView? {
+        var ancestor: NSView? = node
+        while let view = ancestor {
+            if let list = view as? NodeView, presenter?.collections.owns(list.id) == true { return list }
+            ancestor = view.superview
+        }
+        return position(node, offset: 0)?.0
+    }
+
     func selectAll(in window: NSWindow? = nil) {
         requested = nil
         gesture += 1; pendingBegin = false; deferredDrag = nil; deferredEnd = nil
         let nodes = paragraphs.filter { window == nil || $0.window === window }
         var owners: [UInt32: NodeView] = [:]
         for node in nodes {
-            if let (owner, _) = position(node, offset: 0) { owners[owner.id] = owner }
+            if let owner = logicalList(node) { owners[owner.id] = owner }
         }
         // Other windows can retain a responder after this one takes the keyboard.
         let responder = (window?.firstResponder ?? presenter?.focusResponder) as? NodeView
@@ -792,14 +840,23 @@ package final class TextSelection {
         // The logical list survives retired rows. A press outside a list
         // keeps page selection; only an unplaced reader takes the sole list.
         let owner = list.flatMap { owners[$0.id] }
-            ?? context.flatMap { position($0, offset: 0)?.0 }
+            ?? context.flatMap { logicalList($0) }
             ?? (context == nil && owners.count == 1 ? owners.values.first : nil)
-        if let owner, let first = nodes.first(where: { position($0, offset: 0)?.0 === owner }),
-           let (_, start) = position(first, offset: 0),
-           let last = nodes.last(where: { $0.isDescendant(of: owner) }),
-           let (_, end) = position(last, offset: length(last)) {
-            list = owner; logicalAnchor = start; logicalFocus = end; allListText = true
-            anchor = first; focus = last; dragged = true
+        if let owner, let first = nodes.first(where: { logicalList($0) === owner }),
+           let last = nodes.last(where: { logicalList($0) === owner }) {
+            list = owner; allListText = true
+            anchor = first; focus = last; anchorIndex = 0; focusIndex = length(last); dragged = true
+            // Empty fixed-region boundaries retain the logical ends even
+            // when the first or last data row has retired.
+            if let snapshot = presenter?.collections.entries[owner.id]?.snapshot {
+                logicalAnchor = Position(key: "", row: -1, paragraph: 0, offset: 0, fixed: false)
+                logicalFocus = Position(key: "", row: snapshot.count, paragraph: Int(UInt32.max), offset: 0, fixed: true)
+            } else {
+                logicalAnchor = position(first, offset: anchorIndex)?.1
+                logicalFocus = position(last, offset: focusIndex)?.1
+            }
+            unit = .character; anchorAtomic = false
+            anchorSpan = (Spot(first, 0), Spot(first, 0))
             invalidate()
             return
         }
@@ -851,9 +908,9 @@ package final class TextSelection {
 
     private func spanned(_ node: NodeView) -> NSRange? {
         if let list {
-            guard let (owner, p) = position(node, offset: 0), owner === list else { return nil }
             let count = length(node)
-            if allListText { return NSRange(location: 0, length: count) }
+            if allListText { return logicalList(node) === list ? NSRange(location: 0, length: count) : nil }
+            guard let (owner, p) = position(node, offset: 0), owner === list else { return nil }
             guard let a = logicalAnchor, let b = logicalFocus else { return nil }
             let (start, end) = a.order <= b.order ? (a, b) : (b, a)
             guard (p.row, p.paragraph) >= (start.row, start.paragraph), (p.row, p.paragraph) <= (end.row, end.paragraph) else { return nil }
@@ -882,7 +939,22 @@ package final class TextSelection {
         var ancestor: NSView? = node
         var wrapper: NodeView?
         while let view = ancestor {
-            if let n = view as? NodeView, n.props["listItemKey"] != nil { wrapper = n; break }
+            if let n = view as? NodeView {
+                if n.props["listItemKey"] != nil { wrapper = n; break }
+                if let snapshot = presenter?.collections.entries[n.id]?.snapshot {
+                    for (side, fixed) in snapshot.fixed.enumerated() {
+                        var paragraphs: [NodeView] = []
+                        for id in fixed.roots {
+                            if let root = presenter?.views[id] { texts(in: root, withinList: true) { paragraphs.append($0) } }
+                        }
+                        if let ordinal = paragraphs.firstIndex(where: { $0 === node }) {
+                            return (n, Position(key: "", row: side == 0 ? -1 : snapshot.count,
+                                paragraph: ordinal, offset: node.sourceOffset(offset), fixed: side == 1))
+                        }
+                    }
+                    return nil
+                }
+            }
             ancestor = view.superview
         }
         guard let wrapper, let key = wrapper.props["listItemKey"], let index = Int(wrapper.props["accessibilityPosInSet"] ?? "") else { return nil }
@@ -891,7 +963,7 @@ package final class TextSelection {
             if let owner = view as? NodeView, owner.kind == "list" {
                 if positions[node.id] == nil {
                     var ordinal = 0
-                    texts(in: wrapper) {
+                    texts(in: wrapper, withinList: true) {
                         positions[$0.id] = Position(key: key, row: index - 1, paragraph: ordinal, offset: 0)
                         ordinal += 1
                     }

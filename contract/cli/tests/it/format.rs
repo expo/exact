@@ -182,8 +182,9 @@ fn the_roster_names_are_the_roster_s() {
     let e = contract::compile("component A\n  view\n    text formatDate(0, 0)\n").unwrap_err();
     assert_eq!(e.id, "type-arity", "{e}");
     assert!(
-        e.message
-            .contains(r#"formatDate(number | string, number, "medium" | "month-year" | "iso")"#),
+        e.message.contains(
+            r#"formatDate(number | string, number, "medium" | "month-year" | "month-day" | "iso")"#
+        ),
         "{e}"
     );
 }
@@ -279,6 +280,8 @@ fn money_is_format_decimal_and_a_measure_is_to_fixed() {
         ("(1.5).toFixed(2.5)", "given `2.5`"),
         ("(1.5).toFixed(1 + 1)", "given an expression"),
         ("formatDecimal(5, 21)", "given `21`"),
+        (r#"formatNumber(1, "decimal", 101)"#, "given `101`"),
+        (r#"formatNumber(1, "decimal", 1.5)"#, "given `1.5`"),
     ] {
         let e = contract::compile(&format!("component A\n  view\n    text {call}\n")).unwrap_err();
         assert_eq!(e.id, "type-literal-digits", "{call}: {e}");
@@ -312,6 +315,7 @@ fn a_total_its_currency_and_a_share() {
       text formatNumber(total, "currency", "USD") testId="usd"
       text formatNumber(total, "currency", "JPY") testId="yen"
       text formatNumber(share, "percent") testId="share"
+      text formatNumber(total, "decimal", 2) testId="cents"
 "#;
     let plan = contract::compile(src).unwrap();
     assert_eq!(exact_runner::uses(&plan).to_string(), "format");
@@ -327,6 +331,7 @@ fn a_total_its_currency_and_a_share() {
     assert_eq!(text(&r, "usd"), "$1,481.47");
     assert_eq!(text(&r, "yen"), "¥1,481");
     assert_eq!(text(&r, "share"), "26%");
+    assert_eq!(text(&r, "cents"), "1,481.47");
     r.act("refund", vec![]).unwrap();
     assert_eq!(text(&r, "usd"), "-$5.00");
     for (call, says) in [
@@ -343,6 +348,15 @@ fn a_total_its_currency_and_a_share() {
             r#"given `"XYZ"`"#,
         ),
         (r#"formatNumber(total, "money")"#, r#"given `"money"`"#),
+        // expo/exact#491: a digit count is `decimal`'s only.
+        (
+            r#"formatNumber(total, "currency", 2)"#,
+            r#"fraction digit count only with `"decimal"`"#,
+        ),
+        (
+            r#"formatNumber(total, "percent", 0)"#,
+            r#"fraction digit count only with `"decimal"`"#,
+        ),
     ] {
         let e =
             contract::compile(&src.replace(r#"formatNumber(total, "decimal")"#, call)).unwrap_err();
@@ -353,7 +367,7 @@ fn a_total_its_currency_and_a_share() {
     assert_eq!(e.id, "type-arity", "{e}");
     assert!(
         e.message.contains(
-            r#"formatNumber(number, "compact" | "decimal" | "currency" | "percent", "USD" | "EUR" | …?)"#
+            r#"formatNumber(number, "compact" | "decimal" | "currency" | "percent", "USD" | "EUR" | … | 0..=100?)"#
         ),
         "{e}"
     );

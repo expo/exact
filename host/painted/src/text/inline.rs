@@ -1,5 +1,5 @@
 //! Character ownership shared by inline backgrounds and client rectangles.
-use super::{LayoutGlyph, LayoutRun, Paragraph};
+use super::{LayoutGlyph, LayoutRun, Paragraph, RoomKind};
 use crate::paint::Rect4;
 use std::ops::Range;
 
@@ -95,7 +95,57 @@ impl Ownership {
     }
 }
 
+/// How far an inline box's border box stands out from its text: past its
+/// first and last characters (`NodeRef::inline_background_reach`), and above
+/// and below its content area (`NodeRef::inline_background_block_reach`).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct BoxReach {
+    pub sides: exact_kernel::InlineEdges,
+    pub above: f32,
+    pub below: f32,
+}
+
 impl Paragraph {
+    /// Where the run `run`, which has no text, stands: its line and the x of
+    /// its content edge, inside its room (`Run::edges`) as the line draws
+    /// it, its start edge on its paragraph's start side; and whether that
+    /// paragraph is right to left. With no room, before the character after
+    /// it, else after the one before it.
+    pub(super) fn empty_run_place(
+        &self,
+        ownership: &Ownership,
+        run: usize,
+    ) -> Option<(usize, f32, bool)> {
+        let rtl = self.source.spec.direction == exact_kernel::Direction::Rtl;
+        let edges = self.source.spec.runs.get(run)?.edges;
+        for (i, line) in self.layout_runs().enumerate() {
+            if let Some(room) = line.rooms.iter().find(|r| r.run as usize == run) {
+                let x = if rtl {
+                    room.x + room.w - edges.start
+                } else {
+                    room.x + edges.start
+                };
+                return Some((i, x, rtl));
+            }
+        }
+        let at = ownership.runs.get(run)?.0.start;
+        let mut after = None;
+        for (i, line) in self.layout_runs().enumerate() {
+            let base = ownership.base(self, &line);
+            for g in line.glyphs {
+                let range = g.range();
+                let glyph_rtl = g.level % 2 == 1;
+                if base + range.start == at && !range.is_empty() {
+                    return Some((i, if glyph_rtl { g.x + g.w } else { g.x }, rtl));
+                }
+                if base + range.end == at && !range.is_empty() {
+                    after = Some((i, if glyph_rtl { g.x } else { g.x + g.w }, rtl));
+                }
+            }
+        }
+        after
+    }
+
     pub(crate) fn inline_metrics(&self, style: exact_kernel::TextStyle) -> (f32, f32) {
         let (ascent, descent, _) = self
             .source
@@ -105,12 +155,16 @@ impl Paragraph {
         (ascent, descent)
     }
 
-    /// Each contiguous fragment has the addressed inline's own ascent and
-    /// descent. Line height places its baseline; it does not size the box.
+    /// Each contiguous fragment of the addressed inline's border box: its
+    /// own ascent and descent and `reach.above` and `reach.below` down, its
+    /// glyphs across, and `reach.sides` past its first and last characters
+    /// (CSS 2 §10.6.1, §8.6), as Chrome's `getClientRects` answers. Line
+    /// height places its baseline; it does not size the box.
     pub(crate) fn inline_rects(
         &self,
         runs: Range<usize>,
         metrics: (f32, f32),
+        reach: BoxReach,
     ) -> Vec<(usize, Rect4)> {
         let ownership = Ownership::new(self);
         let start = ownership
@@ -122,7 +176,16 @@ impl Paragraph {
             .last()
             .and_then(|i| ownership.runs.get(i))
             .map_or(start, |r| r.0.end);
-        let (ascent, descent) = metrics;
+        let flowed = self.flow.as_ref().is_some_and(|f| !f.incomplete);
+        let paragraph_rtl = self.source.spec.direction == exact_kernel::Direction::Rtl;
+        // Flowed text: the room after its last glyph, which no glyph there has.
+        let end_room = runs
+            .clone()
+            .rev()
+            .find(|i| ownership.runs.get(*i).is_some_and(|r| !r.0.is_empty()))
+            .and_then(|i| self.source.spec.runs.get(i))
+            .map_or(0., |r| r.edges.end);
+        let (ascent, descent) = (metrics.0 + reach.above, metrics.1 + reach.below);
         let rect = |x, y, width| (x, y - ascent, width, ascent + descent);
         let mut out = Vec::new();
         let mut insertion = None;
@@ -167,11 +230,59 @@ impl Paragraph {
                 if g.w <= 0. || local.start >= trim {
                     continue;
                 }
-                for piece in ownership.cluster_pieces(g, range) {
-                    if runs.contains(&piece.run) {
-                        spans.push((piece.lo, piece.hi));
+                let rtl = g.level % 2 == 1;
+                let first = flowed && range.contains(&start);
+                let last = flowed && end > start && range.contains(&(end - 1));
+                for piece in ownership.cluster_pieces(g, range.clone()) {
+                    if !runs.contains(&piece.run) {
+                        continue;
                     }
+                    let (mut lo, mut hi) = (piece.lo, piece.hi);
+                    // Text flowed around shapes draws only a start room, before
+                    // its run's first glyph.
+                    if first {
+                        if rtl {
+                            hi += reach.sides.start;
+                        } else {
+                            lo -= reach.sides.start;
+                        }
+                    }
+                    if last {
+                        let past = reach.sides.end - end_room;
+                        if rtl {
+                            lo -= past;
+                        } else {
+                            hi += past;
+                        }
+                    }
+                    spans.push((lo, hi));
                 }
+            }
+            // The room beside its runs (`Run::edges`), where the line draws it:
+            // its own reach at its start and end, beside its text (a start is
+            // right of its text under `rtl`, an end left of it), and all of the
+            // room of the runs inside it.
+            for room in line.rooms {
+                let run = room.run as usize;
+                let Some((chars, _)) = ownership.runs.get(run).filter(|_| runs.contains(&run))
+                else {
+                    continue;
+                };
+                let w = match room.kind {
+                    RoomKind::Start if chars.start == start => reach.sides.start,
+                    RoomKind::End if chars.end == end => reach.sides.end,
+                    _ => room.w,
+                }
+                .min(room.w);
+                if start == end || w <= 0. {
+                    continue;
+                }
+                let text_left = (room.kind == RoomKind::Start) == paragraph_rtl;
+                let lo = match room.kind {
+                    RoomKind::Start | RoomKind::End if !text_left => room.x + room.w - w,
+                    _ => room.x,
+                };
+                spans.push((lo, lo + w));
             }
             spans.sort_by(|a, b| a.0.total_cmp(&b.0));
             let mut merged: Vec<(f32, f32)> = Vec::new();
@@ -191,6 +302,21 @@ impl Paragraph {
             }
         }
         if start == end {
+            // A run with no text: its border box around its place.
+            let place = runs
+                .clone()
+                .last()
+                .and_then(|run| self.empty_run_place(&ownership, run));
+            if let Some(((i, x, rtl), line)) =
+                place.and_then(|p| Some((p, self.layout_runs().nth(p.0)?)))
+            {
+                let (before, after) = if rtl {
+                    (reach.sides.end, reach.sides.start)
+                } else {
+                    (reach.sides.start, reach.sides.end)
+                };
+                return vec![(i, rect(x - before, line.line_y, before + after))];
+            }
             return insertion.or(previous).into_iter().collect();
         }
         out

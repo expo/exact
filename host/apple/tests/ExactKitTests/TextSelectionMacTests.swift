@@ -1015,6 +1015,10 @@ final class TextSelectionMacTests: XCTestCase {
         let (session, _) = laidOut("")
         defer { session.destroy() }
         let p = session.presenter
+        // The page is 300 points tall. A view outside the window is never
+        // displayed, and the swatch below is a plain view with no drawing
+        // of Exact's for a capture to make again.
+        window.setContentSize(NSSize(width: 400, height: 300))
         // A full block's middle is ink and nothing else; the space between
         // the words is the fill, and the underline where it crosses it.
         let role: [String: Any] = ["sys": "secondaryLabelColor", "c": [[60, 60, 67, 153], [235, 235, 245, 153]]]

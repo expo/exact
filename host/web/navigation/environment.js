@@ -275,13 +275,17 @@ export function pageReporter(agent, platform = globalThis) {
     "has-focus": true,
     "root-font-size": 16,
     "gpu-tier": "high",
-    "iframe-partition": false
+    "iframe-partition": false,
+    presented: true
   }, cache = {
     persisted: false,
     restores: 0
   };
   // cache: the drive's page is never put away
   let frozen = false;
+  // `presented` (LLP 1069.000 D2 r7): the browser has presented a picture of this page. Under the agent each frame is
+  // presented at its commit (true, until `prefer presented`); on the page, false until `presentedNow`.
+  let seen = false;
   let sharesFiles;
   const canShareFiles = () => sharesFiles ??= (() => {
     try {
@@ -314,7 +318,8 @@ export function pageReporter(agent, platform = globalThis) {
     "has-focus": typeof platform.document.hasFocus !== "function" || platform.document.hasFocus(),
     "navigation-type": navigationType,
     "gpu-tier": gpuTier(),
-    "iframe-partition": false
+    "iframe-partition": false,
+    presented: seen
   };
   // iframe-partition: a browser never honours an iframe's `partition` (LLP 1020.002 Q4)
   const bits = () => {
@@ -339,7 +344,7 @@ export function pageReporter(agent, platform = globalThis) {
         "high"
       ].includes(value)) {
         next[name] = value;
-      } else if ((name === "frozen" || name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition") && (value === "true" || value === "false")) {
+      } else if ((name === "frozen" || name === "online" || name === "can-share" || name === "can-share-files" || name === "can-share-pictures" || name === "can-open-files" || name === "has-focus" || name === "iframe-partition" || name === "presented") && (value === "true" || value === "false")) {
         next[name] = value === "true";
       } else if (name === "root-font-size" && Number(value) > 0 && Number.isFinite(Number(value))) {
         next[name] = Number(value);
@@ -407,7 +412,9 @@ export function pageReporter(agent, platform = globalThis) {
       if (!agent) {
         told = tier;
       }
-    }
+    },
+    // The present of the page's first picture; whether this changed it.
+    presentedNow: () => !agent && !seen && (seen = true)
   };
 }
 // The page launch owns its seed, a whole number below 2^32 on every host (LLP 1116.005 D5); a new runner during
@@ -477,6 +484,16 @@ export function launchLocation(platform = globalThis) {
   }
   const rest = q.toString();
   return pathname + (rest ? "?" + rest : "") + hash;
+}
+/** The locations of this document's history entries before the current one, oldest first, by the Navigation API: after
+ * a reload, the visits Back returns to without loading a page (`NavigationHistoryEntry.sameDocument`). */
+export function launchVisits(platform = globalThis) {
+  const entries = platform.navigation?.entries?.() ?? [], at = platform.navigation?.currentEntry?.index ?? -1;
+  let from = at;
+  while (from > 0 && entries[from - 1].sameDocument) {
+    from--;
+  }
+  return entries.slice(from, Math.max(at, 0)).map((entry) => launchLocation({ location: new URL(entry.url) }));
 }
 // Drive facts use the launch URL after route changes too (storage-environment.js `launchHref`).
 const launched = () => new URL(globalThis.performance?.getEntriesByType?.("navigation")[0]?.name ?? location.href).searchParams;

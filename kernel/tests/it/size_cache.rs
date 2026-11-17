@@ -120,8 +120,8 @@ fn a_ratio_leaf_answers_only_the_requested_axis() {
         .new_leaf(Style {
             aspect_ratio: Some(2.0),
             max_size: Size {
-                width: LengthPercentageAuto::auto(),
-                height: LengthPercentageAuto::length(20.0),
+                width: Dimension::auto(),
+                height: Dimension::length(20.0),
             },
             ..Style::default()
         })
@@ -260,6 +260,14 @@ fn shape(
                 height: Dimension::percent(0.9),
             };
         }
+        if kind == "keyword" {
+            // Keyword bounds measure the box in `ContentSize` (LLP 1001.001 D4).
+            style.min_size.width = Dimension::min_content();
+            style.max_size.height = Dimension::max_content();
+            if level % 2 == 1 {
+                style.max_size.width = Dimension::fit_content();
+            }
+        }
         if kind == "grid" && level == depth / 2 {
             style.display = Display::Grid;
         }
@@ -396,6 +404,7 @@ fn small_shapes_equal_layout_without_a_size_cache() {
         "fifty",
         "grid",
         "table",
+        "keyword",
     ] {
         for depth in [4, 8] {
             for padded in [false, true] {

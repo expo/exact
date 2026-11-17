@@ -31,6 +31,7 @@ mod failure;
 mod frame;
 mod frame_commands;
 mod frames;
+pub use frames::view_frames;
 mod geometry;
 mod held;
 mod injects;
@@ -305,6 +306,9 @@ pub struct Shapes {
     /// Call statements refused as ambiguous (LLP 1089 D1): never checked as
     /// host commands too, so their refusal is the only one.
     pub ambiguous: std::collections::BTreeSet<Span>,
+    /// The calls a child writes of a name it holds no action of
+    /// (`contract_syntax::inline::free_calls`): never the root's action.
+    pub free_calls: std::collections::BTreeSet<Span>,
     /// The sounds the app declares, by path (LLP 1096 D1): a literal
     /// `playSound` source names one.
     pub sounds: std::collections::BTreeSet<String>,
@@ -782,7 +786,7 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
         Expr::NamedArg(_, _, span) => {
             return err(
                 "type-named-argument",
-                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`; another call's arguments are positional",
+                "named arguments go to a component use, a shape's call (`Row(title=…)`), `empty(…)`, `t(…)`, a canvas `surface=` binding and `share`, `scrollIntoView`, `saveFile` and the file pickers' `startIn=`; another call's arguments are positional",
                 *span,
             )
         }
@@ -834,7 +838,7 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
                 routes::expand_path(args, *span, scope, shapes)?;
                 return Ok(Ty::String);
             }
-            if !shapes.fns.contains_key(name) && strings::is_text_call(name, scope) {
+            if !shapes.fns.contains_key(name) && strings::is_text_call(name, *span, scope, shapes) {
                 return strings::check_call(args, *span, scope, shapes);
             }
             if let Some(t) = failure::check(name, args, *span, scope) {
@@ -871,9 +875,9 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
             }
             // @ref LLP 1038 D3 — adding roster names must not capture existing
             // scoped action/prop references, e.g. a reader's `open(path)` handler.
-            if let Some((Ref::Action(_) | Ref::Prop(_), Ty::Action(params))) = scope
-                .lookup(name)
-                .filter(|_| !routes::value_call(name, args, scope, shapes))
+            if let Some((Ref::Action(_) | Ref::Prop(_), Ty::Action(params))) =
+                calls::callee(name, *span, scope, shapes)
+                    .filter(|_| !routes::value_call(name, args, scope, shapes))
             {
                 component::action_call(name, params, args, *span, scope, shapes)?
             } else if let Some(f) = Stdlib::from_name(name).filter(|f| lists::is_list_op(*f)) {
@@ -901,8 +905,17 @@ fn infer_unbounded(e: &Expr, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeE
                 }
                 let mut given = Vec::with_capacity(args.len());
                 for (i, (arg, spec)) in args.iter().zip(f.params()).enumerate() {
+                    // String literals that end in a digit range (`formatNumber`'s
+                    // code or fraction digits) take a number literal in it.
+                    let range = spec.rsplit(" | ").next().and_then(|r| r.split_once("..="));
+                    if let (true, Some(range), Expr::Number(..)) = (spec.starts_with('"'), range, arg) {
+                        literals::digits_argument(name, i, range, arg)?;
+                        given.push(Ty::Number);
+                        continue;
+                    }
                     if spec.starts_with('"') {
-                        literals::literal_argument(name, i, spec, arg)?;
+                        let spec = spec.split(" | ").filter(|c| c.starts_with('"')).collect::<Vec<_>>().join(" | ");
+                        literals::literal_argument(name, i, &spec, arg)?;
                         given.push(Ty::String);
                         continue;
                     }
@@ -1302,6 +1315,7 @@ fn check_with_sites(
     // scope, refused before anything expands (LLP 1089 D1).
     let ambiguous = contract_syntax::inline::calls::ambiguous(file);
     shapes.ambiguous = ambiguous.iter().map(|a| a.span).collect();
+    shapes.free_calls = contract_syntax::inline::free_calls(file);
     let mut types = Types {
         shapes,
         components: Vec::new(),
@@ -1379,22 +1393,15 @@ fn check_with_sites(
 /// Children are views over their props, checked standalone before the
 /// root inlines them, so an error in a child is reported in its own terms.
 fn check_children(file: &File, types: &mut Types, sink: &mut Sink) {
-    // A child may own `state`, `derive`, and `action` (LLP 1017 P4c: its
-    // instances' own), never a `resource`, `mutation`, or `task` — a row
-    // must not open N requests, and only the root has a clock — but it may
-    // read the device's facts, which open none (`DEVICE_FACTS`).
+    // A child may own `state`, `derive`, `action` (LLP 1017 P4c: its
+    // instances' own), `resource` and `mutation` (LLP 1035.005.004 D1, D6:
+    // asked and sent while its instance lives), never a `task`, nor a
+    // resource over a list, whose elements are its count of requests.
     for c in file.components.iter().skip(1) {
-        let data = c
-            .resources
-            .iter()
-            .any(|r| !contract_syntax::inline::reads_device(r));
-        if data || !c.mutations.is_empty() || !c.tasks.is_empty() {
-            let span = c
-                .resources
-                .iter()
-                .find(|r| !contract_syntax::inline::reads_device(r))
+        let listed = c.resources.iter().find(|r| r.each.is_some());
+        if listed.is_some() || !c.tasks.is_empty() {
+            let span = listed
                 .map(|r| r.span)
-                .or(c.mutations.first().map(|m| m.span))
                 .or(c.tasks.first().map(|t| t.span))
                 .unwrap_or(c.span);
             sink.push(TypeError {
@@ -1405,9 +1412,15 @@ fn check_children(file: &File, types: &mut Types, sink: &mut Sink) {
                 span,
             });
         }
+        if let Some(e) = tasks::reads_own_request(c) {
+            sink.push(e);
+        }
+        if let Some(e) = tasks::foreign_source(file, c) {
+            sink.push(e);
+        }
     }
     for c in file.components.iter().skip(1) {
-        let ct = component::check_component(c, types, None, sink);
+        let ct = component::check_component(c, types, None, &[], sink);
         types.components.push(ct);
     }
 }
@@ -1423,9 +1436,19 @@ fn check_root(
     for (c, ct) in file.components.iter().zip(&types.components).skip(1) {
         uses::check_uses(&c.view, &types.component_scope(c, ct), types, file, sink);
     }
+    for u in &expanded.owned_uses {
+        if let Some(repeat) = u.repeat {
+            sink.push(tasks::repeated_owner(file, u, repeat));
+        }
+    }
     let independent = sink.errors.len();
-    types.components[0] =
-        component::check_component(&expanded.root, types, Some(&expanded.owners), sink);
+    types.components[0] = component::check_component(
+        &expanded.root,
+        types,
+        Some(&expanded.owners),
+        &expanded.resource_owners,
+        sink,
+    );
     // @ref LLP 1048.000 D2 — each route's `pages=` source, in the root's seam.
     for row in file.routes.iter().flat_map(|r| &r.rows) {
         for field in row.fields.iter().filter(|f| f.name == "pages") {

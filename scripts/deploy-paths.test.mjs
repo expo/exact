@@ -8,9 +8,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, resolve, sep, toNamespacedPath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { assertCapturedContractSources, assertCapturedPackageDependencies, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePaths, streamHead, unrelocatableContractDependency } from './deploy.mjs';
+import { assertCapturedContractSources, assertCapturedPackageDependencies, bake, buildFor, canonicalBytes, classify, classifyArtifacts, cohortReceipt, contractCompiler, copyBake, disposeSnapshot, installedContractPackage, materializeSnapshot, namesNative, nativePlatforms, publishRoot, snapshotOf, sourcePaths, unrelocatableContractDependency } from './deploy.mjs';
+import { streamHead } from './publisher.mjs';
 import { bakeOutput, bakeTarget, buildBake } from './app.mjs';
 import * as asyncLane from './async.mjs';
+import { gameAppleLeg } from './affected.mjs';
 import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
 
@@ -351,9 +353,9 @@ test('async names the suites of each failure its log attributes', () => {
   });
 });
 
-test('async runs a check only for the suites selected, its Rust tests built as a full run builds them', () => {
+test('hourly runs the full checks and selects the remaining suites, sharing workspace test builds', () => {
   const none = asyncLane.nothing();
-  expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'clippy', 'fmt', 'caps', 'boot', 'web-bytes', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
+  expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'workspace-build', 'workspace', 'prepare', 'default-test', 'clippy', 'workspace-clippy', 'fmt', 'caps', 'boot', 'wasm', 'web-bytes', 'tvos-install', 'linux', 'windows', 'windows-arm64', 'android', 'difftest-quick', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
   const selection = {...none, cargo:['exact-painted'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
   const some = asyncLane.checks('new', 'old', selection);
   const step = name => some.find(([n]) => n === name);
@@ -367,7 +369,7 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(step('conform-webkit')).toBeUndefined();
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
-  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
+  for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'game-apple', 'web-ax-test', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(step(name)).toBeUndefined();
   expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
   expect(asyncLane.covers('conform-browsers', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
@@ -381,11 +383,11 @@ test('async runs a check only for the suites selected, its Rust tests built as a
   expect(ranTwo.failures).toEqual(['ios: ExactKitTests.CTests testC failed', 'ios: exit 65 (see log)']);
   const full = asyncLane.checks('new', 'old', {lane:[], glue:['./x.test.mjs']});
   expect(full.find(([n]) => n === 'test')[2]).toEqual(expect.arrayContaining(['cargo', 'test', '--workspace']));
-  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
+  for (const name of ['ios', 'ios-touch', 'tvos', 'watchos', 'game', 'game-apple', 'web-ax-test', 'conform', 'parity-svg', 'parity-motion', 'module-seams', 'notifications-web']) expect(full.some(([n]) => n === name)).toBe(true);
   // A parity leg builds its gallery's Linux host, then drives the smoke on a fresh web build
   expect(full.find(([n]) => n === 'parity-svg').slice(1)).toEqual(['sh', ['-c', 'cargo build --profile host-dev -p svg-gallery-linux && EXACT_PARITY_REBUILD=1 bun scripts/smoke.mjs svg --hosts linux']]);
   // What a selection can leave out is what a full run has and an empty selection has not.
-  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-browsers', 'game', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'prepare', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
+  expect([...asyncLane.gated()].sort()).toEqual(['conform', 'conform-browsers', 'game', 'game-apple', 'game-assets-scaffold', 'game-lock', 'game-pins', 'game-recipes', 'game-scaffold', 'game-vocab', 'glue', 'ios', 'ios-touch', 'lane', 'module-seams', 'notifications-web', 'parity-motion', 'parity-svg', 'test', 'tvos', 'watchos', 'web-ax-test', 'web-build-test']);
 });
 
 test('async runs each module drive whole and keeps its failure until it runs again', () => {
@@ -424,6 +426,12 @@ test('async compiles tvOS per commit with no simulator, and tier 2 installs it',
   const ran = {checks: {tvos: {status: 0}}, failures: []};
   retainSkippedFailures(['tvos: IOS/RemoteTVOS.swift: cannot find type'], ran);
   expect(ran.failures).toEqual([]);
+});
+
+test('async compiles the shared game Apple shell when the lane selects it (#559)', () => {
+  const step = selection => asyncLane.checks('new', 'old', selection).filter(([name]) => name === 'game-apple');
+  expect(step({...asyncLane.nothing(), gameApple: true})).toEqual([['game-apple', 'sh', ['-c', gameAppleLeg]]]);
+  expect(step(asyncLane.nothing())).toEqual([]);
 });
 
 test('async compiles watchOS per commit with no simulator, and tier 2 does not again', () => {
@@ -624,7 +632,56 @@ test('a deploy omits each Cargo crate target and still refuses dirty source', ()
   expect(() => snapshotOf(app, { compiler, dirty: true }, exact)).toThrow(/tracked source .*target.*inferred output root/);
 }, 30_000);
 
-test('Cargo manifest count does not grow deployment Git arguments', () => {
+test('Android build products leave Git and deploy clean while host source edits refuse', () => {
+  const root = mkdtempSync(join(fixture, 'android-outputs-'));
+  const exact = join(root, 'exact'), dir = join(root, 'app');
+  const compiler = contractCompiler(compilerRoot('fn main() { print!(r#"{{"packages":[],"sources":[],"consulted":[],"errors":[]}}"#); }\n'));
+  const write = (name, bytes) => {
+    const path = join(exact, 'host/android', name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
+  };
+  const git = (repo, ...args) => {
+    const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout;
+  };
+  write('.gitignore', readFileSync(new URL('../host/android/.gitignore', import.meta.url)));
+  write('build.gradle.kts', '// root project\n');
+  for (const module of ['canvas', 'widgets']) write(`${module}/build.gradle.kts`, '// module\n');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const repo of [exact, dir]) {
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(repo, 'app.contract'), 'app Test\n');
+    git(repo, 'init', '-q');
+    git(repo, 'add', '-A');
+    git(repo, '-c', 'user.name=Exact Test', '-c', 'user.email=exact@example.invalid', 'commit', '-qm',
+      'fixture\n\nCo-Authored-By: GPT-6.1 Sol <noreply@openai.com>');
+  }
+  const products = ['build/reports/dependencies.html', '.gradle/caches/state.bin', '.kotlin/sessions/session',
+    'canvas/build/intermediates/classes.jar', 'widgets/build/outputs/widget.aar', 'settings-gradle.lockfile',
+    'hs_err_pid123.log', 'replay_pid123.log', 'hs_err_pid123.mdmp'];
+  for (const product of products) write(product, 'generated');
+  const app = { name: 'test', dir, workspace: dir, manifest: {} };
+  const snapshot = snapshotOf(app, { compiler }, exact);
+  try {
+    expect(snapshot.dirty).toBe(false);
+    expect(git(exact, 'status', '--porcelain')).toBe('');
+    const captured = materializeSnapshot(snapshot, join(root, 'run'), app);
+    for (const product of products) expect(existsSync(join(captured.exactRoot, 'host/android', product))).toBe(false);
+    expect(readFileSync(join(captured.exactRoot, 'host/android/canvas/src/Canvas.kt'), 'utf8')).toBe('class Canvas\n');
+  } finally { disposeSnapshot(snapshot); }
+  write('canvas/src/Canvas.kt', 'class Changed\n');
+  expect(() => snapshotOf(app, { compiler }, exact)).toThrow('host/android/canvas/src/Canvas.kt');
+  write('canvas/src/Canvas.kt', 'class Canvas\n');
+  for (const source of ['canvas/hs_err.kt', 'fixtures/build/input.kt']) {
+    write(source, 'source');
+    expect(() => snapshotOf(app, { compiler }, exact)).toThrow(`host/android/${source}`);
+    rmSync(join(exact, 'host/android', source));
+  }
+}, 30_000);
+
+test('Cargo manifests and JVM crash reports do not grow deployment Git arguments', () => {
   const repo = mkdtempSync(join(fixture, 'many-manifests-'));
   const app = { dir: repo, workspace: repo, manifest: {} };
   const git = (...args) => {
@@ -643,6 +700,16 @@ test('Cargo manifest count does not grow deployment Git arguments', () => {
   const after = argv(sourcePaths(repo, app, repo).pathspec);
   expect(after).toBeLessThan(32767);
   expect(after).toBe(before);
+  const android = join(repo, 'host/android');
+  mkdirSync(android, { recursive: true });
+  for (let index = 10000; index < 10400; index++) {
+    for (const name of [`hs_err_pid${index}.log`, `replay_pid${index}.log`, `hs_err_pid${index}.mdmp`]) {
+      writeFileSync(join(android, name), 'crash report');
+    }
+  }
+  const crashes = argv(sourcePaths(repo, app, repo).pathspec);
+  expect(crashes).toBeLessThan(32767);
+  expect(crashes).toBe(before);
 });
 
 test('an external app installs its own captured lockfile before Contract discovery', () => {

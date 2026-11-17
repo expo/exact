@@ -434,6 +434,10 @@ fn read_outside_derives(c: &Component) -> BTreeSet<&str> {
     for a in &c.actions {
         stmts(&a.body, &mut out);
     }
+    // A child's own request reads its derives (LLP 1035.005.004 D1).
+    for r in &c.resources {
+        r.args.iter().chain(&r.gate).for_each(|e| expr(e, &mut out));
+    }
     out
 }
 

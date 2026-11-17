@@ -44,6 +44,10 @@ the whole app and server to copy from.
    page's `/.exact/auth/callback` with `state` and `relay=<handle>`. Redeem
    the handle once, then check as in step 4.
 
+On the web, COOP makes popup closure unknowable: `openAuthSession` does not
+report it as cancelled. Offer Cancel while pending (`signed = none` releases
+the sign-in mutation for retry).
+
 6. **Sign out** with `preventSilentAccess()`.
 
 Under the agent a request holds a `credential` ticket naming the provider,

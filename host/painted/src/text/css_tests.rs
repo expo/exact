@@ -499,7 +499,7 @@ fn an_inline_background_covers_each_line_fragment_of_its_run() {
 #[test]
 fn document_language_replaces_the_shaping_catalog_and_cached_paragraphs() {
     use exact_kernel::TextMeasurer;
-    let shared = TextEngine::shared();
+    let shared = crate::text::fixtures::shared();
     let mut measurer = super::Measurer(shared.clone());
     let old = shared.borrow().catalog.clone();
     measurer.set_language("ar");

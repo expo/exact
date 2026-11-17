@@ -5,7 +5,8 @@
 // `__exact_fetch` and deletes it. `env` is the prelude's door, journal, the
 // runtime's own console line (`runtimeLine`, js/src/console.js) and turn
 // (the answer running, a socket's mapper, the overlay's refusal), its
-// pending fetches by ticket and the answer timers' deadlines.
+// pending fetches by ticket, the answer timers' deadlines and the global's
+// error events (errors.js), whose listeners' fetches go out as reports.
 (function (global) {
   "use strict";
   global.__exact_fetch = function (env) {
@@ -14,7 +15,8 @@
       journal = env.journal,
       runtimeLine = env.runtimeLine,
       pending = env.pending,
-      work = env.work;
+      work = env.work,
+      errors = env.errors;
     var background = env.background,
       timers = env.timers,
       abortHooks = env.abortHooks,
@@ -85,13 +87,85 @@
       call.tickets = [];
       call.socketOps = null;
     }
+    // A fetch made while an error event's listener is dispatched (LLP 1175 D3): one round of plain HTTP requests
+    // that no answer waits for, each sent as a report under the authority of the turn the dispatch interrupted
+    // (door 29), at most REPORTS in flight. Every promise it returns and every error it makes is quiet (D4): its
+    // rejection is journaled, never dispatched, so a reporter whose requests fail sets off no further round.
+    var REPORTS = 16,
+      reporting = 0;
+    var NOT_PLAIN = ["exactStream", "exactLongPoll", "exactHeld", "exactUploadProgress", "exactBodyFrom",
+      "exactBodyTo", "exactPreload", "exactPrefetch"];
+    // What a plain request reads of its options: each read once, into the copy the request is made from.
+    var PLAIN = ["method", "headers", "body", "signal", "redirect", "cache", "exactTimeout", "exactIdleTimeout",
+      "exactIndependentHttp", "exactProtocols"];
+    function reportRefused(e, line) {
+      if (line) runtimeLine(e.message);
+      return errors.quiet(Promise.reject(errors.quietReason(e)));
+    }
+    function report(url, init, special) {
+      url = String(url);
+      if (host(12, "bake", "") === "1") {
+        var baked = new Error("fetch() in an error event's listener is never sent at bake");
+        baked.kind = "Unavailable";
+        baked.code = "bake";
+        baked.bakeWarning = true;
+        return reportRefused(baked);
+      }
+      if (env.initializing())
+        return reportRefused(
+          new Error(
+            "fetch() in an error event's listener during the module's evaluation: it was never run, as no fetch runs there (LLP 1175 D6)"
+          ),
+          true
+        );
+      if (!env.moving())
+        return reportRefused(
+          new Error(
+            "fetch() in an error event's listener: it was never run. A listener's fetch is sent on the main thread placement only, and this module is placed on a worker (LLP 1175 D6)"
+          ),
+          true
+        );
+      var refused = special || !/^https?:/i.test(url) ? "a request that is not plain HTTP" : "",
+        plain;
+      if (!refused && init != null) {
+        for (var i = 0; !refused && i < NOT_PLAIN.length; i++)
+          if (init[NOT_PLAIN[i]] !== undefined) refused = NOT_PLAIN[i];
+        plain = {};
+        for (var j = 0; !refused && j < PLAIN.length; j++) {
+          var value = init[PLAIN[j]];
+          if (value !== undefined) plain[PLAIN[j]] = value;
+        }
+      }
+      if (refused)
+        return reportRefused(
+          new TypeError("fetch() in an error event's listener sends a plain HTTP request: " + refused + " is refused")
+        );
+      if (reporting >= REPORTS)
+        return reportRefused(
+          new Error("fetch() in an error event's listener: " + REPORTS + " reports are in flight, so this one was never sent"),
+          true
+        );
+      // Its slot is held while the request is made, whose options' getters may fetch again.
+      var reporter = {
+        call: { id: 0, status: "report", tickets: [], mutation: false, tool: false },
+        own: env.inTurn(errors.owner()),
+        sent: false,
+      };
+      reporting++;
+      try {
+        return errors.quiet(request(url, plain, undefined, undefined, undefined, reporter));
+      } finally {
+        if (!reporter.sent) reporting--;
+      }
+    }
     global.Response = Response;
     global.fetch = function (url, init) {
       return request(url, init);
     };
     // `listen`: a listener's options (`exactListen`, LLP 1133.005 D1); `own(ticket,
-    // call)`: a child's stream owner and `child`: the call is js/src/process.js's, the one path to `exact-process:`.
-    function request(url, init, listen, own, child) {
+    // call)`: a child's stream owner and `child`: the call is js/src/process.js's, the one path to `exact-process:`;
+    // `reporter`: a report's own call and whether the dispatch interrupted the engine's turn (`report`).
+    function request(url, init, listen, own, child, reporter) {
       var overlaying = env.overlaying(),
         mapping = env.mapping(),
         running = env.current();
@@ -105,6 +179,7 @@
                   : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"
               )
         );
+      if (!reporter && !running && errors.dispatching()) return report(url, init, !!(listen || own || child));
       url = String(url); // read once: the URL checked here and below is the one the host is sent
       if (!child && /^exact-process:/i.test(url))
         return Promise.reject(
@@ -112,14 +187,16 @@
             "fetch: exact-process: is @exact/child-process's: import spawn or execFile from it (LLP 1133.007 D12)"
           )
         );
-      var call = env.current();
+      var call = reporter ? reporter.call : env.current();
       // Refused with no answer running, and below in a let-go answer's continuation, as no answer waits for the reply
       // (where the web lets it run; a request with effects already sent runs to its end, LLP 1146 D2, §2.4).
       if (!call) {
         var refused = new Error(
-          work.inModuleTurn()
+          env.afterReport()
+            ? "fetch() called after an error event's listener returned: it was never run. Fetch in the listener itself, before its first await (LLP 1175 D3)"
+            : work.inModuleTurn()
             ? "fetch() called from a plain .then callback a let-go answer's request settled: it was never run. Await that result in an async function, which resumes in its own answer's turn"
-            : "fetch() called outside an answer: it was never run. Start a fetch inside an answer"
+            : "fetch() called outside an answer: it was never run. Start a fetch inside an answer, or in an error event's listener itself"
         );
         runtimeLine(refused.message);
         return Promise.reject(refused);
@@ -146,8 +223,12 @@
         }
         return e;
       }
+      // (a report's refusal is quiet, D4)
+      function refusedWith(e) {
+        return Promise.reject(reporter ? errors.quietReason(e) : e);
+      }
       function optionRefused(e) {
-        return Promise.reject(mark(e));
+        return refusedWith(mark(e));
       }
       if (call.socketConflict || (call.socketOps && call.socketOps.length)) {
         call.socketConflict = true;
@@ -160,14 +241,14 @@
       try {
         extracted = binary.requestBody(raw, method, headers);
       } catch (e) {
-        return Promise.reject(e);
+        return refusedWith(e);
       }
       var bytes = extracted.bytes,
         body = extracted.text;
       // A body from an app file (LLP 1108 D6 R2): only the path goes to the
-      // host, which reads the file when it runs the request, under `fs.read`,
-      // at most 64 MiB. The bytes never enter JavaScript. A missing file, a
-      // denied path or one over the bound rejects the fetch before it is sent.
+      // host, which streams the file from disk when it runs the request, under
+      // `fs.read` (LLP 1133.008.000 D4). The bytes never enter JavaScript. A
+      // missing file or a denied path rejects the fetch before it is sent.
       // A body to an app file (`exactBodyTo`, 2026-10-26): the host writes a
       // 2xx body there as it arrives, under `fs.write`, at most the ceiling or
       // 1 GiB, and the file appears only whole; any other reply is read as usual.
@@ -266,7 +347,7 @@
         try {
           abortHooks.subscribe(signal, function () {})();
         } catch (e) {
-          return Promise.reject(new TypeError("fetch: init.signal is not an AbortSignal"));
+          return refusedWith(new TypeError("fetch: init.signal is not an AbortSignal"));
         }
       }
       if (signal && signal.aborted) return Promise.reject(signal.reason);
@@ -318,6 +399,11 @@
         throw mark(e);
       } // only the door's own refusal, never what building the request threw
       if (error !== undefined) return optionRefused(new Error(error));
+      if (reporter) {
+        host(29, String(ticket), reporter.own ? "1" : "");
+        reporter.sent = true;
+        work.adopted();
+      }
       call.tickets.push(ticket);
       if (stream) {
         call.stream = stream;
@@ -346,7 +432,11 @@
           head: method === "HEAD",
           // A refusal names the setting a launch gave its origin (prelude.js `launchRefusal`).
           url: url,
+          // A report: handed out at once and kept as module work, its reply delivered in a module turn.
+          report: !!reporter,
+          module: !!reporter,
         };
+        if (reporter) p.claimed = true;
         pending.set(ticket, p);
         // The caller's abort also makes its socket handle stale (D7); the
         // stream itself runs until the runner lets its ticket go.
@@ -362,6 +452,7 @@
             var was = settled(ticket);
             if (was) {
               if (p.module) work.landed();
+              if (p.report) reporting--;
               reject(signal.reason);
               abortRequest(ticket, was);
             }
@@ -406,6 +497,14 @@
           listen
         );
       };
-    return { request: request, settled: settled, withdrawFetches: withdrawFetches };
+    return {
+      request: request,
+      settled: settled,
+      withdrawFetches: withdrawFetches,
+      // A report's reply landed: its slot is free.
+      reportLanded: function () {
+        reporting--;
+      },
+    };
   };
 })(globalThis);

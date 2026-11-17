@@ -38,6 +38,16 @@ final class SpaceHitMacTests: XCTestCase {
         return (p, p.views[1]!, p.views[2]!)
     }
 
+    func testAnAnimatedAxisUsesTheStaticSpatialTransform() {
+        let (p, _, child) = fixture(parent: [:], child: [:], frame: [50, 50, 120, 60],
+            present: [["op": "present", "id": 2, "property": "rotate", "x": -45.0, "y": 1.0, "w": 0.0, "h": 0.0]])
+        XCTAssertTrue(child.standsInSpace)
+        XCTAssertEqual(child.layer!.transform.m22, sqrt(0.5), accuracy: 1e-6)
+        XCTAssertEqual(child.layer!.transform.m11, 1, accuracy: 1e-6)
+        p.apply(wireBatch([["op": "present", "id": 2, "property": "rotate", "x": -90.0, "y": 1.0, "w": 0.0, "h": 0.0]]))
+        XCTAssertEqual(child.layer!.transform.m22, 0, accuracy: 1e-6)
+    }
+
     /// What the mouse finds at a point in the parent's coordinates.
     private func hit(_ parent: NodeView, _ x: CGFloat, _ y: CGFloat) -> NSView? {
         parent.hitTest(parent.superview!.convert(NSPoint(x: x, y: y), from: parent))

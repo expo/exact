@@ -165,10 +165,11 @@ fn hud(w: &World, act: Action, rescued: u32, chasing: u32) {
     let c = *w.resource::<Cycle>();
     let f = *w.resource::<Fire>();
     let p = w.require::<Player>("player");
+    let items = w.components::<Item>();
     let count = |kind: Kind| {
         p.pack
             .iter()
-            .filter(|&&e| w.get::<Item>(e).is_some_and(|i| i.kind == kind))
+            .filter(|&&e| items.get(e).is_some_and(|i| i.kind == kind))
             .count() as u32
     };
     let deer = w.require::<Deer>("deer").mind;

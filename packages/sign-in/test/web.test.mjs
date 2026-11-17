@@ -78,7 +78,7 @@ function page() {
     setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, f) { this.listeners[t] = f; } });
   const doc = { head: el(), createElement: el };
   const element = { ...el(), ownerDocument: doc };
-  globalThis.window = { open: (url, name) => { const w = { url, name, closed: false, close() { this.closed = true; } }; opened.push(w); return w; } };
+  globalThis.window = { open: (url, name) => { const w = { url, name, location: { href: url }, closed: false, close() { this.closed = true; } }; opened.push(w); return w; } };
   globalThis.exact = {};
   return { element, opened };
 }
@@ -135,6 +135,40 @@ test('the host glue navigates the waiting window instead of opening one, and a r
   arm({ ticket: 2 }, env2);
   expect(calls[0].popup).toBe(false);
   expect(opened).toEqual([]);
+});
+
+test("a logout reservation remains owned when the provider button is pressed", async () => {
+  const { element, opened } = page();
+  globalThis.navigator = { userActivation: { isActive: true } };
+  globalThis.location = { origin: 'https://app.example' };
+  globalThis.addEventListener = () => {}; globalThis.removeEventListener = () => {};
+  const { arm, cancelPrepared, prepare } = await import(resolve(import.meta.dir, '../../../host/web/auth-glue.js'));
+  const View = roster['exact-sign-in-button'].view;
+  const button = new View({ implementation: { agent: false }, element, props: { provider: 'google' }, events: { load() {} } });
+  jest.useFakeTimers();
+  try {
+    const cancelled = prepare();
+    button.button.listeners.click();
+    expect(opened).toHaveLength(2);
+    cancelPrepared(cancelled);
+    expect(opened[0].closed).toBe(true);
+    expect(opened[1].closed).toBe(false);
+
+    const adopted = prepare();
+    const signIn = globalThis.exact.authWaiting.window;
+    const done = [];
+    arm({ ticket: 3 }, { agent: false, log() {}, active: () => true, deliver() {},
+      call: req => {
+        if (req.op === 'done') done.push(req);
+        return req.op === 'arm' ? { present: { url: 'https://login.example/logout', callback: 'https://app.example/.exact/auth/callback', state: 's', logout: true, prepared: adopted } } : {};
+      } });
+    expect(opened[2].location.href).toBe('https://login.example/logout');
+    expect(signIn.closed).toBe(false);
+    expect(signIn.url).toBe('about:blank');
+    jest.advanceTimersByTime(250);
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 // ---------------------------------------------------------------- the fixture server's return route

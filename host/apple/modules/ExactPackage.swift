@@ -1,13 +1,14 @@
 // What a package's Swift implementation of a module sees of exact2 (LLP
 // 1133.001 D5; LLP 1133.009 D10 items 1-3; LLP 1133.008 D8 item 9): the
 // `ExactPackage` module, compiled on its own before the packages, which
-// import it, and linked into the app's one module, whose adapter for each
-// package (`exactExtensions`, written by host/apple/build.mjs) holds one
-// instance per session. Nothing of ExactKit or of the app's own module is
-// reachable from here.
+// import it. The seam links into the app module; each package's implementation
+// links into its own library, loaded at first use (LLP 1067.000.001). Its
+// adapter keeps one instance per session. Nothing of ExactKit or of the
+// app's own module is reachable from here.
 //
 // Every entry is on the main thread (LLP 1067.000 D4).
 import AVFoundation
+import Darwin
 import Foundation
 import Security
 #if os(macOS)
@@ -88,6 +89,34 @@ public protocol ExactCredentialMember: AnyObject {
 public struct ExactCredentialFailure: Error {
     public let json: [String: Any]
     public init(_ json: [String: Any]) { self.json = json }
+}
+
+/// A package-owned output directory held by descriptor. Every file is opened
+/// relative to that descriptor, so replacing its path cannot redirect a
+/// later write (LLP 1133.009 D10 item 4).
+public final class ExactPackageDirectory: @unchecked Sendable {
+    private let handle: FileHandle
+    fileprivate init(_ handle: FileHandle) { self.handle = handle }
+
+    /// Append `data` to one regular file in this directory, creating it with
+    /// owner-only permissions. A link or a name containing a path separator
+    /// is refused.
+    public func append(_ data: Data, to name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/"), !name.contains("\0") else { return false }
+        let fd = openat(handle.fileDescriptor, name, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { return false }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { try? file.close(); return false }
+        do {
+            try file.write(contentsOf: data)
+            try file.close()
+            return true
+        } catch {
+            try? file.close()
+            return false
+        }
+    }
 }
 
 /// Shared by contexts of the same session. Registrations do not keep a
@@ -201,7 +230,8 @@ public final class ExactPackageContext {
     public let tracks: ExactTracks
     /// The process's audio session, which the host owns (D7, D10 item 5).
     public let audioSession: ExactAudioSession
-    private let fileFn: (String) -> URL?
+    private let fileFn: (String) -> URL?, directoryFn: (String) -> URL?
+    private let replaceDirectoryFn: (String) -> FileHandle?
     /// Under the agent, unless the drive bound the implementation as in
     /// production (`--bind`): an implementation that is its own substitute
     /// then opens no device and asks the OS for nothing (LLP 1133.006 D8).
@@ -266,11 +296,15 @@ public final class ExactPackageContext {
     /// The app's remote-notification registration, kept by the host (LLP
     /// 1133.004 §9 P3).
     public let push: ExactPushRegistration
+    /// The host events held for this session (LLP 1133.001.000 D2).
+    public let hostEvents: ExactHostEvents
 
     public init(agent: Bool, session: String, hostSession: String = "", label: String? = nil,
                 data: URL? = nil, cache: URL? = nil, temporary: URL? = nil, changed: @escaping (String) -> Void,
                 log: @escaping (String) -> Void, now: @escaping () -> Double,
                 tracks: ExactTracks = ExactTracks(), file: @escaping (String) -> URL? = { _ in nil },
+                directory: @escaping (String) -> URL? = { _ in nil },
+                replaceDirectory: @escaping (String) -> FileHandle? = { _ in nil },
                 audioSession: ExactAudioSession = ExactAudioSession { _, _, _, _ in nil },
                 picture: @escaping (UInt32, String) -> Void = { _, _ in },
                 surfaces: ExactSurfaces = ExactSurfaces { _ in nil }, orientation: @escaping () -> Double = { 0 },
@@ -289,6 +323,7 @@ public final class ExactPackageContext {
                 },
                 regions: ExactRegions = ExactRegions { _, _ in nil },
                 push: ExactPushRegistration = ExactPushRegistration { nil },
+                hostEvents: ExactHostEvents = ExactHostEvents { _ in [] },
                 expireWake: @escaping (String) -> Void = { _ in },
                 state: @escaping ([String: Any]) -> Void = { _ in }) {
         self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
@@ -296,10 +331,11 @@ public final class ExactPackageContext {
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
-        self.tracks = tracks; fileFn = file; self.audioSession = audioSession; pictureFn = picture
+        self.tracks = tracks; fileFn = file; directoryFn = directory; replaceDirectoryFn = replaceDirectory
+        self.audioSession = audioSession; pictureFn = picture
         self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke
         emitFn = emit; activationFn = activation; wakeFn = wake; self.wakes = wakes; self.transfers = transfers
-        self.pads = pads; afterFn = after; self.regions = regions; self.push = push; expireWakeFn = expireWake; stateFn = state
+        self.pads = pads; afterFn = after; self.regions = regions; self.push = push; self.hostEvents = hostEvents; expireWakeFn = expireWake; stateFn = state
     }
 
     /// `body` once, `ms` later on the session's clock: the agent's under the
@@ -393,6 +429,18 @@ public final class ExactPackageContext {
     /// A destination may be missing; an existing destination must be a regular
     /// file, and existing parts must lead through no symbolic link.
     public func file(_ path: String) -> URL? { fileFn(path) }
+
+    /// The directory an admitted `app:/` path names. A package may create,
+    /// fill or empty it, but an existing regular file or symbolic link is
+    /// refused.
+    public func directory(_ path: String) -> URL? { directoryFn(path) }
+
+    /// Empty and recreate an admitted package output directory, returning a
+    /// descriptor-backed writer. Replacing any component after admission
+    /// cannot redirect its removal or writes.
+    public func replaceDirectory(_ path: String) -> ExactPackageDirectory? {
+        replaceDirectoryFn(path).map(ExactPackageDirectory.init)
+    }
 
     /// Under the agent, what the implementation discloses of its own objects
     /// for `state.extensions` (LLP 1133.008 D8 item 9): listed as its
@@ -509,6 +557,17 @@ public protocol ExactPackage: AnyObject {
     /// The host ran the app for this implementation's due wake requests
     /// (`context.wakes`, LLP 1133.017 D8): raise their events, then `done`.
     func woke(_ wake: ExactWake)
+}
+
+/// The retained result of a package library's C factory. The shared seam owns
+/// this box so an existential's layout never crosses the C entry itself.
+public final class ExactPackageImplementation {
+    public let package: any ExactPackage
+    public let authenticator: (any ExactAuthenticator)?
+    public init(_ package: any ExactPackage, authenticator: (any ExactAuthenticator)? = nil) {
+        self.package = package
+        self.authenticator = authenticator
+    }
 }
 
 public extension ExactPackage {
@@ -659,6 +718,24 @@ public final class ExactPushRegistration {
     /// `{token?, error?, answers}`: the last device token in lowercase hex,
     /// or the last failure's message, and how many answers this process had.
     public var current: [String: Any] { readFn() ?? ["answers": 0] }
+}
+
+/// The host events the app's delegates received for one session (LLP
+/// 1133.001.000 D2): a call such as an accepted iCloud share, which the host
+/// holds from launch until the implementation that declares the event in
+/// `"hostEvents"` takes it, even when it came before the module loaded. Each
+/// payload is the system's object (a `CKShare.Metadata`), which the
+/// implementation casts. Each later delivery is posted as `arrived`, its
+/// `userInfo` `{event, session}`; a test posts `deliver` with `{event,
+/// payload, session?}` (an `NSDictionary`) as the system would deliver one.
+public final class ExactHostEvents {
+    public static let arrived = Notification.Name("exact.hostEvents.arrived")
+    public static let deliver = Notification.Name("exact.hostEvents.deliver")
+    private let takeFn: (String) -> [NSObject]
+    public init(_ take: @escaping (String) -> [NSObject]) { takeFn = take }
+    /// What is held of `event` for this session, in arrival order, removed
+    /// from the host's mailbox. Any thread.
+    public func take(_ event: String) -> [NSObject] { takeFn(event) }
 }
 
 /// A wake the host was given for an implementation's due requests.

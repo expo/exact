@@ -1,10 +1,10 @@
 // A drive or verify of the design tool straight from scripts/agent.mjs or
 // scripts/verify.mjs (`--app design-tool`, not through its exact.mjs): on the
 // checkout's own port, as app-cli.mjs runs it, from the copy staged with that
-// origin and its stub (tamber-tool-port.mjs `stageToolTests`), so its stub
+// origin and its stub (forma-tool-port.mjs `stageToolTests`), so its stub
 // never binds the 7740 a person's tool holds. EXACT_TOOL_PORT names another
 // port; EXACT_TOOL_PORT=7740 runs it in place. Kept apart from
-// tamber-tool-port.mjs, whose port is read as it loads: this sets it first.
+// forma-tool-port.mjs, whose port is read as it loads: this sets it first.
 import { existsSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { checkoutPort } from './port-lock.mjs';
@@ -33,7 +33,7 @@ export async function toolDrive(verb, argv) {
   const named = namedDir(argv), tool = resolve(ROOT, 'apps/design-tool');
   if (!named || !existsSync(named.dir) || !existsSync(tool) || realpathSync(named.dir) !== realpathSync(tool)) return argv;
   process.env.EXACT_TOOL_PORT ??= String(checkoutPort(ROOT));
-  const { stageToolTests, testFiles } = await import('./tamber-tool-port.mjs');
+  const { stageToolTests, testFiles } = await import('./forma-tool-port.mjs');
   const tested = testFiles(verb, argv, (await import('./help.mjs')).knownFlags(verb));
   const staged = stageToolTests(named.dir, argv, i => tested.has(i));
   if (!staged) return argv;

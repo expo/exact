@@ -31,12 +31,14 @@ impl Module {
         })
     }
 
+    /// `deferring`: the module has no device (the bake's, or a validation
+    /// pass's), so a refusal coded `bake` leaves its answer to the device.
     pub(super) fn step(
         sig: &Sig,
         engine: &mut Engine,
         source: &str,
         decoded: exact_js_value::Reply,
-        baking: bool,
+        deferring: bool,
     ) -> Step {
         let exact_js_value::Reply {
             fields: mut reply,
@@ -104,7 +106,8 @@ impl Module {
                     Some("UnknownSource") => DataError::UnknownSource(message),
                     Some("BadArguments") => DataError::BadArguments(message),
                     Some("Unavailable")
-                        if baking && reply.get("code").and_then(Json::as_str) == Some("bake") =>
+                        if deferring
+                            && reply.get("code").and_then(Json::as_str) == Some("bake") =>
                     {
                         DataError::DeferredAtBake {
                             message,

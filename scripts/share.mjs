@@ -94,6 +94,7 @@ async function main(argv) {
   if (newLink && force) return fail('share_flags', 'share: --new-link and --force are opposites; pass one.');
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(name);
+  if (app.manifest.variant) return fail('share_variant', `share: variant ${app.manifest.variant.name}: a variant has no AppDrop link of its own (LLP 1030.008 §6); share the app without --variant or EXACT_VARIANT.`);
   const recordPath = resolve(app.dir, '.exact/appdrop.json');
   const record = existsSync(recordPath) ? JSON.parse(readFileSync(recordPath, 'utf8')) : null;
   const branch = branchOf(app.dir), source = sourceOf(app.dir);

@@ -9,8 +9,8 @@
 //! is never disabled is the ordinary case.
 
 use crate::LowerError;
+use contract_checking::View;
 use contract_syntax::state::state_of;
-use contract_syntax::Node;
 
 /// What each state reads.
 const READS: [(&str, &[&str]); 3] = [
@@ -23,31 +23,25 @@ const READS: [(&str, &[&str]); 3] = [
 ];
 
 /// Every node's own state part that its node never meets.
-pub(super) fn dead(view: &[Node], out: &mut Vec<LowerError>) {
-    let mut stack: Vec<&Node> = view.iter().collect();
-    while let Some(node) = stack.pop() {
-        match node {
-            Node::Element {
-                tag,
-                attrs,
-                children,
-                ..
-            } => {
-                for (state, reads) in READS {
-                    let part = attrs
-                        .iter()
-                        .find(|a| state_of(&a.name).is_some_and(|(s, _)| s == state));
-                    // A pressable link (`link`, `button`) with an `href` (bound, or a literal URL)
-                    // is pressed as CSS's `:active` holds on it; a `text` link is never pressed.
-                    let link = state == "active"
-                        && matches!(tag.as_str(), "link" | "button")
-                        && attrs.iter().any(|a| {
-                            a.name == "href" && !matches!(&a.value, contract_syntax::Expr::Str(u, _) if u.is_empty())
-                        });
-                    if let Some(part) = part.filter(|_| {
-                        !link && !attrs.iter().any(|a| reads.contains(&a.name.as_str()))
-                    }) {
-                        out.push(LowerError {
+pub(super) fn dead(view: &View<'_>, out: &mut Vec<LowerError>) {
+    for node in view.walk_reverse() {
+        if let Some((tag, _, attrs)) = node.element() {
+            for (state, reads) in READS {
+                let part = attrs
+                    .iter()
+                    .find(|a| state_of(&a.name).is_some_and(|(s, _)| s == state));
+                // A pressable link (`link`, `button`) with an `href` (bound, or a literal URL)
+                // is pressed as CSS's `:active` holds on it; a `text` link is never pressed.
+                let link = state == "active"
+                    && matches!(tag, "link" | "button")
+                    && attrs.iter().any(|a| {
+                        a.name == "href"
+                            && !matches!(&a.value, contract_syntax::Expr::Str(u, _) if u.is_empty())
+                    });
+                if let Some(part) = part
+                    .filter(|_| !link && !attrs.iter().any(|a| reads.contains(&a.name.as_str())))
+                {
+                    out.push(LowerError {
                             id: "lower-state-dead",
                             message: format!(
                                 "`:{state}` never holds here: the node writes no {}, so its rows never show (LLP 1121 D8)",
@@ -55,17 +49,8 @@ pub(super) fn dead(view: &[Node], out: &mut Vec<LowerError>) {
                             ),
                             span: part.span,
                         });
-                    }
                 }
-                stack.extend(children);
             }
-            Node::When {
-                then, otherwise, ..
-            } => stack.extend(then.iter().chain(otherwise)),
-            Node::Each { body, .. } => stack.extend(body),
-            Node::Match { some, none, .. } => stack.extend(some.1.iter().chain(none)),
-            Node::Use { children, .. } => stack.extend(children),
-            Node::Children { .. } => {}
         }
     }
 }

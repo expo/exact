@@ -175,6 +175,29 @@ fn native_modules_are_deferred_retired_and_unavailable_to_validation() {
     );
 }
 
+/// A validation pass has no storage, so a resource that reads a file or opens
+/// SQLite at boot is left pending, as at bake, and the generation boots
+/// (#676); the committed session asks it again with storage.
+#[test]
+fn validation_leaves_a_boot_read_of_storage_pending() {
+    for op in ["read", "count"] {
+        let root = Root::new();
+        let src = format!("shape Result\n  text: string\ncomponent App\n  resource r = work(\"{op}\", \"x\") as shape Result\n  view\n    text r.text\n");
+        let mut m = root.module();
+        m.activate_for_validation().unwrap();
+        let r = Runner::boot(
+            contract::compile(&src).unwrap(),
+            m,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap_or_else(|e| panic!("{op}: {e:?}"));
+        assert!(r.failed_resources().is_empty(), "{op}");
+        assert!(!root.0.exists(), "{op}: validation touched storage");
+    }
+}
+
 #[test]
 fn storage_is_lazy_persistent_isolated_and_grant_checked() {
     let root = Root::new();

@@ -1160,3 +1160,27 @@ fn change_tasks_wait_for_unseen_wakes_and_for_their_expiry_receipts() {
         "a deferred change never rewinds the clock"
     );
 }
+
+#[test]
+fn android_transfer_entry_follows_the_imported_package() {
+    let app = App::new("transfer-entry");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/background-transfer");
+    copy(
+        &package,
+        &app.0.join("node_modules/@exact/background-transfer"),
+        &["test"],
+    );
+    let out = app.0.join("out");
+    std::fs::create_dir(&out).unwrap();
+    for (source, selected) in [
+        ("component App\n  view\n    text \"plain\"\n", false),
+        ("use backgroundFetchStatus, BackgroundFetchStatus from \"@exact/background-transfer\"\ncomponent App\n  resource status = backgroundFetchStatus() as shape BackgroundFetchStatus\n  view\n    text status.state\n", true),
+        ("use backgroundfetchclick, BackgroundFetchRegistration from \"@exact/background-transfer\"\ncomponent App\n  state last = \"\"\n  action clicked(r: BackgroundFetchRegistration)\n    last = r.id\n  view\n    column backgroundfetchclick=clicked\n      text \"click\"\n", true),
+    ] {
+        app.write("app.contract", source);
+        let plan = app.compile().unwrap_or_else(|e| panic!("{e:?}"));
+        contract::native::android_reach(&app.0, &plan, &out).unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("transfers.rs")).unwrap(),
+            if selected { "exact_painted::android_transfer_jni!();\n" } else { "" });
+    }
+}

@@ -51,6 +51,9 @@ package struct FlatPaint: Equatable {
         "color_scheme",
         // Which rows the author wrote (LLP 1115.000 D2): nothing a leaf paints.
         "written",
+        // Where a scroller rests: a snap area is read from a flat leaf's
+        // frame as from a view's (`ScrollSnapIOS.swift`).
+        "scroll_snap_align", "scroll_snap_stop", "scroll_margin_top", "scroll_margin_right", "scroll_margin_bottom", "scroll_margin_left",
     ]
 
     package init?(_ style: NodeStyle, colorChannels: (BatchValue, Bool) -> [Double]?) {

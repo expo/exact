@@ -17,7 +17,7 @@ fn spec(text: &str) -> Spec {
 
 #[test]
 fn unique_widths_retire_unpinned_previous_snapshots() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"abc def é中 ".repeat(500));
     let mut previous = None;
     for width in 160..180 {
@@ -34,7 +34,7 @@ fn unique_widths_retire_unpinned_previous_snapshots() {
 
 #[test]
 fn intrinsic_queries_retain_only_scalar_metrics() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"abc def ".repeat(300));
     for offer in [AxisOffer::MaxContent, AxisOffer::MinContent] {
         let first = engine.measure(&s, offer);
@@ -50,7 +50,7 @@ fn intrinsic_queries_retain_only_scalar_metrics() {
 
 #[test]
 fn exact_text_and_run_boundaries_cannot_alias_formatted_keys() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let mut split = spec("A");
     let mut second = split.runs[0].clone();
     second.text = "B".into();
@@ -74,7 +74,7 @@ fn exact_text_and_run_boundaries_cannot_alias_formatted_keys() {
 
 #[test]
 fn independently_pinned_identical_text_keeps_both_owner_widths() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"words ".repeat(200));
     let a = engine.paragraph(&s, Some(120.0));
     let b = engine.paragraph(&s, Some(280.0));
@@ -188,6 +188,7 @@ fn paint(painter: &mut Painter, kernel: &Kernel) -> Result<crate::paint::Frame, 
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
             paths: &|_| None,
+            filters: &|_| None,
             scroll: &BTreeMap::new(),
             page: (0., 0.),
             images: &BTreeMap::new(),
@@ -206,7 +207,7 @@ fn paint(painter: &mut Painter, kernel: &Kernel) -> Result<crate::paint::Frame, 
 #[test]
 fn failed_painter_frame_keeps_previous_accepted_leases_until_success() {
     let text = "An accepted paragraph stays alive while a replacement frame fails.";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     let fail = Rc::new(Cell::new(false));
     let mut painter = Painter::new(
         engine.clone(),
@@ -251,7 +252,7 @@ fn failed_painter_frame_keeps_previous_accepted_leases_until_success() {
 
 #[test]
 fn old_unpinned_width_is_destroyed_before_next_buffer_allocation() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"resize retirement ".repeat(500));
     let old = {
         let p = engine.paragraph(&s, Some(150.));
@@ -268,7 +269,7 @@ fn old_unpinned_width_is_destroyed_before_next_buffer_allocation() {
 
 #[test]
 fn intrinsic_scratch_does_not_displace_pinned_frame_and_is_not_retained() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"short words ".repeat(200));
     let displayed = engine.paragraph(&s, Some(240.));
     let shapes = engine.shape_calls;
@@ -289,7 +290,7 @@ fn intrinsic_scratch_does_not_displace_pinned_frame_and_is_not_retained() {
 
 #[test]
 fn scalar_identity_cache_and_dead_width_index_are_bounded() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     for n in 0..cache::COLD_IDENTITIES + 32 {
         engine.measure(&spec(&format!("item {n}")), AxisOffer::MaxContent);
     }
@@ -306,7 +307,7 @@ fn scalar_identity_cache_and_dead_width_index_are_bounded() {
 
 #[test]
 fn cold_target_never_rejects_work_or_evicts_painter_owned_snapshots() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     engine.paragraphs.set_target(0);
     let s = spec(&"a full paragraph ".repeat(200));
     let pinned = engine.paragraph(&s, Some(150.));
@@ -333,7 +334,7 @@ fn cold_target_never_rejects_work_or_evicts_painter_owned_snapshots() {
 #[test]
 fn accepted_small_text_repaints_without_reshaping_under_zero_cold_target() {
     let text = "A small stable label";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let fail = Rc::new(Cell::new(false));
     let mut painter = Painter::new(engine.clone(), 1., Box::new(ControlledBackend { fail }));
@@ -352,7 +353,7 @@ fn accepted_small_text_repaints_without_reshaping_under_zero_cold_target() {
 
 #[test]
 fn eviction_preserves_metrics_and_all_glyph_positions() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let mut s = spec("Latin é 中 العربية 👩‍💻\nsecond line with words");
     s.runs[0].line_height = Some(22.25);
     let p = engine.paragraph(&s, Some(140.));
@@ -387,7 +388,7 @@ fn eviction_preserves_metrics_and_all_glyph_positions() {
 #[test]
 fn catalog_replacement_and_reused_node_keys_do_not_keep_lease_history() {
     let text = "One owner";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     let fail = Rc::new(Cell::new(false));
     let mut painter = Painter::new(engine.clone(), 1., Box::new(ControlledBackend { fail }));
     let mut kernel = text_tree(text, 140.);
@@ -397,7 +398,7 @@ fn catalog_replacement_and_reused_node_keys_do_not_keep_lease_history() {
         let p = engine.borrow_mut().paragraph(&spec(text), Some(140.));
         Rc::downgrade(&p)
     };
-    *engine.borrow_mut() = TextEngine::new();
+    *engine.borrow_mut() = crate::text::fixtures::engine();
     assert!(
         old.upgrade().is_some(),
         "previous successful frame still owns its lease"
@@ -444,7 +445,7 @@ fn catalog_replacement_and_reused_node_keys_do_not_keep_lease_history() {
 
 #[test]
 fn oversized_cold_result_reports_overage_after_last_caller_drop_and_hits() {
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     // Exercise the oversized path without a large allocation in a unit test.
     engine.borrow_mut().paragraphs.set_target(1);
     let text = "An oversized measurement must survive until its painter takes ownership.";
@@ -500,7 +501,7 @@ fn oversized_cold_result_reports_overage_after_last_caller_drop_and_hits() {
 #[test]
 fn catalog_swap_failed_frame_reports_deduplicated_retiring_accepted_storage() {
     let text = "Two accepted owners share the same paragraph backing.";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     let fail = Rc::new(Cell::new(false));
     let mut painter = Painter::new(
         engine.clone(),
@@ -554,7 +555,7 @@ fn catalog_swap_failed_frame_reports_deduplicated_retiring_accepted_storage() {
             p.private_text_bytes_estimate,
         )
     };
-    painter.text = TextEngine::shared();
+    painter.text = crate::text::fixtures::shared();
     drop(engine);
     assert_eq!(painter.text.borrow().residency().paragraphs, 0);
     let expected = RetiringResidency {
@@ -569,7 +570,7 @@ fn catalog_swap_failed_frame_reports_deduplicated_retiring_accepted_storage() {
     assert_eq!(painter.retiring_text_residency(), expected);
     assert!(weak.upgrade().is_some());
     // Repeated catalog swaps while presentation fails retain one accepted set.
-    painter.text = TextEngine::shared();
+    painter.text = crate::text::fixtures::shared();
     assert!(paint(&mut painter, &kernel).is_err());
     assert_eq!(painter.retiring_text_residency(), expected);
     fail.set(false);
@@ -583,7 +584,7 @@ fn catalog_swap_failed_frame_reports_deduplicated_retiring_accepted_storage() {
 
 #[test]
 fn unrelated_identity_trim_preserves_measured_handoff() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     engine.paragraphs.set_target(0);
     let paragraph = spec("A measured paragraph awaiting this frame's painter.");
     engine.measure(&paragraph, AxisOffer::Definite(140.));
@@ -634,7 +635,7 @@ fn taffy_small_control_after_paragraph_preserves_measure_to_paint_handoff() {
             metrics
         }
     }
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let observed = Rc::new(RefCell::new(Observed::default()));
     let mut kernel = Kernel::new(Box::new(Probe {
@@ -713,7 +714,7 @@ fn measured_weak(engine: &mut TextEngine, s: &Spec, width: f32) -> std::rc::Weak
 
 #[test]
 fn handoff_cap_refreshes_deterministically_and_reports_its_separate_cost() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     engine.paragraphs.set_target(0);
     let weak: Vec<_> = (0..64)
         .map(|i| measured_weak(&mut engine, &spec(&format!("paragraph {i}")), 140.))
@@ -745,7 +746,7 @@ fn handoff_cap_refreshes_deterministically_and_reports_its_separate_cost() {
 
 #[test]
 fn replacing_definite_handoff_drops_unaccepted_old_width_before_allocation() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     engine.paragraphs.set_target(0);
     let s = spec("A current working width, not a history of width probes.");
     let old = measured_weak(&mut engine, &s, 140.);
@@ -761,7 +762,7 @@ fn replacing_definite_handoff_drops_unaccepted_old_width_before_allocation() {
 
 #[test]
 fn intrinsic_miss_retires_handoff_before_scratch_but_scalar_hit_preserves_it() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     engine.paragraphs.set_target(0);
     let s = spec("Intrinsic probes must not retain their full scratch Buffers.");
     let old = measured_weak(&mut engine, &s, 140.);
@@ -782,7 +783,7 @@ fn intrinsic_miss_retires_handoff_before_scratch_but_scalar_hit_preserves_it() {
 
 #[test]
 fn failed_frame_drains_handoff_and_preserves_previous_accepted_owner() {
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let fail = Rc::new(Cell::new(false));
     let mut painter = Painter::new(
@@ -814,7 +815,7 @@ fn failed_frame_drains_handoff_and_preserves_previous_accepted_owner() {
 
 #[test]
 fn empty_frame_and_catalog_drop_clear_unpresented_handoffs() {
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let s = spec("A removed paragraph must not become retained history.");
     let old = measured_weak(&mut engine.borrow_mut(), &s, 140.);
@@ -828,7 +829,7 @@ fn empty_frame_and_catalog_drop_clear_unpresented_handoffs() {
     paint(&mut painter, &Kernel::with_monospace()).unwrap();
     assert!(old.upgrade().is_none());
     let old = measured_weak(&mut engine.borrow_mut(), &s, 140.);
-    *engine.borrow_mut() = TextEngine::new();
+    *engine.borrow_mut() = crate::text::fixtures::engine();
     assert!(old.upgrade().is_none());
     assert_eq!(engine.borrow().handoff_residency().paragraphs, 0);
 }
@@ -836,7 +837,7 @@ fn empty_frame_and_catalog_drop_clear_unpresented_handoffs() {
 #[test]
 fn two_accepted_owner_widths_survive_handoff_drain_and_warm_repaint() {
     let text = "Identical content can belong to two visible owners at different widths.";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let mut kernel = text_tree(text, 140.);
     let mut style = StyleProps::default().with_rows(|rows| {
@@ -915,7 +916,7 @@ fn paint_lazy_ink(engine: &mut TextEngine, paragraph: &Paragraph, scale: f32) ->
 #[test]
 fn lazy_ink_growth_is_counted_in_overlapping_handoff_catalog_and_retiring_owners() {
     let text = "One backing shared by accepted owners and a pending measurement.";
-    let engine = TextEngine::shared();
+    let engine = crate::text::fixtures::shared();
     engine.borrow_mut().paragraphs.set_target(0);
     let mut kernel = text_tree(text, 140.);
     let mut style = StyleProps::default().with_rows(|rows| {
@@ -963,7 +964,7 @@ fn lazy_ink_growth_is_counted_in_overlapping_handoff_catalog_and_retiring_owners
     assert_eq!(paragraph.ink_capacity_bytes(), 0);
     let catalog_before = engine.borrow().residency();
     let handoff_before = engine.borrow().handoff_residency();
-    painter.text = TextEngine::shared();
+    painter.text = crate::text::fixtures::shared();
     let retiring_before = painter.retiring_text_residency();
     assert_eq!(retiring_before.owners, 2);
     assert_eq!(retiring_before.paragraphs, 1);
@@ -1040,7 +1041,7 @@ fn lazy_ink_growth_is_counted_in_overlapping_handoff_catalog_and_retiring_owners
 
 #[test]
 fn lazy_ink_growth_enters_cold_policy_and_is_reclaimed_by_budget_maintenance() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let paragraph = engine.paragraph(&spec(&"budgeted words\n".repeat(40)), Some(140.));
     paragraph.lines();
     let base = paragraph.resident_capacity_bytes + paragraph.lines_capacity_bytes();
@@ -1078,7 +1079,7 @@ fn lazy_ink_growth_enters_cold_policy_and_is_reclaimed_by_budget_maintenance() {
 
 #[test]
 fn lazy_ink_capacity_tracks_current_arrays_after_scale_reset_and_refusal() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let paragraph = engine.paragraph(&spec(&"current index arrays\n".repeat(30)), Some(140.));
     paragraph.lines();
     let base = engine.residency().owned_capacity_bytes;

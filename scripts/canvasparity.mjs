@@ -18,7 +18,7 @@
 //    by an `image` beside its canvas, against the host's own screenshot of
 //    that canvas: an image with text, again after strokes accumulated, an
 //    empty canvas, and the refusals of a path outside the grant and of a
-//    surface not mounted.
+//    surface not mounted; and a JPEG from each source, by its size and type.
 // 5. Probes: every canvas drew and none is pending; the throwing fixture
 //    reports its error at odd steps and kept what it drew; the resizing one's
 //    generation is its step; the explicit bitmap is 40 × 25, stretched.
@@ -183,7 +183,7 @@ async function captures(open, host, dir, check, env) {
     await s.tap('page-6');
     await s.clock('settle');
     const first = await take('capture-annotate', 'annotate');
-    const size = first.record.match(/^app:\/tmp\/annotate-\d+\.png (\d+)x(\d+) @([\d.]+)$/);
+    const size = first.record.match(/^app:\/tmp\/annotate-\d+\.png (\d+)x(\d+) @([\d.]+) image\/png$/);
     check(size && +size[1] === Math.round(150 * first.view.k) && +size[2] === Math.round(100 * first.view.k) && +size[3] === first.view.k, `${label} capture: answered ${JSON.stringify(first.record)} at ${first.view.k}x`);
     const before = same(first.view, 'cap-annotate', 'annotate');
     await s.tap('step');
@@ -196,10 +196,17 @@ async function captures(open, host, dir, check, env) {
     for (const button of ['capture-turn', 'capture-resize', 'capture-rust']) {
       if (button !== 'capture-turn') captureWidth += 10;
       const taken = await take(button, button);
-      const size = taken.record.match(/^app:\/tmp\/(?:rust|turn)-\d+\.png (\d+)x(\d+) @([\d.]+)$/);
+      const size = taken.record.match(/^app:\/tmp\/(?:rust|turn)-\d+\.png (\d+)x(\d+) @([\d.]+) image\/png$/);
       check(size && +size[1] === Math.round(captureWidth * taken.view.k) && +size[2] === Math.round(100 * taken.view.k) && +size[3] === taken.view.k,
         `${label} ${button}: expected ${captureWidth}x100 at ${taken.view.k}x, got ${JSON.stringify(taken.record)}`);
       same(taken.view, 'cap-annotate', button);
+    }
+    // A JPEG (`toBlob`'s `image/jpeg`) is the canvas over black, so its pixels are not the shown canvas's.
+    for (const button of ['capture-jpeg', 'capture-rust-jpeg']) {
+      const taken = await take(button, button);
+      const size = taken.record.match(/^app:\/tmp\/(?:annotate|rust)-\d+\.jpg (\d+)x(\d+) @([\d.]+) image\/jpeg$/);
+      check(size && +size[1] === Math.round(captureWidth * taken.view.k) && +size[2] === Math.round(100 * taken.view.k) && +size[3] === taken.view.k,
+        `${label} ${button}: expected a ${captureWidth}x100 JPEG at ${taken.view.k}x, got ${JSON.stringify(taken.record)}`);
     }
     const rustRefused = await take('capture-rust-refused', 'rust-refused');
     check(rustRefused.record.startsWith('NotAllowedError: '), `${label} Rust capture outside the grant: ${JSON.stringify(rustRefused.record)}`);

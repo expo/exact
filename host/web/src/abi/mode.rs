@@ -56,7 +56,7 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// A `tamber-batch` or `tamber-snapshot` frame from the dev stream in the
+    /// A `forma-batch` or `forma-snapshot` frame from the dev stream in the
     /// input buffer (LLP 1121 stage 4): applied in place; returns the batch.
     pub fn design_rows(&mut self, len: usize) -> u32 {
         let Ok(text) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {

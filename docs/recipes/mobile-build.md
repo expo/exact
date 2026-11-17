@@ -6,9 +6,8 @@ Logs: stderr. Releases omit the agent; no `--run`, `--prebuild` or `--test`.
 
 Production bakes with updates need `deploy.signing.keys` and
 `EXACT_UPDATE_RECEIPT` (authenticated receipt) or `EXACT_UPDATE_GENESIS=1`
-(new stream). Without updates, set the store to `"0"`: `deploy.store.ios`
-for iOS, `deploy.store.linux` for Android's shared Linux bake. An absent
-Linux store defaults to updates.
+(new stream). Without updates, set `deploy.store.ios` to `"0"`. Android
+has a store only at `deploy.store.android` `"A"` (absent: `"0"`).
 
 **iOS Simulator**, no installation or signing team:
 

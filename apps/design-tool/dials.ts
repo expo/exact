@@ -7,7 +7,7 @@ import type { Result } from './app.contract.d.ts';
 type Design = Result<'loadDesign'>;
 type Control = Design['groups'][number]['dials'][number];
 
-/** A number as Tamber writes one: a plain number, or a length's `Npx`; null
+/** A number as Forma writes one: a plain number, or a length's `Npx`; null
  * for anything else. */
 export const numberOf = (v: string | undefined) => {
   const t = v?.trim().replace(/px$/i, '') ?? '';
@@ -92,7 +92,7 @@ const literalOf = (kind: string, v: string, tokens: ReadonlySet<string>) =>
 /** A dial's control from its declared metadata (LLP 1121 D4, D15): its
  * `control`, else its kind's own (a colour's field, a ranged number's
  * slider, else a stepper); `none` is not drawn. Metadata is kept, not
- * checked, by Tamber, so a control that does not fit the kind (a stepper
+ * checked, by Forma, so a control that does not fit the kind (a stepper
  * for a colour, a slider with no range, a select with no options) is the
  * kind's own, said in its help; a step or priority that is no number is
  * left at its default. `token` names a picker of tokens, which a dial (a
@@ -149,7 +149,7 @@ export function controlOf(d: { name: string; kind: string; value: string; range:
 }
 
 /** A token's value in a cell, by its kind, from `resolve`'s tuple
- * (docs/tamber-protocol.md, tamber/1.5-1.9): a length or a number as the
+ * (docs/forma-protocol.md, forma/1.5-1.9): a length or a number as the
  * server spells it, a shadow's text, a type's
  * longhands (each one it leaves unsaid named so), a family, a duration in
  * ms, an easing's curve. */

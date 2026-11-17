@@ -209,3 +209,89 @@ fn repeated_component_reference_scaling() {
         eprintln!("{n} component references: {:?}", start.elapsed());
     }
 }
+
+#[test]
+fn blended_scene_follows_resolved_use_marker_pattern_and_mask_references() {
+    for row in [
+        None,
+        Some(StyleId::MarkerEnd),
+        Some(StyleId::Fill),
+        Some(StyleId::SvgMask),
+    ] {
+        let mut d = Doc::new();
+        let source = d.node(NodeType::Svg, &[], &[]);
+        let target = d.node(NodeType::Svg, &[], &[]);
+        let definition = d.node(
+            match row {
+                None => NodeType::SvgGroup,
+                Some(StyleId::MarkerEnd) => NodeType::SvgMarker,
+                Some(StyleId::SvgMask) => NodeType::SvgMask,
+                _ => NodeType::SvgPattern,
+            },
+            &[],
+            &[(PropId::Id, "ink")],
+        );
+        let ink = d.node(
+            NodeType::SvgRect,
+            &[(StyleId::MixBlendMode, "multiply")],
+            &[],
+        );
+        let cycle = d.node(NodeType::SvgUse, &[], &[(PropId::Href, "#ink")]);
+        d.children(definition, &[cycle, ink]);
+        d.children(source, &[definition]);
+        let backdrop = d.node(NodeType::SvgRect, &[], &[]);
+        let reference = match row {
+            None => d.node(NodeType::SvgUse, &[], &[(PropId::Href, "#ink")]),
+            Some(row) => d.node(NodeType::SvgPath, &[(row, "url(#ink)")], &[]),
+        };
+        d.children(target, &[backdrop, reference]);
+        let mut k = d.kernel(&[source, target], 200.);
+        assert!(exact_kernel::svg::in_blended_scene(
+            &k,
+            &k.node(backdrop).unwrap()
+        ));
+        k.apply(0, 2, &[style(ink, &[(StyleId::MixBlendMode, "normal")])])
+            .unwrap();
+        assert!(
+            !exact_kernel::svg::in_blended_scene(&k, &k.node(backdrop).unwrap()),
+            "cycles terminate without a blend"
+        );
+    }
+}
+
+#[test]
+fn a_blended_reference_samples_its_external_source_and_transitive_children() {
+    let mut d = Doc::new();
+    let source = d.node(NodeType::Svg, &[], &[]);
+    let target = d.node(NodeType::Svg, &[], &[]);
+    let group = d.node(NodeType::SvgGroup, &[], &[(PropId::Id, "ink")]);
+    let ink = d.node(NodeType::SvgRect, &[], &[]);
+    let unrelated = d.node(NodeType::SvgRect, &[], &[]);
+    d.children(group, &[ink]);
+    d.children(source, &[group, unrelated]);
+    let reference = d.node(
+        NodeType::SvgUse,
+        &[(StyleId::MixBlendMode, "multiply")],
+        &[(PropId::Href, "#ink")],
+    );
+    d.children(target, &[reference]);
+    let mut k = d.kernel(&[source, target], 200.);
+    assert!(exact_kernel::svg::in_blended_scene(
+        &k,
+        &k.node(ink).unwrap()
+    ));
+    assert!(!exact_kernel::svg::in_blended_scene(
+        &k,
+        &k.node(unrelated).unwrap()
+    ));
+    k.apply(
+        0,
+        2,
+        &[style(reference, &[(StyleId::MixBlendMode, "normal")])],
+    )
+    .unwrap();
+    assert!(!exact_kernel::svg::in_blended_scene(
+        &k,
+        &k.node(ink).unwrap()
+    ));
+}

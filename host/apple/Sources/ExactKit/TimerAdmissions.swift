@@ -144,19 +144,20 @@ final class TimerAdmissions {
             if ExactSession.asyncFills, !frame, !idle, s.frames.link == nil {
                 pending = (cutoff, update)
                 s.advanceInFlight = true
-                let token = generation, epoch = s.generation
+                let token = generation, lease = s.runtime.completionLease
                 let kinds = observe().kinds
                 DispatchQueue.main.async { [weak self, weak s] in
                     guard let s else { return }
-                    guard let self, self.generation == token, s.generation == epoch, s.state != .destroyed else {
+                    guard let self, self.generation == token, s.runtime.accepts(lease) else {
                         s.advanceInFlight = false
                         if let self, self.generation == token { self.pending = nil }
                         return
                     }
-                    s.runtime.timerWaitsAsync(kinds: kinds, cutoff: cutoff) { [weak self, weak s] batch in
-                        s?.publish(.advance, batch, epoch)
+                    s.runtime.timerWaitsAsync(kinds: kinds, cutoff: cutoff) { [weak self, weak s] completion in
+                        s?.publish(.advance, completion)
                         DispatchQueue.main.async { [weak self, weak s] in
-                            guard let self, let s, self.generation == token, s.generation == epoch, s.state != .destroyed else { return }
+                            guard let self, let s, self.generation == token, s.runtime.accepts(completion.lease) else { return }
+                            let batch = completion.batch
                             if batch.waitContinue, !batch.busy, !batch.held { self.check() }
                             else { self.pending = nil; self.scheduleRecentWake() }
                         }

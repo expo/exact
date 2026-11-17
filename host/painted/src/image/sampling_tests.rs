@@ -231,7 +231,13 @@ fn painters() -> Vec<(&'static str, Box<dyn Backend>)> {
 #[test]
 fn minification_smooths_pixelated_but_keeps_crisp_edges_sharp() {
     let mut source = Pixmap::new(32, 32).unwrap();
-    for (i, pixel) in source.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, pixel) in source
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let value = if (i / 32 + i % 32).is_multiple_of(2) {
             0
         } else {

@@ -4,7 +4,7 @@ import CoreText
 import CExact
 
 /// Owned Swift geometry; counted C pointers exist only inside withCShapes.
-package struct TextFlowShape: Equatable {
+package struct TextFlowShape: Equatable, Sendable {
     package var kind: UInt32
     package var x: Float = 0, y: Float = 0, a: Float = 0, b: Float = 0, radius: Float = 0
     package var pairs: [SIMD2<Float>] = []
@@ -50,7 +50,7 @@ package struct TextFlowShape: Equatable {
     }
 }
 
-/// The only full unwrapped CTLine and Rust prepare per TextShape. O(UTF16 + glyphs)
+/// One full unwrapped CTLine and Rust preparation per source. O(UTF16 + glyphs)
 /// storage; glyph indices are logical even when a CTRun's visual order is RTL.
 package final class TextFlowSource {
     package let line: CTLine
@@ -63,41 +63,46 @@ package final class TextFlowSource {
     private(set) package var rustBytes = 0
     package var box: TextLineBox?
     package var ownedBytes: Int { advances.count * MemoryLayout<Float>.stride + rustBytes }
-    package init(_ shape: TextShape) {
+    package convenience init(_ shape: TextShape) {
+        self.init(attributed: shape.attributed, typesetter: shape.typesetter,
+                  overflowWrap: shape.spec.overflowWrap, whiteSpace: shape.spec.whiteSpace)
+    }
+    package init(attributed originalValue: NSAttributedString, typesetter originalTypesetter: CTTypesetter,
+                 overflowWrap: Int, whiteSpace: Int) {
         // Preserve original UTF16 positions while matching the walker's CSS
         // ASCII space/tab collapsing. Continuations become zero-width controls.
-        let original = shape.attributed.string as NSString
+        let original = originalValue.string as NSString
         var replacements: [(Int, String)] = []
         var space = false
         for i in 0..<original.length {
             let ch = original.character(at: i)
             // `pre-line` keeps a line feed, a forced break (LLP 1053 G5).
-            if !shape.spec.preserves && !(shape.spec.whiteSpace == 3 && ch == 10)
+            if ![1, 4].contains(whiteSpace) && !(whiteSpace == 3 && ch == 10)
                 && [32, 9, 10, 13, 12, 0x85, 0x2028, 0x2029].contains(ch) {
                 if space { replacements.append((i, "\u{200b}")) }
                 else if ch != 32 { replacements.append((i, " ")) }
                 space = true
             } else { space = false }
         }
-        if replacements.isEmpty { attributed = shape.attributed; typesetter = shape.typesetter }
+        if replacements.isEmpty { attributed = originalValue; typesetter = originalTypesetter }
         else {
-            let value = NSMutableAttributedString(attributedString: shape.attributed)
+            let value = NSMutableAttributedString(attributedString: originalValue)
             for (index, text) in replacements { value.replaceCharacters(in: NSRange(location: index, length: 1), with: text) }
             attributed = value; typesetter = CTTypesetterCreateWithAttributedString(value)
         }
         line = CTTypesetterCreateLine(typesetter, CFRange(location: 0, length: 0))
-        let text = shape.attributed.string
+        let text = originalValue.string
         utf8Count = text.utf8.count; utf16Count = (text as NSString).length
         advances = Self.advances(line, text: text)
         // Hyphen uses the paragraph strut's font (or first run's resolved font).
-        let attrs = shape.attributed.length > 0 ? shape.attributed.attributes(at: 0, effectiveRange: nil) : [:]
+        let attrs = originalValue.length > 0 ? originalValue.attributes(at: 0, effectiveRange: nil) : [:]
         let hyphen = CTLineCreateWithAttributedString(NSAttributedString(string: "-", attributes: attrs))
         let width = Float(CTLineGetTypographicBounds(hyphen, nil, nil, nil))
         let table = advances, words = Self.complexWords(text)
         handle = Array(text.utf8).withUnsafeBufferPointer { bytes in
             table.withUnsafeBufferPointer { table in
                 words.withUnsafeBufferPointer { words in
-                    exact_textflow_prepare(bytes.baseAddress, bytes.count, table.baseAddress, table.count, words.baseAddress, words.count, UInt32(shape.spec.overflowWrap), UInt32(shape.spec.whiteSpace), width)
+                    exact_textflow_prepare(bytes.baseAddress, bytes.count, table.baseAddress, table.count, words.baseAddress, words.count, UInt32(overflowWrap), UInt32(whiteSpace), width)
                 }
             }
         }
@@ -177,29 +182,14 @@ extension TextEngine {
     package func lineBox(_ spec: Spec, line: CTLine) -> TextLineBox {
         let strut = spec.strut ?? spec.runs.first
         func extents(_ run: Run) -> TextLineBox { TextLineBox(font(run) as CTFont, height: run.lineHeight, scale: lineScale) }
-        var box = strut.map(extents) ?? TextLineBox()
-        for glyphRun in CTLineGetGlyphRuns(line) as! [CTRun] {
-            let range = CTRunGetStringRange(glyphRun)
+        return TextLineBox.paragraph(line, strut: strut.map(extents) ?? TextLineBox(), scale: lineScale) { range in
             var offset = 0
-            var matched = false, includesNormal = false
-            for authored in spec.runs {
-                let end = offset + (authored.text as NSString).length
+            return spec.runs.compactMap { run in
+                let end = offset + run.text.utf16.count
                 defer { offset = end }
-                guard offset < range.location + range.length && end > range.location else { continue }
-                matched = true
-                if authored.lineHeight != nil {
-                    box.include(extents(authored))
-                } else { includesNormal = true }
+                return offset < range.location + range.length && end > range.location ? extents(run) : nil
             }
-            if !matched, let strut, strut.lineHeight != nil {
-                box.include(extents(strut)); continue
-            }
-            if matched && !includesNormal { continue }
-            let attrs = CTRunGetAttributes(glyphRun) as NSDictionary
-            let font = attrs[kCTFontAttributeName] as! CTFont
-            box.include(TextLineBox(font, height: nil, scale: lineScale))
         }
-        return box
     }
 
     // The walker stops at max(1024, 8*prepared work units) bands (or clamp).
@@ -212,54 +202,73 @@ extension TextEngine {
         let source = shape.preparedFlow(), spec = shape.spec
         let box = source.box ?? lineBox(spec, line: source.line)
         source.box = box
-        let lineHeight = box.height
-        let (fragments, height, accepted) = source.flow(flow, width: width, height: lineHeight,
-            fontSize: (spec.strut ?? spec.runs.first)?.size ?? 0, clamp: spec.lineClamp, direction: spec.direction)
-        guard source.handle != 0 && accepted else {
+        guard let laid = source.layout(width: width, flow: flow, box: box,
+            fontSize: (spec.strut ?? spec.runs.first)?.size ?? 0, clamp: spec.lineClamp,
+            direction: spec.direction, align: spec.align, whiteSpace: spec.whiteSpace, checkpoint: {}) else {
             let ordinary = layout(shape, width: width)
             ordinary.flowIncomplete = true
             return ordinary
         }
-        var lines: [CTLine] = [], origins: [CGFloat] = [], baselines: [CGFloat] = [], bottoms: [CGFloat] = []
-        var glyphs = 0, maxWidth: CGFloat = 0
-        for (i, fragment) in fragments.enumerated() {
-            let range = CFRange(location: fragment.paint_start, length: fragment.paint_end - fragment.paint_start)
-            var line = range.length > 0 ? CTTypesetterCreateLine(source.typesetter, range)
-                : CTLineCreateWithAttributedString(NSAttributedString(string: ""))
-            // The walker consumes a selected SHY; CoreText otherwise keeps it
-            // invisible even at a manually supplied line boundary. Retain global
-            // UTF16 indices when replacing that single code unit with its ink.
-            if range.length > 0, fragment.hyphenated != 0 {
-                let visible = NSMutableAttributedString(attributedString: source.attributed.attributedSubstring(
-                    from: NSRange(location: 0, length: fragment.paint_end)))
-                visible.replaceCharacters(in: NSRange(location: fragment.paint_end - 1, length: 1), with: "-")
-                line = CTTypesetterCreateLine(CTTypesetterCreateWithAttributedString(visible), range)
-            }
-            let clamps = i == fragments.count - 1 && spec.lineClamp > 0 && fragment.end < source.utf8Count
-            if clamps {
-                line = ellipsizedLine(spec, range: NSRange(location: range.location, length: range.length), width: Double(fragment.available), source: source.attributed) ?? line
-            }
-            // The walker paints a line without the spaces it consumes after it; those its width counts (a `pre-wrap`
-            // paragraph's last, `pre`'s) align with it, so the line aligns as its consumed range (TextEngine.penOffset).
-            let consumed = !clamps && [1, 4].contains(spec.whiteSpace) && fragment.hyphenated == 0 && fragment.utf16_end > fragment.paint_end
-                ? CTTypesetterCreateLine(source.typesetter, CFRange(location: fragment.paint_start, length: fragment.utf16_end - fragment.paint_start)) : line
-            let flush: CGFloat = spec.align == 1 ? 0.5 : spec.align == 2 ? 1 : 0
-            let x = CGFloat(fragment.x) + TextEngine.penOffset(consumed, flush: flush, room: Double(fragment.available), rtl: spec.direction == 1,
-                                                               whiteSpace: spec.whiteSpace, source: source.attributed)
-            origins.append(x); baselines.append(CGFloat(fragment.y) + box.baseline)
-            bottoms.append(CGFloat(fragment.y) + lineHeight)
-            glyphs += CTLineGetGlyphCount(line); lines.append(line)
-            maxWidth = max(maxWidth, x + CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
-        }
+        let lines = laid.lines, origins = laid.origins, fragments = laid.fragments
+        var baselines = laid.baselines, bottoms = laid.lineBottoms
+        let height = laid.height, lineHeight = laid.flowLineHeight
         var trimmedHeight = CGFloat(height)
         let cut = trimTextBox(spec, lines: lines, baselines: &baselines, lineBottoms: &bottoms, height: &trimmedHeight,
                               firstTop: fragments.first.map { CGFloat($0.y) } ?? 0)
         // The fragments move with the lines they hold
         let moved = cut == 0 ? fragments : fragments.map { var f = $0; f.y -= Float(cut); return f }
-        let paragraph = Paragraph(lines: lines, baselines: baselines, width: CSSLineBox.layoutWidth(maxWidth), height: trimmedHeight,
-                                  lineBottoms: bottoms, shape: shape, glyphCount: glyphs, origins: origins,
+        let paragraph = Paragraph(lines: lines, baselines: baselines, width: laid.width, height: trimmedHeight,
+                                  lineBottoms: bottoms, shape: shape, glyphCount: lines.reduce(0) { $0 + CTLineGetGlyphCount($1) }, origins: origins,
                                   fragments: moved, flowLineHeight: lineHeight)
         paragraph.lineScale = lineScale
         return paragraph
+    }
+}
+
+extension TextFlowSource {
+    /// CoreText stays with its source on the caller's executor. Both direct
+    /// paragraphs and region workers paint these exact fragment lines.
+    package func layout(width: CGFloat, flow: [TextFlowShape], box: TextLineBox, fontSize: CGFloat,
+                        clamp: Int, direction: Int, align: Int, whiteSpace: Int,
+                        checkpoint: () throws -> Void) rethrows -> Paragraph? {
+        let lineHeight = box.height
+        let (fragments, height, accepted) = self.flow(flow, width: width, height: lineHeight,
+            fontSize: fontSize, clamp: clamp, direction: direction)
+        guard handle != 0 && accepted else { return nil }
+        var lines: [CTLine] = [], origins: [CGFloat] = [], baselines: [CGFloat] = [], bottoms: [CGFloat] = []
+        var glyphs = 0, maxWidth: CGFloat = 0
+        for (i, fragment) in fragments.enumerated() {
+            if i % 128 == 0 { try checkpoint() }
+            let range = CFRange(location: fragment.paint_start, length: fragment.paint_end - fragment.paint_start)
+            var line = range.length > 0 ? CTTypesetterCreateLine(typesetter, range)
+                : CTLineCreateWithAttributedString(NSAttributedString(string: ""))
+            // The walker consumes a selected SHY; CoreText otherwise keeps it
+            // invisible even at a manually supplied line boundary. Retain global
+            // UTF16 indices when replacing that single code unit with its ink.
+            if range.length > 0, fragment.hyphenated != 0 {
+                let visible = NSMutableAttributedString(attributedString: attributed.attributedSubstring(
+                    from: NSRange(location: 0, length: fragment.paint_end)))
+                visible.replaceCharacters(in: NSRange(location: fragment.paint_end - 1, length: 1), with: "-")
+                line = CTTypesetterCreateLine(CTTypesetterCreateWithAttributedString(visible), range)
+            }
+            let clamps = i == fragments.count - 1 && clamp > 0 && fragment.end < utf8Count
+            if clamps {
+                line = TextEngine.clampedLine(attributed, range: NSRange(location: range.location, length: range.length), width: Double(fragment.available)) ?? line
+            }
+            // The walker paints a line without the spaces it consumes after it; those its width counts (a `pre-wrap`
+            // paragraph's last, `pre`'s) align with it, so the line aligns as its consumed range (TextEngine.penOffset).
+            let consumed = !clamps && [1, 4].contains(whiteSpace) && fragment.hyphenated == 0 && fragment.utf16_end > fragment.paint_end
+                ? CTTypesetterCreateLine(typesetter, CFRange(location: fragment.paint_start, length: fragment.utf16_end - fragment.paint_start)) : line
+            let flush: CGFloat = align == 1 ? 0.5 : align == 2 ? 1 : 0
+            let x = CGFloat(fragment.x) + TextEngine.penOffset(consumed, flush: flush, room: Double(fragment.available), rtl: direction == 1,
+                                                               whiteSpace: whiteSpace, source: attributed)
+            origins.append(x); baselines.append(CGFloat(fragment.y) + box.baseline)
+            bottoms.append(CGFloat(fragment.y) + lineHeight)
+            glyphs += CTLineGetGlyphCount(line); lines.append(line)
+            maxWidth = max(maxWidth, x + CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)))
+        }
+        try checkpoint()
+        return Paragraph(lines: lines, baselines: baselines, width: CSSLineBox.layoutWidth(maxWidth), height: height,
+                         lineBottoms: bottoms, glyphCount: glyphs, origins: origins, fragments: fragments, flowLineHeight: lineHeight)
     }
 }

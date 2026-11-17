@@ -1,0 +1,35 @@
+component App
+  view
+    column width="100%" height="100%"
+      table testId="moves"
+        caption
+          text "Moves"
+        tfoot
+          tr testId="r-foot1"
+            td colspan=2 testId="foot1"
+              text "Foot 1"
+        thead
+          tr testId="r-head"
+            th testId="h-move"
+              text "Move"
+            th testId="h-power"
+              text "Power"
+        tbody
+          tr testId="r-tackle"
+            th scope="row" testId="tackle"
+              text "Tackle"
+            td testId="forty"
+              text "40"
+          tr testId="r-ember"
+            th scope="row" rowspan=2 testId="ember"
+              text "Ember"
+            td testId="fifty"
+              text "50"
+          tr testId="r-sixty"
+            td testId="sixty"
+              text "60"
+        tfoot
+          tr testId="r-foot2"
+            td colspan=2 testId="foot2"
+              text "Foot 2"
+      table testId="empty"

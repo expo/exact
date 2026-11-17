@@ -58,7 +58,7 @@ extension Presenter {
             var found = Bands(), own = UIEdgeInsets.zero
             if let sv = v.scrollView, (sv as? ScrollView)?.scrollsY ?? true, v.window != nil {
                 let edgeEffect = v.style["scroll_edge_effect"]?.string != "none"
-                if let route = ViewPresentation.controllers(for: v).lazy.compactMap({ $0 as? RouteController }).first(where: { $0.host === navigation && v.isDescendant(of: $0.node) }) {
+                if let route = ViewPresentation.controllers(for: v, layout: true).lazy.compactMap({ $0 as? RouteController }).first(where: { $0.host === navigation && v.isDescendant(of: $0.node) }) {
                     if let judge, edgeEffect { found = routeBands(of: v, sv, in: route, judge) }
                     #if os(iOS)
                     if route.edgeScroll === v, let top = keyboardTop,
@@ -69,7 +69,7 @@ extension Presenter {
                     own = found.band
                     // UIKit clips the inherited safe area at the node's layout box,
                     // even though its scroll view draws the band outside that box.
-                    if !route.ridingBars.isEmpty { own.top += min(found.band.top, route.view.safeAreaInsets.top) }
+                    if !route.ridingBars.isEmpty { own.top += min(found.band.top, route.surface.safeAreaInsets.top) }
                     var r = routes[ObjectIdentifier(route)] ?? (nil, nil)
                     // The bar follows the route's scroller drawn under it, as UIKit's follows a list that is the controller's
                     // own: the automatic one, which an app's selection overrides until it gives the edge back with nil.

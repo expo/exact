@@ -757,6 +757,36 @@ final class TextSelectionIOSTests: XCTestCase {
         XCTAssertEqual(heard, ["1:down", "2:move", "1:up"], "a move-only paragraph still owns the observer")
     }
 
+    /// A held touch that ended without its end reaching the shared input's
+    /// observer (a menu took it) is lifted before the next touch, which then
+    /// resolves its own paragraph: the second paragraph hears it, not the first.
+    func testATouchAfterAnUnseenEndResolvesItsOwnParagraph() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]),
+            text(2, "First paragraph", handlers: ["pointerdown", "pointerup"]),
+            text(3, "Second paragraph", handlers: ["pointerdown", "pointerup"]),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 180, w: 400), frame(2, 30, x: 20), frame(3, 80, x: 20)
+        ])
+        let first = try node(p, 2), second = try node(p, 3), event = TextTouchEvent()
+        let hit = try XCTUnwrap(first.hitTest(CGPoint(x: 30, y: 10), with: event))
+        let observers = sequence(first: hit, next: { $0.superview }).flatMap { view in
+            (view.gestureRecognizers ?? []).compactMap { $0 as? PointerRecognizer }
+        }
+        var heard: [String] = []
+        p.onPointer = { id, kind, _ in heard.append("\(id):\(kind)") }
+        let opened = EndingTouch(hit)
+        opened.point = first.convert(CGPoint(x: 30, y: 10), to: hit)
+        observers.forEach { $0.touchesBegan([opened], with: event) }
+        XCTAssertEqual(heard, ["2:down"])
+        opened.lifted = true
+        let next = EndingTouch(hit)
+        next.point = second.convert(CGPoint(x: 30, y: 10), to: hit)
+        observers.forEach { $0.touchesBegan([next], with: event) }
+        observers.forEach { $0.touchesEnded([next], with: event) }
+        XCTAssertEqual(heard, ["2:down", "2:up", "3:down", "3:up"])
+    }
+
     func testTheSharedInputTakesTextTouchesAndForwardsAPress() throws {
         let p = mounted([
             box(1, style: ["user_select": "text"]),
@@ -794,5 +824,16 @@ final class TextSelectionIOSTests: XCTestCase {
         }
     }
 
+}
+/// A touch on `hit` whose phase a test ends: UIKit's end of it never reached the observers.
+private final class EndingTouch: UITouch {
+    let hit: UIView
+    var point: CGPoint?
+    var lifted = false
+    init(_ hit: UIView) { self.hit = hit; super.init() }
+    override var view: UIView? { hit }
+    override var window: UIWindow? { hit.window }
+    override var phase: UITouch.Phase { lifted ? .ended : .began }
+    override func location(in view: UIView?) -> CGPoint { hit.convert(point ?? CGPoint(x: hit.bounds.midX, y: hit.bounds.midY), to: view) }
 }
 #endif

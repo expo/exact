@@ -75,7 +75,7 @@ fn timing_200k() {
             if index % 2 == 0 {
                 // Simulation work is deliberately outside the upload timer.
                 let rotation = Quat::from_rotation_y(index as f32 / 120.0);
-                for transform in transforms.chunks_exact_mut(10) {
+                for transform in transforms.as_chunks_mut::<10>().0 {
                     transform[3..7].copy_from_slice(&rotation.to_array());
                 }
             }

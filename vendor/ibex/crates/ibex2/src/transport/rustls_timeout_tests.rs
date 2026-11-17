@@ -167,3 +167,79 @@ fn a_pooled_event_stream_restores_deadlines_before_the_next_headers() {
     assert!(Arc::ptr_eq(&context, &idle[0].context));
     peer.join().unwrap();
 }
+
+#[test]
+fn bulk_transfers_bound_each_wait_and_restore_ordinary_timeouts_on_reuse() {
+    for explicit in [None, Some(Duration::from_secs(5))] {
+        let (url, peer) = server(|mut socket| {
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+        });
+        let (transport, context) = transport_with_context();
+        let mut request = Request::get(&url);
+        request.idle_timeout = Some(Duration::from_secs(60));
+        request.timeout = explicit;
+        let response = transport.open(&request, &AbortSignal::default()).unwrap();
+        assert_eq!(
+            context.lock().unwrap().idle_timeout,
+            explicit.is_none().then_some(Duration::from_secs(60))
+        );
+        let mut observed = Observed {
+            inner: Probe {
+                buffers: LazyBuffers::new(1024, 1024),
+                timeout: None,
+            },
+            context: context.clone(),
+            response: true,
+        };
+        for after in [WireDuration::NotHappening, WireDuration::from_secs(5)] {
+            let timeout = NextTimeout {
+                after,
+                reason: ureq::Timeout::RecvBody,
+            };
+            let expected = if explicit.is_none() {
+                after.min(WireDuration::from_secs(60))
+            } else {
+                after
+            };
+            observed.await_input(timeout).unwrap();
+            assert_eq!(observed.inner.timeout.unwrap().after, expected);
+            observed.transmit_output(0, timeout).unwrap();
+            assert_eq!(observed.inner.timeout.unwrap().after, expected);
+        }
+        drop(response);
+        let _lease = transport.lease(&AbortSignal::default(), false, true);
+        assert!(context.lock().unwrap().idle_timeout.is_none());
+        assert_deadlines(&context, false);
+        peer.join().unwrap();
+    }
+}
+
+#[test]
+fn an_idle_timeout_bounds_a_held_dns_lookup_without_an_abort() {
+    use super::super::lookup::gate::{Gate, Opens};
+    let (done, result) = std::sync::mpsc::channel();
+    let (held, gate) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        held.send(Gate::hold_here()).unwrap();
+        let mut transport = RustlsHttpTransport::new();
+        transport.proxy = None;
+        let mut request = Request::get("http://resolving.invalid/");
+        request.idle_timeout = Some(Duration::from_millis(20));
+        let _ = done.send(
+            transport
+                .open(&request, &AbortSignal::default())
+                .map(|_| ()),
+        );
+    });
+    let gate = Opens(gate.recv().unwrap());
+    let answer = result.recv_timeout(Duration::from_secs(2));
+    drop(gate);
+    worker.join().unwrap();
+    let error = answer
+        .expect("DNS must time out without cancellation")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("timeout"), "{error}");
+}

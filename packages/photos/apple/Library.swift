@@ -180,36 +180,101 @@ final class PhotoKitLibrary: NSObject, PHPhotoLibraryChangeObserver {
         whenReadable(origin: origin, reply) { [self] in
             observe()
             let limit = min(500, max(1, (args["limit"] as? NSNumber)?.intValue ?? 60))
+            let after: PageCursor.Key?
+            do { after = try PageCursor.key("photokit", args["cursor"]) } catch { return reply(PageCursor.refused) }
             let options = PHFetchOptions()
             let sort = [NSSortDescriptor(key: "creationDate", ascending: false)]
             let images = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
             options.sortDescriptors = sort
-            options.fetchLimit = limit
+            options.fetchLimit = limit + 1
             options.predicate = images
+            var predicates = [images]
             // The app adds predicates (D9); the module keeps its own.
             if let hatch = PhotosModule.fetchOptions {
                 hatch(options)
-                if options.sortDescriptors != sort { say("the fetchOptions hatch changed sortDescriptors, which the module owns (LLP 1133.019 D9)"); options.sortDescriptors = sort }
-                if options.fetchLimit != limit { say("the fetchOptions hatch changed fetchLimit, which the module owns (LLP 1133.019 D9)"); options.fetchLimit = limit }
-                if let theirs = options.predicate, theirs != images {
-                    options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [images, theirs])
-                }
+                if options.sortDescriptors != sort { say("the fetchOptions hatch changed sortDescriptors, which the module owns (LLP 1133.019 D9)") }
+                if options.fetchLimit != limit + 1 { say("the fetchOptions hatch changed fetchLimit, which the module owns (LLP 1133.019 D9)") }
+                if let theirs = options.predicate, theirs != images { predicates.append(theirs) }
             }
             DispatchQueue.global(qos: .userInitiated).async {
-                var out: [[String: Any]] = []
-                PHAsset.fetchAssets(with: options).enumerateObjects { a, _, _ in
+                let (page, more) = Self.page(limit, after: after, options: options, predicates: predicates)
+                let out = page.map { a -> [String: Any] in
                     let adjusted = PHAssetResource.assetResources(for: a).contains { $0.type == .adjustmentData }
-                    out.append([
+                    return [
                         "id": a.localIdentifier, "mediaType": "image", "width": a.pixelWidth, "height": a.pixelHeight,
                         "creationDate": a.creationDate.map { $0.timeIntervalSince1970 * 1000 } ?? NSNull(),
                         "favorite": a.isFavorite, "picture": "photos:\(a.localIdentifier)",
                         "apple": ["mediaSubtypes": Self.subtypes.filter { a.mediaSubtypes.contains($0.0) }.map(\.1),
                                   "burstIdentifier": a.burstIdentifier as Any? ?? NSNull(), "hasAdjustments": adjusted],
                         "android": NSNull(),
-                    ])
+                    ]
                 }
-                DispatchQueue.main.async { reply(["assets": out]) }
+                let cursor = more ? page.last.map {
+                    PageCursor.text("photokit", .init(date: $0.creationDate?.timeIntervalSinceReferenceDate, id: $0.localIdentifier))
+                } : nil
+                DispatchQueue.main.async { reply(["assets": out, "cursor": cursor ?? NSNull()]) }
             }
+        }
+    }
+
+    /// The page after `after` in the list's order: newest first, the
+    /// `localIdentifier` ordering photos of one date (descending), and the
+    /// photos with no date last. PhotoKit sorts by `creationDate` but not by
+    /// `localIdentifier`, so the module orders each date itself: where a page
+    /// would end inside a run of photos sharing a date, that run is fetched
+    /// whole and the page takes its first ids. Every fetch is the module's
+    /// predicates and the app's, `options` carrying the rest of the hatch's.
+    private static func page(_ limit: Int, after: PageCursor.Key?, options: PHFetchOptions, predicates: [NSPredicate]) -> ([PHAsset], Bool) {
+        /// Newest first, at most `first` (0: every one).
+        func fetch(_ more: NSPredicate, first: Int) -> [PHAsset] {
+            let o = options.copy() as! PHFetchOptions
+            o.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates + [more])
+            o.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+            o.fetchLimit = first
+            let found = PHAsset.fetchAssets(with: o)
+            return found.objects(at: IndexSet(integersIn: 0..<found.count))
+        }
+        /// The photos of one date (nil: no date), ids descending; only those
+        /// below `id` when it is given.
+        func run(_ date: Date?, below id: String?) -> [PHAsset] {
+            var same = date.map { NSPredicate(format: "creationDate == %@", $0 as NSDate) } ?? NSPredicate(format: "creationDate == nil")
+            if let id { same = NSCompoundPredicate(andPredicateWithSubpredicates: [same, NSPredicate(format: "localIdentifier < %@", id)]) }
+            return fetch(same, first: 0).sorted { $0.localIdentifier > $1.localIdentifier }
+        }
+        let afterDate = after?.date.map { Date(timeIntervalSinceReferenceDate: $0) }
+        var page: [PHAsset] = []
+        var more = false
+        if after == nil || afterDate != nil {
+            var dated = NSPredicate(format: "creationDate != nil")
+            if let after, let afterDate {
+                dated = NSPredicate(format: "creationDate < %@ OR (creationDate == %@ AND localIdentifier < %@)", afterDate as NSDate, afterDate as NSDate, after.id)
+            }
+            // One photo past the page says whether an older page follows.
+            let found = fetch(dated, first: limit + 1)
+            if found.count > limit, found[limit - 1].creationDate == found[limit].creationDate {
+                let date = found[limit - 1].creationDate
+                let newer = found.prefix { $0.creationDate != date }
+                page = order(newer) + run(date, below: afterDate == date ? after?.id : nil).prefix(limit - newer.count)
+                more = true
+            } else {
+                page = order(found.prefix(limit))
+                more = found.count > limit
+            }
+        }
+        if !more {
+            let undated = run(nil, below: afterDate == nil ? after?.id : nil)
+            let room = limit - page.count
+            page += undated.prefix(room)
+            more = undated.count > room
+        }
+        return (page, more)
+    }
+
+    /// Dated photos newest first, the id ordering one date.
+    private static func order(_ assets: some Sequence<PHAsset>) -> [PHAsset] {
+        assets.sorted { a, b in
+            let (x, y) = (a.creationDate ?? .distantPast, b.creationDate ?? .distantPast)
+            return x != y ? x > y : a.localIdentifier > b.localIdentifier
         }
     }
 

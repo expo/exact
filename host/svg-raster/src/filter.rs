@@ -43,7 +43,7 @@ impl Img {
         }
         let mut out = self.clone();
         out.linear = linear;
-        for p in out.px.chunks_exact_mut(4) {
+        for p in out.px.as_chunks_mut::<4>().0 {
             let a = p[3];
             if a <= 0.0 {
                 continue;
@@ -141,7 +141,12 @@ fn input(i: Input, source: &Img, results: &[(Img, Rect)], linear: bool) -> Img {
         Input::SourceGraphic => source.to_space(linear),
         Input::SourceAlpha => {
             let mut a = Img::clear(source.w, source.h, linear);
-            for (d, s) in a.px.chunks_exact_mut(4).zip(source.px.chunks_exact(4)) {
+            for (d, s) in
+                a.px.as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(source.px.as_chunks::<4>().0)
+            {
                 d[3] = s[3];
             }
             a
@@ -187,7 +192,7 @@ fn primitive(p: &Primitive, source: &Img, results: &[(Img, Rect)], rect: Rect, s
         Op::DropShadow(sx, sy, dx, dy, color) => {
             let src = a();
             let mut alpha = src.clone();
-            for px in alpha.px.chunks_exact_mut(4) {
+            for px in alpha.px.as_chunks_mut::<4>().0 {
                 px[..3].fill(0.0);
             }
             let blurred = blur(alpha, sx * s.scale.0, sy * s.scale.1);
@@ -379,9 +384,11 @@ pub(crate) fn composite(a: &Img, b: &Img, op: CompositeOp, k: [f32; 4]) -> Img {
     let mut out = Img::clear(a.w, a.h, a.linear);
     for ((o, s), d) in out
         .px
-        .chunks_exact_mut(4)
-        .zip(a.px.chunks_exact(4))
-        .zip(b.px.chunks_exact(4))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(a.px.as_chunks::<4>().0)
+        .zip(b.px.as_chunks::<4>().0)
     {
         let (sa, da) = (s[3], d[3]);
         for c in 0..4 {
@@ -409,7 +416,7 @@ pub(crate) fn composite(a: &Img, b: &Img, op: CompositeOp, k: [f32; 4]) -> Img {
 /// `f` over each pixel's unpremultiplied colour; the result clamped and
 /// premultiplied again.
 fn unpremultiplied(mut img: Img, f: impl Fn([f32; 4]) -> [f32; 4]) -> Img {
-    for p in img.px.chunks_exact_mut(4) {
+    for p in img.px.as_chunks_mut::<4>().0 {
         let a = p[3];
         let c = if a > 0.0 {
             [p[0] / a, p[1] / a, p[2] / a, a]
@@ -623,7 +630,7 @@ mod tests {
     fn blur_spreads_and_offset_moves() {
         let mut px = square();
         run(&one(Op::Blur(2.0, 2.0), false), &mut px, 20, 20, SPACE);
-        let alpha: u32 = px.chunks_exact(4).map(|p| p[3] as u32).sum();
+        let alpha: u32 = px.as_chunks::<4>().0.iter().map(|p| p[3] as u32).sum();
         assert!(
             (alpha as f32 / (100.0 * 255.0) - 1.0).abs() < 0.02,
             "{alpha}"

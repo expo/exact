@@ -78,6 +78,7 @@ fn run(
     executor
         .run(
             RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "upload".into(),
@@ -168,9 +169,52 @@ fn a_body_from_fetch_refuses_is_a_type_error_before_any_request() {
     assert_eq!(m.in_flight(), 0);
 }
 
+/// A file over the 64 MiB the body was once read whole within is streamed
+/// from disk, its length the `Content-Length`, and arrives byte for byte
+/// (LLP 1133.008.000 D4).
+#[cfg(unix)]
+#[test]
+fn a_body_from_a_file_over_64_mib_is_streamed_whole() {
+    let root = Root::new();
+    let mut m = root.module();
+    m.activate().unwrap();
+    let mut s = Store::new(super::storage::GRANTS, Vec::<(String, Vec<u8>)>::new());
+    // Sparse but for marks at the start, across each chunk edge near the old
+    // bound, and at the end, so a skipped, repeated or short chunk shows.
+    let len: u64 = (64 << 20) + 3;
+    let big = std::fs::File::create(root.0.join("data/big.mov")).unwrap();
+    big.set_len(len).unwrap();
+    for at in [0, (64 << 20) - 2, len - 7] {
+        std::os::unix::fs::FileExt::write_all_at(&big, &photo()[..5], at).unwrap();
+    }
+    drop(big);
+    let expected = std::fs::read(root.0.join("data/big.mov")).unwrap();
+    let a = args("upload", "app:/data/big.mov");
+    let Answer::Later(request) = m.answer(&mut s, "work", &a).unwrap() else {
+        panic!("the upload is a request")
+    };
+    let server = Server::start();
+    let outcome = run(&executor(&server, Some(&root)), &server, request);
+    let (head, body) = server
+        .received
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    assert!(
+        head.to_ascii_lowercase()
+            .contains(&format!("content-length: {len}\r\n")),
+        "{head}"
+    );
+    assert_eq!(body.len() as u64, len);
+    assert!(body == expected, "the body differs from the file");
+    let Answer::Now(value) = m.parse(&mut s, "work", &a, outcome).unwrap() else {
+        panic!("the reply answers")
+    };
+    assert_eq!(text(value), "200 received");
+}
+
 /// What the host refuses when it runs the request, before anything is sent:
-/// a path outside the `fs.read` grant, a missing file, one over 64 MiB, and
-/// a host with no app files. Each rejects the fetch, naming why.
+/// a path outside the `fs.read` grant, a missing file, and a host with no
+/// app files. Each rejects the fetch, naming why.
 #[test]
 fn the_host_refuses_a_file_it_may_not_or_cannot_send_before_sending() {
     let root = Root::new();
@@ -179,10 +223,6 @@ fn the_host_refuses_a_file_it_may_not_or_cannot_send_before_sending() {
     let mut s = Store::new(super::storage::GRANTS, Vec::<(String, Vec<u8>)>::new());
     std::fs::create_dir_all(root.0.join("tmp")).unwrap();
     std::fs::write(root.0.join("tmp/secret.jpg"), b"secret").unwrap();
-    // A sparse file one byte over the bound: nothing is read to refuse it.
-    let big = std::fs::File::create(root.0.join("data/big.mov")).unwrap();
-    big.set_len((64 << 20) + 1).unwrap();
-    drop(big);
     std::fs::write(root.0.join("data/photo.jpg"), b"photo").unwrap();
     let server = Server::start();
     for (path, roots, kind, says) in [
@@ -197,12 +237,6 @@ fn the_host_refuses_a_file_it_may_not_or_cannot_send_before_sending() {
             true,
             FailureKind::Refused,
             "No such file",
-        ),
-        (
-            "app:/data/big.mov",
-            true,
-            FailureKind::Refused,
-            "too-large: 67108865 bytes is over 67108864",
         ),
         (
             "app:/data/photo.jpg",

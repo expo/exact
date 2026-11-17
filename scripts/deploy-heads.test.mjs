@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { keepRecord, latestRecord, nextSeq } from './deploy-heads.mjs';
-import { canonicalBytes, streamHead } from './deploy.mjs';
+import { canonicalBytes } from './deploy.mjs';
+import { streamHead } from './publisher.mjs';
 import { sha256 } from './origin.mjs';
 
 const cache = mkdtempSync(join(tmpdir(), 'exact-release-seqs-'));

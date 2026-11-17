@@ -147,27 +147,60 @@ final class BarTouch: UIGestureRecognizer, UIGestureRecognizerDelegate {
 /// menu shows, and the invoker, not this transparent overlay, the shape the
 /// menu grows out of and shrinks back into. UIKit hides the view it previews
 /// while the menu shows, so the invoker's own glass is not drawn under the
-/// menu's, as a stock button's is not.
+/// menu's, as a stock button's is not. What UIKit draws in its place is a
+/// live copy that leaves out the invoker's own layer fill, so while the menu
+/// has it that fill is a sublayer, which the copy draws (`lendFill`).
 final class MenuButton: InvokerButton {
     weak var focus: MenuFocus?
     weak var popover: NodeView?
     var toggled: ((Bool) -> Void)?
     private(set) var isMenuOpen = false
     private var menuConfiguration: UIContextMenuConfiguration?
+    /// The invoker whose fill this menu lent (`NodeExtras.lentFill`).
+    private weak var lentFrom: NodeView?
     func dismissMenu() {
         guard isMenuOpen else { return }
         isMenuOpen = false
         toggled?(false)
         contextMenuInteraction?.dismissMenu()
     }
+    /// The invoker's own layer fill (not a glass material's) lent to a
+    /// sublayer of its shape, under its children, until `returnFill`. The
+    /// box paints it there meanwhile (`applyBoxLayer`), so a style change or
+    /// a new size while the menu shows reaches the stand-in.
+    private func lendFill() {
+        guard lentFrom == nil, let node = invoker, node.glassBody == nil, node.extras?.lentFill == nil,
+              let fill = node.layer.backgroundColor, fill.alpha > 0 else { return }
+        let lent = CAShapeLayer()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        node.layer.insertSublayer(lent, at: 0)
+        node.more.lentFill = lent
+        node.applyBoxLayer()
+        CATransaction.commit()
+        lentFrom = node
+    }
+    /// The fill back on the invoker's layer as the box paints it now: a
+    /// background the page changed or cleared meanwhile stays as it is.
+    private func returnFill() {
+        guard let node = lentFrom else { return }
+        lentFrom = nil
+        guard let lent = node.extras?.lentFill else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        node.more.lentFill = nil
+        lent.removeFromSuperlayer()
+        node.applyBoxLayer()
+        CATransaction.commit()
+    }
     // An invoker hidden or out of the window (unmounted while its menu
     // showed) has no preview: UIKit's default, nil outside a window.
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForHighlightingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        if let preview = invoker.flatMap(LiftTarget.preview(of:)) { return preview }
+        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0, pullDown: true) }) { lendFill(); return preview }
         return window == nil ? nil : super.contextMenuInteraction(interaction, previewForHighlightingMenuWithConfiguration: configuration)
     }
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        if let preview = invoker.flatMap(LiftTarget.preview(of:)) { return preview }
+        if let preview = invoker.flatMap({ LiftTarget.preview(of: $0, pullDown: true) }) { return preview }
         return window == nil ? nil : super.contextMenuInteraction(interaction, previewForDismissingMenuWithConfiguration: configuration)
     }
     override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionAnimating?) {
@@ -185,6 +218,7 @@ final class MenuButton: InvokerButton {
         let ended: () -> Void = { [weak self] in
             guard let self, self.menuConfiguration === configuration else { return }
             self.menuConfiguration = nil
+            self.returnFill()
             self.focus?.restore()
         }
         guard let animator else { ended(); return }

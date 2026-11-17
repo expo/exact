@@ -7,39 +7,192 @@ use contract_syntax::{Component, Expr};
 
 pub(crate) mod sequences;
 
-/// `type-child-resource`'s message for `child`, which declares a resource,
-/// a mutation or a task, under the root `root`. A child's task is most often
+/// `type-child-resource`'s message for `child`, which declares a task or a
+/// resource over a list, under the root `root`. A child's task is most often
 /// a timer the child starts and stops (the euxy port's press-and-hold
 /// capsule) or "when this sheet or route opens" (its icon picker): the
 /// root's gated task does each, so the message shows both.
 pub(crate) fn child_owns(root: &str, child: &Component) -> String {
     let name = &child.name;
-    let resource = child
-        .resources
-        .iter()
-        .find(|r| !contract_syntax::inline::reads_device(r));
-    if resource.is_none() && child.mutations.is_empty() {
+    if let Some(r) = child.resources.iter().find(|r| r.each.is_some()) {
+        let prefix = lower_first(name);
+        let example = format!("{prefix}{}", upper_first(&r.name));
         return format!(
-            "only the root, the root file's first component (`{root}`), may declare a `task`: a timer is the app's; `{name}` is a child, which may own state, derives, and actions. Move the task into `{root}` with the state that gates it, and pass `{name}` that state and the actions that set it as props. A press-and-hold: in `{root}`, `state holding = false`, `task charging when holding` with `every(16, step)` under it, and `action hold(on: bool)` that sets `holding = on`; then `{name}(charge=charge, down=hold(true), up=hold(false))`, whose `props` declare `down: action` and `up: action` and whose view binds `pointerdown=down pointerup=up` (docs/recipes/timer-in-a-component.md). To act when a sheet or route opens, gate the task on what shows `{name}` and key it on what opens it again: `task reveal when top(nav).name == \"icons\" key=top(nav).id` with `change(reveal)` under it. Or, if `{name}` is the app, move it above `{root}`"
+            "only the root, the root file's first component (`{root}`), may declare a resource over a list: `resource {} = {}(…) for …` asks once for each element, a count of requests its list sets. Declare it in `{root}` (`resource {example} = {}(…) for …`) and pass `{name}` its answers as a prop; or, where each element is a row, give the row a component of its own that renders one answer",
+            r.name, r.source, r.source
         );
     }
-    // The example is the child's first request named with the child's
-    // prefix: `Canvas`'s `feed` is `canvasFeed`.
-    let prefix = lower_first(name);
-    let first = resource
-        .map(|r| &r.name)
-        .or(child.mutations.first().map(|m| &m.name))
-        .map_or(String::new(), |n| upper_first(n));
-    let example = format!("{prefix}{first}");
-    let gate = resource.map_or(String::new(), |r| {
-        format!(
-            " Gate a resource that only one tab or screen reads on that tab or screen showing, and it asks nothing while hidden: `resource {example} = {}(…) when nav.tab == \"…\"`.",
-            r.source
-        )
-    });
     format!(
-        "only the root, the root file's first component (`{root}`), may declare a `resource`, `mutation`, or `task`; `{name}` is a child, which may own state, derives, and actions. Declare `{name}`'s resources, mutations and tasks in `{root}`, named with the feature's prefix (`{example}`); a `members {root}` block in a file of their own, which `{root}` lists with `members \"./{prefix}.contract\"`, keeps them together. Pass `{name}` their values and the actions that send them as props (docs/contract-for-agents.md, \"A feature's requests\").{gate} Or, if `{name}` is the app, move it above `{root}`"
+        "only the root, the root file's first component (`{root}`), may declare a `task`: a timer is the app's; `{name}` is a child, which may own state, derives, resources, mutations, and actions. Move the task into `{root}` with the state that gates it, and pass `{name}` that state and the actions that set it as props. A press-and-hold: in `{root}`, `state holding = false`, `task charging when holding` with `every(16, step)` under it, and `action hold(on: bool)` that sets `holding = on`; then `{name}(charge=charge, down=hold(true), up=hold(false))`, whose `props` declare `down: action` and `up: action` and whose view binds `pointerdown=down pointerup=up` (docs/recipes/timer-in-a-component.md). To act when a sheet or route opens, gate the task on what shows `{name}` and key it on what opens it again: `task reveal when top(nav).name == \"icons\" key=top(nav).id` with `change(reveal)` under it. Or, if `{name}` is the app, move it above `{root}`"
     )
+}
+
+/// A child's state initializer that reads the child's own resource, itself
+/// or through a derive (LLP 1035.005.004 D2): an initializer runs once, when
+/// the instance is made, before its requests are asked.
+pub(crate) fn reads_own_request(child: &Component) -> Option<TypeError> {
+    let requests: Vec<&str> = child
+        .resources
+        .iter()
+        .filter(|r| !contract_syntax::inline::reads_device(r))
+        .map(|r| r.name.as_str())
+        .collect();
+    if requests.is_empty() {
+        return None;
+    }
+    // Every name that reads a request: the requests, and the derives that
+    // read one, to a fixed point.
+    let mut reading: Vec<&str> = requests.clone();
+    loop {
+        let more: Vec<&str> = child
+            .derives
+            .iter()
+            .filter(|d| !reading.contains(&d.name.as_str()))
+            .filter(|d| reading.iter().any(|n| reads_free(&d.expr, n)))
+            .map(|d| d.name.as_str())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        reading.extend(more);
+    }
+    child.states.iter().find_map(|st| {
+        let name = reading.iter().find(|n| reads_free(&st.expr, n))?;
+        let request = requests
+            .iter()
+            .find(|r| *r == name)
+            .map_or_else(|| format!("`{name}`, which reads a resource"), |r| format!("its resource `{r}`"));
+        Some(TypeError {
+            id: "type-state-reads-request",
+            message: format!(
+                "`state {}` in `{}` reads {request}: a state's initializer runs once, when the instance is made, before its resources are asked, so it would see only the placeholder. Read it in a `derive` or in the view, or set the state from an action that runs once the answer is there",
+                st.name, child.name
+            ),
+            span: st.span,
+        })
+    })
+}
+
+/// The refusal of a use of a component that declares a request under a
+/// repetition its data sizes (LLP 1035.005.004 D1): each row would ask on its
+/// own, with nothing at the use saying so. The root's resource over a list
+/// asks for every element in one line its author wrote.
+pub(crate) fn repeated_owner(
+    file: &contract_syntax::File,
+    u: &contract_syntax::OwnedUse,
+    repeat: contract_syntax::Repeat,
+) -> TypeError {
+    let root = file.components.first().map_or("", |c| c.name.as_str());
+    let name = &u.component;
+    let first = file
+        .components
+        .iter()
+        .find(|c| &c.name == name)
+        .and_then(|c| {
+            c.resources
+                .iter()
+                .find(|r| !contract_syntax::inline::reads_device(r))
+        });
+    let around = match repeat {
+        contract_syntax::Repeat::Each(at) => {
+            format!("a `for` over data (line {})", at.line)
+        }
+        contract_syntax::Repeat::List(at) => format!(
+            "a virtualized list (line {}), whose rows its window makes and retires as it scrolls",
+            at.line
+        ),
+    };
+    let Some((r, source)) = first.map(|r| (r.name.as_str(), r.source.as_str())) else {
+        // It owns only mutations (D6): each row would send and run its
+        // `then` on its own.
+        let m = (file.components.iter().find(|c| &c.name == name))
+            .and_then(|c| c.mutations.first())
+            .map_or("sent", |m| m.name.as_str());
+        let example = format!("{}{}", lower_first(name), upper_first(m));
+        return TypeError {
+            id: "type-child-resource",
+            message: format!(
+                "`{name}` declares `mutation {m}`, and this use is under {around}: each row would send `{m}` and run its `then` on its own. A component that owns requests is used where its instances are tabs, screens or `if` arms. Declare the mutation in `{root}` (`mutation {example} as shape …`) and pass each row an action that sends it (docs/contract-for-agents.md, \"A feature's requests\")"
+            ),
+            span: u.span,
+        };
+    };
+    let example = format!("{}{}", lower_first(name), upper_first(r));
+    TypeError {
+        id: "type-child-resource",
+        message: format!(
+            "`{name}` declares `resource {r}`, and this use is under {around}: each row would ask `{source}` on its own, with nothing here saying how many. A component that owns requests is used where its instances are tabs, screens or `if` arms. For one request per row, declare it in `{root}` over the list, `resource {example} = {source}(x) for x in … key=…`, and pass each row its answer as a prop (docs/contract-for-agents.md, \"A feature's requests\")"
+        ),
+        span: u.span,
+    }
+}
+
+/// A package's component that owns a request to a source its own package's
+/// module does not declare (LLP 1035.005.004 D7): the app grants what a
+/// package's module declares, so a package asks and sends only through its
+/// own.
+pub(crate) fn foreign_source(file: &contract_syntax::File, child: &Component) -> Option<TypeError> {
+    let package = child.params.package.as_deref()?;
+    let declared = |source: &str| {
+        file.modules.iter().any(|m| {
+            m.kind == contract_syntax::ModuleKind::Source
+                && m.package == package
+                && (m.name == source || m.declared == source)
+        })
+    };
+    let name = &child.name;
+    let foreign = |what: String, source: &str, span| {
+        TypeError {
+        id: "type-package-source",
+        message: format!(
+            "`{name}` comes from the package `{package}`, and its {what} asks `{source}`, which `{package}`'s module does not declare: a package's component owns requests only to its own package's sources, which the app grants. Declare `{source}` in `{package}`'s `exact.json`, or make the request in the app and pass `{name}` its answer as a prop"
+        ),
+        span,
+    }
+    };
+    if let Some(r) = child
+        .resources
+        .iter()
+        .find(|r| !contract_syntax::inline::reads_device(r) && !declared(&r.source))
+    {
+        return Some(foreign(format!("`resource {}`", r.name), &r.source, r.span));
+    }
+    child.actions.iter().find_map(|a| {
+        let (target, source, span) = first_send(&a.body, &|source| !declared(source))?;
+        Some(foreign(format!("`send {target}`"), source, span))
+    })
+}
+
+/// The first `send` in `stmts`, through `if` and `match`, whose source
+/// `pick` takes: its mutation, source and span.
+fn first_send<'a>(
+    stmts: &'a [contract_syntax::Stmt],
+    pick: &dyn Fn(&str) -> bool,
+) -> Option<(&'a str, &'a str, contract_syntax::Span)> {
+    use contract_syntax::Stmt;
+    stmts.iter().find_map(|st| match st {
+        Stmt::Send {
+            target,
+            source,
+            span,
+            ..
+        } if pick(source) => Some((target.as_str(), source.as_str(), *span)),
+        Stmt::If {
+            then, otherwise, ..
+        } => first_send(then, pick).or_else(|| first_send(otherwise, pick)),
+        Stmt::Match { some, none, .. } => {
+            first_send(&some.1, pick).or_else(|| first_send(none, pick))
+        }
+        Stmt::Call { body, .. } => first_send(body, pick),
+        _ => None,
+    })
+}
+
+/// Whether `e` reads `name` free.
+fn reads_free(e: &Expr, name: &str) -> bool {
+    matches!(e, Expr::Ident(n, _) if n == name)
+        || e.scoped_operands()
+            .any(|(child, binds)| !binds.contains(name) && reads_free(child, name))
 }
 
 /// `s` with its first letter lowercased: a feature's prefix.

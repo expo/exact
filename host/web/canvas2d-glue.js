@@ -332,7 +332,7 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
       if (op.capture) {
         const c = op.capture;
         this.capture(c.id, c.lifetime, c.generation, c.w, c.h, c.sequence,
-          () => exact.wasm.exact_canvas_snapshotted(c.ticket)).then(op.resolve, op.reject);
+          () => exact.wasm.exact_canvas_snapshotted(c.ticket), c.type, c.quality).then(op.resolve, op.reject);
         return;
       }
       if (op.forget) { forget(op.id); return; }
@@ -358,9 +358,11 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
     },
     /** Read layout after a commit, before capturing a canvas whose box may have changed. */
     geometry(id) { const el = watched.get(id); if (el) firstGeometry(id, el, true); },
-    /** A capture (LLP 1056 D9, as amended for #188): the element's own
-     *  bitmap as the browser encodes it, a straight-alpha sRGB PNG. */
-    capture(id, lifetime, generation, w, h, sequence, snapshotted = () => true) {
+    /** A capture (LLP 1056 D9, as amended for #188 and #504): the element's
+     *  own bitmap as the browser's `toBlob` encodes it, as `type` at `quality`
+     *  or, for a type it does not write, a straight-alpha sRGB PNG; the
+     *  blob's `type` names which. */
+    capture(id, lifetime, generation, w, h, sequence, snapshotted = () => true, type = "image/png", quality = null) {
       return new Promise((resolve, reject) => {
         const r = canvases.get(id);
         if (!r || !sequence || !(r.sequence >= sequence) || r.lifetime !== lifetime || r.generation !== generation || r.el.width !== w || r.el.height !== h)
@@ -369,7 +371,7 @@ globalThis.exact.canvas2dGlue = function canvas2dGlue(o) {
         const copy = document.createElement("canvas"); copy.width = w; copy.height = h;
         copy.getContext("2d", { colorSpace: "srgb" }).drawImage(r.el, 0, 0);
         if (!snapshotted()) throw new Error("the capture's drawing boundary is no longer available");
-        copy.toBlob(b => (b ? resolve(b) : reject(new Error("the browser did not encode the bitmap"))), "image/png");
+        copy.toBlob(b => (b ? resolve(b) : reject(new Error("the browser did not encode the bitmap"))), type, quality ?? undefined);
       });
     },
     /** Resolves once every watched canvas has reported its first geometry. */

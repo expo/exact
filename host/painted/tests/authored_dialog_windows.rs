@@ -370,7 +370,10 @@ fn authored_popovers_anchor_dismiss_and_replace() {
         p.rect_of(root),
         Some((anchor.0, anchor.1 + anchor.3 + 4., 160., 90.))
     );
-    assert!(p.host().kernel().host_block_implied(root));
+    assert!(matches!(
+        p.host().kernel().host_block(root).unwrap().width,
+        exact_kernel::BlockAxis::Region(_)
+    ));
     let s = p
         .host()
         .kernel()
@@ -688,3 +691,6 @@ fn only_menu_popovers_use_the_menu_flyout() {
         }
     }
 }
+
+#[path = "position_area_region/presenter.rs"]
+mod position_area_region;

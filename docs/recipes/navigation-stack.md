@@ -1,11 +1,11 @@
 # Recipe: a navigation stack
 
-Keyed screens go directly in the app's first element (navigation root) or its linked tabpanels.
+Keyed screens go in the app's first element (navigation root) or linked tabpanels.
 
 A route's first `header` with one heading is its bar (large at `aria-level=1`,
 inline at 2). `navigationBack="close"` names a control's `id`, not its action:
 `button id="close" press=back`. A missing literal id warns
-(`lower-navigation-back-id`); a control only on another route cannot handle Back.
+(`lower-navigation-back-id`); a control only on another route can't handle Back.
 
 <!-- check: app -->
 ```contract
@@ -98,7 +98,7 @@ column navigationKey=`${e.id}` navigationScroll="note-list" position="absolute" 
 ```
 
 The sheet: `navigationPresentation="modal"`; its Cancel's `id` is the root's `navigationBack`,
-which a swipe down presses. On the web: a dialog, its actions below.
+which a swipe down presses. Web: a dialog, actions below.
 
 <!-- check: route add -->
 ```contract
@@ -137,11 +137,12 @@ test "add, open, delete after asking"
   dismisses outside. Another modal is a sheet, closed on ok ([after a write](after-a-write.md)).
 - Routes stay mounted: unique `testId`s. `clock settle` after a push, sheet or alert;
   `clock data` before reading a save.
-- A run (a workout, a quiz) has one exit that ends it or asks; no Back leaves it running.
+- Route motion: [motion](motion.md).
+- A run (a workout, quiz) has one exit that ends it or asks; no Back leaves it running.
 - An unmatched location offers home (`notfound`); a missing detail says so.
 - `link href="#tags"` scrolls to `id="tags"` once data lands.
 
 ## A screen open twice
 
 A screen as a component, `Finder(entry=e)` (`props entry: Entry`), has `state` per
-entry, gone when it pops; resources, mutations and tasks are the root's.
+entry, gone on pop with its resources; mutations and tasks are the root's.

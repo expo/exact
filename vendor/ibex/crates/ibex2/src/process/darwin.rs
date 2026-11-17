@@ -111,6 +111,12 @@ pub(super) fn spawn(
 }
 
 pub(super) fn start_time(pid: i32) -> Option<u64> {
+    info(pid)
+        .ok()
+        .map(|i| i.pbi_start_tvsec * 1_000_000 + i.pbi_start_tvusec)
+}
+
+fn info(pid: i32) -> io::Result<libc::proc_bsdinfo> {
     // SAFETY: a zeroed proc_bsdinfo is valid, and proc_pidinfo writes at
     // most its size.
     unsafe {
@@ -123,7 +129,11 @@ pub(super) fn start_time(pid: i32) -> Option<u64> {
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             size,
         );
-        (n == size).then(|| info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
+        if n == size {
+            Ok(info)
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 }
 
@@ -154,8 +164,8 @@ pub(super) fn boot_id() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-pub(super) fn group_members(pgid: i32) -> Vec<i32> {
-    group_members_with(|pids| {
+pub(super) fn group_members(pgid: i32) -> io::Result<Vec<i32>> {
+    let members = group_members_with(|pids| {
         let bytes = std::mem::size_of_val(pids) as libc::c_int;
         let buffer = if pids.is_empty() {
             std::ptr::null_mut()
@@ -164,27 +174,36 @@ pub(super) fn group_members(pgid: i32) -> Vec<i32> {
         };
         // SAFETY: the buffer holds `bytes` bytes, or is null for the count query.
         unsafe { libc::proc_listpgrppids(pgid, buffer, bytes) }
-    })
+    })?;
+    Ok(members
+        .into_iter()
+        .filter(|pid| match info(*pid) {
+            Ok(i) => i.pbi_status != libc::SZOMB,
+            Err(e) => e.raw_os_error() != Some(libc::ESRCH),
+        })
+        .collect())
 }
 
-fn group_members_with(mut list: impl FnMut(&mut [libc::pid_t]) -> libc::c_int) -> Vec<i32> {
+fn group_members_with(
+    mut list: impl FnMut(&mut [libc::pid_t]) -> libc::c_int,
+) -> io::Result<Vec<i32>> {
     // libproc takes bytes but returns PID counts, including its null-buffer estimate.
     let mut count = list(&mut []);
     let max_pids = libc::c_int::MAX as usize / std::mem::size_of::<libc::pid_t>();
     let mut pids = Vec::new();
     loop {
         if count <= 0 || count as usize > max_pids {
-            return Vec::new();
+            return Err(io::Error::other("could not list process group"));
         }
         pids.resize(count as usize, 0);
         let n = list(&mut pids);
         if n <= 0 {
-            return Vec::new();
+            return Err(io::Error::other("could not list process group"));
         }
         if (n as usize) < pids.len() {
             pids.truncate(n as usize);
             pids.retain(|p| *p > 0);
-            return pids;
+            return Ok(pids);
         }
         // A full buffer may omit members that joined after the estimate.
         count = count.saturating_mul(2);
@@ -206,8 +225,7 @@ mod tests {
             pids[..n].copy_from_slice(&expected[..n]);
             n as libc::c_int
         });
-        assert_eq!(actual.len(), expected.len());
-        assert_eq!(actual, expected);
+        assert_eq!(actual.unwrap(), expected);
     }
 
     #[test]
@@ -223,7 +241,7 @@ mod tests {
             pids[..n].copy_from_slice(&expected[..n]);
             n as libc::c_int
         });
-        assert_eq!(actual, expected);
+        assert_eq!(actual.unwrap(), expected);
         assert_eq!(sizes, [0, 2, 4, 8]);
     }
 
@@ -236,7 +254,7 @@ mod tests {
             pids.copy_from_slice(&[11, 0, 13, 99, 100]);
             3
         });
-        assert_eq!(actual, [11, 13]);
+        assert_eq!(actual.unwrap(), [11, 13]);
     }
 
     #[test]
@@ -257,7 +275,7 @@ mod tests {
                 pids.fill(17);
                 result
             });
-            assert!(actual.is_empty());
+            assert!(actual.is_err());
             assert_eq!(replies.next(), None);
         }
     }

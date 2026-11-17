@@ -53,3 +53,22 @@ export function matchPattern(table, url, bind = () => {}) {
   }
   return -1;
 }
+
+/** A browser location relative to a mounted site, or null when it is outside it. */
+export function withoutBase(location, base = "/") {
+  if (base === "/") return location;
+  const root = base.slice(0, -1);
+  if (location === root || location.startsWith(root + "?") || location.startsWith(root + "#")) return "/" + location.slice(root.length);
+  return location.startsWith(base) ? location.slice(root.length) : null;
+}
+/** Mount an app-relative location. Always add the prefix: a route may itself start with the base's name. */
+export const withBase = (location, base = "/") => base === "/" ? location : base.slice(0, -1) + location;
+
+/** An authored app destination. Fragments, query-only references and external URLs keep HTML's meaning. */
+export function mountedHref(value, base = "/") {
+  if (value == null) return value;
+  value = clean(value);
+  if (value === '' || /^[?#]|^[a-z][a-z0-9+.-]*:|^\/\//i.test(value)) return value;
+  const fragment = fragmentOf(value);
+  return withBase(canonical(value), base) + (fragment ? '#' + fragment : '');
+}

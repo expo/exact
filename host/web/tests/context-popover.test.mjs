@@ -8,9 +8,12 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // where the press was on the popover for a look's sheet to place it by (the neutral one opens it there,
 // which neutral-look.test.mjs holds; LLP 1116 D1's reads neither, and its menu stays where the user agent
 // puts a popover). The page's stylesheet is a default build's (look.mjs).
-import { test, expect } from 'bun:test';
+import { expect } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
+import { engineTests } from '../../../scripts/coverage.mjs';
+
+const engineTest = await engineTests();
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
 const page = `<style>${withLook(read('../index.html')).match(/<style>([\s\S]*?)<\/style>/)[1]}</style>
@@ -26,7 +29,7 @@ const page = `<style>${withLook(read('../index.html')).match(/<style>([\s\S]*?)<
   window.ready = true;
 </script>`;
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a right click opens the context menu's popover, once the press is over, and says where it was`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a right click opens the context menu's popover, once the press is over, and says where it was`, async () => {
   const playwright = await import('playwright-core');
   const browser = await suiteBrowser(engine);
   try {
@@ -66,7 +69,7 @@ const nested = `<style>${withLook(read('../index.html')).match(/<style>([\s\S]*?
   window.ready = true;
 </script>`;
 
-for (const engine of ['chromium', 'firefox', 'webkit']) test(`${engine}: a context menu inside an open popover leaves that popover open`, async () => {
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a context menu inside an open popover leaves that popover open`, async () => {
   const browser = await suiteBrowser(engine);
   try {
     const tab = await browser.newPage({ viewport: { width: 600, height: 400 } });

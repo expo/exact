@@ -118,11 +118,12 @@ fn a_press_inside_a_filtered_box_reaches_what_is_drawn_there() {
         .node_by_key(kernel.find_by_test_id("inside")[0])
         .unwrap()
         .id;
-    let b = *p
+    let b = p
         .boxes()
         .iter()
         .find(|b| b.id == button)
-        .expect("the button's box");
+        .expect("the button's box")
+        .clone();
     p.press_at(b.rect.0 + b.rect.2 / 2.0, b.rect.1 + b.rect.3 / 2.0, 0.0);
     let k = p.host().kernel();
     let text = k.node_by_key(k.find_by_test_id("picked")[0]).unwrap();

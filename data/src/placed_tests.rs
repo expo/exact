@@ -141,6 +141,8 @@ fn blocked_owner_keeps_only_latest_retirement_before_next_turn() {
         },
         Placement::Worker,
     );
+    // The owner queue's own mechanics, with several turns queued at once.
+    placed.unordered = true;
     placed.activate().unwrap();
     let mut store = Store::new("secret.keep document", []);
     let slow = match placed.answer(&mut store, "slow", &[]).unwrap() {
@@ -296,6 +298,8 @@ fn a_key_both_coalesced_retirements_keep_stays_in_flight() {
         },
         Placement::Worker,
     );
+    // The owner queue's own mechanics, with several turns queued at once.
+    placed.unordered = true;
     placed.activate().unwrap();
     let mut store = Store::new("", []);
     let args = [Value::Number(1.0)];
@@ -360,6 +364,8 @@ fn a_turn_handed_over_after_its_call_was_let_go_never_begins() {
         },
         Placement::Worker,
     );
+    // The owner queue's own mechanics, with several turns queued at once.
+    placed.unordered = true;
     placed.activate().unwrap();
     let mut store = Store::new("", []);
     let args = [Value::Number(1.0)];
@@ -427,6 +433,8 @@ fn a_turn_not_yet_handed_over_survives_a_retirement_that_keeps_its_call() {
         },
         Placement::Worker,
     );
+    // The owner queue's own mechanics, with several turns queued at once.
+    placed.unordered = true;
     placed.activate().unwrap();
     let mut store = Store::new("", []);
     let args = [Value::Number(1.0)];
@@ -750,7 +758,11 @@ fn a_kept_reply_waits_off_the_host_while_its_owner_has_unrelated_work() {
     assert!(matches!(placed.dispatch(token, &store), Dispatch::Held));
     assert!(placed.release(&store).is_empty());
     release.send(()).unwrap();
-    slow.recv_timeout(Duration::from_secs(5)).unwrap();
+    let outcome = slow.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The kept reply reads and writes the Store too: it goes to the owner
+    // once the turn before it is parsed (`Placed::running`).
+    placed.parse(&mut store, "slow", &[], outcome).unwrap();
+    assert!(placed.release(&store).is_empty());
     woke.recv_timeout(Duration::from_secs(5)).unwrap();
     let ready = placed.release(&store);
     assert_eq!(ready.len(), 1);
@@ -804,6 +816,9 @@ fn worker_heap_failures(forgotten: bool) {
         },
         Placement::Worker,
     );
+    // Generation cleanup with two turns on the owner at once (unordered); the
+    // ordered set's cleanup with a waiter is order_tests.rs's VM-failure test.
+    placed.unordered = true;
     placed.activate().unwrap();
     let instance = placed.module_identity("").unwrap().instance();
     let mut store = Store::new("", []);
@@ -958,4 +973,313 @@ fn repeated_successful_worker_timers_and_discards_leave_no_bookkeeping() {
                 .is_empty());
         }
     }
+}
+
+/// A read-modify-write turn: `bump` reads the kept `count` and keeps one more.
+struct Bump;
+impl DataSource for Bump {
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        Ok(Value::Number(0.0))
+    }
+    fn app_id(&self) -> &str {
+        "com.exact.test"
+    }
+    fn grants(&self) -> &str {
+        "secret.keep count"
+    }
+    fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        let count: u32 = store.get("count").unwrap_or("0").parse().unwrap();
+        store.set("count", &(count + 1).to_string())?;
+        Ok(Answer::Now(Value::Number(f64::from(count + 1))))
+    }
+}
+
+/// Two `bump` turns through a worker, the second dispatched before the
+/// first's reply is parsed (the Apple pump hands out every request before
+/// their replies commit), or after it. Returns the kept count.
+fn two_bumps(second_after_first_reply: bool) -> String {
+    let mut placed = Placed::new(Bump, Placement::Worker);
+    placed.activate().unwrap();
+    let mut store = Store::new("secret.keep count", []);
+    let turn = |placed: &mut Placed<Bump>, store: &mut Store, target| {
+        let Answer::Later(request) = placed.answer_for(target, store, "bump", &[]).unwrap() else {
+            panic!("an owner turn")
+        };
+        request.continuation.unwrap()
+    };
+    let parse = |placed: &mut Placed<Bump>,
+                 store: &mut Store,
+                 target,
+                 rx: std::sync::mpsc::Receiver<Outcome>| {
+        let outcome = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        placed
+            .parse_for(target, store, "bump", &[], outcome)
+            .unwrap();
+    };
+    let (first, second) = (Target::Mutation(0), Target::Mutation(1));
+    let a = turn(&mut placed, &mut store, first);
+    let first_reply = send(placed.dispatch(a, &store));
+    if second_after_first_reply {
+        parse(&mut placed, &mut store, first, first_reply);
+        let b = turn(&mut placed, &mut store, second);
+        let second_reply = send(placed.dispatch(b, &store));
+        parse(&mut placed, &mut store, second, second_reply);
+    } else {
+        // Dispatched before the first's reply is parsed, the second waits
+        // for it, and `release` hands it out once that reply is parsed.
+        let b = turn(&mut placed, &mut store, second);
+        assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+        parse(&mut placed, &mut store, first, first_reply);
+        let mut released = placed.release(&store);
+        assert_eq!(released.len(), 1);
+        let (token, dispatch) = released.remove(0);
+        assert_eq!(token, b);
+        let second_reply = send(dispatch);
+        parse(&mut placed, &mut store, second, second_reply);
+    }
+    store.get("count").unwrap_or("").to_string()
+}
+
+/// QUEUE (179b9d387): a lone `Placed` worker's turns each read the Store as it
+/// was at their dispatch, so a second read-modify-write dispatched before the
+/// first's reply commits reads the old value and one update is lost.
+#[test]
+fn two_read_modify_write_turns_through_a_worker_keep_both_updates() {
+    assert_eq!(
+        two_bumps(true),
+        "2",
+        "the second dispatched after the first's reply"
+    );
+    assert_eq!(
+        two_bumps(false),
+        "2",
+        "the second dispatched before the first's reply"
+    );
+}
+
+/// Turns held behind a running one go in the order they were dispatched, one
+/// at a time; one whose running turn is discarded unrun, or let go, goes next.
+#[test]
+fn held_turns_go_in_order_and_after_a_discarded_or_let_go_turn() {
+    fn started(placed: &mut Placed<Bump>, store: &mut Store, target: Target) -> u64 {
+        let Answer::Later(request) = placed.answer_for(target, store, "bump", &[]).unwrap() else {
+            panic!("an owner turn")
+        };
+        request.continuation.unwrap()
+    }
+    let finish = |placed: &mut Placed<Bump>, store: &mut Store, target, dispatch| {
+        let outcome = send(dispatch).recv_timeout(Duration::from_secs(5)).unwrap();
+        placed
+            .parse_for(target, store, "bump", &[], outcome)
+            .unwrap();
+    };
+    let targets = [
+        Target::Mutation(0),
+        Target::Mutation(1),
+        Target::Mutation(2),
+    ];
+    let mut placed = Placed::new(Bump, Placement::Worker);
+    placed.activate().unwrap();
+    let mut store = Store::new("secret.keep count", []);
+    let tokens = targets.map(|target| started(&mut placed, &mut store, target));
+    let first = placed.dispatch(tokens[0], &store);
+    assert!(matches!(placed.dispatch(tokens[1], &store), Dispatch::Held));
+    assert!(matches!(placed.dispatch(tokens[2], &store), Dispatch::Held));
+    assert!(
+        placed.release(&store).is_empty(),
+        "the first is still running"
+    );
+    finish(&mut placed, &mut store, targets[0], first);
+    for i in [1, 2] {
+        let mut released = placed.release(&store);
+        assert_eq!(released.len(), 1, "one at a time");
+        let (token, dispatch) = released.remove(0);
+        assert_eq!(token, tokens[i], "in order");
+        finish(&mut placed, &mut store, targets[i], dispatch);
+    }
+    assert_eq!(store.get("count"), Some("3"));
+
+    // The running turn's closure is dropped unrun and discarded.
+    let mut placed = Placed::new(Bump, Placement::Worker);
+    placed.activate().unwrap();
+    let mut store = Store::new("secret.keep count", []);
+    let a = started(&mut placed, &mut store, targets[0]);
+    let b = started(&mut placed, &mut store, targets[1]);
+    drop(placed.dispatch(a, &store));
+    assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+    placed.discard(a);
+    let released = placed.release(&store);
+    assert_eq!(released.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [b]);
+
+    // The running turn's call is let go.
+    let mut placed = Placed::new(Bump, Placement::Worker);
+    placed.activate().unwrap();
+    let mut store = Store::new("secret.keep count", []);
+    let a = started(&mut placed, &mut store, targets[0]);
+    let b = started(&mut placed, &mut store, targets[1]);
+    let _running = placed.dispatch(a, &store);
+    assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+    placed.forgotten(
+        &store,
+        &[InFlight {
+            target: targets[1],
+            source: "bump",
+            args: &[],
+            fetch: None,
+            continuation: Some(b),
+        }],
+    );
+    let released = placed.release(&store);
+    assert_eq!(released.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [b]);
+}
+
+/// Review round 1's cases: a running untargeted call (a tool's) is never let
+/// go; a turn dispatched while others wait goes behind them; a held turn the
+/// runner keeps in flight under its key alone keeps its call; a kept reply's
+/// delivery waits for the running turn and holds the Store in its turn.
+#[test]
+fn a_lone_worker_s_order_survives_let_go_newcomers_and_kept_replies() {
+    fn started(placed: &mut Placed<Bump>, store: &mut Store, target: Option<Target>) -> u64 {
+        let answer = match target {
+            Some(target) => placed.answer_for(target, store, "bump", &[]),
+            None => placed.answer(store, "bump", &[]),
+        };
+        let Answer::Later(request) = answer.unwrap() else {
+            panic!("an owner turn")
+        };
+        request.continuation.unwrap()
+    }
+    fn fresh() -> (Placed<Bump>, Store) {
+        let mut placed = Placed::new(Bump, Placement::Worker);
+        placed.activate().unwrap();
+        (placed, Store::new("secret.keep count", []))
+    }
+    let (m0, m1, m2) = (
+        Target::Mutation(0),
+        Target::Mutation(1),
+        Target::Mutation(2),
+    );
+    let tokens =
+        |released: Vec<(u64, Dispatch)>| released.iter().map(|(t, _)| *t).collect::<Vec<_>>();
+
+    // An untargeted call is running; letting other calls go does not end it.
+    let (mut placed, mut store) = fresh();
+    let tool = started(&mut placed, &mut store, None);
+    let b = started(&mut placed, &mut store, Some(m1));
+    let running = placed.dispatch(tool, &store);
+    assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+    placed.forgotten(
+        &store,
+        &[InFlight {
+            target: m1,
+            source: "bump",
+            args: &[],
+            fetch: None,
+            continuation: Some(b),
+        }],
+    );
+    assert!(
+        tokens(placed.release(&store)).is_empty(),
+        "the tool still holds the Store"
+    );
+    let outcome = send(running).recv_timeout(Duration::from_secs(5)).unwrap();
+    placed.parse(&mut store, "bump", &[], outcome).unwrap();
+    assert_eq!(tokens(placed.release(&store)), [b]);
+
+    // A turn dispatched after the running one ends, before `release`, goes
+    // behind the turn already waiting.
+    let (mut placed, mut store) = fresh();
+    let a = started(&mut placed, &mut store, Some(m0));
+    let b = started(&mut placed, &mut store, Some(m1));
+    let c = started(&mut placed, &mut store, Some(m2));
+    let running = placed.dispatch(a, &store);
+    assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+    let outcome = send(running).recv_timeout(Duration::from_secs(5)).unwrap();
+    placed
+        .parse_for(m0, &mut store, "bump", &[], outcome)
+        .unwrap();
+    assert!(
+        matches!(placed.dispatch(c, &store), Dispatch::Held),
+        "c waits behind b"
+    );
+    assert_eq!(tokens(placed.release(&store)), [b]);
+
+    // A held turn whose call the runner keeps in flight by key alone (a
+    // stream mapper's continuation) survives a let-go.
+    let (mut placed, mut store) = fresh();
+    let a = started(&mut placed, &mut store, Some(m0));
+    let b = started(&mut placed, &mut store, Some(m1));
+    let running = placed.dispatch(a, &store);
+    assert!(matches!(placed.dispatch(b, &store), Dispatch::Held));
+    placed.forgotten(
+        &store,
+        &[
+            InFlight {
+                target: m0,
+                source: "bump",
+                args: &[],
+                fetch: None,
+                continuation: Some(a),
+            },
+            InFlight {
+                target: m1,
+                source: "bump",
+                args: &[],
+                fetch: None,
+                continuation: None,
+            },
+        ],
+    );
+    let outcome = send(running).recv_timeout(Duration::from_secs(5)).unwrap();
+    placed
+        .parse_for(m0, &mut store, "bump", &[], outcome)
+        .unwrap();
+    assert_eq!(tokens(placed.release(&store)), [b]);
+
+    // A kept reply delivered while a turn runs waits for it; once sent to
+    // the owner it holds the Store until its envelope is applied.
+    let (mut placed, mut store) = fresh();
+    let a = started(&mut placed, &mut store, Some(m0));
+    let b = started(&mut placed, &mut store, Some(m1));
+    let running = placed.dispatch(a, &store);
+    placed.kept.insert(17, Some(9));
+    let delivery = placed
+        .module_delivery(&mut store, 17, Dispatch::again_outcome())
+        .unwrap()
+        .unwrap()
+        .continuation
+        .unwrap();
+    assert!(matches!(placed.dispatch(delivery, &store), Dispatch::Held));
+    assert!(
+        matches!(placed.dispatch(b, &store), Dispatch::Held),
+        "b waits behind the delivery"
+    );
+    let outcome = send(running).recv_timeout(Duration::from_secs(5)).unwrap();
+    placed
+        .parse_for(m0, &mut store, "bump", &[], outcome)
+        .unwrap();
+    assert!(
+        tokens(placed.release(&store)).is_empty(),
+        "the delivery goes to the owner, b waits"
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let reply = loop {
+        let mut ready = placed.release(&store);
+        if let Some(i) = ready.iter().position(|(t, _)| *t == delivery) {
+            let (_, Dispatch::Run(Work::Now(reply))) = ready.remove(i) else {
+                panic!("the delivery's envelope")
+            };
+            break reply;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the delivery never came back"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(placed
+        .module_delivery(&mut store, 17, reply())
+        .unwrap()
+        .is_none());
+    assert_eq!(tokens(placed.release(&store)), [b]);
 }

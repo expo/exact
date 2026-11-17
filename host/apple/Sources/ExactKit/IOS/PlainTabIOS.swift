@@ -16,6 +16,21 @@ import UIKit
 final class PlainTab: UIViewController {
     private(set) var route: RouteController?
     weak var host: NavigationHost?
+    /// At launch only the content is mounted here. Its controller receives
+    /// its first containment and appearance from the real owner.
+    var bootContent = false
+
+    /// Move the content back; a live handoff mounts the destination first.
+    func releaseBootContent() {
+        guard let route else { return }
+        route.view.backgroundColor = view.backgroundColor
+        route.view.tintColor = route.node.ownAccent
+        NodeView.containerMoves += 1
+        defer { NodeView.containerMoves -= 1 }
+        for child in view.subviews { route.view.addSubview(child) }
+        route.bootSurface = nil
+        self.route = nil
+    }
 
     override func loadView() { view = UIView() }
 
@@ -28,6 +43,10 @@ final class PlainTab: UIViewController {
     /// Show `next` in place of the route shown now, unanimated.
     func show(_ next: RouteController?) {
         guard next !== route else { return }
+        if let old = route, bootContent {
+            releaseBootContent()
+            old.bootSurface = nil
+        }
         if let old = route {
             old.willMove(toParent: nil)
             old.view.removeFromSuperview()
@@ -39,6 +58,16 @@ final class PlainTab: UIViewController {
             return
         }
         route = next
+        if bootContent {
+            next.bootSurface = view
+            view.backgroundColor = next.view.backgroundColor
+            view.tintColor = next.node.ownAccent
+            NodeView.containerMoves += 1
+            for child in next.view.subviews { view.addSubview(child) }
+            NodeView.containerMoves -= 1
+            next.fitContentViewport()
+            return
+        }
         addChild(next)
         next.view.frame = view.bounds
         next.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -78,6 +107,7 @@ extension NavigationHost {
     /// Where UIKit holds each tab's routes, in tab order (`routesStack`), or
     /// the one stack of a root without tabs.
     var primaryStacks: [UIViewController] {
+        if let bootOwner { return [bootOwner] }
         guard !tabPanels.isEmpty else { return [primaryNavigation].compactMap { $0 } }
         let held = moreTab
         return tabPanels.indices.compactMap { $0 == held ? more : tabStack($0) }

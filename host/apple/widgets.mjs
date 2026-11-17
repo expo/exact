@@ -5,6 +5,7 @@ import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFi
 import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
+import { WATCH_MINIMUM_OS } from './toolchain.mjs';
 import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
@@ -32,32 +33,40 @@ export const widgetId = app => `${app.id}.widgets`;
 // LLP 1126.001 WP16: the Mac container is authorized by the signing team,
 // independently of iOS's registered group and of restricted Keychain access.
 export const macWidgetGroup = (app, team) => `${team}.${app.id}.widgets`;
-export function widgetSigningTeam(identity, { distribution = false, certificates = null } = {}) {
+/** The certificate kinds a Mac build signs with, and the variable that names one: Apple Development; Developer ID
+ * Application (`distribution`); for the Mac App Store (`store`), Apple Distribution or its older name, 3rd Party Mac
+ * Developer Application (LLP 1030.005 D1). */
+export const signingKinds = (distribution, store = null) => store ? ['Apple Distribution', '3rd Party Mac Developer Application']
+  : [distribution ? 'Developer ID Application' : 'Apple Development'];
+/** The kinds as a phrase with its article: "an Apple Distribution or 3rd Party Mac Developer Application". */
+export const kindPhrase = (distribution, store = null) => { const kinds = signingKinds(distribution, store).join(' or '); return `${/^[AEIOU]/.test(kinds) ? 'an' : 'a'} ${kinds}`; };
+export const identityVariable = (distribution, store = null) => store ? 'EXACT_APPSTORE_ID' : distribution ? 'EXACT_DEVELOPER_ID' : 'EXACT_IDENTITY';
+export function widgetSigningTeam(identity, { distribution = false, store = null, certificates = null } = {}) {
   certificates ??= (spawnSync('security', ['find-certificate', '-a', '-p'], { encoding: 'utf8' }).stdout
     ?.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? []).map(pem => new X509Certificate(pem));
-  const kind = distribution ? 'Developer ID Application' : 'Apple Development', variable = distribution ? 'EXACT_DEVELOPER_ID' : 'EXACT_IDENTITY';
+  const kinds = signingKinds(distribution, store), variable = identityVariable(distribution, store);
   for (const cert of certificates) {
     const cn = /^CN=(.*)$/m.exec(cert.subject)?.[1];
     if (cert.fingerprint.replaceAll(':', '') === identity?.toUpperCase() || cn === identity) {
       if (!distribution && cn?.startsWith('Developer ID Application: ')) return null;
-      if (!cn?.startsWith(kind + ': ')) throw new Error(`host/apple: Mac widgets need an ${kind} certificate for this build; ${variable} names ${cn}`);
+      if (!kinds.some(k => cn?.startsWith(k + ': '))) throw new Error(`host/apple: Mac widgets need ${kindPhrase(distribution, store)} certificate for this build; ${variable} names ${cn}`);
       const team = /^OU=([A-Z0-9]{10})$/m.exec(cert.subject)?.[1];
       if (team) return team;
     }
   }
-  throw new Error(`host/apple: Mac widgets need an ${kind} identity; name its SHA-1 or certificate name with ${variable} (security find-identity -v -p codesigning)`);
+  throw new Error(`host/apple: Mac widgets need ${kindPhrase(distribution, store)} identity; name its SHA-1 or certificate name with ${variable} (security find-identity -v -p codesigning)`);
 }
 export { macHardwareID };
 /** `also`: what the app's own profile must allow besides (presence.mjs `macSigning`: its grants' profile entitlements),
  * so one profile is chosen for both. */
-export function macWidgetProfiles({ app, team, distribution = false, installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, udid, hardwareID = macHardwareID, log = console.log, also = () => true }) {
+export function macWidgetProfiles({ app, team, distribution = false, store = null, installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, udid, hardwareID = macHardwareID, log = console.log, also = () => true }) {
   if (named && !named.platforms?.includes('OSX')) {
     log(`Mac widgets: ignoring EXACT_PROFILE (${named.name}) for ${named.platforms?.join(', ') || 'another platform'}; shared secrets need macOS profiles (LLP 1126.001 §5 Q5).`);
     named = null;
   }
   if (udid === undefined) udid = !distribution && installed.some(p => p.platforms?.includes('OSX') && p.team === team) ? hardwareID() : null;
   const group = macWidgetGroup(app, team);
-  const fits = (p, id) => p.platforms?.includes('OSX') && p.team === team && p.dev === !distribution && !profileMisfit(p, udid)
+  const fits = (p, id) => p.platforms?.includes('OSX') && p.team === team && p.dev === !distribution && (!store || p.method === store) && !profileMisfit(p, udid)
     && profilesFor(id, [p]).length && (p.groups.includes(group) || p.groups.includes(`${team}.*`))
     && (p.keychain.includes(`${p.prefix}.${app.id}`) || p.keychain.includes(`${p.prefix}.*`));
   for (const owner of (named ? [named] : installed).filter(p => fits(p, app.id) && also(p)).sort(byExpiry)) {
@@ -68,15 +77,15 @@ export function macWidgetProfiles({ app, team, distribution = false, installed =
   return null;
 }
 /** The widgets' team and profiles, after the build has resolved its signing identity. */
-export function macWidgetSigning(app, identity, { distribution = false, log = console.log, certificates, profiles } = {}) {
+export function macWidgetSigning(app, identity, { distribution = false, store = null, log = console.log, certificates, profiles } = {}) {
   if (!platformWidgetEntries(app, 'macos').length) return null;
-  const team = identity && identity !== '-' ? widgetSigningTeam(identity, { distribution, certificates }) : null;
+  const team = identity && identity !== '-' ? widgetSigningTeam(identity, { distribution, store, certificates }) : null;
   if (!team) {
-    if (identity !== '-') throw new Error(`host/apple: Mac widgets need ${distribution ? 'a Developer ID Application' : 'an Apple Development'} identity; ${distribution ? 'set EXACT_DEVELOPER_ID=<sha1>' : 'set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1>, or EXACT_IDENTITY=- to build without the extension'}`);
+    if (identity !== '-') throw new Error(`host/apple: Mac widgets need ${kindPhrase(distribution, store)} identity; ${distribution ? `set ${identityVariable(distribution, store)}=<sha1>` : 'set DEVELOPMENT_TEAM=<team-id> or EXACT_IDENTITY=<sha1>, or EXACT_IDENTITY=- to build without the extension'}`);
     log('Mac widgets: this build is signed ad hoc (EXACT_IDENTITY=-); building without an extension. Set EXACT_IDENTITY to an Apple Development identity to include widgets.');
     return null;
   }
-  return { team, profiles: macWidgetProfiles({ app, team, distribution, log, ...profiles }) };
+  return { team, profiles: macWidgetProfiles({ app, team, distribution, store, log, ...profiles }) };
 }
 /** Shared widget metadata on the owning app; signing supplies the group's and Keychain's identities. */
 export function widgetAppKeys(app, platform, { group, keychain, generation }) {
@@ -87,9 +96,11 @@ export function widgetAppKeys(app, platform, { group, keychain, generation }) {
     ...(keychain ? { ExactKeychainAccessGroup: keychain } : {}) };
 }
 
-/** ExactWidgetSecretsAvailable is extension-only; ExactWidgetRequiresSecrets is copied from the app. */
-export const widgetExtensionKeys = appInfo => ({ ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup,
-  ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] });
+/** Extension-local storage policy comes from the signed owning bundle. */
+export const widgetExtensionKeys = (appInfo, platform = 'macos') => platform === 'watchos'
+  ? { ...(appInfo.ExactWatchSync ? { ExactWatchSync: appInfo.ExactWatchSync } : {}),
+      ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}) }
+  : { ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup, ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] };
 
 /** `extra`: the app's own profile entitlements (presence.mjs `macProvisioning`), signed under the same profile. */
 export function macWidgetEntitlements({ app, team, profiles = null, extension = false, extra = {} }) {
@@ -111,7 +122,7 @@ export function macWidgetEntitlements({ app, team, profiles = null, extension = 
  * takes distribution ones, the extension's of the named one's method and, for Ad Hoc, its devices. EXACT_PROFILE
  * names the app's, under the same conditions; the extension's is found by its own id, since a team wildcard
  * grants no App Group. `installed` and `named` are the decoded profiles, which a test replaces. */
-export function entryProfiles({ app, udid, required = [], installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, team = process.env.DEVELOPMENT_TEAM?.trim(), phoneName = udid }) {
+export function entryProfiles({ app, udid, required = [], values = {}, installed = installedProfiles(), named = process.env.EXACT_PROFILE ? decodeProfile(process.env.EXACT_PROFILE) : null, team = process.env.DEVELOPMENT_TEAM?.trim(), phoneName = udid }) {
   // installedProfiles also finds native Mac profiles; they cannot provision iOS.
   installed = installed.filter(iosProfile);
   if (udid && team && !named) {
@@ -124,7 +135,7 @@ export function entryProfiles({ app, udid, required = [], installed = installedP
     { has: p => p.groups.includes(group), missing: `the App Group ${group}`, portal: `App Groups (${group})` },
     { has: p => p.keychain.includes(`${p.prefix}.*`) || p.keychain.includes(shared(p.prefix)), missing: `the Keychain group ${shared(prefix)}`, portal: `Keychain Sharing (the group ${shared(prefix)}, or the team's ${prefix}.*)` },
     ...(id === app.id && push && !required.includes('aps-environment') ? [{ has: p => allowsEntitlement(p, 'aps-environment'), missing: 'aps-environment (development on a development profile, production otherwise; an activity takes pushes)', portal: 'Push Notifications' }] : []),
-    ...(id === app.id ? required.map(name => ({ has: p => allowsEntitlement(p, name), missing: name === 'aps-environment' ? 'aps-environment (development on a development profile, production otherwise)' : name, portal: name === 'aps-environment' ? 'Push Notifications' : name })) : []),
+    ...(id === app.id ? required.map(name => ({ has: p => allowsEntitlement(p, name, values), missing: name === 'aps-environment' ? 'aps-environment (development on a development profile, production otherwise)' : name, portal: name === 'aps-environment' ? 'Push Notifications' : name })) : []),
   ];
   // The build's method, which a profile that `like` does not decide must have.
   const mode = p => udid ? (p.dev ? null : `is ${METHODS[p.method]}, not development`) : (p.dev ? 'is development; an archive takes a distribution profile' : null);
@@ -258,7 +269,7 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
       for (const [from, to] of files) syncFile(from, to);
     }
     // The identifier is the app's, written where the framework is placed for it (`placeCoreFramework`).
-    writeIfChanged(layout.info, plistFile({ CFBundleIdentifier: SHARED_CORE_ID, CFBundleName: 'ExactCore', CFBundleExecutable: 'ExactCore', CFBundlePackageType: 'FMWK', CFBundleVersion: '1', CFBundleShortVersionString: '0.1.0', CFBundleSupportedPlatforms: [platform === 'macos' ? 'MacOSX' : platform === 'watchos' ? 'WatchSimulator' : device ? 'iPhoneOS' : 'iPhoneSimulator'], ...(platform === 'macos' ? { LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0' } : { MinimumOSVersion: platform === 'watchos' ? '10.0' : app.manifest.host?.ios?.minimumOS ?? '17.0' }) }));
+    writeIfChanged(layout.info, plistFile({ CFBundleIdentifier: SHARED_CORE_ID, CFBundleName: 'ExactCore', CFBundleExecutable: 'ExactCore', CFBundlePackageType: 'FMWK', CFBundleVersion: '1', CFBundleShortVersionString: '0.1.0', CFBundleSupportedPlatforms: [platform === 'macos' ? 'MacOSX' : platform === 'watchos' ? (device ? 'WatchOS' : 'WatchSimulator') : device ? 'iPhoneOS' : 'iPhoneSimulator'], ...(platform === 'macos' ? { LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0' } : { MinimumOSVersion: platform === 'watchos' ? WATCH_MINIMUM_OS : app.manifest.host?.ios?.minimumOS ?? '17.0' }) }));
     if (!existsSync(resolve(xcframework, 'Info.plist'))) singleFramework(framework, xcframework, prepared.triple);
     else {
       const slice = readdirSync(xcframework).find(name => existsSync(resolve(xcframework, name, 'ExactCore.framework')));
@@ -406,6 +417,8 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   const appInfo = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', resolve(contents, 'Info.plist')], { read: true }).stdout);
   const capabilities = appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {};
   const versions = Object.fromEntries(['CFBundleVersion', 'CFBundleShortVersionString', mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'].map(key => [key, appInfo[key]]));
+  // The extension resolves the app's strings for the language the app's bundle localizations choose (SessionFacts.viewerLocale).
+  const localizations = Object.fromEntries(['CFBundleDevelopmentRegion', 'CFBundleLocalizations'].filter(key => appInfo[key]).map(key => [key, appInfo[key]]));
   const runtimeInfo = resolve(contents, 'Frameworks/ExactCore.framework', mac ? 'Resources/Info.plist' : 'Info.plist');
   const runtime = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', runtimeInfo], { read: true }).stdout);
   writeFileSync(runtimeInfo, plistFile({ ...runtime, ...versions, ...capabilities }));
@@ -425,8 +438,8 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember }));
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
-  writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
-    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? widgetExtensionKeys(appInfo) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
+  writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...localizations, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
+    CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac || platform === 'watchos' ? widgetExtensionKeys(appInfo, platform) : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
   // Xcode's pass extracts from the module's constant values (`intents.mjs`).
@@ -435,14 +448,14 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   if (configured) { rmSync(intents, { recursive: true, force: true }); mkdirSync(intents, { recursive: true }); }
   const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents });
   const { moduleName, sources: swiftSources } = compilation;
-  runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? 'watchsimulator' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
+  runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? (device ? 'watchos' : 'watchsimulator') : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
     ...compilation.args,
     '-module-cache-path', extensionModuleCache, '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
     '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks',
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     shared.snapshotArchive, ...swiftSources, '-o', extensionBinary]);
   if (configured) {
-    const metadata = intentsMetadata({ moduleName, dir: intents, sdk, triple, platform, deployment: versions[mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'] ?? (mac ? '14.0' : platform === 'watchos' ? '10.0' : '17.0'),
+    const metadata = intentsMetadata({ moduleName, dir: intents, sdk, triple, platform, deployment: versions[mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'] ?? (mac ? '14.0' : platform === 'watchos' ? WATCH_MINIMUM_OS : '17.0'),
       binary: extensionBinary, sources: swiftSources, values, runApple });
     cpSync(metadata, resolve(extensionResources, 'Metadata.appintents'), { recursive: true });
   }

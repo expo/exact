@@ -10,8 +10,13 @@ fn lowered(m: &mut Motion, now: f64) -> Vec<f64> {
 fn a_released_hold_springs_home_as_frames_once() {
     let mut m = Motion::new();
     assert!(m.transitions(7, "translate -exact-spring(180, 12, 1)"));
-    m.observe(7, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0], None, 0.0)
-        .unwrap();
+    m.observe(
+        7,
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        None,
+        0.0,
+    )
+    .unwrap();
     assert!(
         lowered(&mut m, 0.0).is_empty(),
         "a first observation is taken as it is"
@@ -61,8 +66,13 @@ fn an_unknown_node_takes_no_hold_and_a_removed_one_forgets_its_holds() {
         .begin(3, Property::Translate, Value::ZERO, 0.0)
         .unwrap()
         .is_none());
-    m.observe(3, [5.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0], None, 0.0)
-        .unwrap();
+    m.observe(
+        3,
+        [5.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        None,
+        0.0,
+    )
+    .unwrap();
     let (serial, _) = m
         .begin(3, Property::Translate, Value::new(5.0, 0.0), 0.0)
         .unwrap()
@@ -77,10 +87,20 @@ fn an_unknown_node_takes_no_hold_and_a_removed_one_forgets_its_holds() {
 fn a_new_target_under_an_eased_transition_lowers_nothing() {
     let mut m = Motion::new();
     assert!(m.transitions(1, "translate 300ms ease-out"));
-    m.observe(1, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0], None, 0.0)
-        .unwrap();
-    m.observe(1, [100.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0], None, 0.5)
-        .unwrap();
+    m.observe(
+        1,
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        None,
+        0.0,
+    )
+    .unwrap();
+    m.observe(
+        1,
+        [100.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        None,
+        0.5,
+    )
+    .unwrap();
     assert!(
         lowered(&mut m, 0.5).is_empty(),
         "the browser plays CSS transitions"
@@ -103,7 +123,7 @@ fn declaration_only_changes_cancel_browser_springs_before_their_end() {
         for delay in ["", " 0s 500ms"] {
             let mut m = Motion::new();
             assert!(m.transitions(7, &format!("translate -exact-spring(){delay}")));
-            let mut values = [0., 0., 0., 0., 1., 0., 1.];
+            let mut values = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
             m.observe(7, values, None, 0.).unwrap();
             lowered(&mut m, 0.);
             values[0] = 100.;
@@ -169,8 +189,13 @@ fn a_transform_pair_moves_together_and_ends_apart() {
         9,
         "translate -exact-spring(200, 20, 1), scale -exact-spring(200, 20, 1)"
     ));
-    m.observe(9, [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0], None, 0.0)
-        .unwrap();
+    m.observe(
+        9,
+        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        None,
+        0.0,
+    )
+    .unwrap();
     let (t, s, v) = m.begin_pair(9, [0.0, 0.0, 1.0], 0.1).unwrap().unwrap();
     assert_eq!(v, [0.0, 0.0, 1.0]);
     assert!(m.update_pair(t, [30.0, 10.0, 2.0], 0.2).unwrap());
@@ -186,8 +211,8 @@ fn a_transform_pair_moves_together_and_ends_apart() {
 
 #[test]
 fn authored_translate_velocity_is_per_axis_and_only_changes_a_new_target() {
-    let initial = [0., 0., 0., 0., 1., 0., 1.];
-    let target = [100., 100., 0., 0., 1., 0., 1.];
+    let initial = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
+    let target = [100., 100., 0., 0., 1., 0., 1., 0., 0., 0.];
     for velocity in [
         Value::new(800., -600.),
         Value::new(-800., 600.),
@@ -254,7 +279,7 @@ fn authored_translate_velocity_is_per_axis_and_only_changes_a_new_target() {
 
 #[test]
 fn enabling_a_spring_releases_nonzero_velocity_at_an_unchanged_endpoint() {
-    let initial = [0., 0., 0., 0., 1., 0., 1.];
+    let initial = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
     for velocity in [
         Value::new(800., -600.),
         Value::new(-800., 600.),
@@ -287,4 +312,41 @@ fn enabling_a_spring_releases_nonzero_velocity_at_an_unchanged_endpoint() {
             "returns to the same endpoint"
         );
     }
+}
+
+/// LLP 1003.001 D9, "The web": on the page's clock a commit's spring is
+/// lowered held (kind 3, its deadline in place of `at`) once, an easing the
+/// browser runs is not held, and the ready time starts and pins it.
+#[test]
+fn a_held_spring_waits_for_its_ready_time() {
+    let mut m = Motion::new();
+    m.start_on_frame(true).unwrap();
+    assert!(m.transitions(7, "translate -exact-spring(180, 12, 1), opacity 300ms"));
+    let at = |m: &mut Motion, x: f64, opacity: f64, now: f64| {
+        let values = [x, 0.0, 0.0, 0.0, 1.0, 0.0, opacity, 0., 0., 0.];
+        m.observe(7, values, None, now).unwrap();
+    };
+    at(&mut m, 0.0, 1.0, 0.0);
+    lowered(&mut m, 0.0);
+    at(&mut m, 100.0, 0.5, 0.1);
+    let ops = lowered(&mut m, 0.1);
+    assert_eq!(ops[..4], [3.0, 7.0, 0.0, 2.1], "held, released by 2.1 s");
+    assert_eq!(
+        m.engine.held_since(),
+        Some(0.1),
+        "the opacity easing is not held"
+    );
+    assert!(lowered(&mut m, 0.12).is_empty(), "lowered once while held");
+    assert!(m.present(7, Property::Translate, 0.14).unwrap());
+    let ops = lowered(&mut m, 0.15);
+    assert_eq!(
+        ops[..5],
+        [1.0, 7.0, 0.0, 0.14, 0.0],
+        "pinned at the ready time"
+    );
+    assert!(!m.present(7, Property::Translate, 0.2).unwrap());
+    // Hidden: the next spring starts at its commit.
+    m.presentable(false).unwrap();
+    at(&mut m, 0.0, 1.0, 0.3);
+    assert_eq!(lowered(&mut m, 0.3)[..4], [1.0, 7.0, 0.0, 0.3]);
 }

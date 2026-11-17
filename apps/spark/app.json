@@ -44,5 +44,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "spark-data", "type": "spark_data::Profiles", "source": "spark_data::Profiles" } }
 }

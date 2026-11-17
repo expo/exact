@@ -187,6 +187,25 @@ function permission(path, mode, answer) {
   if (!m) return answer('denied');
   return handles.has(n) ? ask(handles.get(n)) : keptHandle(n).then(ask);
 }
+/** Where a picker opens for `startIn` (LLP 1173 D2), as the browser's
+ * picker takes it: a name as is (`screenshots`, Exact's own, as
+ * `pictures`); a `doc:` path as the handle it names, walked a folder at a
+ * time beneath a chosen folder. A handle this page does not hold is
+ * refused into the journal and left out, so the picker opens where the
+ * browser would. */
+async function startIn(path, name, log) {
+  if (path == null) return undefined;
+  if (!String(path).startsWith('doc:/')) return path === 'screenshots' ? 'pictures' : path;
+  const m = /^doc:\/(\d+)\/([^/]+)((?:\/[^/]+)*)\/?$/.exec(path), n = m && Number(m[1]);
+  let handle = m && (handles.get(n) ?? await keptHandle(n));
+  if (handle && m[2] !== names.get(n)) handle = null;
+  for (const part of m?.[3].split('/').filter(Boolean) ?? []) {
+    if (handle?.kind !== 'directory') { handle = null; break; }
+    handle = await handle.getDirectoryHandle(part).catch(() => handle.getFileHandle(part)).catch(() => null);
+  }
+  if (!handle) log(`${name}: startIn: refused: ${path} is not a document this session holds`);
+  return handle ?? undefined;
+}
 // A kept entry another tab kept since this page read the database.
 async function keptHandle(n) {
   await kept?.ready;
@@ -507,8 +526,8 @@ function types() {
 // content for the session, as on a Mac.
 async function declaredFile(handle) {
   if (handle?.kind !== 'file') return false;
-  const ext = /\.[^.]+$/.exec(handle.name)?.[0].toLowerCase();
-  return !!ext && (await types()).some((t) => Object.values(t.accept ?? {}).flat().some((e) => e.toLowerCase() === ext));
+  const name = handle.name.toLowerCase();
+  return (await types()).some((t) => Object.values(t.accept ?? {}).flat().some((suffix) => name.endsWith(suffix)));
 }
 
 globalThis.exact.documents = {
@@ -561,9 +580,13 @@ globalThis.exact.documents = {
         if (name === 'showSaveFilePicker' && typeof globalThis.showSaveFilePicker !== 'function') return chosen(dispatch, r.view, name, [downloadFile(r.suggestedName)]);
         const options = name === 'showSaveFilePicker' ? { suggestedName: r.suggestedName } : name === 'showOpenFilePicker' ? { multiple: r.multiple } : {};
         if (name !== 'showDirectoryPicker') { const t = await types(); if (t.length) options.types = t; }
+        const at = await startIn(r.startIn, name, host.log);
+        if (at) options.startIn = at;
         try { const found = await globalThis[name](options); await chosen(dispatch, r.view, name, [found].flat()); }
         catch (e) { if (e?.name === 'AbortError') chosen(dispatch, r.view, name, []); else { host.log(`${name}: refused: ${e?.name ?? e}`); dispatch(r.view, 27, ''); } }
       },
+      /** `saveFile`'s `startIn` (LLP 1173 D2), as the browser's save picker takes it. */
+      startIn: (path, name) => startIn(path, name, host.log),
       /** The agent's answer to a held picker: the driver's files as handles. */
       answer(r, name, files) {
         const dispatch = since();

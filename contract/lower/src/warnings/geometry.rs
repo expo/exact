@@ -14,24 +14,24 @@
 use super::literal;
 use crate::theme::scan::stmts;
 use crate::LowerError;
-use contract_syntax::{Expr, Node, Span};
-use contract_types::Checked;
+use contract_checking::{Checking, View};
+use contract_syntax::{Expr, Span};
 use std::collections::BTreeSet;
 
 /// The geometry reads that take an element's `id` as their first argument.
 const READS: [&str; 3] = ["frame", "rangeFrame", "measure"];
 
 /// Each geometry read whose literal id no element of the view has.
-pub(super) fn unnamed(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
-    let root = &checked.expanded.root;
+pub(super) fn unnamed(checking: &Checking<'_>, out: &mut Vec<LowerError>) {
+    let actions = checking.actions(0);
     // A `fn` or an action of the same name is the author's, not the read.
     let own = |name: &str| {
-        checked.file.fns.iter().any(|f| f.name == name)
-            || root.actions.iter().any(|a| a.name == name)
+        checking.functions().iter().any(|f| f.name == name)
+            || actions.iter().any(|a| a.name == name)
     };
     let mut reads: Vec<(&str, String, Span)> = Vec::new();
     let mut seen = BTreeSet::new();
-    for action in &root.actions {
+    for action in actions {
         stmts(&action.body, &mut |e| {
             e.walk().for_each(|e| {
                 if let Expr::Call(name, args, _) = e {
@@ -50,7 +50,7 @@ pub(super) fn unnamed(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
     if reads.is_empty() {
         return;
     }
-    let Some(view) = Ids::of(&root.view) else {
+    let Some(view) = Ids::of(&checking.expanded()) else {
         return;
     };
     for (read, id, at) in reads {
@@ -84,26 +84,23 @@ struct Ids {
 
 impl Ids {
     /// `None` when an element's id is one the compiler cannot read.
-    fn of(view: &[Node]) -> Option<Ids> {
+    fn of(view: &View<'_>) -> Option<Ids> {
         let mut found = Ids {
             ids: BTreeSet::new(),
             test_ids: BTreeSet::new(),
         };
-        let mut stack: Vec<&Node> = view.iter().collect();
-        while let Some(node) = stack.pop() {
-            match node {
-                Node::Element { attrs, .. } => {
-                    if attrs.iter().any(|a| a.name == "id") {
-                        found.ids.insert(literal(attrs, "id")?.to_string());
-                    }
-                    if let Some(test_id) = literal(attrs, "testId") {
-                        found.test_ids.insert(test_id.to_string());
-                    }
-                }
-                Node::Use { .. } => return None,
-                _ => {}
+        for node in view.walk() {
+            if node.component_use().is_some() {
+                return None;
             }
-            stack.extend(node.children());
+            if let Some((_, _, attrs)) = node.element() {
+                if attrs.iter().any(|a| a.name == "id") {
+                    found.ids.insert(literal(attrs, "id")?.to_string());
+                }
+                if let Some(test_id) = literal(attrs, "testId") {
+                    found.test_ids.insert(test_id.to_string());
+                }
+            }
         }
         Some(found)
     }

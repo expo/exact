@@ -1,0 +1,160 @@
+block: width min-content on text		2>1>width:min-content>aaa bbbbb cc	1=0,0,800,54 2=0,0,50,54
+block: width max-content on text		2>1>width:max-content>aaa bbbbb cc	1=0,0,800,18 2=0,0,120,18
+block: width fit-content on text that fits		2>1>width:fit-content>aaa bbbbb cc	1=0,0,800,18 2=0,0,120,18
+block: width fit-content wider than its container		2>1>width:100px> & 3>2>width:fit-content>aaaa bbbb cccc	1=0,0,800,36 2=0,0,100,36 3=0,0,100,36
+block: width fit-content in a container narrower than min-content		2>1>width:30px> & 3>2>width:fit-content>aaaa bbbb cccc	1=0,0,800,54 2=0,0,30,54 3=0,0,40,54
+block: width min-content on a view around text		2>1>width:min-content> & 3>2>>aaa bbbbb cc	1=0,0,800,54 2=0,0,50,54 3=0,0,50,54
+block: width max-content on a view around text		2>1>width:max-content> & 3>2>>aaa bbbbb cc	1=0,0,800,18 2=0,0,120,18 3=0,0,120,18
+block: width fit-content on a view around text, too wide		2>1>width:100px> & 3>2>width:fit-content> & 4>3>>aaaa bbbb cccc	1=0,0,800,36 2=0,0,100,36 3=0,0,100,36 4=0,0,100,36
+block: width min-content, padding and border, content-box		2>1>width:min-content;padding:5px;border-width:3px;border-style:solid>aaa bbbbb	1=0,0,800,52 2=0,0,66,52
+block: width min-content, padding and border, border-box		2>1>width:min-content;padding:5px;border-width:3px;border-style:solid;box-sizing:border-box>aaa bbbbb	1=0,0,800,52 2=0,0,66,52
+block: width max-content, padding and border, border-box		2>1>width:max-content;padding:5px;border-width:3px;border-style:solid;box-sizing:border-box>aaa bbbbb	1=0,0,800,34 2=0,0,106,34
+block: width fit-content, padding, border-box, too wide		2>1>width:100px> & 3>2>width:fit-content;padding:5px;box-sizing:border-box>aaaa bbbb cccc	1=0,0,800,46 2=0,0,100,46 3=0,0,100,46
+block: height min-content		2>1>width:50px;height:min-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: height max-content		2>1>width:50px;height:max-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: height fit-content		2>1>width:50px;height:fit-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: height min-content, padding, border-box		2>1>width:50px;height:min-content;padding:5px;box-sizing:border-box>aaa bbb	1=0,0,800,46 2=0,0,50,46
+block: min-width min-content above a narrower width		2>1>width:10px;min-width:min-content>aaa bbbbb	1=0,0,800,36 2=0,0,50,36
+block: min-width max-content above a narrower width		2>1>width:10px;min-width:max-content>aaa bbbbb	1=0,0,800,18 2=0,0,90,18
+block: min-width fit-content above a narrower width		2>1>width:10px;min-width:fit-content>aaa bbbbb	1=0,0,800,18 2=0,0,90,18
+block: max-width min-content under an auto width		2>1>max-width:min-content>aaa bbbbb	1=0,0,800,36 2=0,0,50,36
+block: max-width max-content under an auto width		2>1>max-width:max-content>aaa bbbbb	1=0,0,800,18 2=0,0,90,18
+block: max-width fit-content under an auto width		2>1>max-width:fit-content>aaa bbbbb	1=0,0,800,18 2=0,0,90,18
+block: max-width fit-content in a narrow container		2>1>width:60px> & 3>2>max-width:fit-content>aaa bbbbb	1=0,0,800,36 2=0,0,60,36 3=0,0,60,36
+block: max-width min-content under a wider width		2>1>width:200px;max-width:min-content>aaa bbbbb	1=0,0,800,36 2=0,0,50,36
+block: min-width min-content, padding, content-box		2>1>width:10px;min-width:min-content;padding:5px>aaa bbbbb	1=0,0,800,46 2=0,0,60,46
+block: min-width min-content, padding, border-box		2>1>width:10px;min-width:min-content;padding:5px;box-sizing:border-box>aaa bbbbb	1=0,0,800,46 2=0,0,60,46
+block: max-width max-content, padding, border-box		2>1>max-width:max-content;padding:5px;box-sizing:border-box>aaa bbbbb	1=0,0,800,28 2=0,0,100,28
+block: min-height min-content above a shorter height		2>1>width:50px;height:10px;min-height:min-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: min-height max-content above a shorter height		2>1>width:50px;height:10px;min-height:max-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: min-height fit-content above a shorter height		2>1>width:50px;height:10px;min-height:fit-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: max-height min-content under a taller height		2>1>width:50px;height:100px;max-height:min-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: max-height max-content under a taller height		2>1>width:50px;height:100px;max-height:max-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: max-height fit-content under a taller height		2>1>width:50px;height:100px;max-height:fit-content>aaa bbb ccc	1=0,0,800,54 2=0,0,50,54
+block: max-height min-content with padding, border-box		2>1>width:50px;height:100px;max-height:min-content;padding:5px;box-sizing:border-box>aaa bbb ccc	1=0,0,800,64 2=0,0,50,64
+block: width max-content capped by max-width		2>1>width:max-content;max-width:40px>aaa bbbbb	1=0,0,800,36 2=0,0,40,36
+block: width min-content raised by min-width		2>1>width:min-content;min-width:200px>aaa bbbbb	1=0,0,800,18 2=0,0,200,18
+block: max-width min-content below min-width		2>1>min-width:100px;max-width:min-content>aaa bbbbb	1=0,0,800,18 2=0,0,100,18
+block: percentage child of a max-content parent		2>1>width:max-content> & 3>2>width:50%>aaaa bbbb	1=0,0,800,36 2=0,0,90,36 3=0,0,45,36
+block: percentage height child of a max-content height		2>1>height:max-content> & 3>2>height:50%;width:20px> & 4>2>height:40px;width:20px>	1=0,0,800,40 2=0,0,800,40 3=0,0,20,0 4=0,0,20,40
+block: percentage height child of a min-content height		2>1>height:min-content> & 3>2>height:50%;width:20px> & 4>2>height:40px;width:20px>	1=0,0,800,40 2=0,0,800,40 3=0,0,20,0 4=0,0,20,40
+block: max-content child of a min-content parent		2>1>width:min-content> & 3>2>width:max-content>aaa bbb	1=0,0,800,18 2=0,0,70,18 3=0,0,70,18
+block: min-content child of a max-content parent		2>1>width:max-content> & 3>2>width:min-content>aaa bbb & 4>2>>x	1=0,0,800,54 2=0,0,30,54 3=0,0,30,36 4=0,36,30,18
+block: max-content minimum in a min-content parent		2>1>width:min-content> & 3>2>min-width:max-content>aaa bbb	1=0,0,800,18 2=0,0,70,18 3=0,0,70,18
+block: min-content maximum in a max-content parent		2>1>width:max-content> & 3>2>max-width:min-content>aaa bbb & 4>2>>xx	1=0,0,800,54 2=0,0,30,54 3=0,0,30,36 4=0,36,30,18
+block: fit-content child of a max-content parent		2>1>width:max-content> & 3>2>width:fit-content>aaa bbb	1=0,0,800,18 2=0,0,70,18 3=0,0,70,18
+block: fit-content child of a min-content parent		2>1>width:min-content> & 3>2>width:fit-content>aaa bbb	1=0,0,800,36 2=0,0,30,36 3=0,0,30,36
+block: max-content with a margin		2>1>width:max-content;margin-left:20px>aaa	1=0,0,800,18 2=20,0,30,18
+block: max-content centred by auto margins		2>1>width:max-content;margin-left:auto;margin-right:auto>aaa	1=0,0,800,18 2=385,0,30,18
+block: fit-content centred by auto margins		2>1>width:fit-content;margin-left:auto;margin-right:auto>aaa	1=0,0,800,18 2=385,0,30,18
+block: min-content with an aspect ratio		2>1>width:min-content;aspect-ratio:2>aaa bbbbbbbbbb	1=0,0,800,50 2=0,0,100,50
+block: max-content around block children		2>1>width:max-content> & 3>2>width:40px;height:10px> & 4>2>width:70px;height:10px>	1=0,0,800,20 2=0,0,70,20 3=0,0,40,10 4=0,10,70,10
+block: min-content around a percentage-padded child		2>1>width:min-content> & 3>2>padding-left:10%>aaa bbbbb	1=0,0,800,36 2=0,0,50,36 3=0,0,50,36
+flex row: max-content item		2>1>display:flex;width:300px> & 3>2>width:max-content>aaa bbbbb & 4>2>width:50px;height:10px>	1=0,0,800,18 2=0,0,300,18 3=0,0,90,18 4=90,0,50,10
+flex row: min-content item that grows		2>1>display:flex;width:300px> & 3>2>width:min-content;flex-grow:1>aaa bbbbb & 4>2>width:50px;height:10px>	1=0,0,800,18 2=0,0,300,18 3=0,0,250,18 4=250,0,50,10
+flex row: max-content items that shrink		2>1>display:flex;width:100px> & 3>2>width:max-content>aaaa bbbb & 4>2>width:max-content>cccc dddd	1=0,0,800,36 2=0,0,100,36 3=0,0,50,36 4=50,0,50,36
+flex row: max-content minimum keeps an item from shrinking		2>1>display:flex;width:100px> & 3>2>min-width:max-content>aaaa bbbb & 4>2>>cccc dddd	1=0,0,800,36 2=0,0,100,36 3=0,0,90,36 4=90,0,40,36
+flex row: min-content maximum stops growth		2>1>display:flex;width:300px> & 3>2>flex-grow:1;max-width:min-content>aaaa bbbb	1=0,0,800,36 2=0,0,300,36 3=0,0,40,36
+flex row: fit-content item wider than the container		2>1>display:flex;width:300px> & 3>2>width:fit-content>aaaa bbbb cccc dddd eeee ffff gggg	1=0,0,800,36 2=0,0,300,36 3=0,0,300,36
+flex row: fit-content item that fits		2>1>display:flex;width:300px> & 3>2>width:fit-content>aaaa bbbb & 4>2>width:50px;height:10px>	1=0,0,800,18 2=0,0,300,18 3=0,0,90,18 4=90,0,50,10
+flex row: min-content minimum with hidden overflow		2>1>display:flex;width:100px> & 3>2>min-width:min-content;overflow:hidden>aaaa bbbb & 4>2>width:100px;height:10px;flex-shrink:0>	1=0,0,800,36 2=0,0,100,36 3=0,0,40,36 4=40,0,100,10
+flex row: min-content item, padding, border-box		2>1>display:flex;width:300px> & 3>2>width:min-content;padding:5px;box-sizing:border-box>aaa bbbbb	1=0,0,800,46 2=0,0,300,46 3=0,0,60,46
+flex row: min-content height stops stretch		2>1>display:flex;height:100px> & 3>2>height:min-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,800,100 3=0,0,50,36
+flex row: max-content height stops stretch		2>1>display:flex;height:100px> & 3>2>height:max-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,800,100 3=0,0,50,36
+flex row: fit-content height stops stretch		2>1>display:flex;height:100px> & 3>2>height:fit-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,800,100 3=0,0,50,36
+flex row: min-height min-content above a shorter height		2>1>display:flex;height:100px;align-items:flex-start> & 3>2>height:10px;min-height:min-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,800,100 3=0,0,50,36
+flex row: max-height max-content caps stretch		2>1>display:flex;height:100px> & 3>2>max-height:max-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,800,100 3=0,0,50,36
+flex column: max-content item		2>1>display:flex;flex-direction:column;width:300px> & 3>2>width:max-content>aaa bbbbb	1=0,0,800,18 2=0,0,300,18 3=0,0,90,18
+flex column: min-content item		2>1>display:flex;flex-direction:column;width:300px> & 3>2>width:min-content>aaa bbbbb	1=0,0,800,36 2=0,0,300,36 3=0,0,50,36
+flex column: fit-content item wider than the container		2>1>display:flex;flex-direction:column;width:100px> & 3>2>width:fit-content>aaaa bbbb cccc	1=0,0,800,36 2=0,0,100,36 3=0,0,100,36
+flex column: fit-content item that fits		2>1>display:flex;flex-direction:column;width:300px> & 3>2>width:fit-content>aaaa bbbb	1=0,0,800,18 2=0,0,300,18 3=0,0,90,18
+flex column: max-content width cap under stretch		2>1>display:flex;flex-direction:column;width:300px> & 3>2>max-width:max-content>aaaa bbbb	1=0,0,800,18 2=0,0,300,18 3=0,0,90,18
+flex column: min-content height as the basis		2>1>display:flex;flex-direction:column;width:50px;height:200px> & 3>2>height:min-content>aaa bbb ccc & 4>2>flex-grow:1>	1=0,0,800,200 2=0,0,50,200 3=0,0,50,54 4=0,54,50,146
+flex column: max-content height item does not shrink below content		2>1>display:flex;flex-direction:column;width:50px;height:30px> & 3>2>height:max-content>aaa bbb ccc	1=0,0,800,30 2=0,0,50,30 3=0,0,50,54
+flex column: min-height max-content keeps a shrinking item		2>1>display:flex;flex-direction:column;width:50px;height:30px> & 3>2>height:100px;min-height:max-content>aaa bbb ccc	1=0,0,800,30 2=0,0,50,30 3=0,0,50,54
+flex column: max-height min-content caps a growing item		2>1>display:flex;flex-direction:column;width:50px;height:200px> & 3>2>flex-grow:1;max-height:min-content>aaa bbb ccc	1=0,0,800,200 2=0,0,50,200 3=0,0,50,54
+flex container: max-content row		2>1>display:flex;width:max-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,18 2=0,0,120,18 3=0,0,70,18 4=70,0,50,18
+flex container: min-content row		2>1>display:flex;width:min-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,50,36 3=0,0,30,36 4=30,0,20,36
+flex container: min-content wrapping row		2>1>display:flex;flex-wrap:wrap;width:min-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,72 2=0,0,30,72 3=0,0,30,36 4=0,36,30,36
+flex container: min-content column		2>1>display:flex;flex-direction:column;width:min-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,72 2=0,0,30,72 3=0,0,30,36 4=0,36,30,36
+flex container: fit-content row too wide		2>1>width:100px> & 3>2>display:flex;width:fit-content> & 4>3>>aaaa bbbb & 5>3>>cccc dddd	1=0,0,800,36 2=0,0,100,36 3=0,0,100,36 4=0,0,50,36 5=50,0,50,36
+flex container: max-content row of max-content items		2>1>display:flex;width:max-content> & 3>2>width:min-content>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,80,36 3=0,0,30,36 4=30,0,50,36
+flex basis: max-content		2>1>display:flex;width:300px> & 3>2>flex-basis:max-content;width:10px>aaa bbb	1=0,0,800,18 2=0,0,300,18 3=0,0,70,18
+flex basis: min-content		2>1>display:flex;width:300px> & 3>2>flex-basis:min-content;width:200px>aaa bbb	1=0,0,800,36 2=0,0,300,36 3=0,0,30,36
+flex basis: fit-content too wide		2>1>display:flex;width:100px> & 3>2>flex-basis:fit-content;flex-shrink:0>aaaa bbbb cccc	1=0,0,800,36 2=0,0,100,36 3=0,0,100,36
+flex basis: content		2>1>display:flex;width:300px> & 3>2>flex-basis:content;width:10px>aaa bbb	1=0,0,800,18 2=0,0,300,18 3=0,0,70,18
+grid: max-content item in a fixed track		2>1>display:grid;grid-template-columns:200px;width:300px> & 3>2>width:max-content>aaa bbb	1=0,0,800,18 2=0,0,300,18 3=0,0,70,18
+grid: fit-content item too wide for its track		2>1>display:grid;grid-template-columns:100px;width:300px> & 3>2>width:fit-content>aaaa bbbb cccc	1=0,0,800,36 2=0,0,300,36 3=0,0,100,36
+grid: min-content item in a fixed track		2>1>display:grid;grid-template-columns:200px;width:300px> & 3>2>width:min-content>aaa bbb	1=0,0,800,36 2=0,0,300,36 3=0,0,30,36
+grid: min-content container		2>1>display:grid;width:min-content> & 3>2>>aaa bbbbb	1=0,0,800,36 2=0,0,50,36 3=0,0,50,36
+grid: max-content container		2>1>display:grid;width:max-content> & 3>2>>aaa bbbbb	1=0,0,800,18 2=0,0,90,18 3=0,0,90,18
+grid: min-content height stops stretch		2>1>display:grid;grid-template-rows:100px;width:300px> & 3>2>height:min-content;width:50px>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,50,36
+grid: min-content item in auto tracks		2>1>display:grid;grid-template-columns:auto auto;width:300px> & 3>2>width:min-content>aaa bbb & 4>2>>cc	1=0,0,800,36 2=0,0,300,36 3=0,0,30,36 4=155,0,145,36
+grid: max-content minimum widens a fraction track		2>1>display:grid;grid-template-columns:1fr 1fr;width:100px> & 3>2>min-width:max-content>aaaa bbbb & 4>2>>c	1=0,0,800,18 2=0,0,100,18 3=0,0,90,18 4=90,0,10,18
+grid: min-content maximum in a wide track		2>1>display:grid;grid-template-columns:200px;width:300px> & 3>2>max-width:min-content>aaa bbb	1=0,0,800,36 2=0,0,300,36 3=0,0,30,36
+absolute: min-content		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;width:min-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,30,36
+absolute: max-content		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;width:max-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,70,18
+absolute: fit-content between insets, too wide		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;left:0;right:0;width:fit-content>aaaa bbbb cccc dddd eeee ffff gggg	1=0,0,800,100 2=0,0,300,100 3=0,0,300,36
+absolute: fit-content between insets, fits		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;left:0;right:0;width:fit-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,70,18
+absolute: fit-content between narrow insets		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;left:100px;right:100px;width:fit-content>aaaa bbbb cccc	1=0,0,800,100 2=0,0,300,100 3=100,0,100,36
+absolute: min-content height between insets		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;top:0;bottom:0;width:50px;height:min-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,50,36
+absolute: max-content minimum		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;width:10px;min-width:max-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,70,18
+absolute: min-content maximum between insets		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;left:0;right:0;max-width:min-content>aaa bbb	1=0,0,800,100 2=0,0,300,100 3=0,0,30,36
+absolute: max-content in a narrow containing block		2>1>position:relative;width:50px;height:100px> & 3>2>position:absolute;width:max-content>aaa bbb ccc	1=0,0,800,100 2=0,0,50,100 3=0,0,110,18
+image: width min-content		2>1>width:min-content>@img40x20	1=0,0,800,20 2=0,0,40,20
+image: width max-content		2>1>width:max-content>@img40x20	1=0,0,800,20 2=0,0,40,20
+image: width fit-content in a narrow container		2>1>width:30px> & 3>2>width:fit-content>@img40x20	1=0,0,800,20 2=0,0,30,20 3=0,0,40,20
+image: max-width min-content under a wider width		2>1>width:100px;max-width:min-content>@img40x20	1=0,0,800,20 2=0,0,40,20
+image: min-width max-content above a narrower width		2>1>width:10px;min-width:max-content>@img40x20	1=0,0,800,20 2=0,0,40,20
+image: height min-content		2>1>height:min-content>@img40x20	1=0,0,800,20 2=0,0,40,20
+image: in a min-content parent with a percentage width		2>1>width:min-content> & 3>2>width:50%>@img40x20	1=0,0,800,0 2=0,0,0,0 3=0,0,0,0
+root: max-content	width:max-content	2>1>>aaa bbbbb	1=0,0,90,18 2=0,0,90,18
+root: min-content	width:min-content	2>1>>aaa bbbbb	1=0,0,50,36 2=0,0,50,36
+root: fit-content	width:fit-content	2>1>>aaa bbbbb	1=0,0,90,18 2=0,0,90,18
+root: min-content flex	display:flex;width:min-content	2>1>>aaa bbb & 3>1>>cc dd	1=0,0,50,36 2=0,0,30,36 3=30,0,20,36
+image: width max-content with a definite height		2>1>width:max-content;height:100px>@img40x20	1=0,0,800,100 2=0,0,200,100
+image: width min-content with a definite height		2>1>width:min-content;height:100px>@img40x20	1=0,0,800,100 2=0,0,200,100
+image: height max-content with a definite width		2>1>width:80px;height:max-content>@img40x20	1=0,0,800,40 2=0,0,80,40
+image: min-width max-content with a definite height		2>1>width:10px;height:100px;min-width:max-content>@img40x20	1=0,0,800,100 2=0,0,200,100
+ratio: height min-content with a definite width		2>1>width:100px;aspect-ratio:2;height:min-content>aaa	1=0,0,800,50 2=0,0,100,50
+ratio: height auto with a definite width		2>1>width:100px;aspect-ratio:2>aaa	1=0,0,800,50 2=0,0,100,50
+ratio: width max-content with a definite height		2>1>height:30px;aspect-ratio:2;width:max-content>aaa	1=0,0,800,30 2=0,0,60,30
+ratio: width auto with a definite height in a flex row		2>1>display:flex;align-items:flex-start> & 3>2>height:30px;aspect-ratio:2>aaa	1=0,0,800,30 2=0,0,800,30 3=0,0,60,30
+flex basis: content with a ratio and a definite height		2>1>display:flex;height:100px;align-items:flex-start> & 3>2>flex-basis:content;aspect-ratio:2;height:30px;width:10px>a	1=0,0,800,100 2=0,0,800,100 3=0,0,60,30
+flex basis: content on an image with a definite height		2>1>display:flex;align-items:flex-start> & 3>2>flex-basis:content;height:50px;width:10px>@img40x20	1=0,0,800,50 2=0,0,800,50 3=0,0,100,50
+flex container: max-content wrapping row		2>1>display:flex;flex-wrap:wrap;width:max-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,18 2=0,0,120,18 3=0,0,70,18 4=70,0,50,18
+flex container: max-content column		2>1>display:flex;flex-direction:column;width:max-content> & 3>2>>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,70,36 3=0,0,70,18 4=0,18,70,18
+flex container: max-content row of a min-content basis		2>1>display:flex;width:max-content> & 3>2>flex-basis:min-content>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,120,36 3=0,0,30,36 4=30,0,50,36
+flex container: min-content row of a max-content basis		2>1>display:flex;width:min-content> & 3>2>flex-basis:max-content;flex-shrink:0>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,50,36 3=0,0,70,36 4=70,0,20,36
+flex container: max-content row of a fit-content basis		2>1>display:flex;width:max-content> & 3>2>flex-basis:fit-content>aaa bbb & 4>2>>cc dd	1=0,0,800,18 2=0,0,120,18 3=0,0,70,18 4=70,0,50,18
+flex container: min-content row of a fit-content basis		2>1>display:flex;width:min-content> & 3>2>flex-basis:fit-content>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,50,36 3=0,0,30,36 4=30,0,20,36
+flex container: max-content column of a min-content height		2>1>display:flex;flex-direction:column;width:max-content> & 3>2>height:min-content>aaa bbb	1=0,0,800,18 2=0,0,70,18 3=0,0,70,18
+flex container: min-content row of a min-width max-content item		2>1>display:flex;width:min-content> & 3>2>min-width:max-content>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,90,36 3=0,0,70,36 4=70,0,20,36
+flex container: max-content row of a max-width min-content item		2>1>display:flex;width:max-content> & 3>2>max-width:min-content>aaa bbb & 4>2>>cc dd	1=0,0,800,36 2=0,0,80,36 3=0,0,30,36 4=30,0,50,36
+absolute: percentage height under a max-content height		2>1>position:relative;width:100px;height:max-content> & 3>2>height:40px> & 4>2>position:absolute;top:0;height:50%;width:10px>	1=0,0,800,40 2=0,0,100,40 3=0,0,100,40 4=0,0,10,20
+flex row: percentage height under a min-content height item		2>1>display:flex;height:100px> & 3>2>height:min-content;width:50px> & 4>3>height:50%;width:10px> & 5>3>height:40px;width:10px>	1=0,0,800,100 2=0,0,800,100 3=0,0,50,40 4=0,0,10,0 5=0,0,10,40
+grid: percentage height under a max-content height item		2>1>display:grid;grid-template-rows:100px> & 3>2>height:max-content;width:50px> & 4>3>height:50%;width:10px> & 5>3>height:40px;width:10px>	1=0,0,800,100 2=0,0,800,100 3=0,0,50,40 4=0,0,10,0 5=0,0,10,40
+block: fit-content minimum in a min-content parent		2>1>width:min-content> & 3>2>min-width:fit-content>aaa bbb	1=0,0,800,36 2=0,0,30,36 3=0,0,30,36
+block: fit-content maximum in a max-content parent		2>1>width:max-content> & 3>2>max-width:fit-content>aaa bbb & 4>2>>xxxxxxxxxx	1=0,0,800,36 2=0,0,100,36 3=0,0,70,18 4=0,18,100,18
+flex row: min-height max-content in a wrapping row		2>1>display:flex;flex-wrap:wrap;width:100px;align-items:flex-start> & 3>2>width:50px;height:10px;min-height:max-content>aaa bbb ccc	1=0,0,800,54 2=0,0,100,54 3=0,0,50,54
+flex column: min-width min-content above stretch		2>1>display:flex;flex-direction:column;width:20px> & 3>2>min-width:min-content>aaa bbbbb	1=0,0,800,36 2=0,0,20,36 3=0,0,50,36
+block: max-content minimum over a shorter length maximum		2>1>min-width:max-content;max-width:40px>aaa bbbbb	1=0,0,800,18 2=0,0,90,18
+block: min-content minimum over a shorter length maximum		2>1>min-width:min-content;max-width:20px>aaa bbbbb	1=0,0,800,36 2=0,0,50,36
+flex row: max-content minimum over a shorter length maximum		2>1>display:flex> & 3>2>min-width:max-content;max-width:40px>aaa bbbbb	1=0,0,800,18 2=0,0,800,18 3=0,0,90,18
+grid: max-content minimum over a shorter length maximum		2>1>display:grid;grid-template-columns:200px> & 3>2>min-width:max-content;max-width:40px>aaa bbbbb	1=0,0,800,18 2=0,0,800,18 3=0,0,90,18
+absolute: max-content minimum over a shorter length maximum		2>1>position:relative;width:300px;height:100px> & 3>2>position:absolute;min-width:max-content;max-width:40px>aaa bbbbb	1=0,0,800,100 2=0,0,300,100 3=0,0,90,18
+block container: max-content minimum over a shorter length maximum		2>1>min-width:max-content;max-width:40px> & 3>2>>aaa bbbbb	1=0,0,800,18 2=0,0,90,18 3=0,0,90,18
+flex container: max-content minimum over a shorter length maximum		2>1>display:flex;min-width:max-content;max-width:40px> & 3>2>>aaa bbbbb	1=0,0,800,18 2=0,0,90,18 3=0,0,90,18
+flex column: growing min-content height makes a percentage definite		2>1>display:flex;flex-direction:column;height:200px> & 3>2>height:min-content;flex-grow:1> & 4>3>height:50%;width:10px>	1=0,0,800,200 2=0,0,800,200 3=0,0,800,200 4=0,0,10,100
+flex column: wrapping max-content width		2>1>display:flex;flex-direction:column;flex-wrap:wrap;height:30px;width:max-content;align-content:flex-start> & 3>2>width:50px;height:30px> & 4>2>width:50px;height:30px>	1=0,0,800,30 2=0,0,100,30 3=0,0,50,30 4=50,0,50,30
+flex row: definite basis in a max-content row		2>1>display:flex;width:max-content> & 3>2>width:100px;flex-basis:40px>	1=0,0,800,0 2=0,0,40,0 3=0,0,40,0
+grid: fit-content height taller than its area		2>1>display:grid;grid-template-rows:30px;grid-template-columns:50px> & 3>2>height:fit-content>aaa bbbbb cc	1=0,0,800,30 2=0,0,800,30 3=0,0,50,54
+grid: min-content height taller than its area		2>1>display:grid;grid-template-rows:30px;grid-template-columns:50px> & 3>2>height:min-content>aaa bbbbb cc	1=0,0,800,30 2=0,0,800,30 3=0,0,50,54
+absolute: fit-content height taller than its insets		2>1>position:relative;width:300px;height:30px> & 3>2>position:absolute;top:0;bottom:0;width:50px;height:fit-content>aaa bbbbb cc	1=0,0,800,30 2=0,0,300,30 3=0,0,50,54
+flex column: fit-content height taller than the container		2>1>display:flex;flex-direction:column;height:30px;width:50px> & 3>2>height:fit-content;flex-shrink:0>aaa bbbbb cc	1=0,0,800,30 2=0,0,50,30 3=0,0,50,54
+ratio: min-content height above the ratio's		2>1>width:50px;aspect-ratio:2;height:min-content>aaa bbbbb cc	1=0,0,800,54 2=0,0,50,54
+ratio: auto height above the ratio's		2>1>width:50px;aspect-ratio:2>aaa bbbbb cc	1=0,0,800,54 2=0,0,50,54
+ratio: min-content width above the ratio's		2>1>height:10px;aspect-ratio:2;width:min-content>aaaaa	1=0,0,800,10 2=0,0,50,10
+flex row: max-content items shrink to their automatic minimums		2>1>display:flex;width:60px> & 3>2>width:max-content>aaaa bbbb & 4>2>width:max-content>cccc dddd	1=0,0,800,36 2=0,0,60,36 3=0,0,40,36 4=40,0,40,36
+percentage maximum under a max-content parent		2>1>width:max-content> & 3>2>max-width:50%>aaaa bbbb	1=0,0,800,36 2=0,0,90,36 3=0,0,45,36
+percentage minimum under a max-content parent		2>1>width:max-content> & 3>2>min-width:50%>aaaa bbbb	1=0,0,800,18 2=0,0,90,18 3=0,0,90,18

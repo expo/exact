@@ -3,9 +3,9 @@
 // `tsc` under it too), as it is when the check is told to stop or its caller is killed outright; a `tsc` that never
 // returns is stopped at the bound; a builder that finishes is passed through; the bound only shortens, and only under
 // the test switch.
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { checkBound, CHECK_BOUND_MS } from '../js/bake/src/typescript.mjs';
@@ -19,7 +19,9 @@ const knowsBuilder = supervisor => new Promise((known, no) => {
   supervisor.once('exit', () => no(new Error(`the supervisor exited before it knew the builder: ${said}`)));
 });
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-const scratch = () => mkdtempSync(join(tmpdir(), 'exact-check-watchdog-'));
+const scratches = [];
+const scratch = () => { const dir = mkdtempSync(join(tmpdir(), 'exact-check-watchdog-')); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 /** A builder stand-in that spins, with a child of its own that sleeps (a `tsc` under it); both pids written to `pids`. */
 function spinner(dir) {

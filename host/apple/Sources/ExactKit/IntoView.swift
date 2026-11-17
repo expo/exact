@@ -315,6 +315,8 @@ extension Presenter {
         // The target's box where it will be once the inner scrollers'
         // reveals arrive, and where it is now, in the last of them.
         for (index, sv) in scrollers.enumerated() {
+            // A newer request owns the scroller: a position Exact carries for it gives way, instant or animated
+            ((sv as? ScrollView)?.scrollingNode ?? (sv as? GroupedScroller)?.scrollingNode)?.dropCarriedScroll()
             // The inner ports, weakly, for a destination asked again later.
             let inners = scrollers[..<index].map { inner in { [weak inner] in inner } }
             let projected = projection(target, through: inners.compactMap { $0() }, grouped: grouped, block: block, inline: inline)

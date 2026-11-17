@@ -54,6 +54,9 @@ def global (env : Env) (x : String) : Result Value :=
       (lookup x env.derives).elim (.error .pending) .ok
     else if env.prog.resources.any (·.name == x) then
       (lookup x env.resources).elim (.error .pending) .ok
+    else if env.prog.mutations.any (fun m => m.name == x && m.owner.isSome) then
+      -- A child's mutation is its instance's slot (LLP 1035.005.004 D6).
+      (lookup x env.rows).elim (.error (.refused s!"row slot `{x}` read outside its row")) .ok
     else if env.prog.mutations.any (·.name == x) then
       (lookup x env.slots).elim (.error (.unbound x)) .ok
     else .error (.unbound x)
@@ -109,6 +112,10 @@ A style the compiler would have refused is refused as unsupported. -/
 def formatting (tables : Format.Tables) (f : String) (args : List Value) : Result Value :=
   match f, args with
   | "formatTime", [.num e, .num o, .str "short", .str ""] => .ok (.str (Format.formatTime e o))
+  | "formatTime", [.num e, .num o, .str "2-digit", .str ""] => .ok (.str (Format.formatTime e o true))
+  | "formatDate", [.num e, .num o, .str "month-day", .str ""] => .ok (.str (Format.formatMonthDay e o))
+  | "formatDate", [.str k, .num o, .str "month-day", .str ""] =>
+    .ok (.str ((Format.dayKeyWall k o).elim "" (Format.formatMonthDay · 0)))
   | "formatDate", [.num e, .num o, .str "medium", .str ""] => .ok (.str (Format.formatDate e o false))
   | "formatDate", [.num e, .num o, .str "month-year", .str ""] => .ok (.str (Format.formatDate e o true))
   | "formatDate", [.num e, .num o, .str "iso", .str ""] => .ok (.str (Format.formatIsoDate e o))
@@ -124,7 +131,12 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
   | "formatDay", [.num t, .num n, .num o, .str "list", .str ""] => .ok (.str (Format.formatDay t n o "list"))
   | "formatDay", [.num t, .num n, .num o, .str "section", .str ""] => .ok (.str (Format.formatDay t n o "section"))
   | "formatNumber", [.num n, .str "compact", _, .str ""] => .ok (.str (Format.compact n))
-  -- LLP 1116 D8: `decimal`, `percent`, and `currency` with its code.
+  -- LLP 1116 D8: `decimal`, `percent`, and `currency` with its code; a
+  -- `decimal` with a digit count the compiler admitted.
+  | "formatNumber", [.num n, .str "decimal", .num d, .str ""] =>
+    match (Format.digitsOf d 100).bind (Format.styled n "decimal" "" ·) with
+    | .some s => .ok (.str s)
+    | .none => .error (.unsupported "`formatNumber` of digits it does not take")
   | "formatNumber", [.num n, .str style, .str code, .str ""] =>
     match Format.styled n style code with
     | .some s => .ok (.str s)
@@ -132,6 +144,12 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
   -- LLP 1054.000.003 D6: in a table's locale.
   | "formatTime", [.num e, .num o, .str "short", .str loc] =>
     inLocale tables loc fun r c => .some ((Format.wallMs e o).elim "" (Format.timeIn r · c))
+  | "formatTime", [.num e, .num o, .str "2-digit", .str loc] =>
+    inLocale tables loc fun r c => .some ((Format.wallMs e o).elim "" (Format.timeIn r · c true))
+  | "formatDate", [.num e, .num o, .str "month-day", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.wallMs e o).elim "" (Format.dateIn r · 30 31))
+  | "formatDate", [.str k, .num o, .str "month-day", .str loc] =>
+    inLocale tables loc fun r _ => .some ((Format.dayKeyWall k o).elim "" (Format.dateIn r · 30 31))
   | "formatDate", [.num e, .num o, .str "medium", .str loc] =>
     inLocale tables loc fun r _ => .some ((Format.wallMs e o).elim "" (Format.dateIn r · 10 11))
   | "formatDate", [.num e, .num o, .str "month-year", .str loc] =>
@@ -152,6 +170,10 @@ def formatting (tables : Format.Tables) (f : String) (args : List Value) : Resul
     inLocale tables loc fun r _ => .some (Format.compactIn r n)
   | "formatNumber", [.num n, .str style, .str code, .str loc] =>
     inLocale tables loc fun r _ => Format.styledIn r n style code
+  | "formatNumber", [.num n, .str "decimal", .num d, .str loc] =>
+    match Format.digitsOf d 100 with
+    | .some k => inLocale tables loc fun r _ => Format.styledIn r n "decimal" "" (.some k)
+    | .none => .error (.unsupported "`formatNumber` of digits it does not take")
   -- LLP 1102 §3.2: `digits` a whole-number literal the compiler admitted.
   | "toFixed", [.num x, .num d] =>
     match Format.digitsOf d 100 with

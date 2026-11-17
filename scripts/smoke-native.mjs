@@ -15,6 +15,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { buildBase } from '../host/web/generations.mjs';
 import { jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs';
 import { decodePng } from './png.mjs';
 import { resetLogs } from './agent-test.mjs';
@@ -830,7 +831,7 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
       change(dir);
       // A JS-target build's agent pieces are served as `serve.mjs` serves them.
       const server = createServer((req, res) => jsTargetBuild(webDist) ? serveBuildTree(dir, req, res) : serveStatic(dir, req, res));
-      return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({ url: `http://127.0.0.1:${server.address().port}/`, close: () => server.close() })));
+      return new Promise((ok) => server.listen(0, '127.0.0.1', () => ok({ url: `http://127.0.0.1:${server.address().port}${jsTargetBuild(webDist) ? buildBase(dir) : "/"}`, close: () => server.close() })));
     };
     const missing = await variant('missing', (dir) => rmSync(resolve(dir, 'modules'), { recursive: true, force: true }));
     await failing('a missing artifact', { url: missing.url }, /did not load/, missing.close);

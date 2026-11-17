@@ -192,7 +192,8 @@ export async function open({
         : host === 'host-ios'
           ? await openIOS({ plan, app, env, session, hostFixture: true, touch, ax, onProcess })
           : host === 'linux' || host === 'android'
-            ? await openStdio({ host, plan, size: size ?? VIEWPORT, env, app, reader, onProcess })
+            ? // The APK runs at the phone's size, and refuses another (`readerDeploy`).
+              await openStdio({ host, plan, size: size ?? (host === 'android' && (reader ?? !!process.env.EXACT_ANDROID_READER) ? undefined : VIEWPORT), env, app, reader, onProcess })
             : host === 'windows'
               ? await openStdio({ host: 'windows', plan, size: size ?? VIEWPORT, env, app, onProcess })
               : host === 'ios'
@@ -227,7 +228,7 @@ export async function open({
     const a = resolveApp(app);
     const bin =
       host === 'windows'
-        ? (process.env.EXACT_WINDOWS_BIN ?? resolve(a.dir, 'dist-windows', `${executableName(a)}.exe`))
+        ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))
         : host === 'android'
           ? (process.env.EXACT_ANDROID_BIN ?? androidBinary(a, undefined, reader))
           : (process.env.EXACT_LINUX_BIN ?? linuxBinary(a));
@@ -709,7 +710,8 @@ export async function open({
     /** The device facts by their web names (LLP 1061 D5; LLP 1069.000 D6), grouped on the wire as LLP 1069.007 D2
      * groups them. `media`: `{"prefers-reduced-motion": "reduce"}`, `"prefers-reduced-transparency"` likewise,
      * `"prefers-contrast": "more"|"less"|"custom"|"no-preference"`, `"prefers-color-scheme": "dark"|"light"` (the
-     * system's; an app's `setScheme` still wins). `page`: `"visibility-state": "visible"|"hidden"`, `online`,
+     * system's; an app's `setScheme` still wins). `page`: `"visibility-state": "visible"|"hidden"` and `frozen`;
+     * each substitutes a fact and its defined transitions, not process suspension (LLP 1012 §1). Also `online`,
      * `can-share`, `can-share-files`, `can-share-pictures`, `can-open-files` and `has-focus` `"true"|"false"`,
      * `"root-font-size"` in px (what `rem` follows), `"bold-text"` `"true"|"false"` (Apple's Bold Text, refused by
      * name elsewhere). `fold` (LLP 1078 D7): `posture folded|continuous`, `segments <cols>x<rows>`, `gap <points>` —

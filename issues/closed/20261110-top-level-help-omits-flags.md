@@ -23,7 +23,7 @@ behind their command:
 
 The lines for `migrate`, `symbols`, `sources`, `fmt`, `types`, `rust`, `test`, `lean`, `vocab`
 and `gallery` give their command's flags in full, so a reader takes the top-level text as the
-whole surface. (`tamber`'s line names four of its subcommands, `check`, `eval`, `ir` and
+whole surface. (`forma`'s line names four of its subcommands, `check`, `eval`, `ir` and
 `fmt`, and not `serve`, `gen`, `import`, `import-plan` or `export`.)
 
 `bun exact.mjs contract --help` (`scripts/help.mjs:342-353`) repeats the short forms and also

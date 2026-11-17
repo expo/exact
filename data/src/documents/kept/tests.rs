@@ -4,14 +4,15 @@ use super::*;
 
 /// A scratch folder and a kept set's file for one test.
 #[cfg(unix)]
-fn scratch(name: &str) -> (PathBuf, PathBuf) {
+fn scratch(name: &str) -> (crate::TempDir, PathBuf) {
     let root = std::env::temp_dir().join(format!("exact-kept-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("notes")).unwrap();
     std::fs::write(root.join("notes/a.md"), "a").unwrap();
     std::fs::write(root.join("notes/b.md"), "b").unwrap();
     let canonical = std::fs::canonicalize(&root).unwrap();
-    (canonical.clone(), canonical.join("kept.json"))
+    let file = canonical.join("kept.json");
+    (crate::TempDir(canonical), file)
 }
 
 #[cfg(unix)]

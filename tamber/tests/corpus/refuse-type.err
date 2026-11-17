@@ -1,8 +1,0 @@
-4:17: tamber-kind: `normal -exact-body`: a type token writes only what it names, so `normal` says nothing; leave the style or weight out, or write the weight as a number
-5:23: tamber-unknown-token: `Inter` is no token or text style
-6:17: tamber-kind: `1200`: a weight is a whole number from 1 to 1000
-7:18: tamber-unknown-token: `x` is no token
-8:17: tamber-kind: `Inter!`: unquoted font-family name `Inter!` is not a sequence of CSS identifiers; quote it
-9:24: tamber-kind: `"Inter", 12px`: unquoted font-family name `12px` is not a sequence of CSS identifiers; quote it
-10:15: tamber-kind: `-exact-hairline` is a named length no font size takes
-11:18: tamber-kind: `oblique 16px`: `font-style` is `normal` or `italic` on every host; write `italic`

@@ -116,9 +116,13 @@ impl Parser {
             .iter()
             .take_while(|s| !launch_word(s).is_empty())
             .count();
-        // Fetch faults and media preferences may also change between steps.
+        // Fetch faults and preferences may also change between steps.
         let late = steps[leading..].iter().find(|s| {
-            !launch_word(s).is_empty() && !matches!(s, Step::FailFetch { .. } | Step::Prefer { .. })
+            !launch_word(s).is_empty()
+                && !matches!(
+                    s,
+                    Step::FailFetch { .. } | Step::AnswerFetch { .. } | Step::Prefer { .. }
+                )
         });
         if let Some(late) = late {
             return Err(SyntaxError {
@@ -546,7 +550,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `type`, `pick`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `type`, `pick`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -557,12 +561,17 @@ impl Parser {
             "tap" if self.at_ident("midi") => return self.tap_midi(span),
             "prefer" if self.at_ident("midi") => return self.prefer_midi(span),
             "prefer" => {
-                let (name, _) = self.ident()?;
+                // A module's permission is dotted (`permission.notifications`).
+                let (mut name, _) = self.ident()?;
+                while self.eat_punct(".") {
+                    name.push('.');
+                    name.push_str(&self.ident()?.0);
+                }
                 let value = match self.next() {
-                    Token { kind: TokenKind::Ident(value), .. } => value,
+                    Token { kind: TokenKind::Ident(value) | TokenKind::Str(value), .. } => value,
                     token => return Err(SyntaxError {
                         id: "syntax-expected-step",
-                        message: "`prefer` takes a CSS media feature and its value, as `prefer prefers-color-scheme dark`".into(),
+                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now".into(),
                         span: token.span,
                     }),
                 };
@@ -1051,6 +1060,39 @@ impl Parser {
                     Step::FailFetch { prefix, times, span }
                 }
             }
+            "answer" => {
+                self.expect_word("fetch")?;
+                let prefix = self.launch_str("answer fetch", "a URL prefix")?;
+                self.expect_word("with")?;
+                let status = self.step_number("an HTTP status from 200 through 599")?;
+                if status.fract() != 0.0 || !(200.0..=599.0).contains(&status)
+                    || [301.0, 302.0, 303.0, 307.0, 308.0].contains(&status) {
+                    return self.err("syntax-expected-step", "answer fetch takes a status from 200 through 599, excluding redirects (301, 302, 303, 307, 308)");
+                }
+                let mut headers = Vec::new();
+                while self.at_ident("header") {
+                    self.next();
+                    let name = self.str_lit("a header name")?.to_ascii_lowercase();
+                    let value = self.str_lit("a header value")?;
+                    if matches!(name.as_str(), "set-cookie" | "set-cookie2") {
+                        return self.err("syntax-expected-step", "answer fetch cannot expose set-cookie or set-cookie2 headers on every host");
+                    }
+                    headers.push(format!("{}:{}", json_string(&name), json_string(&value)));
+                }
+                let (body, content_type) = match self.peek_kind() {
+                    TokenKind::Newline | TokenKind::Eof => (String::new(), "text/plain; charset=utf-8"),
+                    TokenKind::Str(_) => (self.str_lit("a text body")?, "text/plain; charset=utf-8"),
+                    _ => (self.json_value()?, "application/json"),
+                };
+                if !headers.iter().any(|h| h.starts_with("\"content-type\":")) {
+                    headers.push(format!("\"content-type\":{}", json_string(content_type)));
+                }
+                let response = format!("{{\"status\":{status},\"headers\":{{{}}},\"body\":{}}}", headers.join(","), json_string(&body));
+                if body.len() > 65536 || prefix.len() + response.len() + 20 > 65536 {
+                    return self.err("syntax-expected-step", "answer fetch: encoded fixture exceeds 64 KiB");
+                }
+                Step::AnswerFetch { prefix, response, span }
+            }
             // @ref LLP 1116.006 D8 — `request POST "/items" {"title": "Bread"} as grace`.
             "request" => self.request_step(span)?,
             "reload" => Step::Reload { span },
@@ -1081,7 +1123,7 @@ impl Parser {
                         return self.err(
                             "syntax-expected-step",
                             format!(
-                                "`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, found {}",
+                                "`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, found {}",
                                 describe(&other)
                             ),
                         )
@@ -1137,6 +1179,11 @@ impl Parser {
                             span,
                         }
                     }
+                    "focused" => Step::ExpectFocused {
+                        target: self.str_lit("a testId")?,
+                        span,
+                    },
+                    "layout" => self.expect_layout(span)?,
                     "text" => {
                         let target = self.str_lit("a testId")?;
                         let other = match self.peek_kind() {
@@ -1214,12 +1261,14 @@ impl Parser {
                         // r32 t1 tried `expect value` for a field.
                         let hint = if other == "value" || other == "checked" {
                             "; `expect text` reads a control's value too (a checkbox with a `checked` binding reads `true` or `false`)"
+                        } else if other == "focus" {
+                            "; for the node that holds the focus, write `expect focused \"<testId>\"`"
                         } else {
                             ""
                         };
                         return self.err(
                             "syntax-expected-step",
-                            format!("`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, not `{other}`{hint}"),
+                            format!("`expect` reads `tree`, `text`, `state`, `disabled`, `enabled`, `focused`, `layout`, `refusal`, `sound`, `midi`, `wakelock`, `mediasession`, `perf`, or `no failures`, not `{other}`{hint}"),
                         );
                     }
                 }
@@ -1269,7 +1318,7 @@ fn during_read(op: &str) -> bool {
 
 /// The words of a test's launch lines, which a test file may also write at
 /// its top level for every test in it (habits F7, calendar F13).
-pub(super) const LAUNCH: [&str; 10] = [
+pub(super) const LAUNCH: [&str; 11] = [
     "size",
     "at",
     "epoch",
@@ -1279,6 +1328,7 @@ pub(super) const LAUNCH: [&str; 10] = [
     "fresh",
     "before",
     "fail",
+    "answer",
     "prefer",
 ];
 
@@ -1295,6 +1345,7 @@ pub(super) fn launch_word(step: &Step) -> &'static str {
         Step::Fresh { .. } => "fresh",
         Step::BeforeData { .. } => "before data",
         Step::FailFetch { .. } => "fail fetch",
+        Step::AnswerFetch { .. } => "answer fetch",
         _ => "",
     }
 }
@@ -1305,16 +1356,73 @@ pub fn is_launch(step: &Step) -> bool {
 }
 
 /// Whether two launch lines set the same fact: `fail fetch` lines, the same
-/// prefix; media preferences, the same feature name.
+/// prefix; preferences, the same fact after resolving drive aliases.
 pub fn same_launch(a: &Step, b: &Step) -> bool {
-    if let (Step::FailFetch { prefix: x, .. }, Step::FailFetch { prefix: y, .. }) = (a, b) {
+    if let (
+        Step::FailFetch { prefix: x, .. } | Step::AnswerFetch { prefix: x, .. },
+        Step::FailFetch { prefix: y, .. } | Step::AnswerFetch { prefix: y, .. },
+    ) = (a, b)
+    {
         return x == y;
     }
     if let (Step::Prefer { name: x, .. }, Step::Prefer { name: y, .. }) = (a, b) {
-        return x == y;
+        return prefer_key(x) == prefer_key(y);
     }
     let word = launch_word(a);
     !word.is_empty() && word == launch_word(b)
+}
+
+// Match `scripts/agent-prefer.mjs`'s `preferGroups`. Unknown names, including
+// module permissions, keep their exact spelling for the driver's validation.
+fn prefer_key(name: &str) -> &str {
+    fn norm(name: &str) -> String {
+        let letters: String = name
+            .chars()
+            .flat_map(char::to_lowercase)
+            .filter(char::is_ascii_lowercase)
+            .collect();
+        letters
+            .strip_prefix("prefers")
+            .or_else(|| letters.strip_prefix("prefer"))
+            .unwrap_or(&letters)
+            .to_owned()
+    }
+    let normalized = norm(name);
+    [
+        "display-mode",
+        "prefers-reduced-motion",
+        "prefers-reduced-transparency",
+        "prefers-contrast",
+        "prefers-color-scheme",
+        "color-gamut",
+        "dynamic-range",
+        "pointer",
+        "hover",
+        "frozen",
+        "visibility-state",
+        "online",
+        "can-share",
+        "can-share-files",
+        "can-share-pictures",
+        "can-open-files",
+        "iframe-partition",
+        "has-focus",
+        "keyboard-navigation",
+        "bold-text",
+        "root-font-size",
+        "display-scale",
+        "gpu-tier",
+        "posture",
+        "segments",
+        "gap",
+        "mode",
+        "midi.state",
+        "midi.inputs",
+        "midi.outputs",
+    ]
+    .into_iter()
+    .find(|key| norm(key) == normalized)
+    .unwrap_or(name)
 }
 
 /// `YYYY-MM-DD`, alone or before a `T` time: what the driver's epoch reads.

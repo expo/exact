@@ -45,6 +45,8 @@ pub struct Carried {
     pub forgot_waiting: Vec<(String, usize)>,
     /// The driver's fetch faults as they are (LLP 1103 D3, `Faults::spec`),
     /// so a replacement neither revives a spent fault nor loses an armed one.
+    /// A native host's replacement then shares the live table at its commit
+    /// (`Runner::share_faults`).
     pub faults: Option<String>,
     /// The window's app modes, (axis, value) (LLP 1121 D5): an app's
     /// `setMode` or the agent's `prefer mode` outlives a reload.

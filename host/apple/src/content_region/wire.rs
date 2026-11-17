@@ -16,6 +16,25 @@ fn axis(value: AxisOffer) -> f32 {
 fn metric(style: TextStyle, out: &mut String) {
     let line = style.line_height.map_or("null".into(), |n| n.to_string());
     let _ = write!(out, "\"size\":{},\"weight\":{},\"family\":{},\"italic\":{},\"lineHeight\":{line},\"spacing\":{}", style.font_size, style.font_weight, style.font_family, style.font_style != FontStyle::Normal, style.letter_spacing);
+    let _ = write!(
+        out,
+        ",\"numeric\":{},\"ligatures\":{},\"stretch\":{},\"opticalSizing\":\"{}\",\"variations\":",
+        style.font_variant_numeric,
+        style.font_variant_ligatures,
+        style.font_stretch,
+        if style.font_optical_sizing == exact_kernel::FontOpticalSizing::None {
+            "none"
+        } else {
+            "auto"
+        }
+    );
+    if !crate::style::font_axes_json(out, &style.font_variations) {
+        out.push_str("[]");
+    }
+    out.push_str(",\"features\":");
+    if !crate::style::font_features_json(out, &style.font_features) {
+        out.push_str("[]");
+    }
 }
 fn colors(node: &exact_kernel::NodeRef<'_>, out: &mut String) {
     // The channels cross resolved, so the colour's kind crosses beside them:
@@ -125,6 +144,14 @@ pub(super) fn request(
         }
     }
     let mut out = format!("{{\"request\":\"{}\",\"source\":\"{}\",\"ownerKey\":\"{}\",\"width\":{},\"height\":{},\"catalog\":\"{}\"", p.id, p.source, motion_node(node.key), axis(p.request.offer().width), axis(p.request.offer().height), p.request.catalog());
+    out.push_str(",\"exclusions\":[");
+    for (i, shape) in p.request.exclusions().iter().enumerate() {
+        if i != 0 {
+            out.push(',');
+        }
+        shape.write_json(&mut out);
+    }
+    out.push(']');
     p.request.with_request(|r| -> Result<(), String> {
         if r.runs.len() != leaves.len() {
             return Err("metric/paint run mismatch".into());
@@ -250,10 +277,14 @@ pub(super) fn frames(p: &RegionPublication, kernel: &Kernel) -> String {
         if i != 0 {
             out.push(',');
         }
-        let f = row.frame;
         let artifact = p
             .paint_artifact(row.node)
             .and_then(|a| a.payload::<NativeArtifact>());
+        let f = if artifact.is_some() {
+            p.content_rect(row.node).expect("accepted paragraph frame")
+        } else {
+            row.frame
+        };
         let n = kernel.node_by_key(row.node);
         let kind = n.as_ref().map_or("removed", |n| match n.node_type {
             NodeType::ScrollView => "scroll",
@@ -284,9 +315,16 @@ pub(super) fn native_collections(
     if count > limits.collections * 2 || rows > limits.collection_rows * 2 {
         return Err("selected/live collection union capacity".into());
     }
+    let roots = selected
+        .iter()
+        .chain(outside)
+        .flat_map(|c| &c.fixed)
+        .try_fold(0usize, |n, f| n.checked_add(f.roots.len()))
+        .ok_or("native collection fixed roots overflow")?;
     let bound = count
         .checked_mul(1024)
         .and_then(|n| rows.checked_mul(1024).and_then(|r| n.checked_add(r)))
+        .and_then(|n| roots.checked_mul(12).and_then(|r| n.checked_add(r)))
         .and_then(|n| n.checked_add(2))
         .ok_or("native collection wire overflow")?;
     if bound > limits.diff_wire_bound {

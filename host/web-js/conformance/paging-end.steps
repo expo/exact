@@ -1,0 +1,8 @@
+# The reader scrolls to the top of the loaded window; one page lands above
+# them, they stay where they were reading, and no second page is asked for.
+clock settle
+wheel feed -100000
+clock +600
+clock +600
+clock settle
+expect slots.pages == 1

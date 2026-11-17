@@ -621,3 +621,83 @@ fn a_placeholder_part_colours_a_text_field_and_nothing_else() {
         assert!(e.message.contains(says), "{body}: {}", e.message);
     }
 }
+
+/// LLP 1035.001 D11 (amended 2026-11-14, expo/exact#490): CSS's
+/// `::backdrop { background-color }`, a part block in a `style` or on the
+/// dialog itself, where its value may be computed. The dialog's own wins over
+/// its class's, an unset arm gives the platform's dim back, and a dialog
+/// without it has no row. Only `background-color`, only on a `dialog`.
+#[test]
+fn a_backdrop_part_colours_beneath_a_dialog_and_nothing_else() {
+    use exact_kernel::{Color, ColorValue};
+    let mut r = boot(
+        "style Dim\n  ::backdrop\n    background-color=\"#00000080\"\n",
+        "dialog id=\"a\" class=Dim testId=\"class\"\n  text \"A\"\ndialog id=\"b\" class=Dim testId=\"own\"\n  ::backdrop\n    background-color=\"transparent\"\n  text \"B\"\ndialog id=\"c\" testId=\"arm\"\n  ::backdrop\n    background-color=(on ? \"#ff000040\" : none)\n  text \"C\"\ndialog id=\"d\" testId=\"plain\"\n  text \"D\"\nbutton press=flip testId=\"flip\"\n  text \"Flip\"",
+    );
+    let colour = |r: &Runner<NoData>, name: &str| {
+        let node = r.kernel().node(id(r, name)).unwrap();
+        assert!(
+            !node.style.mask.has(StyleId::BackgroundColor),
+            "{name}: the dialog's own background is untouched"
+        );
+        node.style
+            .mask
+            .has(StyleId::BackdropColor)
+            .then_some(node.style.rare.backdrop_color)
+    };
+    let fixed = |r, g, b, a| Some(ColorValue::Fixed(Color::rgba(r, g, b, a)));
+    assert_eq!(colour(&r, "class"), fixed(0, 0, 0, 0x80));
+    assert_eq!(
+        colour(&r, "own"),
+        fixed(0, 0, 0, 0),
+        "the dialog's own part wins"
+    );
+    assert_eq!(
+        colour(&r, "arm"),
+        fixed(0xff, 0, 0, 0x40),
+        "its own alpha, kept"
+    );
+    assert_eq!(colour(&r, "plain"), None, "no part: the platform's dim");
+    r.dispatch(id(&r, "flip"), Event::Press).unwrap();
+    assert_eq!(
+        colour(&r, "arm"),
+        None,
+        "an unset arm gives the platform's dim back"
+    );
+    for (styles, body, refusal, says) in [
+        (
+            "",
+            "dialog id=\"d\"\n  ::backdrop\n    opacity=0.5\n  text \"D\"",
+            "lower-unknown-attr",
+            "only `background-color`",
+        ),
+        (
+            "style S\n  ::backdrop\n    backdrop-filter=\"blur(4px)\"\n",
+            "dialog id=\"d\" class=S\n  text \"D\"",
+            "lower-unknown-attr",
+            "only `background-color`",
+        ),
+        (
+            "",
+            "column\n  ::backdrop\n    background-color=\"red\"",
+            "lower-attr-tag",
+            "modal `dialog`",
+        ),
+        (
+            "",
+            "input\n  ::selection\n    color=\"red\"",
+            "syntax-part",
+            "::backdrop",
+        ),
+        (
+            "",
+            "dialog id=\"d\"\n  ::backdrop\n    background-color=\"red\"\n  ::backdrop\n    background-color=\"blue\"\n  text \"D\"",
+            "syntax-duplicate-attr",
+            "::backdrop",
+        ),
+    ] {
+        let e = contract::compile(&app(styles, body)).unwrap_err();
+        assert_eq!(e.id, refusal, "{body}: {}", e.message);
+        assert!(e.message.contains(says), "{body}: {}", e.message);
+    }
+}

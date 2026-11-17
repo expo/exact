@@ -69,6 +69,6 @@ as iOS's does.
 
 ## Related
 
-`docs/start-here.md:15` warns of a pale accent under a filled button (`tamber-contrast`);
+`docs/start-here.md:15` warns of a pale accent under a filled button (`forma-contrast`);
 that is the filled style, which `check` still judges. Nothing in `issues/` or `QUEUE.md`
 names `RoundButton` or the tinted exemption.

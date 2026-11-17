@@ -8,7 +8,7 @@
 use std::process::ExitCode;
 
 const USAGE: &str = "usage:
-  exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--json]
+  exact-bake compat <app-dir> --platform <ios|macos|linux|android|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--settings <json>] [--json]
   exact-bake graph <app.plan> <compat.json> <target> <app-dir>";
 
 fn main() -> ExitCode {
@@ -33,6 +33,7 @@ struct CompatOptions<'a> {
     target: Option<&'a str>,
     grants: Option<&'a str>,
     rust_grants: Option<&'a str>,
+    settings: Option<&'a str>,
     json: bool,
 }
 
@@ -43,12 +44,13 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
     }
     let (mut platform, mut target, mut json) = (None, None, false);
     let (mut grants, mut rust_grants) = (None, None);
+    let mut settings = None;
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         match flag.as_str() {
             "--platform" if platform.is_none() => {
                 let value = flags.next()?.as_str();
-                if !matches!(value, "ios" | "macos" | "linux" | "web") {
+                if !matches!(value, "ios" | "macos" | "linux" | "android" | "web") {
                     return None;
                 }
                 platform = Some(value);
@@ -69,6 +71,7 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
                 rust_grants = Some(flags.next()?.as_str()).filter(|v| !v.starts_with("--"));
                 rust_grants?;
             }
+            "--settings" if settings.is_none() => settings = Some(flags.next()?.as_str()),
             _ => return None,
         }
     }
@@ -81,6 +84,7 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
         target,
         grants,
         rust_grants,
+        settings,
         json,
     })
 }
@@ -90,7 +94,7 @@ fn compat_options(args: &[String]) -> Option<CompatOptions<'_>> {
 /// or with `--json` the id and every input it digests. Callers can supply
 /// source grants from a completed bake without linking the native host.
 fn compat(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: exact-bake compat <app-dir> --platform <ios|macos|linux|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--json]";
+    const USAGE: &str = "usage: exact-bake compat <app-dir> --platform <ios|macos|linux|android|web> [--target <triple>] [--grants <text>] [--rust-grants <text>] [--settings <json>] [--json]";
     if matches!(args, [flag] if flag == "--help" || flag == "-h") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
@@ -101,6 +105,7 @@ fn compat(args: &[String]) -> ExitCode {
         target,
         grants,
         rust_grants,
+        settings,
         json,
     }) = compat_options(args)
     else {
@@ -112,7 +117,22 @@ fn compat(args: &[String]) -> ExitCode {
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS));
     let app_dir = std::path::Path::new(dir);
     let result = contract::Manifest::read(app_dir).and_then(|m| {
-        exact_bake::compatibility_id_sources(app_dir, platform, &target, &m, grants, rust_grants)
+        let settings = settings
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| format!("settings: {e}"))?
+            .unwrap_or(serde_json::Value::Null);
+        exact_bake::compatibility_id_pinned(
+            app_dir,
+            platform,
+            &target,
+            &m,
+            grants,
+            rust_grants,
+            None,
+            None,
+            &settings,
+        )
     });
     match result {
         Ok(c) => {

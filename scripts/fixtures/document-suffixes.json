@@ -1,0 +1,18 @@
+[
+  { "declaration": "board", "canonical": ".board" },
+  { "declaration": ".MD", "canonical": ".md" },
+  { "declaration": "TaR", "canonical": ".tar" },
+  { "declaration": ".tar.gz", "canonical": ".tar.gz" },
+  { "declaration": "c++", "canonical": ".c++" },
+  { "declaration": "7", "canonical": ".7" },
+  { "declaration": "123456789012345", "canonical": ".123456789012345" },
+  { "declaration": "1234567890123456", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "end.", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "..a", "canonical": "..a" },
+  { "declaration": "", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "m*d", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "mé", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "ı", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "ſ", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" },
+  { "declaration": "K", "error": "is not a file suffix: use at most 16 ASCII alphanumeric, \"+\" or \".\" code points, with an optional leading dot and no trailing dot" }
+]

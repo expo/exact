@@ -62,6 +62,12 @@ final class AlertHost {
         /// The default button's own target and action (NSAlert's), which a
         /// prompt's Return reaches after its input (`promptDefault`).
         var press: (target: AnyObject?, action: Selector?) = (nil, nil)
+        /// The cancel's own target and action (NSAlert's), which `cancelPressed` forwards to.
+        var cancelPress: (target: AnyObject?, action: Selector?) = (nil, nil)
+        /// Ended by Escape or Command-period at its cancel, HTML's close
+        /// request, which fires `cancel` before `close`. A click of the
+        /// cancel is its authored `command="close"`, which fires `close` alone.
+        var closeRequest = false
         /// Which row Return presses, when one does.
         let defaultRow: Int?
         /// Ended by this host (a batch changed what it shows, `close(id)`, a
@@ -182,6 +188,11 @@ final class AlertHost {
             // its title. (The Return button is the window's default button
             // cell; AppKit holds its key equivalent while the sheet is key.)
             button.keyEquivalent = index == owner.defaultRow ? "\r" : row.cancel ? (pop.props["closedby"] == "none" ? "" : "\u{1b}") : ""
+            if button.keyEquivalent == "\u{1b}" {
+                owner.cancelPress = (button.target, button.action)
+                button.target = self
+                button.action = #selector(cancelPressed(_:))
+            }
             button.setAccessibilityIdentifier(row.node?.props["testId"])
             // A prompt's Return goes through its input first (`promptDefault`).
             if index == owner.defaultRow, !plan.fields.isEmpty {
@@ -207,7 +218,8 @@ final class AlertHost {
 
     /// The sheet ended. A button of it presses its authored button on the
     /// next turn, once, if the alert still showed what is there; the cancel
-    /// has nothing to press.
+    /// has nothing to press, and a close request at it fires `cancel` at a
+    /// modal dialog first. A popover hears none, as in HTML.
     private func ended(_ owner: Presented, _ response: NSApplication.ModalResponse) {
         // A field's `change` before the action's press, as a blur's before a click.
         endPrompt(owner)
@@ -216,8 +228,12 @@ final class AlertHost {
         let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
         guard !owner.withdrawn else { return }
         defer { owner.node?.queueDialogClose() }
-        guard owner.rows.indices.contains(index), valid(owner), !owner.rows[index].cancel else { return }
+        guard owner.rows.indices.contains(index), valid(owner) else { return }
         let row = owner.rows[index]
+        if row.cancel {
+            if owner.closeRequest, !owner.popover { owner.node?.queueDialogCancel() }
+            return
+        }
         DispatchQueue.main.async { [weak self, owner] in
             guard let self, let presenter = self.presenter, self.valid(owner), row.enabled, let node = row.node, let pop = owner.node,
                   self.choosable(node, in: pop) else { return }
@@ -349,6 +365,17 @@ final class AlertHost {
         }
         pressDefault(owner)
     }
+    /// The cancel, which Escape and Command-period also press: those are a
+    /// close request; a click (or Space with keyboard navigation) is not.
+    /// The current event is the last one dequeued, which a click the driver
+    /// makes does not replace: only a key at this alert's own window counts.
+    @objc private func cancelPressed(_ sender: NSButton) {
+        guard let owner = presented, let action = owner.cancelPress.action else { return }
+        if let event = NSApp.currentEvent, event.type == .keyDown, event.window === sender.window, DialogHost.isCloseRequest(event) {
+            owner.closeRequest = true
+        }
+        NSApp.sendAction(action, to: owner.cancelPress.target, from: sender)
+    }
     /// Return from the prompt's field or the key monitor: commit, then press
     /// the default if enabled. The monitor has already dispatched the key.
     /// False when `node` is no field of an alert that is up.
@@ -424,6 +451,7 @@ final class AlertHost {
         let escapes = owner.node?.props["closedby"] != "none"
         let index = name == "Enter" ? owner.defaultRow : name == "Escape" && escapes ? owner.rows.indices.first { owner.rows[$0].cancel && $0 != owner.defaultRow } : nil
         guard let index, owner.alert.buttons.indices.contains(index), owner.alert.buttons[index].isEnabled else { return false }
+        if name == "Escape" { owner.closeRequest = true }
         owner.alert.buttons[index].performClick(nil)
         return true
     }

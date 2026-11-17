@@ -19,17 +19,17 @@
 
 #[cfg(target_os = "linux")]
 pub mod display;
-#[cfg(all(test, unix, not(target_os = "linux")))]
+#[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
 #[path = "display/flip.rs"]
 mod display_flip;
-#[cfg(any(target_os = "linux", all(test, unix)))]
+#[cfg(any(target_os = "linux", all(test, unix, not(target_os = "android"))))]
 #[path = "display/event_loop.rs"]
 mod event_loop;
 #[cfg(target_os = "linux")]
 pub mod input;
 #[cfg(target_os = "linux")]
 pub mod vnc;
-#[cfg(all(test, unix, not(target_os = "linux")))]
+#[cfg(all(test, unix, not(any(target_os = "linux", target_os = "android"))))]
 #[path = "vnc/auth.rs"]
 mod vnc_auth;
 
@@ -126,6 +126,9 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     }
     exact_painted::app::show_neutral_look();
     if config.headless() {
+        // @ref LLP 1178 D6 — the one display is the headless buffer.
+        let screen = exact_painted::desktop::FullScreen::headless();
+        exact_painted::desktop::install_displays(std::rc::Rc::new(screen));
         return exact_painted::app::run_headless::<D>(config, started, None);
     }
     #[cfg(target_os = "linux")]

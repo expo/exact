@@ -15,7 +15,9 @@ pub struct Sites {
     pub instances: Vec<Instance>,
     /// The declaring instance of each plan region.
     pub regions: Vec<u32>,
-    region_tags: std::collections::BTreeMap<u32, u32>,
+    /// The expanded source node that emitted each plan region.
+    pub region_tags: Vec<u32>,
+    region_instances: std::collections::BTreeMap<u32, u32>,
     /// One per plan node, in the `nodes` table's order.
     pub nodes: Vec<NodeSite>,
     /// The plan's slots: the declaring `state` or `mutation`.
@@ -152,7 +154,8 @@ impl Origin {
 impl Sites {
     pub(crate) fn region(&mut self, tag: u32) {
         self.regions
-            .push(self.region_tags.get(&tag).copied().unwrap_or(0));
+            .push(self.region_instances.get(&tag).copied().unwrap_or(0));
+        self.region_tags.push(tag);
     }
 
     /// The declarations' sites from the expansion; nodes are pushed as the
@@ -176,7 +179,8 @@ impl Sites {
         Sites {
             instances: ex.instances.clone(),
             regions: Vec::new(),
-            region_tags: ex.region_instances.clone(),
+            region_tags: Vec::new(),
+            region_instances: ex.region_instances.clone(),
             nodes: Vec::new(),
             slots: root
                 .states

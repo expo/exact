@@ -14,7 +14,7 @@ shape ChainLink
   up: number
   // The component the call site is in (the copy a press of it means to select), as the server joined it.
   component: string
-  // A slot's host (`slot: true`, tamber/1.18, stage 15 D3): the step lands on the component holding the node in its
+  // A slot's host (`slot: true`, forma/1.18, stage 15 D3): the step lands on the component holding the node in its
   // slot, named by its own call.
   slot: bool
 
@@ -41,7 +41,7 @@ shape Hello
   // The server's run: a restart is another.
   epoch: string
   // This tool's scope on the server, and whether its token is the local
-  // one, which pairs and revokes clients (tamber/1.13); a paired client's
+  // one, which pairs and revokes clients (forma/1.13); a paired client's
   // name, as the server gives it.
   scope: string
   local: bool
@@ -148,7 +148,7 @@ shape Mapped
   // In to begin with (the server's choice can leave it out); a picked id flips it.
   on: bool
 
-// What the card's choices sent answered (tamber/1.18 `choose`): the flips to drop, on cards another client chose on.
+// What the card's choices sent answered (forma/1.18 `choose`): the flips to drop, on cards another client chose on.
 shape Choices
   ok: bool
   answer: number
@@ -249,7 +249,7 @@ shape GoneBuild
 shape Build
   id: string
   host: string
-  // The variant gallery's page (`page: 'gallery'`, tamber/1.15): a label only.
+  // The variant gallery's page (`page: 'gallery'`, forma/1.15): a label only.
   gallery: bool
   // Its status has come (none since it registered or reloaded, else).
   reported: bool
@@ -330,9 +330,9 @@ shape Inspected
   node: number
   readOnly: string
   source: string
-  // Each call site above it, innermost first, and how many up it is (tamber/1.16 `inspect` `select`).
+  // Each call site above it, innermost first, and how many up it is (forma/1.16 `inspect` `select`).
   chain: ChainLink[]
-  // A `select`'s move that landed here (tamber/1.17 `moved`): the up asked and the steps its page took (fewer only at
+  // A `select`'s move that landed here (forma/1.17 `moved`): the up asked and the steps its page took (fewer only at
   // the root), -1 for none.
   movedUp: number
   movedStepped: number
@@ -532,7 +532,7 @@ shape ParamGroup
 shape ComponentPanel
   identity: string
   name: string
-  // Declared in the design (`app.tamber#Name`): a view that isn't Contract.
+  // Declared in the design (`app.forma#Name`): a view that isn't Contract.
   native: bool
   package: bool
   // A library component's variant props (stage 12 D3), each with the

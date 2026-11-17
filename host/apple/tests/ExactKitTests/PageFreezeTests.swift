@@ -506,6 +506,20 @@ final class PageFreezeIOSTests: XCTestCase {
         XCTAssertFalse(PageFacts.frozen, "the recovered engine still has its original lease")
     }
 
+    func testAJoiningOwnerKeepsBackgroundEligibilityAfterTheFirstLeaves() throws {
+        audioMode = true
+        AudioSession.configuration = .init("playback")
+        let first = NSObject(), next = NSObject()
+        try AudioSession.hold(ObjectIdentifier(first))
+        try AudioSession.hold(ObjectIdentifier(next))
+        AudioSession.release(ObjectIdentifier(first))
+        defer { AudioSession.release(ObjectIdentifier(next)); move(false) }
+        move(true)
+        XCTAssertFalse(PageFacts.frozen, "the joining owner shares the active session")
+        AudioSession.release(ObjectIdentifier(next))
+        XCTAssertTrue(PageFacts.frozen)
+    }
+
     func testAFailedOwnerDoesNotInheritAnotherOwnersActivation() throws {
         audioMode = true
         AudioSession.configuration = .init("playback")

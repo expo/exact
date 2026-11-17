@@ -406,7 +406,9 @@ pub(crate) fn mapping_count(bytes: &[u8]) -> usize {
 #[test]
 fn a_sweep_removes_other_processes_stale_images_only() {
     let now = 1_000_000_000_000_000_000u128;
-    let temp = std::env::temp_dir().join(format!("exact-logic-sweep-{}", std::process::id()));
+    let temp = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-logic-sweep-{}", std::process::id())),
+    );
     let _ = fs::remove_dir_all(&temp);
     let minute = 60_000_000_000;
     let names = [

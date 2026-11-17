@@ -7,6 +7,34 @@ import Foundation
 import UniformTypeIdentifiers
 
 extension ExactSession {
+    /// @ref LLP 1038 D8/D11 — pre-boot URLs are launch facts; the adapter consumes development links first.
+    @discardableResult public func openURL(_ url: URL) -> Bool {
+        guard state != .destroyed else { return false }
+        return openIncoming(incomingLocation(url))
+    }
+    /// A link the reader followed — a `link href`, a text run's `href`, a
+    /// Markdown link. A path naming one of the app's routes is a location
+    /// for the navigation root, as the web's same-document link is (LLP 1038
+    /// §7); anything else — a page, a file beside a document — is the
+    /// containing app's to open (`openURL`).
+    @discardableResult public func follow(_ href: String, target: String? = nil) -> Bool {
+        guard state != .destroyed, !href.isEmpty else { return false }
+        // A link to a fragment (`href="#moves"`) is the visit shown, at that fragment (LLP 1153 D5).
+        let href = href.hasPrefix("#") ? String((routerOp?["url"] as? String ?? "/").prefix { $0 != "#" }) + href : href
+        if href.hasPrefix("/"), !href.hasPrefix("//"), booted, runtime.routeMatches(href) { return navigate(href, target: target) }
+        delegate?.exactSession(self, command: "openURL", args: [href])
+        return true
+    }
+    @discardableResult public func navigate(_ location: String) -> Bool {
+        guard state != .destroyed, booted else { return false }
+        let batch: Batch
+        if let node = navigationRoot { batch = runtime.navigate(node.id, location, now: now()) }
+        else if runtime.routeMatches(location) { batch = runtime.hostGo(location, now: now()) }
+        else { log("navigate refused: no navigation root handler or matching route"); return false }
+        apply(batch)
+        return batch.error == nil
+    }
+
     /// The location the agent's `type <root> <text>` delivers: a path as
     /// written, and a URL with a scheme as the system's would arrive
     /// (`openURL`), so a drive opens a deep link without iOS's "Open in …?"
@@ -24,7 +52,21 @@ extension ExactSession {
         return protocolHandlers.lazy.compactMap { handler in
             guard let name = handler["protocol"], let template = handler["url"] else { return nil }
             return self.runtime.protocolLocation(of: href, protocol: name, template: template)
-        }.first ?? runtime.location(of: href)
+        }.first ?? runtime.location(of: appRelativeURL(url))
+    }
+
+    private func appRelativeURL(_ url: URL) -> String {
+        guard let base = webMount["base"], base != "/",
+              let origin = webMount["origin"].flatMap(URL.init(string:)),
+              let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              scheme == origin.scheme?.lowercased(), url.host?.lowercased() == origin.host?.lowercased(),
+              (url.port ?? (scheme == "https" ? 443 : 80)) == (origin.port ?? (scheme == "https" ? 443 : 80)),
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
+        let path = parts.percentEncodedPath
+        if path == String(base.dropLast()) { parts.percentEncodedPath = "/" }
+        else if path.hasPrefix(base) { parts.percentEncodedPath = "/" + path.dropFirst(base.count) }
+        else { return url.absoluteString }
+        return parts.string ?? url.absoluteString
     }
 
     /// The `https` handler's template, when the app claims the web's links
@@ -73,6 +115,66 @@ extension ExactSession {
             return true
         }
         return navigate(location)
+    }
+
+    /// The window this session runs in, told before boot (LLP 1030.004
+    /// D2): its name, which the page's `name` reads (`main` untold), and,
+    /// rooted, a router that launches at `location`'s screen alone, a
+    /// window opened at a route, presented without the window's sidebar.
+    public func launchWindow(name: String, at location: String?, rooted: Bool) {
+        guard !booted, state != .destroyed else { return }
+        runtime.launchWindow(name, rooted: rooted)
+        #if os(macOS)
+        presenter.sidebar.rooted = rooted
+        #endif
+        if let location { _ = openIncoming(location) }
+    }
+
+    /// A link that targets this rooted window from elsewhere at another
+    /// location: that screen becomes its only visit (LLP 1030.004 D2). The
+    /// host has asked `beforeUnload` first.
+    @discardableResult public func reroot(_ location: String) -> Bool {
+        guard state != .destroyed, booted else { return false }
+        let batch = runtime.hostRoot(location, now: now())
+        apply(batch)
+        return batch.error == nil
+    }
+
+    /// The selected visit's location, `nil` before the first route commit.
+    public var location: String? {
+        guard let url = routerOp?["url"] as? String else { return nil }
+        let fragment = routerOp?["fragment"] as? String ?? ""
+        return fragment.isEmpty || url.contains("#") ? url : url + "#" + fragment
+    }
+
+    /// Whether the selected visit is at `location`: its location, or its
+    /// url when `location` names no fragment.
+    public func shows(_ location: String) -> Bool {
+        guard let shown = self.location else { return false }
+        return shown == location || !location.contains("#") && routerOp?["url"] as? String == location
+    }
+
+    /// Where a link to one of the app's paths goes by its `target` (LLP
+    /// 1030.004 D1): `nil` in place (none, empty, `_self`, `_parent`, `_top`,
+    /// matched ASCII case-insensitively), else `_blank` or a window's name.
+    /// A name that starts with `_` and is no keyword is `_blank`: such a
+    /// window has no name another link could find.
+    static func window(of target: String?) -> String? {
+        guard let target, !target.isEmpty else { return nil }
+        guard target.hasPrefix("_") else { return target }
+        switch target.lowercased() {
+        case "_self", "_parent", "_top": return nil
+        default: return "_blank"
+        }
+    }
+
+    /// A link to `location`, one of the app's paths: into the window its
+    /// `target` names where the host opens windows (`openWindow`), else in
+    /// place, as a browser without windows does.
+    func navigate(_ location: String, target: String?) -> Bool {
+        guard let window = Self.window(of: target), let openWindow, booted, runtime.routeMatches(location) else { return navigate(location) }
+        openWindow(location, window, false)
+        return true
     }
 
     /// The view that hears `navigate`: the navigation root (LLP 1038 D8).

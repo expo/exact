@@ -7,9 +7,13 @@
 use exact_kernel::style::metrics::{set_column, Column};
 use exact_kernel::style::scale;
 use exact_kernel::{Kernel, StyleId};
-use exact_runner::tamber::{Length, Token};
+use exact_runner::forma::{Length, Token};
 use exact_runner::{DataError, DataSource, Place, Runner, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[path = "it/scratch.rs"]
+#[allow(dead_code)]
+mod scratch;
+use scratch::Scratch;
 
 const CARD_PAD: Token<Length> = Token::new("card.pad");
 
@@ -21,16 +25,14 @@ impl DataSource for NoData {
     }
 }
 
-fn app(name: &str, design: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+fn app(name: &str, design: &str) -> Scratch {
+    let dir = Scratch::new(format!(
         "exact2-base-expression-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), design).unwrap();
+    std::fs::write(dir.join("app.forma"), design).unwrap();
     std::fs::write(dir.join("app.contract"), "component App\n  view\n    column testId=\"card\" padding=\"card.pad\" box-shadow=\"card.shadow\"\n      text \"a\"\n").unwrap();
-    dir.join("app.contract")
+    dir.at("app.contract")
 }
 
 fn boot(path: &Path) -> Runner<NoData> {
@@ -73,7 +75,7 @@ fn an_expression_reads_each_columns_bases() {
     const ARM: &str = "min(space.lg, 12px)";
     let path = app(
         "columns",
-        &format!("tamber t\n\naxes\n  tone = plain | wide\n\ntheme\n  card.pad: length = {EXPR}\n    when tone=wide: {ARM}\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n"),
+        &format!("forma t\n\naxes\n  tone = plain | wide\n\ntheme\n  card.pad: length = {EXPR}\n    when tone=wide: {ARM}\n  card.shadow: box-shadow = 0 space.md calc(space.sm * 2) #000\n"),
     );
     let plan = contract::compile_path(&path).unwrap();
     let token = plan
@@ -100,7 +102,7 @@ fn an_expression_reads_each_columns_bases() {
         let want_px = want;
         // A native binding reads it as a row does.
         assert_eq!(
-            r.tamber().get(CARD_PAD, Place::Root),
+            r.forma().get(CARD_PAD, Place::Root),
             Some(f64::from(want(EXPR))),
             "{column:?}"
         );
@@ -133,7 +135,7 @@ fn an_expression_reads_each_columns_bases() {
         );
         r.set_mode("tone", "wide").unwrap();
         assert_eq!(
-            r.tamber().get(CARD_PAD, Place::Root),
+            r.forma().get(CARD_PAD, Place::Root),
             Some(f64::from(want(ARM))),
             "{column:?}"
         );
@@ -146,7 +148,7 @@ fn an_expression_reads_each_columns_bases() {
         )
         .unwrap();
         assert_eq!(
-            r.tamber().get(CARD_PAD, Place::Root),
+            r.forma().get(CARD_PAD, Place::Root),
             Some(f64::from(want("calc(space.sm * 3)"))),
             "{column:?}"
         );
@@ -162,7 +164,7 @@ fn an_expression_reads_each_columns_bases() {
     set_column(Column::Neutral);
     let own = app(
         "own",
-        &format!("tamber t\n\ntheme\n  space.md = 40px\n  card.pad: length = {EXPR}\n  card.shadow: box-shadow = 0 space.md 1px #000\n"),
+        &format!("forma t\n\ntheme\n  space.md = 40px\n  card.pad: length = {EXPR}\n  card.shadow: box-shadow = 0 space.md 1px #000\n"),
     );
     let plan = contract::compile_path(&own).unwrap();
     let token = plan

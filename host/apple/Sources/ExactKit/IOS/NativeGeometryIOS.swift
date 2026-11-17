@@ -91,7 +91,7 @@ final class NativeGeometry {
                 if let self { pending = false; FrameClock.shared.drop(self) }
                 return
             }
-            session.whenIdle(bound: true, { [weak self, weak session] in
+            session.afterBootOwner { session.whenIdle(bound: true, { [weak self, weak session] in
                 guard let self else { return }
                 pending = false
                 guard let session, session.state == .ready else { FrameClock.shared.drop(self); return }
@@ -104,7 +104,7 @@ final class NativeGeometry {
                 fresh = false; boxes = now; modal = shown.modal; backdrop = region
                 // Runtime.on samples the top layer before the pump; its emit wakes intersections.
                 session.applyUnlessEmpty(session.runtime.pump(now: session.now()))
-            }, cancelled: { [weak self] in self?.pending = false })
+            }, cancelled: { [weak self] in self?.pending = false }) }
         }
     }
 }

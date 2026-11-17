@@ -452,7 +452,7 @@ impl Words {
         };
         // The nodes still owed children, innermost last.
         let mut open: Vec<(u32, u32)> = Vec::new();
-        for (index, node) in words.chunks_exact(2).enumerate() {
+        for (index, node) in words.as_chunks::<2>().0.iter().enumerate() {
             let index = index as u32;
             match open.last_mut() {
                 Some((parent, owed)) => {

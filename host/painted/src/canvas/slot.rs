@@ -23,7 +23,9 @@ pub(super) struct Again {
 
 impl Recorder {
     pub(super) fn slot_open(&mut self, id: ViewId) {
-        if self.slot.is_some() || !*SLOTS {
+        // A named image's decoded size and crop live in its shared header.
+        // Re-record it with its row when the picture arrives or changes.
+        if self.slot.is_some() || self.shared.opened() || !*SLOTS {
             return;
         }
         let Some(row) = &mut self.row else { return };

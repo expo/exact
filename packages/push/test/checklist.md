@@ -13,7 +13,10 @@ and the device only after the step that shows it has passed.
   and the team id.
 - For the device steps, the App ID of the app being run registered with Push
   Notifications, and a development profile for it that includes the phone;
-  then an Ad Hoc profile for it.
+  then an Ad Hoc profile for it. An app with
+  `modules/apple/notification-service/` also needs the exact App ID
+  `<app id>.notifications`, and development and Ad Hoc profiles for it with
+  the app's App Group and shared Keychain group.
 
 ## Sending one push
 
@@ -74,3 +77,13 @@ means the token belongs to the other environment (the other `HOST`).
 10. In an app that also has a Live Activity taking pushes, the archive of step
     9 builds (registration beside the activity, under `device.push`), and the
     activity's update token and the device token both arrive.
+11. With the fixture's notification service extension, send a visible alert
+    with `"mutable-content":1`: its displayed title starts `[Exact] `. Lock the
+    phone and repeat; the changed alert appears on the Lock Screen. Then make
+    the download miss its deadline and confirm the best attempt appears: the
+    title still starts `[Exact] ` and no late attachment is added.
+12. Inspect the Ad Hoc archive from step 9: it contains
+    `Payload/*.app/PlugIns/ExactNotificationService.appex`, the extension is
+    distribution-signed before its app, its embedded profile names
+    `<app id>.notifications`, and the archive passes the distribution service's
+    validation.

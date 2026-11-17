@@ -129,6 +129,10 @@ impl<D: DataSource> Presenter<D> {
         if self.wheel_event(x, y, dx, dy) || canvas {
             return;
         }
+        // `ctrl`+wheel is a pinch that is not a touch (LLP 1057.001.000 §3).
+        if self.modifiers().ctrl && self.wheel_zoom(x, y, dy) {
+            return;
+        }
         // A scrollbar drag bypasses contact recognition.
         if self.brush.scrollbars.drag.take().is_some() {
             self.dirty = true;

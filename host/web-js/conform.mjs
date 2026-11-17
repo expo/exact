@@ -94,7 +94,7 @@
 //   pixel-compared across engines; both are saved, for inspection, only at a
 //   checkpoint that differed (a failure or a known difference). Install
 //   the browsers outside this repo with:
-//     bunx playwright@1.64.1 install firefox webkit
+//     bunx playwright@1.65.1 install firefox webkit
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createServer, request } from 'node:http';
@@ -105,6 +105,7 @@ import { conformArgs } from './conform-args.mjs';
 import { withoutSlots } from './conform-linux.mjs';
 import { WASM_UNBOUND, markUnbound, referenceTapRefused } from './conform-marked.mjs';
 import { clockOnAll, failedTests, parseStep } from './conform-steps.mjs';
+import { tokens as pageTokens } from './page-style.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { reloadWeb } from '../../scripts/agent-test.mjs';
 import { refuseStale, webChanges } from '../../scripts/agent-launch.mjs';
@@ -336,8 +337,9 @@ function diffPng(a, b, sideBySide, masks = []) {
   }
   return share;
 }
-// The document's head too: the active head's fields, as every runner reports them (runner/src/head.rs).
-const STATE_KEYS = ['slots', 'derives', 'resources', 'writes', 'head', 'reorder', 'sounds', 'transport', 'midi', 'sessionCore', 'background'];
+// The document's head too: the active head's fields, as every runner reports them (runner/src/head.rs). A child's
+// resources by instance path (`owned`, `instances`; LLP 1035.005.004 D8) too.
+const STATE_KEYS = ['slots', 'derives', 'resources', 'owned', 'instances', 'writes', 'head', 'reorder', 'sounds', 'transport', 'midi', 'sessionCore', 'background'];
 // The media session (LLP 1098 D10) by testId (each target numbers its views its own way) and the artwork's path (each
 // page has its own port): what every host records (`sessionCore`, Linux's too), and what the pages publish (`session`).
 const addSession = s => {
@@ -431,6 +433,7 @@ async function target(t, report) {
 
 async function drive(t, report, targetFail, dir, ws, js) {
   let W, J, L, current;
+  const cut = sheetCut(t.dist);
   let peers = [], diverged = false;
   const live = () => peers.filter(p => p.active);
   const fail = (step, what, field = null, difference = false) => {
@@ -611,6 +614,7 @@ async function drive(t, report, targetFail, dir, ws, js) {
         const [fw, fj] = await pair(() => W.carrier.evaluate(paint), () => J.carrier.evaluate(paint));
         const op = []; diffJSON(fw, fj, 'paint', op); op.forEach(x => differ(step, x)); st += op.length;
       }
+      for (const token of await uncut(J.carrier.evaluate, cut)) { fail(step, `sheet: ${other} has ${token}, which its sheet was cut for`); st++; }
       // Cross-browser pictures are never compared (each engine rasterizes text its own way): both are kept only as
       // evidence for a checkpoint that differed
       if (crossBrowser && st === 0) {
@@ -812,14 +816,16 @@ async function drive(t, report, targetFail, dir, ws, js) {
   // The app's own tests on each executor.
   const tests = resolve(root, 'apps', t.app, 'app.test.contract');
   if (!t.contract && !t.urls && existsSync(tests)) {
-    const run = (url, browser = 'chrome', host = 'web') => new Promise(ok => {
-      const child = spawn('bun', ['scripts/agent.mjs', host, ...(host === 'web' ? ['--browser', browser, '--url', url] : []), '--app', t.app, '--test', tests], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+    const run = (url, browser = 'chrome', host = 'web', dist = t.dist) => new Promise(ok => {
+      const child = spawn('bun', ['scripts/agent.mjs', host, ...(host === 'web' ? ['--browser', browser, '--url', url] : []), '--app', t.app, '--test', tests], {
+        cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...(host === 'web' ? { EXACT_WEB_DIST: dist } : {}) },
+      });
       let output = ''; child.stdout.on('data', d => { output += d; }); child.stderr.on('data', d => { output += d; });
       child.on('error', error => ok({ output: output + error.message, status: 127 })); child.on('exit', status => ok({ output, status: status ?? 128 }));
     });
     const [w2, j2] = await Promise.all([serve(crossBrowser ? t.dist : t.wasm), serve(t.dist)]);
     const browsers = crossBrowser ? readyBrowsers : ['chrome'];
-    const [rw, ...results] = await Promise.all([run(w2.url), ...browsers.map(browser => run(j2.url, browser))]);
+    const [rw, ...results] = await Promise.all([run(w2.url, 'chrome', 'web', crossBrowser ? t.dist : t.wasm), ...browsers.map(browser => run(j2.url, browser))]);
     w2.close(); j2.close();
     const lines = s => s.split('\n').filter(l => l.startsWith('test '));
     const lw = lines(rw.output);
@@ -857,14 +863,14 @@ async function activation(t, report, fail, url, browser) {
   const step = `${crossBrowser ? `${browser} ` : ''}activation ${url}`;
   let S, early = null;
   try {
-    S = await open({ host: 'web', browser, app: t.app, url });
+    S = await open({ host: 'web', browser, app: t.app, webDist: t.dist, url });
     const ev = S.carrier.evaluate, page = new URL(url);
     page.searchParams.delete('agent');
     await ev(`location.href = ${JSON.stringify(page.href)}`).catch(() => {});
     const read = () => ev(`(() => { const c = document.querySelector('script[type="application/vnd.exact.checkpoint"]'), r = document.getElementById('exact-root');
       return c && document.readyState === 'complete' && !/[?&]agent=/.test(location.search) ? { policy: c.dataset.activate, boot: r?.dataset.bootMs == null ? null : Number(r.dataset.bootMs),
         paint: performance.getEntriesByType('paint')[0]?.startTime ?? null, load: performance.getEntriesByType('navigation')[0]?.loadEventStart ?? null,
-        modules: document.querySelectorAll('script[type=module]').length, preload: !!document.head.querySelector('link[rel=modulepreload][href="./app.js"]'),
+        modules: document.querySelectorAll('script[type=module]').length, preload: !!document.head.querySelector('link[rel=modulepreload][href="' + c.dataset.entry + '"]'),
         fetched: performance.getEntriesByType('resource').filter(e => e.initiatorType !== 'fetch' && e.name.endsWith('.js')).length,
         adopted: (globalThis.exact?.journal ?? []).some(l => l.endsWith('adopted the document')) } : null; })()`).catch(() => null);
     const until = async (ok, ms) => { const end = Date.now() + ms; let r; while (!(r = await read()) || !ok(r)) { if (Date.now() > end) return r; await new Promise(z => setTimeout(z, 50)); } return r; };
@@ -886,7 +892,7 @@ async function activation(t, report, fail, url, browser) {
         w.value = 'early'; for (const k of ['input', 'change']) w.dispatchEvent(new Event(k, { bubbles: true }));
         p.value = 'two'; for (const k of ['input', 'change']) p.dispatchEvent(new Event(k, { bubbles: true }));
         return 'on on early two'; })()`);
-    } else if (!r.preload) out.push(`${r.policy}: the head does not preload ./app.js`);
+    } else if (!r.preload) out.push(`${r.policy}: the head does not preload the entry`);
     r = await until(x => x.boot != null, 10000);
     if (r.boot == null) out.push(`${r.policy}: the runtime never came up${r.policy === 'interaction' ? ' after a press' : ' without input'}`);
     else {
@@ -917,7 +923,15 @@ async function activation(t, report, fail, url, browser) {
 // document for HOLD ms); once the runtime has adopted the settled page,
 // state holds both, the field its text, and the page one root.
 const HOLD = 1500;
+// `sheetCut`: the tokens a JS page's sheet was cut for (LLP 1047.003 D1: the tags and attributes nothing inside the
+// root writes, whose rules left the sheet), from its build's .gen/sheet-cut.json; none for a page served from a URL.
+// `uncut`: those of them an element inside a root has, boot or settled, which that element would show unstyled.
+const sheetCut = dist => new Set(dist && existsSync(resolve(dist, '.gen/sheet-cut.json')) ? JSON.parse(readFileSync(resolve(dist, '.gen/sheet-cut.json'), 'utf8')) : []);
+const uncut = async (evaluate, cut) => !cut.size ? []
+  : [...pageTokens(await evaluate(`[...document.querySelectorAll('#exact-root')].map(root => root.innerHTML).join('')`))].filter(t => cut.has(t));
+
 async function bootPress(t, report, fail, dist, browser) {
+  const cut = sheetCut(dist);
   const step = `${crossBrowser ? `${browser} ` : ''}boot press`;
   const bin = `${t.app}-render`;
   const at = [['linux', `${t.app}-linux`], ['web', `${t.app}-web`]].find(([dir]) => existsSync(resolve(root, 'apps', t.app, dir, 'src/bin', `${bin}.rs`)));
@@ -955,7 +969,7 @@ async function bootPress(t, report, fail, dist, browser) {
     });
     const port = await new Promise(ok => proxy.listen(0, '127.0.0.1', () => ok(proxy.address().port)));
     const url = `http://127.0.0.1:${port}/`;
-    S = await open({ host: 'web', browser, app: t.app, url });
+    S = await open({ host: 'web', browser, app: t.app, webDist: dist, url });
     const ev = S.carrier.evaluate;
     const q = id => `document.querySelector('#exact-root[data-boot] [data-testid="${id}"]')`;
     // Twice: the field edited without focus (the page's focus on <body>),
@@ -972,6 +986,7 @@ async function bootPress(t, report, fail, dist, browser) {
           return 'pressed'; })()`).catch(() => null);
       }
       if (pressed !== 'pressed') { fail(pass, pressed === 'late' ? 'the settled page arrived before the boot document could be pressed' : 'no boot document with boot-bump and boot-words'); continue; }
+      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the boot document has ${token}, which its sheet was cut for`);
       let got = null;
       const want = `1 early|early|${focus ? 'boot-words' : ''}|1|`;
       for (const end = Date.now() + 15000; Date.now() < end; await new Promise(z => setTimeout(z, 50))) {
@@ -980,6 +995,7 @@ async function bootPress(t, report, fail, dist, browser) {
         if (got?.startsWith(want)) break;
       }
       if (!got?.startsWith(want)) fail(pass, `after adoption: ${got}, not ${want}… (state|field|focus|roots|title)`);
+      for (const token of await uncut(ev, cut)) fail(pass, `sheet: the settled page has ${token}, which its sheet was cut for`);
       report.steps.push({ target: t.name, step: pass, ...(crossBrowser ? { browser } : {}), differences: got?.startsWith(want) ? 0 : 1 });
     }
   } catch (e) {

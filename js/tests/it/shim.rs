@@ -24,12 +24,17 @@ fn console(source: &str) -> (String, Vec<String>) {
     (value.as_str().unwrap().to_owned(), logs)
 }
 
+/// Each throw is reported with its stack, as a page's console prints it
+/// (LLP 1175 D1: through Ibex's events binding), and the later listener runs.
 #[test]
 fn console_reports_throwing_abort_listeners() {
     let (answer, logs) = console("consoleAbortListeners");
     assert_eq!(answer, "reached the return");
+    let said: Vec<&str> = (logs.iter().map(String::as_str))
+        .filter(|l| !l.starts_with("    at "))
+        .collect();
     assert_eq!(
-        logs,
+        said,
         [
             "Uncaught Error: boom",
             "Uncaught RangeError: listener",
@@ -260,8 +265,25 @@ fn the_apps(source: &str) -> Vec<(exact_runner::Console, String)> {
     ]
 }
 
+/// [`the_apps`], then the line a browser's console prints for an error event
+/// no listener cancelled (LLP 1175 D5), which the platform's log also has;
+/// `written` without its stack frames.
+fn the_apps_then_uncaught(
+    source: &str,
+    uncaught: &str,
+    written: &[(exact_runner::Console, String)],
+) {
+    let mut expected = the_apps(source);
+    expected.push((exact_runner::Console::Error, uncaught.into()));
+    let first_lines: Vec<_> = (written.iter())
+        .filter(|(_, l)| !l.starts_with(char::is_whitespace))
+        .cloned()
+        .collect();
+    assert_eq!(first_lines, expected);
+}
+
 /// The prelude's refusal of a fetch with no answer running stays in the
-/// journal; the hand-offs that carry the runtime's line are gone before the
+/// journal; the hand-off that carries the runtime's line is gone before the
 /// app loads.
 #[test]
 fn a_refused_fetch_is_the_runtimes_line() {
@@ -271,7 +293,7 @@ fn a_refused_fetch_is_the_runtimes_line() {
         said.journal,
         [
             "console: the app at load",
-            "console: fetch() called outside an answer: it was never run. Start a fetch inside an answer",
+            "console: fetch() called outside an answer: it was never run. Start a fetch inside an answer, or in an error event's listener itself",
             "console: the app's handoffs",
         ]
     );
@@ -289,11 +311,11 @@ fn a_microtasks_uncaught_error_is_the_runtimes_line() {
         "{:#?}",
         said.journal
     );
-    assert_eq!(said.written, the_apps("microtask"));
+    the_apps_then_uncaught("microtask", "Uncaught Error: task", &said.written);
 }
 
 /// An error an abort listener did not catch (Ibex's abort binding, through
-/// console.js's `reportError`).
+/// its events binding's `reportError`).
 #[test]
 fn an_abort_listeners_uncaught_error_is_the_runtimes_line() {
     let said = runtime_lines("abort", false);
@@ -302,7 +324,7 @@ fn an_abort_listeners_uncaught_error_is_the_runtimes_line() {
         "{:#?}",
         said.journal
     );
-    assert_eq!(said.written, the_apps("abort"));
+    the_apps_then_uncaught("abort", "Uncaught RangeError: listener", &said.written);
 }
 
 /// A compact notation the host formats in full (js/src/intl.js); an engine
@@ -332,5 +354,9 @@ fn a_journal_line_without_its_door_is_the_runtimes_line() {
         "{:#?}",
         said.journal
     );
-    assert_eq!(said.written, the_apps("rejection"));
+    the_apps_then_uncaught(
+        "rejection",
+        "Uncaught (in promise) Error: lost",
+        &said.written,
+    );
 }

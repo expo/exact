@@ -68,6 +68,12 @@ pub struct Batch {
     /// A timer's continuation an advance released is still out
     /// (`Runner::data_timer_landing`): the agent's jump waits for its reply.
     pub landing: bool,
+    /// A store write the batch's commits made has landed (`Host::persist`):
+    /// the app's other sessions refresh (LLP 1030.004 D2).
+    pub stored: bool,
+    /// Topics the batch's durable writes announced, for the app's other
+    /// sessions (LLP 1030.004 D2).
+    pub announced: Vec<String>,
     /// Whether a displayed element holds the wake lock, when that changed
     /// (`Host::wakelock_moved`, LLP 1125 D11).
     pub wakelock: Option<bool>,
@@ -125,6 +131,10 @@ fn string_list(items: &[&str], out: &mut String) {
     out.push(']');
 }
 
+/// An omitted box's hit region: the presented child its descendants start
+/// before, its frame, its id, and the presented child after its descendants.
+pub(crate) type HitRegion = (Option<u32>, [f32; 4], u32, Option<u32>);
+
 fn id_list(ids: &[u32], out: &mut String) {
     out.push('[');
     for (i, c) in ids.iter().enumerate() {
@@ -137,6 +147,38 @@ fn id_list(ids: &[u32], out: &mut String) {
 }
 
 impl Batch {
+    pub(crate) fn layout_promote(
+        &mut self,
+        id: u32,
+        parent: u32,
+        frame: [f32; 4],
+        children: &[(u32, [f32; 4])],
+        keep: &[u32],
+    ) {
+        self.ops.push(format!(
+            "{{\"op\":\"layoutPromote\",\"id\":{id},\"parent\":{parent},\"frame\":{},\"children\":{},\"keep\":{}}}",
+            serde_json::to_string(&frame).expect("layout rectangle"),
+            serde_json::to_string(children).expect("child ids"),
+            serde_json::to_string(keep).expect("retained ids")
+        ));
+    }
+
+    /// Omitted boxes destroyed: their hit regions leave `id`'s, and a contact
+    /// one holds ends. Not geometry, so a withheld layout keeps it.
+    pub(crate) fn layout_hits_withdrawn(&mut self, id: u32, ids: &[u32]) {
+        let mut s = format!("{{\"op\":\"layoutHitsWithdrawn\",\"id\":{id},\"ids\":");
+        id_list(ids, &mut s);
+        s.push('}');
+        self.ops.push(s);
+    }
+
+    pub(crate) fn layout_hits(&mut self, id: u32, boxes: &[HitRegion]) {
+        self.ops.push(format!(
+            "{{\"op\":\"layoutHits\",\"id\":{id},\"boxes\":{}}}",
+            serde_json::to_string(boxes).expect("layout rectangles")
+        ));
+    }
+
     /// @ref LLP 1095 D4 — the roles the app's theme replaces, by the
     /// schema's name, each with the colour that replaces it as a style row
     /// sends one; sent at boot, an empty table clearing the last plan's. A
@@ -377,6 +419,23 @@ impl Batch {
         self.ops.is_empty()
     }
 
+    pub(crate) fn repeatable(&self) -> bool {
+        self.ops.is_empty()
+            && self.images.is_empty()
+            && self.seq.is_none()
+            && self.alerts.is_empty()
+            && self.journal.is_empty()
+            && self.announced.is_empty()
+            && self.store_status.is_none()
+            && !self.controls
+            && !self.layout_provisional
+            && !self.facts
+            && !self.stored
+            && self.wakelock.is_none()
+            && self.orientationlock.is_none()
+            && self.must_finish.is_none()
+    }
+
     /// Mounted collection metadata from the runner's common JSON array writer.
     /// An empty array clears previously published collections on the presenter.
     pub fn collections(&mut self, items: &str) {
@@ -549,7 +608,10 @@ impl Batch {
             s.push_str("},\"state\":");
             quote(&session.state, &mut s);
         }
-        s.push_str(&format!(",\"ephemeral\":{}}}", session.ephemeral));
+        s.push_str(&format!(
+            ",\"logout\":{},\"ephemeral\":{}}}",
+            session.logout, session.ephemeral
+        ));
         self.ops.push(s);
     }
 
@@ -610,19 +672,28 @@ impl Batch {
         self.ops.push(s);
     }
 
-    /// `{"op":"surfaceWork","mode":"canvas","ticket","id","lifetime","generation","w","h"}`:
-    /// the presenter encodes that canvas's bitmap (`canvas_capture.rs`); with
-    /// none, `"refused":true`, which it hands straight back.
+    /// `{"op":"surfaceWork","mode":"canvas","ticket","id","lifetime","generation","w","h","type","quality"?}`:
+    /// the presenter encodes that canvas's bitmap (`canvas_capture.rs`) as
+    /// `type` if ImageIO writes it, else PNG; with none, `"refused":true`,
+    /// which it hands straight back.
     pub fn canvas_capture(
         &mut self,
         ticket: u64,
         c: Option<&exact_runner::canvas_capture::CanvasCapture>,
     ) {
         self.ops.push(match c {
-            Some(c) => format!(
-                "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{}}}",
-                c.view, c.lifetime, c.generation, c.sequence, c.width, c.height
-            ),
+            Some(c) => {
+                let mut op = format!(
+                    "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"id\":{},\"lifetime\":{},\"generation\":{},\"sequence\":{},\"w\":{},\"h\":{},\"type\":",
+                    c.view, c.lifetime, c.generation, c.sequence, c.width, c.height
+                );
+                exact_runner::agent::quote(&c.encoding.media_type, &mut op);
+                if let Some(q) = c.encoding.quality {
+                    op.push_str(&format!(",\"quality\":{}", exact_runner::agent::num(q)));
+                }
+                op.push('}');
+                op
+            }
             None => format!(
                 "{{\"op\":\"surfaceWork\",\"mode\":\"canvas\",\"ticket\":{ticket},\"refused\":true}}"
             ),
@@ -892,6 +963,20 @@ impl Batch {
             .push(format!("{{\"op\":\"fragments\",\"id\":{id}{record}}}"));
     }
 
+    /// Where a table's rows and cells stand (LLP 1153 D7.3), for the
+    /// platform's table accessibility:
+    /// `{"op":"table","id":…,"size":[rows,columns],"order":[…]}` for a
+    /// table, its captions aside, with its children's ids in the order it
+    /// draws them when that is not the order written;
+    /// `{"op":"table","id":…,"table":…,"place":[row,rows,column,columns]}`
+    /// for a row or cell, the table that placed it, and its first row and
+    /// column from 0 and how many of each it covers; `{"op":"table","id":…}`
+    /// when it is neither any more.
+    pub fn table(&mut self, id: u32, record: &str) {
+        self.ops
+            .push(format!("{{\"op\":\"table\",\"id\":{id}{record}}}"));
+    }
+
     /// `{"op":"sticky","id":…,"scroller":…,"natural":[…],"limit":[…],
     /// "port":[…],"insets":[…]}` — a sticky box's constraint (LLP 1083 D3),
     /// or `{"op":"sticky","id":…}` when it is no longer sticky.
@@ -1075,6 +1160,9 @@ impl Batch {
         if self.landing {
             s.push_str(",\"landing\":true");
         }
+        if self.stored {
+            s.push_str(",\"stored\":true");
+        }
         if let Some(held) = self.wakelock {
             let _ = write!(s, ",\"wakelock\":{held}");
         }
@@ -1103,7 +1191,11 @@ impl Batch {
         if let Some((first, last)) = self.seq {
             let _ = write!(s, ",\"seq\":[{first},{last}]");
         }
-        for (key, lines) in [("alerts", &self.alerts), ("journal", &self.journal)] {
+        for (key, lines) in [
+            ("alerts", &self.alerts),
+            ("journal", &self.journal),
+            ("announced", &self.announced),
+        ] {
             if lines.is_empty() {
                 continue;
             }
@@ -1138,7 +1230,7 @@ fn layout_geometry(op: &str) -> bool {
     match kind {
         Some(
             "frame" | "content" | "fieldContent" | "flow" | "sticky" | "fragments" | "region"
-            | "native-region" | "svg",
+            | "native-region" | "svg" | "layoutHits",
         ) => true,
         Some("present") => ["translate", "scale", "rotate", "layout", "height"]
             .iter()
@@ -1278,6 +1370,7 @@ mod tests {
         let mut extra = Batch::new();
         extra.surface_work(
             &RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket: 7,
                 target: "continue".into(),
@@ -1293,6 +1386,7 @@ mod tests {
         let mut refused = Batch::new();
         refused.surface_work(
             &RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket: 8,
                 target: "save".into(),

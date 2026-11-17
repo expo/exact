@@ -136,7 +136,7 @@ test('a length named is the design\'s own, else a base name\'s in the kernel tab
   // A name neither has; a host with no column (the terminal has no agent host yet; `host` is the Mac's sample).
   expect(baseLength(schema, none, 'space.header', 'web')).toBeUndefined();
   expect(baseLength(schema, none, 'space.md', 'host')).toBeUndefined();
-  // The design's own, as the compiler reads it (`contract tamber ir`), wins on every host.
+  // The design's own, as the compiler reads it (`contract forma ir`), wins on every host.
   const names = schema.scale.map(r => r[0]);
   const ir = (tokens) => ({ tokens });
   const own = overridesOf(ir([

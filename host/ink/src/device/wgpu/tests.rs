@@ -81,7 +81,9 @@ fn rounded_rectangles_ring_and_gaussian_shadow_at_two_times_scale() {
     );
     assert_eq!(pixel(&bytes, 200, 109, 145), [0; 4]);
     assert!(bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .all(|p| p[..3].iter().all(|c| *c <= p[3])));
 
     let mut times = Vec::new();
@@ -137,8 +139,8 @@ fn textures_brushes_clips_mips_and_retirement_reach_the_pixels() {
     device.generate_mips(image).unwrap();
     for level in 1..4 {
         let bytes = block_on(device.readback_async(image, level)).unwrap();
-        for p in bytes.chunks_exact(4) {
-            near(p.try_into().unwrap(), [64, 0, 64, 128], 1);
+        for p in bytes.as_chunks::<4>().0 {
+            near(*p, [64, 0, 64, 128], 1);
         }
     }
     let ramp = device.create_texture(TextureDesc::rgba(2, 1)).unwrap();

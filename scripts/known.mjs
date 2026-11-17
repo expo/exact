@@ -59,7 +59,7 @@ export function noteOf(result, tier) {
     const complete = c.complete ?? !stoppedEarly(name, result.failures);
     checks[name] = c.skipped ? { command: c.command, skipped: c.skipped } : { command: c.command, status: c.status, complete, ...(c.covers ? { covers: c.covers } : {}) };
   }
-  return { sha: result.sha, tier, at: new Date().toISOString(), checks, failures: result.failures };
+  return { sha: result.sha, tier, at: new Date().toISOString(), checks, failures: result.failures, ...(result.attribution ? { attribution: result.attribution } : {}) };
 }
 
 /** Attach `note` to its commit and push the lane's ref to origin. The lane is the ref's only writer. A failed push is

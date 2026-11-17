@@ -2,6 +2,65 @@ use super::*;
 use exact_kernel::{NodeType, Offer, Op};
 use std::{cell::Cell, rc::Rc};
 
+#[test]
+fn action_geometry_flags_follow_estimated_paragraphs_and_their_completion() {
+    use exact_kernel::{MonospaceMeasurer, TextMeasureRequest, TextMeasurer, TextMetrics};
+    struct Reader(Rc<Cell<bool>>);
+    impl TextMeasurer for Reader {
+        fn measure(&mut self, request: &TextMeasureRequest<'_>) -> TextMetrics {
+            let mut metrics = MonospaceMeasurer::default().measure(request);
+            metrics.pending =
+                self.0.get() && request.runs.iter().any(|r| r.text.contains("estimated"));
+            metrics
+        }
+    }
+    let pending = Rc::new(Cell::new(true));
+    let source = r#"component App
+  state flags = [false]
+  action read
+    flags = [frame("paragraph").provisional, measure("paragraph").provisional, frame("holder").provisional, measure("holder").provisional, frame("peer").provisional, measure("peer").provisional]
+  view
+    box
+      box id="holder"
+        text "estimated paragraph" id="paragraph"
+      box id="peer" position="absolute" left=0 top=0 width=20 height=20
+"#;
+    let mut r = crate::Runner::boot(
+        contract::compile(source).unwrap(),
+        (),
+        Kernel::new(Box::new(Reader(pending.clone()))),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let root = r.roots()[0];
+    for (width, waiting) in [(200.0, true), (120.0, true), (200.0, false)] {
+        pending.set(waiting);
+        let paragraph = view_of(r.kernel(), "paragraph").unwrap();
+        let stamp = r
+            .kernel()
+            .node(paragraph)
+            .unwrap()
+            .paragraph_stamp()
+            .unwrap();
+        r.kernel_mut()
+            .invalidate_text_metrics(stamp.owner(), stamp.metric_revision());
+        r.kernel_mut()
+            .compute_layout(root, Offer::definite(width, 400.0))
+            .unwrap();
+        r.act("read", vec![]).unwrap();
+        assert_eq!(
+            r.slot("flags"),
+            Some(&Value::list(
+                [waiting, waiting, waiting, waiting, false, false]
+                    .into_iter()
+                    .map(Value::Bool)
+                    .collect()
+            ))
+        );
+    }
+}
+
 #[derive(Debug)]
 struct Read {
     calls: Cell<usize>,

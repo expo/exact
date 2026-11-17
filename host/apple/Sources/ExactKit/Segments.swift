@@ -39,7 +39,7 @@ struct ViewportFold: Equatable {
     /// `layout.env`'s four names (LLP 1012 §1; LLP 1078 D7).
     var env: [String: Any] {
         ["device-posture": posture, "horizontal-viewport-segments": cols, "vertical-viewport-segments": rows,
-         "viewport-segments": rects.map { [Agent.r2($0.minX), Agent.r2($0.minY), Agent.r2($0.width), Agent.r2($0.height)] }]
+         "viewport-segments": rects.map { [InspectionValue.r2($0.minX), InspectionValue.r2($0.minY), InspectionValue.r2($0.width), InspectionValue.r2($0.height)] }]
     }
 }
 

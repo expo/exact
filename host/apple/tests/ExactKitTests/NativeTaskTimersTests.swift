@@ -275,7 +275,7 @@ final class NativeTaskTimersTests: XCTestCase {
             DispatchQueue.main.async { turned.fulfill() }
             wait(for: [turned], timeout: 10)
             XCTAssertTrue(session.taskTimers.hasReady, "A busy owner retains the native delivery")
-            session.publishFillForTests(0, Batch(ops: [], timers: true, motion: false, clock: nil, error: nil), generation: session.generation)
+            session.publishFillForTests(0, Batch(ops: [], timers: true, motion: false, clock: nil, error: nil), lease: session.runtime.completionLease)
             session.landFill()
             // The landed fill resumes the queue: the retained delivery is asked for again, by no hand here.
             let asked = expectation(description: "The queue asks for the retained delivery")
@@ -312,6 +312,8 @@ final class NativeTaskTimersTests: XCTestCase {
             let boot = session.runtime.bootPlan(bytes, width: 390, height: 844)
             XCTAssertNil(boot.error)
             session.apply(boot)
+            // The page's first frame: until it is presented a frame is owed (LLP 1069.000 D2 r7).
+            session.apply(session.runtime.tick(now: 1_000_000_000, frame: 1_000_000_016))
             XCTAssertFalse(session.advanceInFlight)
             XCTAssertTrue(session.presenter.views.values.contains { $0.props["text"] == "0" })
             session.timerAdmissions.check(frame: frame, update: true, at: 1_000_000_100)

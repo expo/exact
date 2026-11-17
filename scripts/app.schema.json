@@ -16,7 +16,7 @@
     },
     "preload": {
       "type": "object",
-      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant; {{ writes a literal brace. Checked and parsed at bake, with present secrets filled in on the device.",
+      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant or {env:NAME} for a declared setting with a build value; {{ writes a literal brace. Fixed settings are written in at bake; launch settings and present secrets are filled on the device. Android and the web use build settings.",
       "maxProperties": 8,
       "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
       "additionalProperties": {
@@ -227,6 +227,24 @@
       "description": "The web page the installed app opens at; `/` for most apps.",
       "type": "string"
     },
+    "handle_links": {
+      "description": "Whether the app's web addresses open the installed app (LLP 1038 D8; the WICG handle_links explainer's values). `preferred`: links to app.origin within `scope`, and to each `scope_extensions` origin, open the app on iOS, iPadOS, macOS and Android, which the build signs and registers; the web build writes app.origin's association files and prints every other origin's. `not-preferred` and `auto` (what an absent member means) claim nothing natively. Exact's /.exact/ paths and an https auth.callback are never claimed.",
+      "enum": ["auto", "preferred", "not-preferred"]
+    },
+    "scope": {
+      "description": "The Web App Manifest's `scope`: the paths of app.origin that belong to the app, as an absolute path such as `/notes/` (no query, fragment, dot segment, `*` or `?`). Absent: start_url's directory. `handle_links` narrows its claim on app.origin to it; `start_url` must be inside it.",
+      "type": "string"
+    },
+    "scope_extensions": {
+      "description": "Other https origins whose links belong to the app (the manifest incubation's member): `{ \"type\": \"origin\", \"origin\": \"https://share.example\" }` each, a whole origin with no path, port or wildcard. Each serves the association files the web build prints.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": { "type": { "type": "string" }, "origin": { "type": "string" } },
+        "required": ["type", "origin"],
+        "additionalProperties": false
+      }
+    },
     "display": {
       "description": "How an installed web app is framed: `standalone` (its own window, no browser chrome) is the usual choice.",
       "type": "string",
@@ -366,6 +384,14 @@
         "component"
       ],
       "properties": {
+        "sync": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "state": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+            "secrets": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+          },
+          "description": "Phone-owned persisted state and ordinary secrets copied to the watch. Secrets are sealed to its device-local key and remain usable offline. The watch must run once; deletion is eventual."
+        },
         "source": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*\\.contract$",
@@ -562,7 +588,7 @@
     },
     "intents": {
       "type": "object",
-      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, a destroys tool's face names only the apple door (D10), and a face that reaches the web door needs a tool with a description and a name of at most 128 characters (WebMCP).",
+      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. Parameters are strings, numbers or bools; a file face uses a string for the imported app:/ path and names only the apple door, as a destroys tool does (D10). A web face needs a tool description and a name of at most 128 characters (WebMCP).",
       "additionalProperties": false,
       "properties": {
         "entities": {
@@ -593,7 +619,8 @@
                     "title": { "type": "string", "minLength": 1 },
                     "description": { "type": "string", "minLength": 1, "description": "What the parameter means and what it takes, for a caller choosing a value: App Intents' parameter description, the input schema's description on the web." },
                     "entity": { "type": "string", "minLength": 1, "description": "A kind of intents.entities: the system offers that kind's entries, and passes the entry's id." },
-                    "type": { "enum": ["integer"], "description": "A number parameter the system asks for as a whole number." }
+                    "accept": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 }, "description": "Required for file: accepted MIME types from document-utis.json, excluding directories." },
+                    "type": { "enum": ["integer", "file"], "description": "integer asks for a whole number; file takes an IntentFile on a string parameter through the apple door." }
                   }
                 }
               },
@@ -607,8 +634,8 @@
               },
               "doors": {
                 "type": "array",
-                "items": { "enum": ["apple", "android", "web"] },
-                "description": "The doors that offer it. Defaults to every door, or apple alone for a destroys tool."
+                "items": { "enum": ["apple", "android", "web", "mcp"] },
+                "description": "The doors that offer it. Defaults to apple, android and web, or apple alone for a destroys tool. mcp, offered only when named, is MCP clients on the same Mac (LLP 1111.000; not built yet), and a face naming only mcp keeps the plan's types."
               }
             }
           }
@@ -651,7 +678,7 @@
           "properties": {
             "title": { "type": "string", "minLength": 1 },
             "text": { "type": "string", "minLength": 1 },
-            "url": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "minLength": 1, "description": "The parameter a shared link arrives under. On Apple, mapping it also has Safari give the details of a page it shares: `url` is then the page's canonical URL (its location when it names none) and `title` the page's title. A link shared from a page keeps its own URL and title." },
             "files": {
               "type": "array",
               "minItems": 1,
@@ -670,10 +697,11 @@
         },
         "apple": {
           "type": "object",
-          "description": "Apple's words (D6): `NSExtensionActivationRule` beats the derived rule; `postTitle` is a strings key for the compose sheet's post button.",
+          "description": "Apple's words (D6): `NSExtensionActivationRule` beats the derived rule; `postTitle` is the word on the compose sheet's post button; `presentation` is what the extension shows.",
           "properties": {
-            "NSExtensionActivationRule": { "oneOf": [{ "type": "string" }, { "type": "object" }] },
-            "postTitle": { "type": "string" }
+            "NSExtensionActivationRule": { "oneOf": [{ "type": "string" }, { "type": "object" }], "description": "The extension's activation rule, in place of the derived one: Apple's dictionary of keys, or a predicate string. When `url` is mapped, a dictionary gains `NSExtensionActivationSupportsWebPageWithMaxCount` unless it gives that count itself. A predicate is used as written. Safari hands the extension a shared page's details as a property list (`com.apple.property-list`) in place of the page's link." },
+            "postTitle": { "type": "string", "description": "The word on the compose sheet's post button, in place of Post. The button shows it as written: the build looks nothing up in the app's strings." },
+            "presentation": { "enum": ["compose", "confirmation"], "description": "`compose` (the default) shows the compose sheet: the shared text to edit, then Cancel or Post. `confirmation` shows no editor: choosing the app in the share sheet takes the share at once, shows the app's name under a checkmark for a second, and closes. The app receives either the same way, at `action`. `postTitle` names the compose sheet's button, so the build refuses it with `confirmation`." }
           },
           "additionalProperties": false
         },
@@ -715,7 +743,7 @@
           "description": "The reverse-DNS identity: the bundle identifier on Apple, the update stream's app id, and app.ts's `appId`. `exact new` writes com.example.<name>-<six hex digits>, unique to the app; change it before distributing.",
           "type": "string",
           "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$",
-          "x-hint": "every dot-separated part starts with a letter, since this one id is also the Android package and the Linux app id, which require that (Apple alone allows a leading digit). Put a letter before a part that starts with a digit, as in com.example.x2048, and use that id everywhere; nothing else needs changing."
+          "x-hint": "every dot-separated part starts with a letter, since the Linux app id and the default Android package require that (Apple alone allows a leading digit). Put a letter before a part that starts with a digit, as in com.example.x2048, and set host.android.id when Android needs a different package."
         },
         "name": {
           "description": "The name a native host shows: the menu bar, the app switcher, Finder.",
@@ -845,18 +873,17 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^(?!(remote-notification|fetch|processing)$).*$",
-                "description": "remote-notification is refused: a visible push and ActivityKit update tokens need no background mode, and a data-only push is refused (LLP 1133.004 §9 P8). fetch and processing come from the grant lines device.background-sync and device.periodic-background-sync (LLP 1133.017 D14)."
+                "pattern": "^(?!(remote-notification|fetch|processing|bluetooth-central)$).*$",
+                "description": "remote-notification is refused: a visible push and ActivityKit update tokens need no background mode, and a data-only push is refused (LLP 1133.004 §9 P8). fetch and processing come from the grant lines device.background-sync and device.periodic-background-sync (LLP 1133.017 D14). bluetooth-central comes from device.bluetooth-background beside device.bluetooth."
               }
             },
             "associatedDomains": {
-              "oneOf": [
-                { "type": "boolean" },
-                { "type": "array", "items": { "type": "string" } }
-              ]
+              "description": "The raw associated-domains list, for what has no web name: `webcredentials:`, `appclips:`, a wildcard `applinks:*.example.com`, an `applinks:` host the app does not extend its scope to. A link claim on app.origin is `handle_links` (LLP 1038 D8).",
+              "type": "array",
+              "items": { "type": "string" }
             },
             "appClip": {
-              "description": "An App Clip (LLP 1126 D12: an App Clip is an app). `{}` embeds the whole app a second time at `<App>.app/AppClips/<name>.app`, with `NSAppClip` in its Info.plist, the app as its parent application and each `applinks:` domain of `associatedDomains` as an `appclips:` invocation domain (the app's entitlements list those too). A device build needs a profile for the clip's App ID, registered with the App Clip capability, of the app's profile's team and method.",
+              "description": "An App Clip (LLP 1126 D12: an App Clip is an app). `{}` embeds the whole app a second time at `<App>.app/AppClips/<name>.app`, with `NSAppClip` in its Info.plist, the app as its parent application and each concrete `applinks:` domain it signs (`handle_links`'s and `associatedDomains`') as an `appclips:` invocation domain (the app's entitlements list those too). A device build needs a profile for the clip's App ID, registered with the App Clip capability, of the app's profile's team and method.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
@@ -877,6 +904,7 @@
               "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.",
               "items": { "type": "string" }
             },
+            "alternativeNames": { "$ref": "#/$defs/alternativeNames" },
             "queriesSchemes": {
               "description": "Other apps' URL schemes a native module may ask `canOpenURL` about, to see whether the app is installed (Info.plist's LSApplicationQueriesSchemes): iOS answers false for any scheme not listed, and honours at most 50. A scheme as RFC 3986 writes it, without `:`.",
               "type": "array",
@@ -953,6 +981,11 @@
               "enum": ["regular", "accessory"],
               "description": "\"accessory\": a menu-bar app (LLP 1133.025 D6), written as LSUIElement: no Dock tile and no menu bar of its own, and every launch opens no window; a `-exact-menu=\"status\"` button is how the person reaches it, and `focus()` shows its window. Absent: regular."
             },
+            "layoutDirection": {
+              "enum": ["auto", "rtl"],
+              "default": "auto",
+              "description": "Mac-only: rtl mirrors the window, split view, toolbar and sidebar, even with an English strings table. auto or omission keeps AppKit's process direction. Applied before NSApplication starts; a launch argument naming AppleTextDirection or NSForceRightToLeftWritingDirection takes precedence."
+            },
             "optimize": {
               "enum": ["speed", "size", "balanced"],
               "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O), \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2) or \"balanced\" (size, with the crates a scrolling list spends its time in at opt-level 3, and Swift -O). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size and balanced because their generated Cargo workspace has neither profile. `build.mjs --optimize` overrides it."
@@ -990,6 +1023,7 @@
               "additionalProperties": false
             },
             "team": { "type": "string" },
+            "alternativeNames": { "$ref": "#/$defs/alternativeNames" },
             "urlSchemes": {
               "type": "array",
               "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.",
@@ -1029,9 +1063,14 @@
           "additionalProperties": false
         },
         "android": {
-          "description": "Android: the painter, `minimumOS` (default 12), `certificates` for the origin's `assetlinks.json`, and `maven` libraries for the app's Kotlin.",
+          "description": "Android: the package `id` (default app.id), the painter, `minimumOS` (default 12), `notificationChannels`, `certificates` for the origin's `assetlinks.json`, and `maven` libraries for the app's Kotlin.",
           "type": "object",
           "properties": {
+            "id": {
+              "description": "The Android package name (Gradle applicationId), independent of the Apple bundle identifier. Defaults to app.id with hyphens replaced by underscores. Set it before publishing; a store package name is permanent.",
+              "type": "string",
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$"
+            },
             "painter": {
               "enum": ["ink"],
               "description": "Opt into ink (LLP 1149 D12); absent: the current painter, with `EXACT_PAINTER` overriding the choice, and ink refused until its Vulkan presenter is implemented."
@@ -1039,6 +1078,32 @@
             "minimumOS": {
               "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
               "enum": ["10", "11", "12", "13", "14", "15", "16"]
+            },
+            "launchImage": {
+              "description": "What Android 12's starting window shows on `background_color` (or the platform's surface without one) in place of the launcher icon, which it shows unsaid. A picture (iOS's `host.ios.launchImage`; Expo's splash `image` and `imageWidth`) is that icon, `width` dp wide, which the platform shows within a centred square 192 dp across and, on stock Android, cuts to the circle in it; before Android 12, whose launch window has no icon, it is centred on the window's background. `false` shows no icon. A PNG in the app's directory; light and dark alike. Changing it requires a new native build.",
+              "type": ["object", "boolean"],
+              "required": ["src", "width"],
+              "additionalProperties": false,
+              "properties": {
+                "src": { "type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory." },
+                "width": { "type": "number", "minimum": 1, "maximum": 192, "description": "Its width in the launch window, in dp, up to the icon's 192; its height follows its aspect." }
+              }
+            },
+            "notificationChannels": {
+              "description": "The app's notification channels (LLP 1133.004.000 D1), made by the host after the first frame and when the app is updated; valid only with `device.notifications` granted. Android keeps a channel's importance and sound once made and the person may change them, so a changed importance needs a new id. `id` `default` names and tunes the channel a post without `android.channelId` takes.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "name"],
+                "properties": {
+                  "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$", "description": "The NotificationChannel id, an Android resource name." },
+                  "name": { "type": "string", "description": "A strings key (LLP 1060): the channel's name in Settings." },
+                  "description": { "type": "string", "description": "A strings key: the channel's description in Settings." },
+                  "importance": { "enum": ["min", "low", "default", "high"], "description": "The platform's IMPORTANCE_* name; `default` when absent. `high` shows a post heads-up." },
+                  "sound": { "type": "string", "pattern": "\\.(ogg|mp3|wav|OGG|MP3|WAV)$", "description": "An .ogg, .mp3 or .wav file in the app's directory, `assets/alert.wav`, which the channel plays; the platform's sound when absent." }
+                },
+                "additionalProperties": false
+              }
             },
             "maven": {
               "description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
@@ -1096,6 +1161,11 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "base": {
+              "description": "The URL path the JS web build is served under, such as /app/. Defaults to /. Starts and ends with /; use URL-safe path segments, without dot segments. serve reads the base recorded in the build.",
+              "type": "string",
+              "pattern": "^/(?:[A-Za-z0-9_~-]+(?:\\.[A-Za-z0-9_~-]+)*/)*$"
+            },
             "head": {
               "description": "Tags the web build writes into the <head> of every document: the shell, each pre-rendered page and the 404 page. Each entry is one tag, {\"script\": {...}}, {\"link\": {...}} or {\"meta\": {...}}, whose value is its attributes (a string, or true for a bare one such as async); a script's `text` is its content. For what a site says once to the browser (an analytics script, a preconnect, site-wide JSON-LD); a page's own title and metas are the Contract `head` element's. The same on every page and web only.",
               "type": "array",
@@ -1140,7 +1210,7 @@
           "additionalProperties": { "type": "boolean" }
         },
         "store": {
-          "description": "Per platform (web, macos, ios, linux), whether an installed app has an update store: \"0\" links none, so every change ships as a new binary; \"A\" links the store, so signed plans and assets update over the air (LLP 1030 D4). `exact new` writes the web's; a native verb writes its platform's the first time it runs (LLP 1153 D1). Signed TypeScript and Rust module delivery isn't implemented.",
+          "description": "Per platform (web, macos, ios, linux, windows, android), whether an installed app has an update store: \"0\" links none, so every change ships as a new binary; \"A\" links the store, so signed plans and assets update over the air (LLP 1030 D4). The web host links none, so its can only be \"0\". Android's reads \"0\" when absent (every other native platform's reads \"A\"); at \"A\" the APK links the store and takes signed plans, assets and TypeScript modules, never native code (LLP 1030.006). `exact new` writes the web's; a native verb writes its platform's the first time it runs (LLP 1153 D1). Signed TypeScript and Rust module delivery isn't implemented.",
           "type": "object",
           "additionalProperties": {
             "type": "string",
@@ -1318,6 +1388,31 @@
               ],
               "additionalProperties": false,
               "description": "The portable logic-wrapper cdylib package exporting the Exact logic ABI. One explicit replacement unit; data/helper crates remain ordinary Cargo dependencies."
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "crate": {
+                  "type": "string",
+                  "pattern": "^[a-zA-Z0-9_-]+$",
+                  "description": "The Cargo package of the data crate, a crate beside app.json."
+                },
+                "type": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$",
+                  "description": "The DataSource type, by its path from the crate's library: `pinapp_data::Pins`."
+                },
+                "source": {
+                  "type": "string",
+                  "description": "The constructor when it is not `<type>::default()`: the type itself (a unit struct), or `<type>::new(…)` with literal arguments."
+                }
+              },
+              "required": [
+                "crate",
+                "type"
+              ],
+              "additionalProperties": false,
+              "description": "The Rust data crate that answers the app's sources (LLP 1153.003 D2). The host crates link it and bake the first frame through it; with app.ts beside it, it answers the sources its RUST_SOURCES names and TypeScript the rest."
             }
           },
           "additionalProperties": false
@@ -1352,9 +1447,9 @@
         }
       }
     },
-    "tamber": {
+    "forma": {
       "type": "string",
-      "description": "The app's design (LLP 1121 D2): a `.tamber` file, relative to app.json. Without it, `app.tamber` beside app.contract is the design when there is one."
+      "description": "The app's design (LLP 1121 D2): a `.forma` file, relative to app.json. Without it, `app.forma` beside app.contract is the design when there is one."
     },
     "purchases": {
       "type": "object",
@@ -1399,6 +1494,31 @@
             "additionalProperties": false
           }
         ]
+      }
+    },
+    "variants": {
+      "description": "The app under other identities, each installed beside it with its own data, as a development build beside the store's (LLP 1030.008). `--variant <name>` selects one for a build or a drive (EXACT_VARIANT is the same, and the flag wins); with neither, the app is built as the rest of this file describes it. A variant's `idSuffix` follows app.id, and host.android.id when it is set, so every identifier derived from them follows too: the Apple bundle, its extensions and App Groups, the Android package, the data directories and the update stream.",
+      "type": "object",
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["idSuffix", "name"],
+        "properties": {
+          "idSuffix": {
+            "description": "Appended to app.id (and host.android.id), as `.dev`: one or more parts, each a dot, a letter, then letters, digits or `-`.",
+            "type": "string",
+            "pattern": "^(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"
+          },
+          "name": { "description": "The name people see for this variant, in place of app.name: the launcher, the home screen, the menu bar, the executable.", "type": "string", "minLength": 1 },
+          "icons": { "description": "This variant's icons, in place of `icons`; under it, color_scheme_dark.icons and host.ios.icon and host.macos.icon are not read. Absent: the app's.", "type": "array", "items": { "$ref": "#/$defs/icon" } },
+          "env": {
+            "description": "Values for settings the manifest's `env` declares: after the environment and before .env.local and .env (LLP 1153 D4).",
+            "type": "object",
+            "propertyNames": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
       }
     },
     "typescript": {
@@ -1487,6 +1607,20 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "alternativeNames": {
+      "description": "Other names Siri and App Shortcuts answer to for the app, such as its name before a rename (Info.plist's INAlternativeAppNames): each a `name` and an optional `pronunciationHint`, written as it sounds. At most three. A watch app gets the iPhone app's. Apple admits names based on the app's own or ones its users commonly call it, never another app's.",
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "pronunciationHint": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
     "webCsp": {
       "description": "Directives by name in lower case, each a list of sources to add to Exact's, or a string that replaces Exact's value (the word `exact` standing for Exact's sources).",
       "type": "object",

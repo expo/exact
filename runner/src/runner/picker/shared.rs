@@ -635,7 +635,9 @@ mod tests {
 
     #[test]
     fn share_copy_measures_bytes_and_drops_a_source_that_grows_past_the_cap() {
-        let dir = std::env::temp_dir().join(format!("exact-share-copy-{}", std::process::id()));
+        let dir = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-share-copy-{}", std::process::id())),
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("source.txt");

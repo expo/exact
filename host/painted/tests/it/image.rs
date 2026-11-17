@@ -99,8 +99,8 @@ fn raster_tint_preserves_alpha_background_and_border_in_both_painters() {
     let dir = std::env::temp_dir().join(format!("exact-raster-tint-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut pixels = tiny_skia::Pixmap::new(12, 4).unwrap();
-    for row in pixels.data_mut().chunks_exact_mut(12 * 4) {
-        for (i, pixel) in row.chunks_exact_mut(4).enumerate() {
+    for row in pixels.data_mut().as_chunks_mut::<{ 12 * 4 }>().0 {
+        for (i, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             pixel.copy_from_slice(match i / 4 {
                 0 => &[0, 0, 255, 255],
                 1 => &[0, 0, 128, 128],

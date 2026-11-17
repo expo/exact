@@ -61,18 +61,16 @@ fn heightfield_mesh_and_cylinder_use_world_entities() {
         assert_eq!(w.hash(), restored.hash());
     }
 }
-// A fast body is swept against static colliders by default (the test below), but
-// against a thin dynamic one only with `ccd`, set at spawn or later.
-// `ccd` is encoded only when set, so a body without it reads and hashes as one
-// with only the other fields; a patch that omits it keeps it.
 #[test]
-fn ccd_is_written_only_when_set_and_kept_by_patches() {
+fn ccd_is_replaced_by_serialized_bodies_and_kept_by_patches() {
     use exact_game::{bin, json};
     let on = Body {
         ccd: true,
         ..Body::default()
     };
-    assert!(!json::to_string(&Body::default()).unwrap().contains("ccd"));
+    assert!(json::to_string(&Body::default())
+        .unwrap()
+        .contains("\"ccd\":false"));
     assert!(json::to_string(&on).unwrap().contains("\"ccd\":true"));
     for patch in [r#"{"damping":0.1}"#, "{}"] {
         let mut body = on.clone();
@@ -85,6 +83,12 @@ fn ccd_is_written_only_when_set_and_kept_by_patches() {
     })
     .unwrap();
     assert!(!json::from_str::<Body>(&saved).unwrap().ccd);
+    let mut decoded = on.clone();
+    json::read_into(&saved, &mut decoded).unwrap();
+    assert!(!decoded.ccd, "a serialized default body must turn CCD off");
+    let mut decoded = on.clone();
+    bin::read_into(&bin::to_vec(&Body::default()), &mut decoded).unwrap();
+    assert!(!decoded.ccd, "a binary default body must turn CCD off");
     for body in [Body::default(), on] {
         let mut w = World::new(60, 0);
         physics::register(&mut w);
@@ -97,6 +101,8 @@ fn ccd_is_written_only_when_set_and_kept_by_patches() {
         assert_eq!(bin::from_slice::<Body>(&bin::to_vec(&body)).unwrap(), body);
     }
 }
+// A fast body is swept against static colliders by default, but against a thin
+// dynamic one only with `ccd`, set at spawn or later.
 #[test]
 fn ccd_stops_a_fast_body_tunnelling_through_a_thin_dynamic_one() {
     for ccd in [None, Some(0), Some(1)] {

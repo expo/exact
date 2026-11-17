@@ -73,7 +73,7 @@ impl<D: DataSource> Presenter<D> {
         true
     }
 
-    fn composing_field(&self) -> Option<ViewId> {
+    pub(super) fn composing_field(&self) -> Option<ViewId> {
         let composition = self.ime.as_ref()?;
         let node = self.host.kernel().node_by_key(composition.target.key)?;
         (composition.target.runtime == self.hosts

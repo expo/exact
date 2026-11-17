@@ -18,6 +18,11 @@
 //!   `HKCU\Control Panel\Keyboard\PrintScreenKeyForSnippingEnabled`
 //!   answers `reserved`. A missing value is reserved from build 22000,
 //!   or when the build cannot be read; an explicit zero permits registration.
+//!   While a session reads it, a thread waits on that key
+//!   ([RegNotifyChangeKeyValue](https://learn.microsoft.com/windows/win32/api/winreg/nf-winreg-regnotifychangekeyvalue))
+//!   and, when the answer flips, has the session ask its readings again
+//!   (#503): a reader of a chord the system took is dropped, and one of a
+//!   chord it gave back is registered. Nothing intercepts the key itself.
 //! - **Attention** flashes the taskbar button until the window comes to
 //!   the front, or three times for an informational request, or the
 //!   author's `windows.count` times, which beats `critical`
@@ -91,6 +96,25 @@ fn available_chord(
     Ok(chord)
 }
 
+/// Bare Print Screen's availability as last read, so that a change under
+/// the keyboard's registry key asks readers again only when it flips.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct PrintScreen(bool);
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl PrintScreen {
+    fn new(snipping: Result<Option<u32>, u32>, windows_build: Option<u32>) -> PrintScreen {
+        PrintScreen(available_chord((0, PRINT_SCREEN), snipping, windows_build).is_ok())
+    }
+
+    /// Takes a new reading; true when bare Print Screen's availability changed.
+    fn flipped(&mut self, snipping: Result<Option<u32>, u32>, windows_build: Option<u32>) -> bool {
+        let was = self.0;
+        *self = PrintScreen::new(snipping, windows_build);
+        was != self.0
+    }
+}
+
 /// The virtual-key code of an `aria-keyshortcuts` key name: a letter or
 /// digit, F1–F24, or a named key (`KeyboardEvent.key`'s names).
 fn virtual_key(key: &str) -> Option<u32> {
@@ -144,14 +168,17 @@ mod imp {
     use exact_painted::desktop::{Login, Refusal, Services};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     use windows_sys::Win32::{
         Foundation::{
             GetLastError, ERROR_FILE_NOT_FOUND, ERROR_INVALID_DATA, ERROR_PATH_NOT_FOUND,
             ERROR_SUCCESS, HWND,
         },
         System::Registry::{
-            RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER,
-            HKEY_LOCAL_MACHINE, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+            RegCloseKey, RegDeleteKeyValueW, RegGetValueW, RegNotifyChangeKeyValue, RegOpenKeyExW,
+            RegSetKeyValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_NOTIFY,
+            KEY_QUERY_VALUE, REG_NOTIFY_CHANGE_LAST_SET, REG_SZ, RRF_RT_REG_BINARY,
+            RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
         },
         UI::{
             Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT},
@@ -184,6 +211,9 @@ mod imp {
         repeats: bool,
     }
 
+    /// The sessions to ask again when bare Print Screen flips, by session.
+    type Watchers = Arc<Mutex<Vec<(String, Box<dyn Fn() + Send>)>>>;
+
     /// The host's one hot-key table, taskbar button and launch.
     pub(crate) struct Desktop {
         name: String,
@@ -193,10 +223,103 @@ mod imp {
         launch: Option<bool>,
         /// Wakes the event loop, whose next turn raises a press.
         wake: RefCell<Option<Box<dyn Fn()>>>,
+        watchers: Watchers,
+        /// Whether the thread that waits on the keyboard's key has started.
+        watching: Cell<bool>,
     }
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(Some(0)).collect()
+    }
+
+    fn snipping() -> Result<Option<u32>, u32> {
+        let (key, name) = (wide(KEYBOARD), wide("PrintScreenKeyForSnippingEnabled"));
+        let mut value = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                (&mut value as *mut u32).cast(),
+                &mut size,
+            )
+        };
+        match status {
+            ERROR_SUCCESS if size == std::mem::size_of::<u32>() as u32 => Ok(Some(value)),
+            ERROR_SUCCESS => Err(ERROR_INVALID_DATA),
+            ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
+            error => Err(error),
+        }
+    }
+
+    fn windows_build() -> Option<u32> {
+        let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        let name = wide("CurrentBuildNumber");
+        let mut buffer = [0u16; 32];
+        let mut size = std::mem::size_of_val(&buffer) as u32;
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_LOCAL_MACHINE,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        let end = buffer.iter().position(|c| *c == 0)?;
+        String::from_utf16(&buffer[..end]).ok()?.parse().ok()
+    }
+
+    /// Snipping Tool's setting, and the build when the setting is missing.
+    fn print_screen_reading() -> (Result<Option<u32>, u32>, Option<u32>) {
+        let snipping = snipping();
+        let build = if snipping == Ok(None) {
+            windows_build()
+        } else {
+            None
+        };
+        (snipping, build)
+    }
+
+    /// Waits on the keyboard's key for good, asking `watchers` again each
+    /// time bare Print Screen flips from `print_screen`. A value set or
+    /// deleted under the key ends each synchronous wait.
+    fn watch_keyboard(watchers: Watchers, mut print_screen: super::PrintScreen) {
+        let path = wide(KEYBOARD);
+        let mut key: HKEY = std::ptr::null_mut();
+        let opened = unsafe {
+            RegOpenKeyExW(
+                HKEY_CURRENT_USER,
+                path.as_ptr(),
+                0,
+                KEY_NOTIFY | KEY_QUERY_VALUE,
+                &mut key,
+            )
+        };
+        if opened != ERROR_SUCCESS {
+            return;
+        }
+        while unsafe {
+            RegNotifyChangeKeyValue(key, 0, REG_NOTIFY_CHANGE_LAST_SET, std::ptr::null_mut(), 0)
+        } == ERROR_SUCCESS
+        {
+            let (snipping, build) = print_screen_reading();
+            if print_screen.flipped(snipping, build) {
+                let watchers = watchers.lock().unwrap_or_else(|e| e.into_inner());
+                for (_, changed) in watchers.iter() {
+                    changed();
+                }
+            }
+        }
+        unsafe { RegCloseKey(key) };
     }
 
     impl Desktop {
@@ -210,6 +333,8 @@ mod imp {
                 next: Cell::new(1),
                 launch: super::login_launch(&args),
                 wake: RefCell::new(None),
+                watchers: Arc::default(),
+                watching: Cell::new(false),
             });
             exact_painted::desktop::install(desktop.clone());
             desktop
@@ -254,12 +379,7 @@ mod imp {
             if chord != (0, super::PRINT_SCREEN) {
                 return Ok(chord);
             }
-            let snipping = self.snipping();
-            let build = if snipping == Ok(None) {
-                self.windows_build()
-            } else {
-                None
-            };
+            let (snipping, build) = print_screen_reading();
             super::available_chord(chord, snipping, build)
         }
 
@@ -275,52 +395,6 @@ mod imp {
                 ERROR_HOTKEY_ALREADY_REGISTERED => "in-use",
                 _ => "reserved",
             })
-        }
-
-        fn snipping(&self) -> Result<Option<u32>, u32> {
-            let (key, name) = (wide(KEYBOARD), wide("PrintScreenKeyForSnippingEnabled"));
-            let mut value = 0u32;
-            let mut size = std::mem::size_of::<u32>() as u32;
-            let status = unsafe {
-                RegGetValueW(
-                    HKEY_CURRENT_USER,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    RRF_RT_REG_DWORD,
-                    std::ptr::null_mut(),
-                    (&mut value as *mut u32).cast(),
-                    &mut size,
-                )
-            };
-            match status {
-                ERROR_SUCCESS if size == std::mem::size_of::<u32>() as u32 => Ok(Some(value)),
-                ERROR_SUCCESS => Err(ERROR_INVALID_DATA),
-                ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND => Ok(None),
-                error => Err(error),
-            }
-        }
-
-        fn windows_build(&self) -> Option<u32> {
-            let key = wide(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-            let name = wide("CurrentBuildNumber");
-            let mut buffer = [0u16; 32];
-            let mut size = std::mem::size_of_val(&buffer) as u32;
-            let status = unsafe {
-                RegGetValueW(
-                    HKEY_LOCAL_MACHINE,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    RRF_RT_REG_SZ,
-                    std::ptr::null_mut(),
-                    buffer.as_mut_ptr().cast(),
-                    &mut size,
-                )
-            };
-            if status != ERROR_SUCCESS {
-                return None;
-            }
-            let end = buffer.iter().position(|c| *c == 0)?;
-            String::from_utf16(&buffer[..end]).ok()?.parse().ok()
         }
 
         fn read_string(&self, key: &str) -> Option<String> {
@@ -402,7 +476,14 @@ mod imp {
             };
             let mut chords = self.chords.borrow_mut();
             if let Some(chord) = chords.iter_mut().find(|c| c.keys == keys) {
-                self.available_chord(keys)?;
+                if let Err(reason) = self.available_chord(keys) {
+                    // The system took the chord after it was registered: this
+                    // reader asking again no longer holds it, and the last
+                    // reader's leaving gives the registration back.
+                    drop(chords);
+                    self.unregister_hotkey(session, id, keys);
+                    return Err(reason);
+                }
                 // A reader asking again takes its new repeat.
                 let at = chord
                     .readers
@@ -535,6 +616,27 @@ mod imp {
             Ok(self.login())
         }
 
+        fn watch_reserved(&self, session: &str, changed: Box<dyn Fn() + Send>) {
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            watchers.retain(|(s, _)| s != session);
+            watchers.push((session.into(), changed));
+            if !self.watching.replace(true) {
+                // Read before the caller registers, so a change from here on
+                // is measured against what that registration saw.
+                let (snipping, build) = print_screen_reading();
+                let print_screen = super::PrintScreen::new(snipping, build);
+                let watchers = self.watchers.clone();
+                let _ = std::thread::Builder::new()
+                    .name("print-screen-watch".into())
+                    .spawn(move || watch_keyboard(watchers, print_screen));
+            }
+        }
+
+        fn unwatch_reserved(&self, session: &str) {
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            watchers.retain(|(s, _)| s != session);
+        }
+
         fn login_launch(&self) -> Option<bool> {
             self.launch
         }
@@ -547,7 +649,7 @@ mod imp {
 
 #[cfg(test)]
 mod tests {
-    use super::{available_chord, chord, flash, login_launch, run_value};
+    use super::{available_chord, chord, flash, login_launch, run_value, PrintScreen};
 
     #[test]
     fn an_authors_count_is_the_flashes_even_for_a_critical_request() {
@@ -608,6 +710,29 @@ mod tests {
                     assert_eq!(available_chord(chord, reading, build), Ok(chord));
                 }
             }
+        }
+    }
+
+    /// #503: a change under the keyboard's key asks readers again only when
+    /// it takes bare Print Screen or gives it back.
+    #[test]
+    fn readers_are_asked_again_only_when_print_screen_flips() {
+        let mut print_screen = PrintScreen::new(Ok(Some(1)), None);
+        for (snipping, build, flipped) in [
+            (Ok(Some(1)), None, false), // another value of the key changed
+            (Ok(Some(0)), None, true),  // Snipping Tool's setting turned off
+            (Ok(Some(0)), None, false),
+            (Ok(None), Some(19045), false), // deleted where missing is free
+            (Ok(None), Some(26100), true),  // deleted where missing is reserved
+            (Err(5), None, false),
+            (Ok(Some(0)), None, true),
+            (Err(13), None, true),
+        ] {
+            assert_eq!(
+                print_screen.flipped(snipping, build),
+                flipped,
+                "{snipping:?} {build:?}"
+            );
         }
     }
 

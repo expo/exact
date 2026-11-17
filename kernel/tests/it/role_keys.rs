@@ -103,6 +103,7 @@ fn tree(element: &Element) -> (Kernel, BTreeMap<String, ViewId>) {
                 "tabindex" => PropId::TabIndex,
                 "inert" => PropId::Inert,
                 "href" => PropId::Href,
+                "aria-label" => PropId::AccessibilityLabel,
                 "hidden" => continue,
                 _ => panic!("unknown case attribute {name}"),
             };
@@ -439,4 +440,72 @@ fn native_radios_in_a_radiogroup_are_no_painted_members() {
     }
     assert_eq!(kernel.radio_group(3), vec![2, 3, 4]);
     assert_eq!(kernel.radio_step(3, true), Some(4));
+}
+
+/// A menu's type-ahead (#550, as `host/web/tests/role-keys.test.mjs` has the web's): a letter
+/// moves to the next item it starts, the same letter again to the one after, wrapping, past a
+/// disabled item; more letters within half a second refine the match; a letter no item starts
+/// answers no item, and Space starts no search.
+#[test]
+fn a_letter_in_a_menu_steps_to_the_item_it_starts() {
+    let item = |name: &str, disabled: bool| {
+        let mut attrs = serde_json::json!({ "aria-label": name });
+        if disabled {
+            attrs["disabled"] = serde_json::Value::Bool(true);
+        }
+        serde_json::json!({ "id": name, "tag": "button", "role": "menuitem", "attrs": attrs })
+    };
+    let names = [
+        ("Ada", false),
+        ("Bishop", false),
+        ("Cortana", false),
+        ("Dax", true),
+        ("Data", false),
+        ("Dora", false),
+        ("Eve", false),
+    ];
+    let menu: Element = serde_json::from_value(serde_json::json!({
+        "id": "menu", "role": "menu", "children": names.iter().map(|(n, d)| item(n, *d)).collect::<Vec<_>>()
+    }))
+    .unwrap();
+    let (kernel, ids) = tree(&menu);
+    let mut typed = TypeAhead::default();
+    let mut at = ids["Cortana"];
+    let mut step = |key: &str, now: f64| {
+        let order = kernel.role_type_ahead(at, key, now, &mut typed)?.order;
+        if let Some(first) = order.first() {
+            at = *first;
+        }
+        Some(
+            order
+                .first()
+                .map(|id| ids.iter().find(|(_, v)| *v == id).unwrap().0.as_str()),
+        )
+    };
+    assert_eq!(step("d", 0.), Some(Some("Data")));
+    assert_eq!(step("d", 100.), Some(Some("Dora")));
+    assert_eq!(step("d", 200.), Some(Some("Data")));
+    assert_eq!(step("a", 800.), Some(Some("Ada")));
+    assert_eq!(step("D", 1400.), Some(Some("Data")));
+    assert_eq!(step("o", 1500.), Some(Some("Dora")));
+    assert_eq!(step("z", 2100.), Some(None));
+    assert_eq!(step(" ", 2700.), None);
+    assert_eq!(step("Enter", 2800.), None);
+    // The menu itself, no item of it focused, searches from its first item.
+    let mut typed = TypeAhead::default();
+    let from_menu = kernel
+        .role_type_ahead(ids["menu"], "d", 0., &mut typed)
+        .unwrap()
+        .order;
+    assert_eq!(from_menu, [ids["Data"], ids["Dora"]]);
+    let mut typed = TypeAhead::default();
+    assert_eq!(
+        kernel.role_type_ahead(ids["Ada"], "Tab", 0., &mut typed),
+        None
+    );
+    assert_eq!(
+        typed,
+        TypeAhead::default(),
+        "a key that starts no search leaves the buffer"
+    );
 }

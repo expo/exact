@@ -1419,7 +1419,7 @@ fn css_native_interaction_gaps_are_named_precisely() {
 }
 
 #[test]
-fn css_flex_factor_order_and_intrinsic_basis_refusals_are_precise() {
+fn css_flex_factor_order_and_keyword_bases_are_precise() {
     let source = |value: &str| format!("component App\n  view\n    box flex=\"{value}\"\n");
     assert!(
         contract::compile(&source("0 auto 1")).is_err(),
@@ -1427,14 +1427,14 @@ fn css_flex_factor_order_and_intrinsic_basis_refusals_are_precise() {
     );
     contract::compile(&source("20px 0 1")).unwrap();
     contract::compile(&source("NONE")).unwrap();
-    for basis in ["content", "min-content", "max-content", "fit-content"] {
-        let error = contract::compile(&source(&format!("1 1 {basis}")))
-            .unwrap_err()
-            .to_string();
-        assert!(
-            error.contains("intrinsic basis sizing") && error.contains("CSS flex-basis"),
-            "{error}"
-        );
+    // A keyword is a basis (LLP 1001.001 D6): `flex: max-content` is `1 1 max-content`.
+    for flex in [
+        "1 1 content",
+        "min-content",
+        "1 max-content",
+        "0 fit-content",
+    ] {
+        contract::compile(&source(flex)).unwrap();
     }
 }
 

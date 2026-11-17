@@ -12,7 +12,7 @@
 // `agent.mjs` drives the fixture under the agent, on the web and Apple.
 //
 // usage: bun packages/barcode-detection/test/web.mjs [chromium] [firefox] [webkit]
-//   (every engine by default; `bunx playwright@1.64.1 install firefox webkit` first)
+//   (every engine by default; `bunx playwright@1.65.1 install firefox webkit` first)
 import { extname, join, resolve } from 'node:path';
 import { STILLS, boxOf, checker, discard, images, makeFixture, near, root, run } from './fixture.mjs';
 

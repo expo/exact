@@ -6,7 +6,7 @@ task: make another client's edit show in the tool's token grid quickly
 - A peer's edit took 4.5 s to reach the grid on a 267-token design (a
   copy of the Bluesky clone, five runs, two clients). The first guess was
   the long poll's stream not re-keying the read. Measuring it in Chrome
-  (each `/__tamber` request timed by method) showed the read starting
+  (each `/__forma` request timed by method) showed the read starting
   10 ms after the event. The whole delay was 267 one-token `resolve`s,
   queued one behind another at the design server, for one token's
   change. About an hour went on setting up the copy: a Cargo patch path,

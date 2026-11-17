@@ -26,13 +26,13 @@
 - **`app.id` and `app.name`** are set before the first build (`exact new --name --bundle-id`,
   [porting and release](porting-and-release.md)); `app.ts` takes the id from here.
 - **`host.ios.launchImage`** `{ "src": "assets/splash.png", "width": 276 }`: the launch
-  screen's PNG, `width` points wide, on `background_color`.
+  screen's PNG, `width` points wide, on `background_color` (Android: `host.android.launchImage`).
 - **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; dark icons are `color_scheme_dark.icons`.
 - **`protocol_handlers`**: `euxy://p/abc` is `/p/euxy%3A%2F%2Fp%2Fabc` (whole at `%s`).
   Cold, it opens in its route's tab (declare `p "/p/:d"`); running, `go` pushes it on the
   selected tab, `open` on its route's (`vocab navigate`).
 - **Other keys:** `userInterfaceStyle` (`dark`/`light`), `categories` (store, Game Mode),
-  `data` (`data-*` words a hatch reads), `tamber` (design file),
+  `data` (`data-*` words a hatch reads), `forma` (design file),
   `typescript.sources` (outside directories `app.ts` imports), `commands` (the app's
   `exact.mjs` verbs).
 - **`strings`**: `{ "base": "en" }` sets the base locale for `strings/<locale>.json`.

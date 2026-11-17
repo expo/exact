@@ -58,6 +58,8 @@ final class FrameAdvanceMacTests: XCTestCase {
         window.contentView = ExactView(session: session)
         defer { window.close(); session.destroy() }
         session.clock = nil
+        // The page's first frame is presented, so no frame is owed to it (LLP 1069.000 D2 r7).
+        session.apply(session.runtime.tick(now: session.now(), frame: session.now() + 16))
         session.frames.canvas2d = true
         XCTAssertFalse(session.frames.motion)
         XCTAssertFalse(session.frames.timerSoon)

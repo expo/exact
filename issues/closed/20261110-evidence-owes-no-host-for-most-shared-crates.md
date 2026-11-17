@@ -29,7 +29,7 @@ else if (/^host\/linux\//.test(p)) …
 A path under any other crate matches no branch and touches nothing. Caltrain's Apple,
 Linux and web crates all link `route`, `canvas`, `color`, `logic`, `markdown`, `textflow`,
 `update` and `grants` (`cargo tree -p caltrain-<host> -e normal`), and
-`hostsTouched` returns `[]` for each, and for `data`, `tamber`, `bake`, `gpu`,
+`hostsTouched` returns `[]` for each, and for `data`, `forma`, `bake`, `gpu`,
 `host/apple-update`, `host/raster`, `host/ink`, `host/linux-update` and
 `host/web-capabilities`.
 

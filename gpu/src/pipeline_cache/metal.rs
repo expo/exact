@@ -103,6 +103,387 @@ mod simulator {
 #[cfg(all(test, not(target_abi = "sim")))]
 mod tests {
     use super::*;
+
+    #[link(name = "QuartzCore", kind = "framework")]
+    extern "C" {}
+
+    fn command(test: &str, directory: &Path) -> std::process::Command {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--nocapture"])
+            .env("XDG_CACHE_HOME", directory)
+            .env("EXACT_GPU_CACHE_KEY", "metal-archive-test")
+            .env("EXACT_GPU_CACHE_SEED", directory.join("no-seed"))
+            .env("EXACT_METAL_LIBRARIES", directory.join("no-libraries"))
+            .env("EXACT_METAL_SOURCES", directory.join("sources"));
+        command
+    }
+
+    fn isolated(test: &str) -> bool {
+        const CHILD: &str = "EXACT_METAL_MODULE_TEST";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            return false;
+        }
+        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+            return true;
+        }
+        let directory = super::super::tests::directory();
+        let result = command(test, &directory).env(CHILD, test).output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        eprint!("{}", String::from_utf8_lossy(&result.stdout));
+        true
+    }
+
+    fn module(gpu: crate::Gpu, disk: Disk) -> crate::Module {
+        static REGISTRY: crate::Registry = crate::Registry {
+            surfaces: &[("triangle", 0, || Box::new(Triangle))],
+            shaders: &[],
+        };
+        let cache = PipelineCache::shared_disk(&gpu.device, Some(disk));
+        let mut module = crate::Module::new(&REGISTRY);
+        module.set_gpu(gpu);
+        module.pipeline_cache = cache;
+        module
+    }
+
+    struct Triangle;
+    impl crate::Surface for Triangle {
+        fn bind(&mut self, _: &[crate::Value], _: Option<f64>) -> Result<(), crate::SurfaceError> {
+            Ok(())
+        }
+
+        fn render(
+            &mut self,
+            _: &crate::Frame,
+            device: &wgpu::Device,
+            _: &wgpu::Queue,
+            encoder: &mut wgpu::CommandEncoder,
+            view: &wgpu::TextureView,
+            format: wgpu::TextureFormat,
+        ) -> bool {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(
+                    r#"
+                    @vertex fn vertex(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32> {
+                        let p=array(vec2(-1.,-1.),vec2(3.,-1.),vec2(-1.,3.)); return vec4(p[i],0.,1.);
+                    }
+                    @fragment fn fragment()->@location(0) vec4<f32> { return vec4(0.,1.,0.,1.); }
+                    "#.into(),
+                ),
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vertex"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fragment"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(format.into())],
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&pipeline);
+            pass.draw(0..3, 0..1);
+            false
+        }
+    }
+
+    fn frame() -> crate::Frame {
+        crate::Frame {
+            width: 4.,
+            height: 4.,
+            scale: 1.,
+            now_ms: 0.,
+            seekable: true,
+            period_ms: 0.,
+            children_generation: 0,
+            shader_generation: 0,
+            headroom: 1.,
+        }
+    }
+
+    fn written(module: &crate::Module) {
+        let shared = module.pipeline_cache.shared.as_ref().unwrap();
+        assert_eq!(shared.metal.as_ref().unwrap().counts().1, 1);
+        let mut state = shared.disk.lock().unwrap();
+        let disk = &mut state.disks[0];
+        disk.reap(true);
+        assert_eq!(disk.saved, 1, "the module must save after submitting");
+        assert_eq!(disk.attempts, 1);
+        let bytes = std::fs::read(&disk.path).unwrap();
+        assert!(!unpack(&bytes, disk.key).unwrap().is_empty());
+    }
+
+    #[test]
+    fn flush_writes_the_module_metal_archive() {
+        if isolated("pipeline_cache::metal::tests::flush_writes_the_module_metal_archive") {
+            return;
+        }
+        let gpu = crate::fixture::device().expect("Metal adapter required");
+        let directory = super::super::tests::directory();
+        // SAFETY: the layer is retained until after the module is dropped.
+        let layer: objc2::rc::Retained<objc2::runtime::AnyObject> =
+            unsafe { objc2::msg_send![objc2::class!(CAMetalLayer), new] };
+        let mut module = module(gpu, Disk::new(directory.join("archive.bin"), 1));
+        module.set_seekable(true);
+        let ptr = objc2::rc::Retained::as_ptr(&layer) as *mut std::ffi::c_void;
+        // SAFETY: the layer outlives the module and the surface it owns.
+        let target = unsafe {
+            module
+                .gpu()
+                .unwrap()
+                .instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(ptr))
+        }
+        .unwrap();
+        let id = module.create("triangle", target, 4, 4).unwrap();
+        assert!(module.bind(id, &[], None));
+        for _ in 0..2 {
+            assert_eq!(module.render(id, &frame()), Some(false));
+            assert!(module.open.is_some());
+            assert!(module.flush());
+            assert!(module.open.is_none());
+            written(&module);
+        }
+        drop(module);
+    }
+
+    #[test]
+    fn readback_writes_the_module_metal_archive_without_an_open_frame() {
+        if isolated("pipeline_cache::metal::tests::readback_writes_the_module_metal_archive_without_an_open_frame") {
+            return;
+        }
+        let gpu = crate::fixture::device().expect("Metal adapter required");
+        let directory = super::super::tests::directory();
+        let mut module = module(gpu, Disk::new(directory.join("archive.bin"), 1));
+        let id = module.create_headless("triangle").unwrap();
+        assert!(module.bind(id, &[], None));
+        for _ in 0..2 {
+            assert!(module.open.is_none());
+            let mut output = [0; 4 * 4 * 4];
+            assert_eq!(module.readback_into(id, &frame(), &mut output), Some(false));
+            assert!(output
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [0, 255, 0, 255]));
+            assert!(module.open.is_none());
+            written(&module);
+        }
+    }
+
+    /// A snapshot's file lives as long as its archive, so a killed process
+    /// leaves it; the next process to use an archive removes what the dead
+    /// left and nothing of the living.
+    #[test]
+    fn the_next_process_removes_a_dead_process_snapshot_files() {
+        const CHILD: &str = "EXACT_METAL_SWEEP_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+                return;
+            };
+            let root = std::env::temp_dir().join("exact-metal");
+            let left = |name: &str| {
+                let directory = root.join(name);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("0.metallib"), b"left").unwrap();
+                (
+                    std::fs::File::create(directory.join("lock")).unwrap(),
+                    directory,
+                )
+            };
+            let (_, dead) = left("dead");
+            let (lock, living) = left("living");
+            lock.try_lock().unwrap();
+            let archive = install(&gpu.device, None).unwrap();
+            pipelines(&gpu, false);
+            assert!(archive.data().is_some());
+            assert!(!dead.exists());
+            assert!(living.join("0.metallib").exists());
+            return;
+        }
+        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
+            return;
+        }
+        let directory = super::super::tests::directory();
+        let result = command(
+            "pipeline_cache::metal::tests::the_next_process_removes_a_dead_process_snapshot_files",
+            &directory,
+        )
+        .env(CHILD, "1")
+        .env("TMPDIR", &*directory)
+        .output()
+        .unwrap();
+        assert!(
+            result.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    /// Metal writes an archive that gained nothing by copying the file of its
+    /// last write that had additions; a snapshot must not depend on a file an
+    /// earlier snapshot removed.
+    #[test]
+    fn repeated_snapshots_of_an_unchanged_metal_archive_succeed() {
+        if isolated(
+            "pipeline_cache::metal::tests::repeated_snapshots_of_an_unchanged_metal_archive_succeed",
+        ) {
+            return;
+        }
+        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+            return;
+        };
+        let directory = super::super::tests::directory();
+        let module = module(gpu, Disk::new(directory.join("archive.bin"), 1));
+        let gpu = module.gpu.as_ref().unwrap();
+        let shared = module.pipeline_cache.shared.as_ref().unwrap();
+        let archive = shared.metal.as_ref().unwrap();
+        for blue in [false, true] {
+            pipelines(gpu, blue);
+            let first = archive.data().expect("a snapshot after additions");
+            for _ in 0..3 {
+                assert_eq!(archive.data().as_ref(), Some(&first));
+            }
+        }
+    }
+
+    #[test]
+    fn module_and_renderer_save_one_metal_archive_generation() {
+        if isolated(
+            "pipeline_cache::metal::tests::module_and_renderer_save_one_metal_archive_generation",
+        ) {
+            return;
+        }
+        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+            return;
+        };
+        let directory = super::super::tests::directory();
+        let module = module(gpu, Disk::new(directory.join("archive.bin"), 1));
+        let gpu = module.gpu.as_ref().unwrap();
+        let mut renderer = PipelineCache::new(&gpu.device);
+        let shared = module.pipeline_cache.shared.as_ref().unwrap();
+        let archive = shared.metal.as_ref().unwrap();
+        pipelines(gpu, false);
+        module.pipeline_cache.save_metal();
+        {
+            let mut state = shared.disk.lock().unwrap();
+            let disk = &mut state.disks[0];
+            disk.reap(true);
+            assert_eq!(disk.saved, archive.counts().1);
+            assert_eq!(disk.saved, 2);
+        }
+        renderer.save(1000);
+        {
+            let state = shared.disk.lock().unwrap();
+            assert_eq!(state.disks[0].work, archive.counts().1);
+            assert!(state.disks[0].writer.is_none(), "one write per addition");
+        }
+        pipelines(gpu, true);
+        renderer.save(1001);
+        {
+            let mut state = shared.disk.lock().unwrap();
+            state.disks[0].reap(true);
+            assert_eq!(state.disks[0].saved, archive.counts().1);
+        }
+        module.pipeline_cache.save_metal();
+        let state = shared.disk.lock().unwrap();
+        assert_eq!(state.disks[0].work, archive.counts().1);
+        assert!(state.disks[0].writer.is_none(), "renderer may save first");
+    }
+
+    #[test]
+    fn module_save_without_new_metal_additions_starts_no_writer() {
+        if isolated("pipeline_cache::metal::tests::module_save_without_new_metal_additions_starts_no_writer") {
+            return;
+        }
+        let Some(gpu) = crate::fixture::device_or(crate::fixture::device(), false) else {
+            return;
+        };
+        let directory = super::super::tests::directory();
+        let path = directory.join("archive.bin");
+        let module = module(gpu, Disk::new(path.clone(), 1));
+        let gpu = module.gpu.as_ref().unwrap();
+        let empty_path = directory.join("late-empty.bin");
+        let _empty =
+            PipelineCache::shared_disk(&gpu.device, Some(Disk::new(empty_path.clone(), 2)));
+        module.pipeline_cache.save_metal();
+        let shared = module.pipeline_cache.shared.as_ref().unwrap();
+        {
+            let state = shared.disk.lock().unwrap();
+            for disk in &state.disks {
+                assert_eq!((disk.work, disk.saved, disk.attempts), (0, 0, 0));
+                assert!(disk.writer.is_none());
+                assert!(!disk.path.exists(), "an empty archive needs no snapshot");
+            }
+        }
+        pipelines(gpu, false);
+        module.pipeline_cache.save_metal();
+        {
+            let mut state = shared.disk.lock().unwrap();
+            for disk in &mut state.disks {
+                disk.reap(true);
+                assert_eq!(disk.saved, 2);
+                assert_eq!(disk.attempts, 1);
+            }
+        }
+        assert!(!unpack(&std::fs::read(&empty_path).unwrap(), 2)
+            .unwrap()
+            .is_empty());
+        let added_path = directory.join("late-added.bin");
+        let _added =
+            PipelineCache::shared_disk(&gpu.device, Some(Disk::new(added_path.clone(), 3)));
+        module.pipeline_cache.save_metal();
+        shared.disk.lock().unwrap().disks[2].reap(true);
+        assert!(!unpack(&std::fs::read(&added_path).unwrap(), 3)
+            .unwrap()
+            .is_empty());
+        for _ in 0..65 {
+            module.pipeline_cache.save_metal();
+            let state = shared.disk.lock().unwrap();
+            for disk in &state.disks {
+                assert!(disk.writer.is_none());
+                assert_eq!(disk.attempts, 1);
+                assert_eq!(disk.saved, 2);
+            }
+        }
+        module.pipeline_cache.invalidate();
+        module.pipeline_cache.save_metal();
+        assert!(
+            !path.exists(),
+            "module saves cannot resurrect a lost device"
+        );
+    }
+
     fn pipelines(gpu: &crate::Gpu, blue: bool) {
         let source = format!(
             r#"
@@ -209,7 +590,7 @@ mod tests {
         if let Ok(mode) = std::env::var(CHILD) {
             let path = PathBuf::from(std::env::var_os("EXACT_METAL_ARCHIVE_PATH").unwrap());
             let mut disk = Disk::new(path.clone(), if mode == "wrong-key" { 2 } else { 1 });
-            if mode == "seed" {
+            if matches!(mode.as_str(), "seed" | "late-seed") {
                 disk.path = path.with_extension("seeded");
                 disk.seed = Some(path.clone());
             }
@@ -220,7 +601,9 @@ mod tests {
                 pipelines(&gpu, true);
                 drop(standalone);
             }
-            let mut cache = PipelineCache::shared_disk(&gpu.device, Some(disk));
+            let module = module(gpu, disk);
+            let cache = &module.pipeline_cache;
+            let gpu = module.gpu.as_ref().unwrap();
             let archive = cache
                 .shared
                 .as_ref()
@@ -231,11 +614,26 @@ mod tests {
                 .clone();
             assert_eq!(
                 archive.restored(),
-                matches!(mode.as_str(), "warm" | "shader" | "seed" | "reopen")
+                matches!(
+                    mode.as_str(),
+                    "warm" | "shader" | "seed" | "reopen" | "late" | "late-seed"
+                )
             );
-            pipelines(&gpu, mode == "shader");
+            let late_path = path.with_extension(format!("{mode}-late"));
+            let late = matches!(mode.as_str(), "late" | "late-seed").then(|| {
+                PipelineCache::shared_disk(&gpu.device, Some(Disk::new(late_path.clone(), 2)))
+            });
+            pipelines(gpu, mode == "shader");
             let (hits, misses) = archive.counts();
-            if matches!(mode.as_str(), "warm" | "seed" | "reopen") {
+            assert_eq!(
+                archive.additions(),
+                misses,
+                "every missed pipeline was added"
+            );
+            if matches!(
+                mode.as_str(),
+                "warm" | "seed" | "reopen" | "late" | "late-seed"
+            ) {
                 assert_eq!(
                     (hits, misses),
                     (2, 0),
@@ -246,30 +644,47 @@ mod tests {
             } else {
                 assert_eq!(misses, 2, "an empty archive misses both pipelines");
             }
-            cache.save(2);
+            cache.save_metal();
             for disk in &mut cache.shared.as_ref().unwrap().disk.lock().unwrap().disks {
                 disk.reap(true);
-                assert_eq!(disk.saved, 2);
+                let expected = if disk.path == late_path { 1 } else { misses };
+                assert_eq!(disk.saved, expected);
+                assert_eq!(disk.attempts, u8::from(expected != 0));
+            }
+            if let Some(late) = late {
+                let bytes = std::fs::read(&late_path).unwrap();
+                assert!(!unpack(&bytes, 2).unwrap().is_empty());
+                for _ in 0..65 {
+                    late.save_metal();
+                    let state = late.shared.as_ref().unwrap().disk.lock().unwrap();
+                    assert!(state.disks.iter().all(|disk| disk.writer.is_none()));
+                    assert_eq!(state.disks[1].attempts, 1);
+                }
             }
             if mode == "reopen" {
                 cache.invalidate();
-                pipelines(&gpu, true);
+                pipelines(gpu, true);
                 assert_eq!(
                     archive.counts(),
                     (hits, misses),
                     "invalidated archive is detached"
                 );
-                cache.save(4);
+                cache.save_metal();
                 assert!(!path.exists(), "invalidated cache cannot be resurrected");
             }
-            println!("Metal archive {mode}: hits={hits} misses={misses}");
+            println!(
+                "Metal archive {mode}: hits={hits} misses={misses} additions={}",
+                archive.additions()
+            );
+            return;
+        }
+        if crate::fixture::device_or(crate::fixture::device(), false).is_none() {
             return;
         }
         let directory = super::super::tests::directory();
         let path = directory.join("archive.bin");
         let run = |mode: &str| {
-            let result = std::process::Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "pipeline_cache::metal::tests::metal_archives_reuse_pipelines_across_processes_and_reject_stale_envelopes", "--nocapture"])
+            let result = command("pipeline_cache::metal::tests::metal_archives_reuse_pipelines_across_processes_and_reject_stale_envelopes", &directory)
                 .env(CHILD, mode).env("EXACT_METAL_ARCHIVE_PATH", &path).output().unwrap();
             assert!(
                 result.status.success(),
@@ -282,7 +697,9 @@ mod tests {
         run("cold");
         assert!(std::fs::metadata(&path).unwrap().len() > 24);
         run("warm");
+        run("late");
         run("seed");
+        run("late-seed");
         run("shader");
         run("wrong-key");
         std::fs::write(&path, b"corrupt").unwrap();

@@ -52,17 +52,21 @@ extension NodeView {
     func decorationChanged(from old: NodeStyle) {
         let lines = style["text_decoration_line"], was = old["text_decoration_line"]
         guard lines != was || (lines != nil && old["text_color"] != style["text_color"]) else { return }
-        var stack: [PlatformView] = subviews
-        while let v = stack.popLast() {
-            if let node = v as? NodeView, node.isParagraph {
-                node.invalidateText()
-                #if os(macOS)
-                node.needsDisplay = true
-                #else
-                node.setNeedsDisplay()
-                #endif
-            }
-            stack.append(contentsOf: v.subviews)
+        Self.visitParagraphs(in: subviews) { node in
+            node.invalidateText()
+            #if os(macOS)
+            node.needsDisplay = true
+            #else
+            node.setNeedsDisplay()
+            #endif
+        }
+    }
+    /// Paragraphs beneath native content holders as well as authored boxes.
+    static func visitParagraphs(in roots: [PlatformView], _ body: (NodeView) -> Void) {
+        var stack = roots
+        while let view = stack.popLast() {
+            if let node = view as? NodeView, node.isParagraph { body(node) }
+            stack.append(contentsOf: view.subviews)
         }
     }
     var paragraphOwner: NodeView { self }
@@ -98,12 +102,15 @@ extension NodeView {
         #else
         setNeedsDisplay()
         layer.setNeedsDisplay()
+        presenter?.noteOwedText(self)
         #endif
     }
 
     func invalidateText() {
         #if os(macOS)
         readerParagraph?.invalidatePaint()
+        #else
+        if let presenter, presenter.applying { presenter.changedText.insert(id) }
         #endif
         cachedTextSpec = nil
         // Keep the previous accepted geometry alive through the next lookup.
@@ -114,7 +121,6 @@ extension NodeView {
         #if os(macOS)
         textRasterPending = false
         #else
-        if let presenter, presenter.applying { presenter.changedText.insert(id) }
         presenter?.requestTextPublication()
         #endif
     }
@@ -162,7 +168,11 @@ extension NodeView {
         } else {
             runs = inlineText.filter(\.paints).map { $0.run(dark: night, contrast: contrast, elevated: elevated, tint: tint) }
             let decorates = inlineText.contains(where: { !$0.paints && !$0.lightRun.decoration.isEmpty })
-            let backs = inlineText.contains(where: { !$0.paints && $0.run(dark: night, contrast: contrast, elevated: elevated, tint: tint).background != nil })
+            let backs = inlineText.contains(where: {
+                guard !$0.paints else { return false }
+                let run = $0.run(dark: night, contrast: contrast, elevated: elevated, tint: tint)
+                return run.background != nil || run.border != nil
+            })
             let byId = Dictionary(inlineText.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             for (i, leaf) in inlineText.filter(\.paints).enumerated() {
                 runs[i].opacity = leaf.opacityGroups(in: byId)
@@ -182,25 +192,29 @@ extension NodeView {
                     }
                 }
             }
-            // A container's background covers its descendants' fragments (CSS).
+            // A container's background and border surround its descendants' fragments (CSS).
             if backs {
-                // A leaf's nearest background is its own; each box around it
-                // with one paints under it, every box its own fragments,
+                // A leaf's nearest box with either is its own; each box around
+                // it with one paints under it, every box its own fragments,
                 // corners and padding (`OuterBackground`).
                 for (i, leaf) in inlineText.filter(\.paints).enumerated() {
                     var up = byId[leaf.parent]
                     while let run = up {
                         up = byId[run.parent]
                         let paint = run.run(dark: night, contrast: contrast, elevated: elevated, tint: tint)
-                        guard !paint.hidden, let color = paint.background else { continue }
-                        if runs[i].background == nil {
-                            runs[i].background = color
+                        guard !paint.hidden, paint.background != nil || paint.border != nil else { continue }
+                        if runs[i].background == nil && runs[i].border == nil {
+                            (runs[i].background, runs[i].border) = (paint.background, paint.border)
                             (runs[i].backgroundBox, runs[i].backgroundRadii) = (paint.backgroundBox, paint.backgroundRadii)
                             (runs[i].backgroundBefore, runs[i].backgroundAfter) = (paint.backgroundBefore, paint.backgroundAfter)
+                            (runs[i].backgroundAbove, runs[i].backgroundBelow) = (paint.backgroundAbove, paint.backgroundBelow)
                             runs[i].backgroundOpacity = run.opacityGroups(in: byId)
                         } else if paint.backgroundBox != 0 {
-                            runs[i].outerBackgrounds.append(OuterBackground(color: color, box: paint.backgroundBox, radii: paint.backgroundRadii,
-                                                                            before: paint.backgroundBefore, after: paint.backgroundAfter, opacity: run.opacityGroups(in: byId)))
+                            runs[i].outerBackgrounds.append(OuterBackground(color: paint.background ?? [0, 0, 0, 0], box: paint.backgroundBox,
+                                                                            radii: paint.backgroundRadii,
+                                                                            before: paint.backgroundBefore, after: paint.backgroundAfter,
+                                                                            above: paint.backgroundAbove, below: paint.backgroundBelow,
+                                                                            border: paint.border, opacity: run.opacityGroups(in: byId)))
                         }
                     }
                 }
@@ -209,9 +223,9 @@ extension NodeView {
             // backgrounds keep sharing what they share (TextPaint's keys).
             // So is one that reaches past its text (its padding), or stands in
             // another's, or beside a box's room, which no background covers
-            // but its own boxes'.
-            if !runs.contains(where: { $0.background != nil && ($0.backgroundRadii.contains { !$0.isZero } || $0.backgroundBefore != 0 || $0.backgroundAfter != 0
-                                                                   || !$0.outerBackgrounds.isEmpty) })
+            // but its own boxes', or has a border, sliced at its ends.
+            if !runs.contains(where: { $0.border != nil || $0.background != nil && ($0.backgroundRadii.contains { !$0.isZero } || $0.backgroundBefore != 0 || $0.backgroundAfter != 0
+                                                                   || $0.backgroundAbove != 0 || $0.backgroundBelow != 0 || !$0.outerBackgrounds.isEmpty) })
                 && !runs.contains(where: { $0.inlineStart != 0 || $0.inlineEnd != 0 }) {
                 for i in runs.indices { runs[i].backgroundBox = 0; runs[i].backgroundRadii = []; runs[i].outerBackgrounds = [] }
             }

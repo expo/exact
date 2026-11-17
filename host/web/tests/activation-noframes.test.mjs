@@ -12,7 +12,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { createServer } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { chromium } from '../../../scripts/agent-launch.mjs';
 import { spawnOwned, stopAll } from '../../../scripts/test-children.mjs';
 
@@ -52,7 +52,7 @@ async function devLoop(app, dist, env = {}) {
 }
 
 test('a wasm page given no frames activates within its second, once; one with frames after them, once', async () => {
-  const dist = mkdtempSync(join(tmpdir(), 'exact-noframes-dist-'));
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-noframes-dist-')), 'dist');
   let dev = null, browser = null;
   try {
     let base;
@@ -77,12 +77,12 @@ test('a wasm page given no frames activates within its second, once; one with fr
   } finally {
     await browser?.close();
     await dev?.stop(15_000);
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 900_000);
 
 test('a Canvas 2D page in a cross-origin frame scrolled out of view (no frames, no ResizeObserver) loads its piece once and is ready within its second or so', async () => {
-  const dist = mkdtempSync(join(tmpdir(), 'exact-noframes-canvas-'));
+  const dist = join(mkdtempSync(join(tmpdir(), 'exact-noframes-canvas-')), 'dist');
   let dev = null, browser = null, host = null;
   try {
     // The page framed by another origin (the design tool's, as the dev loop's `frame-ancestors` names it), below the
@@ -120,6 +120,6 @@ test('a Canvas 2D page in a cross-origin frame scrolled out of view (no frames, 
     await browser?.close();
     host?.stop(true);
     await dev?.stop(15_000);
-    rmSync(dist, { recursive: true, force: true });
+    rmSync(dirname(dist), { recursive: true, force: true });
   }
 }, 900_000);

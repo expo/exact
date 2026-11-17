@@ -18,11 +18,11 @@ enum Seen {
 
 /// A socket's path must fit `sun_path` (104 bytes on macOS), and the per-user
 /// `TMPDIR` there takes about 50 of them: keep `name` short.
-fn dir(name: &str) -> PathBuf {
+fn dir(name: &str) -> crate::TempDir {
     let base = std::env::temp_dir().canonicalize().unwrap();
     let dir = base.join(format!("exact-listen-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    dir
+    crate::TempDir(dir)
 }
 
 fn config(path: &std::path::Path, takeover: bool) -> Config {
@@ -280,7 +280,7 @@ fn a_connection_can_be_answered_before_its_callback_returns() {
 fn a_replaced_directory_is_watched_at_its_path() {
     let d = dir("moved");
     let path = d.join("a.sock");
-    let away = d.with_extension("old");
+    let away = crate::TempDir(d.with_extension("old"));
     let _ = std::fs::remove_dir_all(&away);
     let (listener, rx) = open(config(&path, false));
     assert_eq!(next(&rx), Seen::Listening);

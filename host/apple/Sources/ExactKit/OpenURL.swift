@@ -40,7 +40,7 @@ extension ExactSession {
     /// or the session's end is dropped: the replacement may have its own
     /// node by that id, which never asked.
     public func openURLAnswer(_ args: [Any]) -> (Bool) -> Void {
-        let issued = GenerationStamp(self)
+        let issued = SessionLease(self)
         return { opened in
             guard let session = issued.session, args.count > 1, let id = args[1] as? String,
                   let view = (session.runtime.command(["command": "openURL", "id": id])["view"] as? NSNumber)?.uint32Value else { return }

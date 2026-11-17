@@ -100,6 +100,8 @@ struct State {
   int64_t live = 0;
   std::atomic<bool> oom{false};
   std::vector<std::pair<uint64_t, jsi::WeakObject>> keys{};
+  // The prelude's report of what the module's evaluation threw (js/src/errors.js), taken at hardening.
+  std::unique_ptr<jsi::Function> evaluation_threw{};
 };
 
 // Sweep on the executor's thread: GC finalizers may run on Hermes' collector.
@@ -321,9 +323,11 @@ void *exact_js_create(uint32_t max_heap_bytes, HostFn host, BytesFn bytes, void 
     ibex2::jsi_adapter::InstallOptions options;
     options.abort_hooks = "__exact_ibex2_abort_hooks";
     options.headers_hooks = "__exact_ibex2_headers_hooks";
+    options.events_hooks = "__exact_ibex2_events_hooks";
     options.defer_intrinsic_snapshot = true;
     constexpr auto groups = ibex2::jsi_adapter::GROUP_PURE |
                             ibex2::jsi_adapter::GROUP_CRYPTO |
+                            ibex2::jsi_adapter::GROUP_EVENTS |
                             ibex2::jsi_adapter::GROUP_ABORT
 #if defined(EXACT_JS_INTL)
                             | ibex2::jsi_adapter::GROUP_INTL
@@ -347,6 +351,13 @@ int exact_js_load(void *h, const uint8_t *data, size_t len, char **out) {
     return out_of_memory(state, out);
 #endif
   } catch (const jsi::JSError &e) {
+    // Reported as a page reports it, an `error` event, while the thrown value exists (LLP 1175 D2).
+    if (state->evaluation_threw) {
+      try {
+        state->evaluation_threw->call(*state->rt, e.value());
+      } catch (const jsi::JSIException &) {
+      }
+    }
     return fail(out, e.getMessage(), 1);
   } catch (const std::exception &e) {
     return fail(out, e.what(), 2);
@@ -397,6 +408,13 @@ int exact_js_harden(void *h, const uint8_t *harden, size_t harden_len, char **ou
     if (!reflect.getPropertyAsFunction(rt, "deleteProperty")
              .call(rt, rt.global(), jsi::String::createFromUtf8(rt, "__exact_storage_promise")).getBool())
       return fail(out, "storage initialization could not remove its promise getter", 1);
+    if (rt.global().hasProperty(rt, "__exact_evaluation_threw")) {
+      state->evaluation_threw = std::make_unique<jsi::Function>(
+          rt.global().getPropertyAsFunction(rt, "__exact_evaluation_threw"));
+      if (!reflect.getPropertyAsFunction(rt, "deleteProperty")
+               .call(rt, rt.global(), jsi::String::createFromUtf8(rt, "__exact_evaluation_threw")).getBool())
+        return fail(out, "the prelude's evaluation report could not be removed", 1);
+    }
     state->adapter->capture_intrinsics();
     // Hermes' young generation is one heap segment that keeps every page it
     // has touched, so its footprint is the furthest point allocation reaches

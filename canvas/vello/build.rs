@@ -208,17 +208,17 @@ fn patch_fine(src: &str) -> String {
     once(
         &mut s,
         "var image_atlas: texture_2d<f32>;\n",
-        "var image_atlas: texture_2d<f32>;\n\n#ifndef msaa\n@group(0) @binding(8)\nvar backdrop: texture_2d<f32>;\n#endif\n",
+        "var image_atlas: texture_2d<f32>;\n\n#ifndef msaa\n@group(0) @binding(8)\nvar backdrop: texture_2d<f32>;\n@group(0) @binding(9)\nvar<storage, read> clip_masks: array<f32>;\n#endif\n",
     );
     once(
         &mut s,
         "    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {\n        rgba[i] = base_color;\n    }\n",
-        "#ifdef msaa\n    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {\n        rgba[i] = base_color;\n    }\n#else\n    let backdrop_max = vec2<i32>(textureDimensions(backdrop)) - vec2(1);\n    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {\n        let at = min(vec2<i32>(i32(xy.x) + i32(i), i32(xy.y)), backdrop_max);\n        let bd = textureLoad(backdrop, at, 0);\n        rgba[i] = bd + base_color * (1.0 - bd.a);\n    }\n#endif\n",
+        "#ifdef msaa\n    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {\n        rgba[i] = base_color;\n    }\n#else\n    let packed_mask = config.base_color == 0xffff00ffu;\n    let backdrop_max = vec2<i32>(textureDimensions(backdrop)) - vec2(1);\n    for (var i = 0u; i < PIXELS_PER_THREAD; i += 1u) {\n        let at = min(vec2<i32>(i32(xy.x) + i32(i), i32(xy.y)), backdrop_max);\n        let bd = textureLoad(backdrop, at, 0);\n        rgba[i] = select(bd + base_color * (1.0 - bd.a), vec4(0.0), packed_mask);\n    }\n#endif\n",
     );
     once(
         &mut s,
         "            let rgba_sep = vec4(fg.rgb * a_inv, fg.a);\n            textureStore(output, vec2<i32>(coords), rgba_sep);\n",
-        "#ifdef msaa\n            let rgba_sep = vec4(fg.rgb * a_inv, fg.a);\n            textureStore(output, vec2<i32>(coords), rgba_sep);\n#else\n            textureStore(output, vec2<i32>(coords), vec4(min(fg.rgb, vec3(fg.a)), fg.a));\n#endif\n",
+        "#ifdef msaa\n            let rgba_sep = vec4(fg.rgb * a_inv, fg.a);\n            textureStore(output, vec2<i32>(coords), rgba_sep);\n#else\n            var pixel = vec4(min(fg.rgb, vec3(fg.a)), fg.a);\n            if packed_mask {\n                pixel = unpack4x8unorm(bitcast<u32>(clamp(fg.a, 0.0, 1.0)));\n            }\n            textureStore(output, vec2<i32>(coords), pixel);\n#endif\n",
     );
     // Canvas clips (see `patch_coarse`).
     let begin = s
@@ -235,7 +235,22 @@ fn patch_fine(src: &str) -> String {
     once(
         &mut s,
         "                    if end_clip.blend == LUMINANCE_MASK_LAYER {",
-        "                    if end_clip.blend == ((128u << 8u) | 3u) {\n                        rgba[i] = mix(bg, rgba[i], area[i] * end_clip.alpha);\n                        continue;\n                    }\n                    if end_clip.blend == LUMINANCE_MASK_LAYER {",
+        r#"#ifndef msaa
+                    if end_clip.blend == 0x20000u {
+                        let coords = vec2<u32>(xy) + vec2(i, 0u);
+                        if coords.x < config.target_width && coords.y < config.target_height {
+                            let stride = ((config.target_width + 63u) / 64u) * 64u;
+                            let at = u32(end_clip.alpha) * stride * config.target_height + coords.y * stride + coords.x;
+                            rgba[i] = mix(bg, rgba[i], clip_masks[at]);
+                        }
+                        continue;
+                    }
+#endif
+                    if end_clip.blend == ((128u << 8u) | 3u) {
+                        rgba[i] = mix(bg, rgba[i], area[i] * end_clip.alpha);
+                        continue;
+                    }
+                    if end_clip.blend == LUMINANCE_MASK_LAYER {"#,
     );
     s
 }
@@ -264,7 +279,7 @@ fn patch_coarse(src: &str) -> String {
     once(
         &mut s,
         "                            write_begin_clip();",
-        "                            write_begin_clip(scene[dd] == ((128u << 8u) | 3u));",
+        "                            write_begin_clip(scene[dd] == ((128u << 8u) | 3u) || scene[dd] == 0x20000u);",
     );
     s
 }

@@ -48,7 +48,7 @@
 import AppKit
 
 /// A sheet's window. Titled, which is what takes the keyboard.
-final class SheetWindow: NSWindow {}
+final class SheetWindow: ExactDrivenWindow {}
 
 /// A dialog's sheet: its window, the view that holds the dialog's subtree,
 /// and the window it is a sheet on. A modal route's sheet is the same, with
@@ -62,6 +62,9 @@ final class DialogSheet {
     /// The page's window, or the sheet this one stands on.
     private(set) weak var over: NSWindow?
     var begun = false
+    /// The author's `::backdrop` colour laid over the window it is a sheet
+    /// on (LLP 1035.001 D11); nil where none is written, as AppKit lays none.
+    private var dim: NSView?
     /// The content's size as layout last returned it.
     private var used = CGSize.zero
     init(over: NSWindow, size: CGSize, chrome: RouteChrome? = nil) {
@@ -88,6 +91,36 @@ final class DialogSheet {
     }
     /// The rows round the content changed: the window is the same content and the new rows.
     func refit() { fit(used) }
+
+    /// The dialog's `::backdrop` colour over the window beneath, again after
+    /// a batch. It comes in and goes with the sheet, over the quarter of a
+    /// second AppKit's own animation takes, and at once under the agent's clock.
+    func paintDim(_ color: NSColor?, shown: Bool) {
+        if let color, shown, dim == nil, let under = over?.contentView {
+            let view = SheetDim(frame: under.bounds)
+            view.autoresizingMask = [.width, .height]
+            view.wantsLayer = true
+            view.alphaValue = 0
+            under.addSubview(view)
+            dim = view
+        }
+        guard let view = dim else { return }
+        if let color { view.layer?.backgroundColor = color.cgColor }
+        let alpha: CGFloat = color != nil && shown ? 1 : 0
+        if alpha == 0 { dim = nil }
+        let done = { if alpha == 0 { view.removeFromSuperview() } }
+        if ExactEnv.agentFreezes { view.alphaValue = alpha; return done() }
+        guard view.alphaValue != alpha else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            view.animator().alphaValue = alpha
+        }, completionHandler: done)
+    }
+}
+
+/// A sheet's authored dim: drawn, never hit.
+final class SheetDim: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 extension NodeView {
@@ -259,6 +292,7 @@ extension DialogHost {
         // its own first key view as the sheet comes in.
         let focus = focusOwner(sheet.window)
         sheet.window.initialFirstResponder = focus
+        sheet.paintDim(entry.dialog.backdropColor, shown: true)
         over.beginSheet(sheet.window) { _ in }
         guard entries.contains(where: { $0 === entry }) else { return false }
         if let focus, focus.window === sheet.window, focusOwner(sheet.window) !== focus { sheet.window.makeFirstResponder(focus) }
@@ -271,6 +305,7 @@ extension DialogHost {
         let dialog = entry.dialog, over = sheet.over
         let key = sheet.window.isKeyWindow
         sheet.rootEdits.leave(sheet.window)
+        sheet.paintDim(nil, shown: false)
         if let over, over.sheets.contains(sheet.window) { over.endSheet(sheet.window) }
         sheet.window.orderOut(nil)
         if entry.route { release(entry) }

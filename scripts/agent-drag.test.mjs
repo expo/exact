@@ -151,6 +151,54 @@ test('an iOS drag with ops during it needs a held finger', async () => {
   expect(d.asked.filter((a) => !Array.isArray(a))).toEqual([]);
 });
 
+test('an Android reader scroller uses scroll samples rather than losing a presenter contact', async () => {
+  const asked = [], s = {
+    contact: null, held: null,
+    async layout() { return { nodes: [{ id: 9, type: 'ScrollView', x: 0, y: 50, w: 400, h: 640 }], viewport: { w: 400, h: 800 } }; },
+    async op() { return { lines: [], next: 0 }; },
+    async landed(r) { return r; },
+    async pointer() { throw new Error('the presenter cannot recognize a reader scroll'); },
+  };
+  const carrier = { reader: true, async ask(req) {
+    asked.push(req);
+    if (req.probe) return { scrollDrag: 'reader' };
+    return { tapped: 9, scrolledBy: [0, 400], delivery: 'presenter', timing: 'deterministic scroll samples; native touch and fling unobserved' };
+  } };
+  const run = opts => dragTap({ s, carrier, node: { id: 9 }, target: 'content', host: 'android', timing: 'agent' }, opts);
+  const r = await run({ dx: 0, dy: -400, over: 250 });
+  expect(asked).toEqual([
+    { op: 'tap', id: 9, scrollDrag: [0, -400], ms: 250, from: [200, 370], probe: true },
+    { op: 'tap', id: 9, scrollDrag: [0, -400], ms: 250, from: [200, 370] },
+  ]);
+  expect(r.scrolledBy).toEqual([0, 400]);
+  expect(r.timing).toContain('native touch and fling unobserved');
+  expect(s.contact).toBeNull();
+  await expect(run({ dx: 0, dy: -200, hold: 10 })).rejects.toThrow('need native input');
+  carrier.ask = async () => ({ error: 'target is covered' });
+  await expect(run({ dx: 0, dy: -200 })).rejects.toThrow('target is covered');
+});
+
+test('an Android scroller keeps its presenter-owned pan contact and holds', async () => {
+  const phases = [], asks = [], s = {
+    contact: null, held: null,
+    async layout() { return { nodes: [{ id: 9, type: 'ScrollView', x: 0, y: 50, w: 400, h: 640 }], viewport: { w: 400, h: 800 } }; },
+    async op() { return { lines: [], next: 0 }; },
+    async tagged(r) { return r; },
+    async pointer(phase) { phases.push(phase); if (phase === 'up') s.contact = null; return { at: [240, 370], delivery: 'platform' }; },
+  };
+  const carrier = {
+    reader: true,
+    async ask(req) { asks.push(req); return { scrollDrag: 'presenter' }; },
+    async input(id, phase) { phases.push(phase); return { at: [200, 370], contact: true, delivery: 'platform' }; },
+  };
+  const r = await dragTap({ s, carrier, node: { id: 9 }, target: 'content', host: 'android', timing: 'agent' }, { dx: 40, dy: 0, hold: 100 });
+  expect(phases).toEqual(['down', 'move', 'hold', 'up']);
+  expect(asks).toHaveLength(1);
+  expect(asks[0].probe).toBe(true);
+  expect(r.delivery).toBe('platform');
+  expect(s.contact).toBeNull();
+});
+
 // euxy FRICTION 14: `drag 0 -1500` on a scroller was refused for leaving the viewport; it scrolls the whole way.
 function strokeDrive(replies = () => ({})) {
   const strokes = [], node = { id: 9, type: 'ScrollView', x: 0, y: 0, w: 400, h: 800 };
@@ -747,4 +795,27 @@ test('into keyboard requires iOS platform touches and never falls back to scroll
   await expect(run({ opts: { dy: 405 } })).rejects.toThrow('bottom safe area');
   await expect(run({ opts: { dx: 201 } })).rejects.toThrow('bottom safe area');
   await expect(run({ opts: { path: [{ dx: 0, dy: 5, hold: 0 }] } })).rejects.toThrow('path waypoint');
+});
+
+test('a layout-only box supports drag-to and a held contact without a native view', async () => {
+  const d = heldDrive(), boxes = { 7: { x: 10, y: 10, w: 40, h: 20 }, 8: { x: 10, y: 90, w: 40, h: 20 } };
+  d.s.host = 'ios';
+  d.s.layout = async id => id === undefined
+    ? { nodes: [], viewport: { w: 400, h: 800 } }
+    : { node: { space: { viewport: boxes[id] }, native: { layoutOnly: true } } };
+  d.s.find = async () => ({ id: 8 });
+  d.s.op = async () => ({ lines: [], next: 0 });
+  d.s.landed = async r => r;
+  const result = await dragTap({ s: d.s, carrier: { touches: true, input: async (_id, _phase, opts) => ({ drag: opts.drag }) },
+    node: { id: 7 }, target: '7', host: 'ios', timing: 'agent' }, { to: '8', over: 250 });
+  expect(result.drag.dx).toBe(0);
+  expect(result.drag.dy).toBe(80);
+  await heldDown(d.s, { id: 7 });
+  expect([d.s.contact.x, d.s.contact.y]).toEqual([30, 20]);
+  await heldPhase(d.s, d.carrier, 'up', {});
+  expect(d.asked).toHaveLength(1);
+  await heldDown(d.s, { id: 7 });
+  boxes[7].y = 50;
+  await expect(heldPhase(d.s, d.carrier, 'up', {})).rejects.toThrow('moved off');
+  expect(d.asked).toHaveLength(1);
 });

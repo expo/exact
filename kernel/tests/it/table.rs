@@ -1220,3 +1220,6 @@ fn a_tables_spacing_is_whole_cells_under_the_terminals_space_rule() {
 
 #[path = "table/contexts.rs"]
 mod contexts;
+
+#[path = "table/place.rs"]
+mod place;

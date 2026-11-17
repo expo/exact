@@ -11,8 +11,8 @@ use crate::style::taffy_style;
 impl Kernel {
     /// Where layout put a node, as last laid out: its published border box in
     /// its root's space, free of transforms and scrolling, and whether it is
-    /// provisional (an image or video in its subtree has no natural size yet,
-    /// so lays out at zero until it loads). A node changed since keeps its
+    /// provisional (text in its subtree is estimated, or an image or video
+    /// has no natural size yet). A node changed since keeps its
     /// box until the next layout: a read in a dispatch sees the layout last
     /// shown, not the dispatch's own writes, as the web's page does (LLP
     /// 1051.000 D1). `None` when the node is not live, is an inline run, has
@@ -43,7 +43,7 @@ impl Kernel {
         if self.region.is_some() {
             return None;
         }
-        let (published, provisional) = self.laid_out_frame(key)?;
+        let (published, mut provisional) = self.laid_out_frame(key)?;
         let root_slot = self.root_above(key.index)?;
         let root = self.arena.taffy(root_slot)?;
         let node = self.arena.taffy(key.index)?;
@@ -60,6 +60,10 @@ impl Kernel {
         let measured = engine(&mut self.layout)
             .compute(root, offer, &self.arena, self.measurer.as_mut())
             .map(|()| engine(&mut self.layout).layout(node).size);
+        provisional |= self.arena.subtree(key.index).into_iter().any(|s| {
+            !self.arena.flags(s).has(NodeFlags::HIDDEN)
+                && engine(&mut self.layout).text_pending(&self.arena, s)
+        });
         if measured.is_err() {
             // A contained invalid metric may have left a zero in Taffy's
             // cache: rebuild from the columns, as measure_height_targets does.
@@ -77,6 +81,7 @@ impl Kernel {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
             engine(&mut self.layout).present_heights(&self.arena, &previous);
         }
+        engine(&mut self.layout).restore_text_pending();
         let size = measured.ok()?;
         (size.width.is_finite() && size.height.is_finite() && size.height >= 0.0).then_some((
             Frame {
@@ -228,8 +233,8 @@ impl Kernel {
             height: Dimension::auto(),
         };
         outer.min_size = taffy::geometry::Size {
-            width: LengthPercentageAuto::auto(),
-            height: LengthPercentageAuto::auto(),
+            width: Dimension::auto(),
+            height: Dimension::auto(),
         };
         outer.max_size = outer.min_size;
         outer.margin = taffy::geometry::Rect {
@@ -293,7 +298,12 @@ impl Kernel {
             });
         let env = self.arena.env_of(key.index);
         let mut minimum = style.min_width.at_basis(&env, basis).max(0.0);
-        if style.box_sizing == crate::generated::BoxSizing::ContentBox {
+        if matches!(style.min_width, crate::Dimension::Keyword(_)) {
+            // A keyword minimum has no points without measuring: the used
+            // width keeps the placement from narrowing below what layout
+            // gave it (LLP 1001.001 D5).
+            minimum = laid.size.width;
+        } else if style.box_sizing == crate::generated::BoxSizing::ContentBox {
             let (left, _, right, _) = self.resolved_padding(key).unwrap_or_default();
             let [_, br, _, bl] = style.border_widths_in(&env);
             minimum += left + right + bl + br;
@@ -341,6 +351,15 @@ impl Kernel {
     pub fn resolved_padding(&self, key: NodeKey) -> Option<(f32, f32, f32, f32)> {
         let [left, top, right, bottom] = self.arena.inset(self.arena.resolve(key)?)?.padding;
         Some((left, top, right, bottom))
+    }
+
+    /// Used margins from the last layout, including percentages resolved
+    /// against the containing block's content width (CSS 2.1 §8.3).
+    pub(crate) fn resolved_margins(&self, key: NodeKey) -> Option<[f32; 4]> {
+        let slot = self.arena.resolve(key)?;
+        let tree = self.layout.as_deref().and_then(LayoutMirror::tree_ref)?;
+        let margin = tree.layout(self.arena.taffy(slot)?).margin;
+        Some([margin.top, margin.right, margin.bottom, margin.left])
     }
 
     /// A node's margins as its layout reads them under the kernel's
@@ -403,13 +422,15 @@ impl Kernel {
         self.arena.is_root(top).then_some(top)
     }
 
-    /// Whether an image or video under `slot` still waits for its natural
-    /// size, so the box may change when it loads (LLP 1051.000 D5). An
+    /// Whether text under `slot` is estimated, or an image or video still
+    /// waits for its natural size (LLP 1051.000 D5). An
     /// `audio` has none to wait for (LLP 1042 §8).
     fn unsettled(&self, slot: u32) -> bool {
         self.arena.subtree(slot).into_iter().any(|s| {
-            matches!(self.arena.node_type(s), NodeType::Image | NodeType::Video)
-                && self.arena.intrinsic(s).is_none()
+            !self.arena.flags(s).has(NodeFlags::HIDDEN)
+                && (self.arena.flags(s).has(NodeFlags::TEXT_PENDING)
+                    || (matches!(self.arena.node_type(s), NodeType::Image | NodeType::Video)
+                        && self.arena.intrinsic(s).is_none()))
                 && self.arena.props(s).str(crate::PropId::SemanticTag) != Some("audio")
         })
     }

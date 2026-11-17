@@ -144,7 +144,9 @@ final class NativeButtonIOS: UIButton {
         didSet { refreshActiveState() }
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if ExactEnv.agentMode { TouchLog.reach(touches) }
+        #if EXACT_AGENT
+        if ExactEnv.agentCarried { TouchLog.reach(touches) }
+        #endif
         super.touchesBegan(touches, with: event)
     }
     /// Where the touch lifted while UIKit sends the action it ends with (in
@@ -460,7 +462,7 @@ extension ControlHost {
                 "subtitle": face.subtitle as Any, "imagePlacement": face.placement ?? (face.leading ? "leading" : "trailing"),
                 "pointerEvents": button.isUserInteractionEnabled ? "auto" : "none",
                 "rows": ButtonConfigurationIOS.observation(face, button: button),
-                "size": [Agent.r2(button.bounds.width), Agent.r2(button.bounds.height)]]
+                "size": [InspectionValue.r2(button.bounds.width), InspectionValue.r2(button.bounds.height)]]
     }
 }
 

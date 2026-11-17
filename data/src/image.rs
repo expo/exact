@@ -77,8 +77,32 @@ pub fn failure(code: &str, detail: impl std::fmt::Display) -> String {
     format!("compressImage: {code}: {detail}")
 }
 
-/// Check the two limits as A1.1 bounds them.
-pub fn check_limits(max_dimension: f64, max_bytes: f64) -> Result<(u32, u64), String> {
+/// What a compression aims at (A1.1, A1.12): the longer side's limit, and a
+/// byte target, a quality ceiling or both.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Limits {
+    pub max_dimension: u32,
+    /// The encoded file's limit. `None`, with a `quality`: one encode at it,
+    /// within [`MAX_BYTES`].
+    pub max_bytes: Option<u64>,
+    /// The quality to try first and never exceed, 0 to 1. `None`: Bluesky's
+    /// search alone.
+    pub quality: Option<f64>,
+}
+
+impl Limits {
+    /// The most bytes the result may hold.
+    pub fn bytes(&self) -> u64 {
+        self.max_bytes.unwrap_or(MAX_BYTES)
+    }
+}
+
+/// Check the options as A1.1 and A1.12 bound them, in A1.12's order.
+pub fn check_limits(
+    max_dimension: f64,
+    max_bytes: Option<f64>,
+    quality: Option<f64>,
+) -> Result<Limits, String> {
     let integer = |n: f64, max: f64| n.fract() == 0.0 && (1.0..=max).contains(&n);
     if !integer(max_dimension, MAX_DIMENSION as f64) {
         return Err(failure(
@@ -86,13 +110,23 @@ pub fn check_limits(max_dimension: f64, max_bytes: f64) -> Result<(u32, u64), St
             format!("maxDimension must be an integer from 1 to {MAX_DIMENSION}"),
         ));
     }
-    if !integer(max_bytes, MAX_BYTES as f64) {
+    if max_bytes.is_some_and(|n| !integer(n, MAX_BYTES as f64)) {
         return Err(failure(
             "invalid",
             format!("maxBytes must be an integer from 1 to {MAX_BYTES}"),
         ));
     }
-    Ok((max_dimension as u32, max_bytes as u64))
+    if quality.is_some_and(|q| !(0.0..=1.0).contains(&q)) {
+        return Err(failure("invalid", "quality must be a number from 0 to 1"));
+    }
+    if max_bytes.is_none() && quality.is_none() {
+        return Err(failure("invalid", "needs maxBytes, quality or both"));
+    }
+    Ok(Limits {
+        max_dimension: max_dimension as u32,
+        max_bytes: max_bytes.map(|n| n as u64),
+        quality,
+    })
 }
 
 /// `containImageRes`: the size `width × height` takes inside a square of
@@ -110,38 +144,83 @@ pub fn contain(width: u32, height: u32, max: u32) -> (u32, u32) {
     (side(width), side(height))
 }
 
-/// Bluesky's search over an oriented `width × height` source (A1.2).
-/// `encode(w, h, quality)` returns the JPEG at `quality` percent; an `Err`
+/// The bisection's exclusive top in whole percents (A1.12): 101, or under a
+/// ceiling the least `n` with `n / 100 >= quality`, so that every trial is
+/// below it. `quality * 100` can round across a whole percent either way.
+fn top(quality: Option<f64>) -> u32 {
+    let Some(quality) = quality else {
+        return 101;
+    };
+    let mut n = (quality * 100.0).ceil() as u32;
+    if f64::from(n) / 100.0 < quality {
+        n += 1;
+    }
+    if n > 0 && f64::from(n - 1) / 100.0 >= quality {
+        n -= 1;
+    }
+    n
+}
+
+/// The JPEG search over an oriented `width × height` source: Bluesky's
+/// (A1.2), under `limits.quality` when there is one (A1.12).
+/// `encode(w, h, quality)` returns the JPEG at `quality`, 0 to 1; an `Err`
 /// ends the search with it. Returns the best fit, or `None`: nothing fits.
 pub fn search<E>(
     width: u32,
     height: u32,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     mut encode: E,
 ) -> Result<Option<Compressed>, String>
 where
-    E: FnMut(u32, u32, u32) -> Result<Vec<u8>, String>,
+    E: FnMut(u32, u32, f64) -> Result<Vec<u8>, String>,
 {
-    let mut dimension = max_dimension;
-    let (mut lo, mut hi) = (0u32, 101u32);
+    let fits = |bytes: Vec<u8>, (width, height)| {
+        (bytes.len() as u64 <= limits.bytes()).then_some(Compressed {
+            bytes,
+            width,
+            height,
+        })
+    };
+    let max_bytes = match (limits.max_bytes, limits.quality) {
+        (Some(max_bytes), _) => max_bytes,
+        // No byte target: one encode at the quality asked.
+        (None, Some(quality)) => {
+            let (w, h) = contain(width, height, limits.max_dimension);
+            return Ok(fits(encode(w, h, quality)?, (w, h)));
+        }
+        (None, None) => return Err(failure("invalid", "needs maxBytes, quality or both")),
+    };
+    let top = top(limits.quality);
+    let mut dimension = limits.max_dimension;
+    let (mut lo, mut hi) = (0u32, top);
     let mut shrinks = 0;
     let mut best = None;
-    while hi - lo > 1 {
+    // Whether this size has yet to try the ceiling.
+    let mut fresh = limits.quality.is_some();
+    // Until a quality fits and the bisection closes on it. Unsaid, `lo` is 0
+    // only while `hi` is at least 14, so this is Bluesky's `hi - lo > 1`.
+    while lo == 0 || hi - lo > 1 {
         if shrinks >= MAX_SHRINKS {
             break;
         }
         let (w, h) = contain(width, height, dimension);
+        if let (Some(ceiling), true) = (limits.quality, fresh) {
+            fresh = false;
+            if let Some(fit) = fits(encode(w, h, ceiling)?, (w, h)) {
+                return Ok(Some(fit));
+            }
+        }
         // `Math.round((hi + lo) / 2)`: a half rounds up.
         let quality = (hi + lo).div_ceil(2);
         if quality <= 13 {
             lo = 0;
-            hi = 101;
+            hi = top;
             shrinks += 1;
+            fresh = limits.quality.is_some();
             dimension = (f64::from(dimension) * 0.8).floor() as u32;
             continue;
         }
-        let bytes = encode(w, h, quality)?;
+        let bytes = encode(w, h, f64::from(quality) / 100.0)?;
         if bytes.len() as u64 <= max_bytes {
             lo = quality;
             best = Some(Compressed {
@@ -157,30 +236,30 @@ where
 }
 
 /// A PNG's search (A1.11): the fitted size, then each 0.8 shrink, at most
-/// [`MAX_SHRINKS`] of them, until `encode(w, h)` fits `max_bytes`. `None`:
-/// nothing fits.
+/// [`MAX_SHRINKS`] of them, until `encode(w, h)` fits `limits.max_bytes`;
+/// without one, the fitted size alone (A1.12). A PNG has no quality, so
+/// `limits.quality` is not read. `None`: nothing fits.
 pub fn search_lossless<E>(
     width: u32,
     height: u32,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     mut encode: E,
 ) -> Result<Option<Compressed>, String>
 where
     E: FnMut(u32, u32) -> Result<Vec<u8>, String>,
 {
-    let mut dimension = max_dimension;
+    let mut dimension = limits.max_dimension;
     for _ in 0..=MAX_SHRINKS {
         let (w, h) = contain(width, height, dimension);
         let bytes = encode(w, h)?;
-        if bytes.len() as u64 <= max_bytes {
+        if bytes.len() as u64 <= limits.bytes() {
             return Ok(Some(Compressed {
                 bytes,
                 width: w,
                 height: h,
             }));
         }
-        if dimension == 1 {
+        if dimension == 1 || limits.max_bytes.is_none() {
             break;
         }
         dimension = ((f64::from(dimension) * 0.8).floor() as u32).max(1);
@@ -209,19 +288,17 @@ impl Deadline<'_> {
 
 /// Decode `source`, then search with the platform's encoder for `format`,
 /// starting no decode or trial at or after `deadline` (`timeout`).
-/// `max_dimension` and `max_bytes` are as [`check_limits`] admits.
+/// `limits` are as [`check_limits`] admits them.
 pub fn compress(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     deadline: Instant,
 ) -> Result<Compressed, String> {
     compress_controlled(
         source,
         format,
-        max_dimension,
-        max_bytes,
+        limits,
         deadline,
         &|| Ok(()),
         MAX_SOURCE_PIXELS,
@@ -234,12 +311,10 @@ pub fn compress(
 /// finishes before that worker's reservation is released.
 /// `max_scratch_bytes` is a conservative estimate used for native-memory admission,
 /// not an allocator cap on ImageIO or a bound on process RSS.
-#[allow(clippy::too_many_arguments)]
 pub fn compress_controlled(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     deadline: Instant,
     check: &dyn Fn() -> Result<(), String>,
     max_pixels: u64,
@@ -248,8 +323,7 @@ pub fn compress_controlled(
     compress_edited(
         source,
         format,
-        max_dimension,
-        max_bytes,
+        limits,
         &Edit::default(),
         Deadline {
             at: deadline,
@@ -265,12 +339,15 @@ pub fn compress_controlled(
 pub fn compress_edited(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     edit: &Edit,
     deadline: Deadline<'_>,
 ) -> Result<Compressed, String> {
-    check_limits(f64::from(max_dimension), max_bytes as f64)?;
+    check_limits(
+        f64::from(limits.max_dimension),
+        limits.max_bytes.map(|n| n as f64),
+        limits.quality,
+    )?;
     (deadline.check)()?;
     if source.len() as u64 > MAX_BYTES {
         return Err(failure(
@@ -278,40 +355,30 @@ pub fn compress_edited(
             format!("{} bytes is over {MAX_BYTES}", source.len()),
         ));
     }
-    platform(source, format, max_dimension, max_bytes, edit, deadline)
+    platform(source, format, limits, edit, deadline)
 }
 
 #[cfg(target_vendor = "apple")]
 fn platform(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     edit: &Edit,
     deadline: Deadline<'_>,
 ) -> Result<Compressed, String> {
-    apple::compress(source, format, max_dimension, max_bytes, edit, deadline)
+    apple::compress(source, format, limits, edit, deadline)
 }
 
 #[cfg(not(target_vendor = "apple"))]
 fn platform(
     source: &[u8],
     format: Format,
-    max_dimension: u32,
-    max_bytes: u64,
+    limits: Limits,
     edit: &Edit,
     deadline: Deadline<'_>,
 ) -> Result<Compressed, String> {
     let codec = platform::installed().ok_or_else(unsupported)?;
-    platform::compress(
-        codec,
-        source,
-        format,
-        max_dimension,
-        max_bytes,
-        edit,
-        deadline,
-    )
+    platform::compress(codec, source, format, limits, edit, deadline)
 }
 
 /// What `transformImage` wrote, and what of the source it kept: D14's
@@ -400,14 +467,16 @@ pub struct Encoded {
 
 /// One request to the codec as an embedder receives it (Ibex's
 /// `ImageRequest`): a compression in `format` within its limits, whose
-/// `options` may carry an edit; or a transform, whose `options` are
-/// [`edit::parse_transform`]'s and whose output is at most `max_bytes`.
+/// `options` may carry an edit and a `quality` (A1.12), and whose
+/// `max_bytes` is `None` when the call names none; or a transform, whose
+/// `options` are [`edit::parse_transform`]'s and whose output is at most
+/// `max_bytes`.
 pub fn encode_request(
     source: &[u8],
     transform_call: bool,
     options: Option<&str>,
     format: Format,
-    (max_dimension, max_bytes): (u32, u64),
+    (max_dimension, max_bytes): (u32, Option<u64>),
     deadline: Deadline<'_>,
 ) -> Result<Encoded, String> {
     let call = if transform_call {
@@ -422,7 +491,7 @@ pub fn encode_request(
     };
     if transform_call {
         let t = edit::parse_transform(&options)?;
-        let out = transform(source, &t, max_bytes, deadline)?;
+        let out = transform(source, &t, max_bytes.unwrap_or(MAX_BYTES), deadline)?;
         return Ok(Encoded {
             report: Some(out.report().to_string()),
             extension: edit::extension(out.media_type),
@@ -432,7 +501,19 @@ pub fn encode_request(
         });
     }
     let edit = edit::parse_edit(call, &options)?;
-    let out = compress_edited(source, format, max_dimension, max_bytes, &edit, deadline)?;
+    let quality = match &options["quality"] {
+        serde_json::Value::Null => None,
+        q => Some(
+            q.as_f64()
+                .ok_or_else(|| failure("invalid", "quality must be a number from 0 to 1"))?,
+        ),
+    };
+    let limits = check_limits(
+        f64::from(max_dimension),
+        max_bytes.map(|n| n as f64),
+        quality,
+    )?;
+    let out = compress_edited(source, format, limits, &edit, deadline)?;
     Ok(Encoded {
         bytes: out.bytes,
         width: out.width,

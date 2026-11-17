@@ -17,9 +17,14 @@ pub(crate) fn beside(plan: &Path) -> std::io::Result<Delivery> {
                 std::io::Error::other(format!("app.version.json: {name} must be a string"))
             })
     };
+    let production = value
+        .get("production")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| std::io::Error::other("app.version.json: production must be a boolean"))?;
     Ok(Delivery {
         version: field("version")?,
         build_number: field("buildNumber")?,
+        production,
         ..Default::default()
     })
 }
@@ -77,6 +82,7 @@ component Version
             1700000123456.,
             &delivery,
             None,
+            None,
         )
         .unwrap();
         let document = exact_web::document::project(&page.runner).unwrap();
@@ -106,5 +112,37 @@ component Version
         );
         assert_eq!(rendered.activate, exact_plan::ActivatePolicy::Never);
         retire(page, &|| NoData);
+    }
+
+    #[test]
+    fn production_is_read_beside_the_plan() {
+        let dir =
+            std::env::temp_dir().join(format!("exact-render-production-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let plan = dir.join("app.plan");
+        let read = |json: &str| {
+            std::fs::write(dir.join("app.version.json"), json).unwrap();
+            super::beside(&plan)
+        };
+        let built = read(r#"{"version":"2.3.4","buildNumber":"56","production":true}"#).unwrap();
+        assert_eq!((built.version.as_str(), built.production), ("2.3.4", true));
+        assert!(
+            !read(r#"{"version":"","buildNumber":"","production":false}"#)
+                .unwrap()
+                .production
+        );
+        assert_eq!(
+            read(r#"{"version":"","buildNumber":""}"#)
+                .unwrap_err()
+                .to_string(),
+            "app.version.json: production must be a boolean"
+        );
+        assert_eq!(
+            read(r#"{"version":"","buildNumber":"","production":"yes"}"#)
+                .unwrap_err()
+                .to_string(),
+            "app.version.json: production must be a boolean"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

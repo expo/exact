@@ -1,0 +1,28 @@
+shape Reply
+  message: string
+
+component App
+  state open = false
+  state kept: option<Reply> = none
+  resource reply = load() when open as shape Reply else empty(message="offline")
+  resource zero = load() when false as shape Reply else empty()
+  derive retained = match kept { case some(previous) => reply == previous, case none => true }
+  action show
+    open = true
+  action hide
+    kept = some(reply)
+    open = false
+  view
+    column
+      text reply.message testId="reply"
+      text zero.message testId="zero"
+      button "show" press=show testId="show"
+      button "hide" press=hide testId="hide"
+
+test "an idle resource shows its placeholder before its first answer"
+  expect text "reply" == "offline"
+  expect text "zero" == ""
+  tap "show"
+  expect state retained == true
+  tap "hide"
+  expect state retained == true

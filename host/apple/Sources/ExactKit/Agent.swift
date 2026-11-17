@@ -1,3 +1,4 @@
+#if EXACT_AGENT
 // The agent API's presenter half, the part both presenters share (LLP
 // 1012). Requests arrive as JSON lines on a stream the platform opened —
 // stdin on macOS, a Unix socket on iOS (a simulator app has no stdin) —
@@ -18,11 +19,45 @@ import AppKit
 #endif
 
 public final class Agent {
+    package static func installLink() {
+        guard AgentLink.hooks == nil else { return }
+        AgentLink.hooks = .init(
+            prepareStdio: {
+                #if os(macOS)
+                prepareStdio()
+                #endif
+            },
+            startStdio: { sessions in
+                #if os(macOS)
+                startStdio(sessions: sessions)
+                #endif
+            },
+            startSocket: { ready, sessions in
+                #if os(iOS) || os(tvOS)
+                startSocket(ready: ready, sessions: sessions)
+                #endif
+            },
+            reply: reply,
+            route: route,
+            windowsBehind: {
+                #if os(macOS)
+                windowsBehind
+                #else
+                false
+                #endif
+            },
+            setHostState: { hostState = $0 },
+            layout: { $0.agentInstance.layout() }
+        )
+        if let hostState = AgentLink.hostState { self.hostState = hostState }
+    }
+
     #if os(iOS) || os(tvOS)
     // An agent-issued edit awaits its actual editor's native caret reveal.
     weak var pendingTextReveal: TextArea?
     /// The held contact on a `pan` node, recognized (LLP 1057 §10.6).
     var panContact: AgentPan?
+    var checkPicture: AgentPicturePreparation?
     #endif
     #if EXACT_WIDGET_GALLERY && (os(iOS) || os(macOS))
     var widgetPreview: WidgetPreview?
@@ -665,7 +700,7 @@ public final class Agent {
             }
         }
         var facts = PageFacts.agent
-        var boldText: Bool?
+        var boldText: Bool?, presented: Bool?
         #if os(macOS)
         var keyboardNavigation: Bool?
         #endif
@@ -692,6 +727,8 @@ public final class Agent {
             case ("root-font-size", _) where (Double(value) ?? 0) > 0 && Float(Double(value)!).isFinite: facts.rootFontSize = Double(value)!
             // Bold Text (LLP 1115.000 D12.3), as the person's setting reaches the kernel.
             case ("bold-text", "true"), ("bold-text", "false"): boldText = value == "true"
+            // `exactPage().presented` held at a value; it moves no animation (LLP 1069.000 D6).
+            case ("presented", "true"), ("presented", "false"): presented = value == "true"
             // The display's scale as the kernel is told it (LLP 1115.000 D10.3): layout follows; the display draws at its own.
             case ("display-scale", _) where (Double(value) ?? 0) > 0 && Float(Double(value)!).isFinite: PageFacts.agentDisplayScale = Double(value)!
             default:
@@ -715,6 +752,7 @@ public final class Agent {
         if input != DisplayPreferences.input { DisplayPreferences.agentInput = input }
         if page != nil { PageFacts.agent = facts }
         if let boldText { DisplayPreferences.agentBoldText = boldText }
+        if let presented { session.apply(session.runtime.preferPresented(presented)); session.presentedHeld = presented }
         if let mode {
             // An empty group asks again: the other facts' commits may have run a `setMode`.
             let batch = session.runtime.setModes(mode, check: mode.isEmpty)
@@ -728,7 +766,7 @@ public final class Agent {
                                        "has-focus": PageFacts.hasFocus(session.pageWindow), "root-font-size": PageFacts.rootFontSize,
                                        "display-scale": PageFacts.displayScale(session.presenter.viewport),
                                        "gpu-tier": ["high", "mid", "low", "low"][Int(PageFacts.tier & 3)],
-                                       "bold-text": DisplayPreferences.boldText]
+                                       "bold-text": DisplayPreferences.boldText, "presented": session.presentedHeld ?? true]
         #if os(macOS)
         if let keyboardNavigation { KeyboardNavigation.agent = keyboardNavigation }
         pageFacts["keyboard-navigation"] = KeyboardNavigation.on
@@ -816,6 +854,10 @@ public final class Agent {
     /// clock waited on (LLP 1016.000 D9): `held` and `heldTargets`, as the
     /// web hosts' do. An error reply is left as it is.
     func clock(_ req: [String: Any]) -> [String: Any] {
+        // `--live` keeps the wall clock for the whole launch: only an input's landing, which takes nothing, is taken.
+        if ExactEnv.agentLive, req["land"] as? Bool != true {
+            return ["error": "--live runs the app on the wall clock, which the driver does not hold. Let real time pass between operations (perf frames live <ms> waits and measures), or drive without --live to move the clock.", "code": "live-clock"]
+        }
         // An input's landing on the wall's clock takes nothing (`clockStep`),
         // so a capture lets real input finish (LLP 1079.000 §7).
         let landsOnWall = req["land"] as? Bool == true && session.clock == nil && !ExactEnv.agentFreezes
@@ -1268,64 +1310,4 @@ extension ExactSession {
     }
 }
 
-public extension ExactEnv {
-    /// `EXACT_AGENT_CHROME=platform` (opt-in; splitter rough 4, 11): under
-    /// the agent, the native navigation bar and tab bar show as a person
-    /// sees them, their items pressing the authored controls they stand for.
-    /// The default paints the authored header and tablist in their place.
-    static let agentChrome = environment["EXACT_AGENT_CHROME"] ?? "agent"
-    /// Whether a driver can reach this launch. On iOS it is named by
-    /// `EXACT_AGENT_SOCKET` or `EXACT_AGENT_CONNECT` (`Agent.startSocket`);
-    /// the Mac's driver owns stdio. An iOS launch with `EXACT_AGENT=1` and
-    /// neither, as a grader's `simctl launch` arming only the fault table
-    /// (`EXACT_AGENT_FAIL_FETCH`) is, has no driver to read painted chrome:
-    /// it shows what a person sees.
-    #if os(iOS) || os(tvOS)
-    static let agentDriven = agentMode && (environment["EXACT_AGENT_SOCKET"] != nil || environment["EXACT_AGENT_CONNECT"] != nil)
-    #else
-    static let agentDriven = agentMode
-    #endif
-    /// Whether the authored header and tablist paint instead of UIKit's
-    /// bars: the agent's default chrome.
-    static let authoredChrome = agentDriven && agentChrome != "platform"
-    /// Whether the agent paints the popovers a person sees as UIKit's
-    /// menus (LLP 1021 D4). `EXACT_AGENT_PRESENTATION=native`, which
-    /// `--touch platform` launches with (LLP 1080.000 D7), shows UIKit's:
-    /// a real touch opens one and picks its item.
-    static let agentPaints = agentDriven && environment["EXACT_AGENT_PRESENTATION"] != "native"
-}
-
-extension ExactSession {
-    /// The agent API's runner half (LLP 1012): `tree`, `state`, `logs`, `settle`.
-    public func agent(_ request: String) -> String { runtime.agent(request) }
-    /// A line for the runner's journal (LLP 1012 §3; LLP 1035.001 D6): a
-    /// refused intent and its reason, read back through `logs`.
-    public func log(_ line: String) { runtime.log(line) }
-    /// The number of live views the presenter holds (the smoke reads it).
-    public var viewCount: Int { presenter.views.count }
-    /// The first root's frame size (the smoke reads it).
-    public var rootSize: CGSize { presenter.rootSize }
-    /// The viewport's size in points: what the kernel lays out under.
-    public var viewportSize: CGSize { presenter.viewportSize }
-    /// The text engine's counters since this session started (the smoke reads them).
-    public var measureCount: Int { Owner.shared.sync { text.measuring.measureCount } }
-    public var measureHits: Int { Owner.shared.sync { text.measuring.measureHits } }
-    public var measureSeconds: Double { Owner.shared.sync { text.measuring.measureSeconds } }
-    /// The GPU module's and the web arm's status lines (the smoke reads them).
-    public var gpuStatus: String { canvases.status }
-    public var webStatus: String { webviews.status }
-    /// The window's occlusion changed (macOS): the canvases follow.
-    public func occlusionChanged() {
-        #if os(macOS)
-        canvases.occlusionChanged()
-        #endif
-        frames.run(frames.hasWork)
-    }
-    #if os(iOS) || os(tvOS)
-    /// A hardware keyboard's Tab (or Shift-Tab) when no node of this session
-    /// holds the focus: an app's last responder forwards it here, as macOS's
-    /// window starts its key-view loop at the view.
-    public func moveFocus(backward: Bool) { presenter.moveFocus(backward: backward) }
-    #endif
-
-}
+#endif

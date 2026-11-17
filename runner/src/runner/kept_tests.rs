@@ -890,7 +890,7 @@ fn a_refusal_after_boot_is_journaled_and_a_rolled_back_one_is_not() {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(
         lines[0].ends_with(
-            "answer did not use its kept answer: kept for [\"A\"], this launch asks for [\"C\"]: identifying argument 1 is \"C\", reading state car = \"C\""
+            "answer did not use its kept answer: identifying argument 1 differs from the one it was kept for, reading state car"
         ),
         "{lines:?}"
     );
@@ -904,6 +904,23 @@ fn three() -> Plan {
         let r = b.resource(name, "answer", &[], string, Some(&Value::str("loading")));
         b.set_resource_reader(r, true);
         b.set_resource_initial_args(r, &[]);
+    }
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    b.finish().unwrap()
+}
+
+/// Three store readers whose first identity has a caller-chosen length.
+fn three_with_identity(first: &str) -> Plan {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    for (name, identity) in [("a", first), ("b", "b"), ("c", "c")] {
+        let value = b.str(identity);
+        let mut arg = Asm::new();
+        arg.str(value);
+        let arg = b.code(arg);
+        let r = b.resource(name, "answer", &[arg], string, Some(&Value::str("loading")));
+        b.set_resource_reader(r, true);
+        b.set_resource_initial_args(r, &[Value::str(identity)]);
     }
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
     b.finish().unwrap()
@@ -931,10 +948,51 @@ fn kept_answers_over_their_total_forget_the_longest_other() {
         .collect();
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(
-        said[0].contains("forgot `a`'s (204810 bytes) to keep `c`'s"),
+        said[0].contains(
+            "forgot `a`'s kept answer to keep `c`'s, so the next launch shows `a`'s placeholder"
+        ),
         "{}",
         said[0]
     );
+}
+
+#[test]
+fn an_admitted_seed_with_invalid_unchanged_arguments_says_why() {
+    let snapshot = vec![(kept::kept_name("a"), kept::encode(&[], &Value::str("kept")))];
+    let mut r = boot(three(), Source::default(), snapshot);
+    let mut states: Vec<_> = r
+        .resources
+        .iter_mut()
+        .map(|resource| resource.state.take())
+        .collect();
+    r.admit_kept(0, &[], false, false, &mut states);
+    let line = r
+        .keeping
+        .refused
+        .iter()
+        .find_map(|(i, line)| (*i == 0).then_some(line))
+        .unwrap();
+    assert!(line.ends_with("a did not use its kept answer: its request arguments are invalid"));
+}
+
+#[test]
+fn eviction_diagnostics_do_not_measure_identifying_arguments() {
+    let evicted = |identity: &str| {
+        let source = Source {
+            value: Value::str(&"x".repeat(200 * 1024)),
+            ..Source::default()
+        };
+        let mut r = boot(three_with_identity(identity), source, Vec::new());
+        r.data.ready = true;
+        r.data_ready().unwrap();
+        let line = r
+            .journal()
+            .find(|line| line.contains("kept answers are at most 512 KiB together"))
+            .unwrap()
+            .to_owned();
+        line
+    };
+    assert_eq!(evicted("short"), evicted(&"private".repeat(40)));
 }
 
 /// `resource … transient` (LLP 1156.005 D4): the answer is neither shown

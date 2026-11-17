@@ -854,7 +854,7 @@ final class PopoverSheetIOSTests: XCTestCase {
             dialog.handlers.formUnion(["close", "cancel"])
             var closed: [UInt32] = [], cancelled: [UInt32] = []
             p.onClose = { closed.append($0) }
-            p.menus.sheets.onCancel = { cancelled.append($0) }
+            p.onCancel = { cancelled.append($0) }
             let sheet = try show(in: p)
             XCTAssertTrue(sheet.presentingViewController === route, "authored in the route: \(authoredInRoute)")
             p.menus.action("showPopover", ["choices", "opener"])
@@ -904,7 +904,7 @@ final class PopoverSheetIOSTests: XCTestCase {
         for dialog in dialogs { dialog.handlers.formUnion(["close", "cancel"]) }
         var closed: [UInt32] = [], cancelled: [UInt32] = []
         p.onClose = { closed.append($0) }
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         let owner = try XCTUnwrap(route.presentingViewController)
         let dismissed = expectation(description: "the embedder dismissed the stack")
         owner.dismiss(animated: true) { dismissed.fulfill() }
@@ -964,7 +964,7 @@ final class PopoverSheetIOSTests: XCTestCase {
         dialog.handlers.formUnion(["close", "cancel"])
         var closed: [UInt32] = [], cancelled: [UInt32] = []
         p.onClose = { closed.append($0) }
-        p.menus.sheets.onCancel = { cancelled.append($0) }
+        p.onCancel = { cancelled.append($0) }
         sheet.dismiss(animated: true)
         settle { sheet.transitionCoordinator?.isInteractive == true && transition.started }
         transition.interaction.update(0.4)
@@ -1319,7 +1319,7 @@ final class PopoverSheetIOSTests: XCTestCase {
             let presentation = try XCTUnwrap(sheet.presentationController)
             var closed: [UInt32] = [], cancelled: [UInt32] = []
             p.onClose = { closed.append($0) }
-            p.menus.sheets.onCancel = { cancelled.append($0) }
+            p.onCancel = { cancelled.append($0) }
             sheet.dismiss(animated: true)
             settle { sheet.transitionCoordinator?.isInteractive == true && transition.started }
             let coordinator = try XCTUnwrap(sheet.transitionCoordinator)

@@ -250,6 +250,73 @@ fn page_focus_reanswers_only_the_readers_of_it() {
     assert_eq!(online.resource("onLine").cloned(), one(false));
 }
 
+/// LLP 1069.000 D2 r7: `presented` is false on a host that presents until
+/// it hears the first picture's present, then true for the runner's life;
+/// only its readers are asked; `prefer presented` stands in for it; a new
+/// runner starts over; a host with nothing to present answers true at once.
+#[test]
+fn presented_latches_once_and_asks_only_its_readers() {
+    let boot = |fields: &[&str]| {
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let boolean = b.primitive(TypeKind::Bool);
+        for field in fields {
+            let shape = b.record(&format!("{field}Shape"), &[(field, boolean)]);
+            b.resource(field, exact_runner::page::SOURCE, &[], shape, None);
+        }
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+        let data = Deferred {
+            ready: true,
+            ..Deferred::default()
+        };
+        Runner::boot(
+            b.finish().unwrap(),
+            data,
+            Kernel::with_monospace(),
+            Viewport::default(),
+            "/",
+        )
+        .unwrap()
+    };
+    let one = |v: bool| Some(Value::record(vec![Value::Bool(v)]));
+    assert_eq!(
+        boot(&["presented"]).resource("presented").cloned(),
+        one(true),
+        "nothing will present: true from the first commit"
+    );
+    exact_runner::page::set_awaits_present(true);
+    let mut page = boot(&["presented", "onLine"]);
+    let mut other = boot(&["onLine"]);
+    exact_runner::page::set_awaits_present(false);
+    assert_eq!(page.resource("presented").cloned(), one(false));
+    assert!(page.reads_page_field("presented"));
+    let receipt = page.page_presented().unwrap();
+    assert!(receipt.is_some());
+    assert_eq!(page.resource("presented").cloned(), one(true));
+    assert!(page.page_presented().unwrap().is_none(), "once a world");
+    assert!(
+        other.page_presented().unwrap().is_none(),
+        "no reader, no commit"
+    );
+    assert!(other.presented().value());
+    // A hidden page keeps it.
+    let hidden = exact_runner::Page {
+        hidden: true,
+        frozen: true,
+        ..page.page()
+    };
+    page.set_page(hidden).unwrap();
+    assert_eq!(page.resource("presented").cloned(), one(true));
+    // `prefer presented false` holds it, `true` and none release it.
+    assert!(page.prefer_presented(Some(false)).unwrap().is_some());
+    assert_eq!(page.resource("presented").cloned(), one(false));
+    assert!(
+        page.page_presented().unwrap().is_none(),
+        "held while preferred"
+    );
+    assert!(page.prefer_presented(None).unwrap().is_some());
+    assert_eq!(page.resource("presented").cloned(), one(true));
+}
+
 /// LLP 1139.003 D2: `exactViewport().gpuTier` is the page facts' tier,
 /// `high` until a host tells another, and a change re-answers its readers.
 #[test]

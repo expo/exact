@@ -42,6 +42,10 @@ extension Presenter {
         guard root.superview !== host else { return }
         host.addSubview(root)
         viewport.isScrollEnabled = !fixed
+        // UIKit can keep the hidden edge effect's container views. The
+        // viewport holds no document while the native container owns it.
+        viewport.accessibilityElementsHidden = fixed
+        if #available(iOS 26.0, tvOS 26.0, *) { viewport.topEdgeEffect.isHidden = fixed }
         placeDocumentMount()
         // A fixed document takes no keyboard range; a scrolling one does again.
         setKeyboardInset(keyboardInset)

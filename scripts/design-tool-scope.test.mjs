@@ -1,9 +1,9 @@
 // The design tool's reading of the wire's scopes (apps/design-tool/wire.ts
-// NEEDS) is the server's table (scripts/tamber-pairing.mjs METHOD_SCOPE),
+// NEEDS) is the server's table (scripts/forma-pairing.mjs METHOD_SCOPE),
 // so a paired tool greys and holds back exactly what the server refuses
 // (LLP 1122 D12, T6).
 import { expect, test } from 'bun:test';
-import { METHOD_SCOPE } from './tamber-pairing.mjs';
+import { METHOD_SCOPE } from './forma-pairing.mjs';
 import { above, doorOf, GONE, NEEDS, needOf, wire } from '../apps/design-tool/wire.ts';
 import { canvasFrame, onCanvasWord, pairingSources } from '../apps/design-tool/pairing.ts';
 
@@ -25,7 +25,7 @@ test('a paired client holds back a request above its scope, and the local tool\'
 });
 
 test('a pairing goes only to an https door or a tunnel on this machine\'s loopback', () => {
-  expect(doorOf('https://192.168.1.20:7743/__tamber/tool/').origin).toBe('https://192.168.1.20:7743');
+  expect(doorOf('https://192.168.1.20:7743/__forma/tool/').origin).toBe('https://192.168.1.20:7743');
   expect(doorOf('http://127.0.0.1:7744').origin).toBe('http://127.0.0.1:7744');
   expect(doorOf('http://[::1]:7744').origin).toBe('http://[::1]:7744');
   for (const bad of ['http://192.168.1.20:7743', 'http://example.test', 'ftp://127.0.0.1', 'https://ada:pw@192.168.1.20:7743', 'not a url', 'http://127.0.0.1.example.test']) expect(doorOf(bad).error).not.toBe('');
@@ -33,29 +33,29 @@ test('a pairing goes only to an https door or a tunnel on this machine\'s loopba
 
 test('what a request needs, as the server reads it: an inspect toggle and a drop of another\'s proposal are write', () => {
   const owner = id => ({ mine: 'remote:ada#1', theirs: 'design-tool:Grace' })[id] ?? null;
-  expect(needOf('/__tamber', { method: 'inspect', refresh: true })).toBe('read');
-  expect(needOf('/__tamber', { method: 'inspect', on: true })).toBe('write');
-  expect(needOf('/__tamber', { method: 'drop', proposal: 'mine', client: 'remote:ada#1' }, owner)).toBe('propose');
-  expect(needOf('/__tamber', { method: 'drop', proposal: 'theirs', client: 'remote:ada#1' }, owner)).toBe('write');
-  expect(needOf('/__tamber', { method: 'set-secret' })).toBe('local');
-  expect(needOf('/__tamber/events', {})).toBe('read');
+  expect(needOf('/__forma', { method: 'inspect', refresh: true })).toBe('read');
+  expect(needOf('/__forma', { method: 'inspect', on: true })).toBe('write');
+  expect(needOf('/__forma', { method: 'drop', proposal: 'mine', client: 'remote:ada#1' }, owner)).toBe('propose');
+  expect(needOf('/__forma', { method: 'drop', proposal: 'theirs', client: 'remote:ada#1' }, owner)).toBe('write');
+  expect(needOf('/__forma', { method: 'set-secret' })).toBe('local');
+  expect(needOf('/__forma/events', {})).toBe('read');
 });
 
 test('the paired client: a token goes only to the server it came from, nothing above its scope is sent, and after a revoke nothing at all', async () => {
   const sent = [], real = globalThis.fetch;
   let revoked = false, slowToken = null;
   globalThis.fetch = async (url, init = {}) => {
-    sent.push({ url: String(url), token: init.headers?.['x-exact-tamber-token'] ?? null, body: init.body ?? null });
-    if (String(url).endsWith('/__tamber/token')) { if (slowToken) await slowToken; return Response.json({ token: 'local-token' }); }
-    if (String(url).endsWith('/__tamber/pair')) return Response.json({ ok: { token: 'paired-token', client: 'remote:ada#1', scope: 'propose', expires: '' } });
+    sent.push({ url: String(url), token: init.headers?.['x-exact-forma-token'] ?? null, body: init.body ?? null });
+    if (String(url).endsWith('/__forma/token')) { if (slowToken) await slowToken; return Response.json({ token: 'local-token' }); }
+    if (String(url).endsWith('/__forma/pair')) return Response.json({ ok: { token: 'paired-token', client: 'remote:ada#1', scope: 'propose', expires: '' } });
     if (revoked) return Response.json({ error: { message: 'gone' } }, { status: 401 });
     return Response.json({ ok: {} });
   };
   try {
     const w = wire('http://127.0.0.1:7740');
     // Local first: this machine's token, to this machine's server; a review bound to it.
-    const local = (await w.call('/__tamber', { method: 'hello' })).used;
-    expect(sent.at(-1)).toMatchObject({ url: 'http://127.0.0.1:7740/__tamber', token: 'local-token' });
+    const local = (await w.call('/__forma', { method: 'hello' })).used;
+    expect(sent.at(-1)).toMatchObject({ url: 'http://127.0.0.1:7740/__forma', token: 'local-token' });
     // (What the tool keeps of it is a handle, never the token.)
     expect(local).not.toContain('local-token');
     // A door that is not https, nor loopback: refused, nothing sent.
@@ -65,28 +65,28 @@ test('the paired client: a token goes only to the server it came from, nothing a
     // A token asked for before pairing that answers after it is never the one used.
     let let_ = () => {}; slowToken = new Promise(ok => { let_ = ok; });
     const w2 = wire('http://127.0.0.1:7740');
-    const asked = w2.call('/__tamber', { method: 'hello' });
+    const asked = w2.call('/__forma', { method: 'hello' });
     await w2.pairWith('https://door.example.test:7743', '7Q2KD-M4X01', 'ada');
     let_(); slowToken = null;
     await asked;
-    expect(sent.at(-1)).toMatchObject({ url: 'https://door.example.test:7743/__tamber', token: 'paired-token' });
+    expect(sent.at(-1)).toMatchObject({ url: 'https://door.example.test:7743/__forma', token: 'paired-token' });
     expect(await w.pairWith('https://door.example.test:7743', '7Q2KD-M4X01', 'ada')).toMatchObject({ ok: true, scope: 'propose' });
     const n = sent.length;
     // A write bound to this machine's token (made before pairing) is not sent to the door.
-    expect((await w.call('/__tamber', { method: 'propose', ops: [] }, 15000, local)).error).toContain('before the tool paired');
+    expect((await w.call('/__forma', { method: 'propose', ops: [] }, 15000, local)).error).toContain('before the tool paired');
     // Above its scope: held back.
-    expect((await w.call('/__tamber', { method: 'transaction', ops: [] })).error).toContain('needs write');
-    expect((await w.call('/__tamber', { method: 'pair-code', scope: 'read' })).error).toContain('local tool\'s alone');
+    expect((await w.call('/__forma', { method: 'transaction', ops: [] })).error).toContain('needs write');
+    expect((await w.call('/__forma', { method: 'pair-code', scope: 'read' })).error).toContain('local tool\'s alone');
     expect(sent.length).toBe(n);
     // Within it: to the door, with the paired token.
-    const mine = (await w.call('/__tamber', { method: 'propose', ops: [] })).used;
-    expect(sent.at(-1)).toMatchObject({ url: 'https://door.example.test:7743/__tamber', token: 'paired-token' });
+    const mine = (await w.call('/__forma', { method: 'propose', ops: [] })).used;
+    expect(sent.at(-1)).toMatchObject({ url: 'https://door.example.test:7743/__forma', token: 'paired-token' });
     // Revoked: told so, and nothing more is sent, bound or not.
     revoked = true;
-    expect((await w.call('/__tamber', { method: 'hello' })).error).toBe(GONE);
+    expect((await w.call('/__forma', { method: 'hello' })).error).toBe(GONE);
     const m = sent.length;
-    expect((await w.call('/__tamber', { method: 'hello' })).error).toBe(GONE);
-    expect((await w.call('/__tamber', { method: 'propose', ops: [] }, 15000, mine)).error).toBe(GONE);
+    expect((await w.call('/__forma', { method: 'hello' })).error).toBe(GONE);
+    expect((await w.call('/__forma', { method: 'propose', ops: [] }, 15000, mine)).error).toBe(GONE);
     expect(sent.length).toBe(m);
     // The code went once, in a body, never in a URL.
     for (const s of sent) expect(s.url).not.toContain('7Q2KD');
@@ -97,10 +97,10 @@ test('an answer from before a pairing, or from an older one, changes nothing: th
   const real = globalThis.fetch, sent = [];
   let readLate = null, lateRevoke = null, pairs = 0;
   globalThis.fetch = async (url, init = {}) => {
-    const at = String(url), token = init.headers?.['x-exact-tamber-token'] ?? null;
+    const at = String(url), token = init.headers?.['x-exact-forma-token'] ?? null;
     sent.push({ at, token });
-    if (at.endsWith('/__tamber/token')) return { ok: true, status: 200, json: async () => { await readLate; return { token: 'local-token' }; } };
-    if (at.endsWith('/__tamber/pair')) { pairs += 1; return Response.json({ ok: { token: `paired-${pairs}`, client: 'remote:ada#1', scope: 'propose', expires: '' } }); }
+    if (at.endsWith('/__forma/token')) return { ok: true, status: 200, json: async () => { await readLate; return { token: 'local-token' }; } };
+    if (at.endsWith('/__forma/pair')) { pairs += 1; return Response.json({ ok: { token: `paired-${pairs}`, client: 'remote:ada#1', scope: 'propose', expires: '' } }); }
     if (token === 'paired-1' && lateRevoke) { await lateRevoke; return Response.json({ error: { message: 'gone' } }, { status: 401 }); }
     return Response.json({ ok: {} });
   };
@@ -108,20 +108,20 @@ test('an answer from before a pairing, or from an older one, changes nothing: th
     // This machine's token, its body still being read when the tool pairs: the paired token stays.
     let release = () => {}; readLate = new Promise(ok => { release = ok; });
     const w = wire('http://127.0.0.1:7740');
-    const asked = w.call('/__tamber', { method: 'hello' });
+    const asked = w.call('/__forma', { method: 'hello' });
     await Bun.sleep(10);
     await w.pairWith('https://door.example.test:7743', 'X', 'ada');
     release(); readLate = null;
     await asked;
-    expect(sent.at(-1)).toMatchObject({ at: 'https://door.example.test:7743/__tamber', token: 'paired-1' });
+    expect(sent.at(-1)).toMatchObject({ at: 'https://door.example.test:7743/__forma', token: 'paired-1' });
     // A 401 to the first pairing's token, answered after the tool paired again: the new session goes on.
     let revoke = () => {}; lateRevoke = new Promise(ok => { revoke = ok; });
-    const old = w.call('/__tamber', { method: 'hello' });
+    const old = w.call('/__forma', { method: 'hello' });
     await Bun.sleep(10);
     await w.pairWith('https://door.example.test:7743', 'Y', 'ada');
     revoke();
     expect((await old).error).toBe(GONE);
-    expect((await w.call('/__tamber', { method: 'hello' })).error).toBe('');
+    expect((await w.call('/__forma', { method: 'hello' })).error).toBe('');
     expect(sent.at(-1)).toMatchObject({ token: 'paired-2' });
   } finally { globalThis.fetch = real; }
 });

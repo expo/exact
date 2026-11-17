@@ -58,21 +58,32 @@ impl<D: DataSource> Host<D> {
     }
 }
 
-/// Explicit inputs for a headless boot. Presented sessions that tell these
-/// after boot retain their existing first-layout defaults (LLP 1126 D8).
+/// What a boot's first layout reads of its view: the root font size and
+/// display scale last told (valid ones, before or after a boot), and the
+/// insets told while no host runs, which the boot that installs one takes. A
+/// headless boot (LLP 1126 D8) tells them before it, as an iOS view does
+/// before its first (`ExactSession.primeView`); a session that tells them
+/// only after its first boot lays that one out at the defaults.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct LaunchLayout {
+    pub flat_nodes: bool,
     pub root_font_size: Option<f32>,
     pub display_scale: Option<f32>,
     /// The scale Canvas 2D backs its bitmaps at (`exact_canvas_display`):
     /// the session's latest, told before or after a boot, for every boot.
     pub canvas_scale: Option<f64>,
+    /// The safe-area insets (top, right, bottom, left) told before the next
+    /// boot, so its first layout is at the view's real port rather than
+    /// laid out again when they are told after it. Taken by that boot.
+    pub insets: Option<[f32; 4]>,
 }
 impl LaunchLayout {
     pub const NONE: Self = Self {
+        flat_nodes: false,
         root_font_size: None,
         display_scale: None,
         canvas_scale: None,
+        insets: None,
     };
     pub fn prepare(self, kernel: &mut Kernel) -> Result<(), HostError> {
         if let Some(size) = self.root_font_size {
@@ -83,6 +94,12 @@ impl LaunchLayout {
         if let Some(scale) = self.display_scale {
             kernel
                 .set_display_scale(scale)
+                .map_err(|e| HostError::Runner(RunnerError::Kernel(e)))?;
+        }
+        if let Some([top, right, bottom, left]) = self.insets {
+            let env = kernel.env().with_insets(top, right, bottom, left);
+            kernel
+                .set_env(env)
                 .map_err(|e| HostError::Runner(RunnerError::Kernel(e)))?;
         }
         Ok(())

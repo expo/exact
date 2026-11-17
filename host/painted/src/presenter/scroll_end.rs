@@ -306,6 +306,7 @@ impl<D: DataSource> Presenter<D> {
             .timer_due_ms()
             .into_iter()
             .chain(self.scroll_end_due())
+            .chain(self.held_tap_due())
             .reduce(f64::min)
     }
 
@@ -340,7 +341,7 @@ impl<D: DataSource> Presenter<D> {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
             Completion::Reader if self.scroll_end.held.contains(&view) => false,
-            Completion::Glide => !self.gliding(view),
+            Completion::Glide => !self.gliding(view) && !self.zoom_animating(view),
             _ => pending.due <= self.host.now(),
         }
     }
@@ -348,6 +349,11 @@ impl<D: DataSource> Presenter<D> {
     /// The reader holds scroller `view`'s scroll: its finger began dragging
     /// it, or lifted from it into a fling. While held its samples owe no
     /// completion, however long they rest.
+    /// Whether the reader holds scroller `view`'s scroll.
+    pub(super) fn scroll_held(&self, view: ViewId) -> bool {
+        self.scroll_end.held.contains(&view)
+    }
+
     pub(super) fn scroll_end_hold(&mut self, view: ViewId) {
         self.scroll_end.held.insert(view);
     }
@@ -356,9 +362,13 @@ impl<D: DataSource> Presenter<D> {
     /// the fling stopped): its completion is due now, as UIKit ends a drag
     /// that does not decelerate and a deceleration when it stops.
     pub(super) fn scroll_end_release(&mut self, view: ViewId) {
-        if !self.scroll_end.held.remove(&view) {
+        if !self.scroll_end.held.contains(&view) {
             return;
         }
+        // A zoom written while the reader held it moves, as part of the
+        // reader's scroll, before the end.
+        self.zoom_rests(view);
+        self.scroll_end.held.remove(&view);
         let now = self.host.now();
         if let Some(p) = self
             .scroll_end

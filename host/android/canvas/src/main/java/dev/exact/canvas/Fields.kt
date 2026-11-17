@@ -308,8 +308,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
         val text = bare(FieldText(context))
         if (log) text.heard = { Log.i(TAG, "field $id keyboard: $it") }
         val port = Port(context)
-        port.addView(text, LayoutParams(1, 1))
-        addView(port, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        port.addView(text, LayoutParams(1, 1, Gravity.TOP or Gravity.LEFT))
+        addView(port, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT, Gravity.TOP or Gravity.LEFT))
         val f = Field(id, port, text, RenderNode("exact field"))
         f.generation = generation
         fields[id] = f
@@ -514,8 +514,11 @@ internal class Fields(context: Context) : FrameLayout(context) {
         if (text.imeOptions != options) { text.imeOptions = options; if (text.isFocused) imm.restartInput(text) }
         val limit = w[at + 4]
         text.filters = if (limit >= 0) arrayOf<InputFilter>(InputFilter.LengthFilter(limit)) else arrayOf()
+        val rtl = what and RTL != 0
+        text.layoutDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        text.textDirection = if (rtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
         text.gravity = (if (f.multiline) Gravity.TOP else Gravity.CENTER_VERTICAL) or
-            when (w[at + 5]) { 1 -> Gravity.CENTER_HORIZONTAL; 2 -> Gravity.END; else -> Gravity.START }
+            when (w[at + 5]) { 1 -> Gravity.CENTER_HORIZONTAL; 2 -> Gravity.RIGHT; else -> Gravity.LEFT }
         text.setTextColor(w[at + 6])
         text.setHintTextColor(w[at + 7])
         text.highlightColor = w[at + 10]
@@ -551,7 +554,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
 
     private fun size(f: Field) {
         val w = max(1, f.w); val h = max(1, f.h)
-        f.text.layoutParams = LayoutParams(w, h)
+        f.text.layoutParams = LayoutParams(w, h, Gravity.TOP or Gravity.LEFT)
         f.text.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
         f.text.layout(0, 0, w, h)
         f.dirty = true
@@ -593,7 +596,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         val pw = if (clipped) max(1, f.clipW.roundToInt()) else LayoutParams.MATCH_PARENT
         val ph = if (clipped) max(1, f.clipH.roundToInt()) else LayoutParams.MATCH_PARENT
         val lp = f.port.layoutParams
-        if (lp.width != pw || lp.height != ph) f.port.layoutParams = LayoutParams(pw, ph)
+        if (lp.width != pw || lp.height != ph) f.port.layoutParams = LayoutParams(pw, ph, Gravity.TOP or Gravity.LEFT)
         f.port.translationX = px.toFloat(); f.port.translationY = py.toFloat()
         f.text.translationX = f.atX - px; f.text.translationY = f.atY - py
     }
@@ -707,8 +710,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
      * ([Scrolling.next]): once it says the scroll has the touch, what is left is not theirs, and the scroll has
      * cancelled the touch where it was ([cancel]).
      */
-    fun under(serial: Int, field: Int, scrolls: () -> Boolean = { false }) {
-        if (serial != this.serial || state != HOLDING) return
+    fun under(serial: Int, field: Int, scrolls: () -> Boolean = { false }): Boolean {
+        if (serial != this.serial || state != HOLDING) return false
         val f = target
         val events = ArrayList(held)
         held.clear()
@@ -727,6 +730,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             } else view?.fingers?.relay(e)
             e.recycle()
         }
+        return own
     }
 
     /** A scroll took the touch ([Scrolling]): the field's touch is cancelled, or what was held is let go. Whether
@@ -786,6 +790,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         private const val ITALIC = 64
         private const val SUBMITS = 128
         private const val FOLLOWED = 256
+        private const val RTL = 512
         /** Its keyboard: a search's, and none at all. */
         private const val SEARCHES = 6
         private const val NO_KEYBOARD = 7

@@ -221,3 +221,42 @@ fn a_popover_leaving_its_block_is_sent_a_block_op_with_no_size() {
     let back = host.dispatch_at(view(&host, "toggle"), Event::Press, 10.0);
     assert_eq!(used(&back, pins), Some((400.0, 30.0)), "{back}");
 }
+
+#[test]
+fn active_translate_keeps_its_absolute_containing_block() {
+    for offset in ["\"4px 4px\"", "offset"] {
+        let source = format!(
+            r#"component App
+  state offset = "none"
+  action go
+    offset = (offset == "none" ? "4px 4px" : "none")
+  view
+    view position="relative" width=400 height=400
+      view height=40
+      view press=go testId="slab" width=100 height=80
+        :active
+          translate = {offset}
+        view position="absolute" top=0 width=10 height=10 testId="child"
+"#
+        );
+        let plan = contract::compile(&source).unwrap();
+        let (mut host, batch) = Host::boot(
+            &plan.encode(),
+            NoData,
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            400.,
+        )
+        .unwrap();
+        let slab = view(&host, "slab");
+        let child = view(&host, "child");
+        assert_eq!(frame_of(&batch, slab).1, 40.);
+        assert_eq!(frame_of(&batch, child).1, 0.);
+        for _ in 0..3 {
+            host.dispatch(slab, Event::Press);
+            let k = host.runner().kernel();
+            assert_eq!(k.node(slab).unwrap().frame.y, 40.);
+            assert_eq!(k.node(child).unwrap().frame.y, 40.);
+        }
+    }
+}

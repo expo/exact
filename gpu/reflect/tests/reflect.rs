@@ -6,6 +6,25 @@
 
 use exact_gpu_reflect::{generate, reflect};
 
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 const SCENE: &str = r#"
 struct Light { position: vec3<f32>, intensity: f32 }
 struct Scene { time: f32, view: mat3x3<f32>, lights: array<Light, 2>, tint: vec2<f32> }
@@ -283,7 +302,8 @@ fn a_shader_without_bindings_or_inputs_is_just_its_module_and_entries() {
 
 #[test]
 fn generate_reads_a_directory_and_refuses_a_stem_that_is_not_an_identifier() {
-    let dir = std::env::temp_dir().join(format!("exact-gpu-reflect-{}", std::process::id()));
+    let dir =
+        TempDir(std::env::temp_dir().join(format!("exact-gpu-reflect-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("ok.wgsl"), FS).unwrap();

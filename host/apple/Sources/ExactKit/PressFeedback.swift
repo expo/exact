@@ -296,6 +296,7 @@ extension NodeView {
 
     #if os(iOS) || os(tvOS)
     package func applyTransform() {
+        defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer.transform
         defer { if !CATransform3DEqualToTransform(before, layer.transform) { refreshPixelatedImages() } }
@@ -329,7 +330,13 @@ extension NodeView {
     /// transform: a layout transition's offset, a sticky box's scroll offset
     /// (LLP 1083), a keyboard toolbar's lift and a context preview's projection.
     var hostPlacement: CGAffineTransform {
-        CGAffineTransform(translationX: layoutOffset.x + stickyOffset.x, y: layoutOffset.y - keyboardLift + stickyOffset.y + controlRide).concatenating(contextTransform)
+        let placed = CGAffineTransform(translationX: layoutOffset.x + stickyOffset.x, y: layoutOffset.y - keyboardLift + stickyOffset.y + controlRide).concatenating(contextTransform)
+        // A zoomable scroller's child, scaled about its box's top left and
+        // moved to where its zoom centres it (`ScrollZoomIOS.swift`); UIKit
+        // scales about the centre.
+        let z = zoomFactor, shift = zoomShift
+        guard z != 1 || shift != .zero else { return placed }
+        return placed.concatenating(CGAffineTransform(a: z, b: 0, c: 0, d: z, tx: (z - 1) * bounds.width / 2 + shift.x, ty: (z - 1) * bounds.height / 2 + shift.y))
     }
     /// The border box in `viewport`'s visible space as an open top-layer box
     /// is told to the runner: before its own transform, which the runner
@@ -355,6 +362,7 @@ extension NodeView {
     }
     #else
     package func applyTransform() {
+        defer { refreshPressTranslation() }
         defer { overflowClipGeometryChanged() }
         let before = layer?.transform ?? CATransform3DIdentity
         defer { if !CATransform3DEqualToTransform(before, layer?.transform ?? CATransform3DIdentity) { refreshPixelatedImages() } }

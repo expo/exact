@@ -67,7 +67,7 @@ fn metrics(p: &Paragraph) -> (Vec<u32>, Vec<u32>) {
 
 #[test]
 fn shared_layout_matches_a_fresh_shape_at_every_width() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     for align in [
         TextAlign::Left,
         TextAlign::Center,
@@ -91,7 +91,7 @@ fn shared_layout_matches_a_fresh_shape_at_every_width() {
             let mut pinned = Vec::new();
             for width in [Some(0.), Some(97.125), Some(203.5), None] {
                 let p = engine.paragraph(&s, width);
-                let mut fresh = TextEngine::new();
+                let mut fresh = crate::text::fixtures::engine();
                 let expected = fresh.layout(&s, width);
                 assert_eq!(signature(&p), signature(&expected), "{align:?} {width:?}");
                 assert_eq!(metrics(&p), metrics(&expected));
@@ -106,7 +106,7 @@ fn shared_layout_matches_a_fresh_shape_at_every_width() {
 
 #[test]
 fn width_and_intrinsic_queries_reuse_actual_shape_calls() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec();
     let a = engine.paragraph(&s, Some(120.));
     let calls = shaping::shape_line_calls();
@@ -130,7 +130,7 @@ fn width_and_intrinsic_queries_reuse_actual_shape_calls() {
 
 #[test]
 fn retiring_catalog_outlives_engine_and_supplies_cpu_and_gpu_fonts() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let a = engine.paragraph(&spec(), Some(200.));
     let old = Rc::downgrade(&a.source.catalog);
     let source = Rc::downgrade(&a.source);
@@ -158,7 +158,7 @@ fn retiring_catalog_outlives_engine_and_supplies_cpu_and_gpu_fonts() {
         image
     };
     let expected = render(&mut engine);
-    assert!(expected.data().chunks_exact(4).any(|p| p[3] != 0));
+    assert!(expected.data().as_chunks::<4>().0.iter().any(|p| p[3] != 0));
     let batches = engine.glyph_runs(&a, &palette);
     assert!(!batches.is_empty());
     // Exercise the public install boundary, then make the CURRENT catalog
@@ -197,7 +197,7 @@ fn retiring_catalog_outlives_engine_and_supplies_cpu_and_gpu_fonts() {
 
 #[test]
 fn two_widths_count_shared_source_once_and_release_without_history() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec();
     let a = engine.paragraph(&s, Some(150.));
     let b = engine.paragraph(&s, Some(210.));
@@ -458,7 +458,7 @@ mod face_metrics {
             image.data().to_vec()
         };
         let expected = pixels(&mut engine, &p);
-        assert!(expected.chunks_exact(4).any(|p| p[3] != 0));
+        assert!(expected.as_chunks::<4>().0.iter().any(|p| p[3] != 0));
         engine.catalog = Rc::new(RefCell::new(catalog::Catalog::from_bytes(&[], "none")));
         assert_eq!(pixels(&mut engine, &p), expected);
         let b = source.layout(Some(201.75));

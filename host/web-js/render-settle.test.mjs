@@ -15,11 +15,12 @@ const scratch = () => {
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Render Settle', app: { id: 'test.render-settle', name: 'Render Settle' }, host: { web: {} } }));
   return dir;
 };
-// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure.
+// The app in `dir` built for the web with its pages rendered under Bun; its build names no failure. A Rust module
+// builds into the checkout's target, warm from the last run, rather than cold into the app's own.
 async function build(dir) {
   const dist = resolve(dir, 'dist');
   const built = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'render-settle-test', '--out', dist, '--render', 'js'], {
-    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    cwd: root, env: { ...process.env, EXACT_APP_DIR: dir, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? resolve(root, 'target') }, stdout: 'pipe', stderr: 'pipe',
   });
   const [status, stdout, stderr] = await Promise.all([built.exited, new Response(built.stdout).text(), new Response(built.stderr).text()]);
   expect(status, stdout + stderr).toBe(0);

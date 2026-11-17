@@ -217,7 +217,7 @@ pub(crate) fn literal(c: &Component, file: &File) -> Vec<LowerError> {
         .design
         .iter()
         .chain(&file.package_designs)
-        .filter_map(|d| exact_tamber::parse(&d.text).ok())
+        .filter_map(|d| exact_forma::parse(&d.text).ok())
         .flat_map(|d| d.tokens.into_iter().chain(d.icons).map(|t| t.name.value))
         .collect();
     for p in &c.params.list {

@@ -1,5 +1,5 @@
 // The component panel (LLP 1122 D7, T3): each component's params from
-// `describe`'s `components` (LLP 1121 D15, tamber/1.10), grouped and ordered
+// `describe`'s `components` (LLP 1121 D15, forma/1.10), grouped and ordered
 // as the dials panel is, each with its declared control. A param takes a
 // token as well as a literal, and its value is the app's line in the
 // design's `params` block when it has one, else the default as written.
@@ -11,7 +11,7 @@ type Design = Result<'loadDesign'>;
 type Panel = Design['components'][number];
 type Row = Panel['groups'][number]['params'][number];
 
-/** A param as `describe` gives it (docs/tamber-protocol.md, `components`). */
+/** A param as `describe` gives it (docs/forma-protocol.md, `components`). */
 type Param = {
   name: string; short: string | null; kind: string; default: string; values: unknown[] | null;
   range: [number, number] | null; step: number | null; control: string | null; options: string[] | null;
@@ -135,7 +135,7 @@ const iconText = (v: unknown) => {
 };
 
 /** The panel: every component with params or variants (a native one declared in the
- * design too, `app.tamber#Name`; a library one's variant props, D3's `variants`, listed), its groups in the order they first
+ * design too, `app.forma#Name`; a library one's variant props, D3's `variants`, listed), its groups in the order they first
  * appear, each by priority (1 first), priority 3 behind "more". A package's
  * component (its identity's file none of the app's own, `own`, describe's
  * `files`) says so: "Set for this app" writes the app's line, the package's

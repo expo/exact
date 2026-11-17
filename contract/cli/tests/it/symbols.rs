@@ -947,7 +947,8 @@ fn a_syntax_refusal_in_one_file_keeps_the_symbols_of_what_parsed() {
     let row = "component Row\n  props\n    label: string\n  state taps = 0\n  action tap\n    taps = = 1\n  action reset\n    taps = 0\n  view\n    button press=reset\n      text label\n";
     f.write("row.contract", row);
     let root = f.write("app.contract", app);
-    let graph = refused(&root, &["tap"]);
+    // `tap`'s body is refused and its line kept: it is defined, with nothing of its body.
+    let graph = refused(&root, &[]);
     assert!(graph["errors"][0]["file"]
         .as_str()
         .unwrap()
@@ -958,6 +959,7 @@ fn a_syntax_refusal_in_one_file_keeps_the_symbols_of_what_parsed() {
         ("component", "Row"),
         ("prop", "label"),
         ("state", "taps"),
+        ("action", "tap"),
         ("action", "reset"),
     ] {
         definition(&graph, kind, name, None);
@@ -1155,10 +1157,14 @@ fn a_refusal_in_a_members_file_keeps_its_other_members() {
         "app.contract",
         "component App\n  state count = 1\n  members \"./more.contract\"\n  view\n    text `${count} ${doubled}`\n",
     );
-    let graph = refused(&root, &["broken"]);
+    let graph = refused(&root, &[]);
     let more = more.canonicalize().unwrap();
     let more = more.to_string_lossy();
     assert_eq!(graph["errors"][0]["file"], more.as_ref());
+    assert_eq!(
+        definition(&graph, "action", "broken", None)["file"],
+        more.as_ref()
+    );
     let doubled = definition(&graph, "derive", "doubled", None);
     assert_eq!(doubled["file"], more.as_ref());
     let read = refs(&graph)

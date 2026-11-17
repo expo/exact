@@ -13,6 +13,7 @@
     "name": "Exact Live"
   },
   "rust": {
+    "data": { "crate": "exact-live-data", "type": "exact_live_data::Live" },
     "mode": "off"
   },
   "host": {

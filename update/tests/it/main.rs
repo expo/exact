@@ -3,6 +3,7 @@
 mod durability;
 mod instances;
 mod publisher;
+mod reader;
 mod reuse;
 mod store;
 mod support;

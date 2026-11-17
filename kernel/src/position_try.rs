@@ -3,6 +3,8 @@
 //! applied in the order written (CSS Anchor Positioning §6.1: `flip-start`
 //! does not commute with the other two).
 
+pub mod area;
+
 /// Ordered attempts, each its flips in order; an empty list is CSS `none`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PositionTryFallbacks(Vec<Vec<&'static str>>);

@@ -17,8 +17,8 @@ const VIEW: &str = "component App\n  state n = 0\n  action go\n    n = n + 1\n  
 
 fn plan(dir: &std::path::Path, soft: &str) -> exact_plan::Plan {
     std::fs::write(
-        dir.join("app.tamber"),
-        format!("tamber t\n\ntheme\n  accent.soft = {soft}\n"),
+        dir.join("app.forma"),
+        format!("forma t\n\ntheme\n  accent.soft = {soft}\n"),
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), VIEW).unwrap();
@@ -132,8 +132,8 @@ fn a_text_with_a_look_keeps_its_box() {
         };
         check_batch(&boot);
         for (id, display) in [(text, "display:contents;"), (parent, "display:block;")] {
-            let parts =
-                exact_web::host::template::parts_with(kernel, &plan, id, true, true).unwrap();
+            let parts = exact_web::host::template::parts_with(kernel, &plan, id, true, true, false)
+                .unwrap();
             assert_eq!(parts.css.contains(display), folds, "{parts:?}");
         }
         let doc = host.document().unwrap();
@@ -194,8 +194,8 @@ fn a_looks_and_a_press_colour_reach_a_boundary_in_the_boundarys_tuple() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let plan = |hi: &str| {
-        let design = format!("tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  nav = light-dark(#666666, #ffffff)\n  hi = {hi}\n    when ink=plain: #00aa00\n  lo = #0000cc\n    when ink=plain: #00cccc\n");
-        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        let design = format!("forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  nav = light-dark(#666666, #ffffff)\n  hi = {hi}\n    when ink=plain: #00aa00\n  lo = #0000cc\n    when ink=plain: #00cccc\n");
+        std::fs::write(dir.join("app.forma"), design).unwrap();
         contract::compile_path(&dir.join("app.contract")).unwrap_or_else(|e| panic!("{e:?}"))
     };
     let (a, b) = (plan("#cc0000"), plan("#dd0000"));

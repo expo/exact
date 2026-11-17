@@ -58,6 +58,34 @@ pub fn exit_animations(plan: &Plan, code: &[u8], press: bool) -> PresenceValues 
     })
 }
 
+/// The custom property a route's part is carried in (LLP 1013.001 D1).
+pub fn route_part_property(row: StyleId) -> &'static str {
+    match row {
+        StyleId::ViewTransitionNew => "--exact-view-transition-new",
+        _ => "--exact-view-transition-old",
+    }
+}
+
+/// A bound route part's values: each literal's animations as CSS, `none`
+/// written as itself (the author's cut, which the platform's transition is
+/// not).
+pub fn route_parts(plan: &Plan, code: &[u8], row: StyleId) -> PresenceValues {
+    named_values(plan, code, row, |value| {
+        let mut style = exact_kernel::StyleProps::default();
+        style
+            .set_dynamic(row, &exact_kernel::StyleValue::Text(value.into()))
+            .ok()?;
+        let animations = match row {
+            StyleId::ViewTransitionNew => &style.rare.view_transition_new,
+            _ => &style.rare.view_transition_old,
+        };
+        Some(Some(match animations.0.is_empty() {
+            true => "none".to_string(),
+            false => exact_web::css::animations_css(animations, false),
+        }))
+    })
+}
+
 /// The kernel's CSS for a bound layout transition, or no declaration.
 #[cfg(test)]
 pub fn layout_transition(value: &str) -> Option<Option<String>> {

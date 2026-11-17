@@ -14,6 +14,91 @@ private final class CanvasCaptureWindow: NSWindow {
 final class AgentCanvasCaptureMacTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactSurfaces.install() }
 
+    func testViewportCaptureComposesCanvasReadbacksWithTheirChildren() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "viewport-canvas")
+        defer { session.destroy() }
+        let p = session.presenter
+        p.viewport.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = p.viewport
+        defer { window.close() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "canvas"],
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 128]]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "frame", "id": 2, "x": 0, "y": 40, "w": 100, "h": 20],
+        ]))
+        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[1]), name: "viewport-pixels", values: [])
+        entry.id = 1; entry.module = module()
+        session.surfaceHost.entries[1] = entry
+        window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("viewport-canvas-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let reply = session.agentInstance.screenshot(["path": path.path])
+        XCTAssertNil(reply["error"], "\(reply)")
+        let rep = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: path)))
+        func pixel(_ y: Int) -> [UInt] {
+            var components = [UInt](repeating: 0, count: rep.samplesPerPixel)
+            rep.getPixel(&components, atX: rep.pixelsWide / 2, y: y * rep.pixelsHigh / 100)
+            return components
+        }
+        XCTAssertEqual(pixel(10), [255, 0, 0, 255], "the readback's top stripe stays upright")
+        XCTAssertEqual(pixel(80), [0, 255, 0, 255], "Metal supplies the pixels")
+        XCTAssertEqual(pixel(50), [128, 127, 0, 255], "the child composites once in sRGB")
+        XCTAssertEqual(rep.pixelsWide, Int(100 * window.backingScaleFactor))
+        XCTAssertEqual(rep.colorSpace, .sRGB)
+    }
+
+    func testGlassFallbackComposesATranslucentCanvasReadbackOnce() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "glass-canvas-fallback")
+        defer { session.destroy() }
+        let p = session.presenter
+        p.viewport.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        let window = NSWindow(contentRect: p.viewport.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = p.viewport
+        defer { window.close() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "canvas"],
+            ["op": "create", "id": 3, "kind": "view", "props": ["backgroundMaterial": "glass"]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "frame", "id": 3, "x": 80, "y": 0, "w": 20, "h": 20],
+        ]))
+        let entry = CanvasesHost.Entry(view: try XCTUnwrap(p.views[2]), name: "glass-fallback-pixels", values: [])
+        entry.id = 3; entry.module = module()
+        session.surfaceHost.entries[2] = entry
+        window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
+
+        let glass = try XCTUnwrap(p.views[3])
+        XCTAssertTrue(Capture.hasGlass(in: p.viewport))
+        glass.isHidden = true
+        let expected = try XCTUnwrap(Capture.picture(of: p.viewport))
+        glass.isHidden = false
+        Capture.windowImageOverride = { _ in nil }
+        defer { Capture.windowImageOverride = nil }
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("glass-canvas-fallback-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let reply = session.agentInstance.screenshot(["path": path.path])
+        XCTAssertNil(reply["error"], "\(reply)")
+        XCTAssertTrue((reply["note"] as? String)?.contains("glass was not composited") == true, "\(reply)")
+        let actual = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: path)))
+        let reference = expected
+        for point in [NSPoint(x: 50, y: 20), NSPoint(x: 50, y: 80)] {
+            let x = Int(point.x * CGFloat(actual.pixelsWide) / 100)
+            let y = Int(point.y * CGFloat(actual.pixelsHigh) / 100)
+            let got = try XCTUnwrap(actual.paintedColorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            let want = try XCTUnwrap(reference.paintedColorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            XCTAssertEqual(got.redComponent, want.redComponent, accuracy: 0.02, "\(point)")
+            XCTAssertEqual(got.greenComponent, want.greenComponent, accuracy: 0.02, "\(point)")
+            XCTAssertEqual(got.blueComponent, want.blueComponent, accuracy: 0.02, "\(point)")
+        }
+    }
+
     func testWindowCaptureKeepsCanvasPixelsForEitherOcclusionState() throws {
         _ = NSApplication.shared
         let sessions = (0..<2).map { ExactApp.shared.makeSession(label: "window-canvas-\($0)") }
@@ -57,7 +142,7 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
         defer { child.close() }
         window.orderFrontRegardless(); window.displayIfNeeded(); CATransaction.flush()
         guard Agent.ownWindowImage(window.windowNumber) != nil else {
-            throw XCTSkip("the window server gave no picture (a display asleep or a locked screen)")
+            throw XCTSkip("the window server gave no picture (the screen is locked or the display is asleep)")
         }
         window.addChildWindow(child, ordered: .above)
         child.orderFrontRegardless()
@@ -113,11 +198,18 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
         let before = NSBitmapImageRep(cgImage: original)
         let after = try XCTUnwrap(NSBitmapImageRep(data: Data(contentsOf: path)))
         XCTAssertEqual(after.pixelsWide, original.width); XCTAssertEqual(after.pixelsHigh, original.height)
-        for (x, y) in [(0, 0), (original.width / 2, 5), (original.width - 1, 0)] {
+        // At 2x the rounded corners' outermost pixels too; on a 1x display (a headless Mac's virtual one) a corner's single
+        // antialiased pixel varies by a few 255ths from capture to capture, so the top edge's middle alone.
+        let points = window.backingScaleFactor >= 2 ? [(0, 0), (original.width / 2, 5), (original.width - 1, 0)] : [(original.width / 2, 5)]
+        for (x, y) in points {
             let actual = try XCTUnwrap(after.colorAt(x: x, y: y))
             let expected = try XCTUnwrap(before.colorAt(x: x, y: y))
-            XCTAssertEqual(actual.alphaComponent, expected.alphaComponent, accuracy: 0.01, "window shape")
-            XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.02, "title bar")
+            let actualInside = actual.alphaComponent >= 0.5
+            let expectedInside = expected.alphaComponent >= 0.5
+            XCTAssertEqual(actualInside, expectedInside, "window shape")
+            if actualInside && expectedInside {
+                XCTAssertEqual(actual.redComponent, expected.redComponent, accuracy: 0.02, "title bar")
+            }
         }
     }
 
@@ -164,7 +256,7 @@ final class AgentCanvasCaptureMacTests: XCTestCase {
                     bytes[offset] = top ? 255 : 0
                     bytes[offset + 1] = !top && id == 1 ? 255 : 0
                     bytes[offset + 2] = !top && id == 2 ? 255 : 0
-                    bytes[offset + 3] = 255
+                    bytes[offset + 3] = id == 3 ? 128 : 255
                 }
                 return 0
             }, child: { _, _, _, _, _, _, _, _, _, _, _, _ in 0 }, childrenCount: { _, _ in 0 }, placement: { _, _, _, _ in 0 },

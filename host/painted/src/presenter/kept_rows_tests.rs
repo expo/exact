@@ -84,7 +84,7 @@ fn a_renewed_row_is_not_the_row_it_was() {
     let cells: String = (0..6)
         .map(|i| format!("        box height=50 width=200 testId=\"c{i}\"\n"))
         .collect();
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &contract::compile(&format!(
             "component App\n  view\n    scroll testId=\"port\" width=200 height=400\n      column\n{cells}"
         ))
@@ -142,7 +142,7 @@ fn a_new_reader_is_sent_every_row_again() {
     let cells: String = (0..6)
         .map(|i| format!("        box height=50 width=200 testId=\"c{i}\"\n"))
         .collect();
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &contract::compile(&format!(
             "component App\n  view\n    scroll testId=\"port\" width=200 height=400\n      column\n{cells}"
         ))
@@ -178,6 +178,54 @@ fn a_new_reader_is_sent_every_row_again() {
     assert!(second.freed.is_empty(), "it was sent no row to free");
 }
 
+/// A new host under the presenter (an activated update, a development
+/// reload) numbers its nodes as a boot does, so its rows have the old tree's
+/// keys: none of them is the row kept under that key, whose recording
+/// draws the old tree (LLP 1030.006 D6). Each is recorded anew and the old
+/// recordings are freed, though the plan is the same.
+#[test]
+fn a_replaced_host_records_every_row_anew() {
+    let cells: String = (0..6)
+        .map(|i| format!("        box height=50 width=200 testId=\"c{i}\"\n"))
+        .collect();
+    let plan = contract::compile(&format!(
+        "component App\n  view\n    scroll testId=\"port\" width=200 height=400\n      column\n{cells}"
+    ))
+    .unwrap()
+    .encode();
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan,
+        (),
+        (400., 500.),
+        1.,
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/caltrain")),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let heard = Rc::new(RefCell::new(Heard::default()));
+    p.brush.replace_backend(Box::new(Keeps {
+        heard: heard.clone(),
+        row: 0,
+    }));
+    let _ = p.frame();
+    let first = std::mem::take(&mut *heard.borrow_mut());
+    assert_eq!(first.begun.len(), 6, "each cell a kept row");
+    p.set_updates(Some(Box::new(super::delivery::tests::StagedPlan(
+        plan.into(),
+    ))));
+    assert!(p.activate_update(()).unwrap());
+    let _ = p.frame();
+    let heard = heard.borrow();
+    assert_eq!(heard.begun.len(), 6, "every row is recorded again");
+    assert!(heard.begun.iter().all(|(_, previous)| previous.is_none()));
+    let mut freed = heard.freed.clone();
+    freed.sort_unstable();
+    let mut old: Vec<u32> = first.begun.iter().map(|(id, _)| *id).collect();
+    old.sort_unstable();
+    assert_eq!(freed, old, "the old tree's recordings go");
+}
+
 /// A row is recorded again when a layout changes what a node in it
 /// publishes beside a frame that stayed: a percentage padding whose
 /// containing block narrowed (CSS Box Model 3 §4.1) moves the row's content,
@@ -185,7 +233,7 @@ fn a_new_reader_is_sent_every_row_again() {
 #[test]
 fn a_row_whose_padding_alone_changed_is_recorded_again() {
     for moved in [false, true] {
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &contract::compile(
                 &r##"component App
   state narrow = false
@@ -259,7 +307,7 @@ fn inline_frame_retained_rows_keep_initial_and_scrolled_viewport_origins() {
           box height=400
 "#
         );
-        let (mut p, error) = Presenter::boot_with(
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
             &crate::test_plan(&source),
             (),
             (400., 500.),
@@ -328,7 +376,7 @@ fn fractional_row_scroll_matches_a_fresh_walk_with_clips_and_hinted_text() {
           text "Hinted text" font-size=17 color="#ffffff"
         view width=120 height=200 background-color="#44aa33"
 "##;
-    let (mut p, _) = Presenter::boot_with(
+    let (mut p, _) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (140., 100.),

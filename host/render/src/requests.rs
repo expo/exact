@@ -1,7 +1,30 @@
 //! A settle's requests: handed to the executor, and an app's aborts answered.
 use super::{lift, run, Dispatch, Executor, FailureKind, Held, Outcome, Settled};
+use super::{Ids, Projection, Rendered};
 use exact_runner::{DataSource, Runner, RunnerError};
-use std::time::Instant;
+use exact_web::document::Site;
+use std::time::{Duration, Instant};
+
+/// [`crate::render_with`], with a fixed render timestamp in milliseconds since the
+/// Unix epoch, including every initializer, resource argument and checkpoint,
+/// and the web build's delivery facts available before any initializer runs.
+#[allow(clippy::too_many_arguments)]
+pub fn render_with_at<D: DataSource + 'static, F: Fn() -> D>(
+    plan: impl Into<exact_runner::Program>,
+    data: &F,
+    viewport: exact_runner::Viewport,
+    location: &str,
+    site: &Site,
+    deadline: Duration,
+    ids: Ids,
+    projection: Projection,
+    now_ms: f64,
+    delivery: &exact_runner::delivery::Delivery,
+) -> Result<Rendered, String> {
+    super::render_with_faults_at(
+        plan, data, viewport, location, site, deadline, ids, projection, now_ms, delivery, None,
+    )
+}
 
 pub(super) fn hand_out<D: DataSource>(
     runner: &mut Runner<D>,
@@ -14,6 +37,7 @@ pub(super) fn hand_out<D: DataSource>(
     runner.uploads_started(&started);
     lift(executor, held);
     for r in runner.take_requests() {
+        runner.record_render_request(&r);
         // Device capabilities: the environment has none; nor may a long poll run on other work (LLP 1016.000 D8).
         if r.request.surface.is_some()
             || r.request.storage.is_some()
@@ -22,10 +46,14 @@ pub(super) fn hand_out<D: DataSource>(
             held.refused.insert(r.ticket);
             continue;
         }
-        let dispatch = match r.request.continuation {
-            Some(token) => runner.dispatch_work(token),
-            None if r.request.is_native() => runner.native_work(&r.request),
-            None => Dispatch::Missing,
+        let dispatch = if let Some(fault) = runner.fault_dispatch(&r) {
+            fault
+        } else {
+            match r.request.continuation {
+                Some(token) => runner.dispatch_work(token),
+                None if r.request.is_native() => runner.native_work(&r.request),
+                None => Dispatch::Missing,
+            }
         };
         run(executor, held, r, dispatch);
     }

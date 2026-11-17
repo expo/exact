@@ -145,7 +145,7 @@ fn scrollbar_policy_reaches_both_reader_messages_and_live_updates() {
         let target = id(&p, name);
         let y = if name == "strip" { 140. } else { 240. };
         let words = p.reader_under(200., y, 1.);
-        for entry in words[3..].chunks_exact(11) {
+        for entry in words[3..].as_chunks::<11>().0 {
             assert_eq!(entry[1] & 8, if entry[0] == target as i32 { 8 } else { 0 });
         }
         let words = p.reader_scrollers(&[], 1.).unwrap();
@@ -190,7 +190,9 @@ fn a_scrollers_keyboard_dismissal_is_its_authored_mode_and_unsaid_nothing() {
         let words = p.reader_under(200., 240., 1.);
         let flags = |id: ViewId| {
             words[3..]
-                .chunks_exact(11)
+                .as_chunks::<11>()
+                .0
+                .iter()
                 .find(|e| e[0] == id as i32)
                 .unwrap()[1]
         };

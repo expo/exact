@@ -178,14 +178,15 @@ extension NodeView {
     var stepperObservation: [String: Any]? {
         guard let stepper else { return nil }
         let f = stepper.frame
-        let point = { (x: CGFloat, y: CGFloat) in [Agent.r2(x), Agent.r2(y)] }
-        return ["frame": [f.minX, f.minY, f.width, f.height].map { Agent.r2($0) },
+        let point = { (x: CGFloat, y: CGFloat) in [InspectionValue.r2(x), InspectionValue.r2(y)] }
+        return ["frame": [f.minX, f.minY, f.width, f.height].map { InspectionValue.r2($0) },
                 "decrement": point(f.minX + f.width / 4, f.midY), "increment": point(f.maxX - f.width / 4, f.midY),
                 "value": stepper.value, "min": stepper.minimumValue, "max": stepper.maximumValue, "step": stepper.stepValue,
                 "enabled": stepper.isEnabled, "shown": !stepper.isHidden]
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// A plain press at a point of `node` that a finger would land on its
     /// stepper: the half it is on steps the field, as a touch up inside it
@@ -203,6 +204,7 @@ extension Agent {
         return ["tapped": Int(node.id), "at": at, "stepper": half, "stepped": after != before, "value": after, "delivery": "host-activation", "native": "stepper"]
     }
 }
+#endif
 #elseif os(tvOS)
 import UIKit
 

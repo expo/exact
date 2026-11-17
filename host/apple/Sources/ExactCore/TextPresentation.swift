@@ -22,8 +22,9 @@ package protocol TextPresentation: AnyObject {
     /// an inline background's content area rounds to.
     func attributes(_ run: Run, color: [Double], scale: CGFloat, attributes: inout [NSAttributedString.Key: Any])
     /// The paragraph's whole attributed string, once every run's are set:
-    /// what spans runs (an inline box's extent) is read here.
-    func finish(_ string: NSMutableAttributedString)
+    /// what spans runs (an inline box's extent) is read here, and the runs
+    /// with no text, which have no characters to carry their attributes.
+    func finish(_ string: NSMutableAttributedString, empties: [EmptyRun])
 }
 
 package extension NSAttributedString.Key {
@@ -34,7 +35,7 @@ package extension NSAttributedString.Key {
 }
 
 extension TextPresentation {
-    package func finish(_ string: NSMutableAttributedString) {}
+    package func finish(_ string: NSMutableAttributedString, empties: [EmptyRun]) {}
     package func resolveRuns(_ engine: TextEngine, runs: [Run]) -> [Run] { runs }
     package func editorMarkdown(_ engine: TextEngine, source: Run, atoms: String, faces: String, rtl: Bool, width: CGFloat?) -> [Run]? { nil }
 }

@@ -15,7 +15,8 @@
 //! ([`Runner::take_canvas_lists`]) in order. A reply stamped with a retired
 //! lifetime or generation is discarded whole.
 
-use super::{DataSource, Runner};
+use super::completion::{Identity, Owner};
+use super::{Completion, CompletionReply, CompletionSubscription, DataSource, Runner, RunnerError};
 use exact_canvas::{list, Causes, Context2d, Env, Frame, ImageSlot, Images, Rgba, TextEngine};
 use exact_kernel::ViewId;
 use exact_plan::Value;
@@ -325,6 +326,7 @@ struct Record {
     fresh: bool,
     causes: Causes,
     in_flight: Option<(u32, u64)>,
+    completion: Option<CompletionReply>,
     wants_frame: bool,
     error: Option<String>,
     refused: Option<String>,
@@ -400,9 +402,12 @@ pub trait CanvasEngine {
         now: f64,
         on_screen: &dyn Fn(ViewId) -> bool,
         style: NodeStyle<'_>,
+        issue: &dyn Fn(u64, u32) -> CompletionReply,
         draw: &mut dyn FnMut(&DrawRequest<'_>, &Context2d) -> Drawn,
         log: &mut dyn FnMut(String),
     );
+    /// Authority already bound to this canvas generation by a draw.
+    fn completion(&self, lifetime: u64, generation: u32) -> Option<CompletionReply>;
     /// [`Runner::canvas_reply`], at `now`.
     fn reply(
         &mut self,
@@ -527,6 +532,7 @@ impl CanvasEngine for Canvases {
                             fresh: false,
                             causes: Causes::MOUNT,
                             in_flight: None,
+                            completion: None,
                             wants_frame: false,
                             error: None,
                             refused: None,
@@ -619,6 +625,7 @@ impl CanvasEngine for Canvases {
         if had {
             self.retired.push((r.lifetime, r.generation));
             r.generation += 1;
+            r.completion = None;
             r.applied_seq = 0;
             r.causes = r.causes.with(Causes::SIZE);
         }
@@ -672,12 +679,14 @@ impl CanvasEngine for Canvases {
         std::mem::take(&mut self.retired)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw(
         &mut self,
         ready: bool,
         now: f64,
         on_screen: &dyn Fn(ViewId) -> bool,
         style: NodeStyle<'_>,
+        issue: &dyn Fn(u64, u32) -> CompletionReply,
         draw: &mut dyn FnMut(&DrawRequest<'_>, &Context2d) -> Drawn,
         log: &mut dyn FnMut(String),
     ) {
@@ -736,6 +745,8 @@ impl CanvasEngine for Canvases {
             let seq = r.next_seq;
             r.next_seq += 1;
             r.in_flight = Some((r.generation, seq));
+            r.completion
+                .get_or_insert_with(|| issue(r.lifetime, r.generation));
             let frame = Frame {
                 time: now,
                 mounted: r.mounted,
@@ -784,6 +795,13 @@ impl CanvasEngine for Canvases {
         }
     }
 
+    fn completion(&self, lifetime: u64, generation: u32) -> Option<CompletionReply> {
+        self.records
+            .values()
+            .find(|r| r.lifetime == lifetime && r.generation == generation)
+            .and_then(|r| r.completion.clone())
+    }
+
     fn reply(
         &mut self,
         lifetime: u64,
@@ -825,6 +843,7 @@ impl CanvasEngine for Canvases {
                     r.wants_frame = false;
                     self.retired.push((r.lifetime, r.generation));
                     r.generation += 1;
+                    r.completion = None;
                     r.applied_seq = 0;
                     r.rejected_seq = seq;
                     r.fresh = true;
@@ -1062,6 +1081,7 @@ impl CanvasEngine for Canvases {
             width: b.pixel_width,
             height: b.pixel_height,
             scale: b.scale,
+            encoding: crate::canvas_capture::Encoding::default(),
         })
     }
 
@@ -1265,6 +1285,10 @@ impl<D: DataSource> Runner<D> {
         }
         let ready = self.data.ready();
         let now = self.now_ms;
+        let identity = self
+            .completion_identity
+            .get_or_init(Identity::default)
+            .clone();
         let data = &mut self.data;
         let mut lines = Vec::new();
         let style = |view: ViewId| canvas_node_style(kernel, view, dark);
@@ -1273,6 +1297,16 @@ impl<D: DataSource> Runner<D> {
             now,
             on_screen,
             &style,
+            &|lifetime, generation| {
+                CompletionReply::callback(
+                    identity.clone(),
+                    lifetime,
+                    Owner::Canvas {
+                        lifetime,
+                        generation,
+                    },
+                )
+            },
             &mut |request, ctx| data.draw(request, ctx),
             &mut |line| lines.push(line),
         );
@@ -1280,34 +1314,6 @@ impl<D: DataSource> Runner<D> {
             self.log(line);
         }
         self.complete_canvas_captures();
-    }
-
-    /// A draw's reply (LLP 1056 D4). Applied, in order, only if its stamps
-    /// are the canvas's live lifetime, generation and the draw in flight;
-    /// otherwise discarded whole, with the recorder state it produced.
-    /// A reply that fails the structural check starts a new generation, so
-    /// the recorder and the host cannot diverge. Returns why a reply was
-    /// discarded.
-    pub fn canvas_reply(
-        &mut self,
-        lifetime: u64,
-        generation: u32,
-        seq: u64,
-        reply: DrawReply,
-    ) -> Result<(), String> {
-        let now = self.now_ms;
-        let Some(c) = self.canvases.as_mut() else {
-            return Err(format!("canvas {lifetime} is gone"));
-        };
-        let mut lines = Vec::new();
-        let result = c.reply(lifetime, generation, seq, reply, now, &mut |line| {
-            lines.push(line)
-        });
-        for line in lines {
-            self.log(line);
-        }
-        self.complete_canvas_captures();
-        result
     }
 
     /// The stamped lists since the last take, for the host to apply in order.
@@ -1413,3 +1419,5 @@ fn canvas_node_style(
         rtl,
     )
 }
+
+mod completion;

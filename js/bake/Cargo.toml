@@ -18,6 +18,7 @@ sha2 = "0.10"
 
 [dev-dependencies]
 exact-data = { path = "../../data" }
+exact-executor = { path = "../../host/executor" }
 exact-logic = { path = "../../logic" }
 exact-kernel = { path = "../../kernel" }
 exact-plan = { path = "../../plan" }

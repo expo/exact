@@ -205,7 +205,7 @@ impl Core {
                     if held(job.ticket) {
                         return true;
                     }
-                    if job.work.is_none()
+                    if !reads::opaque(&job.work)
                         && (reads::safe_to_forget(&job.request, job.class)
                             || explicit.contains(&job.ticket))
                     {
@@ -255,8 +255,8 @@ impl Core {
                         run.abort.clone()
                     };
                     aborts.extend(abort.map(|abort| (stream, abort)));
-                    // On the machine, cancelling a safe read (or an app's abort) claims it now.
-                    if self.machine.is_some() && asynch::cancel(run, by_app) {
+                    // A worker's rename must see cancellation before abort callbacks run.
+                    if asynch::cancel(run, by_app) && self.machine.is_some() {
                         cancels.push((run.lane, (run.ticket, run.generation)));
                     }
                 }
@@ -277,7 +277,7 @@ impl Core {
                 }
                 if let Fenced::Held(r, work, _, forgotten, _) = &mut place {
                     if !explicit.contains(&r.ticket)
-                        && (reads::effect_read(r, work.is_some())
+                        && (reads::effect_read(r, reads::opaque(work))
                             || matches!(r.class, RequestClass::Parallel(_)))
                     {
                         *forgotten = true;

@@ -34,7 +34,7 @@ pub enum Request {
     Open(String),
     /// Open an authorization URL with its callback endpoint and state. The reader acknowledges
     /// its wait, then answers on failure or cancellation.
-    Auth(String, String, String),
+    Auth(String, String, String, bool),
     /// Forget the reader's auth wait, by its request id. The browser owns its tab.
     AuthEnd(u32),
     /// Play this haptic.
@@ -99,6 +99,11 @@ pub enum Request {
     /// A file input's picker: the shell answers with a JSON array of its
     /// cache copies' paths, null to cancel, or a refusal reason.
     Files(exact_runner::PickerRequest),
+    /// The running generation's assets are now in this directory (empty:
+    /// the embedded ones), after a signed update activated (LLP 1030.006
+    /// D1): the reader opens its sounds, videos and pages there again, and
+    /// says when it drew the new generation (D5).
+    Assets(String),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -144,6 +149,7 @@ impl Request {
             Request::Auth(..) => 17,
             Request::AuthEnd(_) => 19,
             Request::Files(_) => 18,
+            Request::Assets(_) => 20,
         }
     }
 }
@@ -232,6 +238,7 @@ type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(Vec<u8>, exact_runner::Reply)>
 pub(super) struct State {
     /// Whether a shell takes requests ([`Presenter::serve_requests`]).
     shell: bool,
+    pub(super) agent_turn: Option<AgentTurn>,
     /// The last id given; ids start at 1 and are never reused.
     last: u32,
     queued: Vec<(u32, Request)>,
@@ -259,6 +266,8 @@ pub(super) struct State {
     inbox: Inbox,
     /// Module calls the shell took, by id, until it answers.
     modules: BTreeMap<u32, exact_runner::Reply>,
+    /// Of those, the tells: calls with no `source` or `send`.
+    tells: std::collections::BTreeSet<u32>,
     /// The packages this binary composes, which answer their extensions'
     /// calls on the loop's thread.
     packages: packages::Packages,
@@ -295,11 +304,13 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
         | Request::Copy(text)
         | Request::Module(text)
         | Request::Presence(text)
-        | Request::Sound(text) => string(out, text),
-        Request::Auth(url, callback, state) => {
+        | Request::Sound(text)
+        | Request::Assets(text) => string(out, text),
+        Request::Auth(url, callback, state, logout) => {
             string(out, url);
             string(out, callback);
             string(out, state);
+            out.push(i32::from(*logout));
         }
         Request::AuthEnd(id) => out.push(*id as i32),
         Request::Haptic(haptic) => out.push(*haptic as i32),
@@ -364,6 +375,35 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
     out[at + 2] = (out.len() - at - 3) as i32;
 }
 
+/// The reader's request handoff and what it queued for the owner thread,
+/// serviced only on that thread.
+pub type AgentTurn = Box<dyn FnMut(f64, Option<Vec<i32>>) -> Vec<Handed>>;
+
+/// What the reader queued for the owner thread while an agent operation held
+/// it, in the order it was queued: on the wire, `[id, answer]`, the topic,
+/// `{"picture", "revoked"}` or `{"journal"}`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(untagged)]
+pub enum Handed {
+    /// The answer to request `id`, or its cancellation.
+    Answer(i32, Option<String>),
+    /// A topic an extension announced ([`exact_runner::Native::changed`]).
+    Changed(String),
+    /// A picture an extension changed or revoked
+    /// ([`Presenter::picture_changed`]).
+    Picture {
+        /// The picture's source, such as `photos:<id>`.
+        picture: String,
+        /// Revoked, rather than changed.
+        revoked: bool,
+    },
+    /// A line for the session's journal.
+    Journal {
+        /// The line.
+        journal: String,
+    },
+}
+
 impl<D: DataSource> Presenter<D> {
     pub(super) fn request_files(&mut self, picker: exact_runner::PickerRequest) {
         let view = picker.view;
@@ -386,6 +426,39 @@ impl<D: DataSource> Presenter<D> {
         self.requests
             .waiting
             .insert(request, Waiting::Files(Some(view)));
+    }
+
+    /// Service the reader during an agent operation that holds its owner thread.
+    /// The callback hands requests to the UI thread and takes only what the
+    /// reader queued for this thread ([`Handed`]).
+    pub fn set_agent_turn(&mut self, turn: Option<AgentTurn>) -> Option<AgentTurn> {
+        std::mem::replace(&mut self.requests.agent_turn, turn)
+    }
+
+    pub(super) fn agent_reader_turn(&mut self) {
+        let Some(mut turn) = self.requests.agent_turn.take() else {
+            return;
+        };
+        let handed = turn(self.host.now(), self.take_requests());
+        self.requests.agent_turn = Some(turn);
+        for h in handed {
+            match h {
+                Handed::Answer(id, answer) => {
+                    self.answer_request(id as u32, answer.as_deref());
+                }
+                Handed::Changed(topic) => self.host.runner().native_slot().changed(&topic),
+                Handed::Picture { picture, revoked } => self.picture_changed(&picture, revoked),
+                Handed::Journal { journal } => self.host.runner_mut().log(journal),
+            }
+        }
+    }
+
+    /// Whether the shell has a module call to answer that no request in
+    /// flight stands for: a tell (`preferred`, `foreground`, a view's
+    /// `displayed`), which it answers once it has acted on it. What the
+    /// extension announced while acting comes before that answer.
+    pub(crate) fn telling(&self) -> bool {
+        !self.requests.tells.is_empty()
     }
 
     /// A shell takes this presenter's requests from now on: the commands
@@ -502,12 +575,16 @@ impl<D: DataSource> Presenter<D> {
         for (body, reply) in calls {
             let extension = packages::extension_of(&body).unwrap_or_default();
             if self.requests.packages.serves(&extension) {
+                crate::desktop::surface(self.viewport, self.brush.scale, self.pointer);
                 let now = self.host.now();
                 let inbox = self.requests.inbox.clone();
                 (self.requests.packages).dispatch(&body, reply, now, &inbox, &wake);
             } else if self.requests.shell {
                 let id = self.queue(Request::Module(String::from_utf8_lossy(&body).into_owned()));
                 self.requests.modules.insert(id, reply);
+                if packages::told(&body) {
+                    self.requests.tells.insert(id);
+                }
                 queued = true;
             } else {
                 crate::package::Reply::new(reply).error("NotSupportedError", None);
@@ -571,7 +648,12 @@ impl<D: DataSource> Presenter<D> {
             );
             return;
         }
-        let id = self.request(Request::Auth(session.url, session.callback, session.state));
+        let id = self.request(Request::Auth(
+            session.url,
+            session.callback,
+            session.state,
+            session.logout,
+        ));
         self.requests.waiting.insert(
             id,
             Waiting::Auth {
@@ -794,6 +876,10 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    pub(crate) fn reader_requests_pending(&self) -> bool {
+        !self.requests.queued.is_empty()
+    }
+
     /// The requests queued since the shell last took them, each once, as
     /// words: for each its kind, its id, the count of words that follow,
     /// and those words. `None` when nothing is queued.
@@ -816,6 +902,7 @@ impl<D: DataSource> Presenter<D> {
             eprintln!("exact: answer {id}: {answer:?}");
         }
         if let Some(reply) = self.requests.modules.remove(&id) {
+            self.requests.tells.remove(&id);
             reply.send(match answer {
                 Some(json) => exact_runner::Outcome::Response(exact_runner::Response {
                     status: 200,

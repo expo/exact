@@ -62,7 +62,7 @@ final class BoxLayerIOSTests: XCTestCase {
     func testACalculatedRadiusReadsTheKernelOnEachAxis() throws {
         let radius = try XCTUnwrap(CalculatedLength([
             "calc": .string("min(50%, 10vw)"),
-            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0]
+            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0, 16]
         ]))
         var style: NodeStyle = ["background_color": [36, 104, 172, 255]]
         for corner in ["top_left", "top_right", "bottom_right", "bottom_left"] {
@@ -74,7 +74,7 @@ final class BoxLayerIOSTests: XCTestCase {
         // Cancellation precedes the final conversion to layout precision.
         let steep = BatchValue.calculation(try XCTUnwrap(CalculatedLength([
             "calc": .string("calc(1e9 * (min(0.1%, 1px) - 0.2px) + 10px)"),
-            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0]
+            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0, 16]
         ])))
         XCTAssertEqual(steep.length(basis: 200), 10)
     }
@@ -235,7 +235,7 @@ final class BoxLayerIOSTests: XCTestCase {
     func testAPaddingResolvedAtLayoutReadsTheKernelsContentBox() throws {
         let padding = try XCTUnwrap(CalculatedLength([
             "calc": .string("min(10%, 20px)"),
-            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0]
+            "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0, 16]
         ]))
         let knots: NodeStyle = ["padding_top": .calculation(padding)]
         var style = knots
@@ -246,6 +246,53 @@ final class BoxLayerIOSTests: XCTestCase {
         XCTAssertEqual(["top", "right", "bottom", "left"].map { n.padding($0) }, [20, 0, 0, 6])
         n.applyFieldContent(["rect": NSNull()])
         XCTAssertEqual(n.contentBox(), CGRect(x: 0, y: 0, width: 300, height: 120), "a box sent none is its own content box")
+    }
+
+    /// A layout transition's size reaches a material as well as the painted
+    /// surface: the material is a view the node holds, so without it a glass
+    /// box jumps to its laid-out size while its border animates. It takes the
+    /// laid-out bounds back when the transition ends.
+    func testLayoutResizeSizesTheMaterialAndGivesItBack() throws {
+        for kind in ["glass", "ultra-thin"] {
+            let n = node([:], size: CGSize(width: 300, height: 48))
+            n.props["backgroundMaterial"] = kind
+            n.updateMaterial()
+            n.applyBoxLayer()
+            let material = try XCTUnwrap(n.glassSlot ?? n.materialView, kind)
+            XCTAssertEqual(material.frame, n.bounds, kind)
+            n.layoutResize = CGSize(width: 120, height: -8)
+            n.applySurface()
+            XCTAssertEqual(material.frame, CGRect(x: 0, y: 0, width: 420, height: 40), "\(kind) takes the shown size")
+            n.layoutResize = CGSize(width: 60, height: 0)
+            n.applySurface()
+            XCTAssertEqual(material.frame, CGRect(x: 0, y: 0, width: 360, height: 48), "\(kind) follows each frame")
+            n.layoutResize = .zero
+            n.applySurface()
+            XCTAssertNil(n.surface, kind)
+            XCTAssertEqual(material.frame, n.bounds, "\(kind) gives the size back")
+        }
+    }
+
+    /// A material's corners resolve at the shown size: a `50%` radius on a
+    /// box that is not square is an elliptical mask, which follows the box a
+    /// layout transition resizes and returns to `bounds` when it ends.
+    func testLayoutResizeReshapesTheMaterialsCorners() throws {
+        var style: NodeStyle = [:]
+        for corner in ["top_left", "top_right", "bottom_right", "bottom_left"] { style["border_radius_" + corner] = ["pct": 50] }
+        for kind in ["glass", "ultra-thin"] {
+            let n = node(style, size: CGSize(width: 300, height: 48))
+            n.props["backgroundMaterial"] = kind
+            n.updateMaterial()
+            let material = try XCTUnwrap(n.materialView, kind)
+            let outline = { (material.layer.mask as? CAShapeLayer)?.path?.boundingBoxOfPath }
+            XCTAssertEqual(outline(), n.bounds, kind)
+            n.layoutResize = CGSize(width: 120, height: -8)
+            n.applySurface()
+            XCTAssertEqual(outline(), CGRect(x: 0, y: 0, width: 420, height: 40), "\(kind) is clipped to the shown box")
+            n.layoutResize = .zero
+            n.applySurface()
+            XCTAssertEqual(outline(), n.bounds, "\(kind) is clipped to its bounds again")
+        }
     }
 
     private func node(_ style: NodeStyle, size: CGSize = CGSize(width: 300, height: 120)) -> NodeView {

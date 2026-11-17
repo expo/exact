@@ -3,6 +3,20 @@ routes nav
     add "/add"
 component ListReturn
   state choice = ""
+  state accessoryHidden = true
+  state accessoryDisabled = true
+  state accessoryOn = false
+  state accessoryPresses = 0
+  action accessoryFlip(checked: bool)
+    accessoryOn = checked
+  action accessoryPress
+    accessoryPresses = accessoryPresses + 1
+  state imagePresses = 0
+  action imagePress
+    imagePresses = imagePresses + 1
+  action accessoryUpdate
+    accessoryHidden = !accessoryHidden
+    accessoryDisabled = !accessoryDisabled
   action choose(value: string)
     choice = value
   state added = false
@@ -44,6 +58,82 @@ component ListReturn
                   view
                     text "Nested choice" id="nested-label"
                   input type="radio" name="box-choice" value="nested" checked=(choice == "nested") input=choose aria-label="Ignored nested" aria-labelledby="nested-label" testId="nested-choice"
+              // Every state of a row whose accessory UIKit draws, each beside its
+              // plain twin (GroupedAccessoryMatrixIOSTests). The switches share
+              // one state and the radios one group; `accessory-update` flips
+              // what is hidden and what is disabled.
+              section
+                button press=accessoryUpdate testId="accessory-update"
+                  text "Update accessories"
+                // What `toggle-named`'s switch is labelled by: a subtree that is not shown.
+                view id="hidden-name" display="none"
+                  text "Notifications" display="none"
+                for accessory in ["disclosure", "checkmark", "value", "radio", "radio-labelled", "radio-disabled", "radio-aria-disabled", "radio-hidden", "toggle", "toggle-disabled", "toggle-aria-disabled", "toggle-hidden", "toggle-named", "detail", "detail-disabled", "title-labelled", "hidden-run", "row-hidden", "toggle-unseen"] key=accessory
+                  for markdown in [false, true] key=markdown
+                    button press=accessoryPress aria-hidden=(accessory == "row-hidden" and accessoryHidden) testId=`projection-${accessory}-${markdown}`
+                      if accessory == "title-labelled"
+                        text `A ${markdown ? "**long**" : "long"} network name that fills the available line completely` markup=(markdown ? "markdown" : "") line-clamp=1 min-width=0 aria-label="Elapsed time" testId=`title-${accessory}-${markdown}`
+                      else
+                        text `A ${markdown ? "**long**" : "long"} network name that fills the available line completely` markup=(markdown ? "markdown" : "") line-clamp=1 min-width=0 testId=`title-${accessory}-${markdown}`
+                          if accessory == "hidden-run"
+                            text "unseen" display="none"
+                      text "secret" display="none"
+                      text "unspoken" aria-hidden=true display="none"
+                      if accessory == "value"
+                        text "On" testId=`value-${markdown}`
+                      if accessory == "disclosure" or accessory == "value" or accessory == "hidden-run"
+                        image "symbol:forward-chevron" testId=`control-${accessory}-${markdown}`
+                      if accessory == "checkmark" or accessory == "title-labelled"
+                        image "symbol:checkmark" testId=`control-${accessory}-${markdown}`
+                      if accessory == "toggle" or accessory == "toggle-disabled" or accessory == "toggle-aria-disabled" or accessory == "toggle-hidden" or accessory == "toggle-named" or accessory == "row-hidden"
+                        input type="checkbox" switch checked=accessoryOn change=accessoryFlip disabled=(accessory == "toggle-disabled" and accessoryDisabled) aria-disabled=(accessory == "toggle-aria-disabled" and accessoryDisabled) aria-hidden=(accessory == "toggle-hidden" and accessoryHidden) aria-labelledby=(accessory == "toggle-named" ? "hidden-name" : "") testId=`control-${accessory}-${markdown}`
+                      // Hidden by its author (`visibility`), where UIKit would draw its switch.
+                      if accessory == "toggle-unseen"
+                        input type="checkbox" switch checked=accessoryOn change=accessoryFlip visibility=(accessoryHidden ? "hidden" : "visible") testId=`control-${accessory}-${markdown}`
+                      if accessory == "radio" or accessory == "radio-labelled" or accessory == "radio-disabled" or accessory == "radio-aria-disabled" or accessory == "radio-hidden"
+                        input type="radio" name="projected-choice" value=accessory checked=(choice == accessory) input=choose disabled=(accessory == "radio-disabled" and accessoryDisabled) aria-disabled=(accessory == "radio-aria-disabled" and accessoryDisabled) aria-hidden=(accessory == "radio-hidden" and accessoryHidden) aria-label=(accessory == "radio-labelled" ? "Home network" : "") testId=`control-${accessory}-${markdown}`
+                      if accessory == "detail" or accessory == "detail-disabled"
+                        button press=accessoryPress disabled=(accessory == "detail-disabled" and accessoryDisabled) testId=`control-${accessory}-${markdown}`
+                          image "symbol:info"
+                // A text that is more than a label keeps each part of its row.
+                for markdown in [false, true] key=markdown
+                  row testId=`projection-link-${markdown}`
+                    text `${markdown ? "**Home**" : "Home"}` markup=(markdown ? "markdown" : "") testId=`title-link-${markdown}`
+                    text
+                      text "Help" href="https://example.com/docs" testId=`help-${markdown}`
+                    input type="checkbox" switch checked=accessoryOn change=accessoryFlip testId=`control-link-${markdown}`
+                for markdown in [false, true] key=markdown
+                  row testId=`projection-press-${markdown}`
+                    text `${markdown ? "**Home**" : "Home"}` markup=(markdown ? "markdown" : "") press=accessoryPress testId=`title-press-${markdown}`
+                    input type="checkbox" switch checked=accessoryOn change=accessoryFlip testId=`control-press-${markdown}`
+                // An image with a press of its own, where UIKit would draw its chevron, keeps each part too.
+                for markdown in [false, true] key=markdown
+                  row testId=`projection-image-${markdown}`
+                    text `${markdown ? "**Home**" : "Home"}` markup=(markdown ? "markdown" : "") testId=`title-image-${markdown}`
+                    image "symbol:forward-chevron" press=imagePress aria-label=`More, pressed ${imagePresses}` testId=`control-image-${markdown}`
+                // A heading's row: its cell is the heading, or the switch it holds, a heading too.
+                for accessory in ["heading", "heading-toggle"] key=accessory
+                  for markdown in [false, true] key=markdown
+                    row testId=`projection-${accessory}-${markdown}`
+                      text `${markdown ? "**Home**" : "Home"}` markup=(markdown ? "markdown" : "") role="heading" testId=`title-${accessory}-${markdown}`
+                      if accessory == "heading"
+                        image "symbol:checkmark" testId=`control-${accessory}-${markdown}`
+                      else
+                        input type="checkbox" switch checked=accessoryOn change=accessoryFlip testId=`control-${accessory}-${markdown}`
+                // The row of issue 575: its text alone.
+                for markdown in [false, true] key=markdown
+                  row testId=`projection-none-${markdown}`
+                    text `A ${markdown ? "**bold**" : "bold"} word in a list row` markup=(markdown ? "markdown" : "") testId=`title-none-${markdown}`
+              // Left out of the accessibility tree by an ancestor of its rows.
+              section aria-hidden=accessoryHidden
+                for accessory in ["section-hidden-toggle", "section-hidden-radio"] key=accessory
+                  for markdown in [false, true] key=markdown
+                    button press=accessoryPress testId=`projection-${accessory}-${markdown}`
+                      text `A ${markdown ? "**long**" : "long"} network name that fills the available line completely` markup=(markdown ? "markdown" : "") line-clamp=1 min-width=0 testId=`title-${accessory}-${markdown}`
+                      if accessory == "section-hidden-toggle"
+                        input type="checkbox" switch checked=accessoryOn change=accessoryFlip testId=`control-${accessory}-${markdown}`
+                      if accessory == "section-hidden-radio"
+                        input type="radio" name="projected-choice" value=accessory checked=(choice == accessory) input=choose testId=`control-${accessory}-${markdown}`
               // Keep the added section beyond UIKit's realized cells, even on an iPad.
               section
                 for n in [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40] key=n

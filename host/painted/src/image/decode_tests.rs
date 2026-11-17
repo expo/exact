@@ -88,7 +88,10 @@ fn windows_decodes_photos_and_animation_first_frames_at_the_requested_size() {
         let decoded = decode_rows(Cursor::new(&bytes), &plan, || false)
             .unwrap_or_else(|e| panic!("{path}: {e:?}"));
         assert_eq!((decoded.width(), decoded.height()), size, "{path}");
-        assert!(decoded.data().chunks_exact(4).any(|p| p[3] > 0), "{path}");
+        assert!(
+            decoded.data().as_chunks::<4>().0.iter().any(|p| p[3] > 0),
+            "{path}"
+        );
         let part = plan.part(2, 3, (size.0 - 4, size.1 - 6)).unwrap();
         let cropped = decode_rows(Cursor::new(&bytes), &part, || false).unwrap();
         for row in 0..cropped.height() {
@@ -136,10 +139,12 @@ fn windows_scaling_ignores_hidden_colour_and_keeps_valid_premultiplied_pixels() 
     let pixels = super::jpeg_decode::decode(Cursor::new(&bytes), &plan, || false).unwrap();
     assert!(pixels
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|p| p[3] > 0 && p[3] < 255));
-    for p in pixels.data().chunks_exact(4) {
-        assert_eq!(p, [p[3], 0, 0, p[3]]);
+    for p in pixels.data().as_chunks::<4>().0 {
+        assert_eq!(*p, [p[3], 0, 0, p[3]]);
     }
 }
 
@@ -455,11 +460,15 @@ fn shrinking_averages_premultiplied_area_and_crops_the_same_pixels() {
             assert_eq!(actual.data(), oracle, "{dw}x{dh} interlaced={interlaced}");
             assert!(actual
                 .data()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| p[..3].iter().all(|c| *c <= p[3])));
             if (dw, dh) == (w, h) {
                 let exact: Vec<u8> = raw
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .flat_map(|p| {
                         [
                             (u16::from(p[0]) * u16::from(p[3]) / 255) as u8,
@@ -601,17 +610,17 @@ fn decode_reference(bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     };
     match info.color_type {
         png::ColorType::Rgba => {
-            for px in src.chunks_exact(4) {
+            for px in src.as_chunks::<4>().0 {
                 push(&mut out, px[0], px[1], px[2], px[3]);
             }
         }
         png::ColorType::Rgb => {
-            for px in src.chunks_exact(3) {
+            for px in src.as_chunks::<3>().0 {
                 push(&mut out, px[0], px[1], px[2], 255);
             }
         }
         png::ColorType::GrayscaleAlpha => {
-            for px in src.chunks_exact(2) {
+            for px in src.as_chunks::<2>().0 {
                 push(&mut out, px[0], px[0], px[0], px[1]);
             }
         }

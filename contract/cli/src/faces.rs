@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 /// Tool `i`'s signature: its name, description, consequence, modifiers,
-/// parameters by name and type, and the type of what it returns.
+/// whether its reach sends (MCP's `readOnlyHint`, LLP 1111 D3), parameters
+/// by name and type, and the type of what it returns.
 pub fn tool_signature(plan: &Plan, i: usize) -> Value {
     let t = &plan.tools[i];
     let action = plan.action(t.action);
@@ -26,6 +27,7 @@ pub fn tool_signature(plan: &Plan, i: usize) -> Value {
         "description": plan.str(t.description),
         "consequence": plan.str(t.consequence),
         "modifiers": [t.additive, t.idempotent, t.closed],
+        "sends": exact_runner::tools::sends(plan, i),
         "parameters": params,
         "returns": returns,
     })
@@ -43,13 +45,21 @@ pub fn face_digest(plan: &Plan, i: usize, face: &Value) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Type `ty` as text: `number`, `option<string>`, `Book{id:string}[]`.
+/// Type `ty` as text: `number`, `option<string>`, `Book{id:string}[]`,
+/// `enum<"want","reading">`.
 pub fn type_text(plan: &Plan, ty: TypesId) -> String {
     let row = &plan.types[ty.0 as usize];
     let elem = || row.elem.map_or_else(|| "?".into(), |e| type_text(plan, e));
     match row.kind {
         TypeKind::Number => "number".into(),
         TypeKind::Bool => "bool".into(),
+        TypeKind::String if !row.fields.is_empty() => {
+            let start = row.fields.start as usize;
+            let cases: Vec<String> = (plan.fields[start..start + row.fields.len as usize].iter())
+                .map(|f| Value::from(plan.str(f.name)).to_string())
+                .collect();
+            format!("enum<{}>", cases.join(","))
+        }
         TypeKind::String => "string".into(),
         TypeKind::Unit => "unit".into(),
         TypeKind::Option => format!("option<{}>", elem()),

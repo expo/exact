@@ -202,6 +202,14 @@ export function channelOrigin(manifest, channel) {
   return spec === 'appdrop' ? appdropOrigin(manifest) : spec;
 }
 
+/** The channel the manifest bakes in: `deploy.channel`, else the only key of `deploy.channels`, else `prod` — the same rule as `Manifest::channel` in contract/cli. */
+export function channelOf(manifest) {
+  const deploy = manifest.deploy ?? {};
+  if (deploy.channel != null) return deploy.channel;
+  const names = Object.keys(deploy.channels ?? {});
+  return names.length === 1 ? names[0] : 'prod';
+}
+
 /** A directory served by host/web/serve.mjs --origin: the one writable origin in v1, one publisher per stream at a time. */
 export class DirectoryOrigin {
   constructor(dir) {

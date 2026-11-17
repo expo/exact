@@ -47,17 +47,29 @@ extension CollectionHost {
         guard let node = presenter?.views[id], let scroll = node.scroll, !hidden(node) else { return nil }
         // Layout's box, not the one drawn on the pixel grid (`PixelGridIOS.swift`): the runner lays rows to it.
         let bounds = node.layoutBounds, insets = scroll.adjustedContentInset, band = node.pageBand
+        let records = rowRecords(id)
+        let key = CollectionRecords.Port(bounds: bounds, insets: insets, band: band)
+        let horizontal = entries[id]?.snapshot.horizontal ?? false
+        let at = (animating.contains(id) ? owedTargets[id] ?? animationTargets[id] : nil) ?? scroll.contentOffset
+        if records?.port == key, var facts = records?.facts {
+            let content = records!.content
+            facts.offset = Double(horizontal ? max(-CGFloat(facts.paddingStart), at.x + insets.left - content.minX)
+                : max(-CGFloat(facts.paddingStart), at.y + insets.top - band.top - content.minY))
+            return facts
+        }
         let content = node.contentBox()
+        func keep(_ facts: CollectionFacts) -> CollectionFacts {
+            records?.port = key; records?.facts = facts; records?.content = content
+            return facts
+        }
         let portWidth = max(0, bounds.width - insets.left - insets.right)
         // The physical port includes the page bands. Their insets are
         // padding before and after the rows, not space removed from the port.
         let portHeight = max(0, bounds.height + band.top + band.bottom - (insets.top - band.top) - (insets.bottom - band.bottom))
         guard portWidth.isFinite, portHeight.isFinite else { return nil }
-        let horizontal = entries[id]?.snapshot.horizontal ?? false
         // Animating to a smooth correction: where it is headed is the port
         // the runner plans from (`CollectionHost.animating`).
-        let at = (animating.contains(id) ? owedTargets[id] ?? animationTargets[id] : nil) ?? scroll.contentOffset
-        let measured = entries[id]?.snapshot.rows.first.flatMap { crossSize($0.view, horizontal: horizontal) }.map { CGFloat($0) }
+        let measured = entries[id]?.snapshot.rows.first.flatMap { records?.rows[$0.view]?.cross }.map { CGFloat($0) }
         if horizontal {
             let available = max(0, portHeight - content.minY - (node.layoutBounds.height - content.maxY))
             let cross = measured ?? available
@@ -65,17 +77,17 @@ extension CollectionHost {
             let start = max(0, node.padding("left")), end = max(0, node.padding("right"))
             // From the first item: negative in the padding before it, down
             // to that padding (LLP 1010 §6.9).
-            return CollectionFacts(offset: Double(max(-start, at.x + insets.left - content.minX)),
+            return keep(CollectionFacts(offset: Double(max(-start, at.x + insets.left - content.minX)),
                 portMain: Double(portWidth), portCross: Double(portHeight), cross: Double(cross),
-                measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end))
+                measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end)))
         }
         let available = max(0, portWidth - content.minX - (node.layoutBounds.width - content.maxX))
         let width = measured ?? available
         guard width.isFinite else { return nil }
         let start = max(0, node.padding("top")) + band.top, end = max(0, node.padding("bottom")) + band.bottom
-        return CollectionFacts(offset: Double(max(-start, at.y + insets.top - band.top - content.minY)),
+        return keep(CollectionFacts(offset: Double(max(-start, at.y + insets.top - band.top - content.minY)),
             portMain: Double(portHeight), portCross: Double(portWidth), cross: Double(width),
-            measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end))
+            measurements: [], focus: nil, interaction: nil, paddingStart: Double(start), paddingEnd: Double(end)))
     }
     /// A smooth correction's native targets move with a page band's inset
     /// (LLP 1130 D3), as the offset itself does (`NodeView.setPageBand`), and
@@ -121,16 +133,6 @@ extension CollectionHost {
         else { target.y = CGFloat(top) + content.minY - i.top + node.pageBand.top }
         target = Self.reachable(target, in: scroll)
         if scroll.contentOffset != target { scroll.setContentOffset(target, animated: false) }
-    }
-    /// A row wrapper's size across the list: a vertical list's row width,
-    /// a row list's item height.
-    func crossSize(_ id: UInt32, horizontal: Bool) -> Double? {
-        presenter?.views[id].map { Double(horizontal ? $0.layoutBounds.height : $0.layoutBounds.width) }
-    }
-    /// A row wrapper's size along the list, what the index measures.
-    func size(_ id: UInt32, horizontal: Bool) -> Double? {
-        guard let node = presenter?.views[id], !hidden(node) else { return nil }
-        return Double(horizontal ? node.layoutBounds.width : node.layoutBounds.height)
     }
     /// An anchor's correction (`CollectionCursor.takeShift`): the offset
     /// moves by `delta` from `start` (where the batch began) in the layout
@@ -370,66 +372,31 @@ extension CollectionHost {
         guard scroll.contentOffset != target else { return }
         scroll.setContentOffset(target, animated: false)
     }
-    /// A row's frame in the scroll view, as a range along the list's axis.
-    private func span(_ view: UIView, in scroll: UIScrollView, horizontal: Bool) -> ClosedRange<CGFloat> {
-        let frame = view.superview === scroll ? view.frame : view.convert(view.bounds, to: scroll)
-        return horizontal ? frame.minX...frame.maxX : frame.minY...frame.maxY
-    }
-    /// Whether the mounted rows cover the scrollport: no spacer (unbuilt
-    /// rows) shows. Padding before the first item or after the last counts.
+    /// Coverage runs retain gaps and outlying pins. An offset-only frame
+    /// compares the port with those numbers without visiting row views.
     func covers(_ id: UInt32) -> Bool {
-        guard let entry = entries[id], let node = presenter?.views[id], let scroll = node.scroll,
-              let first = entry.snapshot.rows.first, let last = entry.snapshot.rows.last else { return false }
-        let horizontal = entry.snapshot.horizontal
-        let port = horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
-        func box(_ row: CollectionSnapshot.Row) -> ClosedRange<CGFloat>? {
-            presenter?.views[row.view].map { span($0, in: scroll, horizontal: horizontal) }
-        }
-        guard let head = box(first), let tail = box(last) else { return false }
-        var reached = first.index == 0 ? max(port.lowerBound, head.lowerBound) : port.lowerBound
-        let end = last.index == entry.snapshot.count - 1 ? min(port.upperBound, tail.upperBound) : port.upperBound
-        if reached >= end { return true }
-        for row in entry.snapshot.rows {
-            guard let frame = box(row) else { return false }
-            if frame.upperBound <= reached { continue }
-            if frame.lowerBound > reached + 0.5 { return false }
-            reached = frame.upperBound
-            if reached >= end { return true }
-        }
-        return false
+        guard let entry = entries[id], let scroll = presenter?.views[id]?.scroll,
+              let records = rowRecords(id) else { return false }
+        let port = entry.snapshot.horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
+        return records.coverage?.covers(port) ?? false
     }
-    /// Rows past the mounted ones the port will need once it has travelled
-    /// `ahead` points (negative: toward the start), at their mean size.
+    /// Rows beyond the coverage run at the port's leading edge, at the
+    /// mounted rows' mean size. A pinned row across a gap cannot end travel.
     func rowsToCover(_ id: UInt32, ahead: CGFloat) -> UInt32 {
-        guard ahead != 0, let entry = entries[id], let node = presenter?.views[id], let scroll = node.scroll else { return 0 }
-        let horizontal = entry.snapshot.horizontal
-        let rows = entry.snapshot.rows.compactMap { row in presenter?.views[row.view].map { (index: row.index, frame: span($0, in: scroll, horizontal: horizontal)) } }
-        guard !rows.isEmpty else { return 0 }
-        let mean = rows.map { $0.frame.upperBound - $0.frame.lowerBound }.reduce(0, +) / CGFloat(rows.count)
-        guard mean > 0 else { return 0 }
-        let port = horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
-        // The run of rows that covers the port from its edge: a kept row
-        // (LLP 1010 §6.11) past a gap of unbuilt rows is not in it, so the
-        // list's end row ends the travel only when the run reaches it.
-        var shortfall: CGFloat = 0
+        guard ahead != 0, let entry = entries[id], let scroll = presenter?.views[id]?.scroll,
+              let records = rowRecords(id), records.mean > 0 else { return 0 }
+        let port = entry.snapshot.horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
+        let shortfall: CGFloat
         if ahead > 0 {
-            var reached = port.lowerBound, last: Int?
-            for row in rows where row.frame.lowerBound <= reached + 0.5 && row.frame.upperBound >= reached {
-                reached = row.frame.upperBound
-                last = row.index
-            }
-            if last == entry.snapshot.count - 1 { return 0 }
-            shortfall = port.upperBound + ahead - reached
+            let run = records.reach(from: port.lowerBound, forward: true)
+            if run.index == entry.snapshot.count - 1 { return 0 }
+            shortfall = port.upperBound + ahead - run.edge
         } else {
-            var reached = port.upperBound, first: Int?
-            for row in rows.reversed() where row.frame.upperBound >= reached - 0.5 && row.frame.lowerBound <= reached {
-                reached = row.frame.lowerBound
-                first = row.index
-            }
-            if first == 0 { return 0 }
-            shortfall = reached - (port.lowerBound + ahead)
+            let run = records.reach(from: port.upperBound, forward: false)
+            if run.index == 0 { return 0 }
+            shortfall = run.edge - (port.lowerBound + ahead)
         }
-        return shortfall > 0 ? UInt32(min(64, (shortfall / mean).rounded(.up))) : 0
+        return shortfall > 0 ? UInt32(min(64, (shortfall / records.mean).rounded(.up))) : 0
     }
     /// Pins the row under a finger in `port`, the viewport or a presentation's
     /// mount (LLP 1123 D2), so a list's window keeps it for the contact.

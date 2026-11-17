@@ -260,6 +260,16 @@
           "name": "gate",
           "codec": "range:args",
           "_comment": "@ref LLP 1161.002 D1: empty for a resource asked whenever its arguments are ready; for `resource r = source(args) when cond as shape S`, one entry, `cond`, read as a derive is. While it is false the resource is idle: nothing is asked, a request in flight is let go (an upload's goes on), `pending` and `failed` are false, the value it showed stays and is not current. When it turns true the resource is asked, forced."
+        },
+        {
+          "name": "owner",
+          "codec": "opt:arms",
+          "_comment": "@ref LLP 1035.005.004 D1, D2: a child's resource, owned by the arm whose instance holds its state: a router's row, an `if` or `match` arm, a tab panel. Each instance has its own request, value, `pending`, ticket and refresh, made with the instance and let go with it. Its gate and arguments are read in the instance's frames when the render makes or visits it, and its asks go out after that render; an answer lands in a later commit. None: the root's, or a `late` resource."
+        },
+        {
+          "name": "late",
+          "codec": "bool",
+          "_comment": "@ref LLP 1035.005.004 D2: the resource of a child used outside every region, whose one instance lives as long as the root's: settled with the root's resources, from the first settlement after its `late` slots are initialized at boot. Always false when owner is set."
         }
       ]
     },
@@ -292,6 +302,16 @@
           "name": "mode",
           "codec": "enum:MutationMode",
           "_comment": "How its sends overlap. `newest`: a send forgets the one in flight (LLP 1016 §4). `queue` (@ref LLP 1092 D1, D2): one send in flight; a later send waits, with its send-time arguments, until the one before it is answered or let go and its `then` has run. `parallel` (@ref LLP 1161.000 D2-D4): every send is asked when it is made, each its own target at the data seam, and its reply lands whatever else is out."
+        },
+        {
+          "name": "owner",
+          "codec": "opt:arms",
+          "_comment": "@ref LLP 1035.005.004 D6: a child's mutation, owned by the arm whose instance holds its slot (`slot`'s owner is the same arm). Each instance sends on its own: its own `pending`, failure, ticket, queue, written-through overlay and `then`, which runs in the instance's frames. Destroying the instance forgets its sends: a send already made stays made, its reply changes nothing, its `then` does not run, and its waiting sends are dropped. None: the root's, or a child's used outside every region, whose slot is `late`."
+        },
+        {
+          "name": "then_args",
+          "codec": "range:args",
+          "_comment": "@ref LLP 1035.005.004 D6: the arguments `then` takes, read in the frames of the instance whose send answered (the root's for a mutation without `owner`): a child's lifted action takes its captured props, as a handler passes them. Empty for the root's own mutation."
         }
       ]
     },
@@ -1540,10 +1560,10 @@
     },
     {
       "name": "formatTime",
-      "params": ["number", "number", "\"short\""],
+      "params": ["number", "number", "\"short\" | \"2-digit\""],
       "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D1/D7: `h:mm AM` of (epochMs, utcOffset minutes east), as Intl.DateTimeFormat(\"en-US\", { timeZone: <the offset>, timeStyle: \"short\" }) prints it. Core: every app links it, as it linked formatClockTime. A parameter spelled as string literals (`\"a\" | \"b\"`) is a string the compiler requires written as one of them. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
+      "_comment": "@ref LLP 1054.000.003 D1/D7: `h:mm AM` of (epochMs, utcOffset minutes east), as Intl.DateTimeFormat(\"en-US\", { timeZone: <the offset>, timeStyle: \"short\" }) prints it; `2-digit` (expo/exact#491) is { hour: \"2-digit\", minute: \"2-digit\" }, `hh:mm AM`, which a locale writes with a pattern and day periods of its own. Core: every app links it, as it linked formatClockTime. A parameter spelled as string literals (`\"a\" | \"b\"`) is a string the compiler requires written as one of them. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "length",
@@ -1731,18 +1751,18 @@
     },
     {
       "name": "formatDate",
-      "params": ["number | string", "number", "\"medium\" | \"month-year\" | \"iso\""],
+      "params": ["number | string", "number", "\"medium\" | \"month-year\" | \"month-day\" | \"iso\""],
       "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). A string input is a strict ASCII `YYYY-MM-DD` Gregorian date in years 0001–9999, formatted without shifting its calendar day. The offset must still be finite and within ±1080 minutes; invalid keys or offsets print `\"\"`. The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
+      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }, `month-day` (expo/exact#491) { month: \"short\", day: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). A string input is a strict ASCII `YYYY-MM-DD` Gregorian date in years 0001–9999, formatted without shifting its calendar day. The offset must still be finite and within ±1080 minutes; invalid keys or offsets print `\"\"`. The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "formatNumber",
-      "params": ["number", "\"compact\" | \"decimal\" | \"currency\" | \"percent\"", "\"USD\" | \"EUR\" | \"GBP\" | \"JPY\" | \"CNY\" | \"INR\" | \"CAD\" | \"AUD\" | \"NZD\" | \"HKD\" | \"SGD\" | \"CHF\" | \"SEK\" | \"NOK\" | \"DKK\" | \"PLN\" | \"MXN\" | \"BRL\" | \"KRW\" | \"ZAR\" | \"TWD\" | \"ILS\" | \"PHP\" | \"VND\""],
+      "params": ["number", "\"compact\" | \"decimal\" | \"currency\" | \"percent\"", "\"USD\" | \"EUR\" | \"GBP\" | \"JPY\" | \"CNY\" | \"INR\" | \"CAD\" | \"AUD\" | \"NZD\" | \"HKD\" | \"SGD\" | \"CHF\" | \"SEK\" | \"NOK\" | \"DKK\" | \"PLN\" | \"MXN\" | \"BRL\" | \"KRW\" | \"ZAR\" | \"TWD\" | \"ILS\" | \"PHP\" | \"VND\" | 0..=100"],
       "optional": ["\"\""],
       "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D3/D7/D8: `compact` is Intl.NumberFormat(\"en-US\", { notation: \"compact\", roundingMode: \"trunc\", signDisplay: \"negative\" }). @ref LLP 1116 D8: `decimal` is Intl.NumberFormat(\"en-US\") (grouped, at most three fraction digits), `currency` with an ISO 4217 code { style: \"currency\", currency } (`$1,481.47`, `-$5.00`, the code's own fraction digits), `percent` { style: \"percent\" } (`26%`): each rounds the value's shortest decimal digits half away from zero, as ICU does, and signs a negative zero. The code is written only with `currency`, and the compiler fills `\"\"` for a call that omits it. Every style prints `\"\"` for a non-finite value (D7). The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
+      "_comment": "@ref LLP 1054.000.003 D3/D7/D8: `compact` is Intl.NumberFormat(\"en-US\", { notation: \"compact\", roundingMode: \"trunc\", signDisplay: \"negative\" }). @ref LLP 1116 D8: `decimal` is Intl.NumberFormat(\"en-US\") (grouped, at most three fraction digits), `currency` with an ISO 4217 code { style: \"currency\", currency } (`$1,481.47`, `-$5.00`, the code's own fraction digits), `percent` { style: \"percent\" } (`26%`); `decimal` with a whole-number literal from 0 to 100 in the code's place (expo/exact#491) has exactly that many fraction digits, { minimumFractionDigits, maximumFractionDigits } both that number (`1.0`, `1,0` in de): each rounds the value's shortest decimal digits half away from zero, as ICU does, and signs a negative zero. The code is written only with `currency`, a digit count only with `decimal`, and the compiler fills `\"\"` for a call that omits it. Every style prints `\"\"` for a non-finite value (D7). The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "frame",

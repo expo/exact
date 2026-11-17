@@ -164,14 +164,27 @@ final class CanvasInputHost {
         let moved = [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type)
         let (dx, dy) = !moved ? (0, 0) : locked ? (event.deltaX, event.deltaY) : last.map { (point.x - $0.x, point.y - $0.y) } ?? (0, 0)
         last = point
-        view.canvases?.input(view, ["t": "pointer", "phase": phase, "id": 1, "x": point.x, "y": point.y, "dx": dx, "dy": dy, "kind": "mouse", "buttons": buttons], timestamp: event.timestamp)
+        let fields: [String: Any] = ["t": "pointer", "phase": phase, "id": 1, "x": point.x, "y": point.y, "dx": dx, "dy": dy, "kind": "mouse", "buttons": buttons]
+        view.canvases?.input(view, fields.merging(Self.held(event.modifierFlags)) { $1 }, timestamp: event.timestamp)
         return true
     }
+    /// A wheel, or a trackpad pinch as Chrome and Firefox deliver one: a wheel
+    /// with `ctrlKey` set whose `dy` is the magnification's, negated, in
+    /// hundredths (as `wheelLine` writes a node's `wheel`).
     func wheel(_ event: NSEvent) -> Bool {
         guard let view, fallsThrough(event, view), !view.disabled, !view.inert else { return false }
         let point = view.local(windowPoint(event, view))
-        view.canvases?.input(view, ["t": "wheel", "dx": -event.scrollingDeltaX, "dy": -event.scrollingDeltaY, "x": point.x, "y": point.y], timestamp: event.timestamp)
+        let pinch = event.type == .magnify
+        var held = event.modifierFlags
+        if pinch { held.insert(.control) }
+        let (dx, dy): (CGFloat, CGFloat) = pinch ? (0, -event.magnification * 100) : (-event.scrollingDeltaX, -event.scrollingDeltaY)
+        let fields: [String: Any] = ["t": "wheel", "dx": dx, "dy": dy, "x": point.x, "y": point.y]
+        view.canvases?.input(view, fields.merging(Self.held(held)) { $1 }, timestamp: event.timestamp)
         return true
+    }
+    /// The web's `shiftKey`, `ctrlKey`, `altKey` and `metaKey` (Command) of the flags held.
+    static func held(_ flags: NSEvent.ModifierFlags) -> [String: Any] {
+        ["shiftKey": flags.contains(.shift), "ctrlKey": flags.contains(.control), "altKey": flags.contains(.option), "metaKey": flags.contains(.command)]
     }
 }
 

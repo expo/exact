@@ -5,6 +5,30 @@
 use std::path::Path;
 use std::process::Command;
 
+/// `swift -e <source>`, with a TMPDIR of its own that goes when it exits:
+/// `swift` leaves a `TemporaryDirectory.*` in TMPDIR each time it hands a
+/// run to the frontend.
+fn swift_e(source: &str) -> std::process::Output {
+    struct Dir(std::path::PathBuf);
+    impl Drop for Dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tmp = Dir(std::env::temp_dir().join(format!(
+        "exact-swift-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )));
+    std::fs::create_dir_all(&tmp.0).unwrap();
+    Command::new("swift")
+        .args(["-swift-version", "5", "-e", source])
+        .env("TMPDIR", &tmp.0)
+        .output()
+        .unwrap()
+}
+
 fn bun(script: &str) -> String {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
@@ -157,15 +181,9 @@ precondition(admits(URL(string: scheme + "://open?token=" + token + "&url=https:
 precondition(!ExactDevelopmentLink.claims(link("https://x.test/", token)) && !ExactDevelopmentLink.open(link("https://x.test/", token)))
 "#
     .replace("PRODUCED", &format!("##\"{produced}\"##"));
-    let result = Command::new("swift")
-        .args([
-            "-swift-version",
-            "5",
-            "-e",
-            &format!("import Foundation\npublic enum ExactDevelopmentLink{source}\n{checks}"),
-        ])
-        .output()
-        .unwrap();
+    let result = swift_e(&format!(
+        "import Foundation\npublic enum ExactDevelopmentLink{source}\n{checks}"
+    ));
     assert!(
         result.status.success(),
         "{}",
@@ -254,10 +272,7 @@ try write("rust/wasm/app.module.wasm", "wasm"); try write("app.module.json", "no
 precondition(!candidate.apply(to: app) && app.generations.count == both)
 app.mode = "off"; precondition(candidate.apply(to: app) && app.generations.last!.module.bytecode == Data("hbc".utf8))
 "#;
-    let result = Command::new("swift")
-        .args(["-swift-version", "5", "-e", &format!("{source}\n{checks}")])
-        .output()
-        .unwrap();
+    let result = swift_e(&format!("{source}\n{checks}"));
     assert!(
         result.status.success(),
         "{}",

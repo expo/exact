@@ -286,13 +286,13 @@ assert.equal(readDevGeneration(cache,prefix+'app.js'),null);
 assert.deepEqual(readDevGeneration(cache,prefix+'app.hbc')?.body,files.get('app.hbc'));
 assert.equal(readDevGeneration(cache,prefix+'private.js'),null);
 "#;
-    let result =
-        std::process::Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
-            .args(["--input-type=module", "-e", probe])
-            .arg(out)
-            .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-            .output()
-            .unwrap();
+    // Match the tooling's Bun: its relaunch cannot recover eval source from process.argv.
+    let result = exact_bake::bun()
+        .args(["--input-type=module", "-e", probe])
+        .arg(out)
+        .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .output()
+        .unwrap();
     assert!(
         result.status.success(),
         "{}",

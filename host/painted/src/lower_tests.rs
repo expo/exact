@@ -438,42 +438,404 @@ fn a_looks_color_leaves_the_colour_track_to_the_reader() {
 /// backdrop to blend with, so the engine samples its animation. The same
 /// element unblended is the reader's.
 #[test]
-fn a_blended_svg_element_is_sampled_not_the_readers() {
-    for (blend, played) in [("normal", true), ("multiply", false)] {
-        let source = format!(
-            r##"component App
+fn a_blended_svg_backdrop_is_sampled_not_the_readers() {
+    for (blend, clip, played) in [
+        ("normal", "none", true),
+        ("multiply", "none", false),
+        ("normal", "path('M0 0H50V100H0Z')", false),
+    ] {
+        for backdrop in [false, true] {
+            let foreground_blend = if backdrop { "normal" } else { blend };
+            let sibling_blend = if backdrop { blend } else { "normal" };
+            let source = format!(
+                r##"component App
   state o = 1
   action go
     o = 0.2
   view
     box width=400 height=500
       svg width=100 height=100
-        circle testId="target" cx=50 cy=50 r=40 fill="#3366cc" opacity=o transition="opacity 1s linear" mix-blend-mode="{blend}"
+        circle testId="target" cx=50 cy=50 r=40 fill="#3366cc" opacity=o transition="opacity 1s linear" mix-blend-mode="{foreground_blend}" clip-path="{clip}"
+        circle cx=70 cy=50 r=20 fill="#cc6633" mix-blend-mode="{sibling_blend}"
       button testId="go" press=go
         text "Go"
 "##
-        );
+            );
+            let (mut h, error) = Host::boot(
+                &contract::compile(&source).unwrap().encode(),
+                (),
+                Box::new(MonospaceMeasurer::default()),
+                400.,
+                500.,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            h.lowering = true;
+            let target = h.kernel().find_by_test_id("target")[0];
+            let go = h.kernel().find_by_test_id("go")[0];
+            let go = h.kernel().node_by_key(go).unwrap().id;
+            assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
+            let node = motion_node(target);
+            assert_eq!(
+                h.engine.is_played(node, Property::Opacity),
+                played,
+                "{blend}"
+            );
+            let mask = if played { LOWER_OPACITY } else { 0 };
+            assert_eq!(h.lowered_mask(target), mask, "{blend}");
+        }
+    }
+}
+
+#[test]
+fn a_new_blend_reclaims_a_running_backdrop_without_restarting_it() {
+    for reference in 0..3 {
+        for animation in [false, true] {
+            let motion = if animation {
+                "animation=motion"
+            } else {
+                "opacity=o transition=\"opacity 1s linear\""
+            };
+            let definition = if reference == 1 {
+                "      svg width=0 height=0\n        defs\n          rect id=\"ink\" width=50 height=50 fill=\"#fd2f7c\" mix-blend-mode=blend"
+            } else {
+                ""
+            };
+            let foreground = if reference == 1 {
+                "use href=\"#ink\""
+            } else {
+                "rect width=50 height=50 fill=\"#fd2f7c\" mix-blend-mode=blend"
+            };
+            let mut source = format!(
+                r##"keyframes fade
+  from opacity=1
+  to opacity=0.2
+component App
+  state o = 1
+  state motion = "none"
+  state blend = "normal"
+  action go
+    o = 0.2
+    motion = "fade 1s linear infinite"
+  action overprint
+    blend = "multiply"
+  view
+    column
+{definition}
+      svg width=100 height=100
+        rect testId="target" width=100 height=100 fill="#34f1ec" {motion}
+        {foreground}
+      button testId="go" press=go
+        text "Go"
+      button testId="blend" press=overprint
+        text "Blend"
+"##
+            );
+            if reference == 2 {
+                source = source.replace("rect testId=\"target\"", "rect id=\"ink\" testId=\"target\"")
+                    .replace("        rect width=50 height=50 fill=\"#fd2f7c\" mix-blend-mode=blend",
+                        "      svg width=100 height=100\n        rect width=100 height=100 fill=\"#34f1ec\"\n        use href=\"#ink\" mix-blend-mode=blend");
+            }
+            let (mut h, error) = Host::boot(
+                &contract::compile(&source).unwrap().encode(),
+                (),
+                Box::new(MonospaceMeasurer::default()),
+                200.,
+                200.,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            h.lowering = true;
+            h.engine.set_lowered_properties(&LOWERED);
+            let target = h.kernel().find_by_test_id("target")[0];
+            let id = h.kernel().node_by_key(target).unwrap().id;
+            let node = motion_node(target);
+            let go = h
+                .kernel()
+                .node_by_key(h.kernel().find_by_test_id("go")[0])
+                .unwrap()
+                .id;
+            assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
+            assert_eq!(h.lowered_mask(target), LOWER_OPACITY);
+            h.tick(250.);
+            let epoch = h.lowered_epoch;
+            let blend = h
+                .kernel()
+                .node_by_key(h.kernel().find_by_test_id("blend")[0])
+                .unwrap()
+                .id;
+            assert!(h.dispatch_at(blend, Event::Press, 250.).is_none());
+            assert_eq!(h.lowered_mask(target), 0);
+            assert!(!h.engine.is_played(node, Property::Opacity));
+            assert!(h.lowered_changed[&node] > epoch);
+            assert!((h.presented(id).opacity - 0.8).abs() < 0.01);
+            h.tick(500.);
+            assert!((h.presented(id).opacity - 0.6).abs() < 0.01);
+            if animation {
+                assert!(h.engine.node_sampled(node));
+                h.tick(1250.);
+                assert!((h.presented(id).opacity - 0.8).abs() < 0.01);
+            } else {
+                h.tick(1000.);
+                assert!((h.presented(id).opacity - 0.2).abs() < 0.01);
+            }
+        }
+    }
+}
+
+#[test]
+fn axis_keyframes_use_the_spatial_painter_under_the_native_clock() {
+    for (frame, row, spatial) in [
+        ("-90deg x", "0", true),
+        ("-90", "0deg x", true),
+        ("-90deg z", "0", false),
+    ] {
+        let source = format!("keyframes fold\n  to rotate=\"{frame}\"\ncomponent App\n  view\n    view testId=\"fold\" width=120 height=60 rotate=\"{row}\" animation=\"fold 1s linear both\"\n");
         let (mut h, error) = Host::boot(
             &contract::compile(&source).unwrap().encode(),
             (),
             Box::new(MonospaceMeasurer::default()),
-            400.,
-            500.,
+            300.,
+            300.,
         )
         .unwrap();
         assert!(error.is_none(), "{error:?}");
         h.lowering = true;
-        let target = h.kernel().find_by_test_id("target")[0];
-        let go = h.kernel().find_by_test_id("go")[0];
-        let go = h.kernel().node_by_key(go).unwrap().id;
-        assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
-        let node = motion_node(target);
+        let key = h.kernel().find_by_test_id("fold")[0];
+        let id = h.kernel().node_by_key(key).unwrap().id;
+        h.engine.set_lowered_properties(&LOWERED);
+        let mut sync = MotionSync::default();
+        h.kernel().motion_sync_node(key, &mut sync);
+        h.lower_eligibility(&sync);
         assert_eq!(
-            h.engine.is_played(node, Property::Opacity),
-            played,
-            "{blend}"
+            h.lowered_mask(key),
+            if spatial { 0 } else { LOWER_TRANSFORM }
         );
-        let mask = if played { LOWER_OPACITY } else { 0 };
-        assert_eq!(h.lowered_mask(target), mask, "{blend}");
+        if !spatial {
+            continue;
+        }
+        assert!(h.advance(500.).is_none());
+        let shown = h.presented(id);
+        assert_eq!(shown.rotate, -45.0);
+        assert_eq!(shown.rotate_axis.0, [1.0, 0.0, 0.0]);
+        assert_eq!(
+            h.lowered_mask(key),
+            0,
+            "a 2D reader track cannot draw this fold"
+        );
+        assert!(h.advance(1000.).is_none());
+        assert_eq!(h.presented(id).rotate, -90.0);
     }
+}
+
+#[test]
+fn a_transition_from_a_spatial_axis_stays_with_the_painter() {
+    let source = "component App\n  state on = false\n  action go\n    on = true\n  view\n    column\n      button \"Go\" testId=\"go\" press=go\n      view testId=\"box\" width=120 height=60 rotate=(on ? \"45deg z\" : \"90deg x\") transition=\"rotate 1s linear\"\n";
+    let (mut h, error) = Host::boot(
+        &contract::compile(source).unwrap().encode(),
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        300.,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    h.lowering = true;
+    let key = h.kernel().find_by_test_id("box")[0];
+    let go = h
+        .kernel()
+        .node_by_key(h.kernel().find_by_test_id("go")[0])
+        .unwrap()
+        .id;
+    h.dispatch_at(go, Event::Press, 0.);
+    h.advance(500.);
+    assert!(!h.engine.is_played(motion_node(key), Property::Rotate));
+    assert_eq!(h.lowered_mask(key), 0);
+    let v = h.engine.value(motion_node(key), Property::Rotate).unwrap();
+    let expected = exact_motion::rotation::interpolate(
+        exact_motion::rotation::parse("x 90deg").unwrap(),
+        exact_motion::rotation::parse("z 45deg").unwrap(),
+        0.5,
+    );
+    assert!((v.x - expected.x).abs() < 1e-8, "{v:?}");
+}
+
+#[test]
+fn fade_keyframes_stay_sampled_during_a_transition_back_to_z() {
+    let source = r#"keyframes fade
+  from opacity=1
+  to opacity=0
+component App
+  state on = false
+  action go
+    on = true
+  view
+    column
+      button "Go" testId="go" press=go
+      view testId="box" width=120 height=60 rotate=(on ? "z 0deg" : "x 60deg") transition="rotate 1s linear" animation="fade 1s linear both"
+"#;
+    let (mut h, error) = Host::boot(
+        &contract::compile(source).unwrap().encode(),
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        300.,
+        300.,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    h.lowering = true;
+    h.engine.set_lowered_properties(&LOWERED);
+    let key = h.kernel().find_by_test_id("box")[0];
+    let id = h.kernel().node_by_key(key).unwrap().id;
+    let mut sync = MotionSync::default();
+    h.kernel().motion_sync_node(key, &mut sync);
+    h.lower_eligibility(&sync);
+    let go = h
+        .kernel()
+        .node_by_key(h.kernel().find_by_test_id("go")[0])
+        .unwrap()
+        .id;
+    assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
+    assert_eq!(h.lowered_mask(key), 0);
+    assert!(h.advance(500.).is_none());
+    assert_eq!(h.presented(id).opacity, 0.5);
+    assert_eq!(h.lowered_mask(key), 0);
+}
+
+#[test]
+fn negative_z_literal_and_bound_rows_present_the_same_inherited_rotation() {
+    for row in ["\"0 0 -1 0deg\"", "rotation"] {
+        let source = format!("keyframes spin\n  to rotate=60\ncomponent App\n  state rotation = \"0 0 -1 0deg\"\n  view\n    view testId=\"box\" rotate={row} animation=\"spin 1s linear both\"\n");
+        let (mut h, error) = Host::boot(
+            &contract::compile(&source).unwrap().encode(),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            300.,
+            300.,
+        )
+        .unwrap();
+        assert!(error.is_none());
+        let key = h.kernel().find_by_test_id("box")[0];
+        let id = h.kernel().node_by_key(key).unwrap().id;
+        assert!(h.advance(500.).is_none());
+        assert_eq!(h.presented(id).rotate, -30.);
+        assert!(h.advance(1000.).is_none());
+        assert_eq!(h.presented(id).rotate, -60.);
+    }
+}
+
+#[test]
+fn computed_svg_animation_names_are_refused_after_resolution() {
+    for (row, frame) in [
+        ("0deg", "-90deg x"),
+        ("0deg x", "60"),
+        ("10deg x", "60deg z"),
+    ] {
+        let source = format!("keyframes fold\n  to rotate=\"{frame}\"\ncomponent App\n  state animation = \"fold 1s linear both\"\n  view\n    svg width=100 height=100\n      rect width=50 height=50 rotate=\"{row}\" animation=animation\n");
+        let result = Host::boot(
+            &contract::compile(&source).unwrap().encode(),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            300.,
+            300.,
+        );
+        assert!(matches!(result, Err(ref e) if format!("{e:?}").contains("SpatialSvgAnimation")));
+    }
+}
+
+#[test]
+fn spatial_folds_keep_fades_sampled_and_reclaim_reader_tracks() {
+    use crate::presenter::{PainterChoice, Presenter};
+    for (from, to, fold_at) in [("x 60deg", "z 0deg", 0.), ("z 0deg", "x 60deg", 250.)] {
+        let source = format!(
+            r##"component App
+  state folded = false
+  state faded = false
+  action fold
+    folded = true
+  action fade
+    faded = true
+  view
+    box width=200 height=200 background-color="#ffffff"
+      box testId="box" margin=50 width=100 height=100 background-color="#ff0000" rotate=(folded ? "{to}" : "{from}") opacity=(faded ? 0 : 1) transition="rotate 1s linear, opacity 1s linear"
+      button "Fold" testId="fold" press=fold
+      button "Fade" testId="fade" press=fade
+"##
+        );
+        let (mut p, error) = Presenter::boot_with(
+            &contract::compile(&source).unwrap().encode(),
+            (),
+            (200., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().lowering = true;
+        let key = p.host().kernel().find_by_test_id("box")[0];
+        let id = p.host().kernel().node_by_key(key).unwrap().id;
+        let button = |p: &Presenter<()>, name| {
+            p.host()
+                .kernel()
+                .node_by_key(p.host().kernel().find_by_test_id(name)[0])
+                .unwrap()
+                .id
+        };
+        p.frame();
+        p.tap(button(&p, "fade")).unwrap();
+        if fold_at > 0. {
+            assert!(p
+                .host()
+                .engine
+                .is_played(motion_node(key), Property::Opacity));
+            p.tick(fold_at);
+        }
+        p.tap(button(&p, "fold")).unwrap();
+        assert!(!p
+            .host()
+            .engine
+            .is_played(motion_node(key), Property::Opacity));
+        assert_eq!(p.host().lowered_mask(key), 0);
+        p.tick(500.);
+        assert!((p.host().presented(id).opacity - 0.5).abs() < 1e-5);
+        assert!(p.host().presented(id).rotate_axis.is_3d());
+        let c = p.frame().pixel(100, 100).unwrap().demultiply();
+        assert_eq!(c.red(), 255);
+        assert!(
+            (i16::from(c.green()) - 128).abs() <= 1,
+            "{from} -> {to}: {c:?}"
+        );
+        assert_eq!(c.green(), c.blue());
+    }
+}
+
+/// A boot's play waits for the first present, which [`Host::layer_tracks`]
+/// sends the reader as a held track; the present starts it and owes the
+/// reader its running track (LLP 1003.001 D9).
+#[test]
+fn a_boots_play_waits_for_the_present_and_its_start_owes_a_picture() {
+    let previous = exact_runner::page::set_awaits_present(true);
+    let (mut h, error) = Host::boot(
+        &contract::compile(
+            "keyframes enter\n  from opacity=0\n  to opacity=1\ncomponent App\n  view\n    box testId=\"logo\" width=10 height=10 animation=\"enter 400ms linear both\"\n",
+        )
+        .unwrap()
+        .encode(),
+        (),
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        500.,
+    )
+    .unwrap();
+    exact_runner::page::set_awaits_present(previous);
+    assert!(error.is_none(), "{error:?}");
+    let node = motion_node(h.kernel().find_by_test_id("logo")[0]);
+    let play = |h: &Host<()>| h.engine.animation_plays(node)[0].clone();
+    assert_eq!(play(&h).pending, Some(0.0), "waits for the present");
+    let epoch = h.lowered_epoch;
+    let (paint, _) = h.picture_presented(h.engine.sample_time(), 300.);
+    assert!(paint, "the started play owes the reader its track");
+    assert!(h.lowered_changed[&node] > epoch);
+    assert_eq!((play(&h).pending, play(&h).start), (None, 0.3));
 }

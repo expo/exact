@@ -1,6 +1,9 @@
 //! Optional Rust data executors: embedded first frame, replacement after first pixel.
 //! @ref LLP 1029.000 — independently built data modules, one encoded seam on every host.
 
+/// The placement proxy a Rust-only app's generated entry wraps its source in (`rust.placement`).
+#[cfg(not(target_arch = "wasm32"))]
+pub use exact_data;
 use exact_logic_abi as abi;
 #[doc(hidden)]
 pub use exact_plan;
@@ -60,6 +63,9 @@ type Preloader = fn(&[u8]) -> Result<bool, String>;
 pub struct Swappable<D> {
     embedded: Option<D>,
     app_id: String,
+    /// Under a variant, the base app's id (LLP 1030.008 D2): a module's own
+    /// crate names it, and it is admitted where `app_id` is.
+    base: Option<String>,
     grants: String,
     preloads: Vec<exact_runner::request::Preload>,
     launch: Option<exact_runner::request::Launch>,
@@ -85,6 +91,7 @@ impl<D: DataSource> Swappable<D> {
     fn configured(embedded: D, mode: &'static str, loader: Option<Loader>) -> Self {
         Self {
             app_id: embedded.app_id().into(),
+            base: None,
             grants: embedded.grants().into(),
             preloads: embedded.preloads().to_vec(),
             launch: embedded.launch(),
@@ -111,6 +118,26 @@ impl<D: DataSource> Swappable<D> {
             self.app_id = app.into();
         }
         self
+    }
+    /// [`Self::named`] for a variant (LLP 1030.008 D2): `app` is the
+    /// variant's identity and `base` the app's, which a source naming its own
+    /// id names. Both take the variant's, so its storage is its own.
+    pub fn named_variant(mut self, app: &str, base: &str) -> Self {
+        if self.app_id.is_empty() || self.app_id == base {
+            self.app_id = app.into();
+        }
+        self.base = Some(base.into());
+        self
+    }
+    /// A replacement's source keeps the identity this one was admitted under.
+    fn admitted(mut self, app: &str, base: &Option<String>) -> Self {
+        self.app_id = app.into();
+        self.base = base.clone();
+        self
+    }
+    /// Whether `id`, as a module or candidate names itself, is this app.
+    fn names_this_app(&self, id: &str) -> bool {
+        id == self.app_id || self.base.as_deref() == Some(id)
     }
     /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
     pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
@@ -258,7 +285,7 @@ impl<D: DataSource> Swappable<D> {
             .loader
             .ok_or("Rust executor is disabled for this client")?(bytes)?;
         let (app, grants) = abi::metadata_reply(&engine.call(&abi::metadata_request())?)?;
-        if app != self.app_id || grants.trim() != self.grants.trim() {
+        if !self.names_this_app(&app) || grants.trim() != self.grants.trim() {
             return Err("loaded Rust module changes admitted app identity or grants".into());
         }
         if let Some(plan) = &self.plan {
@@ -491,6 +518,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             None => Ok(()),
         }
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.embedded
+            .as_mut()
+            .map_or_else(Vec::new, |embedded| embedded.take_reports())
+    }
     fn module_delivery(
         &mut self,
         store: &mut Store,
@@ -583,8 +615,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 let embedded = embedded
                     .replacement(plan, receipt, module)
                     .map_err(|e| format!("{e:?}"))?;
-                let mut source =
-                    Self::configured(embedded, self.mode, self.loader).named(&self.app_id);
+                let mut source = Self::configured(embedded, self.mode, self.loader)
+                    .admitted(&self.app_id, &self.base);
                 source.preloader = self.preloader;
                 source.native = self.native;
                 return Ok(source);
@@ -596,7 +628,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             {
                 return Err("unsupported Rust receipt or seam ABI".into());
             }
-            if self.app_id.is_empty() || meta["appId"].as_str() != Some(&self.app_id) {
+            if self.app_id.is_empty()
+                || !meta["appId"]
+                    .as_str()
+                    .is_some_and(|id| self.names_this_app(id))
+            {
                 return Err("Rust candidate names another app".into());
             }
             if meta["grants"].as_str().map(str::trim) != Some(self.grants.trim()) {
@@ -642,8 +678,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             }
             if let Some((source, make)) = self.native {
                 if meta["source"].as_str() == Some(source) {
-                    let mut native =
-                        Self::configured(make(), self.mode, self.loader).named(&self.app_id);
+                    let mut native = Self::configured(make(), self.mode, self.loader)
+                        .admitted(&self.app_id, &self.base);
                     native.preloads = self.preloads.clone();
                     native.preloader = self.preloader;
                     native.native = self.native;
@@ -656,6 +692,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             Ok(Self {
                 embedded: None,
                 app_id: self.app_id.clone(),
+                base: self.base.clone(),
                 grants: self.grants.clone(),
                 preloads: self.preloads.clone(),
                 launch: self.launch.clone(),
@@ -804,3 +841,30 @@ mod target_tests;
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 mod native_tests;
+
+/// A test's directory, removed when dropped, so a test that fails or panics
+/// leaves nothing in the system temp directory.
+#[cfg(test)]
+pub(crate) struct TempDir(pub(crate) std::path::PathBuf);
+
+#[cfg(test)]
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

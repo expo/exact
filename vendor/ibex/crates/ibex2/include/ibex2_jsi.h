@@ -106,6 +106,24 @@ struct CompiledScript {
 /// TypeError, and "response" makes them ignore `Set-Cookie` and `Set-Cookie2`.
 /// It throws a TypeError for any other kind or a value that is not a Headers.
 ///
+/// `events_hooks`, when set, names a global with the same name rules and
+/// collisions. It requires GROUP_EVENTS and publishes a frozen object with
+/// exactly `{ reportException, onUnhandled, onHandled, configure }`, and the
+/// events binding then installs with no clock: every event's `timeStamp` is 0.
+/// `reportException(error)` dispatches an `error` event on the global as HTML's
+/// "report an exception" does and returns whether a listener cancelled it;
+/// `onUnhandled(id, reason, promise)` and `onHandled(id, reason, promise)`
+/// dispatch `unhandledrejection` (returning whether it was cancelled) and
+/// `rejectionhandled`. `configure({ report, result, during })`, called once
+/// before any application code, takes three functions: `report(type, value,
+/// text, cancelled)` is told of every exception and unhandled rejection
+/// reported, cancelled or not, in place of the native console; `result(value)`
+/// receives each listener's return value, an `on…` handler's included; and
+/// `during(run)` must call `run` and return its result, around each of the
+/// binding's own dispatches of `error`, `unhandledrejection` and
+/// `rejectionhandled`, but not around `dispatchEvent`. Without `configure`, an
+/// uncancelled report goes to the native console as before.
+///
 /// `defer_intrinsic_snapshot`, when true, makes installation discard the
 /// constructor-time SQLite integrity baseline after all selected binding
 /// scripts have installed. The trusted embedder must run its prelude and then
@@ -221,6 +239,8 @@ struct InstallOptions {
   const char* abort_hooks = nullptr;
   // @ref LLP 0068#opt-in-headers-hooks-protocol — a Headers guard is a trusted-bootstrap handoff, never an application global
   const char* headers_hooks = nullptr;
+  // Exact's local patch 44: a data module's error events are its embedder's to journal
+  const char* events_hooks = nullptr;
   // @ref LLP 0068#deferred-intrinsic-integrity-baseline — trusted preludes may establish the whole SQLite integrity baseline once
   bool defer_intrinsic_snapshot = false;
 };

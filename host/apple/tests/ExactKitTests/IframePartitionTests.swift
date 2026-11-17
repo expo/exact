@@ -145,6 +145,31 @@ final class IframePartitionTests: XCTestCase {
 
     private func events(_ seen: Seen) -> [String] { seen.records.map(\.event) }
 
+    /// A frame's page is asked for with the `Referer` a browser sends for an
+    /// `iframe` under its default policy, `strict-origin-when-cross-origin`:
+    /// the origin of the page that embeds it, the host's frame page at
+    /// `exact.invalid`. The frame page around a sandboxed guest sends it from
+    /// WebKit; a guest loaded as the web view's own page is given the same.
+    func testAFramesPageArrivesWithTheOriginOfThePageThatEmbedsIt() throws {
+        let arm = try arm(), seen = Seen(), pages = try XCTUnwrap(Self.server)
+        func referer(_ path: String, configuration: [String: Any] = [:], sandbox: String? = nil) -> String? {
+            let (handle, _) = mount(arm, seen, configuration: configuration, src: "\(baseURL)\(path)", sandbox: sandbox)
+            defer { arm.destroy(handle) }
+            spin { pages.referers[path] != nil }
+            return pages.referers[path]
+        }
+        XCTAssertEqual(referer("/c?wrapped", sandbox: "allow-scripts"), "http://exact.invalid/", "from the frame page around it")
+        XCTAssertEqual(referer("/c?direct"), "http://exact.invalid/")
+        let browsing = Seen(), (handle, _) = mount(arm, browsing, configuration: ["partition": "memory-referrer"], src: "\(baseURL)/c?partitioned")
+        defer { arm.destroy(handle) }
+        spin { pages.referers["/c?partitioned"] != nil }
+        XCTAssertEqual(pages.referers["/c?partitioned"], "http://exact.invalid/", "a partitioned frame's source")
+        assertLoaded(browsing, ["navigate", "currententrychange", "navigatesuccess"])
+        json(["op": "navigate", "url": "\(baseURL)/c?navigated"], arm.command, handle)
+        spin { pages.referers["/c?navigated"] != nil }
+        XCTAssertEqual(pages.referers["/c?navigated"], "http://exact.invalid/", "and the page's `navigate`")
+    }
+
     func testNavigationEventsCommandsAndTheirRecords() throws {
         let arm = try arm(), seen = Seen()
         let (handle, web) = mount(arm, seen, configuration: ["partition": "memory-a"], src: "\(baseURL)/a")
@@ -380,6 +405,75 @@ final class IframePartitionTests: XCTestCase {
         }
     }
 
+    func testUnpartitionedAgentFramesShareProcessWebsiteDataOutsidePartitions() throws {
+        let arm = try arm(), seen = Seen(), session = UUID().uuidString
+        var handles: [UnsafeMutableRawPointer] = []
+        defer { for handle in handles { arm.destroy(handle) } }
+        func store(agent: Bool, session: String) -> WKWebsiteDataStore {
+            let (handle, web) = mount(arm, seen, configuration: ["agent": agent, "session": session], src: nil)
+            handles.append(handle)
+            return web.configuration.websiteDataStore
+        }
+        func cookies(_ store: WKWebsiteDataStore) -> [HTTPCookie] {
+            var result: [HTTPCookie]?
+            store.httpCookieStore.getAllCookies { result = $0 }
+            spin { result != nil }
+            XCTAssertNotNil(result)
+            return result ?? []
+        }
+        let ordinary = store(agent: false, session: "ordinary")
+        XCTAssertTrue(ordinary === WKWebsiteDataStore.default())
+        let name = "exact-test-\(session)"
+        let personal = try XCTUnwrap(HTTPCookie(properties: [.domain: "example.invalid", .path: "/", .name: name, .value: "personal"]))
+        let test = try XCTUnwrap(HTTPCookie(properties: [.domain: "example.invalid", .path: "/", .name: name, .value: "test"]))
+        var saved = false
+        ordinary.httpCookieStore.setCookie(personal) { saved = true }
+        spin { saved }
+        XCTAssertTrue(saved)
+        defer {
+            var removed = false
+            ordinary.httpCookieStore.delete(personal) { removed = true }
+            spin { removed }
+        }
+        let first = store(agent: true, session: session)
+        XCTAssertFalse(first.isPersistent)
+        XCTAssertFalse(first === ordinary)
+        XCTAssertTrue(first === store(agent: true, session: session), "frames in one drive share storage")
+        let other = store(agent: true, session: session + "other")
+        XCTAssertTrue(first === other, "unpartitioned frames share storage across sessions")
+        saved = false
+        first.httpCookieStore.setCookie(test) { saved = true }
+        spin { saved }
+        XCTAssertTrue(saved)
+        defer {
+            var removed = false
+            first.httpCookieStore.delete(test) { removed = true }
+            spin { removed }
+        }
+        XCTAssertEqual(cookies(other).first { $0.name == name }?.value, "test")
+        let done: DoneFn = { context, bytes, length in
+            Unmanaged<Seen>.fromOpaque(context!).takeUnretainedValue().cleared = String(decoding: UnsafeBufferPointer(start: bytes, count: Int(length)), as: UTF8.self)
+        }
+        for request: [String: Any] in [["partition": "", "types": ["*"]], ["types": ["*"]]] {
+            seen.cleared = nil
+            let data = try JSONSerialization.data(withJSONObject: request)
+            data.withUnsafeBytes { arm.clear($0.bindMemory(to: UInt8.self).baseAddress, UInt32(data.count), Unmanaged.passUnretained(seen).toOpaque(), done) }
+            spin { seen.cleared != nil }
+            XCTAssertTrue(seen.cleared?.hasPrefix("NotFoundError") == true, seen.cleared ?? "no reply")
+        }
+        XCTAssertEqual(cookies(first).first { $0.name == name }?.value, "test")
+        let (invalid, web) = mount(arm, seen, configuration: ["agent": true, "session": session, "partition": ""], src: nil)
+        defer { arm.destroy(invalid) }
+        XCTAssertFalse(web.configuration.websiteDataStore === first, "an invalid partition cannot reach the unpartitioned store")
+        Array("{\"session\":\"\(session)\"}".utf8).withUnsafeBufferPointer { arm.endSession($0.baseAddress, UInt32($0.count)) }
+        let fresh = store(agent: true, session: session)
+        XCTAssertTrue(fresh === first, "ending a session leaves the process store available to other sessions")
+        XCTAssertEqual(cookies(fresh).first { $0.name == name }?.value, "test")
+        XCTAssertEqual(cookies(ordinary).first { $0.name == name }?.value, "personal", "the person's default store survives")
+        Array("{\"session\":\"\(session)\"}".utf8).withUnsafeBufferPointer { arm.endSession($0.baseAddress, UInt32($0.count)) }
+        Array("{\"session\":\"\(session)other\"}".utf8).withUnsafeBufferPointer { arm.endSession($0.baseAddress, UInt32($0.count)) }
+    }
+
     /// A partitioned frame changing its partition gets a new web view, in the new store.
     func testAChangedPartitionReplacesTheWebView() throws {
         let arm = try arm(), seen = Seen()
@@ -553,11 +647,14 @@ func loopbackListener(port: UInt16 = 0, _ serve: @escaping (NWConnection) -> Voi
     throw NSError(domain: "loopbackListener", code: 1, userInfo: [NSLocalizedDescriptionKey: "no listener on 127.0.0.1:\(port == 0 ? "any port" : "\(port)"): \(state)"])
 }
 
-/// Fixed pages on a loopback port: `/a` (a title and an icon), `/b`,
-/// `/redirect` (302 to `/b`) and `/slow`, which never answers.
+/// Fixed pages on a loopback port: `/a` (a title and an icon), `/b`, `/c`,
+/// `/redirect` (302 to `/b`) and `/slow`, which never answers, each under
+/// any query.
 final class FramePages {
     private var listener: NWListener!
     private var held: [NWConnection] = []
+    /// The `Referer` each request arrived with ("" for none), by its path and query.
+    private(set) var referers: [String: String] = [:]
 
     var port: UInt16 { listener.port!.rawValue }
 
@@ -566,10 +663,13 @@ final class FramePages {
     private func serve(_ connection: NWConnection) {
         connection.start(queue: .main)
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            guard let self, let data, let line = String(decoding: data, as: UTF8.self).split(separator: "\r\n").first else { return connection.cancel() }
-            let path = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            let lines = data.map { String(decoding: $0, as: UTF8.self).components(separatedBy: "\r\n\r\n")[0].components(separatedBy: "\r\n") } ?? []
+            guard let self, let line = lines.first else { return connection.cancel() }
+            let target = line.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            self.referers[target] = lines.dropFirst().first { $0.lowercased().hasPrefix("referer:") }
+                .map { $0.dropFirst("referer:".count).trimmingCharacters(in: .whitespaces) } ?? ""
             let response: String
-            switch path {
+            switch target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target {
             case "/a": response = Self.page("Page A", head: "<link rel=icon href=/a.png>")
             case "/b": response = Self.page("Page B")
             case "/c": response = Self.page("Page C")

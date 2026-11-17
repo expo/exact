@@ -1,15 +1,8 @@
-//! The painter: the kernel tree is the display list.
+//! @ref LLP 1015 §2; LLP 1014 D4 — the kernel tree is the painter's display list.
 //!
-//! @ref LLP 1015 §2; LLP 1014 D4 (a host that paints has the exact
-//! invalidation answer because it *is* the display list)
-//!
-//! One preorder walk emits each node to a [`Backend`]: its background and
-//! per-corner radii, borders, image by `object-fit`, paragraph as measured
-//! by [`crate::text`], input value or placeholder and caret, then children.
-//! Children inherit overflow clips and scroll offsets. Motion supplies a
-//! transform about `transform-origin` and group opacity (a layer when not 1).
-//! The walk records transformed bounding boxes in viewport points with
-//! their clips; the agent's `layout` and hit-testing share this geometry.
+//! One preorder walk paints node chrome, replaced content and measured text through [`Backend`].
+//! Children inherit overflow clips and scroll offsets; motion supplies `transform-origin`
+//! transforms and group opacity layers. Viewport boxes and clips serve agent layout and hit-testing.
 //!
 //! Backends: [`crate::gpu`] (vello), [`crate::ink`] (instanced geometry),
 //! and [`crate::raster`] (the CPU fallback and pixel oracle).
@@ -71,6 +64,8 @@ pub use native::NativeKind;
 mod order;
 mod placed;
 mod presented;
+mod shared;
+pub use shared::{SharedElement, SharedState};
 mod region;
 pub mod rows;
 mod shadow;
@@ -84,39 +79,13 @@ mod text_clip;
 mod text_decoration;
 mod text_shadow;
 mod text_stroke;
+mod tint;
+pub(crate) mod zoom;
 use inline::{presented_color, presented_text_colors, text_backgrounds, text_palette};
 pub use presented::{PaintValues, Presented};
 pub(crate) use region::{ActionNode, ActionSlot, RegionActions, ScrollBounds};
 pub use svg::{resolve_with, Ink, SvgPaint};
-
-// Only an explicit row makes a raster a template; motion may supply its ink.
-// `currentcolor` is the node's `color` (feed F1).
-fn image_tint(node: &NodeRef<'_>, presented: &Presented, dark: bool) -> Option<[u8; 4]> {
-    // Icon lowering supplies a currentcolor tint for symbol sources. A
-    // non-template icon keeps the file's paint, as on the web.
-    if node
-        .props
-        .str(PropId::ImageSource)
-        .and_then(crate::image::file_icon)
-        .is_some()
-    {
-        return None;
-    }
-    let style = node.style;
-    style.mask.has(StyleId::TintColor).then(|| {
-        presented
-            .colors
-            .color(exact_motion::Property::TintColor)
-            .unwrap_or_else(|| {
-                rgba(
-                    style
-                        .tint_color
-                        .unwrap_or_else(|| node.text_color())
-                        .resolve(dark),
-                )
-            })
-    })
-}
+use tint::image_tint;
 
 /// A rectangle as (x, y, w, h).
 pub type Rect4 = (f32, f32, f32, f32);
@@ -320,7 +289,7 @@ type ProjectiveHit = ([f32; 9], Rect4, Option<Rect4>, [[f32; 3]; 2]);
 /// A node's box as painted: its transformed bounding box in viewport
 /// points, the clip it was painted under (viewport points, axis-aligned),
 /// and its scroll offset when it is a scroll container.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct PaintedBox {
     /// The node.
     pub id: ViewId,
@@ -332,64 +301,21 @@ pub struct PaintedBox {
     pub scroll: Option<(f32, f32)>,
     /// Generic pointer eligibility of this painted scene, including inheritance.
     pub(crate) pointer_hit: bool,
+    shape_clips: Vec<shape::HitClip>,
     projective: Option<ProjectiveHit>,
     affine: Option<(Transform, Rect4)>,
-    press: f32,
+    unpress: Transform,
+    hit: Option<HitGeometry>,
 }
 
-impl PaintedBox {
-    /// Placed by a perspective (`space.rs`), so no rectangle bounds it.
-    pub(crate) fn projected(&self) -> bool {
-        self.projective.is_some()
-    }
-
-    /// The surface's box through the same transform the painter used.
-    /// Projective canvas placements have no affine surface observation.
-    pub fn surface(&self, shown: Presented) -> Option<Rect4> {
-        if self.projective.is_some() {
-            return None;
-        }
-        self.affine.map(|(ts, rect)| bbox(ts, shown.surface(rect)))
-    }
-
-    /// Project the local center, which need not be the projected AABB center.
-    pub fn center(&self) -> (f32, f32) {
-        if let Some((inv, rect, _, _)) = self.projective {
-            if let Some(h) = crate::placement::inverse(inv) {
-                return crate::placement::map(&h, rect.0 + rect.2 / 2., rect.1 + rect.3 / 2.);
-            }
-        }
-        (
-            self.rect.0 + self.rect.2 / 2.,
-            self.rect.1 + self.rect.3 / 2.,
-        )
-    }
-
-    /// Whether a point (viewport points) is inside the box and its clip.
-    pub fn contains(&self, x: f32, y: f32) -> bool {
-        let inside = |r: Rect4| x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3;
-        let (local_x, local_y) = self
-            .projective
-            .map_or((x, y), |(inv, ..)| crate::placement::map(&inv, x, y));
-        let affine_hit = self.affine.is_none_or(|(ts, rect)| {
-            ts.invert().is_some_and(|inverse| {
-                let mut point = tiny_skia::Point::from_xy(local_x, local_y);
-                inverse.map_point(&mut point);
-                point.x >= rect.0
-                    && point.x < rect.0 + rect.2
-                    && point.y >= rect.1
-                    && point.y < rect.1 + rect.3
-            })
-        });
-        affine_hit
-            && inside(self.rect)
-            && self.clip.is_none_or(inside)
-            && self.projective.is_none_or(|(inv, rect, clip, planes)| {
-                let (x, y) = crate::placement::map(&inv, x, y);
-                let inside = |r: Rect4| x >= r.0 && x < r.0 + r.2 && y >= r.1 && y < r.1 + r.3;
-                inside(rect) && clip.is_none_or(inside) && crate::placement::accepts(&planes, x, y)
-            })
-    }
+/// Hit geometry follows the same walk with press translation excluded.
+#[derive(Debug, Clone)]
+struct HitGeometry {
+    shape_clips: Vec<shape::HitClip>,
+    rect: Rect4,
+    clip: Option<Rect4>,
+    affine: Option<(Transform, Rect4)>,
+    projective: Option<ProjectiveHit>,
 }
 
 /// What a frame is painted from.
@@ -404,6 +330,8 @@ pub struct Scene<'a> {
     pub presented: &'a dyn Fn(ViewId) -> Presented,
     /// A path's `d` while a transition moves it (LLP 1055.000 D15).
     pub paths: &'a dyn Fn(ViewId) -> Option<exact_motion::PathValue>,
+    /// A `filter` while a transition moves it (LLP 1003.002 D8).
+    pub filters: &'a dyn Fn(ViewId) -> Option<exact_motion::FilterValue>,
     /// Scroll offsets of scroll containers (host state, LLP 1010).
     pub scroll: &'a BTreeMap<ViewId, (f32, f32)>,
     /// The page's scroll offset: the window is a viewport over a document.
@@ -438,6 +366,7 @@ pub struct Painter {
     pub(crate) split: Option<crate::presenter::split::Split>,
     pub(crate) window_canvas: Option<ViewId>,
     pub(crate) direct_canvases: std::collections::BTreeSet<ViewId>,
+    pub(crate) media: native::Media,
     pub(crate) alert: Option<alert::Picture>,
     /// The text engine, shared with the kernel's measurer.
     pub text: Shared,
@@ -472,6 +401,7 @@ pub struct Painter {
     cpu_ms: Option<f64>,
     /// What a reorder lifts: a row in its list, or a ghost over everything.
     pub(crate) lift: Lift,
+    pub(crate) shared: SharedState,
     // Accepted owners retain their paragraph leases while a subsequent backend frame fails.
     accepted_text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
     pub(crate) field_text: HashMap<ViewId, Rc<field::PaintedField>>,
@@ -525,10 +455,13 @@ pub struct Painter {
     /// The routes the presenter places itself, and their kept drawings.
     pub(crate) stage: stage::Stage,
     kept: stage::Kept,
+    /// Each zoomable container's zoom as the presenter set it (`zoom.rs`).
+    pub(crate) zoom: BTreeMap<ViewId, f32>,
 }
 
 struct Walk<'a, 'b> {
     scene: &'b Scene<'a>,
+    hit_space: Option<(Transform, Option<Rect4>)>,
     boxes: Vec<PaintedBox>,
     text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
     fields: HashMap<ViewId, Rc<field::PaintedField>>,
@@ -567,11 +500,15 @@ impl Painter {
 
     pub(crate) fn replaced(&mut self) {
         self.native_session = native::new_session();
-        // A fresh kernel can reuse both epochs and node keys.
+        // A fresh kernel can reuse both epochs and node keys: a row kept by
+        // key would replay the old tree's drawing.
         self.paint_epoch = None;
+        self.discard_rows();
+        self.shared = SharedState::default();
         self.svg_warned.clear();
         // The old tree's presses: its view ids are another tree's now.
         self.ripples.clear();
+        self.zoom.clear();
     }
 
     /// A painter over a backend.
@@ -581,6 +518,7 @@ impl Painter {
             split: None,
             window_canvas: None,
             direct_canvases: Default::default(),
+            media: Default::default(),
             text,
             scale,
             dark: false,
@@ -595,6 +533,7 @@ impl Painter {
             ranks: Rc::default(),
             accepted_text: BTreeMap::new(),
             lift: Lift::default(),
+            shared: SharedState::default(),
             region_picture: None,
             region_frame: None,
             damage: Default::default(),
@@ -632,6 +571,7 @@ impl Painter {
             labels: Default::default(),
             stage: Default::default(),
             kept: Default::default(),
+            zoom: BTreeMap::new(),
         }
     }
 
@@ -839,14 +779,18 @@ impl Painter {
             self.svg_warned
                 .retain(|key| scene.kernel.node_by_key(*key).is_some());
             self.refresh_ranks(scene.kernel);
+            self.order_shared(scene);
             self.paint_epoch = Some(scene.kernel.epoch());
             #[cfg(test)]
             {
                 self.rank_passes += 1;
             }
         }
+        self.drop_unrendered_flights(scene);
+        self.backend.shared_frame(&self.shared);
         let mut walk = Walk {
             scene,
+            hit_space: None,
             boxes: Vec::with_capacity(self.boxes_hint),
             text: BTreeMap::new(),
             fields: HashMap::new(),
@@ -917,7 +861,7 @@ impl Painter {
         })
     }
 
-    fn node_at(
+    fn node_content(
         &mut self,
         walk: &mut Walk<'_, '_>,
         id: ViewId,
@@ -980,6 +924,9 @@ impl Painter {
             || self.material_note(&node)
             || !p.colors.is_empty();
         let origin = node.style.transform_origin.resolve(w, h);
+        let (hit_parent, hit_clip) = walk.hit_space.unwrap_or((ts, clip_rect));
+        let mut hit_p = p;
+        hit_p.press_translate = [0.; 4];
         let layer = match self.flatten == Some(id) {
             true => layer::Opened { lowered: 0 },
             false => self.box_layer(node.key, &p, (x, y, w, h), origin, ts),
@@ -994,6 +941,14 @@ impl Painter {
         } else {
             ts
         };
+        let hit_ts = if self.flatten == Some(id) {
+            hit_parent
+        } else if layer.transform() {
+            hit_parent.pre_translate(p.layout[0], p.layout[1])
+        } else {
+            hit_parent.pre_concat(hit_p.transform((x, y, w, h), origin))
+        };
+        walk.hit_space = (hit_ts != ts || hit_clip != clip_rect).then_some((hit_ts, hit_clip));
         let scrolls = {
             let (ox, oy) = effective_overflow(&node);
             ox != Overflow::Visible || oy != Overflow::Visible
@@ -1005,7 +960,9 @@ impl Painter {
         // `revealed` (LLP 1094): the wrapper's inherited hidden shows, and
         // a node that sets its own hidden does not.
         let visible = paints(walk.scene.kernel, id, walk.reveal);
+        let hit_start = walk.boxes.len();
         walk.boxes.push(PaintedBox {
+            shape_clips: Vec::new(),
             id,
             pointer_hit: node
                 .computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
@@ -1013,7 +970,26 @@ impl Painter {
                 && visible,
             projective: None,
             affine: Some((ts, (x, y, w, h))),
-            press: p.press,
+            hit: walk.hit_space.map(|_| HitGeometry {
+                shape_clips: Vec::new(),
+                rect: bbox(hit_ts, (x, y, w, h)),
+                clip: hit_clip,
+                affine: Some((hit_ts, (x, y, w, h))),
+                projective: None,
+            }),
+            unpress: if p.press == 1. {
+                Transform::identity()
+            } else {
+                let rect = (x, y, w, h);
+                let mut base = hit_p;
+                base.press = 1.;
+                base.press_translate = [0.; 4];
+                hit_p
+                    .transform(rect, origin)
+                    .invert()
+                    .map(|inverse| inverse.pre_concat(base.transform(rect, origin)))
+                    .unwrap_or_default()
+            },
             rect: bbox(ts, (x, y, w, h)),
             clip: clip_rect,
             scroll: scrolls.then(|| walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0))),
@@ -1041,11 +1017,17 @@ impl Painter {
             self.backend.push_mask(&Shape::rect((x, y, w, h)), ts);
         }
         // @ref LLP 1043.000 §3 D7 — polygon demo ink and exclusion share an outline.
-        let path_clip = !node.style.rare.clip_path.commands().is_empty()
-            && self
-                .backend
-                .push_css_clip(&node.style.rare.clip_path, ts.pre_translate(x, y));
+        let (sx, sy, sw, sh) = p.surface((x, y, w, h));
+        let css = node.style.rare.clip_path.resolved(sw, sh);
+        let clip_ts = ts.pre_translate(sx, sy);
+        let path_clip = css.has_path() && self.backend.push_css_clip(&css, clip_ts);
         self.box_content(walk, &node, (x, y, w, h), ts, offset, clip_rect);
+        shape::clip_hits(
+            &mut walk.boxes[hit_start..],
+            &css,
+            clip_ts,
+            hit_ts.pre_translate(sx, sy),
+        );
         self.dark = previous;
         if path_clip {
             self.backend.pop_clip();
@@ -1090,9 +1072,11 @@ impl Painter {
             paint.background = [0; 4];
         }
         self.clipped = Some((node.id, paint.background));
-        let geometry = paint.geometry(rect);
+        let mut geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let surface = paint.geometry(shown.surface(rect));
+        let mut surface = paint.geometry(shown.surface(rect));
+        self.flight_geometry(node, &mut geometry);
+        self.flight_geometry(node, &mut surface);
         // A hidden box paints none of its own chrome. Children still do,
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {
@@ -1176,7 +1160,16 @@ impl Painter {
                 self.text_input(walk, node, rect, surface.outer.rect, content, &outer, ts)
             }
             NodeType::Svg => self.svg(walk, node, paint.content_shape(&geometry), ts),
-            NodeType::Video | NodeType::WebView | NodeType::NativeView => {
+            // @ref LLP 1042.001 D5 — the poster under the picture, until
+            // its source's first frame.
+            NodeType::Video => {
+                let edge = geometry.content_edge();
+                if !self.media.framed.contains(&node.key) {
+                    self.picture(walk, node, content, edge, ts);
+                }
+                self.native(node, &edge, ts)
+            }
+            NodeType::WebView | NodeType::NativeView => {
                 self.native(node, &geometry.content_edge(), ts)
             }
             NodeType::Control if node.props.str(PropId::Type) == Some("select") => {
@@ -1235,6 +1228,12 @@ impl Painter {
             _ => {}
         }
         // Children, moved by this box's scroll offset when it scrolls.
+        if let Some((hit_ts, hit_clip)) = walk.hit_space.as_mut() {
+            if let Some(clip) = &clip {
+                let own = bbox(*hit_ts, clip.rect);
+                *hit_clip = Some(hit_clip.map_or(own, |c| intersect(c, own)));
+            }
+        }
         let clips = clip.is_some();
         let mut child_rect = clip_rect;
         if let Some(clip) = clip {

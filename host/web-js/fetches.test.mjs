@@ -12,6 +12,7 @@ const root = resolve(import.meta.dir, '../..');
 // `net.fetch http://127.0.0.1:9`, as the compiler normalizes it (exact-web-js `normalize-grants`).
 const GRANT = { entries: [[1, 'net.fetch http://127.0.0.1:9', ['fetch', 'http', '127.0.0.1', 9], null]], error: null, keepsNoAnswers: false, seal: 'e1b17172201a49fa', version: 1 };
 const ROW = ['GET', 'http://127.0.0.1:9/forecast?q={q}', 'http://127.0.0.1:9', ['q'], [], '', '', '/current', ['s'], { temperature_2m: 'n' }, GRANT];
+const browserFetch = globalThis.fetch;
 let dir, data, sent = [], answers = [];
 beforeAll(async () => {
   dir = mkdtempSync(resolve(tmpdir(), 'exact-fetches-'));
@@ -25,13 +26,14 @@ beforeAll(async () => {
   // The browser's fetch, which admission binds as it loads: each request recorded, its answer the test's to give.
   // The answer names the URL it came from, as the browser's does; admission refuses one that names none.
   globalThis.fetch = (url, init) => {
-    sent.push([String(url), init.redirect]);
-    return new Promise(resolve => answers.push(response => resolve(Object.defineProperty(response, 'url', { value: String(url) }))));
+    const request = new Request(url, init);
+    sent.push([request.url, request.redirect]);
+    return new Promise(resolve => answers.push(response => resolve(Object.defineProperty(response, 'url', { value: request.url }))));
   };
   ({ data } = await import(pathToFileURL(resolve(dir, 'rt.js')).href));
   (await import(pathToFileURL(resolve(dir, 'fetches.js')).href)).fetches({ weather: ROW });
 });
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
+afterAll(() => { globalThis.fetch = browserFetch; rmSync(dir, { recursive: true, force: true }); });
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 

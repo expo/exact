@@ -28,7 +28,7 @@
 //   48  diagnostics → { u32 size 16; 8 record(…) }, or nil in a production
 //        bake: what hatch code says of itself (LLP 1075.003.000.001 §3.2,
 //        HatchDiagnostics.swift). `record` may be called on any thread.
-//   96  tamber(host, view, request, len, out, cap) → length (ExactTamber.swift)
+//   96  forma(host, view, request, len, out, cap) → length (ExactForma.swift)
 //  104  null, reserved: later entries keep their offsets
 //  112  on_line(host) → 1 online, 0 offline, 2 not answered (off main, or a
 //        destroyed session): `app.onLine`, read when the module asks, so
@@ -70,8 +70,13 @@ import UIKit
 /// What a native container covers of a box (LLP 1075.003 §3.5): bars over
 /// its edges, added to its padding, or the whole box, which a native bar
 /// replaces (`display: none`).
-enum HostCover: Equatable {
-    struct Edges: Equatable { var top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat }
+package enum HostCover: Equatable {
+    package struct Edges: Equatable {
+        var top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat
+        package init(top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat) {
+            self.top = top; self.right = right; self.bottom = bottom; self.left = left
+        }
+    }
     case edges(Edges)
     case whole
     /// A scroller UIKit insets (a route's collapsing or bottom-edge
@@ -307,10 +312,10 @@ private let hatchRecord: HatchRecordFn = { host, kind, node, scope, scopeLength,
                         text: text.map { Data(bytes: $0, count: Int(textLength)) } ?? Data())
 }
 
-private typealias HatchTamberFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UInt32
+private typealias HatchFormaFn = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UInt32
 
-/// `tamber(host, view, request, len, out, cap) → len` (LLP 1121 D12): a
-/// native module's `ExactTamber`. `request` is `{"names": [..]}`, and since
+/// `forma(host, view, request, len, out, cap) → len` (LLP 1121 D12): a
+/// native module's `ExactForma`. `request` is `{"names": [..]}`, and since
 /// stage 6 G optionally `"lengths"`, `"numbers"` and `"fonts"` lists; the
 /// answer, `{"inputs", "colors": {name: [[r, g, b, a] × 8] | null}}`, with
 /// `"lengths"` and `"numbers"` maps of numbers and a `"fonts"` map of
@@ -323,22 +328,22 @@ private typealias HatchTamberFn = @convention(c) (UnsafeMutableRawPointer?, Unsa
 /// (0–1, past it for a wide colour), as the library cannot read a row's
 /// value; `inputs` folds that tint in. Written into `out` when `cap` holds
 /// it; its length either way.
-private let hatchTamber: HatchTamberFn = { host, view, request, length, out, cap in
+private let hatchForma: HatchFormaFn = { host, view, request, length, out, cap in
     guard let session = hatchSession(host), let request,
           let asked = try? JSONSerialization.jsonObject(with: Data(bytes: request, count: Int(length))) as? [String: Any] else { return 0 }
     var at = view.map { Unmanaged<PlatformView>.fromOpaque($0).takeUnretainedValue() }
     while let v = at, !(v is NodeView) { at = v.superview }
     let node = at as? NodeView
-    var measures: [Tambers.Measure: [String: BatchValue?]] = [:]
-    for kind in Tambers.Measure.allCases {
+    var measures: [Formas.Measure: [String: BatchValue?]] = [:]
+    for kind in Formas.Measure.allCases {
         for name in asked[kind.rawValue] as? [String] ?? [] { measures[kind, default: [:]][name] = .some(nil) }
     }
-    guard let answer = Tambers.ask(session, view: node?.id ?? 0, names: asked["names"] as? [String] ?? [], measures: measures) else { return 0 }
+    guard let answer = Formas.ask(session, view: node?.id ?? 0, names: asked["names"] as? [String] ?? [], measures: measures) else { return 0 }
     let colors = answer.colors.mapValues { value -> Any in
         guard let value else { return NSNull() }
         return (0..<8).map { side in
             value.textChannels(dark: side & 1 != 0, contrast: side & 2 != 0, elevated: side & 4 != 0, tint: answer.tints[side])
-                .map { ExactTamber.extended(TextEngine.color($0)) } ?? []
+                .map { ExactForma.extended(TextEngine.color($0)) } ?? []
         }
     }
     var reply: [String: Any] = ["inputs": answer.inputs, "colors": colors]
@@ -415,7 +420,7 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchAfter, to: UnsafeRawPointer.self), toByteOffset: 72, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchOwns, to: UnsafeRawPointer.self), toByteOffset: 80, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchParts, to: UnsafeRawPointer.self), toByteOffset: 88, as: UnsafeRawPointer.self)
-    t.storeBytes(of: unsafeBitCast(hatchTamber, to: UnsafeRawPointer.self), toByteOffset: 96, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchForma, to: UnsafeRawPointer.self), toByteOffset: 96, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchOnLine, to: UnsafeRawPointer.self), toByteOffset: 112, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchAudioClaim, to: UnsafeRawPointer.self), toByteOffset: 120, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchAudioRelease, to: UnsafeRawPointer.self), toByteOffset: 128, as: UnsafeRawPointer.self)
@@ -429,8 +434,8 @@ private let hatchHostTable: UnsafeRawPointer = {
     return UnsafeRawPointer(t)
 }()
 
-/// A route or element hatch's moment; `configuring` is a hatched frame's
-/// before its web view is made (LLP 1020.002 §9).
+/// A route or element hatch's moment; `configuring` precedes a frame's web
+/// view or a video's item (LLP 1133 D3).
 enum RouteHatchEvent: UInt32 {
     case built = 0, changed = 1, ended = 2, configuring = 3
     var name: String { switch self { case .built: "built"; case .changed: "changed"; case .ended: "ended"; case .configuring: "configuring" } }
@@ -497,10 +502,10 @@ extension NativeViews {
         return owned
     }
 
-    /// `element` (built, changed), `elementEnded` or, for a frame before its
-    /// web view is made, `elementConfiguration` for a hatched node (LLP
+    /// `element` (built, changed), `elementEnded` or, before a frame's web
+    /// view or video's item is made, `elementConfiguration` (LLP
     /// 1075.003.000, LLP 1020.002 §9): its view, its kind's platform object
-    /// (the `WKWebViewConfiguration` for `configuring`), and
+    /// (a `WKWebViewConfiguration` or video's `NSMutableDictionary` at `configuring`), and
     /// `{"hatch", "node", "id", "kind", "data"}`. `quiet` leaves the call out
     /// of the journal (a list row's after the first; `state` counts them).
     /// True when the hatch set `reusable` (LLP 1075.003.000.000 §8).

@@ -302,6 +302,7 @@ fn stale_bad_metrics_drop_only_their_owner_and_cannot_publish() {
         TextMetrics {
             width: f32::NAN,
             height: -1.,
+            pending: false,
             first_baseline: None,
         },
         Rc::new(DropProbe(drops.clone())),
@@ -1342,4 +1343,27 @@ fn an_inline_popover_run_keeps_its_text_in_a_native_region() {
         .rfind(&format!("\"id\":{kept},\"parent\":"))
         .expect("the run is in its paragraph");
     assert!(wire[run..].contains("Keep me"), "{wire}");
+}
+
+#[test]
+fn native_projection_charges_fixed_root_arrays_without_mounted_data() {
+    let fixed = "            view height=1\n".repeat(300);
+    let source = format!("component App\n  view\n    column width=600 height=800\n      view id=\"owner\" width=600 height=400 overflow=\"hidden\"\n        view id=\"content\" width=600 height=400\n          list virtualized=true appearance=\"none\" width=600 height=200\n{fixed}            for x in range(0) key=x\n              view height=40\n        text \"Preparing\" id=\"pending\"\n");
+    let (mut host, batch) = Host::boot_native_region(
+        &contract::compile(&source).unwrap().encode(),
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        600.,
+        800.,
+        registration(),
+        Default::default(),
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    assert!(serde_json::from_str::<serde_json::Value>(&batch).unwrap()["error"].is_null());
+    settle(&mut host, &Rc::new(Cell::new(0)));
+    assert!(host.region_publication_id().is_some());
+    let c = host.runner().collections().pop().unwrap();
+    assert!(c.rows.is_empty());
+    assert_eq!(c.fixed[0].roots.len(), 300);
 }

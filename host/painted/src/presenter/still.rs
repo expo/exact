@@ -36,11 +36,13 @@ impl Still {
 
 impl<D: DataSource> Presenter<D> {
     /// The paint's inputs other than scroll offsets; `None` while anything
-    /// moves on its own (motion, a press, a collection's pending correction).
+    /// moves on its own (motion, a press, a collection's pending correction)
+    /// or under a finger on the stage.
     pub(crate) fn still(&self) -> Option<Still> {
         if self.needs_animation_frame()
             || self.host.wants_frames()
             || self.host.pressing()
+            || self.stage_follows_finger()
             || self.collection_paint_scroll().is_some()
             || self.host.content_region().is_some()
             || !self.brush.canvases.is_empty()

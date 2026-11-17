@@ -6,7 +6,7 @@ fn emitted(tag: &str, design: &str, view: &str) -> crate::emit::Output {
     let dir = std::env::temp_dir().join(format!("exact-web-js-modes-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), design).unwrap();
+    std::fs::write(dir.join("app.forma"), design).unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let out = crate::emit::emit(&plan, false, false).unwrap();
@@ -14,7 +14,7 @@ fn emitted(tag: &str, design: &str, view: &str) -> crate::emit::Output {
     out
 }
 
-const DESIGN: &str = "tamber t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  surface.card = light-dark(#ffffff, #000000)\n    when dark-style=dim: light-dark(#ffffff, #15202b)\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when dark-style=dim: light-dark(#0f1419, #f7f9f9)\n  brand = #c8102e\n";
+const DESIGN: &str = "forma t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  surface.card = light-dark(#ffffff, #000000)\n    when dark-style=dim: light-dark(#ffffff, #15202b)\n  text.primary = light-dark(#0f1419, #e7e9ea)\n    when dark-style=dim: light-dark(#0f1419, #f7f9f9)\n  brand = #c8102e\n";
 
 #[test]
 fn a_varying_token_is_a_property_declared_by_each_tuples_rule() {
@@ -150,7 +150,7 @@ fn a_bound_inherited_colour_says_whether_it_read_a_token() {
 
 #[test]
 fn an_accent_naming_token_makes_an_authored_accent_a_boundary() {
-    let design = "tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
+    let design = "forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
     let out = emitted(
         "accent",
         design,
@@ -199,7 +199,7 @@ fn a_bound_colour_on_a_boundary_is_the_runtimes_to_say() {
 
 #[test]
 fn an_accent_naming_its_own_token_names_no_property_on_a_boundary() {
-    let design = "tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
+    let design = "forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
     let out = emitted(
         "accent-own",
         design,
@@ -236,7 +236,7 @@ fn an_accent_naming_its_own_token_names_no_property_on_a_boundary() {
 
 #[test]
 fn each_varying_token_has_its_own_property() {
-    let design = "tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  a-b-2 = #000001\n    when ink=plain: #000002\n  a.b = #000003\n    when ink=plain: #000004\n  a-b = #000005\n    when ink=plain: #000006\n";
+    let design = "forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  a-b-2 = #000001\n    when ink=plain: #000002\n  a.b = #000003\n    when ink=plain: #000004\n  a-b = #000005\n    when ink=plain: #000006\n";
     let out = emitted(
         "names",
         design,
@@ -275,7 +275,7 @@ fn a_literal_clear_sets_no_row() {
 
 #[test]
 fn a_pinned_accent_naming_its_token_declares_the_accent_where_the_token_is_a_colour() {
-    let design = "tamber t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
+    let design = "forma t\n\naxes\n  ink = tint | plain\n\ntheme\n  accent.mix = AccentColor\n    when ink=plain: #000000\n";
     let out = emitted(
         "accent-rule",
         design,
@@ -317,7 +317,7 @@ fn a_development_build_makes_every_token_a_property() {
     let dir = std::env::temp_dir().join(format!("exact-web-js-modes-dev-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), DESIGN).unwrap();
+    std::fs::write(dir.join("app.forma"), DESIGN).unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
     let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
     let release = crate::emit::emit(&plan, false, false).unwrap();
@@ -379,8 +379,8 @@ fn a_development_build_makes_every_role_override_a_property() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  ink = #111111\n  CanvasText = ink\n  -exact-label = #222222\n  AccentColor = #0a7aff\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  ink = #111111\n  CanvasText = ink\n  -exact-label = #222222\n  AccentColor = #0a7aff\n",
     )
     .unwrap();
     std::fs::write(dir.join("app.contract"), view).unwrap();
@@ -450,7 +450,7 @@ fn a_development_build_makes_every_role_override_a_property() {
 /// moves it; in a plain app an unnamed token's add does not.
 #[test]
 fn the_design_readers_structure_moves_for_what_the_plan_keeps() {
-    let design = "tamber t\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #111111\n";
+    let design = "forma t\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #111111\n";
     let added = format!("{design}  spare = #222222\n");
     let varies = design.replace(
         "ink = #111111\n",
@@ -474,7 +474,7 @@ fn the_design_readers_structure_moves_for_what_the_plan_keeps() {
             std::env::temp_dir().join(format!("exact-web-js-reader-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("app.tamber"), design).unwrap();
+        std::fs::write(dir.join("app.forma"), design).unwrap();
         std::fs::write(
             dir.join("app.contract"),
             "component App\n  view\n    text \"a\" color=\"ink\"\n",
@@ -615,7 +615,7 @@ fn a_mode_boundarys_implied_colour_is_not_authored() {
     let dir = std::env::temp_dir().join(format!("exact-web-js-modes-ink-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("app.tamber"), DESIGN).unwrap();
+    std::fs::write(dir.join("app.forma"), DESIGN).unwrap();
     std::fs::write(
         dir.join("app.contract"),
         "component App\n  state ink = \"inherit\"\n  action paint(v: string)\n    ink = v\n  view\n    column color=\"text.primary\"\n      for v in [\"inherit\", \"unset\", \"currentcolor\", \"nope\", \"nada\", \"#ff0000\"] key=v\n        button v press=paint(v) testId=v\n      image \"symbol:star\" testId=\"beside\"\n      column -exact-mode=\"dark-style=dim\" testId=\"boundary\"\n        image \"symbol:star\" testId=\"under\"\n      column -exact-mode=\"dark-style=dim\" color=ink testId=\"bound\"\n        image \"symbol:star\" testId=\"bound-under\"\n",

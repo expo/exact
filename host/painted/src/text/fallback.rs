@@ -480,11 +480,12 @@ mod tests {
         // Each script's list is what it was when every script was set its
         // own copy: its families, then the rest of the last resort (Latin
         // has none of its own here, so its list is the last resort).
-        let mut c = crate::text::fonts::installed().collection.clone();
+        let engine = crate::text::fixtures::engine();
+        let mut c = engine.catalog.borrow().fonts.collection.clone();
         configure(&mut c, "en");
         let latin = FallbackKey::new(Script::from_str_unchecked("Latn"), None);
         let last: Vec<FamilyId> = c.fallback_families(latin).collect();
-        assert!(!last.is_empty(), "this machine has installed fonts");
+        assert!(!last.is_empty(), "the fixture has fallback fonts");
         for (script, _) in <Script as ScriptExt>::all_samples() {
             let own: Vec<FamilyId> = families(script.as_str(), "en")
                 .iter()

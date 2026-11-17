@@ -45,12 +45,13 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Whether `node` and what is under it are left out: hidden, inert, not
-    /// displayed or `aria-hidden`.
+    /// Whether `node` and what is under it are left out: hidden, inert, in a
+    /// shared-element flight, not displayed or `aria-hidden`.
     fn access_excluded(&self, node: &NodeRef<'_>) -> bool {
         let (hidden, inert) = self.host.route_visibility(node.id);
         hidden
             || inert
+            || self.host.flying(node.id)
             || node.style.display == Display::None
             || node.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
     }
@@ -65,9 +66,14 @@ impl<D: DataSource> Presenter<D> {
         // A press on it is a press on the switch. A switch left out of the
         // tree leaves the row as it is, and the switch's `aria-disabled` is
         // the node's, as it would be its own.
+        // A row with a text or an image that has a press of its own is no such row:
+        // each of its parts is walked as it is written.
         let kernel = self.host.kernel();
-        let toggle = (kernel.grouped_toggle(id).and_then(|t| kernel.node(t)))
-            .filter(|t| !self.access_excluded(t));
+        let acts = |id| (self.host.runner().handlers_of(id)).contains(&EventKind::Press);
+        let toggle = (kernel
+            .grouped_toggle(id, &acts)
+            .and_then(|t| kernel.node(t)))
+        .filter(|t| !self.access_excluded(t));
         if let Some((target, kind)) =
             toggle.and_then(|t| Some((t, ControlKind::of(t.node_type, t.props)?)))
         {
@@ -107,6 +113,12 @@ impl<D: DataSource> Presenter<D> {
                     false => self.field_text(id),
                 };
                 Some((role, flag::CLICK, [0.0; 3], (name, value)))
+            }
+            // @ref LLP 1042.001 D11 — one node: what is in a controller
+            // is the controller's to report.
+            (NodeType::Video, _) => {
+                let name = self.access_label(&node).unwrap_or_default();
+                Some((role::MEDIA, 0, [0.0; 3], (name, String::new())))
             }
             (_, Some(kind)) if kind != ControlKind::Button => {
                 let (role, flags, range, value) = self.access_control(&node, kind);
@@ -167,13 +179,32 @@ impl<D: DataSource> Presenter<D> {
             })
         {
             // A range role is one element, its children presentational.
-            let min = number(node.props.str(PropId::AccessibilityValueMin)).unwrap_or(0.0);
-            let max = number(node.props.str(PropId::AccessibilityValueMax)).unwrap_or(100.0);
-            let role = if aria == Some("slider") {
-                role::SLIDER
-            } else {
-                role::PROGRESS
+            let said_min = number(node.props.str(PropId::AccessibilityValueMin));
+            let said_max = number(node.props.str(PropId::AccessibilityValueMax));
+            let (min, max) = (said_min.unwrap_or(0.0), said_max.unwrap_or(100.0));
+            let role = match aria {
+                Some("slider") => role::SLIDER,
+                Some("spinbutton") => role::SPIN_BUTTON,
+                _ => role::PROGRESS,
             };
+            // A slider or spin button steps by its author's keys
+            // (`access_step_range`) while it is short of a bound: ARIA's 0
+            // and 100 for a slider, and only the bounds a spin button says.
+            let (low, high) = match aria {
+                Some("slider") => (min, max),
+                Some("spinbutton") => (
+                    said_min.unwrap_or(f32::NEG_INFINITY),
+                    said_max.unwrap_or(f32::INFINITY),
+                ),
+                _ => (f32::INFINITY, f32::NEG_INFINITY),
+            };
+            let mut flags = flag::RANGE;
+            if now < high {
+                flags |= flag::FORWARD;
+            }
+            if now > low {
+                flags |= flag::BACKWARD;
+            }
             let text = node
                 .props
                 .str(PropId::AccessibilityValueText)
@@ -182,7 +213,7 @@ impl<D: DataSource> Presenter<D> {
                 self.access_label(&node).unwrap_or_default(),
                 text.to_string(),
             );
-            self.access_emit(b, &scope, &node, role, flag::RANGE, [min, max, now], || {
+            self.access_emit(b, &scope, &node, role, flags, [min, max, now], || {
                 Some(words)
             });
             return;
@@ -203,7 +234,7 @@ impl<D: DataSource> Presenter<D> {
             if let Some(s) = scroller {
                 let (flags, range) = Self::access_scroll(&s);
                 let words = (label.unwrap_or_default(), String::new());
-                let painted = b.boxes.get(&id).copied();
+                let painted = b.boxes.get(&id).cloned();
                 let Some(own) =
                     self.access_emit(b, &scope, &node, role::SCROLLER, flags, range, || {
                         Some(words)
@@ -257,7 +288,7 @@ impl<D: DataSource> Presenter<D> {
             Some(hash) => rowed(hash),
             None => (id & 0x3fff_ffff) as i32,
         };
-        for (index, child) in node.child_nodes().enumerate() {
+        let mut visit = |index: usize, child: NodeRef<'_>| {
             let key = child.props.str(PropId::ListItemKey);
             let mut under = scope;
             under.hash = match key.filter(|key| !key.is_empty()) {
@@ -267,6 +298,20 @@ impl<D: DataSource> Presenter<D> {
                     .map(|hash| fnv(hash, &(index as u32).to_le_bytes())),
             };
             self.access_walk_node(b, child, under);
+        };
+        // A table's rows are visited in the order it draws and counts them
+        // (`Node::grid`), not as written: the first `tfoot` last.
+        match kernel.table_order(id) {
+            Some(order) => {
+                let written: Vec<NodeRef<'_>> = node.child_nodes().collect();
+                for index in order {
+                    visit(index, written[index]);
+                }
+            }
+            None => node
+                .child_nodes()
+                .enumerate()
+                .for_each(|(i, c)| visit(i, c)),
         }
     }
 }

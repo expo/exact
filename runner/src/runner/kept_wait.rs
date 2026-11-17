@@ -85,7 +85,7 @@ impl<D: DataSource> Runner<D> {
             if super::kept::kept_surface(&self.plan, i) {
                 out.kept_seed = matched == Match::Admit && self.surface_seed_waiting(i);
                 if !ready && !out.kept_seed {
-                    self.refuse_kept(i, &kept, now, states);
+                    self.refuse_kept(i, &kept, now, valid, states);
                 }
             } else if !ready {
                 match matched {
@@ -100,7 +100,7 @@ impl<D: DataSource> Runner<D> {
                         let slept = states[i].as_ref().is_some_and(|s| s.slept);
                         self.start_waiting(i, kept, slept);
                     }
-                    Match::Mismatch => self.refuse_kept(i, &kept, now, states),
+                    Match::Mismatch => self.refuse_kept(i, &kept, now, valid, states),
                 }
             } else if states[i].as_ref().is_some_and(|s| s.slept) {
                 // Idle through readiness, so never compared until its gate
@@ -114,7 +114,7 @@ impl<D: DataSource> Runner<D> {
                         states[i] = None;
                     }
                     Match::Mismatch => {
-                        self.refuse_kept(i, &kept, now, states);
+                        self.refuse_kept(i, &kept, now, valid, states);
                         states[i] = None;
                     }
                 }
@@ -145,17 +145,15 @@ impl<D: DataSource> Runner<D> {
                         out.kept_seed = !ready;
                         out.hold = ready;
                         out.admitted_early = !ready;
-                        let mut shown = String::new();
-                        crate::agent::untyped_json(&Value::list(waiting.args), &mut shown);
                         let name = self.plan.str(self.resource_row(i).name);
-                        let line = super::lines::kept_shown(name, &shown);
+                        let line = super::lines::kept_shown(name);
                         self.keeping.refused.push((i, line));
                     }
                 }
                 Match::Wait => {}
                 Match::Mismatch => {
                     self.resources[i].waiting = None;
-                    self.refuse_kept(i, &waiting.args, now, states);
+                    self.refuse_kept(i, &waiting.args, now, valid, states);
                 }
             }
         }
@@ -320,55 +318,55 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Journal resource `i`'s kept answer, kept for `kept`, consumed by a
-    /// known mismatch with `now`: each differing identifying argument with
-    /// its value, and the states and resources it reads with theirs. Once
-    /// per resource and commit.
+    /// known mismatch with `now`: each differing identifying argument and
+    /// the states and resources it reads. Once per resource and commit.
     fn refuse_kept(
         &mut self,
         i: usize,
         kept: &[Value],
         now: &[Value],
+        valid: bool,
         states: &[Option<ResourceState>],
     ) {
         if self.keeping.refused.iter().any(|(r, _)| *r == i) {
             return;
         }
-        let json = |v: &Value| {
-            let mut out = String::new();
-            crate::agent::untyped_json(v, &mut out);
-            out
-        };
-        let list = |args: &[Value]| json(&Value::list(args.to_vec()));
         let differing: Vec<String> = (0..now.len())
             .filter(|&k| kept.get(k) != Some(&now[k]))
             .map(|k| {
-                let inputs = self.arg_inputs(i, k, states, &json);
-                super::lines::kept_argument(k + 1, &json(&now[k]), &inputs)
+                let inputs = self.arg_inputs(i, k, states);
+                super::lines::kept_argument(k + 1, &inputs)
             })
             .collect();
-        let mut why = format!(
-            "this launch asks for {}",
-            super::lines::shortened(&list(now))
-        );
-        if !differing.is_empty() {
-            why = format!("{why}: {}", differing.join("; "));
-        }
+        let unknown: Vec<String> = (0..now.len())
+            .filter(|&k| self.arg_unknown(i, k, states))
+            .map(|k| {
+                let inputs = self.arg_inputs(i, k, states);
+                super::lines::kept_argument_unknown(k + 1, &inputs)
+            })
+            .collect();
+        let why = if kept.len() != now.len() {
+            "its identifying arguments differ in count".to_string()
+        } else if !differing.is_empty() {
+            differing.join("; ")
+        } else if super::kept::kept_surface(&self.plan, i) && !self.surface_seed_waiting(i) {
+            "a live surface publication replaced it".to_string()
+        } else if !valid {
+            "its request arguments are invalid".to_string()
+        } else {
+            debug_assert!(!unknown.is_empty());
+            unknown.join("; ")
+        };
         let name = self.plan.str(self.resource_row(i).name);
-        let line = super::lines::kept_refused(name, Some(&list(kept)), &why);
+        let line = super::lines::kept_refused(name, &why);
         self.keeping.refused.push((i, line));
     }
 
     /// The root states and resources resource `i`'s identifying argument
-    /// `k` reads, directly or through derives, each with its value. A
+    /// `k` reads, directly or through derives. A
     /// resource says whether it holds an admitted kept answer or is a store
     /// reader without one.
-    fn arg_inputs(
-        &self,
-        i: usize,
-        k: usize,
-        states: &[Option<ResourceState>],
-        json: &dyn Fn(&Value) -> String,
-    ) -> Vec<String> {
+    fn arg_inputs(&self, i: usize, k: usize, states: &[Option<ResourceState>]) -> Vec<String> {
         use crate::instance::Input;
         let mut named = Vec::new();
         self.identity_inputs(
@@ -378,14 +376,10 @@ impl<D: DataSource> Runner<D> {
                 let name = match input {
                     Input::Slot(s) => (self.plan.slots.get(s).zip(self.slots.get(s)))
                         .filter(|(slot, _)| slot.owner.is_none())
-                        .map(|(slot, v)| {
-                            let value = super::lines::shortened(&json(v));
-                            format!("state {} = {value}", self.plan.str(slot.name))
-                        }),
+                        .map(|(slot, _)| format!("state {}", self.plan.str(slot.name))),
                     Input::Resource(r) | Input::PendingResource(r) | Input::FailedResource(r) => {
                         states.get(r).and_then(Option::as_ref).map(|s| {
                             let name = self.plan.str(self.resource_row(r).name);
-                            let value = super::lines::shortened(&json(s.value.get(&self.plan)));
                             let what = if s.kept_seed {
                                 " (holding an admitted kept answer)"
                             } else if self.resources[r].store_reader {
@@ -393,7 +387,7 @@ impl<D: DataSource> Runner<D> {
                             } else {
                                 ""
                             };
-                            format!("resource {name} = {value}{what}")
+                            format!("resource {name}{what}")
                         })
                     }
                     _ => None,

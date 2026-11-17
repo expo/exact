@@ -43,9 +43,9 @@ const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
 const contractGrammar = JSON.parse(readFileSync(join(REPO, 'editors/vscode/syntaxes/exact-contract.tmLanguage.json'), 'utf8'));
 const highlighter = await createHighlighter({
   themes: [THEMES.light, THEMES.dark],
-  langs: ['ts', 'js', 'json', 'rust', 'swift', 'shellscript', { ...contractGrammar, name: 'contract', aliases: ['contract-test', 'tamber'] }],
+  langs: ['ts', 'js', 'json', 'rust', 'swift', 'shellscript', { ...contractGrammar, name: 'contract', aliases: ['contract-test', 'forma'] }],
 });
-const LANG: Record<string, string> = { sh: 'shellscript', bash: 'shellscript', shell: 'shellscript', ts: 'ts', js: 'js', json: 'json', rust: 'rust', swift: 'swift', contract: 'contract', 'contract-test': 'contract', tamber: 'contract' };
+const LANG: Record<string, string> = { sh: 'shellscript', bash: 'shellscript', shell: 'shellscript', ts: 'ts', js: 'js', json: 'json', rust: 'rust', swift: 'swift', contract: 'contract', 'contract-test': 'contract', forma: 'contract' };
 const TERMINAL = new Set(['sh', 'bash', 'shell', 'console']);
 
 function imageSize(file: string): { width: number; height: number } {

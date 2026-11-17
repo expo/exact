@@ -310,7 +310,10 @@ fn popover_surfaces_placement_dismissal_and_modal_replacement() {
     let root = id(&p, "picker");
     let r = p.rect_of(root).unwrap();
     assert_eq!(r, (anchor.0, anchor.1 + anchor.3 + 4., 160., 90.));
-    assert!(p.host().kernel().host_block_implied(root));
+    assert!(matches!(
+        p.host().kernel().host_block(root).unwrap().width,
+        exact_kernel::BlockAxis::Region(_)
+    ));
     let s = p
         .host()
         .kernel()
@@ -594,3 +597,6 @@ fn popover_keeps_the_fitting_option_until_its_size_changes_or_it_reopens() {
     tap(&mut p, "invoker");
     assert_eq!(p.rect_of(root), Some((100., 386., 160., 100.)));
 }
+
+#[path = "position_area_region/presenter.rs"]
+mod position_area_region;

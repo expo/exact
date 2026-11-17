@@ -77,3 +77,50 @@ the agent's 552 KB and the rest of the Swift growth belong in every production
 app is the same question. Either the budget is re-based on what the core now
 holds on purpose, or the module seam (and whatever else is ruled optional) goes
 on the link-by-use list and the budget stays.
+
+## Status (2026-11-14)
+
+The delegated ruling removes the Swift agent from Apple's production
+composition. Development compositions retain the agent and remain drivable.
+The package excludes the agent implementation sources when
+`EXACT_UPDATE_TRUST=production`; product helpers remain in `ExactKit`, and an
+optional hook connects them to the agent only when that implementation is
+present. Frame health remains in every composition and no longer reaches the
+agent for native layout.
+
+The ios-size step, run alone on this lane at base `e8f945f3e`, measured:
+
+| composition | speed | size |
+|---|---:|---:|
+| before | 19,168,544 B | 12,520,000 B |
+| after | 18,175,416 B | 11,736,984 B |
+| reduction | 993,128 B | 783,016 B |
+| budget | 8,600,000 B | 6,050,000 B |
+
+These are stripped simulator executables over an empty UIKit executable; the
+empty executable was 53,680 B before and 53,688 B after. Both rows remain over
+budget. On the `a54f4234f` base, this composition measured 18,818,992 B at
+speed, 12,019,600 B at size and 16,669,360 B balanced. Main's
+`IOS_HELLO_BYTES` ceilings remain 8,600,000 B, 6,050,000 B and 16,900,000 B,
+so the first two rows still exceed them. Whether those ceilings move is owed
+to the maintainer; the composition change does not decide it.
+
+The production link proof requires fresh build receipts and checks every iOS
+and macOS production Hello bake it finds. Each contains the frame-health
+positive-control symbol and no `ExactKit.Agent` symbol. Fresh development
+bakes contain `ExactKit.Agent.startSocket` or `startStdio`, plus
+`accessibilityElementsTree` and `layout`. A production Hello launched on a
+simulator and showed its first screen, and its four-finger frame-health card
+opened and rendered. A production macOS Hello also launched and showed its
+text. Development iOS and macOS apps still answered agent trees and their
+platform smokes exercised the same paths.
+
+In a production bake, Save Trace returns `TraceError.production` and
+`TraceSignal.install` does nothing, so neither the dev-menu command nor the
+signal-triggered snapshot can write a trace. An authored
+`startTrace_EXPERIMENTAL()` / `stopTrace_EXPERIMENTAL()` recording still works
+in production. That path builds its frame report directly and never calls
+`traceSnapshot()` or the agent's native-layout seam, so it has no layout field
+to mark unavailable. The seam gives any future caller an explicit
+`available: false` value whose reason says that native layout inspection is
+not linked in a production composition.

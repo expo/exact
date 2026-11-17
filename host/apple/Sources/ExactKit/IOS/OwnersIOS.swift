@@ -232,7 +232,7 @@ final class OwnerBlocks {
         if let leaving = (stack as? UINavigationController)?.transitionCoordinator?.viewController(forKey: .from),
            !controllers.contains(where: { $0 === leaving }) { controllers.append(leaving) }
         return controllers.compactMap { controller in
-            guard let route = controller as? RouteController, let view = route.viewIfLoaded,
+            guard let route = controller as? RouteController, let view = route.bootSurface ?? route.viewIfLoaded,
                   presenter.views[route.node.id] === route.node else { return nil }
             let block = self.block(in: view)
             route.fitContentViewport(in: block)

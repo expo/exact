@@ -69,6 +69,10 @@ struct DeclaredAction: Equatable {
 /// The app's declared categories, by identifier.
 enum DeclaredCategories {
     static let key = "exact.notifications.categories"
+    /// Where `kept` lives. Every XCTest process shares one standard domain,
+    /// where another process's launch would rewrite it: a test names a suite
+    /// of its own.
+    nonisolated(unsafe) static var defaults = UserDefaults.standard
 
     /// A list's category: the identifier a post and a push name it by.
     static func identifier(_ actions: [DeclaredAction]) -> String { actions.map(\.action).joined(separator: ",") }
@@ -82,7 +86,7 @@ enum DeclaredCategories {
 
     /// The last registered Exact definitions, kept for ownership reconciliation.
     static var kept: [String: [DeclaredAction]] {
-        guard let data = UserDefaults.standard.data(forKey: key),
+        guard let data = defaults.data(forKey: key),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] else { return [:] }
         return json.mapValues { $0.compactMap(DeclaredAction.init) }
     }
@@ -94,7 +98,7 @@ enum DeclaredCategories {
             if let p = a.placeholder { o["placeholder"] = p }
             return o
         } }
-        if let data = try? JSONSerialization.data(withJSONObject: json) { UserDefaults.standard.set(data, forKey: key) }
+        if let data = try? JSONSerialization.data(withJSONObject: json) { defaults.set(data, forKey: key) }
     }
 }
 

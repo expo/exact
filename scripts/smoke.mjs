@@ -17,7 +17,8 @@ import { HOST_DEV, authoredTests, resolveApp, withAppFixture } from './app.mjs';
 import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL, webSmokeBuild, webSmokeSweep } from './smoke-inspect.mjs';
 import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './origin.mjs';
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
-import { canonicalBytes, channelOf, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
+import { canonicalBytes, publicKeyFromRaw, readAssetIndex, webRelease } from './deploy.mjs';
+import { channelOf } from './origin.mjs';
 import { crop, decodePng, diff, encodePng } from './png.mjs';
 import { requireNativeBuilds } from './parity.mjs';
 import { fileURLToPath } from 'node:url';
@@ -235,8 +236,9 @@ if (host === 'deploy') {
         }
         check(src?.includes('/.exact/root/web/releases/'), `the published deck loaded from its immutable release: ${src}`);
       }
-      // The program is the JS target's `app.js` when it takes the app, else `app.wasm` (LLP 1071 §7, delivery).
-      check(requests.some((p) => /^\/\.exact\/root\/web\/releases\/[0-9a-f]{64}\/app\.(?:js|wasm)$/.test(p))
+      // The program is the JS target's entry (`app-<hash>.js`, LLP 1153.004) when it takes the app, else `app.wasm`
+      // (LLP 1071 §7, delivery).
+      check(requests.some((p) => /^\/\.exact\/root\/web\/releases\/[0-9a-f]{64}\/app(?:-[\w-]{8}\.js|\.wasm)$/.test(p))
         && !requests.some((p) => /^\/(assets|deck|shaders)\//.test(p)), `the browser used immutable local resources: ${requests.join(', ')}`);
       const lines = browser.carrier.hostLines;
       check(!lines.some((line) => /exception:|console.error: exact:/.test(line)), `published browser diagnostics: ${lines.join(' | ')}`);
@@ -791,11 +793,15 @@ if (apple && !device) await httpFrameSmoke({ host, open, check });
   writeFileSync(source, 'shape Time\n  locale: string\n  formatLocale: string\n  resolvedLocale: string\n  timeZone: string\n  seed: number\n  epochAtZero: number\n  utcOffset: number\ncomponent App\n  resource time = exactTime() as shape Time\n  state minute = 0\n  action tick\n    minute = time.epochAtZero + performanceNow()\n  task minutes mount\n    every(60000, tick)\n  view\n    column\n      text `${time.locale}|${time.resolvedLocale}|${time.timeZone}|${time.seed}|${time.formatLocale}` testId="place"\n      text `${time.epochAtZero}|${time.utcOffset}|${minute}` testId="date"\n      text t("greeting") testId="greeting"\n');
   const compiled = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], {cwd:ROOT, encoding:'utf8'});
   check(compiled.status === 0, 'launch facts fixture compiles: ' + compiled.stderr);
+  // The Mac lays out in AppKit's process direction (LLP 1060.000 D1), which a probe process reads as the fixture's would while
+  // the system's settings decide it: the fixture is launched with no `Apple…` arguments.
+  const macDir = host === 'macos' ? spawnSync('xcrun', ['swift', '-'], { input: 'import AppKit; print(NSApplication.shared.userInterfaceLayoutDirection == .rightToLeft ? "rtl" : "ltr")', encoding: 'utf8' }).stdout.trim() : null;
+  if (host === 'macos') check(macDir === 'ltr' || macDir === 'rtl', `the AppKit direction probe answers: ${macDir}`);
   if (compiled.status === 0) for (const options of [{}, {}, {seed:42, locale:'fr-CA', timeZone:'America/Toronto', epoch:'2026-09-21T14:13:20Z'}, {seed:42, locale:'ar-EG', timeZone:'UTC'}, {epoch:'now'}, {locale:'en-US', formatLocale:'en-KR'}]) {
     const launched = Date.now(), f = await openFixture({host, browser: 'chrome', plan, ...options});
     try {
       const lang = options.locale === 'ar-EG' ? 'ar' : options.locale?.startsWith('fr') ? 'fr' : 'en';
-      const dir = lang === 'ar' ? 'rtl' : 'ltr';
+      const dir = macDir ?? (lang === 'ar' ? 'rtl' : 'ltr');
       const expected = `${options.locale ?? 'en-US'}|${lang}|${options.timeZone ?? 'UTC'}|${options.seed ?? 1}|${options.formatLocale ?? options.locale ?? 'en-US'}`; // the Region's format: the drive's, else the locale
       const tree = await f.tree();
       check(byTestId(tree, 'place')?.props.text === expected, `launch facts: expected ${expected}, got ${byTestId(tree, 'place')?.props.text}`);
@@ -1405,6 +1411,9 @@ if ((host === 'web' || apple || host === 'linux') && !argv.includes('--app-only'
       await f.tap('open'); h = await held('open-file');
       await f.tap(`@${h?.ticket}`, { choice: 'cancel' }); await f.clock('settle');
       check(await text('cancels') === '1', `tap @N cancel fires cancel: ${await text('cancels')}`);
+      // `startIn=` (LLP 1173 D2) is in the held picker's summary: a name, or a handle chosen earlier.
+      for (const [button, capability, want] of [['open-pictures', 'open-file', 'pictures'], ['save-beside', 'save-file', await text('folder-value')]]) {
+        await f.tap(button); h = await held(capability); check(h?.device.args.startIn === want, `${button} is held with startIn ${want}: ${JSON.stringify(h)}`); await f.tap(`@${h?.ticket}`, { choice: 'cancel' }); await f.clock('settle'); }
     } catch (error) {
       failures.push(`the pickers fixture stopped: ${error.message}`);
     } finally { await f.close(); }
@@ -1427,7 +1436,7 @@ if (app.modules.tags.includes('exact-fixture') && ['web', 'macos', 'ios'].includ
 }
 // A painting host loads no module; the fixture's hatches run there (LLP 1075.003.000.001 §8 stage 4).
 if (app.modules.tags.includes('exact-fixture') && host === 'linux') await (await import('./smoke-native.mjs')).paintingHatchSmoke({ host, open, check });
-if (app.modules.tags.includes('exact-swatch') && ['macos', 'ios'].includes(host)) await (await import('./smoke-tamber.mjs')).tamberSmoke({ host, open, check }); // LLP 1121 D12
+if (app.modules.tags.includes('exact-swatch') && ['macos', 'ios'].includes(host)) await (await import('./smoke-forma.mjs')).formaSmoke({ host, open, check }); // LLP 1121 D12
 // 15. The recorder (LLP 1133.009 §11): the microphone through the standard packages.
 if (app.id === 'com.exact.recorder' && ['web', 'macos', 'ios'].includes(host)) {
   const { recorderSmoke } = await import('./smoke-recorder.mjs');

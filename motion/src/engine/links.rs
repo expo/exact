@@ -3,12 +3,13 @@
 //! transition, shared element, keyframes, timeline, spring or hold) still
 //! needs the engine as the store of what the host presents, and nothing
 //! else of it. [`EngineLinks::SETTLE`] keeps that store and names none of the
-//! machinery — curves, springs, keyframes, holds, clocks, timelines, paths
-//! — so an artifact that makes its engine from it in a `const` links none
+//! machinery — curves, springs, keyframes, holds, clocks, timelines, paths,
+//! filters — so an artifact that makes its engine from it in a `const` links none
 //! of them. [`Engine::new`] plays everything.
 
 use super::*;
 use crate::animation::Animations;
+use crate::filter::FilterValue;
 use crate::path::PathValue;
 
 /// An entry point's answer.
@@ -42,6 +43,7 @@ pub struct EngineLinks {
     pub(super) seek_timelines: fn(&mut Engine),
     pub(super) play_transition: fn(&mut Engine, u64, Property) -> Option<PlayedTransition>,
     pub(super) observe_path: fn(&mut Engine, u64, Option<PathValue>),
+    pub(super) observe_filter: fn(&mut Engine, u64, Option<FilterValue>, bool),
     pub(super) begin_transform_hold: BeginTransformHold,
     pub(super) update_transform_hold:
         fn(&mut Engine, TransformHold, f64, [Value; 2]) -> Answer<bool>,
@@ -76,6 +78,7 @@ impl EngineLinks {
         seek_timelines: Engine::seek_timelines_full,
         play_transition: Engine::play_transition_full,
         observe_path: Engine::observe_path_full,
+        observe_filter: Engine::observe_filter_full,
         begin_transform_hold: Engine::begin_transform_hold_full,
         update_transform_hold: Engine::update_transform_hold_full,
         begin_hold: Engine::begin_hold_full,
@@ -111,6 +114,7 @@ impl EngineLinks {
         seek_timelines: |_| {},
         play_transition: |_, _, _| None,
         observe_path: |_, _, _| {},
+        observe_filter: |_, _, _, _| {},
         begin_transform_hold: |_, _, _, _| Ok(None),
         update_transform_hold: |_, _, _, _| Ok(false),
         begin_hold: |_, _, _, _, _| Ok(None),
@@ -137,6 +141,8 @@ impl Engine {
             now: Default::default(),
             shown: Default::default(),
             start_on_frame: Default::default(),
+            unpresentable: Default::default(),
+            carried: Default::default(),
             pending: Default::default(),
             transitions: Default::default(),
             slots: Default::default(),
@@ -154,6 +160,7 @@ impl Engine {
             timelines: Default::default(),
             clocks: Default::default(),
             paths: Default::default(),
+            filters: Default::default(),
             links,
         }
     }

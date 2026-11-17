@@ -406,9 +406,11 @@ impl<D: DataSource> Presenter<D> {
             || self.group_needs_frame()
             || self.brush.moving()
             || self.bars_ripple_moving()
+            || self.surface_ripple_moving()
             || self.surfaces.owes_records()
             || self.stage_moving()
             || self.glides_moving()
+            || self.zooms_moving()
     }
     pub(super) fn arrange_edge(&self) -> Option<(ViewId, f64, f64)> {
         let s = self.arrange.as_ref()?;

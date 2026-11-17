@@ -38,7 +38,7 @@ fn closed_wait() -> bool {
 }
 
 /// Whether `node` is a box of the top layer: a `dialog` or a popover.
-fn top_layer(node: &exact_kernel::NodeRef<'_>) -> bool {
+pub(in crate::host) fn top_layer(node: &exact_kernel::NodeRef<'_>) -> bool {
     node.props.get(PropId::Popover).is_some()
         || node.props.str(PropId::SemanticTag) == Some("dialog")
 }

@@ -285,5 +285,6 @@ pub(crate) fn reserve(
         };
         metrics.width = metrics.width.max(candidate.width);
         metrics.height = metrics.height.max(candidate.height);
+        metrics.pending |= candidate.pending;
     }
 }

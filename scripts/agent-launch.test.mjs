@@ -149,7 +149,7 @@ test('--reader and --headless name the Android carrier as drive flags', () => {
 // `-fp-contract=off` is in `build.rustflags`). A run for another target, or for the host, is left alone.
 test('the Android build links its libraries with 16 KB pages, beside the flags Cargo would use', async () => {
   const { ANDROID_PAGE_SIZE: page, androidCargo } = await import('./cargo-check.mjs');
-  const config = ['--config', `build.rustflags=["${page}"]`];
+  const abi = '-Clink-arg=-lc++abi', config = ['--config', `build.rustflags=["${page}","${abi}"]`];
   const run = (env, args = ['build', '-p', 'app', '--target', 'aarch64-linux-android']) => {
     const [, argv, { env: out }] = androidCargo('cargo', args, { env });
     return { argv, flags: Object.fromEntries(['CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS', 'CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS'].filter((k) => out[k] !== undefined).map((k) => [k, out[k]])) };
@@ -157,11 +157,11 @@ test('the Android build links its libraries with 16 KB pages, beside the flags C
   expect(run({})).toEqual({ argv: ['build', '-p', 'app', '--target', 'aarch64-linux-android', ...config], flags: {} });
   expect(run({}, ['rustc', '--target=aarch64-linux-android', '--', '-Cfoo']).argv).toEqual(['rustc', '--target=aarch64-linux-android', ...config, '--', '-Cfoo']);
   expect(run({ CARGO_BUILD_RUSTFLAGS: '--cfg b' }).flags).toEqual({ CARGO_BUILD_RUSTFLAGS: '--cfg b' });
-  expect(run({ RUSTFLAGS: '-Cdebuginfo=1' }).flags).toEqual({ RUSTFLAGS: `-Cdebuginfo=1 ${page}` });
-  expect(run({ RUSTFLAGS: '' }).flags).toEqual({ RUSTFLAGS: page });
-  expect(run({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: '--cfg\x1fa b' }).flags).toEqual({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: `--cfg\x1fa b\x1f${page}` });
-  expect(run({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: '-llog' }).flags).toEqual({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `-llog ${page}` });
-  expect(run({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: page }).flags).toEqual({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: page });
+  expect(run({ RUSTFLAGS: '-Cdebuginfo=1' }).flags).toEqual({ RUSTFLAGS: `-Cdebuginfo=1 ${page} ${abi}` });
+  expect(run({ RUSTFLAGS: '' }).flags).toEqual({ RUSTFLAGS: `${page} ${abi}` });
+  expect(run({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: '--cfg\x1fa b' }).flags).toEqual({ RUSTFLAGS: '-Cdebuginfo=1', CARGO_ENCODED_RUSTFLAGS: `--cfg\x1fa b\x1f${page}\x1f${abi}` });
+  expect(run({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: '-llog' }).flags).toEqual({ CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `-llog ${page} ${abi}` });
+  expect(run({ RUSTFLAGS: page, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `${page} ${abi}` }).flags).toEqual({ RUSTFLAGS: `${page} ${abi}`, CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS: `${page} ${abi}` });
   // The host's own runs (a game's lints) and other targets'.
   for (const args of [['clippy', '-p', 'game', '--lib'], ['build', '--target', 'aarch64-apple-ios']]) {
     const env = { RUSTFLAGS: '-Cdebuginfo=1' };
@@ -1110,7 +1110,7 @@ test('a setting is read from the environment, then .env.local, then .env, and wh
     // And so it reaches the module, though `.env.development`, the one file that holds it, is not read.
     writeFileSync(resolve(dir,'app.json'),JSON.stringify({env:['D']}));
     const {parseSync}=await import('rolldown/utils'), {inlineSettings}=await import('../js/bake/src/__exact_env.mjs');
-    expect(inlineSettings('const D_ = import.meta.env.D;\n',dir,parseSync,exported)).toEqual({code:'const D_ = "d-development";\n',record:{D:{value:'d-development',source:'environment'}}});
+    expect(inlineSettings('const D_ = import.meta.env.D;\n',dir,parseSync,exported)).toEqual({code:'const D_ = ("d-development" as string);\n',record:{D:{value:'d-development',source:'environment'}}});
     // An edit after the command started: the given value still wins; the one Bun loaded gives way to the file.
     writeFileSync(resolve(dir,'.env'),'A=a-edited\nC=c-env\n');
     expect(settingValues(dir,['A'],exported)).toEqual({A:{value:'a-env',source:'environment'}});
@@ -1136,11 +1136,11 @@ test('import.meta.env inlines each declared setting in app.ts, its grant follows
     writeFileSync(resolve(dir,'.env'),'API_BASE_URL=http://127.0.0.1:9999\n');
     const code="const API = import.meta.env.API_BASE_URL;\nexport const grants = `net.fetch ${API}`;\n";
     const set=inline(code);
-    expect(set.code).toBe('const API = "http://127.0.0.1:9999";\nexport const grants = `net.fetch ${API}`;\n');
+    expect(set.code).toBe('const API = ("http://127.0.0.1:9999" as string);\nexport const grants = `net.fetch ${API}`;\n');
     expect(set.record).toEqual({API_BASE_URL:{value:'http://127.0.0.1:9999',source:'.env'}});
     expect(staticFacts(set.code,parseSync).grants).toBe('net.fetch http://127.0.0.1:9999');
     // Exported, wrapped, or with a default the environment overrides; a const origin it sets is one the backend selection may move.
-    expect(inline("export const API = (import.meta.env['API_BASE_URL'] ?? 'http://x') as string;",{API_BASE_URL:'https://api.example'}).code).toBe('export const API = "https://api.example";');
+    expect(inline("export const API = (import.meta.env['API_BASE_URL'] ?? 'http://x') as string;",{API_BASE_URL:'https://api.example'}).code).toBe('export const API = ("https://api.example") as string;');
     const origin=inline("const origin = import.meta.env.API_BASE_URL;\nexport const grants = `net.fetch ${origin}`;\n").code;
     expect(staticFacts(injectBackendOrigin(origin,'http://127.0.0.1:4790',parseSync),parseSync).grants).toBe('net.fetch http://127.0.0.1:4790');
     rmSync(resolve(dir,'.env'));
@@ -1159,7 +1159,7 @@ test('import.meta.env inlines each declared setting in app.ts, its grant follows
     ].join('\n'));
     // One name read twice takes one default.
     declare('API_BASE_URL');
-    expect(inline("const A = import.meta.env.API_BASE_URL ?? 'http://a';\nconst B = import.meta.env.API_BASE_URL ?? 'http://a';\n").code).toBe('const A = "http://a";\nconst B = "http://a";\n');
+    expect(inline("const A = import.meta.env.API_BASE_URL ?? 'http://a';\nconst B = import.meta.env.API_BASE_URL ?? 'http://a';\n").code).toBe('const A = ("http://a" as string);\nconst B = ("http://a" as string);\n');
     expect(() => inline("const A = import.meta.env.API_BASE_URL ?? 'http://a';\nconst B = import.meta.env.API_BASE_URL ?? 'http://b';\nconst C = import.meta.env.API_BASE_URL;\n")).toThrow([
       'app.ts:2:11: import.meta.env.API_BASE_URL is read again with "http://b", and at app.ts:1:11 with "http://a": read it once, or give every read the same default',
       'app.ts:3:11: import.meta.env.API_BASE_URL is read again with no default, and at app.ts:1:11 with "http://a": read it once, or give every read the same default',
@@ -1238,15 +1238,21 @@ test('a setting is named the backend\'s source only where the grant takes it, an
 test("another host's crate or Android's Gradle files are no input of the Apple, web or plan check", async () => {
   const {receiptChanges,webInputs}=await import('./agent-launch.mjs');
   const {planSources}=await import('./agent-build.mjs');
-  const {resolveApp}=await import('./app.mjs');
+  const {resolveApp,patchLines}=await import('./app.mjs');
   const dir=realpathSync(mkdtempSync(resolve(tmpdir(),'exact-other-hosts-'))), before=process.env.EXACT_APP_DIR;
   try {
+    // An app that writes its own host crates writes their workspace too (LLP 1153.003 D3).
+    const hosts=['android','windows','linux','web'];
+    writeFileSync(resolve(dir,'Cargo.toml'),`[workspace]\nmembers = ${JSON.stringify(hosts)}\nresolver = "2"\n\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
+    writeFileSync(resolve(dir,'rust-toolchain.toml'),`[toolchain]\nchannel = "${PINNED_RUST}"\n`);
     const files=['app.json','app.contract','gradle.lockfile','gradle-verification.xml',
-      ...['android','windows','linux','web'].flatMap(host=>[`${host}/Cargo.toml`,`${host}/src/lib.rs`])];
+      ...hosts.flatMap(host=>[`${host}/Cargo.toml`,`${host}/src/lib.rs`])];
     const inputTime=new Date('2026-01-01T00:00:00Z'), builtTime=new Date('2026-01-01T00:01:00Z'), edited=new Date('2026-01-01T00:02:00Z');
+    for (const file of ['Cargo.toml','rust-toolchain.toml']) utimesSync(resolve(dir,file),inputTime,inputTime);
     for (const file of files) {
       mkdirSync(dirname(resolve(dir,file)),{recursive:true});
-      writeFileSync(resolve(dir,file),file==='app.json'?JSON.stringify({name:'Hosts',app:{id:'com.exact.hosts',name:'Hosts'}}):file==='app.contract'?'component App\n  view\n    text "x"\n':'');
+      writeFileSync(resolve(dir,file),file==='app.json'?JSON.stringify({name:'Hosts',app:{id:'com.exact.hosts',name:'Hosts'}}):file==='app.contract'?'component App\n  view\n    text "x"\n'
+        :file.endsWith('/Cargo.toml')?`[package]\nname = "hosts-${dirname(file)}"\nversion = "0.0.0"\nedition = "2021"\n`:'');
       utimesSync(resolve(dir,file),inputTime,inputTime);
     }
     const app=resolveApp(dir), receipt=resolve(dir,'target/receipt.json');

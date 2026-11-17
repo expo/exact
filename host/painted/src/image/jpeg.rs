@@ -171,7 +171,7 @@ fn exif_orientation(bytes: &[u8]) -> Option<u8> {
     let ifd = tiff.get(usize::try_from(offset).ok()?..)?;
     let count = usize::from(u16_at(ifd.get(..2)?));
     let entries = ifd.get(2..)?.get(..count * 12)?;
-    for entry in entries.chunks_exact(12) {
+    for entry in entries.as_chunks::<12>().0 {
         if u16_at(entry) != 0x112 || u16_at(&entry[2..]) != 3 {
             continue;
         }

@@ -5,8 +5,9 @@
 // direct.html, which runs the same fixtures on Chrome's context directly.
 //
 // Page 3's fixtures are sequences: `step` redraws them on the same context.
-// Page 6 captures canvases as PNG files (`captureCanvas`, LLP 1056 D9) and
-// shows each file beside its canvas, so one screenshot compares the two.
+// Page 6 captures canvases as PNG and JPEG files (`captureCanvas`, LLP 1056
+// D9) and shows each file beside its canvas, so one screenshot compares the
+// two; a `.jpg` path asks for `image/jpeg`.
 // `backdrop` puts every canvas on black instead of white, without a redraw:
 // what shows through is the bitmap's alpha (LLP 1056 §4).
 
@@ -59,6 +60,9 @@ component Gallery
       send captured = capture("annotate", `app:/tmp/turn-${step}.png`)
   action rustRefused
     send captured = captureRust("annotate", "app:/data/rust.png")
+  action rustJpeg
+    step = step + 1
+    send captured = captureRust("annotate", `app:/tmp/rust-${step}.jpg`)
   action advance
     step = step + 1
   action flip
@@ -115,6 +119,8 @@ component Gallery
                 text "Annotation" font-size=13
               button appearance="none" press=take("blank", "app:/tmp/blank.png") testId="capture-blank"
                 text "Blank" font-size=13
+              button appearance="none" press=take("annotate", `app:/tmp/annotate-${step}.jpg`) testId="capture-jpeg"
+                text "JPEG" font-size=13
               button appearance="none" press=take("annotate", "app:/data/annotate.png") testId="capture-refused"
                 text "Outside the grant" font-size=13
               button appearance="none" press=take("nowhere", "app:/tmp/nowhere.png") testId="capture-missing"
@@ -128,6 +134,8 @@ component Gallery
                 text "Rust resize and capture" font-size=13
               button appearance="none" press=rustRefused testId="capture-rust-refused"
                 text "Rust outside grant" font-size=13
+              button appearance="none" press=rustJpeg testId="capture-rust-jpeg"
+                text "Rust JPEG" font-size=13
             match captured
               case some(c)
                 text c.record testId="captured"

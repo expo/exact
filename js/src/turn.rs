@@ -25,6 +25,7 @@ pub(crate) struct TurnTime(Option<(Arc<AtomicU64>, u64)>);
 pub(crate) struct TurnClock {
     wall: Instant,
     cpu: Option<Duration>,
+    loading: Duration,
     ticking: Option<(Arc<AtomicU64>, u64)>,
 }
 
@@ -35,6 +36,7 @@ pub(crate) struct Took {
     pub(crate) wall_ms: f64,
     /// Whether `own_ms` is CPU time.
     pub(crate) cpu: bool,
+    loading_ms: f64,
 }
 
 impl crate::Module {
@@ -81,6 +83,7 @@ impl TurnClock {
     pub(crate) fn start(time: &TurnTime) -> TurnClock {
         TurnClock {
             cpu: thread_cpu(),
+            loading: exact_runner::Native::library_load_time(),
             wall: Instant::now(),
             ticking: time
                 .0
@@ -96,19 +99,26 @@ impl TurnClock {
                 own_ms: ms,
                 wall_ms: ms,
                 cpu: false,
+                loading_ms: 0.0,
             };
         }
         let wall_ms = self.wall.elapsed().as_secs_f64() * 1e3;
+        let loading_ms = exact_runner::Native::library_load_time()
+            .saturating_sub(self.loading)
+            .as_secs_f64()
+            * 1e3;
         match (self.cpu, thread_cpu()) {
             (Some(a), Some(b)) => Took {
                 own_ms: b.saturating_sub(a).as_secs_f64() * 1e3,
                 wall_ms,
                 cpu: true,
+                loading_ms,
             },
             _ => Took {
                 own_ms: wall_ms,
                 wall_ms,
                 cpu: false,
+                loading_ms,
             },
         }
     }
@@ -131,7 +141,7 @@ impl TurnClock {
         let over = took.over(budget_ms, deadline);
         if over.is_none() {
             let held = took.held(main_thread, deadline, source, budget_ms);
-            journal.extend(held.map(|line| (None, line)));
+            journal.extend(held.map(|line| (crate::Writer::Runtime, line)));
         }
         over
     }
@@ -181,10 +191,11 @@ impl Took {
             ));
         }
         let backstop = budget_ms * WALL_BACKSTOP_BUDGETS;
-        (self.wall_ms > backstop).then(|| {
+        let wall_ms = (self.wall_ms - self.loading_ms).max(0.0);
+        (wall_ms > backstop).then(|| {
             format!(
                 "waited {:.1} ms of wall ({:.1} ms of its own), over the {backstop} ms a turn may take",
-                self.wall_ms, self.own_ms
+                wall_ms, self.own_ms
             )
         })
     }
@@ -241,6 +252,7 @@ mod tests {
             own_ms,
             wall_ms,
             cpu: true,
+            loading_ms: 0.0,
         }
     }
 
@@ -268,6 +280,35 @@ mod tests {
             .contains("over the 0 ms budget for one turn"));
         // An unlimited budget never refuses.
         assert!(took(1e6, 1e7).over(f64::INFINITY, false).is_none());
+    }
+
+    #[test]
+    fn only_a_library_load_leaves_the_wall_backstop() {
+        let mut turn = took(2.0, 1400.0);
+        turn.loading_ms = 1300.0;
+        assert!(turn.over(100.0, false).is_none());
+        assert!(
+            turn.over(100.0, true).is_some(),
+            "deadlines stay on wall time"
+        );
+        turn.own_ms = 110.0;
+        assert!(
+            turn.over(100.0, false).is_some(),
+            "own work is still bounded"
+        );
+        turn.own_ms = 2.0;
+        turn.wall_ms = 2400.0;
+        assert!(
+            turn.over(100.0, false).is_some(),
+            "other waits stay bounded"
+        );
+        let clock = TurnClock::start(&TurnTime::default());
+        exact_runner::Native::record_library_load(Duration::from_millis(1300));
+        assert_eq!(clock.took().loading_ms, 1300.0);
+        assert_eq!(
+            TurnClock::start(&TurnTime::default()).took().loading_ms,
+            0.0
+        );
     }
 
     #[test]

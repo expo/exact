@@ -4,12 +4,16 @@
 //! runner asks to admit reads the instance's own status first; the session's
 //! end destroys each instance once.
 use super::super::*;
+use crate::hatches::{install, Context as HatchContext, Element, Hatches, Ticket};
 use crate::package::{json, Context, Entry, Json, Package, Reply};
 use std::cell::RefCell;
 
 thread_local!(static HEARD: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) });
 thread_local!(static STATE: RefCell<&'static str> = const { RefCell::new("prompt") });
 thread_local!(static NOTIFIER: RefCell<Option<crate::package::Notifier>> = const { RefCell::new(None) });
+thread_local!(static BACKGROUND_STATE: RefCell<&'static str> = const { RefCell::new("prompt") });
+thread_local!(static BACKGROUND_NOTIFIER: RefCell<Option<crate::package::Notifier>> = const { RefCell::new(None) });
+thread_local!(static BACKGROUND_MOMENTS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) });
 
 fn heard() -> Vec<String> {
     HEARD.with(|h| std::mem::take(&mut *h.borrow_mut()))
@@ -18,6 +22,96 @@ fn heard() -> Vec<String> {
 /// Answers its status from `prompt`'s state and echoes every call.
 struct Probe {
     context: Context,
+}
+
+struct BackgroundPackage;
+
+impl Package for BackgroundPackage {
+    fn new(context: Context) -> Self {
+        BACKGROUND_NOTIFIER.with(|notifier| *notifier.borrow_mut() = Some(context.notifier()));
+        Self
+    }
+
+    fn later(&mut self, name: &str, _: &Json, _: Option<&Json>, reply: Reply) {
+        assert_eq!(name, "geolocationStatus");
+        let state = BACKGROUND_STATE.with(|state| *state.borrow());
+        reply.send(json!({"available": true, "state": state, "accuracy": "unknown"}));
+    }
+}
+
+#[derive(Default)]
+struct DeferredReply {
+    release: Option<std::sync::mpsc::Receiver<()>>,
+    started: Option<std::sync::mpsc::Sender<()>>,
+    completed: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl DataSource for DeferredReply {
+    fn query(
+        &mut self,
+        source: &str,
+        _: &[exact_runner::Value],
+    ) -> Result<exact_runner::Value, exact_runner::DataError> {
+        Err(exact_runner::DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(
+        &mut self,
+        _: &mut exact_runner::Store,
+        _: &str,
+        _: &[exact_runner::Value],
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        Ok(exact_runner::Answer::Later(
+            exact_runner::Request::continuation(1),
+        ))
+    }
+
+    fn dispatch(&mut self, _: u64, _: &exact_runner::Store) -> exact_runner::Dispatch {
+        let release = self.release.take().expect("one deferred reply");
+        let started = self.started.take().expect("the start signal");
+        let completed = self.completed.take().expect("the completion signal");
+        exact_runner::Dispatch::Run(exact_runner::Work::Later(Box::new(move |reply| {
+            started.send(()).unwrap();
+            release.recv().unwrap();
+            reply.send(exact_runner::Outcome::Storage(b"7".to_vec()));
+            completed.send(()).unwrap();
+        })))
+    }
+
+    fn parse(
+        &mut self,
+        _: &mut exact_runner::Store,
+        _: &str,
+        _: &[exact_runner::Value],
+        outcome: exact_runner::Outcome,
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        assert!(matches!(outcome, exact_runner::Outcome::Storage(ref bytes) if bytes == b"7"));
+        Ok(exact_runner::Answer::Now(exact_runner::Value::Number(7.0)))
+    }
+}
+
+#[derive(Default)]
+struct BackgroundHatch {
+    frames: Option<Ticket>,
+}
+
+impl Hatches for BackgroundHatch {
+    fn element(&mut self, _: &Element, context: &mut HatchContext<'_, Self>) {
+        if self.frames.is_none() {
+            self.frames = Some(context.frames(|_, _, context| {
+                let first = BACKGROUND_MOMENTS.with(|moments| {
+                    let mut moments = moments.borrow_mut();
+                    moments.push("frame");
+                    moments.len() == 1
+                });
+                if first {
+                    context.after(5.0, |_, _| {
+                        BACKGROUND_MOMENTS.with(|moments| moments.borrow_mut().push("after"));
+                    });
+                }
+            }));
+        }
+    }
 }
 
 impl Package for Probe {
@@ -179,10 +273,116 @@ fn an_admitted_call_reads_the_status_first() {
 /// A plan that reads a module the composed package answers.
 const READS_GEOLOCATION: &str = "use geolocationStatus, GeolocationStatus from \"@exact/geolocation\"\ncomponent App\n  resource status = geolocationStatus() as shape GeolocationStatus\n  view\n    text \"Hi\"\n";
 
+const DRIVEN_BACKGROUND: &str = r#"use geolocationStatus, GeolocationStatus from "@exact/geolocation"
+component App
+  resource status = geolocationStatus() as shape GeolocationStatus
+  state ticks = 0
+  state replied = false
+  mutation result as shape number then accepted
+  action begin
+    send result = save()
+  action accepted
+    replied = true
+  action tick
+    ticks = ticks + 1
+  task beat mount
+    every(10, tick)
+  view
+    column width=300 height=300
+      button "Begin" testId="begin" press=begin height=30
+      column hatch="clock" width=20 height=20
+      text `${replied} ${ticks} ${status.state}`
+"#;
+
 /// Whether the runner binds the package's extension.
 fn bound(p: &Presenter<Nothing>) -> bool {
     let state = (p.host().runner().extensions_json()).expect("the plan names a module");
     serde_json::from_str::<Json>(&state).unwrap()["geolocation"]["bound"] == true
+}
+
+#[test]
+fn driven_page_facts_leave_painted_host_work_running() {
+    BACKGROUND_STATE.with(|state| *state.borrow_mut() = "prompt");
+    BACKGROUND_NOTIFIER.with(|notifier| *notifier.borrow_mut() = None);
+    BACKGROUND_MOMENTS.with(|moments| moments.borrow_mut().clear());
+    let (release, released) = std::sync::mpsc::channel();
+    let (started, did_start) = std::sync::mpsc::channel();
+    let (completed, did_complete) = std::sync::mpsc::channel();
+    let data = DeferredReply {
+        release: Some(released),
+        started: Some(started),
+        completed: Some(completed),
+    };
+    let app = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/native-fixture/app.contract");
+    let plan = contract::compile_path_source(&app, DRIVEN_BACKGROUND)
+        .unwrap()
+        .encode();
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        data,
+        (300., 300.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.set_hatches(Some(install::<BackgroundHatch>(&["clock"])));
+    p.serve_packages(vec![Entry::of::<BackgroundPackage>("geolocation")]);
+
+    let json = |reply: String| -> Json { serde_json::from_str(&reply).unwrap() };
+    let data = json(crate::agent::handle(
+        &mut p,
+        r#"{"op":"clock","data":true}"#,
+    ));
+    assert_eq!(data["settled"], true, "{data}");
+    let state = json(crate::agent::handle(&mut p, r#"{"op":"state"}"#));
+    assert_eq!(state["resources"]["status"]["state"], "prompt", "{state}");
+
+    let key = p.host().kernel().find_by_test_id("begin")[0];
+    let begin = p.host().kernel().node_by_key(key).unwrap().id;
+    let tapped = json(crate::agent::handle(
+        &mut p,
+        &format!(r#"{{"op":"tap","id":{begin}}}"#),
+    ));
+    assert!(tapped.get("error").is_none(), "{tapped}");
+    did_start
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the executor started before the page transition");
+
+    let preferred = json(crate::agent::handle(
+        &mut p,
+        r#"{"op":"prefer","page":{"visibility-state":"hidden","frozen":true}}"#,
+    ));
+    assert_eq!(
+        preferred["page"]["visibility-state"], "hidden",
+        "{preferred}"
+    );
+    assert_eq!(preferred["page"]["frozen"], true, "{preferred}");
+
+    BACKGROUND_STATE.with(|state| *state.borrow_mut() = "granted");
+    let notifier = BACKGROUND_NOTIFIER
+        .with(|notifier| notifier.borrow().clone())
+        .unwrap();
+    notifier.changed("geolocation.geolocationStatus");
+    release.send(()).unwrap();
+    did_complete
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the executor reply completed while the page facts stood");
+    let pump_error = p.pump(p.host().now());
+    assert!(pump_error.is_none(), "{pump_error:?}");
+
+    let clock = json(crate::agent::handle(&mut p, r#"{"op":"clock","to":40}"#));
+    assert_eq!(clock["clock"], 40, "{clock}");
+    assert!(clock.get("error").is_none(), "{clock}");
+    let state = json(crate::agent::handle(&mut p, r#"{"op":"state"}"#));
+    assert_eq!(state["slots"]["replied"], true, "{state}");
+    assert_eq!(state["slots"]["ticks"], 4, "{state}");
+    assert_eq!(state["resources"]["status"]["state"], "granted", "{state}");
+    let moments = BACKGROUND_MOMENTS.with(|moments| moments.borrow().clone());
+    assert!(moments.contains(&"frame"), "{moments:?}");
+    assert!(moments.contains(&"after"), "{moments:?}");
 }
 
 /// A replacement runner, the dev loop's reload's or an activated update's,

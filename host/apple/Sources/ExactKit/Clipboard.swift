@@ -262,6 +262,7 @@ extension NodeView {
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// `type <id> copy|cut|paste [text]` (spreadsheet F6): the event ⌘C, ⌘X
     /// or ⌘V delivers with the focus at `v` — a paste carrying `text` as
@@ -330,3 +331,4 @@ extension Agent {
         #endif
     }
 }
+#endif

@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { open } from '../../../scripts/agent.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { drivable, need } from '../../../scripts/coverage.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 import { serveBuildTree } from '../serve.mjs';
 
@@ -141,7 +141,7 @@ for (const [runtime, webDist] of Object.entries({ wasm: process.env.EXACT_WEB_DI
         await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
         options = { url: `http://127.0.0.1:${server.address().port}/` };
       }
-      for (const browser of ['chrome', 'firefox', 'webkit']) {
+      for (const browser of await drivable(['chrome', 'firefox', 'webkit'])) {
         const s = await open({ host: 'web', browser, size: '420x700', ...options });
         try {
           await s.tap('open');

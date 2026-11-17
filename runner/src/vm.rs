@@ -61,12 +61,76 @@ pub const MAX_LIST_STEPS: u32 = 1 << 16;
 /// to walk again than to look up.
 const REMEMBERED: u64 = 64;
 
-/// An instance's own slots — the values of the `state` a child component
+/// An instance's own storage — the values of the `state` a child component
 /// declared, one set per keyed row or shown `if`/`match` arm (LLP 1017
-/// P4c) — shared by the instance and every frame that reaches it, so a
-/// read during an update and a write applied after an action's commit see
-/// one storage.
-pub type RowSlots = Rc<RefCell<BTreeMap<u32, Value>>>;
+/// P4c), and what its own requests show (LLP 1035.005.004 D1) — shared by
+/// the instance and every frame that reaches it, so a read during an update
+/// and a write applied after an action's commit see one storage.
+pub type RowSlots = Rc<RefCell<Owned>>;
+
+/// What one instance owns.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Owned {
+    /// Its state, by slot index.
+    pub slots: BTreeMap<u32, Value>,
+    /// Its requests, one per resource its arm owns, in plan order.
+    pub requests: Vec<OwnedRequest>,
+    /// The runner's row for each mutation its arm owns that it has sent,
+    /// by the plan's mutation (LLP 1035.005.004 D6).
+    pub sends: Vec<(u32, usize)>,
+}
+
+impl Owned {
+    /// A storage holding nothing yet.
+    pub fn shared() -> RowSlots {
+        Rc::new(RefCell::new(Owned::default()))
+    }
+
+    /// What resource `resource` shows in this instance.
+    pub fn request(&self, resource: u32) -> Option<&OwnedRequest> {
+        self.requests.iter().find(|r| r.resource == resource)
+    }
+
+    /// The runner's row for this instance's sends to `mutation`, once it
+    /// has sent one.
+    pub fn send(&self, mutation: u32) -> Option<usize> {
+        self.sends
+            .iter()
+            .find(|(m, _)| *m == mutation)
+            .map(|(_, row)| *row)
+    }
+}
+
+/// One instance's request for a resource its arm owns: what its view reads,
+/// copied from the runner's row for it before each render (`owned.rs`), and
+/// that row.
+#[derive(Debug, Clone)]
+pub struct OwnedRequest {
+    /// The plan's resource.
+    pub resource: u32,
+    /// The runner's row for this instance's request, once the render that
+    /// made the instance has been followed by its asks.
+    pub row: Option<usize>,
+    /// The answer shown: the placeholder until one lands.
+    pub value: crate::held::Held,
+    /// A request is in flight.
+    pub pending: bool,
+    /// The value answers the arguments asked now (LLP 1161.001).
+    pub current: bool,
+    /// Why the latest request for the arguments asked now failed.
+    pub failed: Option<crate::failure::Failure>,
+}
+
+impl PartialEq for OwnedRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.resource == other.resource
+            && self.row == other.row
+            && crate::held::Held::same(&self.value, &other.value)
+            && self.pending == other.pending
+            && self.current == other.current
+            && self.failed == other.failed
+    }
+}
 
 /// One instance scope: what a `for` row or a `match` arm binds.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -139,6 +203,30 @@ pub struct Env<'a> {
     pub store_dependent_derives: &'a [bool],
     /// Store dependence of settled resources, for bake provenance propagation.
     pub store_dependent_resources: Column<'a, bool>,
+}
+
+/// What the instance in `env`'s frames that owns resource `i` shows of it
+/// (LLP 1035.005.004 D1): `None` for the root's.
+fn owned(env: &Env<'_>, i: usize, pc: usize) -> Result<Option<OwnedRequest>, Trap> {
+    let Some(arm) = env.plan.resources.get(i).and_then(|r| r.owner) else {
+        return Ok(None);
+    };
+    let region = env.plan.arm(arm).region.0;
+    Frame::row_of(env.frames, region)
+        .and_then(|r| r.borrow().request(i as u32).cloned())
+        .map(Some)
+        .ok_or(Trap::BadScope { pc, depth: 0 })
+}
+
+/// The runner's row for mutation `i` as read in `env`'s frames (LLP
+/// 1035.005.004 D6): `i` itself for the root's, the instance's own row for
+/// a child's, or `None` before that instance has sent it.
+fn mutation_row(env: &Env<'_>, i: usize) -> Option<usize> {
+    let Some(arm) = env.plan.mutations.get(i).and_then(|m| m.owner) else {
+        return Some(i);
+    };
+    let region = env.plan.arm(arm).region.0;
+    Frame::row_of(env.frames, region).and_then(|r| r.borrow().send(i as u32))
 }
 
 /// Take `n` list steps, or trap at `pc`.
@@ -290,6 +378,18 @@ pub struct Outcome {
     pub refreshes: Vec<u32>,
     /// The evaluated path read a value derived from the durable store.
     pub store_dependent: bool,
+}
+
+/// The counters one evaluation consumed. Differential semantics checks use
+/// this receipt; ordinary callers continue to use [`eval`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Accounting {
+    /// Executable derive rows entered, including a refused entry.
+    pub calls: u32,
+    /// Callback and roster list steps, including a refused step.
+    pub list_steps: u32,
+    /// The active executable-row depth after the evaluation returns.
+    pub call_depth: u16,
 }
 
 /// The plan's strings as values (`Env::strings`), each made when first read:
@@ -447,6 +547,30 @@ pub fn eval(code: &[u8], env: &Env<'_>, allowed_writes: &[u32]) -> Result<Outcom
     eval_reusing(code, env, allowed_writes, &mut Scratch::default())
 }
 
+/// Evaluate as [`eval`] does and retain the shared counters after success or
+/// refusal. This is the runner side of the formal-semantics comparison.
+pub fn eval_accounted(
+    code: &[u8],
+    env: &Env<'_>,
+    allowed_writes: &[u32],
+) -> (Result<Outcome, Trap>, Accounting) {
+    let mut scratch = Scratch::default();
+    match prepare_projection(code, env, &mut scratch) {
+        Ok(Some(value)) => {
+            return (
+                Ok(Outcome {
+                    value,
+                    ..Outcome::default()
+                }),
+                Accounting::default(),
+            );
+        }
+        Err(error) => return (Err(error), Accounting::default()),
+        Ok(None) => {}
+    }
+    eval_machine_accounted(code, env, allowed_writes, &mut scratch)
+}
+
 /// Allocation storage shared by evaluations in one tree update. Values
 /// never survive an evaluation, including one that traps inside a callback.
 pub(crate) struct Scratch {
@@ -544,6 +668,31 @@ fn eval_machine(
     allowed_writes: &[u32],
     scratch: &mut Scratch,
 ) -> Result<Outcome, Trap> {
+    eval_machine_main(code, env, allowed_writes, scratch, |_| ()).0
+}
+
+fn eval_machine_accounted(
+    code: &[u8],
+    env: &Env<'_>,
+    allowed_writes: &[u32],
+    scratch: &mut Scratch,
+) -> (Result<Outcome, Trap>, Accounting) {
+    eval_machine_main(code, env, allowed_writes, scratch, |run| Accounting {
+        calls: run.calls,
+        list_steps: run.steps,
+        call_depth: run.depth,
+    })
+}
+
+// The generic capture is unit on the ordinary path, so that instantiation
+// neither constructs an Accounting nor reads the counters after evaluation.
+fn eval_machine_main<R>(
+    code: &[u8],
+    env: &Env<'_>,
+    allowed_writes: &[u32],
+    scratch: &mut Scratch,
+    capture: impl FnOnce(&Run<'_, '_>) -> R,
+) -> (Result<Outcome, Trap>, R) {
     let mut run = Run {
         env,
         code,
@@ -564,6 +713,7 @@ fn eval_machine(
         depth: 0,
     };
     let value = machine::run(&mut run, &mut scratch.machine);
+    let captured = capture(&run);
     scratch.machine.pos = 0;
     scratch.machine.stack.clear();
     scratch.machine.locals.clear();
@@ -572,8 +722,11 @@ fn eval_machine(
     scratch.extents = run.extents;
     run.decoded.clear();
     scratch.decoded = run.decoded;
-    run.out.value = value?;
-    Ok(run.out)
+    let outcome = value.map(|value| {
+        run.out.value = value;
+        run.out
+    });
+    (outcome, captured)
 }
 
 /// Read an initial row field without cloning its enclosing record. The rest
@@ -788,7 +941,7 @@ impl Host<Value> for Run<'_, '_> {
             // An owned slot: the value the innermost instance of its region
             // (a row, an arm) holds.
             Some(region) => Frame::row_of(env.frames, region.0)
-                .and_then(|r| r.borrow().get(&(slot as u32)).cloned())
+                .and_then(|r| r.borrow().slots.get(&(slot as u32)).cloned())
                 .ok_or(Trap::BadScope { pc, depth: 0 }),
             None => env.slots.get(slot).cloned().ok_or(Trap::Malformed { pc }),
         }
@@ -856,6 +1009,9 @@ impl Host<Value> for Run<'_, '_> {
     fn load_resource(&mut self, i: u64, pc: usize) -> Result<Value, Trap> {
         let resource = i as usize;
         let env = self.env;
+        if let Some(owned) = owned(self.env, resource, pc)? {
+            return Ok(owned.value.read(env.plan));
+        }
         let value = env
             .resources
             .get(resource)
@@ -901,6 +1057,13 @@ impl Host<Value> for Run<'_, '_> {
         // Known once the resource settled this pass, like its value.
         let i = i as usize;
         let env = self.env;
+        if let Some(owned) = owned(self.env, i, pc)? {
+            return Ok(match op {
+                Opcode::FailedResource => owned.failed.is_some(),
+                Opcode::CurrentResource => owned.current,
+                _ => owned.pending,
+            });
+        }
         if env.resources.get(i).is_none_or(Option::is_none) {
             return Err(Trap::Pending { pc });
         }
@@ -919,7 +1082,11 @@ impl Host<Value> for Run<'_, '_> {
         if !self.resource_flag(Opcode::FailedResource, i, pc)? {
             return Ok(Value::Option(None));
         }
-        let why = self.env.failed_why.get(i as usize).and_then(Option::as_ref);
+        let owned = owned(self.env, i as usize, pc)?.and_then(|o| o.failed);
+        let why = match &owned {
+            Some(why) => Some(why),
+            None => self.env.failed_why.get(i as usize).and_then(Option::as_ref),
+        };
         let (code, message, reason) = why.map_or(("error", "it failed", ""), |w| {
             (w.exposed_code(), w.message.as_str(), w.reason.as_str())
         });
@@ -933,17 +1100,14 @@ impl Host<Value> for Run<'_, '_> {
 
     #[inline]
     fn mutation_failed(&self, i: u64) -> bool {
-        self.env
-            .failed_mutations
-            .get(i as usize)
+        mutation_row(self.env, i as usize)
+            .and_then(|m| self.env.failed_mutations.get(m))
             .is_some_and(Option::is_some)
     }
 
     fn mutation_failure(&mut self, i: u64, pc: usize) -> Result<Value, Trap> {
-        let Some(why) = self
-            .env
-            .failed_mutations
-            .get(i as usize)
+        let Some(why) = mutation_row(self.env, i as usize)
+            .and_then(|m| self.env.failed_mutations.get(m))
             .and_then(Option::as_ref)
         else {
             return Ok(Value::Option(None));
@@ -963,9 +1127,8 @@ impl Host<Value> for Run<'_, '_> {
     }
 
     fn pending_mutation(&self, i: u64) -> bool {
-        self.env
-            .pending_mutations
-            .get(i as usize)
+        mutation_row(self.env, i as usize)
+            .and_then(|m| self.env.pending_mutations.get(m))
             .copied()
             .unwrap_or(false)
     }

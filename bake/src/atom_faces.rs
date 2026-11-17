@@ -46,9 +46,9 @@ pub(crate) fn apply(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
-    fn app(name: &str, view: &str) -> PathBuf {
+    fn app(name: &str, view: &str) -> crate::TempDir {
         let dir =
             std::env::temp_dir().join(format!("exact-atom-faces-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -63,7 +63,7 @@ mod tests {
             format!("atom mention prefix=\"@\"\ncomponent App\n  derive faces = [AtomFace(source=\"@a\", label=\"\", icon=\"\", title=\"\", color=\"\", backgroundColor=\"\", direction=\"\", ariaLabel=\"\")]\n  view\n{view}"),
         )
         .unwrap();
-        dir
+        crate::TempDir(dir)
     }
 
     /// The app's compatibility id, through this input's code path or

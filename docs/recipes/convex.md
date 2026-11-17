@@ -66,3 +66,4 @@ component Chat
   a source that does both before its first `await` is refused.
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.
+- **Convex Auth** signs in through three of the deployment's mutations: `bun exact.mjs docs convex auth`.

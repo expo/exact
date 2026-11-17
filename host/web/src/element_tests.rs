@@ -374,12 +374,15 @@ fn a_link_out_of_the_app_opens_a_new_browsing_context() {
         kept("NoOpener help")
     );
     assert_eq!(link_rel("/c/42", None, Some("help")).1, Some("help".into()));
-    let app = |t: &str| {
-        format!("component A\n  view\n    link href=\"/x\" target=\"{t}\"\n      text \"x\"\n")
-    };
-    assert!(contract::compile(&app("_blank")).is_ok());
-    let e = contract::compile(&app("_top")).unwrap_err().to_string();
-    assert!(e.contains("`target` takes"), "{e}");
+    // A window's name is no new browsing context; HTML's keywords match in any case.
+    assert_eq!(
+        link("/compose", Some("compose")),
+        (Some("compose".into()), None)
+    );
+    assert_eq!(
+        link("/c/42", Some("_BLANK")),
+        (Some("_BLANK".into()), Some("noopener".into()))
+    );
 }
 
 /// @ref LLP 1075.003 §3.3 — every `data-` name this host writes on an
@@ -629,6 +632,46 @@ fn a_layout_region_is_the_browsers_safe_area() {
     }
 }
 
+/// A node's custom properties (LLP 1123 D5) are the browser's own: each
+/// declaration's length, and a length reads one through `var()`, which the
+/// browser substitutes.
+#[test]
+fn custom_properties_reach_the_browser_as_declarations() {
+    use exact_kernel::{StyleId, StyleValue};
+    let mut style = StyleProps::default();
+    let declared = "--gap: 8px; --pad: calc(var(--gap) * 2)";
+    style
+        .set_dynamic(
+            StyleId::SafeAreaProperties,
+            &StyleValue::Text(declared.into()),
+        )
+        .unwrap();
+    style
+        .set_dynamic(
+            StyleId::PaddingLeft,
+            &StyleValue::Text("var(--pad, 4px)".into()),
+        )
+        .unwrap();
+    // A fallback stands alone where the row's value does, so a sum keeps its `calc()`
+    style
+        .set_dynamic(
+            StyleId::MarginTop,
+            &StyleValue::Text("var(--missing, calc(10% + 2px))".into()),
+        )
+        .unwrap();
+    let (out, _) = crate::css::css_text(&style, &[]);
+    assert!(
+        out.contains("--gap:8px;--pad:calc(2 * var(--gap));"),
+        "{out}"
+    );
+    assert!(out.contains("padding-left:var(--pad, 4px)"), "{out}");
+    // As host/web/tests/local-insets.test.mjs has the browser read it
+    assert!(
+        out.contains("margin-top:var(--missing, calc(10% + 2px))"),
+        "{out}"
+    );
+}
+
 /// A content owner's local inset (LLP 1123 D9) reaches the browser as the
 /// registered custom property it reads, alone or in a calculation.
 #[test]
@@ -725,4 +768,39 @@ fn an_active_descendant_is_written_as_the_aria_attribute() {
             Some(value)
         );
     }
+}
+
+/// LLP 1047.003 D1: every attribute `props_of` writes by name (an `insert` or
+/// `get_or_insert_with` of a literal, in element.rs and the symbol marks) is in
+/// `attributes_by_data`, which the JS target's build counts where data sets a
+/// node's props or styles; one missing there could lose its rules.
+#[test]
+fn every_attribute_props_of_derives_is_one_data_can_give() {
+    let source = [
+        include_str!("element.rs"),
+        include_str!("element_symbol.rs"),
+    ]
+    .concat();
+    let body = &source[source.find("pub fn props_of").unwrap()..];
+    let listed: std::collections::BTreeSet<&str> = [
+        NodeType::View,
+        NodeType::Control,
+        NodeType::TextInput,
+        NodeType::Image,
+    ]
+    .into_iter()
+    .flat_map(super::attributes_by_data)
+    .collect();
+    let mut missing = Vec::new();
+    for call in ["insert(", "get_or_insert_with("] {
+        for at in body.match_indices(call).map(|(at, _)| at + call.len()) {
+            let rest = body[at..].trim_start();
+            if let Some(name) = rest.strip_prefix('"').and_then(|r| r.split('"').next()) {
+                if name != "data-" && !listed.contains(name) {
+                    missing.push(name.to_owned());
+                }
+            }
+        }
+    }
+    assert_eq!(missing, Vec::<String>::new());
 }

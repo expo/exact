@@ -122,3 +122,129 @@ fn each_frame_draws_its_own_bytes() {
         );
     }
 }
+
+#[test]
+fn dynamic_offsets_select_each_steps_uniform_slot() {
+    let Some(gpu) = fixture::device_or_skip(fixture::device()) else {
+        return;
+    };
+    let device = &gpu.device;
+    // The entries reflection emits for this shader.
+    const STEP: wgpu::BindGroupLayoutEntry = wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(8),
+        },
+        count: None,
+    };
+    const OUTPUT: wgpu::BindGroupLayoutEntry = wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: std::num::NonZeroU64::new(8),
+        },
+        count: None,
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("step"),
+        entries: &[exact_gpu::dynamic_offset(STEP), OUTPUT],
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("step"),
+        source: wgpu::ShaderSource::Wgsl(
+            "struct Step { dt: f32, index: u32 }
+            @group(0) @binding(0) var<uniform> s: Step;
+            @group(0) @binding(1) var<storage, read_write> output: array<f32, 2>;
+            @compute @workgroup_size(1) fn step() { output[s.index] = s.dt; }"
+                .into(),
+        ),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: None,
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: Some(&pipeline_layout),
+        module: &shader,
+        entry_point: Some("step"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let slot_bytes = u64::from(device.limits().min_uniform_buffer_offset_alignment).max(256);
+    let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: slot_bytes * 2,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let output = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 8,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 8,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniform,
+                    offset: 0,
+                    size: std::num::NonZeroU64::new(8),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: output.as_entire_binding(),
+            },
+        ],
+    });
+    for (index, dt) in [3.0_f32, 7.0].into_iter().enumerate() {
+        let mut bytes = [0; 8];
+        bytes[..4].copy_from_slice(&dt.to_le_bytes());
+        bytes[4..].copy_from_slice(&(index as u32).to_le_bytes());
+        gpu.queue
+            .write_buffer(&uniform, slot_bytes * index as u64, &bytes);
+    }
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        for index in 0..2 {
+            pass.set_bind_group(0, &group, &[(slot_bytes * index) as u32]);
+            pass.dispatch_workgroups(1, 1, 1);
+        }
+    }
+    encoder.copy_buffer_to_buffer(&output, 0, &readback, 0, 8);
+    gpu.queue.submit([encoder.finish()]);
+    let slice = readback.slice(..);
+    let (send, receive) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        send.send(result).unwrap()
+    });
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    receive.recv().unwrap().unwrap();
+    let bytes = slice.get_mapped_range().unwrap();
+    let values: Vec<_> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|value| f32::from_le_bytes(*value))
+        .collect();
+    assert_eq!(values, [3.0, 7.0]);
+}

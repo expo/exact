@@ -32,7 +32,7 @@ impl Module {
         self.retirement.reload = true;
         self.host.storage_changed = self.directories.is_some();
         self.logs.push((
-            None,
+            crate::Writer::Runtime,
             format!("data module retired: {message}; a new request starts a fresh runtime"),
         ));
         Some(DataError::Failed(

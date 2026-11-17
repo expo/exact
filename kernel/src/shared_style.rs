@@ -98,11 +98,11 @@ impl<T> Interner<T> {
 /// A hash of `bytes`, eight at a time.
 pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut hasher = IdHasher::default();
-    let mut chunks = bytes.chunks_exact(8);
-    for chunk in &mut chunks {
-        hasher.write_u64(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+    let (words, rest) = bytes.as_chunks::<8>();
+    for word in words {
+        hasher.write_u64(u64::from_le_bytes(*word));
     }
-    hasher.write(chunks.remainder());
+    hasher.write(rest);
     hasher.finish()
 }
 

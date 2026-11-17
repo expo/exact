@@ -1,6 +1,7 @@
 //! The installed-codec driver over a recording fake: the plan each edit
 //! hands the platform, the sizes the search encodes, what a transform
 //! keeps, and that every handle is closed.
+use super::super::tests::{aim, at};
 use super::*;
 use crate::image::edit::{parse_edit, parse_transform};
 use serde_json::json;
@@ -254,7 +255,15 @@ fn compress_decodes_srgb_edits_once_and_searches_on_the_crop() {
         &json!({"rotate": 90, "crop": {"x": 0, "y": 0, "width": 32, "height": 48}}),
     )
     .unwrap();
-    let out = compress(&fake, PORTRAIT, Format::Jpeg, 8192, 1000, &edit, deadline()).unwrap();
+    let out = compress(
+        &fake,
+        PORTRAIT,
+        Format::Jpeg,
+        aim(8192, 1000),
+        &edit,
+        deadline(),
+    )
+    .unwrap();
     let calls = fake.calls();
     assert_eq!(calls[0], "decode srgb=true");
     assert!(calls[1].starts_with("edit 1 "), "{calls:?}");
@@ -265,12 +274,8 @@ fn compress_decodes_srgb_edits_once_and_searches_on_the_crop() {
         .iter()
         .all(|c| c.starts_with("encode 2 32x48 image/jpeg") && c.ends_with("hdr=false")));
     // The same sequence the shared search records: 1,536 pixels, a 1,000-byte budget.
-    let expected = search(32, 48, 8192, 1000, |w, h, q| {
-        Ok(vec![
-            0;
-            (f64::from(w * h) * f64::from(q) / 100.0).ceil()
-                as usize
-        ])
+    let expected = search(32, 48, aim(8192, 1000), |w, h, q| {
+        Ok(vec![0; (f64::from(w * h) * q).ceil() as usize])
     })
     .unwrap()
     .unwrap();
@@ -283,11 +288,34 @@ fn compress_decodes_srgb_edits_once_and_searches_on_the_crop() {
         &fake,
         PORTRAIT,
         Format::Png,
-        8192,
-        1,
+        aim(8192, 1),
         &Edit::default(),
         deadline(),
     )
     .unwrap_err();
     assert!(e.starts_with("compressImage: unfit:"), "{e}");
+}
+
+/// A1.12: the platform's encoder is handed the quality asked, and a ceiling
+/// that fits is the one encode.
+#[test]
+fn compress_hands_the_platform_the_quality_asked() {
+    let fake = Fake::default();
+    let limits = at(0.5, aim(8192, 1_000_000));
+    let out = compress(
+        &fake,
+        PORTRAIT,
+        Format::Jpeg,
+        limits,
+        &Edit::default(),
+        deadline(),
+    )
+    .unwrap();
+    let trials: Vec<String> = fake
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("encode"))
+        .collect();
+    assert_eq!(trials, ["encode 1 48x64 image/jpeg 0.5 hdr=false"]);
+    assert_eq!(out.bytes.len(), 48 * 64 / 2);
 }

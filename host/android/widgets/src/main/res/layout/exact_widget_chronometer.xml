@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A countdown or a timer (`time format="countdown"` or `"timer"`), which the launcher ticks (LLP 1126.003 D6). -->
+<Chronometer xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/exact_widget_view"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:fontFamily="sans-serif"
+    android:gravity="left|top"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:singleLine="true" />

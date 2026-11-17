@@ -182,8 +182,9 @@ function record(l) {
     }
     return [out, days.length ? [...(names.length ? names : Array(12).fill("")), ...days] : names];
   };
-  const time = (tag) => {
-    const f = dtf({ timeStyle: "short" }, tag);
+  // A time of the options `o` (`timeStyle: "short"`, or a two-digit hour), in the hour cycle `tag` forces.
+  const time = (tag, o = { timeStyle: "short" }) => {
+    const f = dtf(o, tag);
     const at = (m) => f.formatToParts(UTC(2026, 9, 5, (m / 60) | 0, m % 60));
     const hour = (h) => toAscii(at(h * 60 + 2).find((p) => p.type === "hour").value);
     const hours = `${hour(0)}/${hour(1)}/${hour(13)}`;
@@ -237,6 +238,11 @@ function record(l) {
   const [weekdayDate, weekdayYear] = [capital(date({ weekday: "short", month: "short", day: "numeric" })),
     capital(date({ weekday: "short", month: "short", day: "numeric", year: "numeric" }))];
   const [plainTime, h12, h23] = [time(l), time(`${l}-u-hc-h12`), time(`${l}-u-hc-h23`)];
+  // formatTime's "2-digit": ECMA-402's `{ hour: "2-digit", minute: "2-digit" }`, a pattern and day periods of its own,
+  // since a locale may write it otherwise than the short time with its hour padded (`zh-TW`'s periods differ).
+  const twoDigit = { hour: "2-digit", minute: "2-digit" };
+  const [plain2, h12_2, h23_2] = [time(l, twoDigit), time(`${l}-u-hc-h12`, twoDigit), time(`${l}-u-hc-h23`, twoDigit)];
+  const monthDay = date({ month: "short", day: "numeric" });
   return {
     digits: ascii ? "" : native.join(""),
     decimal: sym("decimal"),
@@ -263,6 +269,10 @@ function record(l) {
     weekdayDate: weekdayDate[0], weekdayDateNames: weekdayDate[1],
     weekdayYear: weekdayYear[0], weekdayYearNames: weekdayYear[1],
     weekdayLabels: [0, 1, 2, 3, 4, 5, 6].map((i) => literal(upper(wf.format(UTC(2026, 10, 4 + i))))),
+    monthDay: monthDay[0], monthDayNames: monthDay[1],
+    time2Digit: plain2[0], time2DigitPeriods: plain2[1],
+    time2Digit12: h12_2[0], time2Digit12Periods: h12_2[1],
+    time2Digit23: h23_2[0], time2Digit23Periods: h23_2[1],
   };
 }
 
@@ -348,9 +358,11 @@ function oracle() {
       for (const hc of l.includes("-hc-") ? [""] : ["", "h12", "h23"]) {
         const tag = !hc ? l : l.includes("-u-") ? `${l}-hc-${hc}` : `${l}-u-hc-${hc}`;
         rows.push([hc ? `${l} ${hc}` : l, "formatTime", [ms, off, "short"], dtf({ timeStyle: "short" }, tag).format(d)]);
+        rows.push([hc ? `${l} ${hc}` : l, "formatTime", [ms, off, "2-digit"], dtf({ hour: "2-digit", minute: "2-digit" }, tag).format(d)]);
       }
       rows.push([l, "formatDate", [ms, off, "medium"], dtf({ dateStyle: "medium" }).format(d)]);
       rows.push([l, "formatDate", [ms, off, "month-year"], dtf({ month: "long", year: "numeric" }).format(d)]);
+      rows.push([l, "formatDate", [ms, off, "month-day"], dtf({ month: "short", day: "numeric" }).format(d)]);
     }
     const rtf = new Intl.RelativeTimeFormat(l, { numeric: "auto" });
     const word = (n) => { const [c, ...rest] = rtf.format(n, "day"); return c.toLocaleUpperCase(l) + rest.join(""); };
@@ -380,6 +392,7 @@ function oracle() {
     const z = (n) => (Object.is(n, -0) ? "-0" : n);
     for (const n of NUMBERS) {
       rows.push([l, "formatNumber", [z(n), "decimal", ""], nf({}).format(n)]);
+      for (const digits of [0, 1, 2, 4]) rows.push([l, "formatNumber", [z(n), "decimal", digits], nf({ minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n)]);
       rows.push([l, "formatNumber", [z(n), "percent", ""], nf({ style: "percent" }).format(n)]);
       for (const code of ["USD", "EUR", "JPY", "CHF"]) rows.push([l, "formatNumber", [z(n), "currency", code], nf({ style: "currency", currency: code }).format(n)]);
     }

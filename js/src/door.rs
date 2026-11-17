@@ -69,13 +69,14 @@ pub(crate) unsafe extern "C" fn host_door(
             None => Err("store.forget: no store at bake".into()),
         },
         // Storage's availability, as the prelude's refusal code (kanban
-        // F28): none at bake; none for a drive that names no scratch store;
-        // none where the host configured no directories.
+        // F28): none at bake or in a validation pass (the device answers what
+        // either leaves pending); none for a drive that names no scratch
+        // store; none where the host configured no directories.
         5 => match state.store {
             Some(store) => {
                 // A read even at bake: the build compiles no answer that tried.
                 (*store).observe_external_read();
-                if state.baking {
+                if state.deferring() {
                     Err("bake".into())
                 } else {
                     // `a` is the path a file operation names: a document
@@ -95,7 +96,7 @@ pub(crate) unsafe extern "C" fn host_door(
                     || a.starts_with("home:/")
                     || a.starts_with("bundle:/");
                 super::storage::refusal(
-                    !state.baking,
+                    !state.deferring(),
                     state.storage || document,
                     state.agent.is_some(),
                 )
@@ -122,6 +123,14 @@ pub(crate) unsafe extern "C" fn host_door(
                     (*store).observe_topic(&b);
                 }
                 Ok(None)
+            } else if a == "announce" {
+                // A durable write the app's other sessions are told of (LLP
+                // 1030.004 D2). With no store (between answers) the prelude
+                // keeps it for the next call that has one.
+                Ok(state.store.map(|store| {
+                    (*store).announce_topic(&b);
+                    "announced".into()
+                }))
             } else if a == "kept" {
                 // What the app keeps across launches (LLP 1069.010.000 D5):
                 // the device's, and a candidate on trial changes none of it.
@@ -310,6 +319,25 @@ pub(crate) unsafe extern "C" fn host_door(
         // A setting a launch may give (LLP 1153.002 D2): the launch's value
         // for the name `a`, which the bundle's launch module asks for.
         28 => Ok(super::launch::value(state, &a)),
+        // A fetch an error event's listener made (LLP 1175 D3): its request
+        // goes out as a report, not with an answer. `b` is "1" when the
+        // listener interrupted the turn the engine runs now, whose reporter
+        // it then takes; else no answer's.
+        29 => {
+            let ticket = a.parse::<u64>().ok();
+            match state.requests.iter().position(|(t, _)| Some(*t) == ticket) {
+                Some(at) => {
+                    let (ticket, request) = state.requests.remove(at);
+                    let by = match (&*b, state.turn) {
+                        ("1", Some(by)) => by,
+                        _ => exact_runner::Reporter::None,
+                    };
+                    state.reports.push((ticket, request, by));
+                    Ok(None)
+                }
+                None => Err("report: no such request".into()),
+            }
+        }
         other => Err(format!("__exact_host: no op {other}")),
     };
     *out = std::ptr::null_mut();

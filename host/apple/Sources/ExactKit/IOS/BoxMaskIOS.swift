@@ -41,6 +41,7 @@ extension NodeView {
         if state.key == key, clipBox?.layer.mask === state.boxMask, hasBoxFilter || ownMask === state.layerMask,
            image == nil || effect?.layer.mask === (state.effectMask as? UIView)?.layer { return }
         state.key = key
+        clipPath = ClipPath.path(style["clip_path"], size: bounds.size)
         let shaped = ClipPath.mask(outline)
         if let box = clipBox?.layer { box.mask = shaped }
         state.boxMask = clipBox?.layer.mask

@@ -35,7 +35,9 @@ pub(crate) type Fill<'a> = dyn FnMut(&mut Put<'_>) + 'a;
 pub(crate) fn filled(len: usize, fill: &mut Fill<'_>) -> Vec<f32> {
     let mut out = vec![0u8; len * 4];
     fill(&mut |at, bytes| out[at..at + bytes.len()].copy_from_slice(bytes));
-    out.chunks_exact(4)
+    out.as_chunks::<4>()
+        .0
+        .iter()
         .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
         .collect()
 }

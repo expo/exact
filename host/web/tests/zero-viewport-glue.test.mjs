@@ -109,15 +109,16 @@ test('a generation retired during inspection returns without waiting for a viewp
   expect(h.listeners).toHaveLength(0);
 });
 
-test('pre-rendered children do not authorize runner reports; a running runner receives only positive resizes', () => {
+test('pre-rendered children do not authorize reports; page facts stay live while zero-sized resizes wait', () => {
   const h = host(400, 300);
   h.state.media(); h.state.pageChanged();
   expect(h.calls).toEqual([]);
   h.state.incarnation = 1;
   for (const [width, height] of [[0, 0], [0, 300], [400, 0]]) {
     h.resize(width, height); h.state.media();
+    expect(h.calls).toEqual([['page']]);
+    h.calls.length = 0;
   }
-  expect(h.calls).toEqual([]);
   h.resize(420, 320); h.state.media(); h.state.pageChanged();
-  expect(h.calls).toEqual([['resize', 420, 320], ['page']]);
+  expect(h.calls).toEqual([['resize', 420, 320], ['page'], ['page']]);
 });

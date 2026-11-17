@@ -302,3 +302,31 @@ fn an_exit_paint_flag_follows_the_kernel_mask() {
         .collect();
     assert_eq!(got, serde_json::json!(expected));
 }
+
+/// Presence plays a layout transition, an exit animation and a route's
+/// entrance or exit (motion.rs `PRESENCE_ROWS`). A press look's declarations
+/// are inline beside them, and are the input piece's: a node with only those
+/// registers no presence, so its page never fetches presence.
+#[test]
+fn only_a_row_presence_plays_registers_with_presence() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let page = |row: &str| {
+        let plan = contract::compile(&format!(
+            "keyframes leave\n  to opacity=0\n\ncomponent App\n  state k = 0\n  action next\n    k = k + 1\n  view\n    column\n      if k < 3\n        column press=next {row}\n          text \"Next\"\n"
+        ))
+        .unwrap();
+        crate::emit::emit(&plan, false, false).unwrap().js
+    };
+    let pressed = page("-exact-press-scale=0.9");
+    assert!(pressed.contains("--exact-press:"), "{pressed}");
+    assert!(pressed.contains("pressFeedback()"), "{pressed}");
+    assert!(!pressed.contains("pr(e"), "{pressed}");
+    for row in [
+        "-exact-layout-transition=\"200ms linear\"",
+        "-exact-exit-animation=\"leave 200ms linear both\"",
+        "-exact-press-scale=0.9 -exact-layout-transition=\"200ms linear\"",
+    ] {
+        let js = page(row);
+        assert!(js.contains("pr(e"), "{row}: {js}");
+    }
+}

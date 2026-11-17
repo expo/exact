@@ -28,14 +28,12 @@ impl Painter {
         offset: (f32, f32),
         clip_rect: Option<Rect4>,
     ) {
-        let chain = (self.backend.supports_island_image() && !node.style.filter.is_none())
-            .then(|| {
-                exact_kernel::svg::scene::box_filter(
-                    &node.style.filter,
-                    node.style.text_color,
-                    self.dark,
-                )
-            })
+        // A running transition's list over the row (LLP 1003.002 D8).
+        let moving = (walk.scene.filters)(node.id)
+            .map(|f| exact_kernel::motion::filter_list(&f, node.text_color()));
+        let list = moving.as_ref().unwrap_or(&node.style.filter);
+        let chain = (self.backend.supports_island_image() && !list.is_none())
+            .then(|| exact_kernel::svg::scene::box_filter(list, node.style.text_color, self.dark))
             .flatten()
             .filter(|chain| !chain.primitives.is_empty());
         let (width, height) = self.viewport;

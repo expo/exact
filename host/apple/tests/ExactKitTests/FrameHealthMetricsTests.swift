@@ -1179,6 +1179,48 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertEqual(demand.snapshot().callbacks, 0)
     }
 
+    /// An agent's capture lease asks an on-demand collector to collect, as the card's showing does, and its end, by
+    /// `stop` or expiry, ends that demand. Collection that is off refuses the lease by what it is.
+    func testAnAgentsCaptureStartsAnOnDemandCollectorAsTheCardDoes() {
+        let off = FrameHealth(enabled: false), demand = FrameHealth(policy: .onDemand)
+        defer { off.destroy(); demand.destroy() }
+        XCTAssertEqual(off.setAgentCapture("start")["reason"] as? String, "collection-disabled")
+        XCTAssertFalse(off.enabled)
+        demand.requestedRate(120)
+        let started = demand.setAgentCapture("start", duration: 60_000)
+        XCTAssertEqual(started["available"] as? Bool, true, "\(started)")
+        XCTAssertEqual(started["capture"] as? Bool, true)
+        XCTAssertTrue(demand.enabled)
+        XCTAssertEqual(demand.requestedHertz, 120, "under the rate requested before")
+        demand.record(arrival: 2, target: 2.008, period: 0.008, finished: 2.001)
+        XCTAssertEqual(demand.snapshot().callbacks, 1)
+        // The card's showing and hiding leave the agent's demand, and the same generation
+        let generation = demand.snapshot().generation
+        demand.hudEffectiveVisible = true
+        demand.hudEffectiveVisible = false
+        XCTAssertTrue(demand.enabled)
+        XCTAssertEqual(demand.snapshot().generation, generation)
+        XCTAssertEqual(demand.snapshot().callbacks, 1)
+        let stopped = demand.setAgentCapture("stop")
+        XCTAssertEqual(stopped["available"] as? Bool, true, "it can collect when asked again: \(stopped)")
+        XCTAssertEqual(stopped["capture"] as? Bool, false)
+        XCTAssertFalse(demand.enabled)
+        // An expired lease ends its demand at the next check; the card's demand outlives the agent's
+        _ = demand.setAgentCapture("start", duration: 1)
+        XCTAssertGreaterThan(demand.snapshot().generation, generation, "each demand is a new generation")
+        demand.expireCapture(at: CACurrentMediaTime() + 0.01)
+        XCTAssertFalse(demand.enabled)
+        demand.hudEffectiveVisible = true
+        _ = demand.setAgentCapture("start", duration: 1)
+        demand.expireCapture(at: CACurrentMediaTime() + 0.01)
+        XCTAssertTrue(demand.enabled)
+        // On the agent's clock, the lease is refused and starts nothing
+        demand.hudEffectiveVisible = false
+        demand.clockChanged(virtual: true)
+        XCTAssertEqual(demand.setAgentCapture("start")["reason"] as? String, "virtual-clock")
+        XCTAssertFalse(demand.enabled)
+    }
+
     func testTheHeaderButtonsFitApartAtTheMinimumWidth() {
         let layout = FrameHealthCardFace.Layout(width: FrameHealthCardFace.minimumWidth)
         let header = [layout.close, layout.title, layout.status, layout.details, layout.share]

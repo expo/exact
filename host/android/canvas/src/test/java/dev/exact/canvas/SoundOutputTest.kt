@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
+import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -80,7 +81,7 @@ class SoundOutputTest {
         val backend = Backend().apply { broken = setOf(1) }
         var at = 100.0
         var state = JSONObject()
-        val output = SoundOutput(context, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { at })
         fun cues(reset: Boolean = false) = batch(play(1) + "," + play(2).replace("\"sound\":0", "\"sound\":1"), reset)
             .put("files", org.json.JSONArray(listOf("assets/hit.wav", "assets/broken.wav")))
             .put("submitted", at)
@@ -113,7 +114,7 @@ class SoundOutputTest {
         var at = 100.0
         var state = JSONObject()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, SoundPolicy.of("playback"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, { state = JSONObject(it) }, { at })
         try {
             output.apply(batch(play(1, 3700.0)))
             val request = manager.lastAudioFocusRequest.audioFocusRequest
@@ -139,7 +140,7 @@ class SoundOutputTest {
     @Test fun releasingOnPermanentLossDoesNotRetakeFocusForRemainingSpeech() {
         val backend = Backend()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, SoundPolicy.of("playback"), backend, {}, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 })
         val heard = ArrayList<String>()
         var speech: AudioClaim? = null
         var other: AudioClaim? = null
@@ -167,7 +168,7 @@ class SoundOutputTest {
     @Test fun theFirstPlayLoadsAndBackpressurePreservesPlaysAndStopsInOrder() {
         val backend = Backend()
         var state = JSONObject()
-        val output = SoundOutput(context, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, { state = JSONObject(it) }, { 100.0 })
         try {
             output.apply(batch("", true))
             assertEquals(0, backend.opens)
@@ -190,7 +191,7 @@ class SoundOutputTest {
     @Test fun backgroundAndNoisyDiscardPendingVoicesAndTheNextPlayReopens() {
         val backend = Backend()
         var at = 100.0
-        val output = SoundOutput(context, SoundPolicy.of("playback-mix"), backend, {}, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), backend, {}, { at })
         try {
             output.apply(batch(play(1)))
             output.foreground(false)
@@ -217,7 +218,7 @@ class SoundOutputTest {
     @Test fun aTransientInterruptionKeepsFocusOnlyUntilItReturnsAndTheNextPlayClaimsAgain() {
         val backend = Backend()
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, SoundPolicy.of("playback"), backend, {}, { 100.0 })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { 100.0 })
         try {
             output.apply(batch(play(1)))
             val first = manager.lastAudioFocusRequest.audioFocusRequest
@@ -240,7 +241,7 @@ class SoundOutputTest {
         val backend = Backend()
         var at = 100.0
         val manager = shadowOf(context.getSystemService(AudioManager::class.java))
-        val output = SoundOutput(context, SoundPolicy.of("playback"), backend, {}, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback"), backend, {}, { at })
         try {
             output.apply(batch(play(1)))
             val oldListener = manager.lastAudioFocusRequest.listener
@@ -267,7 +268,7 @@ class SoundOutputTest {
                 context.applicationInfo.flags = if (debug) flags or android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
                     else flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE.inv()
                 org.robolectric.shadows.ShadowLog.clear()
-                val output = SoundOutput(context, SoundPolicy.of("playback-mix"), Backend(), {}, { 100.0 })
+                val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("playback-mix"), Backend(), {}, { 100.0 })
                 try {
                     output.apply(batch(play(1)).put("submitted", 100.0))
                     output.foreground(false)
@@ -288,7 +289,7 @@ class SoundOutputTest {
         var state = JSONObject()
         val manager = context.getSystemService(AudioManager::class.java)
         manager.ringerMode = AudioManager.RINGER_MODE_SILENT
-        val output = SoundOutput(context, SoundPolicy.of("ambient"), backend, { state = JSONObject(it) }, { at })
+        val output = SoundOutput(context, { File(context.filesDir, "app") }, SoundPolicy.of("ambient"), backend, { state = JSONObject(it) }, { at })
         try {
             output.apply(batch(play(1)))
             assertEquals(0, backend.opens)

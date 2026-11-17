@@ -306,8 +306,10 @@ fn posed_model_pixels_match_cpu_hierarchy_and_move() {
         if let Some(before) = previous {
             let moved = actual
                 .data
-                .chunks_exact(4)
-                .zip(before.data.chunks_exact(4))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(before.data.as_chunks::<4>().0)
                 .filter(|(a, b)| a != b)
                 .count();
             assert!(moved > 400, "pose must move visible geometry: {moved}");

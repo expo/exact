@@ -54,5 +54,6 @@
       "macos": "0",
       "ios": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "activity-fixture-data", "type": "activity_fixture_data::ActivityFixture", "source": "activity_fixture_data::ActivityFixture" } }
 }

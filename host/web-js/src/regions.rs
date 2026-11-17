@@ -120,6 +120,8 @@ impl Em<'_> {
                             .parent
                             .is_some_and(|p| self.panels.binary_search(&p).is_ok());
                     let carry = panel.then(|| format!("{parent}.getAttribute(\"id\")"));
+                    let path = self.instance_path(&mut sc, format!("\"/{r}:{k}\""), *arm);
+                    self.out.push_str(&path);
                     let decl = self.owned(*arm, &format!("$a{arm}"), &mut sc, carry.as_deref())?;
                     self.out.push_str(&decl);
                     self.children(self.sites.of_arm(*arm), "p", &sc)?;
@@ -163,7 +165,7 @@ impl Em<'_> {
     /// later slot can read an earlier one through `name`; empty when it
     /// owns none. `carry`, the dev loop's for a tab panel's arm: an
     /// expression naming the panel, by which each is carried across a reload.
-    fn owned(
+    pub(super) fn owned(
         &mut self,
         arm: u32,
         name: &str,
@@ -171,7 +173,17 @@ impl Em<'_> {
         carry: Option<&str>,
     ) -> Result<String, String> {
         let plan = self.plan;
-        if self.answers.slots(arm).is_empty() {
+        // A child's resources this arm's instances own (LLP 1035.005.004 D1).
+        let requests: Vec<usize> = (plan.resources.iter().enumerate())
+            .filter(|(_, r)| r.owner.is_some_and(|a| a.0 == arm))
+            .map(|(i, _)| i)
+            .collect();
+        // And its mutations (D6).
+        let sends: Vec<usize> = (plan.mutations.iter().enumerate())
+            .filter(|(_, m)| m.owner.is_some_and(|a| a.0 == arm))
+            .map(|(i, _)| i)
+            .collect();
+        if self.answers.slots(arm).is_empty() && requests.is_empty() && sends.is_empty() {
             return self.unsettled(Some(arm), scope);
         }
         let mut decl = match &scope.rows {
@@ -217,7 +229,41 @@ impl Em<'_> {
             let slot_name = string_name(plan, slot);
             let _ = write!(decl, "{name}[{k}]={sig}({init},{ty}{slot_name});");
         }
+        // Asked after the instance's state is initialized (D2).
+        let path = scope.path.clone().unwrap_or_else(|| "\"\"".into());
+        for i in requests {
+            decl.push_str(&super::resources::owned(
+                plan,
+                i,
+                name,
+                &path,
+                scope,
+                &mut self.uses,
+            )?);
+        }
+        // Made after its requests, which its sends refresh.
+        for i in sends {
+            decl.push_str(&super::mutations::owned(
+                plan,
+                i,
+                name,
+                scope,
+                &mut self.uses,
+            )?);
+        }
         Ok(decl)
+    }
+
+    /// The path of an instance one region deeper, `segment` added, as
+    /// `const $q<arm>=…;`, put in force in `scope`; nothing where the plan
+    /// has no child's resource.
+    fn instance_path(&mut self, scope: &mut Scope, segment: String, arm: u32) -> String {
+        if !self.owns_requests {
+            return String::new();
+        }
+        let outer = scope.path.clone().unwrap_or_else(|| "\"\"".into());
+        scope.path = Some(format!("$q{arm}"));
+        format!("const $q{arm}={outer}+{segment};")
     }
 
     /// A `for`, or a virtualized list's rows when `list` carries the
@@ -283,17 +329,27 @@ impl Em<'_> {
         ));
         // The row's own slots, started from their initializers when
         // the row is created and kept with its key (LLP 1017 P4c).
+        // The row's identity (`$k`, rows.js `rowKey`) names its instances.
+        let path = if self.owns_requests && list.is_none() {
+            let row_path = self.uses.rt("rowPath");
+            self.instance_path(&mut inner, format!("\"/{r}=\"+{row_path}($k)"), arms[0])
+        } else {
+            String::new()
+        };
+        let row_key = if path.is_empty() { "" } else { ",$k" };
         let rows_decl = self.owned(arms[0], &format!("$r{r}"), &mut inner, None)?;
         let saved = std::mem::take(&mut self.out);
+        self.out.push_str(&path);
         self.out.push_str(&rows_decl);
         self.children(self.sites.of_arm(arms[0]), "p", &inner)?;
         let built = std::mem::replace(&mut self.out, saved);
         match list {
             Some(opts) => {
                 let inputs = self.row_inputs(r, scope)?;
+                let text = self.logical_children(self.sites.of_arm(arms[0]), &inner)?;
                 let _ = write!(
                     self.out,
-                    "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{built}}},{{...{opts},{inputs}}});"
+                    "$vl({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{built}}},{{...{opts},{inputs},text:({item},{index})=>{{{rows_decl}return {text};}}}});"
                 );
             }
             None => {
@@ -308,7 +364,7 @@ impl Em<'_> {
                 };
                 let _ = write!(
                     self.out,
-                    "{each}({parent},{subject},({item},{index})=>{key},(p,{item},{index})=>{{{built}}}{pure});"
+                    "{each}({parent},{subject},({item},{index})=>{key},(p,{item},{index}{row_key})=>{{{built}}}{pure});"
                 );
             }
         }

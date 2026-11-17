@@ -3,7 +3,7 @@
 // or to the carrier's own contact phases. `agent.mjs` calls it from `tap`.
 import { MalformedOperation, pointerArguments, tapWords, inputJSON } from './agent-keys.mjs';
 import { DRAG_BOUNDS, REACH_MS, reaches } from '../host/apple/touches.mjs';
-import { layoutArgs, perfOp } from './agent-inspect.mjs';
+import { layoutArgs, perfOp, layoutBox } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
@@ -199,11 +199,26 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   // The touch runner lifts at the end of its scripted hold, and its ops start after the press and the move: without a hold they would find the finger lifted.
   if (carrier.touches && legs.some(l => l.during.length && !(l.hold > 0))) throw new Error('drag: under --touch platform, during runs after the press and the move, inside the scripted hold: give hold <ms>, the time the ops run in');
   if (s.contact) throw new Error('a contact is already down; use `tap up` or `tap cancel` first');
-  const layout = await s.layout(), b = layout.nodes.find((n) => n.id === node.id), vp = layout.viewport;
+  const layout = await s.layout(), b = await layoutBox(s, node.id, layout), vp = layout.viewport;
   const mark = await journalMark(s);
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // Android's reader owns scrolling; Presenter.pointer_* cannot hold its scroll contact.
+  // Use the reader's deterministic scroll samples, and report that delivery explicitly.
+  if (host === 'android' && carrier.reader && ['ScrollView', 'List'].includes(b.type) && !mouse) {
+    if (!inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
+    const req = { op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, from: start };
+    const owner = await carrier.ask({ ...req, probe: true });
+    if (owner.error) throw new Error(`drag: ${owner.error}`);
+    if (owner.scrollDrag !== 'presenter') {
+      if (owner.scrollDrag !== 'reader') throw new Error('drag: Android reader did not identify the scroll owner');
+      if (during.length || press || hold || opts.path || modifiers) throw new Error('drag: Android reader scroll samples do not hold a native touch; press, hold, during, path and modifiers need native input');
+      const r = await carrier.ask(req);
+      if (r.error || r.delivery === 'unsupported') throw new Error(`drag: ${r.error ?? r.reason ?? 'unsupported'}`);
+      return noted(await s.landed({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...still(r, target), ...await reorderNotes(s, mark)]);
+    }
+  }
   if (into && !(await s.op({ op: 'state' })).keyboard?.visible) throw new Error('drag: into keyboard needs the software keyboard up at the press');
   const bounds = { viewport: [vp.w, vp.h], screen: layout.screen, safeArea: layout.safeArea };
   if (into && !inside(start)) throw new Error(`drag: start (${start}) leaves the viewport (${vp.w} × ${vp.h})`);
@@ -357,7 +372,7 @@ const heldPress = (queue) => queue.reduce((t, q) => t + (q.hold ?? q.clock ?? 0)
  * (`tap <target> drag`).
  */
 export async function heldDown(s, node, at) {
-  const b = (await s.layout()).nodes.find((n) => n.id === node.id);
+  const b = await layoutBox(s, node.id, await s.layout());
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const point = at ? [at.x, at.y] : [b.x + b.w / 2, b.y + b.h / 2];
   s.contact = { x: point[0], y: point[1], whole: { id: node.id, hold: 0, queue: [] } };
@@ -410,7 +425,7 @@ export async function heldPhase(s, carrier, phase, opts) {
     return { phase, at, delivery: 'platform', note: `nothing was pressed${queue.some((q) => q.run) ? '; the steps written before it ran after it, unpressed' : ''}` };
   }
   // The point the contact went down at, still on its target: a target that moved since is refused, never followed.
-  const b = (await s.layout()).nodes.find((n) => n.id === whole.id);
+  const b = await layoutBox(s, whole.id, await s.layout());
   if (!b || at[0] < b.x || at[1] < b.y || at[0] > b.x + b.w || at[1] > b.y + b.h) throw new Error(`tap up: view ${whole.id} moved off (${at}), where the contact went down, so nothing was pressed: tap it down again`);
   // A step that fails once the touch is delivered is the reply's landError, the receipt kept: a retry would press twice.
   let landError = null;
@@ -479,7 +494,7 @@ async function strokes(s, target, opts, [x, y], vp) {
 async function toward(s, node, { to, at, from }) {
   const end = await s.find(to, false);
   if (!end) throw new Error(`drag to: ${to} is not mounted`);
-  const layout = await s.layout(), a = layout.nodes.find((n) => n.id === node.id), b = layout.nodes.find((n) => n.id === end.id), vp = layout.viewport;
+  const layout = await s.layout(), a = await layoutBox(s, node.id, layout), b = await layoutBox(s, end.id, layout), vp = layout.viewport;
   if (!a) throw new Error(`view ${node.id} has no box on screen`);
   if (!b || (vp && (b.x + b.w <= 0 || b.y + b.h <= 0 || b.x >= vp.w || b.y >= vp.h))) throw new Error(`drag to: ${to} is off screen; drag dx dy hold ms scrolls a list or a board toward it`);
   const start = from ? [a.x + from[0], a.y + from[1]] : [a.x + a.w / 2, a.y + a.h / 2];

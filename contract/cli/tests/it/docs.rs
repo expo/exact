@@ -3,13 +3,14 @@
 //! 1116 D3) and `README.md` compiles with no errors, those a builder copies
 //! (README's, the recipes', start-here's) with no warnings either, and each
 //! `contract-test` block parses. A deliberately partial block is fenced
-//! `text`. A `tamber` block is checked as a design, and is the design of
+//! `text`. A `forma` block is checked as a design, and is the design of
 //! the `contract` blocks after it in its section (LLP 1121 D2). Every
 //! failure is reported in one run. So does every starter
 //! pattern (`docs/patterns/<name>/`, LLP 1116.001 D3), and the async lane
 //! verifies an app `exact new` made, untouched and with each pattern
 //! written into it.
 
+use crate::scratch::Scratch;
 use std::path::{Path, PathBuf};
 
 /// One fenced block: its document, the line of its opening fence, its info
@@ -21,8 +22,8 @@ pub(crate) struct Block {
     pub(crate) info: String,
     pub(crate) body: String,
     pub(crate) contract: Option<String>,
-    /// The nearest `tamber` block before it in the same section: the app's
-    /// design (`app.tamber`, LLP 1121 D2), which a `contract` block names.
+    /// The nearest `forma` block before it in the same section: the app's
+    /// design (`app.forma`, LLP 1121 D2), which a `contract` block names.
     pub(crate) design: Option<String>,
     /// The `<!-- check: … -->` marker on the line before the fence, if any:
     /// `app`, `route <name>` or `file`. Marked blocks are parts of one app
@@ -109,7 +110,7 @@ pub(crate) fn blocks() -> Vec<Block> {
                                 .collect();
                             block.contract = Some(assemble(&parts).0);
                         }
-                        if block.info == "tamber" {
+                        if block.info == "forma" {
                             design = Some(block.body.clone());
                         }
                         if block.info == "contract" {
@@ -271,8 +272,7 @@ fn the_long_list_recipe_appends_pages_and_stops_at_the_last() {
 
 #[test]
 fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
-    let dir = std::env::temp_dir().join(format!("exact-docs-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-docs-{}", std::process::id()));
     let package = dir.join("node_modules/@exact/in-app-browser");
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/in-app-browser");
     for file in [
@@ -309,10 +309,10 @@ fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
                     }
                 }
                 // A design shown before it in its section is the app's.
-                let tamber = dir.join("app.tamber");
+                let forma = dir.join("app.forma");
                 match &block.design {
                     Some(design) => {
-                        std::fs::write(&tamber, design).unwrap();
+                        std::fs::write(&forma, design).unwrap();
                         // An icon's SVG the design names is a one-colour
                         // triangle here (the compiler reads it).
                         for src in design.split("svg \"").skip(1) {
@@ -322,7 +322,7 @@ fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
                         }
                     }
                     None => {
-                        let _ = std::fs::remove_file(&tamber);
+                        let _ = std::fs::remove_file(&forma);
                     }
                 }
                 if let Err(all) = contract::compile_path_source_all(&path, &block.body, false) {
@@ -341,10 +341,9 @@ fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
                     }
                 }
             }
-            "tamber" => {
+            "forma" => {
                 parsed += 1;
-                if let Err(all) = exact_tamber::check(&block.body, &contract_lower::tamber_vocab())
-                {
+                if let Err(all) = exact_forma::check(&block.body, &contract_lower::forma_vocab()) {
                     for d in all {
                         failures.push(format!("{}: [{}] {}", at(d.line), d.id, d.message));
                     }
@@ -376,8 +375,7 @@ fn every_contract_example_in_the_guides_compiles_and_every_test_parses() {
 /// block appended. The assembled app compiles with no diagnostics.
 #[test]
 fn every_split_app_in_the_guides_compiles_assembled() {
-    let dir = std::env::temp_dir().join(format!("exact-docs-app-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-docs-app-{}", std::process::id()));
     let path = dir.join("app.contract");
     let mut docs: Vec<(PathBuf, Vec<Block>)> = Vec::new();
     for block in blocks() {
@@ -498,8 +496,7 @@ fn every_pattern_compiles_with_expected_diagnostics_and_its_tests_parse() {
 #[ignore = "async lane: makes an app with Bun and Cargo and verifies it and every pattern in Chrome; bun scripts/async.mjs runs it"]
 fn the_new_app_and_every_pattern_verify_clean_on_the_web() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let parent = std::env::temp_dir().join(format!("exact-patterns-{}", std::process::id()));
-    std::fs::create_dir_all(&parent).unwrap();
+    let parent = Scratch::new(format!("exact-patterns-{}", std::process::id()));
     let app = parent.join("groceries");
     let run = |cwd: &Path, args: &[&str]| {
         let output =
@@ -678,8 +675,7 @@ fn content_design_readout_has_no_width_ceiling_warning() {
         .into_iter()
         .find(|b| b.doc.ends_with("recipes/content-design.md") && b.info == "contract")
         .expect("content design readout");
-    let dir = std::env::temp_dir().join(format!("exact-content-design-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-content-design-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, block.body).unwrap();
     let (result, warnings) = contract::compile_path_all_warned(&path, false);

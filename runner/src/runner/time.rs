@@ -39,8 +39,14 @@ impl<D: DataSource> Runner<D> {
             .unwrap_or("")
     }
 
-    /// CSS direction of the resolved table, compiled from CLDR likely subtags.
+    /// The document's CSS direction: the platform's where the host told one
+    /// at launch (the Mac's process direction), else the resolved table's,
+    /// compiled from CLDR likely subtags. What the author leaves unsaid lays
+    /// out in it, and the host is told it beside `lang`.
     pub fn direction(&self) -> &'static str {
+        if let Some(direction) = self.host_direction {
+            return direction.name();
+        }
         if self
             .plan
             .locales

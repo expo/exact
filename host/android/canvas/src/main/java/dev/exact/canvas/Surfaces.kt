@@ -277,7 +277,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
                 pane.escape = { popup.dismiss() }
                 val s = Shown(serial, pane, null, popup)
                 popup.setOnDismissListener { if (!s.quiet) dismissed(serial) }
-                popup.showAtLocation(root, Gravity.NO_GRAVITY, frame[0], frame[1])
+                popup.showAtLocation(root, Gravity.LEFT or Gravity.TOP, frame[0], frame[1])
                 s
             }
             else -> throw IllegalArgumentException("a surface of kind $what")

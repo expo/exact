@@ -14,6 +14,7 @@ fn retained_handoff_outcomes_drain_and_release_room_for_the_next_turn() {
         executor
             .run(
                 RequestOut {
+                    completion: None,
                     class: RequestClass::Ordered,
                     ticket,
                     target: "test".into(),

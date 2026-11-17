@@ -46,20 +46,20 @@ fn sink(answer: impl Fn(usize) -> (u16, &'static str) + Send + 'static) -> (Stri
     (url, seen)
 }
 
-fn service(endpoint: &str, name: &str) -> Service {
-    let dir =
-        std::env::temp_dir().join(format!("exact-observe-test-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+/// A service on a directory of its own, which the returned guard removes.
+fn service(endpoint: &str, name: &str) -> (Service, crate::TestDir) {
+    let dir = crate::TestDir::new(&format!("exact-observe-test-{name}"));
     let config = json!({ "projectId": "p1", "endpoint": endpoint, "dispatchInDebug": true });
     let app = json!({ "id": "com.example.test", "name": "Test", "version": "1.2" });
-    Service::new(
+    let service = Service::new(
         config.as_object().unwrap().clone(),
         &app,
         true,
-        dir,
+        dir.to_path_buf(),
         "s-1".into(),
         1_700_000_000.0,
-    )
+    );
+    (service, dir)
 }
 
 fn startup(s: &mut Service, n: usize) {
@@ -74,7 +74,7 @@ fn startup(s: &mut Service, n: usize) {
 #[test]
 fn startup_becomes_observes_metrics_on_its_wire() {
     let (url, seen) = sink(|_| (200, ""));
-    let mut s = service(&url, "wire");
+    let (mut s, _dir) = service(&url, "wire");
     startup(&mut s, 2);
     s.dispatch();
     assert!(s.metrics.is_empty(), "acknowledged rows leave the queue");
@@ -141,7 +141,7 @@ fn startup_becomes_observes_metrics_on_its_wire() {
 fn a_413_halves_the_chunk_and_drops_a_lone_row() {
     // The sink rejects any request with more than two rows.
     let (url, seen) = sink(|rows| if rows > 2 { (413, "") } else { (200, "") });
-    let mut s = service(&url, "large");
+    let (mut s, _dir) = service(&url, "large");
     startup(&mut s, 2); // six rows
     s.dispatch();
     assert!(s.metrics.is_empty());
@@ -152,7 +152,7 @@ fn a_413_halves_the_chunk_and_drops_a_lone_row() {
         "halved until accepted; a success resets to the full chunk"
     );
     let (url, seen) = sink(|_| (413, ""));
-    let mut s = service(&url, "lone");
+    let (mut s, _dir) = service(&url, "lone");
     startup(&mut s, 1);
     s.dispatch();
     assert!(
@@ -168,7 +168,7 @@ fn a_413_halves_the_chunk_and_drops_a_lone_row() {
 #[test]
 fn a_retryable_status_keeps_the_rows_and_waits_retry_after() {
     let (url, seen) = sink(|_| (503, "Retry-After: 5\r\n"));
-    let mut s = service(&url, "retry");
+    let (mut s, _dir) = service(&url, "retry");
     startup(&mut s, 1);
     s.dispatch();
     assert_eq!(s.metrics.len(), 3, "kept for later");
@@ -189,7 +189,7 @@ fn a_retryable_status_keeps_the_rows_and_waits_retry_after() {
         "nothing is sent before the gate opens"
     );
     let (url, _) = sink(|_| (400, ""));
-    let mut s = service(&url, "fatal");
+    let (mut s, _dir) = service(&url, "fatal");
     startup(&mut s, 1);
     s.dispatch();
     assert!(
@@ -213,7 +213,7 @@ fn a_failed_export_retries_while_idle() {
             (200, "")
         }
     });
-    let mut s = service(&url, "idle-retry");
+    let (mut s, _dir) = service(&url, "idle-retry");
     s.event(&json!({ "kind": "app.event", "name": "idle.retry" }));
     s.due = None;
     s.dispatch();
@@ -236,7 +236,7 @@ fn a_failed_export_retries_while_idle() {
 #[test]
 fn custom_events_follow_observes_rules() {
     let (url, seen) = sink(|_| (200, ""));
-    let mut s = service(&url, "events");
+    let (mut s, _dir) = service(&url, "events");
     s.event(
         &json!({ "kind": "app.attributes", "attributes": { "tier": "pro", "expo.reserved": 1 } }),
     );
@@ -300,10 +300,24 @@ fn sampling_matches_eas_client_ids_uniform_value() {
 
 #[test]
 fn launch_defers_subscription_and_recovers_a_panic() {
-    let state =
-        std::env::temp_dir().join(format!("exact-observe-test-panic-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&state);
-    std::env::set_var("XDG_STATE_HOME", &state);
+    // The launched service and the panic hook write here for the rest of the
+    // process, after the test has ended, so the directory goes at exit. The
+    // service can still be saving the queue then, from the send this test
+    // waited for: the removal is tried again until the directory is gone.
+    fn state() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("exact-observe-test-panic-{}", std::process::id()))
+    }
+    let _ = std::fs::remove_dir_all(state());
+    std::fs::create_dir_all(state()).unwrap();
+    ibex2::process::wait_at_exit(|| {
+        for _ in 0..40 {
+            if std::fs::remove_dir_all(state()).is_ok() || !state().exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    std::env::set_var("XDG_STATE_HOME", state());
     let (attempts, received) = mpsc::channel();
     let (url, seen) = sink(move |rows| {
         attempts.send(rows).unwrap();
@@ -379,12 +393,7 @@ fn launch_defers_subscription_and_recovers_a_panic() {
 
 #[test]
 fn a_crash_record_stays_until_the_queue_holding_it_is_written() {
-    let dir = std::env::temp_dir().join(format!(
-        "exact-observe-test-unsaved-crash-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-observe-test-unsaved-crash");
     let record = dir.join("pending-crashed.json");
     std::fs::write(
         &record,
@@ -397,7 +406,7 @@ fn a_crash_record_stays_until_the_queue_holding_it_is_written() {
             Map::new(),
             &json!({}),
             true,
-            dir.clone(),
+            dir.to_path_buf(),
             session.into(),
             0.0,
         )
@@ -418,19 +427,13 @@ fn a_crash_record_stays_until_the_queue_holding_it_is_written() {
         .collect();
     assert_eq!(crashes.len(), 1);
     assert_eq!(crashes[0]["name"], "native.exception");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A crash whose session no saved row names is counted against the build in
 /// its record, not the build that opens next.
 #[test]
 fn a_crash_before_its_session_is_saved_keeps_its_build() {
-    let dir = std::env::temp_dir().join(format!(
-        "exact-observe-test-crash-build-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-observe-test-crash-build");
     let old = json!({ "id": "com.example.app", "name": "App", "version": "1.0" });
     let record = json!({
         "session": "crashed", "sessionStart": 1.0, "time": 2.0, "type": "panic", "message": "boom",
@@ -438,13 +441,19 @@ fn a_crash_before_its_session_is_saved_keeps_its_build() {
     });
     std::fs::write(dir.join("pending-crashed.json"), record.to_string()).unwrap();
     let new = json!({ "id": "com.example.app", "name": "App", "version": "2.0" });
-    let s = Service::new(Map::new(), &new, false, dir.clone(), "next".into(), 3.0);
+    let s = Service::new(
+        Map::new(),
+        &new,
+        false,
+        dir.to_path_buf(),
+        "next".into(),
+        3.0,
+    );
     let crashed = &s.sessions["crashed"]["meta"];
     assert_eq!(crashed["appVersion"], "1.0");
     assert_eq!(crashed["environment"], "staging");
     assert_eq!(crashed["osName"], "Linux");
     assert_eq!(s.sessions["next"]["meta"]["appVersion"], "2.0");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The event names of every logs request the sink received, sorted.
@@ -473,18 +482,14 @@ fn two_processes_add_to_one_queue_and_send_each_row_once() {
         std::thread::sleep(Duration::from_millis(100));
         (200, "")
     });
-    let dir = std::env::temp_dir().join(format!(
-        "exact-observe-test-processes-{}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = crate::TestDir::new("exact-observe-test-processes");
     let config = json!({ "projectId": "p1", "endpoint": url, "dispatchInDebug": true });
     let open = |session: &str| {
         Service::new(
             config.as_object().unwrap().clone(),
             &json!({ "id": "com.example.processes" }),
             true,
-            dir.clone(),
+            dir.to_path_buf(),
             session.into(),
             0.0,
         )

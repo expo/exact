@@ -1,5 +1,6 @@
 //! Process-start requests and their boot handoff (LLP 1162.000 D4).
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
+use exact_executor::preload::preload_url;
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -346,29 +347,8 @@ impl LaunchPreloads {
                 self.record_definition(definition, crate::executor::PreloadEvent::DroppedBySecret);
                 continue;
             }
-            match definition.fill(|name| secrets.get(name).cloned()) {
-                Ok(request) => {
-                    use crate::executor::PreloadEvent;
-                    use ibex2::stdlib::fetch;
-                    let invalid = if url::Url::parse(&request.url).is_err() {
-                        Some(PreloadEvent::InvalidUrl)
-                    } else if request.headers.iter().any(|(_, value)| {
-                        !fetch::is_valid_value(value) || fetch::normalize_value(value) != value
-                    }) {
-                        Some(PreloadEvent::InvalidHeader)
-                    } else {
-                        None
-                    };
-                    if let Some(outcome) = invalid {
-                        self.record_definition(definition, outcome);
-                        continue;
-                    }
-                    let preload = Preload {
-                        name: definition.name.into(),
-                        request,
-                        deadline_ms: definition.timeout_ms,
-                        secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
-                    };
+            match Preload::fill(definition, |name| secrets.get(name).cloned()) {
+                Ok(preload) => {
                     if when == PreloadWhen::Foreground
                         && self.0.phase.load(Ordering::Acquire) & OPENED == 0
                     {
@@ -385,9 +365,7 @@ impl LaunchPreloads {
                         ready.push(preload);
                     }
                 }
-                Err(_) => {
-                    self.record_definition(definition, crate::executor::PreloadEvent::MissingSecret)
-                }
+                Err(fact) => self.record_fact(fact),
             }
         }
         if let Some(set) = self.0.set.get() {
@@ -400,7 +378,7 @@ impl LaunchPreloads {
         outcome: crate::executor::PreloadEvent,
     ) {
         let origin = definition
-            .fill(|_| Some("redacted".into()))
+            .fill(|_| Some("redacted".into()), preload_url)
             .ok()
             .and_then(|r| url::Url::parse(&r.url).ok())
             .map(|u| u.origin().ascii_serialization())

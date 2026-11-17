@@ -54,6 +54,24 @@ struct Inputs {
     anchor: Option<Rect4>,
 }
 impl<D: DataSource> Presenter<D> {
+    fn alert_anchor_scroll(&self, invoker: ViewId) -> (f32, f32) {
+        let k = self.host.kernel();
+        let mut at = k.node(invoker);
+        let mut scroll = (0., 0.);
+        while let Some(n) = at {
+            if k.host_block(n.id).is_some() {
+                return scroll;
+            }
+            at = n.parent.and_then(|id| k.node(id));
+            if let Some(parent) = at {
+                let offset = self.scroll_of(parent.id);
+                scroll.0 += offset.0;
+                scroll.1 += offset.1;
+            }
+        }
+        (scroll.0 + self.page.0, scroll.1 + self.page.1)
+    }
+
     fn alert_scroll(&self, id: ViewId) -> (f32, f32) {
         self.host
             .kernel()
@@ -322,9 +340,7 @@ impl<D: DataSource> Presenter<D> {
                 if !open.modal {
                     let _ = k.set_popover_source_visible(id, false);
                 }
-                if open.modal {
-                    let _ = k.set_host_block(id, None);
-                }
+                let _ = k.set_host_block(id, None);
                 if let Err(e) = self.host.layout() {
                     self.host.log(e);
                 }
@@ -467,7 +483,72 @@ impl<D: DataSource> Presenter<D> {
                 .set_alert_prefix(id, label.is_some())
                 .map_err(|e| format!("alert title: {e:?}"))?;
         }
+        let anchor = self
+            .alert
+            .as_ref()
+            .and_then(|open| open.anchor.filter(|_| !modal && open.point.is_none()));
+        if !modal && (anchor.is_none() || !self.host.kernel().is_top_layer(id)) {
+            self.host
+                .runner_mut()
+                .kernel_mut()
+                .set_host_block(id, None)
+                .map_err(|e| format!("top-layer block: {e:?}"))?;
+        }
         self.host.layout()?;
+        let placement = if let Some(anchor) = anchor {
+            let k = self.host.kernel();
+            let style = k
+                .node(id)
+                .ok_or("popover removed during layout")?
+                .computed_style(exact_kernel::StyleMask::INHERITED);
+            let env = k.env_of(id);
+            let frame = k.node(id).unwrap().frame;
+            let scroll = self
+                .alert
+                .as_ref()
+                .unwrap()
+                .invoker
+                .map_or((0., 0.), |invoker| self.alert_anchor_scroll(invoker));
+            let history = &mut self.alert.as_mut().unwrap().placement;
+            let placement = if k.host_block(id).is_none() {
+                exact_kernel::position_try::area::Placement {
+                    origin: top::area::origin(
+                        &style,
+                        &env,
+                        anchor,
+                        (frame.width, frame.height),
+                        self.viewport,
+                        history,
+                    ),
+                    block: None,
+                }
+            } else {
+                top::area::place(
+                    &style,
+                    &env,
+                    anchor,
+                    self.viewport,
+                    scroll,
+                    history,
+                    |block| self.host.runner_mut().kernel_mut().measure_block(id, block),
+                )
+                .map_err(|e| format!("popover measurement: {e:?}"))?
+            };
+            let k = self.host.kernel();
+            if k.host_block(id) != placement.block
+                && (placement.block.is_some() || !k.host_block_implied(id))
+            {
+                self.host
+                    .runner_mut()
+                    .kernel_mut()
+                    .set_host_block(id, placement.block)
+                    .map_err(|e| format!("popover region: {e:?}"))?;
+                self.host.layout()?;
+            }
+            Some(placement)
+        } else {
+            None
+        };
         let k = self.host.kernel();
         let node = k.node(id).ok_or("alert removed during layout")?;
         let key = node.key;
@@ -490,15 +571,8 @@ impl<D: DataSource> Presenter<D> {
         let open = self.alert.as_ref().unwrap();
         let origin = if let Some(point) = open.point {
             top::area::at_point(point, (f.width, f.height), self.viewport)
-        } else if let Some(anchor) = open.anchor.filter(|_| !modal) {
-            top::area::origin(
-                &node.computed_style(exact_kernel::StyleMask::INHERITED),
-                &k.env_of(node.id),
-                anchor,
-                (f.width, f.height),
-                self.viewport,
-                &mut self.alert.as_mut().unwrap().placement,
-            )
+        } else if let Some(placement) = placement {
+            placement.origin
         } else {
             (
                 (self.viewport.0 - f.width) / 2.,
@@ -507,6 +581,7 @@ impl<D: DataSource> Presenter<D> {
         };
         let offset = (f.x - origin.0, f.y - origin.1);
         let dark = self.host.presented(id).dark.unwrap_or(self.dark());
+        let backdrop = self.backdrop(id, dark);
         let scroll = self.alert_scroll(id);
         let title = title.map(|(label, p)| {
             let frame = prefix.expect("a nonempty label has a generated item");
@@ -530,26 +605,11 @@ impl<D: DataSource> Presenter<D> {
         if title.is_none() {
             self.alert.as_mut().unwrap().title = None;
         }
-        let scrim = modal.then(|| {
-            self.colors.contrast.palette.map_or_else(
-                || {
-                    if self.desktop_overlays() {
-                        [0, 0, 0, 77]
-                    } else {
-                        [
-                            0,
-                            0,
-                            0,
-                            (255.
-                                * crate::paint::look::number(
-                                    exact_kernel::generated::metric::SCRIM_ALPHA,
-                                ))
-                            .round() as u8,
-                        ]
-                    }
-                },
-                |p| [p.window[0], p.window[1], p.window[2], 204],
-            )
+        // A forced palette's scrim stays, as forced colours replace an
+        // authored background on the web.
+        let scrim = modal.then(|| match &self.colors.contrast.palette {
+            Some(p) => [p.window[0], p.window[1], p.window[2], 204],
+            None => backdrop.unwrap_or_else(|| self.scrim()),
         });
         self.brush.alert = Some(crate::paint::AlertPicture {
             key,
@@ -575,6 +635,23 @@ impl<D: DataSource> Presenter<D> {
             self.report_top_layer();
         }
         Ok(())
+    }
+    /// The author's `::backdrop` colour beneath the modal dialog `id`, which
+    /// wins over the platform's dim (LLP 1035.001 D11).
+    pub(in crate::presenter) fn backdrop(&self, id: ViewId, dark: bool) -> Option<[u8; 4]> {
+        let node = self.host.kernel().node(id)?;
+        node.style
+            .mask
+            .has(exact_kernel::StyleId::BackdropColor)
+            .then(|| crate::paint::rgba(node.style.rare.backdrop_color.resolve(dark)))
+    }
+    /// The platform's dim beneath a modal dialog.
+    fn scrim(&self) -> [u8; 4] {
+        if self.desktop_overlays() {
+            return [0, 0, 0, 77];
+        }
+        let alpha = crate::paint::look::number(exact_kernel::generated::metric::SCRIM_ALPHA);
+        [0, 0, 0, (255. * alpha).round() as u8]
     }
     fn alert_inputs(&self, id: ViewId) -> Option<Inputs> {
         let k = self.host.kernel();

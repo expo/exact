@@ -1,12 +1,12 @@
 # Recipe: a Snapback backend (shared server data)
 
-This needs the Snapback client at `<exact2>/snapback4/`, which the exact2
-repository does not include; in a checkout without it, `exact new --snapback`
+This needs the Snapback client at `<exact2>/snapback4/`, absent from this
+repository; in a checkout without it, `exact new --snapback`
 and `bun exact.mjs snapback` refuse, naming the missing client.
 
 For shared server data, `bun <exact2>/scripts/exact.mjs new app --snapback
 [--port <n>]` from the backend’s directory writes a guestbook and wires its
-driver, generated operations and device. The origin defaults to 4400.
+driver, generated operations and device. The default port is 4400.
 `bun exact.mjs snapback` wires an existing app. With an existing schema, the
 untouched greeting becomes a typed query and mutation explorer with `--online`.
 `snapback --port <n>` records an ignored local backend selection.
@@ -20,9 +20,10 @@ for the same server at a LAN address; see [keyed grants](../reference.md#bake-an
 A native drive refuses a build baked for another backend than the one selected
 (or `app.ts`'s literal `origin`); `--backend <url>` drives it. A build with a
 literal `origin` and no backend record must be rebuilt.
-Password sign-in, stored sessions and refresh with Contract time are
-in [the adapter guide](../../snapback4/README.md#personas-and-password-accounts).
-For a server-only schema, add `--online`; `snapback` and `update` preserve it.
+Where a checkout has the Snapback client, its `snapback4/README.md` covers
+password sign-in, stored sessions and refresh with Contract time in “Personas
+and password accounts”. This repository includes neither client nor guide.
+A server-only schema takes `--online`; `snapback` and `update` preserve it.
 On a plain scaffold, `snapback --port <n>` adds the origin and fetch/storage
 grants. A computed origin or grants declaration needs an explicit edit.
 After upgrading Snapback4, run `bun exact.mjs snapback --rebuild`.
@@ -31,8 +32,8 @@ Custom mounts: add `--artifact-only` to rebuild without rewiring.
 `app.json`'s `typescript.sources` are virtual import mounts: `./backend/api.ts`
 resolves through `backend` to `../snapback/generated/api.ts`, and
 `./snapback4/snapback.ts` resolves through `snapback4` to the selected adapter.
-These directories need not exist inside the app. A healthy `snapback --rebuild`
-prints the resolved mappings and exits successfully.
+These directories need not exist inside the app. `snapback --rebuild`
+prints the resolved mappings.
 The device's embedded `snapback4.engine` section records its identity;
 `assets/snapback4.wasm.json` is derived diagnostic output.
 `snapback`, `contract build`, `test web` and `agent web` refuse a stale device;

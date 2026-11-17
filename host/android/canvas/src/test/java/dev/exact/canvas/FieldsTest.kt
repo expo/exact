@@ -24,7 +24,7 @@ class FieldsTest {
         private val family = File("../../painted/tests/fonts/Inter-Regular.ttf").canonicalPath + "#0"
 
         /** A statement of one field, id 1, with these font features; with a size, placed in that box. */
-        fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f): IntArray {
+        fun statement(features: String = "", x: Float = 0f, y: Float = 0f, w: Float = 0f, h: Float = 0f, flags: Int = 0, align: Int = 0): IntArray {
             val placed = if (w > 0f) 1 else 0
             val words = mutableListOf(1, 1, 0, placed, 0, x.toBits(), y.toBits(), w.toBits(), h.toBits(), 0, 0, (-1f).toBits(), (-1f).toBits(), 0)
             fun string(s: String) {
@@ -35,9 +35,31 @@ class FieldsTest {
                 }
             }
             string("1111")
-            words.addAll(listOf(0, 0, 0, 0, -1, 0, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, 0, 0, 0))
+            words.addAll(listOf(flags, 0, 0, 0, -1, align, -16777216, 0, 0, 0, 0, 40f.toBits(), 400, 0, 0, 0, 0, 0))
             for (s in listOf("", "", family, "", features)) string(s)
             return words.toIntArray()
+        }
+    }
+
+    @Test fun fieldsApplyDirectionWithoutReversingPhysicalAlignment() {
+        val context = RuntimeEnvironment.getApplication()
+        context.applicationInfo.flags = context.applicationInfo.flags or android.content.pm.ApplicationInfo.FLAG_SUPPORTS_RTL
+        val fields = Fields(context)
+        fields.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL
+        for (rtl in listOf(true, false, true)) {
+            for (align in listOf(0, 2)) {
+                fields.told(statement(x = 24f, y = 16f, w = 100f, h = 48f, flags = if (rtl) 512 else 0, align = align))
+                fields.measure(android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.EXACTLY),
+                    android.view.View.MeasureSpec.makeMeasureSpec(200, android.view.View.MeasureSpec.EXACTLY))
+                fields.layout(0, 0, 400, 200)
+                val text = (fields.getChildAt(0) as FrameLayout).getChildAt(0) as EditText
+                assertEquals(24f, text.x, 0.01f)
+                assertEquals(16f, text.y, 0.01f)
+                assertEquals(if (rtl) android.view.View.LAYOUT_DIRECTION_RTL else android.view.View.LAYOUT_DIRECTION_LTR, text.layoutDirection)
+                assertEquals(if (rtl) android.view.View.TEXT_DIRECTION_RTL else android.view.View.TEXT_DIRECTION_LTR, text.textDirection)
+                assertEquals(if (align == 2) android.view.Gravity.RIGHT else android.view.Gravity.LEFT,
+                    android.view.Gravity.getAbsoluteGravity(text.gravity, text.layoutDirection) and android.view.Gravity.HORIZONTAL_GRAVITY_MASK)
+            }
         }
     }
 

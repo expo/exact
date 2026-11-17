@@ -163,6 +163,17 @@ fn plan_and_module_reloads_keep_the_document_owner() {
     );
     let reply = bridge.host.as_mut().unwrap().answer_hold(&request).unwrap();
     let doc = exact_runner::agent::field_str(&reply, "doc").unwrap();
+    // A picker's `startIn` opens in the chosen file's folder (LLP 1173 D2).
+    let mut folder = |path: &str, owner: u64| {
+        let request = format!(r#"{{"op":"documentFolder","owner":{owner},"path":"{path}"}}"#);
+        bridge.host.as_mut().unwrap().answer_hold(&request).unwrap()
+    };
+    let parent = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert_eq!(
+        exact_runner::agent::field_str(&folder(&doc, u64::from(rt)), "folder").as_deref(),
+        parent.to_str()
+    );
+    assert_eq!(folder(&doc, u64::from(rt) + 1), "{}");
     let resolves = |bridge: &mut Bridge<DocumentOwnerSource>| {
         use ibex2::stdlib::fs::{DocumentError, DocumentLease, FsOp, FsResult};
         let owner = bridge.host.as_mut().unwrap().runner_mut().data().owner;

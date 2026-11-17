@@ -275,6 +275,7 @@ fn stream(ticket: u64, path: &str, ceiling: u32) -> RequestOut {
         unreachable!()
     };
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "progress".into(),
@@ -299,6 +300,7 @@ fn upload_within(ticket: u64, path: &str, size: usize, ceiling: u32) -> RequestO
         unreachable!()
     };
     RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "upload".into(),
@@ -399,6 +401,7 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
     for ticket in [2, 3] {
         core.run_owned(
             RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
@@ -456,6 +459,7 @@ fn a_repeated_wire_content_type_delivers_events_before_the_connection_closes() {
     };
     core.run_owned(
         RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "events".into(),
@@ -622,6 +626,7 @@ fn a_stream_opens_while_every_independent_worker_holds_a_reply() {
     for ticket in 1..=INDEPENDENT as u64 {
         core.run_owned(
             RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "held".into(),
@@ -657,6 +662,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         let request = Request::get("https://example.test/read").independent_http(4096);
         core.run_owned(
             RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
@@ -668,6 +674,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         .unwrap();
     }
     let read = |ticket| RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "read".into(),
@@ -1192,9 +1199,10 @@ fn file_upload(ticket: u64, path: &str, name: &str) -> RequestOut {
 /// LLP 1016.000 D10: a file's room is the most a file body may be until it
 /// is read, then its length; a second file waits for room before it is read.
 #[test]
-fn an_uploads_file_is_read_once_it_has_room() {
+fn an_uploads_file_body_is_held_at_its_readers_bound() {
     let (core, script, woke) = setup_with("net.fetch https://example.test\nfs.read app:/tmp");
-    core.shared.uploads.limit(1 << 20);
+    // Room for one file body's reader, streamed (LLP 1133.008.000 D4).
+    core.shared.uploads.limit(crate::body::READ_BOUND);
     let files = AppFiles::new("a.bin", &[7; 4096]);
     core.set_app_roots(files.roots());
     core.run_owned(file_upload(1, "/upload", "a.bin"), None)
@@ -1202,8 +1210,8 @@ fn an_uploads_file_is_read_once_it_has_room() {
     let first = feed(&script, 0);
     assert_eq!(
         core.shared.uploads.waiting(),
-        (0, 4096 * super::COPIES),
-        "held at its length"
+        (0, crate::body::READ_BOUND),
+        "held at its reader's bound"
     );
     core.run_owned(file_upload(2, "/upload", "a.bin"), None)
         .unwrap();
@@ -1251,6 +1259,7 @@ fn thirty_uploads_waiting_leave_an_independent_fetch_its_room() {
     let _going: Vec<Feed> = (0..3).map(|at| feed(&script, at)).collect();
     assert_eq!(core.shared.uploads.waiting().0, 27);
     let fetch = RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket: 100,
         target: "data".into(),
@@ -1321,6 +1330,7 @@ fn an_upload_waiting_for_its_lanes_room_starts_when_a_request_let_go_frees_it() 
     let (core, script, _woke) = setup();
     for ticket in 1..=3 {
         let image = RequestOut {
+            completion: None,
             class: exact_runner::RequestClass::Ordered,
             ticket,
             target: "image".into(),

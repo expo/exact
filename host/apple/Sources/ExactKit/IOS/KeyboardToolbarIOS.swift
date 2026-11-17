@@ -46,8 +46,8 @@ final class KeyboardToolbars {
     func ride(overlap: CGFloat) {
         let toolbars = presenter.keyboardPolicy == "overlays-content" ? presenter.carrying("toolbarPlacement").filter {
             guard $0.props["toolbarPlacement"] == "keyboard", !$0.isHidden, $0.window != nil else { return false }
-            if !ExactEnv.authoredChrome, let route = ViewPresentation.controller(for: $0) as? RouteController {
-                return presenter.ownsKeyboard(in: route.view)
+            if !ExactEnv.authoredChrome, let route = ViewPresentation.controller(for: $0, layout: true) as? RouteController {
+                return presenter.ownsKeyboard(in: route.surface)
             }
             return true
         } : []

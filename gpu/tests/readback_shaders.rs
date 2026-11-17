@@ -115,12 +115,22 @@ fn missing_sources_refuse_readback_but_headless_bind_input_and_save_work() {
     let (pixels, _) = module
         .readback(id, &frame)
         .expect("registered source produces pixels");
-    assert!(pixels.data.chunks_exact(4).all(|p| p == [255, 0, 0, 255]));
+    assert!(pixels
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [255, 0, 0, 255]));
     assert!(module.set_shader(
         "readback_probe",
         SOURCE.replace("vec4<f32>(1.,0.,0.,1.)", "vec4<f32>(0.,1.,0.,1.)")
     ));
     let (pixels, _) = module.readback(id, &frame).unwrap();
-    assert!(pixels.data.chunks_exact(4).all(|p| p == [0, 255, 0, 255]));
+    assert!(pixels
+        .data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| *p == [0, 255, 0, 255]));
     assert_eq!(module.carry(id).unwrap(), Some(vec![1]));
 }

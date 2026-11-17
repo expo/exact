@@ -33,5 +33,6 @@
     "store": {
       "ios": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "library-gate-data", "type": "library_gate_data::Gate", "source": "library_gate_data::Gate" } }
 }

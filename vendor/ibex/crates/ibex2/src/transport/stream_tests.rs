@@ -375,3 +375,99 @@ fn the_portable_transport_tells_an_uploads_bytes_sent() {
     assert!(told.iter().all(|&(_, total)| total == 1 << 20), "{told:?}");
     assert_eq!(told.last(), Some(&(1 << 20, 1 << 20)));
 }
+
+/// A file body held in memory, read from its first byte for each attempt.
+struct MemoryFile(Arc<Vec<u8>>);
+impl crate::stdlib::fetch::FileBody for MemoryFile {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn reader(&self) -> std::io::Result<Box<dyn Read + Send>> {
+        Ok(Box::new(std::io::Cursor::new(self.0.clone().to_vec())))
+    }
+}
+
+fn file_upload(url: &str, bytes: Vec<u8>) -> (Request, Arc<std::sync::Mutex<Vec<(u64, u64)>>>) {
+    use crate::stdlib::fetch::{BodyFile, Sent};
+    let told = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = told.clone();
+    let mut request = Request::get(url);
+    request.method = "POST".into();
+    request.body_file = Some(BodyFile(Arc::new(MemoryFile(Arc::new(bytes)))));
+    request.sent = Some(Sent(
+        Arc::new(move |loaded, total| seen.lock().unwrap().push((loaded, total))),
+        None,
+    ));
+    (request, told)
+}
+
+/// A file body (Exact patch 46) goes out framed by its length, byte for
+/// byte, its progress the bytes written, rising to the whole.
+#[test]
+fn the_portable_transport_streams_a_file_body_by_its_length() {
+    let bytes: Vec<u8> = (0..3_000_000u32)
+        .map(|i| (i * 31 + i / 977) as u8)
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/up", listener.local_addr().unwrap());
+    let peer = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut head = Vec::new();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        let mut body = vec![0; 3_000_000];
+        socket.read_exact(&mut body).unwrap();
+        socket
+            .write_all(b"HTTP/1.1 201 Created\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .unwrap();
+        (String::from_utf8(head).unwrap().to_ascii_lowercase(), body)
+    });
+    let (request, told) = file_upload(&url, bytes.clone());
+    let response = RustlsHttpTransport::new().send(&request).unwrap();
+    assert_eq!(response.status, 201);
+    let (head, body) = peer.join().unwrap();
+    assert!(
+        head.contains("content-length: 3000000") && !head.contains("transfer-encoding"),
+        "{head}"
+    );
+    assert!(body == bytes, "the body differs from the file");
+    let told = told.lock().unwrap();
+    assert!(told.windows(2).all(|w| w[0].0 < w[1].0), "{told:?}");
+    assert_eq!(told.last(), Some(&(3_000_000, 3_000_000)));
+}
+
+/// A server that answers before it has read the body: progress stops at
+/// the bytes written, never `total` (LLP 1133.008.000 D4). The portable
+/// transport may read the 413 or fail on the closed connection; either way
+/// it tells no byte it did not write.
+#[test]
+fn an_early_reply_leaves_progress_at_the_bytes_written() {
+    let total = 32u64 << 20;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/up", listener.local_addr().unwrap());
+    let peer = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        request_head(&mut socket);
+        let mut some = vec![0; 64 << 10];
+        socket.read_exact(&mut some).unwrap();
+        let _ = socket.write_all(
+            b"HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        );
+        let _ = socket.shutdown(std::net::Shutdown::Both);
+    });
+    let (request, told) = file_upload(&url, vec![1; total as usize]);
+    let result = RustlsHttpTransport::new().send(&request);
+    peer.join().unwrap();
+    if let Ok(response) = &result {
+        assert_eq!(response.status, 413);
+    }
+    let told = told.lock().unwrap();
+    let last = told.last().map_or(0, |&(loaded, _)| loaded);
+    assert!(last < total, "told {last} of {total}: {result:?}");
+}

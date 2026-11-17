@@ -93,11 +93,11 @@ test('a live batch sets each tuple rule on its base, and a stale one asks for th
   const { modes } = await import('./modes.js');
   modes([['dark-style', ['black', 'dim']]], {}, [], {}, ['--x-ink'], { '--x-ink': 'ink' }, 'd0', 's0');
   const design = globalThis.exact.design;
-  expect(design({ kind: 'tamber-batch', structure: 's0', base: 'other', design: 'd1', tokens: [] }).live).toBe('stale');
+  expect(design({ kind: 'forma-batch', structure: 's0', base: 'other', design: 'd1', tokens: [] }).live).toBe('stale');
   // A notice of the design it runs applies nothing; another structure's is refused.
-  expect(design({ kind: 'tamber-batch', structure: 's0', base: 'd0', design: 'd0', tokens: [] }).live).toBe('applied');
-  expect(design({ kind: 'tamber-snapshot', structure: 's1', base: null, design: 'd9', tokens: [{ name: 'ink', prop: '--x-ink', css: ['#000', '#000'] }] }).live).toBe('structure');
-  const batch = { kind: 'tamber-batch', structure: 's0', base: 'd0', design: 'd1', tokens: [{ name: 'ink', value: '#ff0000ff', slices: [], prop: '--x-ink', css: ['#ff0000ff', '#00ff00ff'] }] };
+  expect(design({ kind: 'forma-batch', structure: 's0', base: 'd0', design: 'd0', tokens: [] }).live).toBe('applied');
+  expect(design({ kind: 'forma-snapshot', structure: 's1', base: null, design: 'd9', tokens: [{ name: 'ink', prop: '--x-ink', css: ['#000', '#000'] }] }).live).toBe('structure');
+  const batch = { kind: 'forma-batch', structure: 's0', base: 'd0', design: 'd1', tokens: [{ name: 'ink', value: '#ff0000ff', slices: [], prop: '--x-ink', css: ['#ff0000ff', '#00ff00ff'] }] };
   expect(design(batch).live).toBe('applied');
   expect(black.style.map.get('--x-ink')).toBe('#ff0000ff');
   expect(dim.style.map.get('--x-ink')).toBe('#00ff00ff');
@@ -105,13 +105,13 @@ test('a live batch sets each tuple rule on its base, and a stale one asks for th
   expect(accent.style.map.get('--exact-accent')).toBe('#00ff00ff');
   // Its base is past now; a snapshot applies whatever this page ran.
   expect(design(batch).live).toBe('stale');
-  expect(design({ ...batch, kind: 'tamber-snapshot', base: null, design: 'd2', tokens: [{ ...batch.tokens[0], css: ['#000000ff', '#111111ff'] }] }).live).toBe('applied');
+  expect(design({ ...batch, kind: 'forma-snapshot', base: null, design: 'd2', tokens: [{ ...batch.tokens[0], css: ['#000000ff', '#111111ff'] }] }).live).toBe('applied');
   expect(dim.style.map.get('--x-ink')).toBe('#111111ff');
   // A scrub's frames (LLP 1121 D13): each applies with transitions off, and
   // one older than the last of its scrub applied (a snapshot fetched late)
   // is dropped.
-  const frame = (design, rev, css, more = {}) => ({ ...batch, base: null, kind: 'tamber-snapshot', design, scrub: { id: 'scrub-1', rev }, tokens: [{ ...batch.tokens[0], css }], ...more });
-  expect(design(frame('d3', 2, ['#222222ff', '#333333ff'], { kind: 'tamber-batch', base: 'd2' })).live).toBe('applied');
+  const frame = (design, rev, css, more = {}) => ({ ...batch, base: null, kind: 'forma-snapshot', design, scrub: { id: 'scrub-1', rev }, tokens: [{ ...batch.tokens[0], css }], ...more });
+  expect(design(frame('d3', 2, ['#222222ff', '#333333ff'], { kind: 'forma-batch', base: 'd2' })).live).toBe('applied');
   expect(dim.style.map.get('--x-ink')).toBe('#333333ff');
   // Transitions stay off through the drag, and come back once it rests.
   expect(document.documentElement.getAttribute('data-x-scrub')).toBe('');
@@ -144,7 +144,7 @@ test('a live batch sets each part of a type token', async () => {
   const { modes } = await import('./modes.js');
   modes([['density', ['regular', 'compact']]], {}, [], {}, [], { '--x-type-a-size': 'type.a', '--x-type-a-weight': 'type.a' }, 'd0', 's0');
   const parts = [{ prop: '--x-type-a-size', css: ['1rem', '0.75rem'] }, { prop: '--x-type-a-weight', css: ['600', '700'] }];
-  expect(globalThis.exact.design({ kind: 'tamber-batch', structure: 's0', base: 'd0', design: 'd1', tokens: [{ name: 'type.a', value: '600 -exact-body', slices: [], parts }] }).live).toBe('applied');
+  expect(globalThis.exact.design({ kind: 'forma-batch', structure: 's0', base: 'd0', design: 'd1', tokens: [{ name: 'type.a', value: '600 -exact-body', slices: [], parts }] }).live).toBe('applied');
   expect(regular.style.map.get('--x-type-a-size')).toBe('1rem');
   expect(compact.style.map.get('--x-type-a-size')).toBe('0.75rem');
   expect(compact.style.map.get('--x-type-a-weight')).toBe('700');
@@ -166,7 +166,7 @@ test('a live batch sets a role override, the tint in the theme rule', async () =
     { name: 'CanvasText', value: '#222222ff', slices: [], prop: '--exact-canvas-text', css: ['#222222ff'] },
     { name: 'AccentColor', value: '#ff0000ff', slices: [], prop: '--exact-accent', css: ['#ff0000ff'], root: true },
   ];
-  expect(design({ kind: 'tamber-batch', structure: 's0', base: 'd0', design: 'd1', tokens }).live).toBe('applied');
+  expect(design({ kind: 'forma-batch', structure: 's0', base: 'd0', design: 'd1', tokens }).live).toBe('applied');
   expect(root.style.map.get('--exact-canvas-text')).toBe('#222222ff');
   expect(theme.style.map.get('--exact-accent')).toBe('#ff0000ff');
   expect(root.style.map.has('--exact-accent')).toBe(false);
@@ -243,17 +243,50 @@ test('a development build boots in the modes its reload carried', async () => {
 // modes still work.
 test('a release copy of modes.js has no live entry point', async () => {
   const { withoutDev } = await import('./module.mjs');
-  const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs');
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
   const { join } = await import('node:path');
   const release = withoutDev(readFileSync(new URL('./modes.js', import.meta.url), 'utf8'));
   for (const live of ['function design(', 'tupleRules', 'tupleKey', 'designDigest', 'dev-only']) expect(release).not.toContain(live);
   const dir = mkdtempSync(join((await import('node:os')).tmpdir(), 'exact-modes-release-'));
-  writeFileSync(join(dir, 'rt.js'), 'export const After = [], PropHooks = {}, inflight = { n: 0 }, say = () => {};\n');
-  writeFileSync(join(dir, 'modes.js'), release);
-  const document = createDocument();
-  Object.assign(globalThis, { document, __exactRender: true, exact: {} });
-  const { modes } = await import(join(dir, 'modes.js'));
+  let modes;
+  try {
+    writeFileSync(join(dir, 'rt.js'), 'export const After = [], PropHooks = {}, inflight = { n: 0 }, say = () => {};\n');
+    writeFileSync(join(dir, 'modes.js'), release);
+    const document = createDocument();
+    Object.assign(globalThis, { document, __exactRender: true, exact: {} });
+    ({ modes } = await import(join(dir, 'modes.js')));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
   modes([['dark-style', ['black', 'dim']]], {}, [], {}, [], {}, 'd0', 's0');
   expect(globalThis.exact.design).toBeUndefined();
   expect(globalThis.exact.modes).toBeDefined();
+});
+
+
+test('the drive DOM clears baked token styles and walks nested boundaries without browser selectors', async () => {
+  const previous = { document: globalThis.document, __exactRender: globalThis.__exactRender, MutationObserver: globalThis.MutationObserver, CSS: globalThis.CSS };
+  const document = createDocument();
+  document.getElementsByClassName = name => document.root.getElementsByTagName('*').filter(e => e.classList.contains(name));
+  const el = (parent, attrs) => { const e = document.createElement('div'); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); parent.append(e); return e; };
+  const page = el(document.root, { class: 'c0' });
+  const boundary = el(page, { 'data-x-b': '0', 'data-x-pin': 'density=compact' });
+  const child = el(boundary, { 'data-x-b': '0' });
+  Object.assign(globalThis, { document, __exactRender: false, MutationObserver: class { observe() {} disconnect() {} }, CSS: undefined });
+  try {
+    const { modes } = await import('./modes.js');
+    // The drive lacks both APIs; a host with CSS.escape alone still needs the walk.
+    for (const css of [undefined, { escape: value => value }]) {
+      globalThis.CSS = css;
+      delete page.$xc;
+      page.style.setProperty('color', '#222222');
+      modes([['density', ['regular', 'compact']]], { c0: { 0: 0 } }, ['color:var(--x-ink)'], { c0: ['color'] }, []);
+      exact.modes.set([]);
+      expect(page.style.getPropertyValue('color')).toBe('');
+      expect(child.getAttribute('data-x-modes')).toBe('density=compact');
+      expect(child.style.getPropertyValue('color')).toBe('var(--x-ink)');
+      boundary.setAttribute('data-x-pin', 'density=regular');
+      exact.modes.set([]);
+      expect(child.getAttribute('data-x-modes')).toBe('density=regular');
+      boundary.setAttribute('data-x-pin', 'density=compact');
+    }
+  } finally { Object.assign(globalThis, previous); }
 });

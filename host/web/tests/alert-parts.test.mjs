@@ -6,6 +6,7 @@
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { withLook } from '../look.mjs';
+import { drivable } from '../../../scripts/coverage.mjs';
 import { chromium as browserPath } from '../../../scripts/agent-launch.mjs';
 
 const web = new URL('../', import.meta.url);
@@ -52,7 +53,7 @@ async function inEngines(run) {
   } });
   const playwright = await import('playwright-core');
   try {
-    for (const engine of ['chromium', 'firefox', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'firefox', 'webkit'])) {
       const browser = await playwright[engine].launch({ headless: true, ...(engine === 'chromium' ? { executablePath: browserPath().executable } : {}) });
       try {
         for (const [width, height] of [[390, 844], [844, 390]]) {
@@ -330,11 +331,11 @@ async function renderedAhead({ head = '', tail = '', files, slow = {} }, drive) 
     return new Response(`<!doctype html><html><head><style>${sheet}</style>${head}</head><body><div id="exact-root">
       <button id="ask" commandfor="failed" command="show-modal">Ask</button>
       <dialog id="failed" role="alertdialog" aria-label="Couldn’t Save">${message(text('failed-message', long), 'Couldn’t Save')}${actions(button('failed-ok', 'OK'))}</dialog>
-      </div><script type="application/vnd.exact.checkpoint" data-activate="interaction">{}</script>${tail}</body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+      </div><script type="application/vnd.exact.checkpoint" data-activate="interaction" data-entry="./app.js">{}</script>${tail}</body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8' } });
   } });
   const playwright = await import('playwright-core');
   try {
-    for (const engine of ['chromium', 'webkit']) {
+    for (const engine of await drivable(['chromium', 'webkit'])) {
       const browser = await playwright[engine].launch({ headless: true, ...(engine === 'chromium' ? { executablePath: browserPath().executable } : {}) });
       try {
         await drive(await browser.newPage({ viewport: { width: 390, height: 844 } }), server.url.href, engine);

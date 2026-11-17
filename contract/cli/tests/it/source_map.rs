@@ -458,8 +458,8 @@ fn the_map_says_each_source_and_the_digest_of_its_text_as_compiled() {
     let child_text = "component Child\n  view\n    text \"child\" testId=\"child\"\n";
     let root = app.write("app.contract", root_text);
     let child = app.write("child.contract", child_text);
-    let design_text = "tamber digests\n\ntheme\n  ink = #101010\n";
-    let design = app.write("app.tamber", design_text);
+    let design_text = "forma digests\n\ntheme\n  ink = #101010\n";
+    let design = app.write("app.forma", design_text);
     let (_, json) = app.compile();
     let sources: Vec<(String, String)> = json["sources"]
         .as_array()

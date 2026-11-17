@@ -19,7 +19,8 @@ const models = {
 test('the search makes Bluesky\'s trials', async () => {
   for (const c of recorded.cases) {
     const trials = [];
-    const found = await search(c.width, c.height, c.maxDimension, c.maxBytes, async (w, h, q) => {
+    const found = await search(c.width, c.height, { maxDimension: c.maxDimension, maxBytes: c.maxBytes }, async (w, h, quality) => {
+      const q = Math.round(quality * 100);
       trials.push([w, h, q]);
       const size = models[c.model](w, h, q);
       return { size, value: size };
@@ -38,11 +39,11 @@ test('contain floors, never upscales, and keeps a pixel', () => {
 
 test('a PNG shrinks by 0.8 until it fits, at most four times (A1.11)', async () => {
   const trials = [];
-  const found = await searchLossless(1000, 800, 1000, 300_000, async (w, h) => { trials.push([w, h]); return { size: w * h / 2, value: w }; });
+  const found = await searchLossless(1000, 800, { maxDimension: 1000, maxBytes: 300_000 }, async (w, h) => { trials.push([w, h]); return { size: w * h / 2, value: w }; });
   expect(trials).toEqual([[1000, 800], [800, 640]]);
   expect(found).toEqual({ value: 800, width: 800, height: 640 });
   trials.length = 0;
-  expect(await searchLossless(1000, 800, 1000, 1, async (w, h) => { trials.push([w, h]); return { size: 2, value: null }; })).toBe(null);
+  expect(await searchLossless(1000, 800, { maxDimension: 1000, maxBytes: 1 }, async (w, h) => { trials.push([w, h]); return { size: 2, value: null }; })).toBe(null);
   expect(trials).toEqual([[1000, 800], [800, 640], [640, 512], [512, 409], [409, 327]]);
 });
 
@@ -53,6 +54,73 @@ test('limits are integers in range, else a TypeError', () => {
   for (const bad of [undefined, null, 7, {}, { maxDimension: 0, maxBytes: 1 }, { maxDimension: 8193, maxBytes: 1 },
     { maxDimension: 1.5, maxBytes: 1 }, { maxDimension: 1, maxBytes: 0 }, { maxDimension: 1, maxBytes: 67108865 }, { maxDimension: '10', maxBytes: 1 }])
     expect(() => limits(bad)).toThrow(TypeError);
+});
+
+// An explicit quality (LLP 1069.002 A1.12), case for case as
+// `exact_data::image`'s tests.
+const api = 'storage.fs.compressImage(): ';
+test('quality is checked and makes maxBytes optional (A1.12)', () => {
+  expect(limits({ maxDimension: 100, quality: 0.5 })).toEqual({ maxDimension: 100, maxBytes: undefined, quality: 0.5, type: 'image/jpeg' });
+  expect(limits({ maxDimension: 100, maxBytes: 1000, quality: 0 }).quality).toBe(0);
+  expect(limits({ maxDimension: 100, maxBytes: 1000, quality: 1 }).quality).toBe(1);
+  for (const quality of [-0.01, 1.01, NaN, Infinity, null, '0.5'])
+    expect(() => limits({ maxDimension: 100, maxBytes: 1000, quality })).toThrow(`${api}quality must be a number from 0 to 1`);
+  expect(() => limits({ maxDimension: 100 })).toThrow(`${api}needs maxBytes, quality or both`);
+  expect(() => limits({ maxDimension: 100, maxBytes: 0, quality: 2 })).toThrow(`${api}maxBytes must be an integer from 1 to 67108864`);
+  expect(() => limits({ maxDimension: 100, quality: 0.5, type: 'image/webp' })).toThrow(`${api}type must be "image/jpeg" or "image/png"`);
+  expect(() => limits(7)).toThrow(`${api}options must be an object`);
+});
+
+const ceilingTrials = async ([width, height], budget, size) => {
+  const trials = [];
+  const found = await search(width, height, budget, async (w, h, q) => { trials.push([w, h, q]); const n = size(w, h, q); return { size: n, value: n }; });
+  return [trials, found && [found.width, found.height, found.value]];
+};
+
+test('a ceiling that fits is one encode (A1.12)', async () => {
+  const [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 2000, maxBytes: 1_000_000, quality: 0.855 }, (w, h, q) => Math.floor(q * 1000));
+  expect(trials).toEqual([[2000, 1500, 0.855]]);
+  expect(found).toEqual([2000, 1500, 855]);
+});
+
+test('a ceiling that misses bisects below it, then shrinks (A1.12)', async () => {
+  let [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 2000, maxBytes: 100, quality: 0.8 }, (w, h, q) => Math.floor(q * (w === 2000 ? 1000 : 100)));
+  expect(trials).toEqual([[2000, 1500, 0.8], [2000, 1500, 0.4], [2000, 1500, 0.2], [1600, 1200, 0.8]]);
+  expect(found).toEqual([1600, 1200, 80]);
+  [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 2000, maxBytes: 700, quality: 0.8 }, (w, h, q) => Math.floor(q * 1000));
+  expect(trials.map(t => Math.round(t[2] * 100))).toEqual([80, 40, 60, 70, 75, 73, 72, 71]);
+  expect(found).toEqual([2000, 1500, 700]);
+  [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 2000, maxBytes: 1, quality: 0.8 }, () => 2);
+  expect(trials.map(t => t[0])).toEqual([2000, 2000, 2000, 1600, 1600, 1600, 1280, 1280, 1280, 1024, 1024, 1024]);
+  expect(found).toBe(null);
+});
+
+test('the bisection stays under any ceiling (A1.12)', async () => {
+  // 0.56 * 100 is 56.00000000000001: the bisection still stops below 56.
+  const [trials] = await ceilingTrials([100, 100], { maxDimension: 100, maxBytes: 559, quality: 0.56 }, (w, h, q) => Math.floor(q * 1000));
+  expect(trials.map(t => Math.round(t[2] * 100))).toEqual([56, 28, 42, 49, 53, 55]);
+  for (const quality of [0, 0.1, 0.56, 0.29, 1]) {
+    const [trials] = await ceilingTrials([4000, 3000], { maxDimension: 2000, maxBytes: 1, quality }, () => 2);
+    expect(trials.every(t => t[2] <= quality)).toBe(true);
+    expect(trials.filter(t => t[2] === quality).length).toBe(4);
+  }
+});
+
+test('quality alone is one encode (A1.12)', async () => {
+  let [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 1000, quality: 0.7 }, () => 5_000_000);
+  expect(trials).toEqual([[1000, 750, 0.7]]);
+  expect(found).toEqual([1000, 750, 5_000_000]);
+  [trials, found] = await ceilingTrials([4000, 3000], { maxDimension: 1000, quality: 0.7 }, () => 64 * 1024 * 1024 + 1);
+  expect([trials.length, found]).toEqual([1, null]);
+});
+
+test('a PNG ignores quality (A1.12)', async () => {
+  const sizes = [];
+  await searchLossless(1000, 800, { maxDimension: 1000, maxBytes: 300_000, quality: 0.3 }, async (w, h) => { sizes.push([w, h]); return { size: w * h / 2, value: w }; });
+  expect(sizes).toEqual([[1000, 800], [800, 640]]);
+  sizes.length = 0;
+  expect(await searchLossless(1000, 800, { maxDimension: 500, quality: 0.3 }, async (w, h) => { sizes.push([w, h]); return { size: 64 * 1024 * 1024 + 1, value: w }; })).toBe(null);
+  expect(sizes).toEqual([[500, 400]]);
 });
 
 test('the header gives the stored size before anything is decoded', async () => {
@@ -102,7 +170,7 @@ test('a deadline already past decodes nothing', async () => {
   const before = globalThis.createImageBitmap;
   globalThis.createImageBitmap = async () => { decodes++; throw new Error('decoded'); };
   try {
-    const error = await compress(fixture, 4000, 2_000_000, 0).then(() => null, e => e);
+    const error = await compress(fixture, { maxDimension: 4000, maxBytes: 2_000_000 }, 0).then(() => null, e => e);
     expect([error?.code, decodes]).toEqual(['timeout', 0]);
   } finally { globalThis.createImageBitmap = before; }
 });

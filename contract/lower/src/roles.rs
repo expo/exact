@@ -4,17 +4,14 @@ use contract_syntax::Expr;
 use exact_kernel::ARIA_ROLES;
 
 pub(crate) fn check(value: &Expr) -> Result<(), LowerError> {
+    for value in contract_checking::value_leaves(value) {
+        check_leaf(value)?;
+    }
+    Ok(())
+}
+
+fn check_leaf(value: &Expr) -> Result<(), LowerError> {
     match value {
-        Expr::Ternary(_, yes, no, _)
-        | Expr::Match {
-            some: yes,
-            none: no,
-            ..
-        } => {
-            check(yes)?;
-            check(no)
-        }
-        Expr::Let { body, .. } => check(body),
         Expr::Str(text, span) => {
             let known = |word: &str| {
                 ARIA_ROLES

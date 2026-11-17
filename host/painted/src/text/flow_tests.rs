@@ -19,7 +19,7 @@ fn circle(x: f32) -> [FlowShape; 1] {
 }
 #[test]
 fn moving_shape_retains_shaping_and_no_frame_history() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let spec = spec(&"A quiet river carries the light through the city. ".repeat(40));
     let before = shaping::shape_line_calls();
     let mut p = engine.paragraph_flow(&spec, 500.0, &circle(200.0), None);
@@ -50,7 +50,7 @@ fn moving_shape_retains_shaping_and_no_frame_history() {
 }
 #[test]
 fn bilingual_fragments_reorder_clusters_but_keep_logical_fragment_order() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let text = "Before שלום עולם מילים רבות مرحبا بالعالم كتابة جميلة after. ".repeat(12);
     for direction in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
         let mut s = spec(&text);
@@ -85,7 +85,7 @@ fn bilingual_fragments_reorder_clusters_but_keep_logical_fragment_order() {
 }
 #[test]
 fn clamp_counts_bands_and_alignment_uses_each_interval() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let mut s = spec(&"One two three four five six seven eight nine. ".repeat(20));
     s.line_clamp = 5;
     let start = engine.paragraph_flow(&s, 400.0, &circle(200.0), None);
@@ -106,7 +106,7 @@ fn clamp_counts_bands_and_alignment_uses_each_interval() {
 }
 #[test]
 fn worst_case_full_obstruction_is_bounded_and_empty_is_not_success() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let mut s = spec(&"W".repeat(20000));
     s.overflow_wrap = exact_kernel::OverflowWrap::Anywhere;
     let blocked = [FlowShape::RoundRect {
@@ -127,7 +127,7 @@ fn worst_case_full_obstruction_is_bounded_and_empty_is_not_success() {
 
 #[test]
 fn measure_request_and_fragment_paint_have_identical_metrics() {
-    let shared = TextEngine::shared();
+    let shared = crate::text::fixtures::shared();
     let style = exact_kernel::TextStyle::from_style(&exact_kernel::StyleProps::default());
     let runs = [exact_kernel::TextRun {
         text: "Measure what we paint. ".into(),
@@ -155,7 +155,7 @@ fn measure_request_and_fragment_paint_have_identical_metrics() {
 
 #[test]
 fn fragment_byte_coverage_survives_clusters_and_hard_breaks() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let source = "office affinity e\u{301} 👩‍👩‍👧‍👦   word\n\nשלום עולם\r\nNext\t\tend".repeat(30);
     let mut s = spec(&source);
     s.overflow_wrap = exact_kernel::OverflowWrap::Anywhere;
@@ -181,7 +181,7 @@ fn fragment_byte_coverage_survives_clusters_and_hard_breaks() {
 
 #[test]
 fn unbreakable_normal_word_reports_its_actual_overflow() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec(&"unbreakable".repeat(100));
     let p = engine.paragraph_flow(&s, 200., &circle(100.), None);
     assert!(p.width > 2000.);
@@ -192,7 +192,7 @@ fn unbreakable_normal_word_reports_its_actual_overflow() {
 
 #[test]
 fn trailing_blank_lines_keep_source_glyphs_in_their_own_bands() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let text = "First source line.\nSecond source line.\n\n\n";
     // Hard breaks are preserved segment breaks: `pre-wrap` (CSS; LLP 1053 G5).
     let mut pre = spec("");
@@ -211,12 +211,12 @@ fn trailing_blank_lines_keep_source_glyphs_in_their_own_bands() {
 
 #[test]
 fn retired_font_catalog_cannot_seed_a_new_flow_layout() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let spec = spec("The same text in a replacement font catalog.");
     let old = engine.paragraph_flow(&spec, 400., &circle(200.), None);
     // A plan/catalog replacement swaps the entire engine while the accepted
     // frame may still own its previous paragraph until publication succeeds.
-    engine = TextEngine::new();
+    engine = crate::text::fixtures::engine();
     let before = shaping::shape_line_calls();
     let new = engine.paragraph_flow(&spec, 400., &circle(200.), Some(&old));
     assert_eq!(shaping::shape_line_calls() - before, 1);
@@ -226,7 +226,7 @@ fn retired_font_catalog_cannot_seed_a_new_flow_layout() {
 
 #[test]
 fn css_white_space_changes_flow_width_and_breaks() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let mut s = spec("A    B\nC");
     let normal = engine.paragraph_flow(&s, 500.0, &circle(900.0), None);
     assert_eq!(normal.fragments().len(), 1);
@@ -262,7 +262,7 @@ fn css_white_space_changes_flow_width_and_breaks() {
 #[test]
 fn pre_line_flows_the_lines_its_plain_layout_has() {
     // @ref LLP 1053 §0 G5 — flowed text breaks where plain text does.
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = crate::paint::text_spec(
         &exact_kernel::StyleProps::default().with_rows(|rows| {
             rows.font_size = 16.0;
@@ -283,7 +283,7 @@ fn pre_line_flows_the_lines_its_plain_layout_has() {
 
 #[test]
 fn rtl_hebrew_and_arabic_take_right_interval_first() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let hole = [FlowShape::RoundRect {
         x: 140.,
         y: 0.,
@@ -327,7 +327,7 @@ fn rtl_hebrew_and_arabic_take_right_interval_first() {
 
 #[test]
 fn tall_wall_jumps_and_unrepresentable_flow_falls_back_to_visible_text() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let s = spec("word");
     let mut wall = [FlowShape::RoundRect {
         x: 0.,
@@ -364,7 +364,7 @@ fn tall_wall_jumps_and_unrepresentable_flow_falls_back_to_visible_text() {
 
 #[test]
 fn clamp_paints_measured_ellipsis_inside_last_interval() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let ellipsis = engine.paragraph(&spec("…"), None);
     let ink = *ellipsis
         .layout_runs()
@@ -388,7 +388,7 @@ fn clamp_paints_measured_ellipsis_inside_last_interval() {
 
 #[test]
 fn soft_hyphen_paints_real_dash_beside_hole() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let dash = engine.paragraph(&spec("-"), None);
     let glyph = dash.layout_runs().next().unwrap().glyphs[0];
     let p = engine.paragraph_flow(
@@ -416,7 +416,7 @@ fn soft_hyphen_paints_real_dash_beside_hole() {
 
 #[test]
 fn justified_fragments_fill_intervals_except_paragraph_end_and_hard_breaks() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     for direction in [exact_kernel::Direction::Ltr, exact_kernel::Direction::Rtl] {
         let mut s = spec(&"one two three four five six seven eight nine ten ".repeat(8));
         s.align = TextAlign::Justify;
@@ -467,7 +467,7 @@ fn justified_fragments_fill_intervals_except_paragraph_end_and_hard_breaks() {
 
 #[test]
 fn split_ending_bands_keep_every_fragment_at_start() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let shapes = [FlowShape::RoundRect {
         x: 110.,
         y: 0.,
@@ -516,7 +516,7 @@ fn split_ending_bands_keep_every_fragment_at_start() {
 
 #[test]
 fn pre_line_justifies_soft_wraps_after_unicode_break_characters() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let shapes = [FlowShape::RoundRect {
         x: 110.,
         y: 0.,
@@ -553,7 +553,7 @@ fn pre_line_justifies_soft_wraps_after_unicode_break_characters() {
 
 #[test]
 fn logical_flow_alignment_uses_the_paragraph_direction() {
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let shapes = [FlowShape::RoundRect {
         x: 140.,
         y: 0.,
@@ -588,7 +588,7 @@ fn logical_flow_alignment_uses_the_paragraph_direction() {
 fn collapsed_break_controls_keep_adjacent_spaces() {
     // Under `normal` a form feed, NEL, U+2028 or U+2029 is zero-width text:
     // the spaces beside it do not collapse into it.
-    let mut engine = TextEngine::new();
+    let mut engine = crate::text::fixtures::engine();
     let p = engine.paragraph_flow(&spec("A B"), 440., &circle(220.), None);
     let space: f32 = p.layout_runs().next().unwrap().glyphs[1].w;
     assert!(space > 1.);

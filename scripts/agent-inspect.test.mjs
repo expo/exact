@@ -1,9 +1,9 @@
 // `state <name>` (agent-inspect.mjs `stateOp`, LLP 1116.007 D3.9): a state, derive or resource (or a field of the record)
 // reads by name, down a dotted path, as `expect state` does, even where a view carries the name; a plain view's is the record.
 import { test, expect } from 'bun:test';
-import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta } from './agent-inspect.mjs';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { render, renderTrace, renderFrameHealthReport, renderFrameHealthMetrics, perfOp, readTrack, renderPerf, stateOp, tapRefusal, nextCommitTasks, settleBound, planLocators, perfDelta, pidTrace } from './agent-inspect.mjs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { open } from './agent-session.mjs';
 import { launchFacts } from './agent-launch.mjs';
@@ -78,16 +78,18 @@ test('Android live windows read their baseline once the lease lends the clock, a
   expect(s.now).toBe(1700);
 });
 
-test('Apple live windows use a host-side wait and release their lease on errors', async () => {
+test('Apple live windows read their baseline once the lease holds, use a host-side wait and release their lease on errors', async () => {
   const requests = [], cursor = { version: 1 };
+  let started = false;
   const s = { host: 'ios', op: async request => {
     requests.push(request);
-    if (request.capture) return { capture: request.capture === 'start' };
+    if (request.capture) { started = request.capture === 'start'; return { capture: started }; }
     if (request.cursor) throw new Error('disconnected');
-    return { available: true, cursor };
+    // An on-demand collector collects once the lease asks it to
+    return started ? { available: true, cursor } : { available: false, reason: 'collection-disabled' };
   }, perf: () => { throw new Error('legacy sampler'); } };
   await expect(perfOp(s, ['frames', 'live', '1'])).rejects.toThrow('disconnected');
-  expect(requests.map(request => request.capture ?? 'health')).toEqual(['health', 'start', 'health', 'stop']);
+  expect(requests.map(request => request.capture ?? (request.cursor ? 'delta' : 'health'))).toEqual(['health', 'start', 'health', 'delta', 'stop']);
   expect(requests.some(request => request.op === 'clock')).toBe(false);
   await expect(perfOp(s, ['frames', 'live', '30001'])).rejects.toThrow();
 });
@@ -259,11 +261,13 @@ test('ink traces retain phase and coverage information without inventing frame j
 
 test('--plan finds plans with a map beside them in a directory, and refuses one with none', () => {
   const dir = mkdtempSync(join(tmpdir(), 'plan-'));
-  mkdirSync(join(dir, 'bake', 'dev'), { recursive: true });
-  writeFileSync(join(dir, 'bake', 'dev', 'macos.plan.map.json'), '{}');
-  expect(planLocators(dir)).toEqual([join(dir, 'bake', 'dev', 'macos.plan')]);
-  expect(planLocators(join(dir, 'x.plan.map.json'))).toEqual([join(dir, 'x.plan')]);
-  expect(() => planLocators(join(dir, 'bake', 'dev', 'empty-dir-does-not-exist'))).toThrow();
+  try {
+    mkdirSync(join(dir, 'bake', 'dev'), { recursive: true });
+    writeFileSync(join(dir, 'bake', 'dev', 'macos.plan.map.json'), '{}');
+    expect(planLocators(dir)).toEqual([join(dir, 'bake', 'dev', 'macos.plan')]);
+    expect(planLocators(join(dir, 'x.plan.map.json'))).toEqual([join(dir, 'x.plan')]);
+    expect(() => planLocators(join(dir, 'bake', 'dev', 'empty-dir-does-not-exist'))).toThrow();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('perf during subtracts each handler\'s dispatches and drops the ones that did not run', () => {
@@ -519,4 +523,12 @@ test("a world's perf prints its counters; only `state <canvas> draws` is a draw 
   expect(render('state', perf, { name: 'world.0.perf' }).split('\n')).toEqual(['wallClock true', 'pixels [1280,720]', 'draws 15', 'instances 11', 'triangles 5425']);
   const draws = { tick: 4, hash: '0x1', draws: [{ pass: 'opaque', draw: 'mesh', winding: 'ccw', writes: 'color' }] };
   expect(render('state', draws, { name: 'world', look: true })).toBe('tick 4 · hash 0x1\nopaque        · mesh · ccw · writes color');
+});
+
+test('trace --pid looks for a sandboxed Mac app\'s marker in its container (LLP 1030.005 D4)', async () => {
+  const sandbox = '<plist><dict><key>com.apple.security.app-sandbox</key><true/></dict></plist>';
+  const run = (signed) => (cmd, args) => ({ stdout: cmd === 'ps' ? (args[1] === 'comm=' ? '/b/Probe.app/Contents/MacOS/Probe\n' : 'Sat Nov 14 19:00:00 2026\n')
+    : cmd === 'codesign' ? signed : cmd === 'plutil' ? 'com.example.probe\n' : cmd === 'getconf' ? '/var/folders/x/T/\n' : '' });
+  await expect(pidTrace(4242, () => '/nowhere', run(sandbox))).rejects.toThrow(`no ${join(homedir(), 'Library/Containers/com.example.probe/Data/tmp/exact-trace-4242.ready')}`);
+  await expect(pidTrace(4242, () => '/nowhere', run('<plist><dict/></plist>'))).rejects.toThrow('no /var/folders/x/T/exact-trace-4242.ready');
 });

@@ -8,6 +8,48 @@ use exact_runner::instance::Input;
 use std::fmt::Write as _;
 
 impl Em<'_> {
+    pub(super) fn collection_children(
+        &mut self,
+        i: u32,
+        parent: &str,
+        scope: &Scope,
+        edges: &[String; 2],
+    ) -> Result<(), String> {
+        use super::sites::Site;
+        let children = self.sites.of_node(i);
+        let rows: Vec<_> = children
+            .iter()
+            .enumerate()
+            .filter_map(|(at, site)| match site {
+                Site::Region(r)
+                    if self.plan.regions[*r as usize].kind == exact_plan::RegionKind::Each =>
+                {
+                    Some((at, *r))
+                }
+                _ => None,
+            })
+            .collect();
+        let [(split, region)] = rows.as_slice() else {
+            return Err(format!("node {i}: a virtualized list needs one direct keyed `for`; wrap a second in an element"));
+        };
+        let (split, region) = (*split, *region);
+        let mut opts = self.list_options(i, scope, edges)?;
+        if children.len() > 1 {
+            let mut bodies = Vec::new();
+            for sites in [&children[..split], &children[split + 1..]] {
+                let saved = std::mem::take(&mut self.out);
+                self.children(sites, "p", scope)?;
+                bodies.push(std::mem::replace(&mut self.out, saved));
+            }
+            opts = format!(
+                "{{...{opts},fixed:[p=>{{{}}},p=>{{{}}}]}}",
+                bodies[0], bodies[1]
+            );
+        }
+        self.list = true;
+        self.each(region, parent, scope, Some(opts))
+    }
+
     /// Node `i`'s `scrollFollowEnd` on an ordinary scroller, `constant` or
     /// bound: follow.js's (LLP 1070.000 §15). A virtualized list's is list.js's.
     pub(super) fn end_follow(&mut self, i: u32, e: &str, constant: Option<&String>) {
@@ -41,7 +83,14 @@ impl Em<'_> {
                 Input::Derive(i) => format!("d_{i}()"),
                 Input::Resource(i) => format!("r_{i}()"),
                 Input::PendingResource(i) => format!("r_{i}.p()"),
-                Input::PendingMutation(i) => format!("[m_{i}.p(),m_{i}.e()]"),
+                Input::PendingMutation(i) if self.plan.mutations[i].owner.is_none() => {
+                    format!("[m_{i}.p(),m_{i}.e()]")
+                }
+                // A child's, on the instance in force (LLP 1035.005.004 D6).
+                Input::PendingMutation(i) => match &scope.rows {
+                    Some(rows) => format!("[{rows}.m{i}.p(),{rows}.m{i}.e()]"),
+                    None => continue,
+                },
                 Input::FailedResource(i) => format!("r_{i}.e()"),
                 Input::Clock => format!("{}()", self.uses.rt("x_performanceNow")),
             };

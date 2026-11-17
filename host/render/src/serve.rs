@@ -15,7 +15,7 @@
 
 use crate::encode::{self, Accepts, Variants};
 use crate::files::{asset_shaped, percent_decode};
-use crate::{page, render_with_at, Ids, Projection, Rendered};
+use crate::{page, render_with_faults_at, Ids, Projection, Rendered};
 use exact_plan::{Plan, RenderPolicy};
 use exact_runner::DataSource;
 use exact_web::document::{canonical_location, route_at, Site};
@@ -124,6 +124,9 @@ struct Shared {
     generations: Option<crate::generations::Generations>,
     /// The entry's `modulepreload`s, for a 103 ([`crate::stream::hint`]).
     hints: Vec<String>,
+    /// The paths of the build's files named by their content (LLP 1153.004
+    /// D6), which a client keeps for good.
+    content: std::collections::HashSet<String>,
     /// The shell is the JavaScript runtime's.
     js: bool,
     /// Its places, read once, and its early head ([`page::head_js`]) with the
@@ -227,6 +230,10 @@ impl Server {
                 [true, false].map(|preload| page::head_js(&shell, &at, &lang, dir, preload, false));
             Some((at, heads))
         });
+        let content = crate::files::content_files(&serve.dist)
+            .into_values()
+            .map(|to| format!("/{to}"))
+            .collect();
         Ok(Server {
             listener,
             stop: Arc::new(AtomicBool::new(false)),
@@ -244,6 +251,7 @@ impl Server {
                 variants,
                 generations,
                 hints,
+                content,
                 js,
                 early,
             },
@@ -423,6 +431,7 @@ struct Request {
     keep: bool,
     /// What it says of its reader's viewport (LLP 1048.006).
     hints: crate::viewport::Hints,
+    faults: Option<String>,
 }
 
 #[derive(Clone)]
@@ -657,6 +666,7 @@ fn indexed<D: DataSource + 'static>(
             navigate: false,
             keep: false,
             hints: Default::default(),
+            faults: None,
         };
         let response = respond(&request, shared, data, None);
         let noindex = response.headers.iter().any(|(name, value)| {
@@ -701,7 +711,7 @@ fn read_request(stream: &mut TcpStream, within: Duration) -> Result<Request, ()>
         }
         let _ = stream.set_read_timeout(Some(left));
         let n = stream.read(&mut chunk).map_err(|_| ())?;
-        if n == 0 || bytes.len() + n > 16 << 10 {
+        if n == 0 || bytes.len() + n > 128 << 10 {
             return Err(());
         }
         bytes.extend_from_slice(&chunk[..n]);
@@ -728,6 +738,15 @@ fn read_request(stream: &mut TcpStream, within: Duration) -> Result<Request, ()>
         .take_while(|line| !line.is_empty())
         .filter_map(|line| line.split_once(':'))
         .collect();
+    let faults = headers
+        .iter()
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("x-exact-faults"));
+    // A 64 KiB table expands in base64; ordinary request fields retain their 16 KiB bound.
+    if end.saturating_sub(faults.map_or(0, |(name, value)| name.len() + value.len() + 3)) > 16 << 10
+    {
+        return Err(());
+    }
+    let faults = faults.map(|(_, value)| value.trim().to_string());
     let if_none_match = headers
         .iter()
         .find(|(name, _)| name.trim().eq_ignore_ascii_case("if-none-match"))
@@ -772,6 +791,7 @@ fn read_request(stream: &mut TcpStream, within: Duration) -> Result<Request, ()>
     });
     let keep = version == "HTTP/1.1" && !close && !pipelined && matches!(method, "GET" | "HEAD");
     Ok(Request {
+        faults,
         keep,
         hints: crate::viewport::Hints::parse(&headers),
         method: method.to_string(),
@@ -864,7 +884,11 @@ fn respond<D: DataSource + 'static>(
             streamed: false,
         };
     }
-    if policy != Some(RenderPolicy::Cached) || shared.serve.lifetime.is_zero() || request.no_store {
+    if policy != Some(RenderPolicy::Cached)
+        || shared.serve.lifetime.is_zero()
+        || request.no_store
+        || driven(request, shared)
+    {
         return document(request, policy, notfound, shared, data, early);
     }
     // A dictionary the browser holds and names itself (D11). A CDN's request
@@ -935,6 +959,7 @@ fn render_kept<D: DataSource + 'static>(
         navigate: request.navigate && request.if_none_match.is_none(),
         keep: request.keep,
         hints: request.hints,
+        faults: request.faults.clone(),
     };
     let mut response = document(&unconditional, policy, notfound, shared, data, early);
     // Keep no page sent `no-store`, such as one whose render drew randomness
@@ -1142,6 +1167,17 @@ fn stream_file(path: &Path, kind: &str, request: &Request) -> Option<Response> {
     })
 }
 
+fn driven(request: &Request, shared: &Shared) -> bool {
+    let query = request
+        .target
+        .split_once('?')
+        .map_or("", |(_, query)| query);
+    !shared.delivery.production
+        && url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == "agent")
+        && url::form_urlencoded::parse(query.as_bytes())
+            .any(|(key, value)| key == "failFetch" && value == "1")
+}
+
 fn document<D: DataSource + 'static>(
     request: &Request,
     policy: Option<RenderPolicy>,
@@ -1150,6 +1186,22 @@ fn document<D: DataSource + 'static>(
     data: fn() -> D,
     early: Option<&mut TcpStream>,
 ) -> Response {
+    let faults = if driven(request, shared) {
+        let parsed = request
+            .faults
+            .as_deref()
+            .and_then(exact_data::envelope::unbase64)
+            .filter(|bytes| !bytes.is_empty() && bytes.len() <= 65536)
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|spec| exact_runner::runner::faults::Faults::parse(&spec).ok());
+        let Some(faults) = parsed else {
+            return Response::text(400, "Invalid fetch fixtures.\n")
+                .header("Cache-Control", "no-store");
+        };
+        Some(faults)
+    } else {
+        None
+    };
     let serve = &shared.serve;
     let started = Instant::now();
     // The reader's viewport, when the plan reads one (LLP 1048.006).
@@ -1159,13 +1211,14 @@ fn document<D: DataSource + 'static>(
         origin: serve.origin.as_deref(),
     };
     let location = request.target.as_str();
-    let checkpoints = matches!(policy, Some(RenderPolicy::Request | RenderPolicy::Cached))
-        .then_some(&shared.checkpoints);
+    let checkpoints = (faults.is_none()
+        && matches!(policy, Some(RenderPolicy::Request | RenderPolicy::Cached)))
+    .then_some(&shared.checkpoints);
     // @ref LLP 1071 D6 — the early flush (crate::stream): a browser's
     // navigation gets the page's head now; its rest follows the render.
     let js = shared.js && !notfound && request.method == "GET";
     let preload = crate::page::preloads_early(&shared.plan, location);
-    let mut early = early.filter(|_| js);
+    let mut early = early.filter(|_| js && faults.is_none());
     if let Some(out) = early.as_deref_mut().filter(|_| request.cdn && preload) {
         crate::stream::hint(out, &shared.hints);
     }
@@ -1228,7 +1281,7 @@ fn document<D: DataSource + 'static>(
         }
         // A JavaScript page drops the document's view ids (page::for_runtime).
         let ids = if shared.js { Ids::Any } else { Ids::Runtime };
-        render_with_at(
+        render_with_faults_at(
             &shared.plan,
             &data,
             viewport,
@@ -1239,6 +1292,7 @@ fn document<D: DataSource + 'static>(
             projection,
             crate::render_time(),
             &shared.delivery,
+            faults.as_ref(),
         )
         .and_then(|rendered| {
             let html = match &flush {
@@ -1330,7 +1384,7 @@ fn document<D: DataSource + 'static>(
         }
         // A page whose render drew randomness is the reader's alone, whatever
         // its status, as a draw is the device's (LLP 1069.005 D2)
-        _ if rendered.drew => {
+        _ if rendered.drew || faults.is_some() => {
             response.headers.push(("Cache-Control", "no-store".into()));
         }
         404 | 410 => {

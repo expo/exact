@@ -112,7 +112,7 @@ fn a_template_fills_as_format_does() {
         format!("{{\"op\":\"destroy\",\"id\":{}}}", 7u32)
     );
     assert_eq!(crate::text!(""), "");
-    assert_eq!(crate::text!("{{}}"), format!("{{}}"));
+    assert_eq!(crate::text!("{{}}"), "{}");
     assert_eq!(crate::text!("{{{}}}", 1u8), format!("{{{}}}", 1u8));
     assert_eq!(crate::text!("{}{}", 'a', "b"), "ab");
     assert_eq!(crate::text!("é{}💬 {{ }} {}", 'x', -0i32), "éx💬 { } 0");

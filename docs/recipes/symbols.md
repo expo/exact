@@ -27,7 +27,7 @@ ones are checked at runtime. Aliases (`gearshape`, `trash`, `chevron-right`)
 build with a `lower-symbol-alias` warning naming the role.
 
 - A role draws everywhere; `sf/<name>` on Apple. Declare other icons in
-  `app.tamber`'s `icons`: `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")`,
+  `app.forma`'s `icons`: `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")`,
   used as `symbol:icon.rain`. Alias identical sources (`icon.shower = icon.rain`).
   Non-template SVGs draw on web, Linux and Apple except watchOS; Apple builds
   raster assets. `-exact-symbol-rendering="multicolor"` keeps their colours;

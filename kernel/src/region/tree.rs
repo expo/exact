@@ -93,8 +93,8 @@ impl Derived {
             height: taffy::style::Dimension::length(frame.height),
         };
         style.min_size = taffy::geometry::Size {
-            width: taffy::style::LengthPercentageAuto::length(frame.width),
-            height: taffy::style::LengthPercentageAuto::length(frame.height),
+            width: taffy::style::Dimension::length(frame.width),
+            height: taffy::style::Dimension::length(frame.height),
         };
         style.max_size = style.min_size;
         style.margin = taffy::geometry::Rect {

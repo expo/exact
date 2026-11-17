@@ -306,6 +306,29 @@ final class RasterImageTests: XCTestCase {
         XCTAssertThrowsError(try RasterImage.decode(replacement, metadata: metadata,
             plan: RasterDecodePlan(metadata: metadata, maxPixel: 100), charge: TestRasterCharge()))
     }
+
+    func testAReplacedAppFileIsRecheckedBeforeDecode() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var old = try fixture(40, 20), replacement = try fixture(40, 40)
+        let count = max(old.count, replacement.count)
+        old.append(Data(repeating: 0, count: count - old.count))
+        replacement.append(Data(repeating: 0, count: count - replacement.count))
+        let file = root.appendingPathComponent("picture.png")
+        try old.write(to: file)
+        AppFiles.learn(["roots": ["data": root.path]])
+        let input = try RasterInput.open("app:/data/picture.png", resolver: AssetResolver(root: root))
+        let reads = RasterMetadata.testHeaderReads
+        let metadata = try input.metadata()
+        try replacement.write(to: file, options: .atomic)
+        XCTAssertThrowsError(try input.withBytes { bytes, file in
+            try RasterImage.decode(bytes, metadata: metadata, plan: RasterDecodePlan(metadata: metadata, maxPixel: 20),
+                                   charge: TestRasterCharge(), file: file, recheckMetadata: input.rechecksMetadata)
+        }) { error in XCTAssertEqual(error as? RasterFailure, .reservation) }
+        XCTAssertEqual(RasterMetadata.testHeaderReads - reads, 2)
+        XCTAssertEqual(try input.metadata().naturalSize, CGSize(width: 40, height: 40))
+    }
 }
 
 private final class RasterDropCounter: @unchecked Sendable {

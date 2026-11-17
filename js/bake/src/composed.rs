@@ -195,6 +195,9 @@ impl exact_runner::DataSourceWrapper for Composed {
     ) -> Result<(), DataError> {
         self.0.module_landed(store, token, outcome)
     }
+    fn take_reports(&mut self) -> Vec<exact_runner::Report> {
+        self.0.take_reports()
+    }
     fn background_state(&self) -> Option<exact_runner::BackgroundState> {
         self.0.background_state()
     }

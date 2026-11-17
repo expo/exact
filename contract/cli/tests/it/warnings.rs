@@ -2,6 +2,8 @@
 //! the author meant. They fail nothing; each names its repair; and what the
 //! compiler cannot see through is given the benefit of the doubt.
 
+use crate::scratch::Scratch;
+
 /// The ids and lines of the warnings `src` earns, after checking that it
 /// still compiles: a warning never fails a build.
 pub(crate) fn warned(src: &str) -> Vec<(String, u32)> {
@@ -413,9 +415,9 @@ fn the_accent_pair_roles_and_artwork_are_not_named() {
         "main accent-color=\"light-dark(#0a7f5a, #3cc98f)\"\n  text \"a\"",
         "main accent-color=\"-exact-system-teal\"\n  text \"a\"",
         // Roles, and what is no colour of its own.
-        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\"",
+        "text \"a\" color=\"-exact-secondary-label\" background-color=\"-exact-secondary-grouped-background\" border-color=\"-exact-separator\" border-style=\"solid\"",
         "text \"a\" color=\"CanvasText\" background-color=\"AccentColor\" -exact-tint-color=\"-exact-system-red\"",
-        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\"",
+        "text \"a\" color=\"currentColor\" background-color=\"transparent\" border-color=\"rgba(0, 0, 0, 0)\" border-style=\"solid\"",
         "text \"a\" color=\"-exact-platform-color(ios systemPinkColor, #ff2d55)\"",
         // Artwork: an `svg`'s paint, and a shadow, which darkens in both.
         "svg viewBox=\"0 0 10 10\" width=10 height=10\n  circle cx=5 cy=5 r=4 fill=\"#ff0000\" stroke=\"#000000\"",
@@ -452,9 +454,7 @@ fn a_builds_text_says_the_literal_colours_in_one_line_and_json_lists_each() {
     let view: String = (0..5)
         .map(|i| format!("  text \"{i}\" color=\"#1234{i:02}\"\n"))
         .collect();
-    let dir = std::env::temp_dir().join(format!("exact-one-scheme-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-one-scheme-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, screen(&format!("column\n{view}"))).unwrap();
     let run = |json: bool| {
@@ -853,7 +853,7 @@ fn symbols_answer_to_apple_names_and_aliases_and_the_plan_carries_the_role() {
         .unwrap_err();
         assert!(error.to_string().contains("not a role"), "{name}: {error}");
     }
-    // `sf/` stays distinct: Apple's name, opaque, no warning (a role's own: tamber_icons).
+    // `sf/` stays distinct: Apple's name, opaque, no warning (a role's own: forma_icons).
     let (plan, warnings) =
         contract::compile_warned("component App\n  view\n    image \"symbol:sf/gearshape.2\"\n");
     let strings = plan.unwrap().strings;
@@ -1294,9 +1294,7 @@ fn warned_circles(name: &str, body: &str) -> Vec<(String, u32, String)> {
     let src = format!(
         "use RoundButton from \"exact:content\"\ncomponent App\n  state n = 0\n  state title = \"Start quiz\"\n  action go\n    n = n + 1\n  view\n    column\n{body}"
     );
-    let dir = std::env::temp_dir().join(format!("exact-circles-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = Scratch::new(format!("exact-circles-{name}-{}", std::process::id()));
     let path = dir.join("app.contract");
     std::fs::write(&path, &src).unwrap();
     let (result, warnings) = contract::compile_path_all_warned(&path, false);

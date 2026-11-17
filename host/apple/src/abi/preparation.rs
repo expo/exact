@@ -54,7 +54,9 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         now_ms,
         store,
         forgot_waiting,
-        faults,
+        // The commit shares the live fault table (`Runner::share_faults`), so
+        // a fault a long poll takes meanwhile does not hold the commit back.
+        faults: _,
         modes,
         uploads,
     } = a;
@@ -68,7 +70,6 @@ fn same_carried(a: &exact_runner::Carried, b: &exact_runner::Carried) -> bool {
         && now_ms.to_bits() == b.now_ms.to_bits()
         && store == &b.store
         && forgot_waiting == &b.forgot_waiting
-        && faults == &b.faults
         && modes == &b.modes
         && slots.len() == b.slots.len()
         && slots

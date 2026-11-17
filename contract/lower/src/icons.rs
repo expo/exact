@@ -1,7 +1,7 @@
 //! @ref LLP 1121 D10 (stage 6 F) — icon tokens at build. Each icon's SVG is
 //! read ([`crate::icon_svg`]) and each target the app ships is checked to
-//! have a source (`tamber-icon-missing`). Independent declarations with
-//! identical sources are refused (`tamber-icon-duplicate`). A literal
+//! have a source (`forma-icon-missing`). Independent declarations with
+//! identical sources are refused (`forma-icon-duplicate`). A literal
 //! `symbol:icon.reply` is written as the source form every host reads,
 //! `symbol:icon|<sf>|<view_box>|<path>|<svg>`, and the plan's `icons` table
 //! keeps what a computed source may name. `symbol:sf/<name>` names the role
@@ -12,7 +12,7 @@ pub use confined::{read as read_confined, Unread};
 
 use crate::LowerError;
 use contract_syntax::{DesignSource, Span};
-use exact_tamber as tamber;
+use exact_forma as forma;
 use std::cell::RefCell;
 use std::path::Path;
 
@@ -75,13 +75,13 @@ fn apple(target: &str) -> bool {
 }
 
 /// The source `target` draws for `icon`, by D10's rule (the one
-/// `tamber-icon-missing` checks): Apple draws the SF Symbol, falling back
+/// `forma-icon-missing` checks): Apple draws the SF Symbol, falling back
 /// to an SVG except on watchOS. Non-template SVGs become raster assets
 /// in the Apple build. Other hosts draw template paths; the web and Linux
 /// also draw non-template SVG files.
 fn drawn(
     target: &str,
-    icon: &tamber::Icon,
+    icon: &forma::Icon,
     svg: Option<&crate::icon_svg::Svg>,
 ) -> Option<&'static str> {
     let template = svg.is_some_and(|s| s.not_template.is_none());
@@ -102,7 +102,7 @@ fn drawn(
 /// theme's, and its `params` lines). Its SVG is read under that package's
 /// `assets/`, the app's under the app's.
 pub fn written_in<'a>(
-    icon: &tamber::Icon,
+    icon: &forma::Icon,
     packages: &'a [DesignSource],
     params: &'a [crate::params::ParamToken],
 ) -> Option<(&'a str, Option<&'a str>)> {
@@ -129,7 +129,7 @@ pub struct Home<'a> {
 impl<'a> Home<'a> {
     /// `icon`'s: its package's root ([`written_in`]), else `app`.
     pub fn of(
-        icon: &tamber::Icon,
+        icon: &forma::Icon,
         app: Option<&'a Path>,
         packages: &'a [DesignSource],
         params: &'a [crate::params::ParamToken],
@@ -197,7 +197,7 @@ impl<'a> Home<'a> {
 /// read as one, a template is over its size (its path travels in the plan
 /// and in every literal source), or a package's is no template (stage 13,
 /// Q2: non-template files are loaded from the app's `assets/` only).
-fn svg_of(icon: &tamber::Icon, home: Home) -> Result<Option<crate::icon_svg::Svg>, String> {
+fn svg_of(icon: &forma::Icon, home: Home) -> Result<Option<crate::icon_svg::Svg>, String> {
     let file = match (&icon.svg, home.root) {
         (None, _) => return Ok(None),
         (Some(_), None) => return Err(format!("`{}`: an icon's SVG is under the app's `assets/`; compile this source with `compile_path`", icon.name)),
@@ -226,7 +226,7 @@ fn svg_of(icon: &tamber::Icon, home: Home) -> Result<Option<crate::icon_svg::Svg
 /// Which source each target the app at `root` ships draws for `icon`
 /// (`describe`'s icon entry, LLP 1121 stage 9 C), its SVG read as the build
 /// reads it ([`svg_of`], under `home`); one the build refuses draws as none.
-pub fn draws(icon: &tamber::Icon, root: &Path, home: Home) -> Vec<(String, Option<&'static str>)> {
+pub fn draws(icon: &forma::Icon, root: &Path, home: Home) -> Vec<(String, Option<&'static str>)> {
     let svg = svg_of(icon, home).ok().flatten();
     targets(Some(root))
         .into_iter()
@@ -303,8 +303,8 @@ fn targets(root: Option<&Path>) -> Vec<Target> {
 /// icon's line. Independent declarations must have distinct sources.
 /// `exported`: whether an icon is kept for code outside the views (D7).
 pub(crate) fn declare<'a>(
-    icons: &[tamber::Icon],
-    home: &dyn Fn(&tamber::Icon) -> Home<'a>,
+    icons: &[forma::Icon],
+    home: &dyn Fn(&forma::Icon) -> Home<'a>,
     span: &dyn Fn(u32, u32) -> Span,
     exported: &dyn Fn(&str) -> bool,
 ) -> Vec<LowerError> {
@@ -322,7 +322,7 @@ pub(crate) fn declare<'a>(
         let svg = match svg_of(icon, home) {
             Ok(svg) => svg,
             Err(why) => {
-                errors.push(refuse("tamber-icon-svg", why));
+                errors.push(refuse("forma-icon-svg", why));
                 continue;
             }
         };
@@ -344,7 +344,7 @@ pub(crate) fn declare<'a>(
             let first = sources.entry(resolved.form()).or_insert(icon);
             if first.written != icon.written {
                 errors.push(refuse(
-                    "tamber-icon-duplicate",
+                    "forma-icon-duplicate",
                     format!(
                         "`{}` and `{}` have identical icon sources: alias one to the other (`{} = {}`)",
                         first.name, icon.name, icon.name, first.name
@@ -359,11 +359,11 @@ pub(crate) fn declare<'a>(
             errors.push(match (&svg, &icon.svg) {
                 // A watch draws neither template paths nor raster icon assets.
                 (Some(_), Some(_)) if target == "watchos" => refuse(
-                    "tamber-icon-missing",
+                    "forma-icon-missing",
                     format!("{} has no source for {target}: a watch draws an icon only as an SF Symbol (an `sf` source)", icon.name),
                 ),
                 (Some(s), Some(file)) => refuse(
-                    "tamber-icon-svg",
+                    "forma-icon-svg",
                     format!(
                         "`{}`: {} is no one-colour shape ({}), and the app ships {target}, which draws an icon only as {TEMPLATE}{} (the web, Linux, iOS, macOS and tvOS also draw non-template SVG files). To fix it, {}; or start from an SVG already in that form (Material Symbols' are){}",
                         icon.name,
@@ -392,7 +392,7 @@ pub(crate) fn declare<'a>(
                         ),
                     }).unwrap_or_default();
                     refuse(
-                        "tamber-icon-missing",
+                        "forma-icon-missing",
                         format!(
                             "{} has no source for {target}, which draws an icon only from an `svg` source: add `svg \"icons/{file}.svg\"`, with `assets/icons/{file}.svg` drawn as {TEMPLATE} (a Material Symbols SVG is){sf}{}",
                             icon.name,
@@ -403,7 +403,7 @@ pub(crate) fn declare<'a>(
                     )
                 }
                 _ => refuse(
-                    "tamber-icon-missing",
+                    "forma-icon-missing",
                     format!("{} has no source for {target}", icon.name),
                 ),
             });

@@ -1,30 +1,50 @@
 mod support;
 use std::fs;
-fn temp() -> std::path::PathBuf {
+
+/// Removes its directory when dropped, so a failing test leaves nothing behind.
+struct TempDir(std::path::PathBuf);
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp() -> TempDir {
     let p = std::env::temp_dir().join(format!(
         "asset-outputs-{}-{:?}",
         std::process::id(),
         std::thread::current().id()
     ));
     fs::create_dir_all(p.join("art")).unwrap();
-    p
+    TempDir(p)
 }
 const CRATE: &str = include_str!("fixtures/crate.gltf");
 /// The crate's one texture, named by its content.
 const CRATE_TEX: &str = "textures/86b6f64da4937176.tex";
 #[test]
 fn app_cli_bakes_paths_with_spaces_and_refuses_authored_replacements() {
-    let app = std::env::temp_dir().join(format!(
+    let app = TempDir(std::env::temp_dir().join(format!(
         "asset CLI outputs {} {:?}",
         std::process::id(),
         std::thread::current().id()
-    ));
+    )));
     fs::create_dir_all(app.join("art")).unwrap();
     fs::write(app.join("art/crate.gltf"), CRATE).unwrap();
     let run = || {
         std::process::Command::new(env!("CARGO_BIN_EXE_exact-game-bake"))
             .arg("--art")
-            .arg(&app)
+            .arg(&*app)
             .output()
             .unwrap()
     };
@@ -193,10 +213,10 @@ fn sprites_use_blocks_only_where_they_decode_exactly() {
         let authored = read(&format!("{stem}.tex"));
         for family in ["bc", "astc"] {
             let t = read(&format!("{stem}.{family}.tex"));
-            for level in 0..t.mips.len() {
+            for (level, mip) in authored.mips[..t.mips.len()].iter().enumerate() {
                 assert_eq!(
                     exact_game_bake::compress::decode(&t, level),
-                    authored.mips[level],
+                    *mip,
                     "{stem}.{family}.tex level {level} keeps the palette"
                 );
             }
@@ -294,7 +314,7 @@ fn content_equal_without_ownership_never_adopts_authored_output() {
     fs::remove_dir_all(app).unwrap();
 }
 
-fn interrupt_bake(update: bool) -> std::path::PathBuf {
+fn interrupt_bake(update: bool) -> TempDir {
     let app = temp();
     let source = app.join("art/strip.png");
     if update {
@@ -406,7 +426,7 @@ fn concurrent_cli_bakes_share_output_ownership() {
                         start.wait();
                         std::process::Command::new(env!("CARGO_BIN_EXE_exact-game-bake"))
                             .arg("--art")
-                            .arg(&app)
+                            .arg(&*app)
                             .output()
                             .unwrap()
                     })
@@ -538,13 +558,18 @@ fn masked_coverage_survives_block_encoding() {
     let stem = name.strip_suffix(".tex").unwrap();
     let rgba = &textures[name];
     let covered = |texels: &[u8]| {
-        let n = texels.chunks_exact(4).filter(|p| p[3] >= 128).count();
+        let n = texels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[3] >= 128)
+            .count();
         n as f64 / (texels.len() / 4) as f64
     };
     for family in ["bc", "astc"] {
         let t = &textures[&format!("{stem}.{family}.tex")];
-        for level in 0..t.mips.len() - 2 {
-            let expected = covered(&rgba.mips[level]);
+        for (level, mip) in rgba.mips[..t.mips.len() - 2].iter().enumerate() {
+            let expected = covered(mip);
             let actual = covered(&exact_game_bake::compress::decode(t, level));
             eprintln!("{family} level {level}: {actual:.3} vs {expected:.3}");
             assert!(

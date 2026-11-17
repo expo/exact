@@ -41,6 +41,10 @@ pub struct Scope {
     pub rows: Option<String>,
     /// Row slots available in this scope, excluding slots owned by descendants.
     pub row_slots: BTreeSet<usize>,
+    /// The JavaScript expression of the instance path in force, where the
+    /// plan has a child's resource (LLP 1035.005.004 D8): each region
+    /// crossed, with its arm or its row's key.
+    pub path: Option<String>,
 }
 
 /// One region frame's getters.
@@ -153,7 +157,30 @@ pub fn touches_rows(plan: &Plan, code: &[u8]) -> bool {
         .any(|i| {
             matches!(i.op, Opcode::LoadSlot | Opcode::StoreSlot)
                 && plan.slots[i.args[0] as usize].owner.is_some()
+                || reads_resource(i.op) && plan.resources[i.args[0] as usize].owner.is_some()
+                || reads_mutation(i.op) && plan.mutations[i.args[0] as usize].owner.is_some()
         })
+}
+
+/// Whether `op` sends to or reads mutation `args[0]`.
+fn reads_mutation(op: Opcode) -> bool {
+    matches!(
+        op,
+        Opcode::Send | Opcode::PendingMutation | Opcode::FailedMutation | Opcode::FailureMutation
+    )
+}
+
+/// Whether `op` reads or refreshes resource `args[0]`.
+fn reads_resource(op: Opcode) -> bool {
+    matches!(
+        op,
+        Opcode::LoadResource
+            | Opcode::Refresh
+            | Opcode::PendingResource
+            | Opcode::CurrentResource
+            | Opcode::FailedResource
+            | Opcode::FailureResource
+    )
 }
 
 /// A JavaScript function expression for `code` (`() => …`, or `(p0, …) =>`
@@ -311,6 +338,28 @@ impl Translator<'_> {
         } else {
             format!("let {};", names.join(","))
         }
+    }
+
+    /// Resource `i`'s reader: the root's `r_<i>`, or a child's on the
+    /// instance in force (LLP 1035.005.004 D1).
+    fn resource(&self, i: u64) -> Result<String, String> {
+        if self.plan.resources[i as usize].owner.is_none() {
+            return Ok(format!("r_{i}"));
+        }
+        let rows = (self.scope.rows.as_ref())
+            .ok_or("a child's resource read with no instance in force")?;
+        Ok(format!("{rows}.r{i}"))
+    }
+
+    /// Mutation `i`'s object: the root's `m_<i>`, or a child's, the
+    /// instance's in force (LLP 1035.005.004 D6).
+    fn mutation(&self, i: u64) -> Result<String, String> {
+        if self.plan.mutations[i as usize].owner.is_none() {
+            return Ok(format!("m_{i}"));
+        }
+        let rows = (self.scope.rows.as_ref())
+            .ok_or("a child's mutation used with no instance in force")?;
+        Ok(format!("{rows}.m{i}"))
     }
 
     fn push(&mut self, e: String) {
@@ -473,7 +522,10 @@ impl Translator<'_> {
                         self.push(format!("d_{}()", x.args[0]));
                     }
                 }
-                Opcode::LoadResource => self.push(format!("r_{}()", x.args[0])),
+                Opcode::LoadResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}()"))
+                }
                 Opcode::LoadParam => self.push(format!("p{}", x.args[0])),
                 Opcode::LoadItem | Opcode::LoadIndex | Opcode::LoadBound => {
                     let d = x.args[0] as usize;
@@ -715,16 +767,35 @@ impl Translator<'_> {
                 }
                 Opcode::Refresh => {
                     self.flush();
-                    let r = self.uses.rt("R");
-                    self.out.push_str(&format!("{r}(r_{});", x.args[0]));
+                    let refresh = self.uses.rt("R");
+                    let r = self.resource(x.args[0])?;
+                    self.out.push_str(&format!("{refresh}({r});"));
                 }
-                Opcode::PendingResource => self.push(format!("r_{}.p()", x.args[0])),
-                Opcode::CurrentResource => self.push(format!("r_{}.c()", x.args[0])),
-                Opcode::FailedMutation => self.push(format!("m_{}.f()", x.args[0])),
-                Opcode::FailureMutation => self.push(format!("m_{}.e()", x.args[0])),
-                Opcode::FailedResource => self.push(format!("r_{}.f()", x.args[0])),
+                Opcode::PendingResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.p()"))
+                }
+                Opcode::CurrentResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.c()"))
+                }
+                Opcode::FailedMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.f()"))
+                }
+                Opcode::FailureMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.e()"))
+                }
+                Opcode::FailedResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.f()"))
+                }
                 // `none` or the `Failure` record, `[code, message, reason]` (LLP 1109 D3).
-                Opcode::FailureResource => self.push(format!("r_{}.e()", x.args[0])),
+                Opcode::FailureResource => {
+                    let r = self.resource(x.args[0])?;
+                    self.push(format!("{r}.e()"))
+                }
                 Opcode::Return => {
                     match self.stack.pop() {
                         Some(e) => {
@@ -748,15 +819,18 @@ impl Translator<'_> {
                         .to_string();
                     let args = self.popn(x.args[2] as usize)?;
                     self.flush();
+                    let target = self.mutation(x.args[0])?;
                     let m = self.uses.rt("M");
                     self.out.push_str(&format!(
-                        "{m}(m_{},{},[{}]);",
-                        x.args[0],
+                        "{m}({target},{},[{}]);",
                         serde_json::to_string(&source).unwrap(),
                         args.join(",")
                     ));
                 }
-                Opcode::PendingMutation => self.push(format!("m_{}.p()", x.args[0])),
+                Opcode::PendingMutation => {
+                    let m = self.mutation(x.args[0])?;
+                    self.push(format!("{m}.p()"))
+                }
                 // A native module's props (LLP 1024 D1): the pairs as one
                 // JSON object of strings, as `stdlib::native_props` writes it.
                 Opcode::NativeProps => {

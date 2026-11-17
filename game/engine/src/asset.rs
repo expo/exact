@@ -519,7 +519,9 @@ impl Model {
                     || o.reach.len() * 3 != mesh.positions.len()
                     || o.normals.iter().any(|x| !x.is_finite())
                     || o.normals
-                        .chunks_exact(3)
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
                         .any(|n| glam::Vec3::from_slice(n).length_squared() < 1e-12)
                     || o.reach
                         .iter()
@@ -532,7 +534,9 @@ impl Model {
             }
             if mesh
                 .weights
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|w| w.iter().any(|v| *v < 0.) || (w.iter().sum::<f32>() - 1.).abs() > 1e-4)
             {
                 return fail("skin weights must be nonnegative and normalized");

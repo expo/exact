@@ -225,7 +225,8 @@ final class FrameHealthReportTests: XCTestCase {
         _ = session.frameHealth.setAgentCapture("start")
         let done = expectation(description: "owner tick returns and applies on main")
         let frame = (CACurrentMediaTime() - 0.002 - ExactEnv.t0) * 1000
-        session.runtime.tickAsync(now: session.now(), frame: frame, capture: session.frameHealth.captureID) { batch in
+        session.runtime.tickAsync(now: session.now(), frame: frame, capture: session.frameHealth.captureID) { completion in
+            let batch = completion.batch
             DispatchQueue.main.async {
                 var landed = batch
                 landed.frameWorkTiming?.landed = CACurrentMediaTime()

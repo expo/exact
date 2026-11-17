@@ -308,3 +308,56 @@ fn independent_deadlines_include_time_queued_behind_busy_workers() {
     collect(&core, &woke, WORKERS - 1);
     until_settled(&core);
 }
+
+#[test]
+fn response_fixture_deadlines_include_time_queued_behind_busy_workers() {
+    let (core, fixture, woke) = setup();
+    for ticket in 1..WORKERS as u64 {
+        core.run(
+            job(
+                ticket,
+                Request::get("https://example.test/hold").independent_http(1 << 20),
+            ),
+            None,
+        )
+        .unwrap();
+    }
+    fixture.wait_held(WORKERS - 1);
+    let ticket = WORKERS as u64;
+    core.run_owned(
+        job(
+            ticket,
+            Request::get("https://example.test/never-sent")
+                .independent_http(1 << 20)
+                .timeout(100),
+        ),
+        Some(OwnedWork::HttpResponse(Arc::new(|| {
+            panic!("expired fixture delivered")
+        }))),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut outcomes = Vec::new();
+    while Instant::now() < deadline {
+        core.begin_pump();
+        outcomes.extend(core.drain().into_iter().map(|(t, o, _)| (t, o)));
+        if !outcomes.is_empty() {
+            break;
+        }
+        let _ = woke.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
+    fixture.release();
+    assert_eq!(outcomes.len(), 1, "queued fixture did not expire");
+    assert_eq!(outcomes[0].0, ticket);
+    assert!(timed_out(&outcomes[0].1, 100), "{outcomes:?}");
+    assert!(!fixture
+        .state
+        .lock()
+        .unwrap()
+        .2
+        .iter()
+        .any(|url| url.ends_with("/never-sent")));
+    fixture.release();
+    collect(&core, &woke, WORKERS - 1);
+    until_settled(&core);
+}

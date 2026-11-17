@@ -80,7 +80,7 @@ fn ensure_worker(pool: &'static Pool) {
 fn spawn_worker(pool: &'static Pool) {
     if pool
         .total
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |total| {
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |total| {
             (total < pool.max).then_some(total + 1)
         })
         .is_err()

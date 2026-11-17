@@ -93,8 +93,8 @@ fn lean_components_preserve_child_device_resources() {
         .unwrap();
     assert_eq!(
         resources,
-        "[{ name := \"pick\", ty := (.record \"Viewport\"), source := \"exactViewport\", args := [] },\n    \
-         { name := \"online\", ty := (.record \"Page\"), source := \"exactPage\", args := [] }]"
+        "[{ name := \"pick\", ty := (.record \"Viewport\"), source := \"exactViewport\", args := [], placeholder := .some (.record \"Viewport\" [(.num (Contract.F64.ofBits 0x0000000000000000))]) },\n    \
+         { name := \"online\", ty := (.record \"Page\"), source := \"exactPage\", args := [], placeholder := .some (.record \"Page\" [(.bool false)]) }]"
     );
     assert!(!emitted.contains("pick@Child"));
     assert!(!emitted.contains("online@Child"));

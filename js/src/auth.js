@@ -9,7 +9,7 @@
     // `authCallback()` is this carrier's callback, known before PAR: a native
     // build's granted `auth.callback`, the web's `<origin>/.exact/auth/callback`
     // (D2); a device fact, so bake compiles no answer that asks.
-    // `openAuthSession(url, {callback, state, ephemeral, message})` is a request to `exact-auth:` on the independent
+    // `openAuthSession(url, {callback, state, logout, ephemeral, message})` is a request to `exact-auth:` on the independent
     // lane, as `native.later` is (D1): it resolves with the callback URL (200) or rejects with the status and message
     // (499 cancelled, 403, 409, 428, 501, 502) as `error.status`; `message` is a loopback page's sentence (LLP 1133.005
     // D9).
@@ -18,6 +18,13 @@
       var callback = host(12, "callback", "");
       if (callback === undefined) throw new Error("authCallback(): the grants name no auth.callback");
       return callback;
+    };
+    global.prepareAuthSession = function prepareAuthSession() {
+      if (host(12, "placement", "") === "worker") return null;
+      return host(12, "auth-prepare", "") || null;
+    };
+    global.cancelAuthSession = function cancelAuthSession(prepared) {
+      if (typeof prepared === "string" && prepared) host(12, "auth-cancel", prepared);
     };
     global.openAuthSession = function openAuthSession(url, options) {
       var o = options || {};
@@ -32,11 +39,13 @@
         typeof o.callback !== "string" ||
         typeof o.state !== "string" ||
         !o.state ||
-        (o.message !== undefined && typeof o.message !== "string")
+        (o.message !== undefined && typeof o.message !== "string") ||
+        (o.logout !== undefined && typeof o.logout !== "boolean") ||
+        (o.prepared !== undefined && (typeof o.prepared !== "string" || !o.prepared))
       ) {
         return Promise.reject(
           new TypeError(
-            "openAuthSession(url, {callback, state, message}): callback is authCallback(), state a non-empty string and message, if given, a string"
+            "openAuthSession(url, {callback, state, logout, prepared, message}): callback is authCallback(), state and prepared non-empty strings, logout a boolean and message, if given, a string"
           )
         );
       }
@@ -44,6 +53,8 @@
         url: String(url),
         callback: o.callback,
         state: o.state,
+        logout: !!o.logout,
+        prepared: o.prepared,
         ephemeral: !!o.ephemeral,
         message: o.message,
       });

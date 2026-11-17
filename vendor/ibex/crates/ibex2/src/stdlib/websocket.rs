@@ -448,7 +448,7 @@ impl Connection {
 }
 
 fn saturating_add(amount: &std::sync::atomic::AtomicUsize, bytes: usize) {
-    let _ = amount.fetch_update(
+    let _ = amount.try_update(
         std::sync::atomic::Ordering::AcqRel,
         std::sync::atomic::Ordering::Acquire,
         |current| Some(current.saturating_add(bytes)),

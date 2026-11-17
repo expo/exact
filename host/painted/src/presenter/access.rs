@@ -51,7 +51,7 @@ use super::requests::string;
 use super::scrollers::Scroller;
 use super::top::shape::{Entry, Plan};
 use super::*;
-use exact_kernel::{ControlKind, Display, Kernel, NodeRef};
+use exact_kernel::{ControlKind, Direction, Display, Kernel, NodeRef, StyleId};
 use std::collections::BTreeSet;
 
 /// What a node is, as the reader maps it to a class TalkBack knows.
@@ -116,6 +116,11 @@ pub mod role {
     pub const LIST_BOX: i32 = 28;
     /// A row of an open `select`'s menu: ARIA's `option`.
     pub const OPTION: i32 = 29;
+    /// A drawn `spinbutton`: a number a person steps up and down.
+    pub const SPIN_BUTTON: i32 = 30;
+    /// A `video` or `audio`, named by its author: where a reader hosts
+    /// its player's controller, the controller's own view stands here.
+    pub const MEDIA: i32 = 31;
 }
 
 /// A table's or a description list's element as its role (HTML-AAM): a
@@ -168,6 +173,9 @@ pub mod flag {
     pub const ASSERTIVE: i32 = 1 << 12;
     /// Its range's three numbers mean something.
     pub const RANGE: i32 = 1 << 13;
+    /// A range takes a value set to it ([`act::SET`]): a native range. A
+    /// drawn one only steps, by its author's keys.
+    pub const SETTABLE: i32 = 1 << 14;
 }
 
 /// What changed of a node since the last statement.
@@ -233,6 +241,10 @@ pub struct Node {
     /// Its place among its kind, from 1, and how many they are (a tab, a
     /// list's row); for a `tablist`, 0 and how many tabs. 0 and 0: none.
     pub set: (i32, i32),
+    /// Where a table's row or cell stands in it (LLP 1153 D7.3), from 1:
+    /// its first row, the rows it covers, its first column, the columns it
+    /// covers; for a table, 0, its rows, 0 and its columns. 0s: none.
+    pub grid: [i32; 4],
     /// Its accessible name.
     pub name: String,
     /// Its value: a range's text, a `select`'s choice, a painted field's
@@ -604,7 +616,7 @@ impl<D: DataSource> Presenter<D> {
         let painted = b
             .boxes
             .get(&node.id)
-            .copied()
+            .cloned()
             .or_else(|| self.inline_box(node.id))?;
         let rect = (
             painted.rect.0 + scope.shift.0,
@@ -633,6 +645,7 @@ impl<D: DataSource> Presenter<D> {
             rect: [shows.0 + b.origin.0, shows.1 + b.origin.1, shows.2, shows.3],
             range,
             set: std::mem::take(&mut b.item),
+            grid: [0; 4],
             name,
             value,
             hint: self.access_hint(node),
@@ -666,7 +679,7 @@ impl<D: DataSource> Presenter<D> {
                 let range = exact_kernel::Range::of(node.props);
                 let now = (choice.and_then(|c| number(Some(c))).map(f64::from))
                     .map_or_else(|| range.shown(node.props), |v| range.sanitize(v));
-                let mut flags = flag::RANGE;
+                let mut flags = flag::RANGE | flag::SETTABLE;
                 if now < range.max {
                     flags |= flag::FORWARD;
                 }
@@ -801,6 +814,7 @@ impl<D: DataSource> Presenter<D> {
             rect: [frame[0] + rect.0, frame[1] + rect.1, rect.2, rect.3],
             range: [0.0; 3],
             set: (0, 0),
+            grid: [0; 4],
             name,
             value: String::new(),
             hint: node.map(|n| self.access_hint(&n)).unwrap_or_default(),
@@ -901,24 +915,60 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// Each `tablist`'s tabs are counted and placed among themselves.
-    fn access_sets(nodes: &mut [Node]) {
-        let lists: Vec<i32> = (nodes.iter())
-            .filter(|n| n.role == role::TABLIST)
-            .map(|n| n.id)
+    /// Each `tablist`'s tabs and each description list's terms are counted
+    /// and placed among themselves; each table's rows and cells are placed
+    /// where the kernel's table placed them, when that table is the one
+    /// above them here.
+    fn access_sets(&self, nodes: &mut [Node]) {
+        let lists: Vec<(i32, i32)> = (nodes.iter())
+            .filter_map(|n| match n.role {
+                role::TABLIST => Some((n.id, role::TAB)),
+                role::DESCRIPTION_LIST => Some((n.id, role::TERM)),
+                _ => None,
+            })
             .collect();
-        for list in lists {
+        for (list, item) in lists {
             let count = (nodes.iter())
-                .filter(|n| n.parent == list && n.role == role::TAB)
+                .filter(|n| n.parent == list && n.role == item)
                 .count() as i32;
             let mut at = 0;
             for node in nodes.iter_mut() {
                 if node.id == list {
                     node.set = (0, count);
-                } else if node.parent == list && node.role == role::TAB {
+                } else if node.parent == list && node.role == item {
                     at += 1;
                     node.set = (at, count);
                 }
+            }
+        }
+        self.access_tables(nodes);
+    }
+
+    /// Each table's size, and each of its rows' and cells' place.
+    fn access_tables(&self, nodes: &mut [Node]) {
+        let kernel = self.host.kernel();
+        let index: BTreeMap<i32, usize> =
+            (nodes.iter().enumerate()).map(|(i, n)| (n.id, i)).collect();
+        for i in 0..nodes.len() {
+            let n = &nodes[i];
+            let grid = match n.role {
+                role::TABLE => kernel
+                    .table_size(n.view)
+                    .map(|(rows, columns)| [0, rows as i32, 0, columns as i32]),
+                role::ROW | role::CELL | role::COLUMN_HEADER | role::ROW_HEADER => {
+                    let mut above = index.get(&n.parent).map(|i| &nodes[*i]);
+                    while let Some(a) = above.filter(|a| a.role != role::TABLE) {
+                        above = index.get(&a.parent).map(|i| &nodes[*i]);
+                    }
+                    kernel
+                        .table_place(n.view)
+                        .filter(|p| above.is_some_and(|t| t.view == p.table))
+                        .map(|p| [p.row + 1, p.rows, p.column + 1, p.columns].map(|v| v as i32))
+                }
+                _ => None,
+            };
+            if let Some(grid) = grid {
+                nodes[i].grid = grid;
             }
         }
     }
@@ -951,7 +1001,7 @@ impl<D: DataSource> Presenter<D> {
         let mut b = Build {
             out: Vec::new(),
             used: BTreeSet::new(),
-            boxes: self.boxes.iter().map(|b| (b.id, *b)).collect(),
+            boxes: self.boxes.iter().map(|b| (b.id, b.clone())).collect(),
             origin: (frame[0], frame[1]),
             item: (0, 0),
             limits: self.collection_scroll_limits(),
@@ -973,7 +1023,7 @@ impl<D: DataSource> Presenter<D> {
                 },
             );
             self.access_menu(&mut b);
-            Self::access_sets(&mut b.out);
+            self.access_sets(&mut b.out);
             return (b.out, 0, (0, String::new()));
         }
         if self.page_inert() {
@@ -1004,6 +1054,7 @@ impl<D: DataSource> Presenter<D> {
                 rect: [frame[0], frame[1], page.port[2], page.port[3]],
                 range,
                 set: (0, 0),
+                grid: [0; 4],
                 name: String::new(),
                 value: String::new(),
                 hint: String::new(),
@@ -1022,7 +1073,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.access_bottom(&mut b);
         self.access_menu(&mut b);
-        Self::access_sets(&mut b.out);
+        self.access_sets(&mut b.out);
         (b.out, 0, pane)
     }
 
@@ -1073,7 +1124,11 @@ impl<D: DataSource> Presenter<D> {
             if was.name != node.name || was.value != node.value || was.hint != node.hint {
                 what |= change::TEXT;
             }
-            if was.flags != node.flags || was.set != node.set || was.role != node.role {
+            if was.flags != node.flags
+                || was.set != node.set
+                || was.grid != node.grid
+                || was.role != node.role
+            {
                 what |= change::STATE;
             }
             if was.range != node.range {
@@ -1160,8 +1215,9 @@ impl<D: DataSource> Presenter<D> {
     ///   ([`role`]), its flags ([`flag`]), its box (x, y, width, height),
     ///   as float bits its range's least, greatest and present value (a
     ///   scroller's offset along its axis and its farthest, in points),
-    ///   its place in its set and the set's size, and three strings: its
-    ///   name, its value and its description.
+    ///   its place in its set and the set's size, its place in its table
+    ///   ([`Node::grid`]: four words), and three strings: its name, its
+    ///   value and its description.
     pub fn reader_access(&mut self, scale: f32, again: bool) -> Option<Vec<i32>> {
         let key = self.access_key();
         if !again && self.access.told && self.access.key.as_ref() == Some(&key) {
@@ -1225,6 +1281,7 @@ impl<D: DataSource> Presenter<D> {
             out.extend(node.rect.map(px));
             out.extend(node.range.map(|v| v.to_bits() as i32));
             out.extend([node.set.0, node.set.1]);
+            out.extend(node.grid);
             for text in [&node.name, &node.value, &node.hint] {
                 string(&mut out, text);
             }
@@ -1249,8 +1306,10 @@ impl<D: DataSource> Presenter<D> {
     /// node's middle, as the agent's `tap` is; a held press opens the
     /// node's context menu, as a finger held on it does; a scroller scrolls
     /// by what it shows, less a little kept in view; a range steps, or is
-    /// set to `value`. A press on a select opens or closes its menu, and on
-    /// one of the menu's options chooses it, as a press on its row does.
+    /// set to `value`, and a drawn slider or spin button steps by its
+    /// author's keys ([`Self::access_step_range`]). A press on a select
+    /// opens or closes its menu, and on one of the menu's options chooses
+    /// it, as a press on its row does.
     pub fn access_act(&mut self, id: i32, action: i32, value: f32, now_ms: f64) -> bool {
         let Some(node) = self.access.nodes.iter().find(|n| n.id == id).cloned() else {
             return false;
@@ -1301,23 +1360,113 @@ impl<D: DataSource> Presenter<D> {
                 };
                 self.scroll_to(view, to).is_some_and(|at| at != s.offset)
             }
+            (act::FORWARD | act::BACKWARD, _)
+                if node.flags & flag::RANGE != 0 && node.flags & flag::SETTABLE == 0 =>
+            {
+                let up = action == act::FORWARD;
+                let offered = node.flags & if up { flag::FORWARD } else { flag::BACKWARD } != 0;
+                offered && live(self) && self.access_step_range(node.view, up, now_ms)
+            }
             (act::FORWARD | act::BACKWARD | act::SET, role::SLIDER) if live(self) => {
-                let range = (self.host.kernel().node(node.view))
-                    .filter(|n| n.node_type == NodeType::Control)
-                    .map(|n| exact_kernel::Range::of(n.props));
-                let Some(range) = range else { return false };
-                // A range with no step moves by a twentieth of its span.
-                let step = range.step.unwrap_or((range.max - range.min) / 20.0);
-                let now = f64::from(node.range[2]);
-                let to = range.sanitize(match action {
-                    act::FORWARD => now + step,
-                    act::BACKWARD => now - step,
-                    _ => f64::from(value),
-                });
-                to != now && self.set_control_value(node.view, &to.to_string()).is_ok()
+                let view = node.view;
+                // The range as it is when asked, if it may move: a keydown's
+                // handler may have moved it, bounded it anew, disabled it or
+                // made it inert.
+                let range = |p: &Self| {
+                    (p.host.kernel().node(view))
+                        .filter(|n| {
+                            n.node_type == NodeType::Control
+                                && n.props.bool(PropId::Disabled) != Some(true)
+                                && !p.host.route_visibility(view).1
+                        })
+                        .map(|n| exact_kernel::Range::of(n.props))
+                };
+                let step = |p: &mut Self| {
+                    let (Some(range), Some(now)) = (range(p), p.range_value(view)) else {
+                        return false;
+                    };
+                    // A range with no step moves by a twentieth of its span.
+                    let by = range.step.unwrap_or((range.max - range.min) / 20.0);
+                    let to = range.sanitize(match action {
+                        act::FORWARD => now + by,
+                        act::BACKWARD => now - by,
+                        _ => f64::from(value),
+                    });
+                    to != now && p.set_control_value(view, &to.to_string()).is_ok()
+                };
+                if action == act::SET {
+                    return step(self);
+                }
+                // A step is the range's arrow key, whose default action it
+                // is (LLP 1069.001, amended 2026-11-16); a disabled or inert
+                // range gets no key, as a keyboard's reaches none. Its answer
+                // is whether the value moved, by a handler or by the step.
+                let from = range(self).and_then(|_| self.range_value(view));
+                if from.is_none() {
+                    return false;
+                }
+                let up = action == act::FORWARD;
+                self.access_range_keys(view, up, false, now_ms, |p| _ = step(p));
+                self.range_value(view).is_some_and(|now| Some(now) != from)
             }
             _ => false,
         }
+    }
+
+    /// A service's step up (`up`) or down of a drawn `slider` or
+    /// `spinbutton`, which only its author's keys move
+    /// ([`Self::access_range_keys`]): ArrowUp or ArrowDown for a spin button
+    /// (ARIA's keys for one) or an `aria-orientation="vertical"` slider.
+    /// Whether it was such a node.
+    pub(crate) fn access_step_range(&mut self, view: ViewId, up: bool, now_ms: f64) -> bool {
+        let Some(node) = self.host.kernel().node(view) else {
+            return false;
+        };
+        let aria = node.props.str(PropId::AccessibilityRole);
+        if node.node_type == NodeType::Control || !matches!(aria, Some("slider" | "spinbutton")) {
+            return false;
+        }
+        let vertical = aria == Some("spinbutton")
+            || node.props.str(PropId::AccessibilityOrientation) == Some("vertical");
+        self.access_range_keys(view, up, vertical, now_ms, |_| ());
+        true
+    }
+
+    /// A service's step of a range as its arrow key: a keydown and a keyup
+    /// at `view` for the author's `key` and `keyup` handlers, as WebKit
+    /// adjusts an ARIA range
+    /// (`AccessibilityNodeObject::postKeyboardKeysForValueChange`): ArrowUp or
+    /// ArrowDown for a `vertical` one, else ArrowRight or ArrowLeft, swapped
+    /// where the node's computed `direction` is `rtl`. `step` is the key's
+    /// default action: it runs between the two, as a keyboard's does, unless
+    /// a handler called `preventDefault()` on the keydown.
+    fn access_range_keys(
+        &mut self,
+        view: ViewId,
+        up: bool,
+        vertical: bool,
+        now_ms: f64,
+        step: impl FnOnce(&mut Self),
+    ) {
+        let rtl = (self.host.kernel().node(view))
+            .is_some_and(|n| n.computed_row(StyleId::Direction, |s| s.direction) == Direction::Rtl);
+        let key = match (vertical, up, up != rtl) {
+            (true, true, _) => "ArrowUp",
+            (true, false, _) => "ArrowDown",
+            (false, _, true) => "ArrowRight",
+            (false, _, false) => "ArrowLeft",
+        };
+        let send = |p: &mut Self, kind| {
+            let (error, prevented) = p.key_event_at(Some(view), kind, key, key, false, now_ms);
+            if let Some(e) = error {
+                p.host.log(format!("accessibility: step: {e}"));
+            }
+            prevented
+        };
+        if !send(self, EventKind::Key) {
+            step(self);
+        }
+        send(self, EventKind::Keyup);
     }
 }
 

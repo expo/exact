@@ -8,7 +8,8 @@ import XCTest
 /// presented full screen over whatever is presented, a sheet included, with
 /// no transition of UIKit's, laid out as written and centred in the window,
 /// over UIKit's dimming; `closedby="any"` closes it on a tap outside its
-/// box; a removal with an exit keeps it shown until the exit ends.
+/// box; a removal with an exit keeps it shown until the exit ends. A
+/// `::backdrop` colour takes the place of the dimming, a sheet's too.
 /// UIKit, so a simulator runs it: bun host/apple/build.mjs --test --ios
 final class DialogTopLayerIOSTests: XCTestCase {
     /// A touch at a point of a view.
@@ -111,7 +112,7 @@ final class DialogTopLayerIOSTests: XCTestCase {
         top.view.layoutIfNeeded()
         XCTAssertEqual(ask.center.x, top.scroller.bounds.midX, accuracy: 0.5, "centred across the window")
         XCTAssertEqual(ask.center.y, top.scroller.bounds.midY, accuracy: 0.5, "and down it")
-        XCTAssertEqual(top.view.backgroundColor, DialogSheetController.dimming, "over UIKit's dimming")
+        XCTAssertEqual(top.backdrop.backgroundColor, DialogSheetController.dimming, "over UIKit's dimming")
         XCTAssertTrue(ask.accessibilityViewIsModal)
         XCTAssertEqual(p.menus.sheets.observation?["presentation"] as? String, "top-layer")
         let block = try XCTUnwrap(p.menus.sheets.containingBlocks.first { $0.0 == 30 }?.1)
@@ -267,16 +268,16 @@ final class DialogTopLayerIOSTests: XCTestCase {
         let (p, controller) = page(scene)
         let other = Presenter()
         defer {
-            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]), root: p.root)
-            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]), root: other.root)
+            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0], root: p.root)
+            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0], root: other.root)
         }
-        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 200, 0, 255]]]]), root: p.root)
+        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 200, 0, 255]]]]).ops[0], root: p.root)
         p.applyThemeTint()
         p.dialogCommand("showModal", "ask")
         spin { !p.menus.inTransition }
         let top = try XCTUnwrap(controller.presentedViewController as? DialogSheetController)
         // Another session's theme applies last.
-        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [200, 0, 0, 255]]]]), root: other.root)
+        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [200, 0, 0, 255]]]]).ops[0], root: other.root)
         func rgb(_ c: UIColor?) throws -> [CGFloat] {
             var (r, g, b, a): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
             XCTAssertTrue(try XCTUnwrap(c).getRed(&r, green: &g, blue: &b, alpha: &a))
@@ -286,10 +287,43 @@ final class DialogTopLayerIOSTests: XCTestCase {
         let ask = try XCTUnwrap(p.views[30])
         for (got, want) in zip(try rgb(ThemeRoles.color("AccentColor", in: ask)), [0, 200.0 / 255, 0]) { XCTAssertEqual(got, want, accuracy: 0.01, "its presenter's accent") }
         for (got, want) in zip(try rgb(top.view.tintColor), [0, 200.0 / 255, 0]) { XCTAssertEqual(got, want, accuracy: 0.01, "and tint") }
-        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 0, 200, 255]]]]), root: p.root)
+        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 0, 200, 255]]]]).ops[0], root: p.root)
         p.applyThemeTint()
         for (got, want) in zip(try rgb(top.view.tintColor), [0, 0, 200.0 / 255]) { XCTAssertEqual(got, want, accuracy: 0.01, "a live edit retints it") }
-        XCTAssertEqual(top.view.backgroundColor, DialogSheetController.dimming, "and keeps its dimming")
+        XCTAssertEqual(top.backdrop.backgroundColor, DialogSheetController.dimming, "and keeps its dimming")
+    }
+
+    /// A `::backdrop` colour is what lies beneath, in place of the dimming:
+    /// the top layer's backdrop, and beneath a sheet, whose UIKit dimming
+    /// goes; cleared, the dimming comes back (LLP 1035.001 D11).
+    func testABackdropColourTakesThePlaceOfTheDimming() throws {
+        guard let scene else { throw missing("scene", "a presentation completes only in a scene's window") }
+        let (p, controller) = page(scene)
+        let red: [String: Any] = ["backdrop_color": [255, 0, 0, 128], "written": ["backdrop_color"]]
+        p.apply(wireBatch([["op": "style", "id": 2, "style": red]]))
+        p.dialogCommand("showModal", "form")
+        spin { !p.menus.inTransition }
+        let form = try XCTUnwrap(controller.presentedViewController as? DialogSheetController)
+        let sheet = try XCTUnwrap(form.sheetPresentationController)
+        func rgba(_ c: UIColor?) -> [CGFloat] {
+            var (r, g, b, a): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+            c?.getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [r, g, b, a].map { ($0 * 255).rounded() }
+        }
+        XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .init("exact.dialog"), "UIKit's dimming goes")
+        XCTAssertTrue(form.backdrop.superview === form.presentationController?.containerView, "beneath the sheet")
+        XCTAssertEqual(rgba(form.backdrop.backgroundColor), [255, 0, 0, 128])
+        XCTAssertEqual(form.backdrop.alpha, 1, "faded in")
+        p.apply(wireBatch([["op": "style", "id": 2, "style": [:]]]))
+        XCTAssertNil(sheet.largestUndimmedDetentIdentifier, "cleared, UIKit's dimming is back")
+        XCTAssertEqual(form.backdrop.backgroundColor, .clear)
+
+        p.apply(wireBatch([["op": "style", "id": 30, "style": Self.painted.merging(["backdrop_color": [0, 0, 0, 0], "written": ["background_color", "border_radius", "backdrop_color"]]) { $1 }]]))
+        p.dialogCommand("showModal", "ask")
+        spin { !p.menus.inTransition }
+        let top = try XCTUnwrap(form.presentedViewController as? DialogSheetController)
+        XCTAssertEqual(rgba(top.backdrop.backgroundColor), [0, 0, 0, 0], "`transparent` lays nothing")
+        XCTAssertNotNil(top.backdrop.backgroundColor)
     }
 
     /// Removed with an exit, it stays in the top layer until the exit ends,

@@ -47,7 +47,11 @@ component A
 "#;
 
 fn boot() -> Host<NoData> {
-    let plan = contract::compile(LIST).unwrap().encode();
+    boot_with(LIST)
+}
+
+fn boot_with(source: &str) -> Host<NoData> {
+    let plan = contract::compile(source).unwrap().encode();
     let (mut host, _) = Host::boot(
         &plan,
         NoData,
@@ -232,4 +236,182 @@ fn a_panic_inside_an_inert_entry_ends_it() {
     let layouts = host.layout_calls;
     host.resize(392.0, 844.0);
     assert!(host.layout_calls > layouts);
+}
+
+#[test]
+fn an_empty_report_reuses_finish_only_while_the_deadline_is_unchanged() {
+    let mut host = boot();
+    let before = host.finish_passes;
+    for offset in [35.1, 35.2, 35.3] {
+        let reply = report(&mut host, offset);
+        assert!(reply.starts_with("{\"ops\":[]"), "{reply}");
+    }
+    assert_eq!(
+        host.finish_passes, before,
+        "three reports do no finish passes"
+    );
+
+    let mut batch = Batch::new();
+    batch.destroy(1);
+    host.finish(batch, None);
+    assert_eq!(host.finish_passes, before + 1, "a changed batch finishes");
+    let passes = host.finish_passes;
+    host.finish(Batch::new(), Some("refused".into()));
+    assert!(!host.route_overflow.settled);
+    host.finish_collection();
+    assert_eq!(
+        host.finish_passes,
+        passes + 2,
+        "a refused finish is not reused"
+    );
+    assert!(host.route_overflow.settled);
+
+    let plan = contract::compile(
+        r#"component A
+  state done = false
+  task end mount
+    after(100, end)
+  action end
+    done = true
+  view
+    text "timer"
+"#,
+    )
+    .unwrap()
+    .encode();
+    let (mut host, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        100.,
+        100.,
+    )
+    .unwrap();
+    let first = host.finish_collection();
+    assert!(first.contains("\"timer_due_ms\":100"), "{first}");
+    let before = host.finish_passes;
+    host.finish_collection();
+    assert_eq!(host.finish_passes, before);
+    host.runner.advance_timed(100.);
+    let reply = host.finish_collection();
+    assert!(!reply.contains("timer_due_ms"), "{reply}");
+    assert_eq!(
+        host.finish_passes,
+        before + 1,
+        "a deadline change finishes even without ops"
+    );
+}
+
+#[test]
+fn a_hundred_offset_reports_write_no_batch_and_one_shot_output_is_not_replayed() {
+    let mut host = boot();
+    report(&mut host, 35.1);
+    let reply = report(&mut host, 35.2);
+    let writes = host.batch_writes;
+    for n in 0..100 {
+        assert_eq!(report(&mut host, 35.2 + f64::from(n) / 1000.), reply);
+    }
+    assert_eq!(
+        host.batch_writes, writes,
+        "no batch construction or serialization"
+    );
+
+    host.log("between reports");
+    let logged = report(&mut host, 35.4);
+    assert!(logged.contains("between reports"), "{logged}");
+    assert_eq!(host.batch_writes, writes + 1);
+    assert!(!report(&mut host, 35.5).contains("between reports"));
+    let writes = host.batch_writes;
+    report(&mut host, 35.6);
+    assert_eq!(host.batch_writes, writes);
+
+    host.runner.store().announce_topic("collection-test");
+    let announced = report(&mut host, 35.7);
+    assert!(announced.contains("collection-test"), "{announced}");
+    assert!(!report(&mut host, 35.8).contains("collection-test"));
+
+    host.runner.use_native_timers(true);
+    let native = host.finish(Batch::new(), None);
+    assert!(native.contains("\"nativeTimers\":[]"), "{native}");
+    host.runner.use_native_timers(false);
+    let ordinary = report(&mut host, 35.9);
+    assert!(!ordinary.contains("nativeTimers"), "{ordinary}");
+
+    let writes = host.batch_writes;
+    report(&mut host, 1200.);
+    assert!(
+        host.batch_writes > writes,
+        "a changed window writes its batch"
+    );
+}
+
+#[test]
+fn an_empty_report_delivers_resize_notifications_left_by_the_depth_limit() {
+    let mut host = boot_with(
+        r#"component A
+  state side = 100
+  state observed = 0
+  state growing = false
+  action grow
+    growing = true
+    side = 110
+  action resized(w: number, h: number, r: DOMRectReadOnly)
+    observed = w
+    if growing && w < 130
+      side = w + 10
+  view
+    column
+      button press=grow testId="grow" width=60 height=20
+      box width=side height=20 resize=resized
+      list virtualized=true height=160 width=240 testId="list"
+        for i in range(100) key=i
+          text `${i}` height=20
+"#,
+    );
+    assert_eq!(host.runner.slot("observed"), Some(&Value::Number(100.)));
+    press(&mut host, "grow");
+    assert_eq!(host.runner.slot("observed"), Some(&Value::Number(110.)));
+    assert!(!host.runner.resize_due(0).is_empty());
+    assert!(!host.layout_owed);
+    assert_eq!(host.runner.timer_due_ms(), None);
+
+    let before = host.finish_passes;
+    for (offset, width) in [(35.1, 120.), (35.2, 130.)] {
+        report(&mut host, offset);
+        assert_eq!(host.runner.slot("observed"), Some(&Value::Number(width)));
+    }
+    assert_eq!(host.finish_passes, before + 2);
+    assert!(host.runner.resize_due(0).is_empty());
+    let reply = report(&mut host, 35.3);
+    assert!(reply.starts_with("{\"ops\":[]"), "{reply}");
+    assert_eq!(
+        host.finish_passes,
+        before + 2,
+        "settled reports reuse finish"
+    );
+}
+
+#[test]
+fn a_reused_finish_samples_the_deadline_after_writing() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct Clock(AtomicUsize);
+    impl exact_runner::process::WorkClock for Clock {
+        fn advance(&self, _: f64) {}
+        fn due(&self) -> Option<f64> {
+            (self.0.fetch_add(1, Ordering::Relaxed) != 0).then_some(100.)
+        }
+        fn owed(&self) -> bool {
+            false
+        }
+    }
+    let mut host = boot();
+    host.runner
+        .set_work_clock(Some(Arc::new(Clock(AtomicUsize::new(0)))));
+    let before = host.finish_passes;
+    let reply = host.finish_collection();
+    assert!(reply.contains("\"timer_due_ms\":100"), "{reply}");
+    assert_eq!(host.finish_passes, before);
 }

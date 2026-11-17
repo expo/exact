@@ -158,7 +158,9 @@ fn compress_image_is_declared_as_the_docs_give_it() {
     for line in [
         "compressImage(from: string, to: string, options: CompressImageOptions): Promise<CompressedImage>;",
         "readonly maxDimension: number;",
-        "readonly maxBytes: number;",
+        "readonly maxBytes?: number;",
+        "readonly quality?: number;",
+        "({ readonly maxBytes: number } | { readonly quality: number });",
         "readonly type?: \"image/jpeg\" | \"image/png\";",
         "readonly type: \"image/jpeg\" | \"image/png\";",
         "readonly width: number;",
@@ -175,9 +177,8 @@ fn compress_image_is_declared_as_the_docs_give_it() {
     // The engine's positional binding is the prelude's to adapt, never the app's.
     assert!(!declared.contains("compressImage(from: string, to: string, maxDimension"));
     let reference = include_str!("../../../../docs/reference.md");
-    assert!(
-        reference.contains("`storage.fs.compressImage(from, to, {maxDimension, maxBytes, type})`")
-    );
+    assert!(reference
+        .contains("`storage.fs.compressImage(from, to, {maxDimension, maxBytes, quality, type})`"));
     assert!(reference.contains("`storage.fs.transformImage(from, to, options)`"));
 }
 
@@ -876,12 +877,10 @@ fn types_check_is_read_only_and_build_reports_only_changed_declarations() {
 #[test]
 #[ignore = "async lane: typechecks the design's token union with tsc; bun scripts/async.mjs runs it"]
 fn a_data_module_returning_an_unknown_token_fails_tsc() {
-    let dir = std::env::temp_dir().join(format!("exact-types-tokens-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::scratch::Scratch::new(format!("exact-types-tokens-{}", std::process::id()));
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber t\n\ntheme\n  brand = #c8102e\n  surface.card = #ffffff\n  space.row = 12px\n",
+        dir.join("app.forma"),
+        "forma t\n\ntheme\n  brand = #c8102e\n  surface.card = #ffffff\n  space.row = 12px\n",
     )
     .unwrap();
     std::fs::write(

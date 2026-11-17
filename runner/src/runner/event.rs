@@ -422,7 +422,7 @@ pub enum Event {
 /// at its end, `scrollHeight - scrollTop - clientHeight` as on the web).
 /// A native host's `scrollWidth`/`scrollHeight` is its client size plus its
 /// scroll range, so the difference is the range it clamps to.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollEvent {
     /// The offset from the start, along x (`scrollLeft`).
     pub left: f64,
@@ -436,6 +436,23 @@ pub struct ScrollEvent {
     pub client_width: f64,
     /// The scrollport's height (`clientHeight`).
     pub client_height: f64,
+    /// A zoomable container's zoom (`scrollZoom`, LLP 1057.001.000 D2); 1
+    /// on any other scroller.
+    pub zoom: f64,
+}
+
+impl Default for ScrollEvent {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            top: 0.0,
+            width: 0.0,
+            height: 0.0,
+            client_width: 0.0,
+            client_height: 0.0,
+            zoom: 1.0,
+        }
+    }
 }
 
 impl ScrollEvent {
@@ -452,6 +469,7 @@ impl ScrollEvent {
             Value::Number(self.client_height),
             key,
             Value::Number(offset),
+            Value::Number(self.zoom),
         ])
     }
 }
@@ -744,21 +762,33 @@ impl Event {
     }
 
     /// Decode the scroll event: `left,top,scrollWidth,scrollHeight,
-    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative.
+    /// clientWidth,clientHeight`, finite CSS pixels, the extents not negative,
+    /// then a zoomable container's zoom, above 0; a scroller that does not
+    /// zoom leaves it out.
     pub fn scroll_payload(payload: &str) -> Option<Self> {
+        let (payload, zoom) = match payload.matches(',').count() {
+            6 => {
+                let (rest, zoom) = payload.rsplit_once(',')?;
+                (rest, exact_num::parse_f64(zoom).ok()?)
+            }
+            _ => (payload, 1.0),
+        };
         let [left, top, width, height, client_width, client_height] = tuple::<6>(payload)?;
         ([left, top].iter().all(|v| v.is_finite())
             && [width, height, client_width, client_height]
                 .iter()
-                .all(|v| v.is_finite() && *v >= 0.0))
-        .then_some(Self::Scroll(ScrollEvent {
-            left,
-            top,
-            width,
-            height,
-            client_width,
-            client_height,
-        }))
+                .all(|v| v.is_finite() && *v >= 0.0)
+            && zoom.is_finite()
+            && zoom > 0.0)
+            .then_some(Self::Scroll(ScrollEvent {
+                left,
+                top,
+                width,
+                height,
+                client_width,
+                client_height,
+                zoom,
+            }))
     }
 }
 
@@ -1028,7 +1058,10 @@ impl<D: DataSource> Runner<D> {
                 return self.as_origin(origin, |r| r.arrived(|r| r.dispatch_event(view, event)));
             }
         }
-        self.arrived(|r| r.dispatch_event(view, event))
+        self.arrived(|r| {
+            r.note_input(&event);
+            r.dispatch_event(view, event)
+        })
     }
 
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {

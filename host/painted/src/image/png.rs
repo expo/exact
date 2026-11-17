@@ -671,7 +671,9 @@ impl AreaRows {
             let at = (self.next_y - plan.crop.y) as usize * stride;
             let area = u64::from(w) * u64::from(h);
             for (px, sum) in out.data_mut()[at..at + stride]
-                .chunks_exact_mut(4)
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
                 .zip(&mut self.accumulated)
             {
                 for c in 0..4 {
@@ -735,7 +737,13 @@ impl AreaPasses {
     fn finish(self, plan: &DecodePlan, out: &mut Pixmap) {
         let (w, h) = plan.natural();
         let area = u64::from(w) * u64::from(h);
-        for (pixel, sum) in out.data_mut().chunks_exact_mut(4).zip(self.accumulated) {
+        for (pixel, sum) in out
+            .data_mut()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(self.accumulated)
+        {
             for c in 0..4 {
                 pixel[c] = ((sum[c] + area / 2) / area) as u8;
             }

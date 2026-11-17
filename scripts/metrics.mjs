@@ -1,9 +1,8 @@
 #!/usr/bin/env bun
 /**
  * metrics — startup and speed numbers from one captured-source run.
- * Builds use a private cache kept warm per checkout and app. Diagnostic,
- * never blocking (rules/RULES.md §Loop shape: run everything, block on almost
- * nothing).
+ * Builds use a private cache kept warm per checkout and app. Web byte budgets
+ * fail the run; wall-clock budgets remain diagnostic on a shared machine.
  *
  *   bun scripts/metrics.mjs            table
  *   bun scripts/metrics.mjs --json     one JSON object
@@ -29,11 +28,11 @@
  *                                       (LLP 1047.001 D8; reported)
  *   bun scripts/metrics.mjs --web-bytes  only the bytes each web app ships (LLP 1047.002 D5): the
  *                                       production app.js of the hello app, the `exact new` starter
- *                                       and the gated apps against JS_TARGET_KIB, the eager closure
+ *                                       and the gated apps against JS_TARGET_BYTES, the eager closure
  *                                       the page preloads with it, and the entry by source module;
  *                                       seconds, in the working tree, no capture
  *
- * Budgets are read from rules/RULES.md so they cannot drift from the prose.
+ * Time budgets are read from rules/RULES.md; web byte ceilings are below.
  */
 import { spawnSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -51,6 +50,8 @@ import { Cdp, open } from './agent.mjs';
 import { chromium, quitBrowser } from './agent-launch.mjs';
 import { childFailure as failure, failureSummary } from './agent-build.mjs';
 import { fileURLToPath } from 'node:url';
+import { gateMetric } from './gate.mjs';
+import { builtFile } from '../host/web-js/content-names.mjs';
 
 const t0 = Date.now();
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -103,71 +104,58 @@ if (process.argv.includes('--stress-url')) {
   process.exit(process.exitCode ?? 0);
 }
 
-// The web's gate since 2026-10-02: KiB of brotli-11 app.js, the runtime and the
-// app as one ES module, which is what each app's web build ships (LLP 1071); since
-// 2026-10-06 the production build's (Charlie: gate what ships, not the development
-// build's tools).
-// Over one is a VIOLATION the async lane files against the commit. Each is the
-// size that day (d09bfd087: Caltrain 17,159 B, RealWorld 28,721 B, the video
-// player 7,226 B) plus ~2 KiB. Raise one only on purpose, with the reason here;
-// lower it when a cut lands. Pieces loaded on demand (the GPU glue, Canvas 2D,
-// the markup editor) are not in it.
-// Caltrain raised 19 → 28 (Charlie, 2026-10-06): 26.8 KiB shipped on 2026-10-06, grown
-// by real features (browser-side grant checks, media, commands, pointer events, the
-// router, paint order, its TV screens); a cut lane follows. RealWorld (38.5 KiB) and the
-// video player (18.7 KiB) are over and stay over until Charlie rules or a cut lands.
-// Caltrain lowered 28 → 25 the same day (lane/web-size: the grant admission, media and the event families link by use;
-// 22.7 KiB shipped). RealWorld raised 30 → 38 and the video player 9 → 17 (Charlie,
-// 2026-10-06): 36.0 and 15.6 KiB shipped after that cut. RealWorld's bulk is its own
-// generated module (~8 KB), the runtime core (~11.6 KB) and the TypeScript data layer
-// (~2.9 KB); the video player grew with its media session, controls and full screen.
-// RealWorld raised 38 → 45 (Charlie, 2026-10-12): 43.45 KiB shipped at fe5b26798, grown by real
-// features since 2026-10-08 (optimistic writes, +2.4 KB, the largest; the LLP 1115.000 web rows);
-// the file-body path already links by use (-0.4 KB). A link-by-use cut hunt is in QUEUE.md.
-// 2026-11-03 (LLP 1047.002): at 574720f370 Caltrain ships 45.5 KiB, RealWorld 65.1 and the video player
-// 36.1, all over, with no issue filed since 2026-10-12; hello (the core, LLP 1047 D9's carrier) and the
-// `exact new` starter join at that day's size plus ~2 KiB: 21.3 and 49.1 KiB shipped. The cuts of 1047.002 lower them:
-// the starter 52 → 48 the same day (D3, the empty-set grant admission; 46.1 KiB shipped); hello 24 → 18 the same day
-// (D1's first cut: `navigation` links only where a plan has routes or a back control; 15.5 KiB shipped, and the
-// video player 36.3 → 30.7, still over); hello 18 → 14 and the starter 48 → 45 the same day (D1's second cut: the
-// host commands an action names, and the dialog, alert and menu glue, link by use; 11.9 and 42.7 KiB shipped,
-// Caltrain 42.6, RealWorld 61.7 and the video player 27.2, all three still over); the starter 45 → 44 the same day
-// (D3's second cut: sources with no network grant bind a `fetch` of the asset path and the refusal; 41.7 KiB shipped).
-// 2026-11-11 (Charlie): the starter 44 → 45. Runtime fixes since had carried it past 44; with five more commands
-// linked by use it ships 44.2 KiB.
-const JS_TARGET_KIB = { hello: 14, starter: 45, realworld: 45, 'video-player': 17, caltrain: 25 };
+// LLP 1172.011 E1: production brotli-11 bytes, with the shared core (hello's one text node) gated independently.
+// `target` is the size to reach; `entry` and `eager` are ceilings that fail the run. Eager includes app.js and every
+// preloaded chunk, so moving code out of the entry cannot evade the ratchet. Lower ceilings when a cut lands.
+// Ceilings after the link-by-use cuts from 7f4abbc2b, 2026-11-14. Growth requires an explicit budget change.
+const JS_TARGET_BYTES = {
+  hello: { target: 14 * 1024, entry: 10754, eager: 11269 },
+  starter: { target: 45 * 1024, entry: 44842, eager: 77875 },
+  realworld: { target: 45 * 1024, entry: 69958, eager: 105243 },
+  'video-player': { target: 17 * 1024, entry: 35240, eager: 63852 },
+  caltrain: { target: 25 * 1024, entry: 56570, eager: 97030 },
+};
 
 const brotli = (b) => brotliCompressSync(b, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: b.length } }).length;
 const sizesOf = (file) => { const b = readFileSync(file); return { raw: b.length, gzip: gzipSync(b, { level: 9 }).length, brotli: brotli(b) }; };
 /** What `name` ships on the JS target (LLP 1071): its production `app.js`, built as delivery builds it
  * (scripts/deploy.mjs: `host/web-js/build.mjs --production` over a plan) over the development build's plan,
  * which is the gated number; the development build's `app.js`, which also links its tools, beside it and not
- * gated (Charlie, 2026-10-06: gate what ships); the eager closure, `app.js` and the chunks the page's head
+ * gated (Charlie, 2026-10-06: gate what ships); the eager closure, `app.js` and the chunks the head or entry
  * preloads with it, each compressed alone as a server sends it; and the entry's bytes by source module, as
  * Rolldown rendered them before minification (`.gen/modules.json`): shares, not a ledger. */
 const jsTargetBytes = (name, target) => {
   const dist = resolve(ROOT, 'target/metrics-bytes', `${name}-js`), shipped = `${dist}-production`;
   const env = { ...process.env, EXACT_APP_DIR: target.dir, EXACT_WEB_DIST: dist };
   const b = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), target.crate('web')], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
-  if (b.status !== 0 || !existsSync(resolve(dist, 'app.js'))) return { js: { failed: b.status !== 0 ? failure(b) : 'no app.js: not a JS target build' } };
-  const measured = { js_dev: sizesOf(resolve(dist, 'app.js')) };
+  if (b.status !== 0 || !existsSync(resolve(dist, builtFile(dist, 'app.js')))) return { js: { failed: b.status !== 0 ? failure(b) : 'no app.js: not a JS target build' } };
+  const measured = { js_dev: sizesOf(resolve(dist, builtFile(dist, 'app.js'))) };
   const p = spawnSync(process.execPath, [resolve(ROOT, 'host/web-js/build.mjs'), name, '--plan', resolve(dist, 'app.plan'), '--out', shipped, '--production'], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
-  if (p.status !== 0 || !existsSync(resolve(shipped, 'app.js'))) return { ...measured, js: { failed: p.status !== 0 ? failure(p) : 'no production app.js' } };
-  measured.js = sizesOf(resolve(shipped, 'app.js'));
-  const preloads = [...readFileSync(resolve(shipped, 'index.html'), 'utf8').matchAll(/<link rel="modulepreload" href="\.\/([^"]+)">/g)].map((m) => m[1]);
+  const entry = resolve(shipped, builtFile(shipped, 'app.js'));
+  if (p.status !== 0 || !existsSync(entry)) return { ...measured, js: { failed: p.status !== 0 ? failure(p) : 'no production app.js' } };
+  measured.js = sizesOf(entry);
+  measured.module_brotli = JSON.parse(readFileSync(resolve(shipped, '.gen/module-bytes.json'), 'utf8'));
+  // The entry prepares every emitted chunk even when an interaction-activated document omits its head's preloads.
+  const preloads = Object.keys(measured.module_brotli);
   measured.closure = preloads.map((f) => sizesOf(resolve(shipped, f))).reduce((sum, s) => ({ files: sum.files + 1, raw: sum.raw + s.raw, gzip: sum.gzip + s.gzip, brotli: sum.brotli + s.brotli }), { files: 0, raw: 0, gzip: 0, brotli: 0 });
   const modules = resolve(shipped, '.gen/modules.json');
   if (existsSync(modules)) measured.modules = JSON.parse(readFileSync(modules, 'utf8'));
   return measured;
 };
+const jsTargetFailed = (name, m) => {
+  const limit = JS_TARGET_BYTES[name];
+  return !!m.js.failed || !Number.isFinite(m.js.brotli) || !Number.isFinite(m.closure?.brotli)
+    || m.js.brotli > limit.entry || m.closure.brotli > limit.eager;
+};
 /** The report row for an app's JS target bytes: its label, raw size, and the note the async lane reads a VIOLATION from. */
 const jsTargetRow = (name, m) => {
-  const shipped = m.js, limit = JS_TARGET_KIB[name], k1 = (n) => `${(n / 1024).toFixed(1)} KiB`;
-  if (shipped.failed) return [`web app.js: ${name}`, 'FAILED', shipped.failed];
+  const shipped = m.js, limit = JS_TARGET_BYTES[name], k1 = (n) => `${(n / 1024).toFixed(1)} KiB`;
+  const label = `web ${name === 'hello' ? 'runtime' : 'app.js'}: ${name}`;
+  if (shipped.failed) return [label, 'FAILED', shipped.failed];
   const total = m.modules ? Object.values(m.modules).reduce((a, b) => a + b, 0) : 0;
   const top = m.modules ? `; entry by module: ${Object.entries(m.modules).slice(0, 6).map(([f, n]) => `${f} ${Math.round(100 * n / total)}%`).join(' · ')}` : '';
-  const closure = m.closure && m.closure.files > 1 ? `; eager closure ${k1(m.closure.brotli)} over ${m.closure.files} files` : '';
-  return [`web app.js: ${name}`, `${(shipped.raw / 1024).toFixed(0)} KiB`, `${k1(shipped.brotli)} brotli-11 production${limit === undefined ? '' : `; budget ${limit} KiB, ${shipped.brotli <= limit * 1024 ? 'within' : 'VIOLATION'}`}, ${k1(shipped.gzip)} gzip${closure}${m.js_dev ? `; development build ${k1(m.js_dev.brotli)} (not gated)` : ''}${top}`];
+  const closure = `; eager closure ${m.closure.brotli} B / ceiling ${limit.eager} B over ${m.closure.files} file${m.closure.files === 1 ? '' : 's'}`;
+  return [label, `${(shipped.raw / 1024).toFixed(0)} KiB`, `${shipped.brotli} B brotli-11 production; ceiling ${limit.entry} B, ${jsTargetFailed(name, m) ? 'VIOLATION' : 'within'}; target ${k1(limit.target)}, ${k1(shipped.gzip)} gzip${closure}${m.js_dev ? `; development build ${k1(m.js_dev.brotli)} (not gated)` : ''}${top}`];
 };
 // The apps the size work tracks: hello is the core (one text node, nothing a plan adds: LLP 1047 D9's carrier,
 // LLP 1047.001 D8's on iOS), the starter is what `exact new` writes today (made here from this checkout's
@@ -175,13 +163,13 @@ const jsTargetRow = (name, m) => {
 // directory: a captured run selects its original app through EXACT_APP_DIR, which resolveApp returns for any name.
 const sizedApps = () => {
   // Outside the checkout: an app's Cargo workspace inside this one's `target/` would read this one's manifest as its root.
-  const starter = resolve(tmpdir(), 'exact-metrics-bytes', 'starter');
+  const starter = resolve(tmpdir(), 'exact-metrics-bytes', createHash('sha256').update(ROOT).digest('hex').slice(0, 16), 'starter');
   rmSync(starter, { recursive: true, force: true });
-  const made = spawnSync(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'new', starter], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
+  const made = spawnSync(process.execPath, [resolve(ROOT, 'scripts/exact.mjs'), 'new', starter, '--bundle-id', 'com.example.starter'], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8' });
   if (made.status !== 0) throw new Error(`exact new ${starter}: ${failure(made)}`);
   const selectedDir = process.env.EXACT_APP_DIR, apps = [];
   try {
-    for (const name of Object.keys(JS_TARGET_KIB)) {
+    for (const name of Object.keys(JS_TARGET_BYTES)) {
       process.env.EXACT_APP_DIR = name === 'starter' ? starter : resolve(ROOT, 'apps', name);
       apps.push([name, resolveApp(name)]);
     }
@@ -192,14 +180,17 @@ const sizedApps = () => {
   return apps;
 };
 // Only the web bytes, in the working tree (LLP 1047.002 D5): seconds once the compiler is built, so the async
-// lane files a VIOLATION in the minute after the commit, and a person measures a cut before landing it.
+// lane files a VIOLATION at its hourly run.
 if (process.argv.includes('--web-bytes')) {
   mkdirSync(resolve(ROOT, 'target/metrics-bytes'), { recursive: true });
-  const t = Date.now(), rows = sizedApps().map(([name, target]) => jsTargetRow(name, jsTargetBytes(name, target)));
-  console.log(`web bytes (the JS target's production app.js, gated by JS_TARGET_KIB; LLP 1047.002 D5) — ${new Date().toISOString().slice(0, 19)}Z, commit ${spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim()}, working tree`);
+  const t = Date.now(), measured = Object.fromEntries(sizedApps().map(([name, target]) => [name, jsTargetBytes(name, target)]));
+  const failed = Object.entries(measured).some(([name, m]) => jsTargetFailed(name, m));
+  if (process.argv.includes('--json')) { console.log(JSON.stringify({ budgets: JS_TARGET_BYTES, measured, failed })); process.exit(failed ? 1 : 0); }
+  const rows = Object.entries(measured).map(([name, m]) => jsTargetRow(name, m));
+  console.log(`web bytes (production entries and eager closures; LLP 1172.011 E1) — ${new Date().toISOString().slice(0, 19)}Z, commit ${spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim()}, working tree`);
   for (const [k, v, note] of rows) console.log(`  ${k.padEnd(34)} ${v.padStart(11)}   ${note}`);
   console.log(`  ${'total'.padEnd(34)} ${`${((Date.now() - t) / 1000).toFixed(1)} s`.padStart(11)}`);
-  process.exit(0);
+  process.exit(failed ? 1 : 0);
 }
 const appName = process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : undefined;
 const app = resolveApp(appName);
@@ -222,6 +213,8 @@ if (!process.argv.includes('--flow') && !process.argv.includes('--scaling') && !
 const json = process.argv.includes('--json');
 const rebuild = process.argv.includes('--rebuild');
 const long = process.argv.includes('--long');
+const APPLE_AGENT_FAILURES = ['ios_speed_failed', 'ios_size_failed', 'ios_balanced_failed', 'agent_development_ios_failed',
+  'agent_production_macos_failed', 'agent_development_macos_failed', 'agent_symbol_proof_failed'];
 const rules = readFileSync(resolve(ROOT, 'rules/RULES.md'), 'utf8');
 const budget = (label) => rules.match(new RegExp(`\\|\\s*${label}[^|]*\\|\\s*([^|\\n]+)`, 'i'))?.[1].trim() ?? '?';
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -440,7 +433,7 @@ await step('wasm', async () => {
   if (out.web_target === 'js') {
     out.web_artifacts = buildFileCards(dist);
     out.web_artifact_id = sha256(JSON.stringify(out.web_artifacts));
-    const js = readFileSync(resolve(dist, 'app.js'));
+    const js = readFileSync(resolve(dist, builtFile(dist, 'app.js')));
     out.js_bytes = js.length;
     out.js_gzip_bytes = gzipSync(js, { level: 9 }).length;
     return;
@@ -824,29 +817,20 @@ await step('macos-boot', () => {
 // swift), then the budget row "touch one line, rebuild that crate" for the
 // host crate — and the startup again on the fresh binary.
 if (long) {
-  // The loop's own budgets, in this captured checkout's warm cache: the six
-  // checks exactly as AGENTS.md states them (the second pass is the warm
-  // one), then one kernel source touched and its tests rebuilt and run.
+  // Measure the blocking command itself, then the kernel's build and tests separately.
   await step('loop', () => {
     // A developer's environment: none of this fixture's EXACT_* overrides.
-    // (The sixth check's build scripts run Bun: app.mjs has put this one first on PATH.)
+    // app.mjs has put the pinned Bun first on PATH for Cargo build scripts.
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('EXACT_')));
     const timed = (command, args, name = args[0]) => {
       const t = Date.now();
       const r = spawnSync(command, args, { cwd: ROOT, env, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
-      return { name, s: (Date.now() - t) / 1000, ok: r.status === 0 };
+      return { name, s: (Date.now() - t) / 1000, ok: r.status === 0, log: `${r.stdout ?? ''}${r.stderr ?? ''}` };
     };
     const gate = () => {
-      const checks = [
-        timed('cargo', ['build', '--all-targets', '--keep-going']),
-        timed('cargo', ['test', '--tests', '--no-fail-fast']),
-        timed('cargo', ['clippy', '--all-targets', '--keep-going', '--', '-D', 'warnings']),
-        timed('cargo', ['fmt', '--all', '--', '--check']),
-        timed(process.execPath, ['scripts/caps.mjs'], 'caps'),
-        timed(process.execPath, ['scripts/boot.mjs'], 'boot'),
-        timed('cargo', ['check', '--workspace', '--all-targets', '--keep-going'], 'workspace'),
-      ];
-      return { s: checks.reduce((sum, c) => sum + c.s, 0), failed: checks.filter(c => !c.ok).map(c => c.name) };
+      const result = timed(process.execPath, ['scripts/gate.mjs'], 'gate');
+      if (!result.ok) console.error(result.log);
+      return { s: result.s, failed: result.ok ? [] : ['gate'] };
     };
     out.gate_first_s = gate().s;
     const warm = gate();
@@ -948,6 +932,34 @@ if (long) {
         continue;
       }
       out[`ios_${optimize}_bytes`] = strippedSize(binary) - out.ios_floor_bytes;
+    }
+    const development = { ...own, EXACT_UPDATE_TRUST: 'development' };
+    const prerequisites = [
+      ...(out.ios_speed_failed ? ['production iOS speed build failed'] : []),
+      ...(out.ios_size_failed ? ['production iOS size build failed'] : []),
+      ...(out.ios_balanced_failed ? ['production iOS balanced build failed'] : []),
+    ];
+    for (const [label, key, args, buildEnv] of [
+      ['development iOS', 'agent_development_ios_failed', [hello.crate('apple'), '--ios', '--no-install'], development],
+      ['production macOS', 'agent_production_macos_failed', [hello.crate('apple')], env],
+      ['development macOS', 'agent_development_macos_failed', [hello.crate('apple')], development],
+    ]) {
+      const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], { cwd: ROOT, env: buildEnv, encoding: 'utf8' });
+      if (built.status !== 0) {
+        out[key] = `exit ${built.status ?? 1}: ${failure(built)}`;
+        prerequisites.push(`${label} build failed`);
+        console.error(`${label} Hello for the agent link proof: ${out[key]}`);
+      }
+    }
+    if (prerequisites.length) out.agent_symbol_proof_failed = `not qualified: ${prerequisites.join('; ')}`;
+    else {
+      const proofEnv = { ...own, EXACT_REQUIRED: '1' };
+      delete proofEnv.EXACT_GLUE_FAST;
+      const proof = spawnSync(process.execPath, ['test', 'host/apple/link.test.mjs', '--test-name-pattern', 'production omits the agent'], { cwd: ROOT, env: proofEnv, encoding: 'utf8' });
+      if (proof.status !== 0) {
+        out.agent_symbol_proof_failed = `exit ${proof.status ?? 1}: ${failure(proof)}`;
+        console.error(`Apple agent link proof: ${out.agent_symbol_proof_failed}`);
+      }
     }
   });
 }
@@ -1095,6 +1107,7 @@ if (long) {
     }
     // The gated rows, for every sized app (hello and the starter have no wasm row).
     out.web_js_bytes = Object.fromEntries(sizedApps().map(([name, target]) => [name, jsTargetBytes(name, target)]));
+    if (Object.entries(out.web_js_bytes).some(([name, m]) => jsTargetFailed(name, m))) process.exitCode = 1;
   });
 }
 
@@ -1106,7 +1119,9 @@ out.macos_total_ms = out.macos_exec_ms + out.macos_paint_ms;
 out.macos_framework_ms = out.macos_runner_ms + out.macos_apply_ms;
 out.total_s = (Date.now() - t0) / 1000 + (out.source_capture_s ?? 0);
 
-if (json) { console.log(JSON.stringify(out)); process.exit(0); }
+const appleAgentFailed = APPLE_AGENT_FAILURES.some(key => out[key]);
+if (appleAgentFailed) process.exitCode = 1;
+if (json) { console.log(JSON.stringify(out)); process.exit(process.exitCode ?? 0); }
 
 const ms = (v) => (Number.isFinite(v) ? `${v.toFixed(v < 10 ? 2 : 1)} ms` : 'n/a');
 const kib = (v) => Number.isFinite(v) ? `${(v / 1024).toFixed(0)} KiB` : 'n/a';
@@ -1155,7 +1170,9 @@ if (Number.isFinite(out.macos_paint_ms)) rows.push(
 if (rebuild) rows.push([`edit → ${out.web_target === 'js' ? 'JS target' : 'wasm'} rebuilt (no driver)`, ms(out.rebuild_ms), out.rebuild_note ?? 'the cold path: cargo build of the app crate']);
 if (long) {
   const s = (v) => (Number.isFinite(v) ? `${v.toFixed(1)} s` : 'n/a');
-  rows.push(['blocking gate (the six checks, warm)', s(out.gate_s), `${out.gate_failed?.length ? `failing: ${out.gate_failed.join(', ')}; ` : ''}first pass ${s(out.gate_first_s)}; budget ${budget('Blocking gate')}`]);
+  const gateRow = gateMetric(out.gate_s, Number.parseFloat(budget('Blocking gate')), out.gate_failed);
+  gateRow[2] += `; first pass ${s(out.gate_first_s)}`;
+  rows.push(gateRow);
   rows.push(['kernel: touch one line, rebuild', s(out.touch_kernel_s), `kernel/src/lib.rs; budget ${budget('Touch one line')}`]);
   rows.push(['kernel: test what you changed', s(out.test_kernel_s), `cargo test -p exact-kernel${out.test_kernel_ok === false ? ' (failing)' : ''}; budget ${budget('Test what you changed')}`]);
   rows.push(['macOS: initial captured build', out.macos_build_failed ? 'FAILED' : s(out.macos_build_s), out.macos_build_failed ?? `cargo ${s(out.macos_build_cargo_s)} · swift ${s(out.macos_build_swift_s)}; budget ${budget('Full build')}`]);
@@ -1171,6 +1188,12 @@ if (long) {
     const budget = Number.isFinite(bytes) ? `; budget ${limit.toLocaleString('en-US')} B, ${bytes.toLocaleString('en-US')} B ${bytes <= limit ? 'within' : 'VIOLATION'}` : '';
     rows.push([`iOS: hello app, optimized for ${optimize}`, out[`ios_${optimize}_failed`] ? 'FAILED' : mib(bytes), out[`ios_${optimize}_failed`] ?? `production, simulator, stripped, over an empty UIKit app (${mib(out.ios_floor_bytes)}); one text node: the core and nothing a plan adds; ${{ size: 'the embed default', balanced: 'the iOS and tvOS app default', speed: 'the Mac default' }[optimize]}${budget}`]);
   }
+  for (const [label, key, success] of [
+    ['agent proof: development iOS', 'agent_development_ios_failed', 'Hello built'],
+    ['agent proof: production macOS', 'agent_production_macos_failed', 'Hello built'],
+    ['agent proof: development macOS', 'agent_development_macos_failed', 'Hello built'],
+    ['agent proof: production omits it', 'agent_symbol_proof_failed', 'iOS and macOS symbols checked'],
+  ]) rows.push([label, out[key] ? 'FAILED' : 'passed', out[key] ?? success]);
   rows.push(['macOS: touch one line, rebuild', out.macos_touch_failed ? 'FAILED' : s(out.macos_touch_s), out.macos_touch_failed ?? `host/apple/src/host.rs; budget ${budget('Touch one line')}`]);
   // The JS target's bytes, gated (LLP 1047.002 D5), then LLP 1047 D9: each app's wasm, and its code by capability (KiB of code).
   for (const [name, m] of Object.entries(out.web_js_bytes ?? {})) rows.push(jsTargetRow(name, m));

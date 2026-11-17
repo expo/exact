@@ -86,6 +86,7 @@ mod tests {
     #[test]
     fn only_the_packages_own_file_is_read() {
         let dir = std::env::temp_dir().join(format!("exact-confined-{}", std::process::id()));
+        let _cleanup = crate::TestPath(dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         let (package, outside) = (dir.join("pkg"), dir.join("app"));
         std::fs::create_dir_all(package.join("assets")).unwrap();

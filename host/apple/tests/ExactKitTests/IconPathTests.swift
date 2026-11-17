@@ -205,10 +205,7 @@ final class IconPathTests: XCTestCase {
         p.viewport.layer.render(in: ctx)
         #else
         p.viewport.layoutSubtreeIfNeeded()
-        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: w, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-                                                 isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: w * 4, bitsPerPixel: 32))
-        rep.size = p.viewport.bounds.size
-        Capture.draw(p.viewport, to: rep) // as IconShapeMacTests captures C1's layers
+        let rep = try XCTUnwrap(Capture.picture(of: p.viewport, scale: scale))
         let cg = try XCTUnwrap(rep.cgImage)
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: w))
         #endif

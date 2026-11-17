@@ -1,0 +1,103 @@
+{
+  "overlap": {
+    "ops": [{ "op": "midi", "ops": [
+      { "op": "send", "id": 1, "output": "synth", "data": [144, 60, 100], "at": 100 },
+      { "op": "send", "id": 2, "output": "synth", "data": [128, 60, 0], "at": 500 },
+      { "op": "retract", "id": 2 },
+      { "op": "send", "id": 3, "output": "synth", "data": [128, 60, 0], "at": 200 },
+      { "op": "send", "id": 4, "output": "synth", "data": [144, 60, 100], "at": 200 },
+      { "op": "send", "id": 5, "output": "synth", "data": [128, 60, 0], "at": 600 }
+    ] }],
+    "clock": 0
+  },
+  "late": {
+    "ops": [{ "op": "midi", "ops": [
+      { "op": "send", "id": 1025, "output": "synth", "data": [144, 61, 100], "at": 250 },
+      { "op": "send", "id": 1026, "output": "synth", "data": [128, 61, 0], "at": 300 },
+      { "op": "send", "id": 1027, "output": "synth", "data": [144, 60, 100], "at": 100 },
+      { "op": "send", "id": 1028, "output": "synth", "data": [128, 60, 0], "at": 180 }
+    ] }],
+    "clock": 200
+  },
+  "short": {
+    "scheduled": {
+      "ops": [{ "op": "midi", "ops": [
+        { "op": "send", "id": 1, "output": "synth", "data": [144, 60, 100], "at": 100 },
+        { "op": "send", "id": 2, "output": "synth", "data": [128, 60, 0], "at": 180 }
+      ] }],
+      "clock": 0
+    },
+    "freeze": { "ops": [], "clock": 150, "freeze": true }
+  },
+  "clock": {
+    "scheduled": {
+      "ops": [{ "op": "midi", "ops": [
+        { "op": "send", "id": 1, "output": "synth", "data": [250], "at": 0 },
+        { "op": "send", "id": 2, "output": "synth", "data": [248], "at": 0 },
+        { "op": "send", "id": 3, "output": "synth", "data": [248], "at": 20.833333333333332 },
+        { "op": "send", "id": 4, "output": "synth", "data": [248], "at": 41.666666666666664 },
+        { "op": "send", "id": 5, "output": "synth", "data": [248], "at": 62.5 },
+        { "op": "send", "id": 6, "output": "synth", "data": [248], "at": 83.33333333333333 },
+        { "op": "send", "id": 7, "output": "synth", "data": [248], "at": 104.16666666666669 },
+        { "op": "send", "id": 8, "output": "synth", "data": [248], "at": 125 },
+        { "op": "send", "id": 9, "output": "synth", "data": [248], "at": 145.83333333333334 },
+        { "op": "send", "id": 10, "output": "synth", "data": [248], "at": 166.66666666666666 },
+        { "op": "send", "id": 11, "output": "synth", "data": [248], "at": 187.5 },
+        { "op": "send", "id": 12, "output": "synth", "data": [248], "at": 208.33333333333337 },
+        { "op": "send", "id": 13, "output": "synth", "data": [248], "at": 229.16666666666663 }
+      ] }],
+      "clock": 0
+    },
+    "freeze": {
+      "ops": [{ "op": "midi", "ops": [
+        { "op": "retract", "id": 12 },
+        { "op": "retract", "id": 13 },
+        { "op": "send", "id": 14, "output": "synth", "data": [252], "at": 187.5 }
+      ] }],
+      "clock": 150,
+      "freeze": true
+    }
+  },
+  "sound": {
+    "scheduled": {
+      "ops": [{ "op": "sound", "ops": [
+        { "op": "haptic", "id": 1, "kind": "impact-light", "at": 100 },
+        { "op": "play", "id": 1, "sound": 0, "at": 100, "gain": 1 }
+      ] }],
+      "clock": 0
+    },
+    "freeze": { "ops": [], "clock": 150, "freeze": true }
+  },
+  "standalone": {
+    "scheduled": {
+      "ops": [
+        { "op": "exit", "id": 4, "css": "10s linear 0s 1 normal both running leave" },
+        { "op": "destroy", "id": 4 },
+        { "op": "command", "name": "haptic", "args": ["impact-light"], "source": 2 },
+        { "op": "sound", "ops": [
+          { "op": "play", "id": 1, "sound": 0, "at": 120, "gain": 1 }
+        ] },
+        { "op": "midi", "ops": [
+          { "op": "send", "id": 1, "output": "synth", "data": [144, 64, 100], "at": 120 },
+          { "op": "send", "id": 2, "output": "synth", "data": [128, 64, 0], "at": 280 }
+        ] }
+      ],
+      "clock": 100
+    },
+    "freeze": { "ops": [], "clock": 150, "freeze": true },
+    "resume": { "ops": [], "clock": 200 },
+    "fresh": {
+      "ops": [
+        { "op": "command", "name": "haptic", "args": ["impact-light"], "source": 2 },
+        { "op": "sound", "ops": [
+          { "op": "play", "id": 2, "sound": 0, "at": 220, "gain": 1 }
+        ] },
+        { "op": "midi", "ops": [
+          { "op": "send", "id": 3, "output": "synth", "data": [144, 64, 100], "at": 220 },
+          { "op": "send", "id": 4, "output": "synth", "data": [128, 64, 0], "at": 380 }
+        ] }
+      ],
+      "clock": 200
+    }
+  }
+}

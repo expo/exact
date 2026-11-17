@@ -271,6 +271,9 @@ public final class HeadlessSession {
         return try pump(at: now)
     }
 
+    /// Re-read an imported companion snapshot and invalidate its readers.
+    public func storeChanged() throws -> Snapshot { try turn { core.runtime.storeChanged() } }
+
     /// Drain ready replies and lay out their store changes: a live host's answer to its wake.
     @discardableResult
     public func pump(at now: Double) throws -> Snapshot {
@@ -446,10 +449,7 @@ public final class HeadlessSession {
             case .children: nodes[op.id]?.children = op.ids
             case .paragraph: nodes[op.id]?.inline = op.runs
             case .frame: nodes[op.id]?.frame = CGRect(x: op.x, y: op.y, width: op.w, height: op.h)
-            case .fieldContent:
-                if let r = op.payload["rect"] as? [Double], r.count == 4 {
-                    nodes[op.id]?.content = CGRect(x: r[0], y: r[1], width: r[2], height: r[3])
-                } else { nodes[op.id]?.content = nil }
+            case .fieldContent: nodes[op.id]?.content = op.contentRect
             case .flow:
                 nodes[op.id]?.flow = (op.payload["shapes"] as? [[String: Any]] ?? []).compactMap(TextFlowShape.init)
             // A motion property's presentation value: `opacity` is a static

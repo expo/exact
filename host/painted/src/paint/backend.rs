@@ -79,9 +79,10 @@ pub trait Backend {
         Err("this painter cannot present to a CAMetalLayer".into())
     }
     /// Copy the last compose target, without another paint or resize in between.
+    /// False means no retained frame is available.
     #[cfg(target_os = "macos")]
-    fn repeat_apple_frame(&mut self) -> Result<(), String> {
-        Err("this painter has no retained Metal frame".into())
+    fn repeat_apple_frame(&mut self) -> Result<bool, String> {
+        Ok(false)
     }
     /// A lost device whose carrier can present CPU pixels without that device.
     fn lost_device_needs_cpu(&self) -> bool {
@@ -116,6 +117,11 @@ pub trait Backend {
     fn displayed_process_ms(&self) -> Result<Option<f64>, String> {
         Ok(None)
     }
+    /// The swap chain's present statistics, when the device presents directly.
+    #[cfg(windows)]
+    fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
+        None
+    }
     /// Attach the carrier's owned window when the device can present directly.
     #[cfg(windows)]
     fn attach_window(
@@ -142,8 +148,8 @@ pub trait Backend {
     /// A new frame of this size in points at this scale, cleared to the
     /// page's colour ([`Backend::page`]; white until one is told).
     fn begin(&mut self, width: f32, height: f32, scale: f32);
-    /// Release idle renderer storage on memory pressure or backgrounding.
-    fn trim(&mut self) {}
+    /// Release idle renderer storage, keeping the visible frame unless hidden.
+    fn trim(&mut self, _hidden: bool) {}
     /// Storage from a presented frame after its last reader releases it.
     fn recycle_frame(&mut self, _pixels: Pixmap) {}
     /// Seed a clipped repaint from an accepted frame; false means full repaint.
@@ -222,6 +228,10 @@ pub trait Backend {
     /// Whether this backend places a CPU island: the walk makes none it
     /// would not (a text stroke's band).
     fn supports_island_image(&self) -> bool;
+    /// Whether an island can blend with previously painted pixels.
+    fn supports_blend(&self) -> bool {
+        true
+    }
     /// An SVG island's pixels over `dst` in `ts`'s space, blended by `mode`.
     fn island_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4, ts: Transform, mode: u8);
     /// Draw through a row-major projective matrix until `plane_end`. A backend
@@ -385,6 +395,14 @@ pub trait Backend {
     }
     /// The layer ends.
     fn layer_end(&mut self) {}
+    /// Shared-element identity and engine progress, before this frame's destroys.
+    fn shared_frame(&mut self, _state: &super::SharedState) {}
+    /// Keep this live subtree apart from its normal slot on a native reader.
+    fn shared_begin(&mut self, _element: &super::SharedElement<'_>) -> bool {
+        false
+    }
+    /// Finish a named live subtree.
+    fn shared_end(&mut self) {}
     /// The last frame's (encode + render, readback) milliseconds, on a
     /// backend that has them.
     fn last_frame_ms(&self) -> Option<(f64, f64)> {
@@ -401,7 +419,7 @@ impl super::Painter {
         self.backend.attach_apple_layer(layer)
     }
     #[cfg(target_os = "macos")]
-    pub(crate) fn repeat_apple_frame(&mut self) -> Result<(), String> {
+    pub(crate) fn repeat_apple_frame(&mut self) -> Result<bool, String> {
         self.backend.repeat_apple_frame()
     }
     pub(crate) fn lost_device_needs_cpu(&self) -> bool {
@@ -432,6 +450,10 @@ impl super::Painter {
         self.backend.displayed_process_ms()
     }
     #[cfg(windows)]
+    pub(crate) fn present_statistics(&self) -> Option<exact_ink::device::d3d11::PresentStatistics> {
+        self.backend.present_statistics()
+    }
+    #[cfg(windows)]
     pub(crate) fn attach_window(
         &mut self,
         window: exact_ink::device::d3d11::Window,
@@ -440,9 +462,13 @@ impl super::Painter {
         self.backend.attach_window(window, size)
     }
 
-    /// Release idle renderer storage while preserving kept rows.
-    pub fn trim(&mut self) {
-        self.backend.trim();
+    /// Release rebuildable drawing storage on memory pressure or while hidden.
+    /// Keep the accepted content picture until its replacement is published.
+    pub fn trim(&mut self, hidden: bool) {
+        // Rows must release their texture pins before the backend trims its images.
+        self.discard_rows();
+        self.damage.pixels = None;
+        self.backend.trim(hidden);
     }
 }
 

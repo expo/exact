@@ -1,7 +1,7 @@
 import { writePrivacyManifest, privacyManifestForBinaries, privacyAPIManifest } from './privacy.mjs';
 // The app's icon and asset catalog, from its manifest, for an Apple bundle
 // (host/apple/build.mjs assembles it).
-import { spawnSync } from './toolchain.mjs';
+import { spawnSync, WATCH_MINIMUM_OS } from './toolchain.mjs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve, isAbsolute } from 'node:path';
@@ -283,8 +283,8 @@ export function iosAssets(app, dir, device, options = {}) {
   return appleAssets(app, dir, { ...options, device, platform: options.tv ? 'tvos' : 'ios' });
 }
 export function appleAssets(app, dir, { platform = 'macos', device = false, catalog = false, requireIcon = catalog, kept = null, expected, expectedLaunchImage, icons = [], launch = 'system' } = {}) {
-  // tvOS takes the manifest's iOS section; the watch app's deployment target is watch.mjs's.
-  const minimum = platform === 'watchos' ? '10.0' : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
+  // tvOS takes the manifest's iOS section.
+  const minimum = platform === 'watchos' ? WATCH_MINIMUM_OS : app.manifest.host?.[platform === 'tvos' ? 'ios' : platform]?.minimumOS ?? (platform === 'macos' ? '14.0' : '17.0');
   const catalogs = appleAssetCatalogInventory({ ...app, appleIcons: icons }, platform);
   const selected = catalogs.find(entry => entry.path.endsWith('.icon'));
   if (expected !== undefined && JSON.stringify(catalogs) !== JSON.stringify(expected))
@@ -560,7 +560,9 @@ export const macReleaseEntitlements = (compat, widgets = {}) => {
   const names = compat?.reach?.entitlements ?? [];
   // An https auth callback's `webcredentials:` domain (LLP 1069.006 D2),
   // which a Developer ID build signs only with a profile that grants it.
-  const domains = compat?.reach?.auth?.associatedDomains ?? [];
+  // The domains the profile signed (`widgets`: the links' too, LLP 1038 D8) stay, as signed.
+  const signed = widgets['com.apple.developer.associated-domains'] ?? [], named = new Set(signed.map((d) => d.split('?')[0]));
+  const domains = [...signed, ...(compat?.reach?.auth?.associatedDomains ?? []).filter((d) => !named.has(d.split('?')[0]))];
   if (!names.length && !domains.length && !Object.keys(widgets).length) return null;
   return plistFile({ ...widgets, ...Object.fromEntries(names.map((name) => [name, true])),
     ...(domains.length ? { 'com.apple.developer.associated-domains': domains } : {}) });
@@ -569,7 +571,9 @@ export const macReleaseEntitlements = (compat, widgets = {}) => {
 /** The keys a macOS provisioning profile authorizes (presence.mjs `macProfileEntitlements`). */
 export const PROFILE_KEYS = ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups',
   'com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment', 'com.apple.developer.declared-age-range',
-  'com.apple.developer.associated-domains'];
+  'com.apple.developer.associated-domains', 'com.apple.developer.group-session', 'com.apple.developer.applesignin',
+  'com.apple.developer.in-app-payments', 'com.apple.developer.ubiquity-kvstore-identifier', 'com.apple.developer.sensitivecontentanalysis.client',
+  'com.apple.developer.icloud-services', 'com.apple.developer.icloud-container-identifiers', 'com.apple.developer.icloud-container-environment'];
 
 /** Of `bundle`'s signed entitlements, those a profile authorizes; `signed`: its entitlements as a plist (a test's). */
 export function profileEntitlements(bundle, signed = run('codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', stdio: 'pipe' }).stdout) {
@@ -630,39 +634,62 @@ export function helperEntitlements(bundle, manifest, compat, order) {
   return signed;
 }
 
-/** The release's signature walk: every path `signingOrder` names, innermost
- *  first, with `identity`, the hardened runtime and `timestamp`. The app
- *  carries `macReleaseEntitlements`, each helper a runtime grant names its
- *  own (`helperEntitlements`), and a widget extension keeps its signing entitlements. The plists
- *  are written into `scratch`. */
-export function signRelease(bundle, { compat, manifest, identity, id, scratch, timestamp = ['--timestamp'] }) {
+/** The release's signature walk: every path `signingOrder` names, innermost first, with `identity`, the hardened
+ *  runtime (unless `hardened` is false: an ad hoc store build's, LLP 1030.005 D4) and `timestamp`. The app carries
+ *  `macReleaseEntitlements`, a helper a runtime grant names its own (`helperEntitlements`), and an app extension
+ *  (widgets, share) the entitlements its build signed. A Mac App Store build (`store`, LLP 1030.005 D1) signs the app
+ *  with the bake's sandbox entitlements too, and every other executable with `app-sandbox` and `inherit` alone (Apple,
+ *  "Embedding a helper tool in a sandboxed app"). The plists are written into `scratch`. Returns the signing order. */
+export function signRelease(bundle, { compat, manifest, identity, id, scratch, timestamp = ['--timestamp'], store = false, hardened = true }) {
   const order = signingOrder(bundle, compat, identity);
   const plists = helperEntitlements(bundle, manifest, compat, order);
   const info = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(bundle, 'Contents/Info.plist')], { encoding: 'utf8', stdio: 'pipe' }).stdout);
-  const widgets = info.ExactAppGroup ? { 'com.apple.security.application-groups': [info.ExactAppGroup] } : {};
+  // The widgets' group, or a share-only app's: the app reads the extension's inbox there (LLP 1133.024 D4).
+  const group = info.ExactAppGroup ?? info.ExactShareGroup;
+  const widgets = group ? { 'com.apple.security.application-groups': [group] } : {};
   if (info.ExactAppGroup && existsSync(resolve(bundle, 'Contents/embedded.provisionprofile'))) {
     if (!info.ExactKeychainAccessGroup) throw new Error('Mac widget profile has no restricted Keychain group in the app plist');
     Object.assign(widgets, { 'keychain-access-groups': [info.ExactKeychainAccessGroup],
       'com.apple.application-identifier': info.ExactKeychainAccessGroup,
       'com.apple.developer.team-identifier': info.ExactAppGroup.split('.')[0] });
   }
-  const extension = resolve(bundle, 'Contents/PlugIns/ExactWidgets.appex');
-  if (info.ExactAppGroup && existsSync(extension)) {
+  for (const name of ['ExactWidgets', 'ExactShare']) {
+    const extension = resolve(bundle, `Contents/PlugIns/${name}.appex`);
+    if (!existsSync(extension)) continue;
     const signed = run('codesign', ['-d', '--entitlements', '-', '--xml', extension], { encoding: 'utf8', stdio: 'pipe' }).stdout;
-    if (!signed?.includes('<plist')) throw new Error('Mac widget extension has no entitlements to preserve');
+    if (!signed?.includes('<plist')) throw new Error(`Mac ${name} extension has no entitlements to preserve`);
     plists.set(extension, signed);
   }
   // What the build signed under its embedded macOS profile (LLP 1133.010 D7), kept as the build chose it.
   if (existsSync(resolve(bundle, 'Contents/embedded.provisionprofile'))) Object.assign(widgets, profileEntitlements(bundle));
+  if (store) {
+    Object.assign(widgets, Object.fromEntries((compat?.reach?.sandboxEntitlements ?? []).map((key) => [key, true])));
+    const helper = plistFile({ 'com.apple.security.app-sandbox': true, 'com.apple.security.inherit': true });
+    for (const path of order) {
+      if (path === bundle || plists.has(path) || /\.appex\//.test(path)) continue;
+      if (path.endsWith('.app') || (!NESTED_BUNDLE.test(path) && machOType(path) === 2)) plists.set(path, helper);
+    }
+  }
   const own = macReleaseEntitlements(compat, widgets);
   if (own) plists.set(bundle, own);
   let n = 0;
   for (const path of order) {
     const plist = plists.get(path), file = plist && resolve(scratch, `entitlements-${n++}.plist`);
     if (plist) writeFileSync(file, plist);
-    run('codesign', ['--force', '--sign', identity, '--options', 'runtime', ...timestamp,
+    run('codesign', ['--force', '--sign', identity, ...(hardened ? ['--options', 'runtime'] : []), ...timestamp,
       ...(path === bundle ? ['--identifier', id] : []), ...(plist ? ['--entitlements', file] : []), path]);
   }
+  return order;
+}
+
+/** Each signature in `order` (a bundle's `signingOrder`) as `{ path, entitlements }`, the entitlements as JSON;
+ *  `read(path)` gives a signature's entitlements plist (a test's). */
+export function signedEntitlements(order, read = (path) => run('codesign', ['-d', '--entitlements', '-', '--xml', path], { encoding: 'utf8', stdio: 'pipe' }).stdout) {
+  return order.map((path) => {
+    const signed = read(path);
+    const entitlements = signed?.includes('<plist') ? JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', '-'], { input: signed, encoding: 'utf8', stdio: 'pipe' }).stdout) : {};
+    return { path, entitlements };
+  });
 }
 
 /** The folder of an iOS or tvOS bundle that holds the trees `host.ios.resources`
@@ -685,6 +712,28 @@ export function iosExecutableRefusal(manifest, name, key = 'app.name') {
 /** The trees every Apple bundle gets from the build's capture (`copyAppleStaticTrees`):
  *  under the Mac's `Contents/Resources`, at the top of an iOS bundle. */
 export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities'];
+
+/** Normal simulator launches read the installed bundle. Copy an explicit override into the drive's temporary
+ * directory, dereferencing symlinks so its reads stay outside protected checkout paths. Live dev generations
+ * deliver their own asset bytes through the dev connection, independently of this launch generation. */
+export function simulatorAssetRoot(installed, source, stage) {
+  if (!source) return installed;
+  cpSync(resolve(source), resolve(stage), { recursive: true, dereference: true });
+  return stage;
+}
+
+/** ExactDevelopmentPlan reads the plan, its JavaScript pair and Rust replacements beside it. Copy those bytes
+ * outside protected user folders for each drive, including a bake selected after a plan-only edit. */
+export function simulatorPlanPath(source, stage) {
+  const root = dirname(resolve(source));
+  mkdirSync(stage, { recursive: true });
+  copyFileSync(source, resolve(stage, basename(source)));
+  for (const name of ['app.module.json', 'app.hbc', 'rust']) {
+    if (existsSync(resolve(root, name)))
+      cpSync(resolve(root, name), resolve(stage, name), { recursive: true, dereference: true });
+  }
+  return resolve(stage, basename(source));
+}
 
 /** What the Mac build writes under `Contents/Resources` (bundle.mjs, intents.mjs) beside
  *  the trees an app declares, which may not take one of these places; and a

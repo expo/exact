@@ -24,7 +24,7 @@ app.json      { "name": "Notes", "id": "com.example.notes",
                 "app": { "id": "com.example.notes", "name": "Notes" },
                 "shortcuts": [{ "name": "New note", "url": "/" }] }
 
-app.tamber    tamber t
+app.forma    forma t
 
               theme
                 page = #fafafa
@@ -47,7 +47,7 @@ app.contract  use setAppShortcuts, ShortcutItem from "@exact/quick-actions"
                     text "a" color="ink"
 ```
 
-Under `bun host/web/dev.mjs --app <dir>`, three saves of `app.tamber`:
+Under `bun host/web/dev.mjs --app <dir>`, three saves of `app.forma`:
 
 | `edge` | the loop says |
 |---|---|
@@ -55,13 +55,13 @@ Under `bun host/web/dev.mjs --app <dir>`, three saves of `app.tamber`:
 | `#abcdef` to `#abcde0` | `edit → batch ready 69 ms (design read in 63 ms, no build) · 1 token to 0 pages, no reload` |
 | `#abcde0` to `#fafafa` | `edit → building`, then `edit → plan ready 360 ms (rebuilt in 353 ms) · 0 pages reloading` |
 
-Expected: a batch each time. LLP 1121 D13: "saving a value change in `app.tamber` is a live-table edit too". Without `shortcuts` in `app.json`, the first save is a batch.
+Expected: a batch each time. LLP 1121 D13: "saving a value change in `app.forma` is a live-table edit too". Without `shortcuts` in `app.json`, the first save is a batch.
 
 ## Verification
 
 Ran the dev loop as above, with and without `shortcuts`. Its design reader alone (`exact-web-js design app.contract -`, the design on stdin) gives `structure` `dc6e88b6…` for `edge = #fafafa` and `#111111`, and `7e7d469d…` for `#abcdef` and `#abcde0`; without `shortcuts`, one value for all four.
 
-A hatch word in `app.json` that the Contract does not name moves the structure the same way; one the Contract names does not, since the pool holds it before the values. So `apps/tamber-host`, the one app in the tree with design values and a hatch word, is unaffected (run: its structure holds when `page` takes `swatch.fill`'s value).
+A hatch word in `app.json` that the Contract does not name moves the structure the same way; one the Contract names does not, since the pool holds it before the values. So `apps/forma-host`, the one app in the tree with design values and a hatch word, is unaffected (run: its structure holds when `page` takes `swatch.fill`'s value).
 
 Not run: a purchases catalogue, a tool's face, a package view, and a scrub. By reading, the compile that verifies a scrub's patched frame compares the same field (`dev.mjs:833`) and ends the scrub as a mismatch.
 
@@ -71,4 +71,4 @@ Make `structure` independent of the ids: write each `str` field as its rank amon
 
 ## Related
 
-No issue, `QUEUE.md` entry or pitfall names `structure`. `contract/cli/tests/it/tamber.rs:1167` covers the same edit for an app with no `app.json`.
+No issue, `QUEUE.md` entry or pitfall names `structure`. `contract/cli/tests/it/forma.rs:1167` covers the same edit for an app with no `app.json`.

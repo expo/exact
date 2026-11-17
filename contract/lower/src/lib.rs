@@ -70,6 +70,7 @@ mod popover_surface;
 mod resource_args;
 mod roles;
 mod root_names;
+mod route_parts;
 mod routes;
 mod row_look;
 mod scale;
@@ -101,6 +102,7 @@ pub mod warning_rank;
 pub use shorthands::style_values;
 pub mod vocab;
 mod warnings;
+mod zoom;
 
 pub use dataset::{data_words, hatch_words};
 pub use error::LowerError;
@@ -114,7 +116,7 @@ pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
 pub use states::PRESS_OPACITY_TO;
 pub use swipe_rows::expand_row_deletes;
-pub use theme::vocab as tamber_vocab;
+pub use theme::vocab as forma_vocab;
 
 /// The base scale's names (LLP 1121 stage 11, the lead's ruling 2).
 pub const BASE_SCALE: [&str; 9] = theme::packages::BASE;
@@ -129,25 +131,25 @@ pub fn package_line(line: u32) -> Option<(usize, u32)> {
 /// as the build folds them (LLP 1121 D11); what it refuses of them is the
 /// build's to say.
 pub fn with_package_designs(
-    design: Option<exact_tamber::Design>,
+    design: Option<exact_forma::Design>,
     packages: &[contract_syntax::DesignSource],
-) -> Option<exact_tamber::Design> {
+) -> Option<exact_forma::Design> {
     theme::packages::merge(design, packages).0
 }
 
 /// [`with_package_designs`], and what the build refuses of the packages'
 /// designs before the fold (each at its line in its file).
 pub fn join_package_designs(
-    design: Option<exact_tamber::Design>,
+    design: Option<exact_forma::Design>,
     packages: &[contract_syntax::DesignSource],
-) -> (Option<exact_tamber::Design>, Vec<LowerError>) {
+) -> (Option<exact_forma::Design>, Vec<LowerError>) {
     theme::packages::merge(design, packages)
 }
 
 /// What the build refuses of a folded joined design's package tokens: a
 /// name, a pair or a dial that isn't theirs to name (LLP 1121 D11).
 pub fn package_references(
-    folding: &exact_tamber::Folding,
+    folding: &exact_forma::Folding,
     packages: &[contract_syntax::DesignSource],
     all: &[params::ParamToken],
     identities: &[String],
@@ -170,8 +172,7 @@ pub use theme::retained::{
     before_view, first_refusal, offer_design_scan, retention_only, take_design_scan,
     with_design_scan, DesignScan,
 };
-pub use theme::rows;
-pub use theme::{retention, synthetic_candidates};
+pub use theme::{retention, rows, synthetic_candidates};
 pub use warnings::{warnings, MAX_WARNINGS};
 
 use contract_analyze::Analysis;
@@ -186,6 +187,19 @@ use exact_plan::{
 };
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// A test's file or directory, removed when dropped (on a panic too).
+#[cfg(test)]
+pub(crate) struct TestPath(pub std::path::PathBuf);
+
+#[cfg(test)]
+impl Drop for TestPath {
+    fn drop(&mut self) {
+        if std::fs::remove_dir_all(&self.0).is_err() {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}
 
 /// A row the compiler implies, which no author wrote (LLP 1115.000 D2): a
 /// tag's fixed row, a heading's style, a sheet's row, one derived from
@@ -249,7 +263,7 @@ pub(crate) struct Lowerer<'a> {
     pub(crate) atoms: BTreeMap<String, atoms::Declared>,
     pub atom_scopes: BTreeMap<u32, Vec<(String, String)>>,
     /// The `keyframes` declarations, by name, with what each animates (LLP 1055 D5).
-    pub keyframes: BTreeMap<String, Vec<exact_motion::Property>>,
+    pub keyframes: BTreeMap<String, exact_motion::Keyframes>,
     /// The file's `fn` declarations, by name, expanded inline at each call
     /// (LLP 1017 P5), each with its body's repeated calls bound once.
     pub fns: BTreeMap<&'a str, (&'a FnDecl, &'a Expr)>,
@@ -380,7 +394,10 @@ pub fn lower_all(
     }
     let (mut asset_errors, asset_warnings) = asset_root
         .filter(|_| !theme::retained::stops_at_retention())
-        .map(|root| bundled::check(&checked.expanded.root.view, root))
+        .map(|root| {
+            let checking = contract_checking::Checking::new(checked);
+            bundled::check(&checking.expanded(), root)
+        })
         .unwrap_or_default();
     let mut text_styles = warnings::TextStyles::new();
     let result = lower_with_sites(
@@ -597,7 +614,8 @@ fn lower_body(
                 None => {
                     let hint = (name.is_empty() && !a.name.is_empty())
                         .then(|| "; the press's opacity is `opacity` in an `:active` part (LLP 1121 D8)".to_string())
-                        .or_else(|| fields::placeholder_hint(&a.name))
+                        .or_else(|| fields::part_hint(&a.name))
+                        .or_else(|| route_parts::hint(&a.name))
                         .or_else(|| lint::css_hint(&a.name))
                         .or_else(|| tags::renamed(&a.name).map(|n| {
                             if n.starts_with(":active ") { lint::active_migration_hint(&a.name, n) }
@@ -701,7 +719,7 @@ fn lower_body(
         let code = l.expr_code(&d.expr, &scope, 0)?;
         l.b.set_derive_body(l.derives[i], code);
     }
-    l.resource_args(root, &scope)?;
+    l.resource_args(root, &ex.resource_owners, &scope)?;
     // @ref LLP 1048.003 D6 — a declared placeholder is a row of its own,
     // after every authored row; its arguments read no state.
     for (i, r) in root.resources.iter().enumerate() {
@@ -831,6 +849,8 @@ fn lower_body(
         // Row slots name regions a refused element may not have lowered.
         return Err(Vec::new());
     }
+    l.owned_resource_args(root, ex, &scope)?;
+    l.owned_mutations(root, ex, &scope)?;
     // Child state (LLP 1017 P4c): each lifted state is initialized where its
     // instance is created — in its owning arm's scope, now that the arms
     // exist, or, for a use outside every region, at the boot render.
@@ -1193,7 +1213,7 @@ impl<'a> Lowerer<'a> {
             );
         }
         if let Some(why) = shorthands::text_box_trim_refusal(&a.name, tag, module)
-            .or_else(|| fields::placeholder_refusal(&a.name, tag, control))
+            .or_else(|| fields::part_refusal(&a.name, tag, control))
         {
             return err("lower-attr-tag", why, a.span);
         }
@@ -1296,6 +1316,7 @@ impl<'a> Lowerer<'a> {
                 }
             }
             tags::AttrTarget::Styles(rows) => {
+                let a = &*values::fallback_tokens(a, rows)?;
                 if rows == [StyleId::FontFamily] {
                     if self.family_token(a, scope, locals, bindings)? {
                         return Ok(());
@@ -1338,6 +1359,8 @@ impl<'a> Lowerer<'a> {
                             StyleId::Transition
                                 | StyleId::Animation
                                 | StyleId::ExitAnimation
+                                | StyleId::ViewTransitionNew
+                                | StyleId::ViewTransitionOld
                                 | StyleId::LayoutTransition
                         )
                     })
@@ -1351,7 +1374,10 @@ impl<'a> Lowerer<'a> {
                     .or_else(|| values::grid_tokens(a, rows).map(|g| vec![g]));
                 let a = written.as_ref().map_or(a, |m| &m[0]);
                 let (code, ty) = self.typed_code(&a.value, scope, locals)?;
-                self.check_style(a, rows, &ty, font, scope)?;
+                let pressed = rows
+                    .contains(&StyleId::PressTranslate)
+                    .then(|| crate::lint::press_translation_arms(a, self.root, scope));
+                self.check_style(pressed.as_ref().unwrap_or(a), rows, &ty, font, scope)?;
                 for &row in rows {
                     bindings.push(style_row(row, code, a.written));
                 }

@@ -16,19 +16,20 @@
 // with the authored one and a moving parent carries it. A size change is the
 // surface's alone, as native frame animation shows it: the element keeps its
 // laid-out box, so its content and children never scale, and a stand-in
-// behind it (the element's background, border, radius and shadow, which it
-// stops painting for the while) grows or shrinks from its top-left corner;
-// an element that clips its children clips them to the shown box. A spring
-// is lowered here, per move, from its displacement and velocity in points,
-// on the grid and rest threshold the engine settles on natively
-// (`exact_motion::spring`).
+// behind it (the element's background, border, radius, shadow and backdrop
+// filter, which it stops painting for the while) grows or shrinks from its
+// top-left corner; an element that clips its children clips them to the
+// shown box. A spring is lowered here, per move, from its displacement and
+// velocity in points, on the grid and rest threshold the engine settles on
+// natively (`exact_motion::spring`).
 import { unwrapListItem, viewParent } from './navigation.js';
 import { translation } from './motion-glue.js';
 const LAYOUT = '--exact-layout-transition';
 const PAINT = ['backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundPosition', 'backgroundRepeat', 'backgroundOrigin', 'backgroundClip',
-  'borderTop', 'borderRight', 'borderBottom', 'borderLeft', 'borderRadius', 'boxShadow', 'opacity', 'translate', 'rotate', 'scale', 'transform', 'transformOrigin'];
+  'borderTop', 'borderRight', 'borderBottom', 'borderLeft', 'borderRadius', 'boxShadow', 'backdropFilter', 'opacity', 'translate', 'rotate', 'scale', 'transform',
+  'transformOrigin'];
 const CLEAR = { backgroundColor: 'transparent', backgroundImage: 'none', borderTopColor: 'transparent', borderRightColor: 'transparent',
-  borderBottomColor: 'transparent', borderLeftColor: 'transparent', boxShadow: 'none' };
+  borderBottomColor: 'transparent', borderLeftColor: 'transparent', boxShadow: 'none', backdropFilter: 'none' };
 
 // A 2D matrix of an element's own transforms about its origin, from its
 // computed style: `translate`, `rotate`, `scale`, then `transform`. Its
@@ -56,6 +57,91 @@ function paint(box, el, cs) {
   if (cs.translate === 'none') return;
   const [x, y] = translation(el, cs.translate, cs), z = cs.translate.match(/calc\([^)]*\)|\S+/g)?.[2];
   box.style.translate = `${x}px ${y}px${z ? ` ${z}` : ''}`;
+}
+
+// Computed basic shapes keep percentages until the presented border box is known.
+// Pixel shapes work on both the final-size content and its moving stand-in.
+function shownClip(css, w, h) {
+  const match = /^(polygon|inset|circle|ellipse)\((.*)\)$/.exec(css);
+  if (!match) return css; // path() already uses CSS pixels.
+  const [, kind, body] = match;
+  const length = (v, basis) => parseFloat(v) * (v.endsWith('%') ? basis / 100 : 1);
+  const words = s => s.trim().split(/\s+/);
+  if (kind === 'polygon') {
+    const parts = body.split(',').map(s => s.trim());
+    const rule = /^(nonzero|evenodd)$/.test(parts[0]) ? parts.shift() + ', ' : '';
+    return `path(${rule}"M${parts.map(p => { const [x, y] = words(p); return `${length(x, w)} ${length(y, h)}`; }).join(' L')} Z")`;
+  }
+  if (kind === 'inset') {
+    const [edges, round = '0px'] = body.split(' round ');
+    const four = s => { const [a, b = a, c = a, d = b] = words(s); return [a, b, c, d]; };
+    let [t, r, b, l] = four(edges).map((v, i) => length(v, i % 2 ? w : h));
+    if (t + b > h) { const f = h / (t + b); t *= f; b *= f; }
+    if (l + r > w) { const f = w / (l + r); l *= f; r *= f; }
+    const iw = Math.max(0, w - l - r), ih = Math.max(0, h - t - b);
+    const [rx, ry = rx] = round.split('/');
+    const x = four(rx).map(v => length(v, w)), y = four(ry).map(v => length(v, h));
+    const f = Math.min(1, ...[x[0] + x[1], x[3] + x[2], y[0] + y[3], y[1] + y[2]].map((sum, i) => sum ? (i < 2 ? iw : ih) / sum : 1));
+    for (let i = 0; i < 4; i++) { x[i] *= f; y[i] *= f; }
+    const right = l + iw, bottom = t + ih, k = .5522847498307936;
+    return `path("M${l + x[0]} ${t} L${right - x[1]} ${t} C${right - x[1] * (1-k)} ${t} ${right} ${t + y[1] * (1-k)} ${right} ${t + y[1]}
+      L${right} ${bottom - y[2]} C${right} ${bottom - y[2] * (1-k)} ${right - x[2] * (1-k)} ${bottom} ${right - x[2]} ${bottom}
+      L${l + x[3]} ${bottom} C${l + x[3] * (1-k)} ${bottom} ${l} ${bottom - y[3] * (1-k)} ${l} ${bottom - y[3]}
+      L${l} ${t + y[0]} C${l} ${t + y[0] * (1-k)} ${l + x[0] * (1-k)} ${t} ${l + x[0]} ${t} Z")`.replace(/\s+/g, ' ');
+  }
+  const [radii, at = '50% 50%'] = body.split(/\s*at\s+/);
+  let [x, y] = words(at);
+  if (y === undefined) { if (/^(top|bottom)$/.test(x)) { y = x; x = 'center'; } else y = 'center'; }
+  else if (/^(top|bottom)$/.test(x) || /^(left|right)$/.test(y)) [x, y] = [y, x];
+  const position = (v, basis) => length(({ left: '0%', top: '0%', right: '100%', bottom: '100%', center: '50%' })[v] ?? v, basis);
+  const cx = position(x, w), cy = position(y, h);
+  const oval = (rx, ry) => `path("M${cx-rx} ${cy} A${rx} ${ry} 0 1 0 ${cx+rx} ${cy} A${rx} ${ry} 0 1 0 ${cx-rx} ${cy} Z")`;
+  const radius = (v, center, extent) => v === 'closest-side' ? Math.min(Math.abs(center), Math.abs(extent-center))
+    : v === 'farthest-side' ? Math.max(Math.abs(center), Math.abs(extent-center)) : length(v, extent);
+  const [rx = 'closest-side', ry = rx] = radii.trim() ? words(radii) : [];
+  if (kind === 'circle') {
+    const r = rx.endsWith('side') ? (rx === 'closest-side' ? Math.min : Math.max)(radius(rx, cx, w), radius(rx, cy, h))
+      : length(rx, Math.hypot(w, h) / Math.SQRT2);
+    return oval(r, r);
+  }
+  return oval(radius(rx, cx, w), radius(ry, cy, h));
+}
+
+// The content clips at the padding edge, inside the shown border and its reduced radii.
+function paddingClip(cs, w, h) {
+  const edges = ['Top', 'Right', 'Bottom', 'Left'].map(side => parseFloat(cs[`border${side}Width`]));
+  const radii = ['TopLeft', 'TopRight', 'BottomRight', 'BottomLeft'].map(corner => {
+    const [x, y = x] = cs[`border${corner}Radius`].split(' ');
+    return [x, y].map((v, i) => parseFloat(v) * (v.endsWith('%') ? (i ? h : w) / 100 : 1));
+  });
+  const f = Math.min(1, ...[radii[0][0]+radii[1][0], radii[3][0]+radii[2][0], radii[0][1]+radii[3][1], radii[1][1]+radii[2][1]]
+    .map((sum, i) => sum ? (i < 2 ? w : h) / sum : 1));
+  const x = radii.map(([r], i) => Math.max(0, r*f - edges[i === 0 || i === 3 ? 3 : 1]));
+  const y = radii.map(([, r], i) => Math.max(0, r*f - edges[i < 2 ? 0 : 2]));
+  const px = values => values.map(v => `${v}px`).join(' ');
+  return shownClip(`inset(${px(edges)} round ${px(x)} / ${px(y)})`, w, h);
+}
+
+// SVG clip paths intersect the authored outline with overflow without changing
+// the content's layout or losing clip-path's pointer hit testing.
+let clipId = 0;
+function contentClip(sf) {
+  const svg = name => document.createElementNS('http://www.w3.org/2000/svg', name);
+  const defs = svg('svg'), clip = svg('clipPath'), padding = svg('clipPath');
+  defs.style.cssText = 'position:absolute;width:0;height:0';
+  clip.id = `exact-presence-clip-${++clipId}`; padding.id = `${clip.id}-padding`;
+  const shape = svg('path'), edge = svg('path');
+  shape.setAttribute('clip-path', `url(#${padding.id})`);
+  clip.append(shape); padding.append(edge); defs.append(clip, padding); sf.stand.append(defs);
+  const set = (path, css) => {
+    const [, rule, d] = /^path\((?:(evenodd|nonzero),\s*)?["'](.*)["']\)$/.exec(css);
+    path.setAttribute('d', d); path.setAttribute('clip-rule', rule ?? 'nonzero');
+  };
+  return (css, cs, w, h) => {
+    const inner = paddingClip(cs, w, h);
+    set(shape, css === 'none' ? inner : css); set(edge, inner);
+    return `url(#${clip.id})`;
+  };
 }
 
 // The linear part (rotation, scale, skew) of a matrix.
@@ -166,6 +252,7 @@ function createPresence(root) {
     const sf = f.surface;
     if (!sf) return;
     sf.hide.effect.target = null;
+    if (sf.shape) sf.shape.effect.target = null;
     for (const [a, frames] of sf.hidden) a.effect.setKeyframes(frames);
     sf.hidden.clear();
   }
@@ -178,6 +265,14 @@ function createPresence(root) {
       f.animation.effect.target = null;
       const cs = getComputedStyle(el);
       paint(sf.box, el, cs);
+      if (sf.shape) {
+        const [w, h] = size(getComputedStyle(sf.box));
+        const clipPath = shownClip(cs.clipPath, w, h);
+        sf.box.style.clipPath = clipPath;
+        const content = sf.contentClip ? sf.contentClip(clipPath, cs, w, h) : clipPath;
+        sf.shape.effect.setKeyframes([{ clipPath: content }, { clipPath: content }]);
+        sf.shape.effect.target = el;
+      }
       if (placed) {
         const place = measure(), [x, y] = place(el, viewParent(el)), [ax, ay] = place(sf.stand, viewParent(el));
         sf.box.style.left = `${x - ax}px`; sf.box.style.top = `${y - ay}px`;
@@ -225,8 +320,8 @@ function createPresence(root) {
   // The element's surface, standing in for it behind it while its size
   // moves: a zero-size anchor before it (so the size never moves the
   // anchor, whatever its parent's alignment), and in it a box with the
-  // element's background, border, radius, shadow and own transforms, placed
-  // over the element's laid-out box. Behind its content in the parent's
+  // element's background, border, radius, shadow, backdrop filter and own
+  // transforms, placed over the element's laid-out box. Behind its content in the parent's
   // stacking context, isolated structurally by the kernel.
   function surface(el, place) {
     const cs = getComputedStyle(el), stand = document.createElement('div'), box = document.createElement('div');
@@ -237,7 +332,7 @@ function createPresence(root) {
     box.style.cssText = `position:absolute;left:${x - ax}px;top:${y - ay}px;box-sizing:border-box;margin:0`;
     paint(box, el, cs);
     stand.append(box);
-    return { stand, box, hidden: new Map(), clips: cs.overflowX !== 'visible' || cs.overflowY !== 'visible', clipPath: cs.clipPath, radius: cs.borderRadius };
+    return { stand, box, hidden: new Map(), clips: cs.overflowX !== 'visible' || cs.overflowY !== 'visible', clipPath: cs.clipPath };
   }
 
   // Play `el` back from `d` (and velocity `v`) to its laid-out box `w` × `h`.
@@ -268,11 +363,16 @@ function createPresence(root) {
         sf.stand.animate(moved, timing),
         sf.box.animate(frames(s => { const [bw, bh] = size(s); return { width: `${bw}px`, height: `${bh}px` }; }), timing),
         sf.hide);
-      // A box that clips its children clips them to the shown box.
-      if (sf.clips && sf.clipPath === 'none') {
-        parts.push(el.animate([{ overflow: 'visible' }, { overflow: 'visible' }], hold),
-          el.animate(frames(s => { const [bw, bh] = size(s); return { clipPath: `inset(0 ${w - bw}px ${h - bh}px 0 round ${sf.radius})` }; }), timing));
+      if (sf.clipPath !== 'none' || sf.clips) {
+        const [bw, bh] = size(d), clipPath = shownClip(sf.clipPath, bw, bh);
+        sf.box.style.clipPath = clipPath;
+        if (sf.clips) sf.contentClip = contentClip(sf);
+        const content = sf.contentClip ? sf.contentClip(clipPath, getComputedStyle(el), bw, bh) : clipPath;
+        sf.shape = el.animate([{ clipPath: content }, { clipPath: content }], hold);
+        parts.push(sf.shape);
       }
+      // A box that clips its children clips them to the shown box.
+      if (sf.clips) parts.push(el.animate([{ overflow: 'visible' }, { overflow: 'visible' }], hold));
       surfaces.add(el);
     }
     const f = { animation, parts, surface: sf, d, v, config };
@@ -299,17 +399,22 @@ function createPresence(root) {
     // Before a batch's ops: the place of every view that declares the row or
     // gains it here, with what it has still to go (a view that gains the row
     // moves from where it was, as a CSS transition gained with its change
-    // runs), then the leaving views, before any op moves them.
+    // runs), then the leaving views, before any op moves them. A batch that
+    // changes no tree moves no view, so none is measured: the JS target
+    // says which (`still`, rt.js `commit`), and the wasm host's then holds
+    // only its clock stamp (`at`). A view the page no longer holds is
+    // tracked no longer, whether or not the batch measures.
     before(batch, views) {
       first = new Map();
       for (const el of surfaces) reveal(flips.get(el));
+      for (const el of tracked) if (!el.isConnected) tracked.delete(el);
+      const still = batch.still ?? !batch.ops?.some(op => op.op !== 'at');
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
-      else {
+      else if (!still) {
         const place = measure();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
-          if (!el?.isConnected) { tracked.delete(el); continue; }
-          const at = place(el);
+          const at = el && place(el);
           if (at) first.set(el, [at, going(el)]);
         }
       }
@@ -414,4 +519,4 @@ function createPresence(root) {
 if (globalThis.exact) globalThis.exact.presence = createPresence;
 // A box's border-box size from its computed style, shared with geometry
 // reads' `measure` (geometry-glue.js, LLP 1051.000 D4).
-export { own, size };
+export { own, size, shownClip };

@@ -1,4 +1,7 @@
 //! Palette reports are process-wide; this test owns its process.
+#[path = "fonts/mod.rs"]
+mod test_fonts;
+
 use exact_kernel::{Color, ColorValue};
 use exact_painted::presenter::{ContrastPalette, PainterChoice};
 use exact_painted::Presenter;
@@ -15,6 +18,7 @@ fn pixel(p: &mut Presenter<()>, x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn contrast_changes_live_and_restores_both_schemes_without_replacing_literal_colors() {
+    crate::test_fonts::pin_font();
     exact_painted::app::show_neutral_look();
     let plan = contract::compile(
         r##"component App

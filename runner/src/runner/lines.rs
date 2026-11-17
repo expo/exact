@@ -6,6 +6,28 @@
 use crate::request::Request;
 use exact_num::text;
 
+impl<D: super::DataSource> super::Runner<D> {
+    /// The retained journal lines, oldest first.
+    pub fn journal(&self) -> impl Iterator<Item = &str> {
+        self.journal.iter().map(String::as_str)
+    }
+
+    /// The index (since boot) of the first retained journal line: how many
+    /// were dropped by the ring.
+    pub fn journal_start(&self) -> usize {
+        self.journal_start
+    }
+
+    /// The retained journal lines not yet echoed by the host, marked through
+    /// the current end. Lines dropped by the ring are skipped.
+    pub fn journal_echo(&self) -> impl Iterator<Item = &str> {
+        let from = self.journal_echoed.get().max(self.journal_start);
+        self.journal_echoed
+            .set(self.journal_start + self.journal.len());
+        self.journal().skip(from - self.journal_start)
+    }
+}
+
 /// A line as the journal keeps it: stamped with the clock.
 pub(super) fn stamped(now_ms: f64, line: &str) -> String {
     text!("t={} {}", crate::agent::num(now_ms), line)
@@ -67,41 +89,18 @@ pub(super) fn revalidated(resource: &str, same: bool) -> String {
     text!("{} answered: {}", resource, what)
 }
 
-/// A kept answer the first frame shows, with its identifying arguments
-/// (the first 200 characters, and `…` when there were more).
-pub(super) fn kept_shown(resource: &str, args: &str) -> String {
-    let args = shortened(args);
-    text!(
-        "{} shows its kept answer from the last session, kept for {}",
-        resource,
-        args
-    )
-}
-
-/// Arguments as a journal line shows them: the first 200 characters, and
-/// `…` when there were more.
-pub(super) fn shortened(args: &str) -> String {
-    let mut shown: String = args.chars().take(200).collect();
-    if shown.len() < args.len() {
-        shown.push('…');
-    }
-    shown
+/// A kept answer the first frame shows. Identifying values never enter the
+/// journal (LLP 1027.005 D3).
+pub(super) fn kept_shown(resource: &str) -> String {
+    text!("{} shows its kept answer from the last session", resource)
 }
 
 /// A kept answer the first frame does not show, and why (LLP 1027 D4,
-/// LLP 1027.005 D3): `kept` is what it was kept for, when it decoded.
+/// LLP 1027.005 D3).
 /// Worded as what happened, not as a refusal: a new launch identity or shape
 /// is ordinary, and `verify` counts refusals (LLP 1156.001 D2).
-pub(super) fn kept_refused(resource: &str, kept: Option<&str>, why: &str) -> String {
-    match kept {
-        Some(kept) => text!(
-            "{} did not use its kept answer: kept for {}, {}",
-            resource,
-            shortened(kept),
-            why
-        ),
-        None => text!("{} did not use its kept answer: {}", resource, why),
-    }
+pub(super) fn kept_refused(resource: &str, why: &str) -> String {
+    text!("{} did not use its kept answer: {}", resource, why)
 }
 
 /// A kept answer whose identifying arguments are not known yet (LLP
@@ -114,16 +113,31 @@ pub(super) fn kept_waiting(resource: &str) -> String {
 }
 
 /// One identifying argument a refused kept answer differs in: its 1-based
-/// position, its value, and the states and resources it reads, each with
-/// its value (LLP 1027.005 D3, 2026-11-13).
-pub(super) fn kept_argument(n: usize, value: &str, inputs: &[String]) -> String {
+/// position and the states and resources it reads (LLP 1027.005 D3).
+pub(super) fn kept_argument(n: usize, inputs: &[String]) -> String {
     if inputs.is_empty() {
-        text!("identifying argument {} is {}", n, shortened(value))
+        text!(
+            "identifying argument {} differs from the one it was kept for",
+            n
+        )
     } else {
         text!(
-            "identifying argument {} is {}, reading {}",
+            "identifying argument {} differs from the one it was kept for, reading {}",
             n,
-            shortened(value),
+            inputs.join(" and ")
+        )
+    }
+}
+
+/// One identifying argument whose value still comes from an input not known
+/// for this launch (LLP 1027.005 D3).
+pub(super) fn kept_argument_unknown(n: usize, inputs: &[String]) -> String {
+    if inputs.is_empty() {
+        text!("identifying argument {} is not yet known", n)
+    } else {
+        text!(
+            "identifying argument {} is not yet known, reading {}",
+            n,
             inputs.join(" and ")
         )
     }

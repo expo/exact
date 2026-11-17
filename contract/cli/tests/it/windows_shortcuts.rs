@@ -1,6 +1,8 @@
 //! LLP 1115.004 D9.6: in an app with a Windows host, a button chord that
 //! never presses it on Windows is a warning.
 
+use crate::scratch::Scratch;
+
 const SOURCE: &str = "component App
   view
     column
@@ -23,13 +25,11 @@ component Command
       text \"Command\"
 ";
 
-fn app(name: &str, manifest: Option<&str>) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
+fn app(name: &str, manifest: Option<&str>) -> Scratch {
+    let dir = Scratch::new(format!(
         "contract-windows-shortcuts-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("app.contract"), SOURCE).unwrap();
     if let Some(manifest) = manifest {
         std::fs::write(dir.join("app.json"), manifest).unwrap();

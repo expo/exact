@@ -66,6 +66,7 @@ extension NodeView {
         #else
         setNeedsDisplay()
         layer.setNeedsDisplay()
+        presenter?.noteOwedText(self)
         #endif
     }
 

@@ -451,7 +451,7 @@ mod tests {
                 .render(&encoder.finish(), target, Some([0.; 4]))
                 .unwrap();
             let pixels = device.readback(target).unwrap();
-            for (n, pixel) in pixels.chunks_exact(4).enumerate() {
+            for (n, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
                 assert_eq!(pixel, &[(n * 11 + frame as usize) as u8; 4]);
             }
             let stats = atlas.stats();

@@ -1,0 +1,10 @@
+4:3: forma-syntax: `under scheme=light`: an axis may be `under scheme=dark` only
+5:3: forma-syntax: an axis and its values are identifiers
+8:3: forma-syntax: a dial is `name: color|length|number = value [in low..high] [meta=…]`
+9:3: forma-syntax: `noval` has no value: a dial is `name: color|length|number = value [in low..high] [meta=…]`
+10:3: forma-syntax: `label=`: unknown escape `\q`
+13:3: forma-syntax: a token is `name = value`
+15:5: forma-syntax: a `when` is `when axis=value …: value`
+16:3: forma-syntax: a `when` is indented under its token
+17:1: forma-block: a second `theme` block: a design has one of each
+20:1: forma-block: `palette`: a block is `axes`, `dials`, `theme`, `icons`, `exports`, `params` or `component`

@@ -19,14 +19,17 @@ const check = need('chrome', unavailable);
 
 const style = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<style>[\s\S]*?<\/style>/)[0];
 const abs = 'position:absolute;inset:0;display:flex;flex-direction:column';
-// The root's routes: a page, a sheet over it, a route pushed inside that sheet, and a second sheet, whose detents
-// the test writes (as `data-navigationdetent` and `data-navigationinitialdetent`, the attributes both web targets
-// write). The page covers the window's safe areas, so an inset the test emulates reaches `env()`.
+// The root's routes: a page, a sheet over it, a route pushed inside that sheet, a second sheet, whose detents the
+// test writes (as `data-navigationdetent` and `data-navigationinitialdetent`, the attributes both web targets
+// write), then a full-screen route that paints its own ground and a sheet over it. The page covers the window's safe
+// areas, so an inset the test emulates reaches `env()`.
 const page = '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">' + style + `<div id="exact-root"><main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">
   <div navigationKey="1" id="home" style="${abs}"><header><h1>Home</h1></header></div>
   <div navigationKey="2" id="sheet" navigationPresentation="modal" style="${abs}"><header><h2>Sheet</h2></header><div id="rows" style="height:120px"></div><input id="field"></div>
   <div navigationKey="3" id="pushed" style="${abs}"><header><h2>Pushed</h2></header></div>
   <div navigationKey="4" id="over" navigationPresentation="modal" style="${abs}"><header><h2>Over</h2></header></div>
+  <div navigationKey="5" id="full" navigationPresentation="fullscreen" style="${abs};background:black"><header><h2>Full</h2></header></div>
+  <div navigationKey="6" id="top" navigationPresentation="modal" style="${abs}"><header><h2>Top</h2></header></div>
 </main></div>
 <script type="module">
   import { navigation, useSheets, sheetFrame } from './navigation.js';
@@ -171,4 +174,58 @@ check('the bottom safe area is added below every detent, a content-high one incl
   // The tallest sheet is 844 - 12 - 34 = 798 above the band: `medium` is 399 of it, 433 with the band.
   expect(await open(evaluate, 'medium large')).toEqual([411, 433]);
   expect(await open(evaluate, 'fit-content')).toEqual([844 - content - 34, content + 34]);
+}), 60000);
+
+check('each presented route is drawn above every route beneath it, sheet or full screen', () => inChrome(async (evaluate, size) => {
+  // The route painted at a point, with every slide ended: hit testing skips an inert route, so the covered ones are
+  // made hittable for the read.
+  const at = (x, y) => evaluate(`{
+    const routes = [...document.querySelectorAll('[navigationKey]:not(main)')], inert = routes.filter(e => e.inert);
+    routes.forEach(e => { e.getAnimations().forEach(a => a.finish()); e.inert = false; });
+    const id = document.elementFromPoint(${x}, ${y}).closest('[navigationKey]:not(main)')?.id;
+    inert.forEach(e => { e.inert = true; });
+    id;
+  }`);
+  for (const [width, height] of [[390, 844], [1200, 800]]) {
+    await size(width, height);
+    await evaluate(`select('1'); select('4')`);
+    expect([width, await at(width / 2, height / 2)]).toEqual([width, 'over']);
+    // A full-screen route over the sheets covers them, as UIKit presents it above the sheet it is presented from.
+    await evaluate(`select('5')`);
+    expect([width, await at(width / 2, height / 2), await evaluate(`shown('over')`)]).toEqual([width, 'full', true]);
+    // A sheet over the full-screen route is above it in turn.
+    await evaluate(`select('6')`);
+    expect([width, await at(width / 2, height - 100)]).toEqual([width, 'top']);
+  }
+}), 60000);
+
+check('a content-high wide sheet keeps its heading and actions visible while its list scrolls', () => inChrome(async (evaluate, size) => {
+  await evaluate(`{
+    const sheet = document.getElementById('sheet');
+    sheet.innerHTML = '<header style="display:flex;align-items:center;justify-content:space-between;padding:8px 16px"><button id="cancel" aria-label="Cancel">Cancel</button><h2>Form</h2><button id="save" aria-label="Save">Save</button></header><div id="form" data-liststyle="inset-grouped" style="flex:1;min-height:0;overflow:auto"><section><div>' + Array.from({ length: 20 }, (_, i) => '<div style="height:54px">Field ' + (i + 1) + '</div>').join('') + '</div></section></div>';
+    for (const button of sheet.querySelectorAll('button')) button.onclick = () => select('1');
+  }`);
+  for (const [width, height] of [[980, 545], [899, 400], [900, 400], [1200, 300], [1200, 1000], [650, 400]]) {
+    await size(width, height);
+    await open(evaluate, null);
+    const geometry = await evaluate(`{
+      box('sheet');
+      const sheet = document.getElementById('sheet'), list = document.getElementById('form');
+      const b = sheet.getBoundingClientRect();
+      const visible = e => {
+        const r = e.getBoundingClientRect();
+        return r.top >= Math.max(0, b.top) && r.bottom <= Math.min(innerHeight, b.bottom) && r.left >= Math.max(0, b.left) && r.right <= Math.min(innerWidth, b.right);
+      };
+      list.scrollTop = list.scrollHeight;
+      [b.y, b.height, list.scrollHeight > list.clientHeight, list.scrollTop > 0,
+        [...sheet.querySelectorAll('h2, button')].every(visible),
+        getComputedStyle(sheet).maxHeight];
+    }`);
+    const wide = width >= 900, sheetHeight = wide ? Math.min(720, height - 64) : height - 12;
+    const top = wide ? (height - sheetHeight) / 2 : 12;
+    expect([width, height, geometry]).toEqual([width, height,
+      [top, sheetHeight, true, true, true, wide ? sheetHeight + 'px' : 'none']]);
+    await evaluate(`document.getElementById('save').click()`);
+    expect(await evaluate(`shown('home') && !shown('sheet')`)).toBe(true);
+  }
 }), 60000);

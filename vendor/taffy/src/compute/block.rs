@@ -276,7 +276,7 @@ use super::common::scrollable_overflow::{
     compute_scrollable_overflow_contribution, margin_box_contribution, with_end_padding,
 };
 use super::common::sizing_keyword::{
-    resolve_sizing_keyword, SizingKeywordResolution,
+    keyword_bounds, own_keyword_bounds, resolve_sizing_keyword, SizingKeywordResolution,
 };
 
 /// Per-child data that is accumulated and modified over the course of the layout algorithm
@@ -367,6 +367,7 @@ pub fn compute_block_layout(
     block_ctx: Option<&mut BlockContext<'_>>,
 ) -> LayoutOutput {
     let LayoutInput { known_dimensions, parent_size, run_mode, .. } = inputs;
+    let own = own_keyword_bounds(tree, node_id, inputs);
     let style = tree.get_block_container_style(node_id);
 
     // Pull these out earlier to avoid borrowing issues
@@ -392,12 +393,12 @@ pub fn compute_block_layout(
 
     // EXACT PATCH 12: the size styles through the ratio (`compute::ratio`).
     let raw_max_size =
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment);
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment));
     let (style_size, min_size, mut max_size) = sizes_through_ratio(
         &style,
         padding_border_size,
         style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
         raw_max_size,
     );
     // EXACT PATCH 57: with a supplied height, transferred bounds must not short-circuit the inline content probe.
@@ -476,6 +477,7 @@ fn compute_inner(
         known_dimensions, parent_size, available_space, run_mode, vertical_margins_are_collapsible, ..
     } = inputs;
 
+    let own = own_keyword_bounds(tree, node_id, inputs);
     let style = tree.get_block_container_style(node_id);
     let raw_padding = style.padding();
     let raw_border = style.border();
@@ -514,9 +516,9 @@ fn compute_inner(
     // which fills an axis only when it is a real constraint) decides the
     // transfer, and an incoming known size is left as the parent resolved it.
     let raw_min_size =
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment);
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment));
     let raw_max_size =
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment);
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment));
     let (size, _, _) = sizes_through_ratio(
         &style,
         padding_border_size,
@@ -599,6 +601,17 @@ fn compute_inner(
             + content_box_inset.horizontal_axis_sum();
         intrinsic_width.maybe_clamp(min_size.width, max_size.width).maybe_max(Some(padding_border_size.width))
     });
+
+    // EXACT PATCH 78: the items' keyword bounds, now that the width they stretch to is known.
+    let inner_width = container_outer_width - content_box_inset.horizontal_axis_sum();
+    for item in items.iter_mut() {
+        let margins = item.margin.resolve_or_zero(Some(inner_width), |val, basis| tree.calc(val, basis));
+        let stretch = f32_max(inner_width - margins.horizontal_axis_sum(), 0.0);
+        let (min, max) =
+            keyword_bounds(tree, item.node_id, container_content_box_size, item.size, AvailableSpace::Definite(stretch));
+        item.min_size = item.min_size.or(min);
+        item.max_size = item.max_size.or(max);
+    }
 
     // Short-circuit if computing size and both dimensions known
     if let (RunMode::ComputeSize, Some(container_outer_height)) = (run_mode, known_dimensions.height) {
@@ -1061,8 +1074,7 @@ fn determine_content_based_container_width(
         };
         let width = compressed.or(known_dimensions.width).unwrap_or_else(|| {
             let item_available_width = match resolve_sizing_keyword(item.size_style.width, None, None) {
-                Some(SizingKeywordResolution::Measure(available_width)) => available_width,
-                Some(SizingKeywordResolution::Exact(width)) => AvailableSpace::Definite(width),
+                Some(resolution) => resolution.available(),
                 None => available_space.width.maybe_sub(item_x_margin_sum),
             };
             tree.measure_child_size(

@@ -153,7 +153,7 @@ async function runtime(dir) {
   const text = readFileSync(roster, 'utf8');
   if (!text.includes(engine)) throw new Error(`roster.js no longer has \`${engine}\``);
   writeFileSync(roster, text.replace(engine, 'export const x_sin = x => globalThis.__trig.sin(x), x_cos = x => globalThis.__trig.cos(x);'));
-  for (const f of ['admission.js', 'agent.js', 'modules.js']) writeFileSync(resolve(dir, f), localImports(readFileSync(resolve(webJs, f), 'utf8')));
+  for (const f of ['admission.js', 'agent.js', 'modules.js', 'mount.js']) writeFileSync(resolve(dir, f), localImports(readFileSync(resolve(webJs, f), 'utf8')));
   writeFileSync(resolve(dir, 'draw.js'), 'export const drawer = null;\n');
   writeFileSync(resolve(dir, 'path2d.js'), 'export const browserPath2D = globalThis.Path2D;\n');
   writeFileSync(resolve(dir, 'admission-data.js'), "import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(''),rustGrantSet=createGrantSet('');\n");
@@ -303,10 +303,23 @@ async function drive(code, c, hostSources) {
   out.push(`outcome ${booted}`);
   if (booted === 'poisoned') return { lines: [...out, ...notes], asked: [...asked] };
   const root = document.root;
-  // Elements in preorder; a virtualized list's rows are its window's (left out), as observe.rs leaves
-  // out a collection's. list.js attaches its collection as `$list`, regardless of the author's role.
+  // Elements in preorder, omitting virtualized data rows and retaining fixed children, as observe.rs does.
+  // list.js attaches its collection as `$list`, regardless of the author's role.
   // A grouped list (`list appearance="auto"`) scrolls too but builds every row.
-  const walk = (e, f, windowed) => { for (const k of e.childNodes) if (k.nodeType === 1) { f(k); if (!(windowed && windowedList(k))) walk(k, f, windowed); } };
+  const walk = (e, f, windowed) => { for (const k of e.childNodes) if (k.nodeType === 1) {
+    f(k);
+    if (windowed && windowedList(k)) {
+      if (k.$list.fixed) {
+        const { a, b } = k.$list.fixed;
+        let fixed = true;
+        for (const child of k.childNodes) {
+          if (child === a) { fixed = false; continue; }
+          if (child === b) { fixed = true; continue; }
+          if (fixed && child.nodeType === 1) { f(child); walk(child, f, windowed); }
+        }
+      }
+    } else walk(k, f, windowed);
+  } };
   const windowedList = e => !!e.$list;
   const find = id => { let hit = null; walk(root, e => { if (!hit && e.getAttribute('data-testid') === id) hit = e; }, false); return hit; };
   // What the store keeps for a persisted state, read back by its slot's type

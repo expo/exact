@@ -1,0 +1,25 @@
+component App
+  state n = 3
+  state hits = 0
+  action hit
+    hits = hits + 1
+  action empty
+    n = 0
+  view
+    list virtualized=true appearance="none" height=200 testId="list"
+      button "Lead" press=hit testId="lead"
+      for x in range(n) key=x
+        text `${x}` height=40 testId=`row-${x}`
+      column
+        for x in [1, 2] key=x
+          button "Trail" press=hit testId=`trail-${x}`
+      button "Empty" press=empty testId="empty"
+      text `${hits}` font-variant-numeric="tabular-nums" testId="hits"
+
+test "fixed children keep their scopes and outlive an empty data window"
+  tap "lead"
+  tap "trail-2"
+  expect text "hits" == "2"
+  tap "empty"
+  tap "trail-1"
+  expect text "hits" == "3"

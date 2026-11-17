@@ -1,7 +1,7 @@
 //! One connection to the session bus, and a pick asked over it.
 
 use super::wire::{self, Message, Value};
-use super::{Outcome, Socket};
+use super::{Filter, Outcome, Socket};
 use exact_runner::file_pickers::{Kind, Picker};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -169,7 +169,13 @@ impl Bus {
 
 /// Ask the portal at the session bus `address` for `picker`'s choice, and
 /// wait for it: the body of a pick's thread. `None`: no session bus.
-pub(crate) fn choose(picker: &Picker, address: Option<&str>, timeout: Duration) -> Outcome {
+pub(crate) fn choose(
+    picker: &Picker,
+    filters: &[Filter],
+    folder: Option<&std::path::Path>,
+    address: Option<&str>,
+    timeout: Duration,
+) -> Outcome {
     let Some(address) = address.filter(|a| !a.is_empty()) else {
         return Outcome::Refused("no desktop portal: there is no session bus".into());
     };
@@ -181,7 +187,7 @@ pub(crate) fn choose(picker: &Picker, address: Option<&str>, timeout: Duration) 
             ))
         }
     };
-    match ask(&mut bus, picker) {
+    match ask(&mut bus, picker, filters, folder) {
         Ok(outcome) => outcome,
         Err(e) => Outcome::Refused(e),
     }
@@ -189,7 +195,12 @@ pub(crate) fn choose(picker: &Picker, address: Option<&str>, timeout: Duration) 
 
 static TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn ask(bus: &mut Bus, picker: &Picker) -> Result<Outcome, String> {
+fn ask(
+    bus: &mut Bus,
+    picker: &Picker,
+    filters: &[Filter],
+    folder: Option<&std::path::Path>,
+) -> Result<Outcome, String> {
     // Whether a file chooser is there at all, and which version: a folder
     // needs `directory`, version 3's.
     let version = bus
@@ -228,7 +239,7 @@ fn ask(bus: &mut Bus, picker: &Picker) -> Result<Outcome, String> {
     bus.subscribe(&format!(
         "type='signal',sender='{DBUS}',interface='{DBUS}',member='NameOwnerChanged',arg0='{PORTAL}'"
     ))?;
-    let (member, options) = super::request(picker, &token);
+    let (member, options) = super::request(picker, &token, filters, folder);
     let title = super::title(picker.kind);
     let reply = bus
         .call(

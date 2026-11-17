@@ -32,7 +32,7 @@
   list under an unfilled composer and blurs it. I followed that advice, so the composer is unfilled.
 - `overflow-wrap="anywhere"` (the recipe's) was flagged for breaking inside words, so I used
   `break-word`.
-- The jump button's chevron is an `app.tamber` icon token (SF `chevron.down` plus an SVG), so the
+- The jump button's chevron is an `app.forma` icon token (SF `chevron.down` plus an SVG), so the
   web/Linux builds aren't blank.
 
 ## Not done / limits

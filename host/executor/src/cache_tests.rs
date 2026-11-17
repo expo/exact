@@ -223,6 +223,7 @@ fn serve(mut socket: TcpStream, server: Arc<(Mutex<ServerState>, Condvar)>) {
 }
 pub(in super::super) fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        completion: None,
         ticket,
         target: "cache-test".into(),
         forced: false,
@@ -1154,6 +1155,7 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
                 forced: false,
                 work: None,
                 waiting_charge: charge,
+                waited_for_preload: false,
                 charge,
                 limit,
                 forgotten: false,

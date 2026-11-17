@@ -112,6 +112,18 @@ impl<D: DataSource> Host<D> {
         }
     }
 
+    /// The host places status items from now on (LLP 1133.025 D4): each
+    /// `-exact-menu="status"` button takes no room in the page and is
+    /// neither painted nor hit, as the Mac hides the button its status item
+    /// stands for.
+    pub fn place_status_items(&mut self) -> Result<(), String> {
+        self.navigation.status_items = true;
+        match self.project_bars() {
+            true => self.layout().map(|_| ()),
+            false => Ok(()),
+        }
+    }
+
     pub(crate) fn show_authored_popover(&mut self, id: Option<ViewId>) -> Result<(), String> {
         self.navigation.shown_popover = id;
         self.project_bars();
@@ -149,6 +161,10 @@ impl<D: DataSource> Host<D> {
                     .filter(|id| Some(*id) != self.navigation.shown_popover)
                     .map(|id| (id, HostCover::Whole)),
             );
+        }
+        if self.navigation.status_items {
+            let placed = exact_runner::desktop::buttons(&self.runner, "status");
+            wanted.extend(placed.into_iter().map(|id| (id, HostCover::Whole)));
         }
         let (mut routes, mut tabs, mut stacks) = (Vec::new(), None, Vec::new());
         let (mut all_routes, mut sheeted): (Vec<ViewId>, Vec<ViewId>) = (Vec::new(), Vec::new());

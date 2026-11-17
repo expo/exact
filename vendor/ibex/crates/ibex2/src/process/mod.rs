@@ -25,6 +25,8 @@ use darwin as platform;
 mod fork;
 #[cfg(not(target_vendor = "apple"))]
 use fork as platform;
+#[cfg(any(not(target_vendor = "apple"), test))]
+mod scan;
 
 #[cfg(test)]
 mod tests;
@@ -208,7 +210,53 @@ fn sigpipe_off(fd: RawFd) -> bool {
     unsafe { libc::fcntl(fd, F_GETNOSIGPIPE) == 1 }
 }
 
-/// Wait for child `pid` to end, reaping it.
+/// Wait for child `pid` to end without reaping it. The retained zombie
+/// reserves its pid until [`wait`], so its group cannot acquire a new leader
+/// while the caller can still signal it.
+pub fn observe_exit(pid: i32) -> io::Result<Exit> {
+    observe(pid, 0).map(|exit| exit.expect("a blocking wait observes an exit"))
+}
+
+/// Observe an already exited child without reaping it or waiting for a
+/// running child. `None` means the child has not exited.
+pub fn try_observe_exit(pid: i32) -> io::Result<Option<Exit>> {
+    observe(pid, libc::WNOHANG)
+}
+
+fn observe(pid: i32, flags: libc::c_int) -> io::Result<Option<Exit>> {
+    loop {
+        // SAFETY: zeroed siginfo_t is valid; waitid fills it for this child.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let r = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT | flags,
+            )
+        };
+        if r == 0 {
+            // SAFETY: waitid leaves si_pid zero when WNOHANG finds no exit.
+            if unsafe { info.si_pid() } == 0 {
+                return Ok(None);
+            }
+            // SAFETY: WEXITED filled the child-exit variant of siginfo_t.
+            let status = unsafe { info.si_status() };
+            return Ok(Some(if info.si_code == libc::CLD_EXITED {
+                Exit::Code(status)
+            } else {
+                Exit::Signal(status)
+            }));
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
+/// Wait for child `pid` to end, reaping it. After this call its numeric pid
+/// and group id may be reused; finish signalling its group first.
 pub fn wait(pid: i32) -> io::Result<Exit> {
     let mut status = 0;
     loop {
@@ -232,16 +280,72 @@ pub fn wait(pid: i32) -> io::Result<Exit> {
 pub const SIGKILL: i32 = libc::SIGKILL;
 pub const SIGTERM: i32 = libc::SIGTERM;
 
-/// One signal to process `pid` alone.
-pub fn signal_process(pid: i32, signal: i32) -> io::Result<()> {
+/// One signal to process `pid` alone, if `same(pid)` holds for the process
+/// the signal reaches: `Ok(false)` when it does not. On Linux the process is
+/// held by a pidfd from before the test, so a pid reused after the test is
+/// not signalled; elsewhere nothing can hold a process that is not a child,
+/// and the signal follows the test at once.
+pub fn signal_process_if(
+    pid: i32,
+    signal: i32,
+    same: impl FnOnce(i32) -> bool,
+) -> io::Result<bool> {
     if pid <= 1 {
         return Err(invalid("not a child's pid"));
     }
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: plain syscall; a new descriptor or -1.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if fd >= 0 {
+            // SAFETY: pidfd_open returned a descriptor this call now owns.
+            let fd = unsafe { OwnedFd::from_raw_fd(fd as RawFd) };
+            if !same(pid) {
+                return Ok(false);
+            }
+            // SAFETY: a pidfd, no siginfo, no flags.
+            let r = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd.as_raw_fd(),
+                    signal,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            return if r == 0 {
+                Ok(true)
+            } else {
+                Err(io::Error::last_os_error())
+            };
+        }
+        let e = io::Error::last_os_error();
+        // Before Linux 5.3, or under a seccomp filter that refuses it.
+        if !matches!(e.raw_os_error(), Some(libc::ENOSYS | libc::EPERM)) {
+            return Err(e);
+        }
+    }
+    if !same(pid) {
+        return Ok(false);
+    }
     // SAFETY: plain syscall.
     if unsafe { libc::kill(pid, signal) } == 0 {
-        Ok(())
+        Ok(true)
     } else {
         Err(io::Error::last_os_error())
+    }
+}
+
+/// The process group `pid` is in.
+pub fn group_of(pid: i32) -> Option<i32> {
+    getpgid(pid).ok()
+}
+
+fn getpgid(pid: i32) -> io::Result<i32> {
+    // SAFETY: plain syscall.
+    match unsafe { libc::getpgid(pid) } {
+        -1 => Err(io::Error::last_os_error()),
+        pgid => Ok(pgid),
     }
 }
 
@@ -269,13 +373,17 @@ pub fn signal_group(pgid: i32, signal: i32) -> io::Result<()> {
     }
 }
 
-/// Whether any member of process group `pgid` lives. A group's id is not
-/// reused while the group exists (POSIX `setpgid`), so this, and a signal
-/// to it, stay safe after its leader has exited.
+/// Whether process group `pgid` has a member with live threads, treating
+/// failed inspection as alive. A process with no live threads needs
+/// neither signalling nor a grace period.
+/// Keep the leader unreaped until the last group signal: a liveness check
+/// alone cannot protect the id from reuse between the check and the signal.
 pub fn group_alive(pgid: i32) -> bool {
     pgid > 1
+        // SAFETY: signal 0 only checks whether the group exists.
         && (unsafe { libc::kill(-pgid, 0) } == 0
             || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+        && platform::group_members(pgid).map_or(true, |members| !members.is_empty())
 }
 
 /// The signals a child may be sent, by their names.
@@ -324,9 +432,11 @@ pub fn boot_id() -> Option<String> {
     platform::boot_id()
 }
 
-/// The live members of process group `pgid`.
+/// The live members of process group `pgid`, or an empty list if inspection
+/// fails. An empty list alone does not establish that a group has ended;
+/// use [`group_alive`] for liveness, which treats inspection failure as alive.
 pub fn group_members(pgid: i32) -> Vec<i32> {
-    platform::group_members(pgid)
+    platform::group_members(pgid).unwrap_or_default()
 }
 
 /// The session process `pid` belongs to: what a crash's cleanup checks a

@@ -247,7 +247,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             // A height is the table's least: its rows grow to fill it, and
             // content taller than it makes it taller (CSS 2.2 §17.5.3).
             if let Some(floor) = floor(style, env, StyleId::Height, StyleId::MinHeight) {
-                s.min_size.height = floor;
+                s.min_size.height = floor.into();
                 s.size.height = auto();
             }
         }
@@ -321,7 +321,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 let share = 100.0 - sp - ep;
                 let wider = (left + right) * share / 100.0 - sv - ev;
                 s.size.width = length(0.0);
-                s.min_size.width = Dimension::Calc(share, wider).floor_lpa(env);
+                s.min_size.width = Dimension::Calc(share, wider).floor_taffy(env);
             }
         }
         Part::Group | Part::Row => {
@@ -372,12 +372,16 @@ fn cell_padding(style: &crate::StyleProps, env: &crate::style::Env, s: &mut taff
 /// §17.5.3): the box fills its grid area, as a cell fills its slot.
 fn least(style: &crate::StyleProps, env: &crate::style::Env, s: &mut taffy::style::Style) {
     if let Some(floor) = floor(style, env, StyleId::Width, StyleId::MinWidth) {
-        s.min_size.width = floor;
+        s.min_size.width = floor.into();
         s.size.width = auto();
+    } else if matches!(style.min_width, Dimension::Keyword(_)) {
+        s.min_size.width = auto();
     }
     if let Some(floor) = floor(style, env, StyleId::Height, StyleId::MinHeight) {
-        s.min_size.height = floor;
+        s.min_size.height = floor.into();
         s.size.height = auto();
+    } else if matches!(style.min_height, Dimension::Keyword(_)) {
+        s.min_size.height = auto();
     }
     s.align_self = None;
     s.justify_self = None;
@@ -391,11 +395,15 @@ fn floor(
     size: StyleId,
     least: StyleId,
 ) -> Option<taffy::style::LengthPercentageAuto> {
-    let dimension = |id| match id {
-        StyleId::Width => style.width.clone(),
-        StyleId::Height => style.height.clone(),
-        StyleId::MinWidth => style.min_width.clone(),
-        _ => style.min_height.clone(),
+    // A keyword is `auto` here (LLP 1001.001 D3, "Tables").
+    let dimension = |id| {
+        match id {
+            StyleId::Width => style.width.clone(),
+            StyleId::Height => style.height.clone(),
+            StyleId::MinWidth => style.min_width.clone(),
+            _ => style.min_height.clone(),
+        }
+        .unless_keyword()
     };
     let (said, least_said) = (dimension(size), dimension(least));
     let greater = match (said.resolve(env), least_said.resolve(env)) {

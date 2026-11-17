@@ -1,0 +1,49 @@
+{
+  "kind": "interface",
+  "name": "@exact/store-update",
+  "version": "1.0.0",
+  "substitute": "implementation",
+  "shapes": {
+    "StoreUpdateStatus": {
+      "available": "bool",
+      "updateAvailability": "enum<unknown|current|listed|offered|in-progress>",
+      "apple": "option<AppleStoreUpdateStatus>",
+      "android": "option<AndroidStoreUpdateStatus>"
+    }
+  },
+  "names": [
+    {
+      "source": "storeUpdateStatus",
+      "live": true,
+      "overlays": "implementation",
+      "answers": "StoreUpdateStatus",
+      "grants": [
+        "net.fetch"
+      ],
+      "substitute": {
+        "default": {
+          "available": false,
+          "updateAvailability": "unknown"
+        }
+      }
+    },
+    {
+      "send": "openStorePage",
+      "request": true,
+      "origin": "app",
+      "foreground": true,
+      "answers": null,
+      "grants": [
+        "net.fetch"
+      ],
+      "substitute": {
+        "unsupported": [
+          "web",
+          "linux",
+          "windows",
+          "tvos"
+        ]
+      }
+    }
+  ]
+}

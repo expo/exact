@@ -1,0 +1,26 @@
+# Video Player on Android's Canvas host (LLP 1042.001): one library with the
+# runner, the kernel, the data crate, the baked plan (written by build.rs,
+# never committed) and the host's JNI, which the reader (host/android) loads
+# as libexactcanvas.so. Off Android the library is empty.
+[package]
+name = "video-player-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Video Player on Android's Canvas host: the library the reader loads"
+publish = false
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+bench = false
+
+[target.'cfg(target_os = "android")'.dependencies]
+video-player-data = { path = "../data" }
+exact-painted = { path = "../../../host/painted" }
+
+[build-dependencies]
+video-player-data = { path = "../data" }
+contract = { path = "../../../contract/cli" }
+exact-bake = { path = "../../../bake" }

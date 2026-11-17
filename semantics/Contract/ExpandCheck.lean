@@ -216,6 +216,11 @@ def report (comp : CProgram) (flat : Program) (o : Oracle) (events : List Observ
     | .error e => ["#expand-error " ++ e]
     | .ok l =>
       ["#struct " ++ (structDiff l flat).getD "ok", "#types " ++ (typeDiff l flat).getD "ok"]
-  structural ++ ["#flat"] ++ Observe.run flat o events ++ ["#comp"] ++ CompSem.crun comp o events
+  -- The component-level semantics does not model a child's mutations
+  -- (`CompSem.cboot`): such a file's expansion is compared, not its meaning.
+  if comp.components.any (!·.mutations.isEmpty) then
+    structural ++ ["#flat", "# a child's mutations: meaning not compared", "#comp"]
+  else
+    structural ++ ["#flat"] ++ Observe.run flat o events ++ ["#comp"] ++ CompSem.crun comp o events
 
 end Contract.ExpandCheck

@@ -29,8 +29,8 @@ use super::common::alignment::apply_alignment_fallback;
 use super::common::scrollable_overflow::{
     compute_scrollable_overflow_contribution, margin_box_contribution, with_end_padding,
 };
-use super::common::sizing_keyword::{
-    resolve_sizing_keyword, SizingKeywordResolution,
+use super::common::sizing_keyword::{keyword_bounds, own_keyword_bounds, OwnKeywordBounds, 
+    measure_keyword_width, resolve_sizing_keyword, SizingKeywordResolution,
 };
 
 /// The intermediate results of a flexbox calculation for a single item
@@ -242,6 +242,7 @@ pub fn compute_flexbox_layout(
     inputs: LayoutInput,
 ) -> LayoutOutput {
     let LayoutInput { known_dimensions, parent_size, run_mode, .. } = inputs;
+    let own = own_keyword_bounds(tree, node, inputs);
     let style = tree.get_flexbox_container_style(node);
 
     // Pull these out earlier to avoid borrowing issues
@@ -254,12 +255,12 @@ pub fn compute_flexbox_layout(
 
     // EXACT PATCH 12: the container's own size styles through the ratio (`compute::ratio`).
     let raw_max_size =
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment);
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment));
     let (style_size, min_size, mut max_size) = sizes_through_ratio(
         &style,
         padding_border_sum,
         style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
         raw_max_size,
     );
     // EXACT PATCH 57: with a supplied height, transferred bounds must not short-circuit the inline content probe.
@@ -352,9 +353,11 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
     let LayoutInput { known_dimensions, parent_size, available_space, run_mode, .. } = inputs;
 
     // Define some general constants we will need for the remainder of the algorithm.
+    let own = own_keyword_bounds(tree, node, inputs);
     let mut constants = compute_constants(
         tree,
         tree.get_flexbox_container_style(node),
+        own,
         known_dimensions,
         inputs.known_dimensions_are_definite,
         parent_size,
@@ -385,6 +388,7 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
     // 2. Determine the available main and cross space for the flex items
     debug_log!("determine_available_space");
     let available_space = determine_available_space(known_dimensions, available_space, &constants);
+    resolve_item_keyword_bounds(tree, &constants, available_space.width, &mut flex_items);
 
     // 3. Determine the flex base size and hypothetical main size of each item.
     debug_log!("determine_flex_base_size");
@@ -637,6 +641,7 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
 fn compute_constants(
     tree: &impl LayoutFlexboxContainer,
     style: impl FlexboxContainerStyle,
+    own: OwnKeywordBounds,
     known_dimensions: Size<Option<f32>>,
     known_dimensions_are_definite: Size<bool>,
     parent_size: Size<Option<f32>>,
@@ -697,8 +702,8 @@ fn compute_constants(
         &style,
         padding_border_sum,
         known_dimensions,
-        style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
-        style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment),
+        own.min(style.min_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
+        own.max(style.max_size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis)).maybe_add(box_sizing_adjustment)),
         sizing_mode,
     );
     let node_outer_size = known_dimensions;
@@ -974,6 +979,26 @@ fn generate_anonymous_flex_items(
             }
         })
     );
+}
+
+/// EXACT PATCH 78: the items' keyword minimum and maximum sizes (`min-content`,
+/// `max-content`, `fit-content`), where their lengths resolved to none. A keyword minimum is
+/// then a definite minimum, so it replaces the automatic minimum (CSS Flexbox 1 §4.5), and
+/// both enter the container's intrinsic contributions as bounds do. A `fit-content` bound
+/// clamps against the inline space less the item's margins; a block-axis bound is the
+/// content height at the item's width, or at that space where the width is not known.
+fn resolve_item_keyword_bounds(
+    tree: &mut impl LayoutFlexboxContainer,
+    constants: &AlgoConstants,
+    available_width: AvailableSpace,
+    items: &mut [FlexItem],
+) {
+    for item in items.iter_mut() {
+        let stretch = available_width.map_definite_value(|w| (w - item.margin.horizontal_axis_sum()).max(0.0));
+        let (min, max) = keyword_bounds(tree, item.node, constants.node_inner_size, item.size, stretch);
+        item.min_size = item.min_size.or(min);
+        item.max_size = item.max_size.or(max);
+    }
 }
 
 /// Determine the available main and cross space for the flex items.

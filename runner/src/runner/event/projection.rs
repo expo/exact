@@ -57,7 +57,7 @@ impl<D: DataSource> Runner<D> {
                 let row = self.plan.slots.get(id as usize).ok_or(Unsupported)?;
                 match self.plan.owner_region(row) {
                     Some(owner) => crate::vm::Frame::row_of(frames, owner.0)
-                        .and_then(|slots| slots.borrow().get(&id).cloned())
+                        .and_then(|slots| slots.borrow().slots.get(&id).cloned())
                         .ok_or(Unsupported)?,
                     None => self.slots.get(id as usize).cloned().ok_or(Unsupported)?,
                 }

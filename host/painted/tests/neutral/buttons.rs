@@ -310,6 +310,7 @@ pub(super) fn symbols_use_the_neutral_metrics_in_layout_and_paint() {
       button font-size=20 flex-direction="column" testId="stacked"
         image "{sf}" -exact-tint-color="red"
         text "MMMM"
+      text "MMMM" font-size=20 font-weight=500 testId="line"
       button appearance="auto" font-size=20 width=200 height=36 gap=0 testId="sized"
         image "{sf}" -exact-tint-color="red"
         text "MMMM"
@@ -390,9 +391,16 @@ pub(super) fn symbols_use_the_neutral_metrics_in_layout_and_paint() {
         size(&mut p, "image-font"),
         (title.0 + 36. + 8., title.1),
     );
-    // 30 px image, a -2.5 px margin toward the 25 px title line, 8 px gap,
-    // and the same 19.5 px block padding and border as the ordinary face.
-    check("stacked", size(&mut p, "stacked"), (title.0, 80.));
+    // 30 px image, a -2.5 px margin toward the title, 8 px gap, the title on
+    // its font's own line, and the same 19.5 px block padding and border as
+    // the ordinary face.
+    let frame = |p: &Presenter<()>, name: &str| p.host().kernel().node(id(p, name)).unwrap().frame;
+    let line = frame(&p, "line").height;
+    check(
+        "stacked",
+        (frame(&p, "stacked").width, frame(&p, "stacked").height),
+        (title.0, 55. + line),
+    );
     // A menu row's space beside its title is `.5em`, a space in its type
     // once its author writes a direction, and 1em stacked (button_css.rs).
     let menu = size(&mut p, "menu");

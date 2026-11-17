@@ -458,6 +458,12 @@ pub struct Fetch {
 }
 
 impl Fetch {
+    /// Admit a URL without sending it, using this binding's grants and hop gate.
+    /// A later `stream` rechecks it and every redirect under the same authority.
+    pub fn admit(&self, url: &str) -> Result<(), HostError> {
+        fetch::admit_hop(&self.grants, self.gate.as_deref(), url, false)
+    }
+
     /// This binding with the host's `gate` checked beside the grant at every
     /// hop (Exact patch, LLP 1133.036 D6).
     pub fn with_gate(mut self, gate: Arc<dyn crate::boundary::HopGate>) -> Self {

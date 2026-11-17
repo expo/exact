@@ -28,6 +28,9 @@ impl<D: DataSource> Bridge<D> {
         let Ok(kind_name) = std::str::from_utf8(&bytes[plan..plan + kind]) else {
             return self.refuse("entry kind is not UTF-8");
         };
+        if let Err(reason) = crate::watch_sync::startup(data.grants(), data.app_id()) {
+            return self.refuse(&reason);
+        }
         // Snapshot admission has no controls. Stage 2 must install field/button
         // chrome, measurement revisions and control_text::prepare with intents.
         let measurer: Box<dyn TextMeasurer> = match hooks.measure {
@@ -74,6 +77,7 @@ impl<D: DataSource> Bridge<D> {
                 self.executor = None;
                 hooks.console_into(host.runner_mut());
                 let batch = Host::ending(self.host.replace(host), batch);
+                self.launch_layout.insets = None;
                 self.parked.clear();
                 self.emit(batch)
             }

@@ -9,7 +9,7 @@
 //   tap <target> [at <x> <y> (a press at a point; plain, it presses what it names) | wheel <dx> <dy> [gesture | fling |
 //     hold] [at <x> <y>] [modifiers <Control…>] | wheel 0 0 release | drop <path…> | dragenter <path…> | dragleave |
 //     into <key> [block <v>] [inline <v>] | hover | hold-state active|hover|focus-visible|none | history <n> |
-//     {"history":n} | mouse | dblclick | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
+//     {"history":n} | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
 //     <Shift+Meta…>]) | modifiers <Shift+Meta…> | pinch <scale> [at <x> <y>] | mediasession <action> [seconds] |
 //     pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS) | drag <dx> <dy> [from <x>
 //     <y>] [mouse] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard] [during "<op>" …, inside the hold under --touch
@@ -152,8 +152,10 @@ export async function main(argv, injected = {}) {
     return 2;
   }
   if (flags.live) {
-    if (!['macos', 'mac'].includes(host) || flags.test)
-      throw new Error('--live requires a macOS drive without --test');
+    if (!['macos', 'mac', 'ios'].includes(host) || flags.test)
+      throw new Error('--live requires a macOS or iOS simulator drive without --test');
+    // A phone's carrier forces agent mode, and a real drag there needs an XCTest runner on the phone.
+    if (flags.device) throw new Error('--live drives the iOS simulator, not a phone');
     if (flags.timing && flags.timing !== 'platform')
       throw new Error('--live keeps the platform clock; --timing agent is incompatible');
     flags.timing = 'platform';
@@ -258,7 +260,7 @@ export async function main(argv, injected = {}) {
     console.error(
       [
         'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--live] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
-        '  desktop carriers open 420x900 unless --size names another viewport; a target is a testId, a view id, or a view\'s exact label or text (`tap "Sky off"`); tap and type scroll a target out of view into it first; web defaults to chrome; EXACT_WEB_BROWSER selects the same option. Install the other engines outside the repo: bunx playwright@1.64.1 install firefox webkit',
+        '  desktop carriers open 420x900 unless --size names another viewport; a target is a testId, a view id, or a view\'s exact label or text (`tap "Sky off"`); tap and type scroll a target out of view into it first; web defaults to chrome; EXACT_WEB_BROWSER selects the same option. Install the other engines outside the repo: bunx playwright@1.65.1 install firefox webkit',
         '  ' +
           [
             'tree',
@@ -289,7 +291,7 @@ export async function main(argv, injected = {}) {
             'history <n>',
             '{"history":n}',
             'mouse',
-            'dblclick',
+            "dblclick [touch: a finger's double tap: iOS, Chrome, Android, Windows]",
             'contextmenu',
             'auxclick (the middle button)',
             'clicks <1-3> (each [at <x> <y>: from its top left] [modifiers <Shift+Meta…>])',
@@ -303,7 +305,7 @@ export async function main(argv, injected = {}) {
             'tap hold <ms>',
             'tap up [modifiers <M>]',
             'tap cancel (the target shows pressed until the lift: "tap row down" "screenshot held.png" "tap up"; under --touch platform one real touch at tap up, the holds, reads and clock +<ms> between run inside it; a word a form does not use is refused; a form a carrier cannot deliver answers unsupported)',
-            'type <target> <text…> (a select, date, time, range or checkbox: its value; the navigation root: a path, or a deep link as euxy://p/1, through protocol_handlers on macOS and iOS)',
+            'type <target> <text…> (a select, date, time, range or checkbox: its value; the navigation root: a path, or a deep link as euxy://p/1, through protocol_handlers on macOS, iOS and the Android reader)',
             'type <target> key <Name> [for <ms>]',
             'type <target> copy',
             'cut',
@@ -320,7 +322,7 @@ export async function main(argv, injected = {}) {
             'resize <w> <h> (the window: web, macOS, Linux)',
             "close (the window's close button, asking its beforeunload: web, macOS)",
             "back (the platform's Back: an open dialog's cancel, else the top sheet dismissed, else the pushed route popped)",
-            'prefer <media feature, page fact, posture folded|continuous, segments <cols>x<rows> [gap <points>]> […]',
+            'prefer <media feature, page fact, posture folded|continuous, segments <cols>x<rows> [gap <points>]> […] (visibility-state and frozen substitute facts; neither suspends the driven process)',
             'prefer extension <extension>.<source>=<JSON>|clear (the source of a native module, LLP 1124 D7)',
             "prefer permission.<name> granted|denied|prompt (the permission of a module; --permission <name>=<state> sets it at launch, --bind <extension> answers it from its implementation on Apple and Android; its tickets are `tap @t allow|deny|cancel` and `type @t <value>`, LLP 1133.002 §6; a module's listed entry, `state.notifications`, is `tap @ref`, and --notification '<entry>' hands a relaunch one, LLP 1133.004 §7)",
             'fail fetch <url-prefix> [times <n>]',
@@ -589,7 +591,7 @@ export async function main(argv, injected = {}) {
       case 'url':
       case 'link':
         throw new MalformedOperation(
-          `${op} is not an op: a link arrives as \`type <root> ${args[0] ?? 'euxy://p/abc'}\`, the root being the node with navigate= (its testId or id, from \`tree\`; LLP 1038 D11); on macOS and iOS a URL with a scheme goes through the app's protocol_handlers as the system delivers it, with no "Open in …?" alert`,
+          `${op} is not an op: a link arrives as \`type <root> ${args[0] ?? 'euxy://p/abc'}\`, the root being the node with navigate= (its testId or id, from \`tree\`; LLP 1038 D11); on macOS, iOS and the Android reader a URL with a scheme goes through the app's protocol_handlers as the system delivers it (on iOS, with no "Open in …?" alert)`,
         );
       default:
         throw new MalformedOperation(

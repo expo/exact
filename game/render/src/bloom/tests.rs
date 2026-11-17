@@ -57,8 +57,10 @@ fn read(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u16> {
         .chunks_exact(row as usize)
         .flat_map(|r| {
             r[..texture.width() as usize * 8]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
         })
         .collect()
 }

@@ -95,7 +95,9 @@ pub(crate) fn glyph_words(
             out.extend(
                 image
                     .data
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| i32::from_be_bytes([c[3], c[0], c[1], c[2]])),
             );
             return Some(out);
@@ -159,7 +161,9 @@ mod jni {
         let mut words = vec![0i32; n as usize];
         ((**env).GetIntArrayRegion.expect("jni"))(env, axes, 0, n, words.as_mut_ptr());
         let axes: Vec<(u32, f32)> = words
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|w| (w[0] as u32, f32::from_bits(w[1] as u32)))
             .collect();
         let Some(out) = super::glyph_words(data, index.max(0) as u32, &axes, id as u16) else {

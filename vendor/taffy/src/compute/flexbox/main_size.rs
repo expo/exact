@@ -86,7 +86,10 @@ pub(super) fn determine_flex_base_size(
                 dir,
                 ckd.cross(dir).maybe_clamp(transferred_min_size.cross(dir), transferred_max_size.cross(dir)),
             );
+            // EXACT PATCH 77: a keyword cross size is not auto, so it does not stretch.
+            let cross_style = child.size_style.cross(dir);
             if child.align_self == AlignSelf::STRETCH
+                && !(cross_style.is_sizing_keyword() && !cross_style.is_stretch())
                 && !child.margin_is_auto.cross_start(constants.dir)
                 && !child.margin_is_auto.cross_end(constants.dir)
                 && ckd.cross(dir).is_none()
@@ -154,26 +157,50 @@ pub(super) fn determine_flex_base_size(
             }
             _ => None,
         };
+        // EXACT PATCH 77: a column item's keyword width is its width for the probes too.
+        let keyword_cross = if !dir.is_row() && provisional_cross_removed.cross(dir).is_none() {
+            resolve_sizing_keyword(
+                child.size_style.cross(dir),
+                cross_axis_available_space.maybe_sub(cross_axis_margin_sum).into_option(),
+                cross_axis_parent_size,
+            )
+        } else {
+            None
+        };
         let mut fit_content_known: Option<Size<Option<f32>>> = None;
         let fit_content_floor = (child.padding + child.border).cross_axis_sum(dir);
         let (fit_content_min, fit_content_max) = (child.min_size.cross(dir), child.max_size.cross(dir));
         let mut known_for_probe = |tree: &mut _| -> Size<Option<f32>> {
-            let Some(available) = fit_content_available else { return provisional_cross_removed };
+            if fit_content_available.is_none() && keyword_cross.is_none() {
+                return provisional_cross_removed;
+            }
             *fit_content_known.get_or_insert_with(|| {
                 // The final width's own helper and clamp
                 // (determine_hypothetical_cross_size), so the two agree.
-                let fit_content = crate::compute::common::fit_content_width(
-                    tree,
-                    child.node,
-                    provisional_cross_removed,
-                    Size { width: true, height: true },
-                    child_parent_size,
-                    available,
-                    SizingMode::ContentSize,
-                )
-                .maybe_clamp(fit_content_min, fit_content_max)
-                .max(fit_content_floor);
-                provisional_cross_removed.with_cross(dir, Some(fit_content))
+                let width = match (keyword_cross, fit_content_available) {
+                    (Some(resolution), _) => measure_keyword_width(
+                        tree,
+                        child.node,
+                        resolution,
+                        provisional_cross_removed,
+                        child_parent_size,
+                        AvailableSpace::MaxContent,
+                        SizingMode::InherentSize,
+                        Line::FALSE,
+                    ),
+                    (None, Some(available)) => crate::compute::common::fit_content_width(
+                        tree,
+                        child.node,
+                        provisional_cross_removed,
+                        Size { width: true, height: true },
+                        child_parent_size,
+                        available,
+                        SizingMode::ContentSize,
+                    ),
+                    (None, None) => unreachable!("returned above"),
+                };
+                let width = width.maybe_clamp(fit_content_min, fit_content_max).max(fit_content_floor);
+                provisional_cross_removed.with_cross(dir, Some(width))
             })
         };
 
@@ -207,7 +234,19 @@ pub(super) fn determine_flex_base_size(
                         child.used_flex_basis_is_definite = true;
                         break 'flex_basis size;
                     }
-                    Some(SizingKeywordResolution::Measure(available)) => Some(available),
+                    Some(SizingKeywordResolution::Fit(stretch)) if dir.is_row() => {
+                        let known = known_for_probe(tree);
+                        break 'flex_basis crate::compute::common::fit_content_width(
+                            tree,
+                            child.node,
+                            known,
+                            known.map(|d| d.is_some()),
+                            child_parent_size,
+                            stretch,
+                            SizingMode::ContentSize,
+                        );
+                    }
+                    Some(resolution) => Some(resolution.block_axis().available()),
                     None => None,
                 }
             } else {
@@ -228,7 +267,19 @@ pub(super) fn determine_flex_base_size(
                         child.used_flex_basis_is_definite = flex_basis_style.is_auto();
                         break 'flex_basis size;
                     }
-                    Some(SizingKeywordResolution::Measure(available)) => Some(available),
+                    Some(SizingKeywordResolution::Fit(stretch)) if dir.is_row() => {
+                        let known = known_for_probe(tree);
+                        break 'flex_basis crate::compute::common::fit_content_width(
+                            tree,
+                            child.node,
+                            known,
+                            known.map(|d| d.is_some()),
+                            child_parent_size,
+                            stretch,
+                            SizingMode::ContentSize,
+                        );
+                    }
+                    Some(resolution) => Some(resolution.block_axis().available()),
                     None => None,
                 }
             };
@@ -839,9 +890,17 @@ pub(super) fn determine_container_main_size(
                                     })
                                     .maybe_clamp(child_min_cross, child_max_cross);
 
-                                let child_available_space = available_space.with_cross(
-                                    dir, cross_axis_available_space.maybe_sub(cross_axis_margin_sum),
-                                );
+                                // EXACT PATCH 77: an item whose main size is `min-content` or
+                                // `max-content` contributes that size under either constraint
+                                // (CSS Sizing 3 §5.2); `fit-content` takes the container's.
+                                let main_available = match item.size_style.main(dir).tag() {
+                                    crate::CompactLength::MIN_CONTENT_TAG => AvailableSpace::MinContent,
+                                    crate::CompactLength::MAX_CONTENT_TAG => AvailableSpace::MaxContent,
+                                    _ => available_space.main(dir),
+                                };
+                                let child_available_space = available_space
+                                    .with_main(dir, main_available)
+                                    .with_cross(dir, cross_axis_available_space.maybe_sub(cross_axis_margin_sum));
 
                                 // Known dimensions for child sizing
                                 let child_known_dimensions = {

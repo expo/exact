@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A box's background or one edge of its border: a fill tinted with the box's colour, clipped to its radius. -->
+<ImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/exact_widget_view"
+    android:layout_width="0dp"
+    android:layout_height="0dp"
+    android:clipToOutline="true"
+    android:importantForAccessibility="no"
+    android:scaleType="fitXY"
+    android:src="@drawable/exact_widget_fill" />

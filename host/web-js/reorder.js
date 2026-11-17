@@ -21,6 +21,7 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
   function gap(ix, y, source) {
     if (!isFinite(y)) throw new Error("invalid reorder coordinate");
     if (!ix.len) return null;
+    if ((ix.fixed[0] > 0 && y < ix.fixed[0]) || (ix.fixed[1] > 0 && y > ix.fixed[0] + ix.dataExtent)) return null;
     y = Math.max(0, Math.min(y, ix.total));
     const i = ix.rowAt(y);
     let raw = ix.len;
@@ -29,9 +30,9 @@ export function install({ internals: { Collection, Lists, Views, find, minEpoch,
       raw = source === i ? i : y < ix.prefix(i) + ix.h[i] / 2 ? i : i + 1;
     }
     const top = ix.prefix(raw);
-    let right = ix.rowAt(top) ?? ix.len, left = top > 0 ? find(ix.t, top, true) ?? 0 : 0;
+    let right = ix.rowAt(top) ?? ix.len, left = top > 0 ? find(ix.t, top - ix.fixed[0], true) ?? 0 : 0;
     if (right === source) right = ix.rowAt(ix.prefix(source + 1)) ?? ix.len;
-    if (left === source) { const before = ix.prefix(source); left = before > 0 ? find(ix.t, before, true) ?? 0 : 0; }
+    if (left === source) { const before = ix.prefix(source); left = before > 0 ? find(ix.t, before - ix.fixed[0], true) ?? 0 : 0; }
     return minEpoch(ix.t, left, Math.min(right + 1, ix.len)) >= ix.epoch ? right : null;
   }
   Object.assign(Collection.prototype, {

@@ -1,8 +1,7 @@
 //! The one traversal of a view and of an expression: what is directly under a
 //! [`Node`] or an [`Expr`], with the names bound over it. A pass that only
 //! descends uses these instead of matching every kind, so a new kind is
-//! one edit here. A pass that rebuilds a tree, or that treats a kind
-//! differently, keeps its own match.
+//! one edit here. Rebuilding a tree still needs its own match.
 
 use crate::ast::{Attr, Expr, Node, TemplatePart};
 
@@ -146,26 +145,131 @@ impl Node {
     /// and in source order otherwise.
     pub fn walk(nodes: &[Node]) -> Walk<'_> {
         Walk {
-            stack: vec![nodes.iter()],
+            inner: Self::walk_with(nodes, (), |_, _| [Some(()), Some(())]),
         }
+    }
+
+    /// Walk with a context inherited by each child list. `descend` supplies
+    /// the two contexts in [`Node::child_lists`] order; `None` skips that
+    /// list. It runs before the node is yielded. Siblings keep their parent's
+    /// context. The heap stack uses O(depth) frames, with no Rust recursion.
+    ///
+    /// @ref LLP 1172.013 E1, §4 step 4 — one descent for checks with scopes
+    /// or ancestor facts, as well as checks that only need the nodes.
+    pub fn walk_with<'a, C: Clone, F: FnMut(&'a Node, &C) -> [Option<C>; 2]>(
+        nodes: &'a [Node],
+        context: C,
+        descend: F,
+    ) -> WalkWith<'a, C, F> {
+        WalkWith {
+            events: WalkEvents {
+                stack: vec![Frame::List(nodes.iter(), context)],
+                descend,
+                reverse: false,
+            },
+        }
+    }
+
+    /// Enter and leave each node in source order. A skipped list has no events.
+    /// Leave carries the same inherited context as enter.
+    pub fn walk_events_with<'a, C: Clone, F: FnMut(&'a Node, &C) -> [Option<C>; 2]>(
+        nodes: &'a [Node],
+        context: C,
+        descend: F,
+    ) -> WalkEvents<'a, C, F> {
+        WalkEvents {
+            stack: vec![Frame::List(nodes.iter(), context)],
+            descend,
+            reverse: false,
+        }
+    }
+
+    /// Preorder with roots, siblings and arms in reverse source order.
+    pub fn walk_reverse(nodes: &[Node]) -> impl Iterator<Item = &Node> {
+        let mut events = Self::walk_with(nodes, (), |_, _| [Some(()), Some(())]).events;
+        events.reverse = true;
+        events.filter_map(|(node, (), entering)| entering.then_some(node))
     }
 }
 
 /// The iterator [`Node::walk`] returns.
 pub struct Walk<'a> {
-    stack: Vec<std::slice::Iter<'a, Node>>,
+    inner: WalkWith<'a, (), Unscoped>,
 }
+
+type Unscoped = fn(&Node, &()) -> [Option<()>; 2];
 
 impl<'a> Iterator for Walk<'a> {
     type Item = &'a Node;
 
     fn next(&mut self) -> Option<&'a Node> {
-        while let Some(top) = self.stack.last_mut() {
-            if let Some(node) = top.next() {
+        self.inner.next().map(|(node, ())| node)
+    }
+}
+
+/// The iterator [`Node::walk_with`] returns. Each node carries the context
+/// supplied for the list containing it.
+pub struct WalkWith<'a, C, F> {
+    events: WalkEvents<'a, C, F, false>,
+}
+
+impl<'a, C: Clone, F: FnMut(&'a Node, &C) -> [Option<C>; 2]> Iterator for WalkWith<'a, C, F> {
+    type Item = (&'a Node, C);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.events
+            .find_map(|(node, context, entering)| entering.then_some((node, context)))
+    }
+}
+
+enum Frame<'a, C> {
+    List(std::slice::Iter<'a, Node>, C),
+    Leave(&'a Node, C),
+}
+
+/// The iterator returned by [`Node::walk_events_with`]. The boolean is true
+/// on entry and false on exit. Storage is O(depth), including wide lists.
+pub struct WalkEvents<'a, C, F, const LEAVES: bool = true> {
+    stack: Vec<Frame<'a, C>>,
+    descend: F,
+    reverse: bool,
+}
+
+impl<'a, C: Clone, F: FnMut(&'a Node, &C) -> [Option<C>; 2], const LEAVES: bool> Iterator
+    for WalkEvents<'a, C, F, LEAVES>
+{
+    type Item = (&'a Node, C, bool);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(frame) = self.stack.last_mut() {
+            let Frame::List(list, context) = frame else {
+                let Some(Frame::Leave(node, context)) = self.stack.pop() else {
+                    unreachable!()
+                };
+                return Some((node, context, false));
+            };
+            let node = if self.reverse {
+                list.next_back()
+            } else {
+                list.next()
+            };
+            if let Some(node) = node {
+                let context = context.clone();
                 let [first, second] = node.child_lists();
-                self.stack.push(second.iter());
-                self.stack.push(first.iter());
-                return Some(node);
+                let [a, b] = (self.descend)(node, &context);
+                let mut children = [(first, a), (second, b)];
+                if !self.reverse {
+                    children.reverse();
+                }
+                if LEAVES {
+                    self.stack.push(Frame::Leave(node, context.clone()));
+                }
+                for (list, child) in children {
+                    if let Some(child) = child.filter(|_| !list.is_empty()) {
+                        self.stack.push(Frame::List(list.iter(), child));
+                    }
+                }
+                return Some((node, context, true));
             }
             self.stack.pop();
         }
@@ -446,5 +550,20 @@ mod tests {
         }
         binders(d, &mut bound);
         assert_eq!(bound, ["v", "x", "i"]);
+    }
+
+    #[test]
+    fn inherited_context_stays_in_its_branch_and_can_prune_a_list() {
+        let nodes = view("component App\n  view\n    column\n      if true\n        a\n      else\n        b\n      c\n    d\n");
+        let found: Vec<_> = Node::walk_with(&nodes, 0, |node, depth| match node {
+            Node::When { .. } => [Some(depth + 1), None],
+            _ => [Some(depth + 1), Some(depth + 1)],
+        })
+        .filter_map(|(node, depth)| match node {
+            Node::Element { tag, .. } => Some((tag.as_str(), depth)),
+            _ => None,
+        })
+        .collect();
+        assert_eq!(found, [("column", 0), ("a", 2), ("c", 1), ("d", 0)]);
     }
 }

@@ -1,6 +1,7 @@
-//! A 2D canvas's kept bitmap written as a PNG file (LLP 1056 D9, as amended
-//! for expo/exact#188): `captureCanvas(surface, path)` in TypeScript,
-//! [`Request::capture_canvas`] in Rust.
+//! A 2D canvas's kept bitmap written as an image file (LLP 1056 D9, as
+//! amended for expo/exact#188 and #504): `captureCanvas(surface, path, type,
+//! quality)` in TypeScript, [`Request::capture_canvas`] and
+//! [`Request::capture_canvas_as`] in Rust.
 //!
 //! @ref LLP 1056 D9 (readback stays refused; the capture is the asynchronous
 //! form) / LLP 1133.032 D7 (`captureImage`'s shape: a path, its size) /
@@ -8,10 +9,14 @@
 //!
 //! The capture is presenter work: the host that keeps the canvas's bitmap
 //! encodes what it has drawn and kept (every list applied, its images and
-//! text as drawn) as a straight-alpha sRGB PNG at device pixels, and
-//! writes it atomically to an `app:/` path under the source's `fs.write`.
-//! The answer is `{path, width, height, scale}`; no pixel crosses the
-//! source. A capture takes a completed drawing at or after its requesting
+//! text as drawn) as an sRGB image at device pixels, and writes it
+//! atomically to an `app:/` path under the source's `fs.write`. The type
+//! and quality are `HTMLCanvasElement.toBlob`'s: `image/png` (straight
+//! alpha) unless another type is asked for and the host's system encoder
+//! writes it, `image/jpeg` on every host, composited over opaque black as
+//! the HTML standard says, and a quality from 0 to 1 for a lossy type,
+//! 0.92 when none is given. The answer is `{path, width, height, scale,
+//! type}`, `type` the one written; no pixel crosses the source. A capture takes a completed drawing at or after its requesting
 //! commit. Later drawings can satisfy a pending job; unmount or replacement
 //! retires it. A ticket no longer held writes nothing.
 //! A refusal is a DOM exception's name and a message:
@@ -43,9 +48,52 @@ pub const MAX_PIXELS: u64 = 1 << 26;
 /// The longest `path`, in bytes, as `exactBodyTo` takes.
 pub const MAX_PATH: usize = 4096;
 
-/// What a capture answers: where the PNG is, and its size in device pixels
+/// The quality of a lossy type when none is given: Chrome's and Firefox's
+/// `toBlob` default.
+pub const DEFAULT_QUALITY: f64 = 0.92;
+
+/// The image type and quality a capture asks for, as `toBlob` takes them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Encoding {
+    /// A MIME type in lower case; `image/png` when none was given.
+    pub media_type: String,
+    /// A lossy type's quality in `[0, 1]`; `None` when none was given, or
+    /// when what was given is not a number in range, which `toBlob` ignores.
+    pub quality: Option<f64>,
+}
+
+// A quality is finite, so equality is reflexive.
+impl Eq for Encoding {}
+
+impl Default for Encoding {
+    fn default() -> Self {
+        Self::new("", None)
+    }
+}
+
+impl Encoding {
+    /// `toBlob`'s reading of `type` and `quality`: an empty type is PNG.
+    pub fn new(media_type: &str, quality: Option<f64>) -> Self {
+        let media_type = media_type.to_ascii_lowercase();
+        Self {
+            media_type: if media_type.is_empty() {
+                "image/png".into()
+            } else {
+                media_type
+            },
+            quality: quality.filter(|q| (0.0..=1.0).contains(q)),
+        }
+    }
+
+    /// The quality a lossy encoder uses.
+    pub fn lossy_quality(&self) -> f64 {
+        self.quality.unwrap_or(DEFAULT_QUALITY)
+    }
+}
+
+/// What a capture answers: where the image is, its size in device pixels
 /// with the device pixels per CSS px it was drawn at (1 for a canvas with
-/// an explicit bitmap size).
+/// an explicit bitmap size), and its type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CapturedImage {
     /// The `app:/` path written.
@@ -56,6 +104,8 @@ pub struct CapturedImage {
     pub height: u32,
     /// Device pixels per CSS px.
     pub scale: f64,
+    /// The MIME type written.
+    pub media_type: String,
 }
 
 /// The canvas a capture names, as the runner resolved it: the host encodes
@@ -83,11 +133,13 @@ pub struct CanvasCapture {
     pub height: u32,
     /// Device pixels per CSS px.
     pub scale: f64,
+    /// The type and quality asked for.
+    pub encoding: Encoding,
 }
 
 impl CanvasCapture {
-    /// The answer once the PNG is at `path`.
-    pub fn captured(&self) -> Outcome {
+    /// The answer once the image of `media_type` is at `path`.
+    pub fn captured(&self, media_type: &str) -> Outcome {
         if let Some(job) = &self.job {
             let mut state = job.0.lock().unwrap();
             if !matches!(*state, CaptureState::Snapshotted) {
@@ -98,11 +150,13 @@ impl CanvasCapture {
         let mut body = String::from("{\"path\":");
         crate::agent::quote(&self.path, &mut body);
         body.push_str(&format!(
-            ",\"width\":{},\"height\":{},\"scale\":{}}}",
+            ",\"width\":{},\"height\":{},\"scale\":{},\"type\":",
             self.width,
             self.height,
             crate::agent::num(self.scale)
         ));
+        crate::agent::quote(media_type, &mut body);
+        body.push('}');
         json(200, body)
     }
 }
@@ -261,10 +315,23 @@ impl Request {
     /// Capture the kept bitmap of the one mounted 2D canvas of `surface` as
     /// a PNG at the `app:/` file `path` (see the module).
     pub fn capture_canvas(surface: impl Into<String>, path: impl Into<String>) -> Request {
+        Self::capture_canvas_as(surface, path, "", None)
+    }
+
+    /// [`Request::capture_canvas`] as `media_type` (`image/jpeg`), at
+    /// `quality` from 0 to 1 for a lossy type, as `toBlob` takes them; a
+    /// type the host cannot write is written as PNG.
+    pub fn capture_canvas_as(
+        surface: impl Into<String>,
+        path: impl Into<String>,
+        media_type: &str,
+        quality: Option<f64>,
+    ) -> Request {
         Request {
             surface: Some(Box::new(SurfaceRequest::Canvas {
                 name: surface.into(),
                 path: path.into(),
+                encoding: Encoding::new(media_type, quality),
                 job: None,
             })),
             ..Request::get("")
@@ -274,7 +341,8 @@ impl Request {
 
 /// A TypeScript source's `fetch(CANVAS_URL, …)` as the surface work it
 /// stands for; any other request is left as it is. A body that is not
-/// `{"surface", "path"}` strings names an empty surface, which is refused.
+/// `{"surface", "path"}` strings names an empty surface, which is refused;
+/// its `type` and `quality` are optional.
 pub(crate) fn from_fetch(request: &mut Request) {
     if request.url != CANVAS_URL
         || request.surface.is_some()
@@ -285,7 +353,12 @@ pub(crate) fn from_fetch(request: &mut Request) {
     }
     let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
     let text = |k: &str| body[k].as_str().unwrap_or_default().to_string();
-    let converted = Request::capture_canvas(text("surface"), text("path"));
+    let converted = Request::capture_canvas_as(
+        text("surface"),
+        text("path"),
+        &text("type"),
+        body["quality"].as_f64(),
+    );
     *request = Request {
         grants: request.grants.take(),
         fetch: request.fetch,
@@ -317,6 +390,31 @@ pub(crate) fn path_refusal(path: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// The type of an encoded image, by its signature: the types a system
+/// encoder writes. `None` for another.
+pub fn media_type_of(image: &[u8]) -> Option<&'static str> {
+    let at = |i: usize, s: &[u8]| image.get(i..i + s.len()) == Some(s);
+    Some(if at(0, b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if at(0, b"\xff\xd8\xff") {
+        "image/jpeg"
+    } else if at(0, b"RIFF") && at(8, b"WEBP") {
+        "image/webp"
+    } else if at(0, b"GIF8") {
+        "image/gif"
+    } else if at(0, b"II*\0") || at(0, b"MM\0*") {
+        "image/tiff"
+    } else if at(0, b"BM") {
+        "image/bmp"
+    } else if at(4, b"ftypavif") {
+        "image/avif"
+    } else if at(4, b"ftyp") && [&b"heic"[..], b"heix", b"mif1"].iter().any(|b| at(8, b)) {
+        "image/heic"
+    } else {
+        return None;
+    })
 }
 
 /// A refusal: `name` a DOM exception's, `message` the reason.
@@ -357,14 +455,20 @@ pub fn captured_image(outcome: &Outcome) -> Result<CapturedImage, String> {
         size("width"),
         size("height"),
         json["scale"].as_f64(),
+        json["type"].as_str(),
     ) {
-        (Some(path), Some(width), Some(height), Some(scale)) => Ok(CapturedImage {
-            path: path.into(),
-            width,
-            height,
-            scale,
-        }),
-        _ => Err("EncodingError: the host's answer is not {path, width, height, scale}".into()),
+        (Some(path), Some(width), Some(height), Some(scale), Some(media_type)) => {
+            Ok(CapturedImage {
+                path: path.into(),
+                width,
+                height,
+                scale,
+                media_type: media_type.into(),
+            })
+        }
+        _ => {
+            Err("EncodingError: the host's answer is not {path, width, height, scale, type}".into())
+        }
     }
 }
 
@@ -395,20 +499,61 @@ mod tests {
             width: 40,
             height: 20,
             scale: 2.0,
+            encoding: Encoding::default(),
         };
         assert_eq!(
-            captured_image(&capture.captured()),
+            captured_image(&capture.captured("image/png")),
             Ok(CapturedImage {
                 path: "app:/tmp/a.png".into(),
                 width: 40,
                 height: 20,
-                scale: 2.0
+                scale: 2.0,
+                media_type: "image/png".into(),
             })
         );
         assert_eq!(
             captured_image(&refused("NotFoundError", "no canvas")),
             Err("NotFoundError: no canvas".into())
         );
+    }
+
+    #[test]
+    fn a_type_and_quality_are_read_as_to_blob_reads_them() {
+        let read = |body: &str| {
+            let mut request = Request::post_json(CANVAS_URL, body);
+            from_fetch(&mut request);
+            match request.surface.as_deref() {
+                Some(SurfaceRequest::Canvas { encoding, .. }) => encoding.clone(),
+                _ => unreachable!(),
+            }
+        };
+        let jpeg =
+            read(r#"{"surface":"s","path":"app:/tmp/a.jpg","type":"Image/JPEG","quality":0.5}"#);
+        assert_eq!(jpeg, Encoding::new("image/jpeg", Some(0.5)));
+        assert_eq!(jpeg.media_type, "image/jpeg");
+        assert_eq!(jpeg.lossy_quality(), 0.5);
+        // A quality out of range, or not a number, is no quality: the default.
+        for body in [
+            r#"{"surface":"s","path":"app:/tmp/a.jpg","type":"image/jpeg","quality":1.5}"#,
+            r#"{"surface":"s","path":"app:/tmp/a.jpg","type":"image/jpeg","quality":"high"}"#,
+        ] {
+            assert_eq!(read(body).lossy_quality(), DEFAULT_QUALITY);
+        }
+        assert_eq!(
+            read(r#"{"surface":"s","path":"app:/tmp/a.png"}"#),
+            Encoding::default()
+        );
+        assert_eq!(Encoding::default().media_type, "image/png");
+    }
+
+    #[test]
+    fn an_image_type_is_read_from_its_signature() {
+        assert_eq!(media_type_of(b"\x89PNG\r\n\x1a\n\0\0"), Some("image/png"));
+        assert_eq!(media_type_of(b"\xff\xd8\xff\xe0"), Some("image/jpeg"));
+        assert_eq!(media_type_of(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(media_type_of(b"\0\0\0\x18ftypheic"), Some("image/heic"));
+        assert_eq!(media_type_of(b"\0\0\0\x18ftypavif"), Some("image/avif"));
+        assert_eq!(media_type_of(b"PNG"), None);
     }
 
     #[test]

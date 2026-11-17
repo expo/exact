@@ -38,6 +38,247 @@ final class AgentCheckIOSTests: XCTestCase {
         return Agent(session: session)
     }
 
+    func testCheckLeavesANativeMenusSubstituteOutAndStillReadsThePage() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "button", "props": ["id": "open", "popovertarget": "choices"]],
+            ["op": "create", "id": 3, "kind": "view", "props": ["popover": "auto", "id": "choices", "accessibilityRole": "menu"]],
+            ["op": "create", "id": 4, "kind": "button", "handlers": ["press"]],
+            ["op": "create", "id": 5, "kind": "text", "props": ["text": "Choice"]],
+            ["op": "create", "id": 6, "kind": "button", "handlers": ["press"]],
+            ["op": "create", "id": 7, "kind": "button", "handlers": ["press"]],
+            ["op": "children", "id": 1, "ids": [2, 6, 7, 3]],
+            ["op": "children", "id": 3, "ids": [4]], ["op": "children", "id": 4, "ids": [5]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 20, "y": 100, "w": 100, "h": 44],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 250, "h": 1000],
+            ["op": "frame", "id": 4, "x": 0, "y": 0, "w": 250, "h": 1000],
+            ["op": "frame", "id": 5, "x": 0, "y": 0, "w": 250, "h": 1000],
+            ["op": "frame", "id": 6, "x": 40, "y": 250, "w": 100, "h": 44],
+            ["op": "frame", "id": 7, "x": 40, "y": 250, "w": 100, "h": 44],
+        ])
+        let p = try XCTUnwrap(session?.presenter), pop = try XCTUnwrap(p.views[3]), source = try XCTUnwrap(p.views[2])
+        XCTAssertTrue(pop.menuShaped)
+        p.menus.invoke(source)
+        XCTAssertTrue(p.menus.isOpen(pop))
+        let reply = agent.check([:]), items = try XCTUnwrap(reply["items"] as? [[String: Any]])
+        XCTAssertFalse(items.contains { [3, 4, 5].contains($0["id"] as? Int ?? -1) }, "the painted substitute does not measure UIMenu")
+        let covered = try XCTUnwrap(items.first { $0["id"] as? Int == 6 })
+        XCTAssertEqual((covered["cover"] as? [String: Any])?["by"] as? Int, 7, "the page beneath still has its real covering control")
+        XCTAssertTrue(items.contains { $0["id"] as? Int == 7 })
+        XCTAssertTrue(p.menus.isOpen(pop), "checking does not dismiss the menu")
+        XCTAssertFalse(pop.isHidden, "the next agent tap can still choose a row")
+
+        // A command opens these same rows as content, even with role=menu.
+        for args in [["choices"], ["choices", "open"]] {
+            p.menus.drop("choices")
+            p.menus.action("showPopover", args)
+            let content = try XCTUnwrap(agent.check(["capture": true])["items"] as? [[String: Any]])
+            XCTAssertTrue(content.contains { $0["id"] as? Int == 4 }, "an actual in-page presentation stays judged")
+            XCTAssertFalse(pop.isHidden, "a positioning source does not make content a native-menu substitute")
+            _ = agent.check(["release": true])
+        }
+    }
+
+    func testCheckCapturesThePageWithoutAnOverflowingMenuRowOrItsShadow() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit captures the overflowing row in its window") }
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [0, 0, 0, 255]]],
+            ["op": "create", "id": 2, "kind": "button", "props": ["popovertarget": "choices"]],
+            ["op": "create", "id": 3, "kind": "view", "props": ["popover": "auto", "id": "choices", "accessibilityRole": "menu"]],
+            ["op": "create", "id": 4, "kind": "button", "handlers": ["press"], "style": ["appearance": "none", "background_color": [255, 255, 255, 255]]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "children", "id": 3, "ids": [4]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 20, "y": 100, "w": 100, "h": 44],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 250, "h": 40],
+            ["op": "frame", "id": 4, "x": 0, "y": 0, "w": 250, "h": 200],
+        ])
+        let p = try XCTUnwrap(session?.presenter), win = try XCTUnwrap(window)
+        let pop = try XCTUnwrap(p.views[3]), row = try XCTUnwrap(p.views[4])
+        p.viewport.contentSize = win.bounds.size
+        p.menus.invoke(try XCTUnwrap(p.views[2]))
+        _ = agent.settleForPicture()
+        _ = agent.settleMotion()
+        pop.frame = CGRect(x: 20, y: 200, width: 250, height: 40)
+        row.layer.shadowColor = UIColor.white.cgColor
+        row.layer.shadowOpacity = 1
+        row.layer.shadowRadius = 10
+        row.layer.shadowOffset = .zero
+        row.layer.shadowPath = UIBezierPath(rect: row.bounds).cgPath
+        let point = row.convert(CGPoint(x: 100, y: 100), to: win)
+        let shadow = row.convert(CGPoint(x: row.bounds.maxX + 5, y: 100), to: win)
+        XCTAssertTrue(win.bounds.contains(point), "the overflowing row stays on screen: \(point)")
+        XCTAssertFalse(pop.convert(pop.bounds, to: win).contains(point), "the row paints beyond its popover")
+        let before = UIGraphicsImageRenderer(size: win.bounds.size).image { _ in
+            win.drawHierarchy(in: win.bounds, afterScreenUpdates: true)
+        }
+        func red(_ image: UIImage, scale: CGFloat, at: CGPoint? = nil) throws -> UInt8 {
+            let point = at ?? point
+            return try XCTUnwrap(SharePictureCase.rgba(try XCTUnwrap(image.cgImage), x: Int(point.x * scale), y: Int(point.y * scale))).0
+        }
+        XCTAssertGreaterThan(try red(before, scale: before.scale), 240, "the overflowing row is visible in a normal capture")
+        XCTAssertGreaterThan(try red(before, scale: before.scale, at: shadow), 15, "the shadow paints outside the row")
+        let reply = agent.check(["capture": true])
+        defer { _ = agent.check(["release": true]) }
+        XCTAssertNil((reply["capture"] as? [String: Any])?["png"], "the carrier composes the picture")
+        XCTAssertTrue(pop.isHidden)
+        p.menus.sync()
+        XCTAssertTrue(pop.isHidden, "a reentrant batch cannot show the substitute")
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let capture = agent.screenshot(["path": path.path, "window": true])
+        let image = try XCTUnwrap(UIImage(contentsOfFile: path.path))
+        XCTAssertLessThan(try red(image, scale: CGFloat(try XCTUnwrap(capture["scale"] as? Double))), 15, "judgment sees the black page under the overflowing row")
+        XCTAssertLessThan(try red(image, scale: CGFloat(try XCTUnwrap(capture["scale"] as? Double)), at: shadow), 15, "the shadow is absent from judgment")
+        XCTAssertTrue(pop.isHidden, "the simulator's display read still needs the substitute hidden")
+        _ = agent.check(["release": true])
+        XCTAssertFalse(pop.isHidden)
+        XCTAssertTrue(p.menus.isOpen(pop))
+    }
+
+    func testAMenuOverTheKeyboardIsOutOfTheHeldCaptureWhichStillCarriesTheKeyboard() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the software keyboard and materials need a hosted window") }
+        let session = ExactApp.shared.makeSession(label: "check-keyboard-material")
+        self.session = session
+        let view = ExactView(session: session), win = UIWindow(windowScene: scene)
+        self.window = win
+        win.frame = win.screen.bounds
+        win.rootViewController = UIViewController()
+        // A session view that has not booted boots the baked app at its first layout, over a tree applied by hand.
+        XCTAssertNil(session.boot(plan: try fixturePlan("FIELDLESS"), size: win.bounds.size).error)
+        view.frame = win.bounds
+        win.rootViewController!.view.addSubview(view)
+        win.makeKeyAndVisible()
+        view.layoutIfNeeded()
+        let p = session.presenter, agent = Agent(session: session)
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "style": ["background_color": [0, 0, 0, 255]]],
+            ["op": "create", "id": 101, "kind": "button", "props": ["popovertarget": "choices"]],
+            ["op": "create", "id": 102, "kind": "view", "props": ["popover": "auto", "id": "choices", "accessibilityRole": "menu"]],
+            ["op": "create", "id": 103, "kind": "button", "handlers": ["press"], "style": ["appearance": "none", "background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 104, "kind": "input", "props": ["value": ""], "handlers": ["input"]],
+            ["op": "children", "id": 100, "ids": [101, 104, 102]], ["op": "children", "id": 102, "ids": [103]], ["op": "roots", "ids": [100]],
+            // Shorter than the page above the keys, so focusing the field scrolls nothing.
+            ["op": "frame", "id": 100, "x": 0, "y": 0, "w": Double(win.bounds.width), "h": 400],
+            ["op": "frame", "id": 101, "x": 20, "y": 20, "w": 100, "h": 44],
+            ["op": "frame", "id": 102, "x": 0, "y": 0, "w": 250, "h": 88],
+            ["op": "frame", "id": 103, "x": 0, "y": 0, "w": 250, "h": 88],
+            ["op": "frame", "id": 104, "x": 20, "y": 200, "w": 250, "h": 44],
+        ]))
+        let pop = try XCTUnwrap(p.views[102]), row = try XCTUnwrap(p.views[103]), field = try XCTUnwrap(p.views[104]?.field)
+        let material = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+        material.frame = field.convert(field.bounds, to: p.viewport).offsetBy(dx: 0, dy: 80)
+        p.viewport.addSubview(material)
+        XCTAssertTrue(field.becomeFirstResponder())
+        defer { win.endEditing(true) }
+        waitFor("the software keyboard") { agent.keyboardTopForCheck().map { $0 < win.bounds.height } == true }
+        p.menus.invoke(try XCTUnwrap(p.views[101]))
+        _ = agent.settleForPicture()
+        _ = agent.settleMotion()
+        let keys = try XCTUnwrap(agent.keyboardTopForCheck(), "opening the menu leaves the keyboard up")
+        XCTAssertTrue(p.menus.platformMenus.contains { $0.popover === pop }, "a person sees UIKit's menu for this popover")
+        let shown = row.convert(row.bounds, to: win), point = CGPoint(x: shown.midX, y: shown.midY)
+        XCTAssertLessThan(shown.maxY, keys, "the menu's row is above the keys: \(shown)")
+        XCTAssertFalse(agent.backdropRects(win).contains { $0.intersects(shown) }, "the row is over the page alone: \(shown)")
+        func red(_ image: UIImage, scale: CGFloat) throws -> UInt8 {
+            try XCTUnwrap(SharePictureCase.rgba(try XCTUnwrap(image.cgImage), x: Int(point.x * scale), y: Int(point.y * scale))).0
+        }
+        let before = UIGraphicsImageRenderer(size: win.bounds.size).image { _ in win.drawHierarchy(in: win.bounds, afterScreenUpdates: true) }
+        XCTAssertGreaterThan(try red(before, scale: before.scale), 240, "the open menu's row is painted over the page")
+
+        let observation = agent.check(["capture": true])
+        defer { _ = agent.check(["release": true]) }
+        XCTAssertEqual(observation["keyboard"] as? Double, InspectionValue.r2(keys), "the observation has the keyboard's top")
+        XCTAssertEqual((observation["advice"] as? [[String: Any]])?.compactMap { $0["id"] as? Int }, [102])
+        let items = try XCTUnwrap(observation["items"] as? [[String: Any]])
+        XCTAssertFalse(items.contains { [102, 103].contains($0["id"] as? Int ?? -1) })
+        XCTAssertTrue(pop.isHidden)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let capture = agent.screenshot(["path": path.path, "window": true])
+        XCTAssertNil(capture["error"])
+        let image = try XCTUnwrap(UIImage(contentsOfFile: path.path))
+        XCTAssertLessThan(try red(image, scale: CGFloat(try XCTUnwrap(capture["scale"] as? Double))), 15, "the judged picture has the black page where the menu's row was")
+        // What the simulator driver composes the display from (devices.mjs `withDisplay`): the keyboard's band from
+        // `windowTop` down, and the rest once the display shows the app's drawing at `opaque`.
+        let keyboard = try XCTUnwrap(capture["keyboard"] as? [String: Any])
+        XCTAssertEqual(keyboard["visible"] as? Bool, true)
+        XCTAssertEqual(keyboard["windowTop"] as? Double, InspectionValue.r2(keys), "the keyboard's pixels come from the display")
+        XCTAssertEqual(capture["front"] as? Bool, true, "the display is read only for an app in front")
+        let opaque = try XCTUnwrap(capture["opaque"] as? [[Double]]).map { CGPoint(x: $0[0], y: $0[1]) }
+        let glass = material.convert(material.bounds, to: win)
+        XCTAssertFalse(opaque.contains { glass.contains($0) }, "the material's pixels come from the display")
+        XCTAssertTrue(opaque.contains { shown.contains($0) }, "the display must show the page where the menu's row was hidden")
+        XCTAssertTrue(pop.isHidden, "the display is read after this picture")
+        XCTAssertTrue(field.isFirstResponder)
+
+        _ = agent.check(["release": true])
+        XCTAssertFalse(pop.isHidden)
+        XCTAssertTrue(p.menus.isOpen(pop))
+        XCTAssertEqual(agent.keyboardTopForCheck(), keys, "the keyboard stays up through the check")
+    }
+
+    func testSnapshotCallbacksFinishBeforeObservationAndClosedMenusStayHidden() throws {
+        CheckSnapshotModule.table.withUnsafeBytes { NativeViews.install(table: $0.baseAddress!) }
+        defer { CheckSnapshotModule.callback = nil; NativeViews.uninstallTable() }
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "button", "props": ["popovertarget": "choices"]],
+            ["op": "create", "id": 3, "kind": "view", "props": ["popover": "auto", "id": "choices", "accessibilityRole": "menu"]],
+            ["op": "create", "id": 4, "kind": "button", "handlers": ["press"]],
+            ["op": "create", "id": 5, "kind": "text", "props": ["text": "Before"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 5]], ["op": "children", "id": 3, "ids": [4]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 20, "y": 100, "w": 100, "h": 44],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 250, "h": 100],
+            ["op": "frame", "id": 4, "x": 0, "y": 0, "w": 250, "h": 44],
+            ["op": "frame", "id": 5, "x": 20, "y": 400, "w": 200, "h": 30],
+        ])
+        let session = try XCTUnwrap(session), p = session.presenter, pop = try XCTUnwrap(p.views[3])
+        session.natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        let guest = NodeView(id: 10, kind: "native", presenter: p)
+        guest.frame = CGRect(x: 0, y: 500, width: 20, height: 20)
+        p.viewport.addSubview(guest); p.views[10] = guest
+        session.natives.create(owner: guest)
+        guest.props = ["nativeViewModuleName": "check-snapshot", "nativeViewProps": "{}"]
+        session.natives.update(guest)
+        defer { session.natives.destroy(id: 10) }
+        for closes in [false, true] {
+            p.menus.invoke(try XCTUnwrap(p.views[2]))
+            var callbacks = 0
+            CheckSnapshotModule.callback = {
+                callbacks += 1
+                XCTAssertFalse(pop.isHidden, "snapshot preparation must finish before suppression")
+                p.apply(wireBatch([
+                    ["op": "props", "id": 5, "set": ["text": "After"]],
+                    ["op": "props", "id": 4, "set": ["accessibilityLabel": "Updated choice"]],
+                ]))
+                if closes { p.menus.drop("choices") }
+            }
+            let reply = agent.check(["capture": true])
+            XCTAssertEqual(callbacks, 1)
+            let items = try XCTUnwrap(reply["items"] as? [[String: Any]])
+            XCTAssertEqual(items.first { $0["id"] as? Int == 5 }?["text"] as? String, "After")
+            XCTAssertTrue(pop.isHidden)
+            p.menus.sync()
+            XCTAssertTrue(pop.isHidden)
+            let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+            defer { try? FileManager.default.removeItem(at: path) }
+            XCTAssertNil(agent.screenshot(["path": path.path, "window": true])["error"])
+            XCTAssertEqual(callbacks, 1, "the held capture reuses prepared snapshots")
+            _ = agent.check(["release": true])
+            XCTAssertEqual(pop.isHidden, closes)
+            if !closes {
+                _ = agent.check(["capture": true])
+                p.menus.drop("choices")
+                _ = agent.check(["release": true])
+                XCTAssertTrue(pop.isHidden, "closing during the display capture stays closed")
+            }
+        }
+    }
+
     func testFrameHealthControlsAreExcludedFromAppOcclusionFindings() throws {
         let agent = mounted([
             ["op": "create", "id": 1, "kind": "button", "props": ["testId": "under-hud"], "handlers": ["press"]],
@@ -925,4 +1166,48 @@ private final class FloatingBarHostingView: UIView {
     }
 }
 private final class UIPlatformGlassInteractionView: UIView {}
+
+private enum CheckSnapshotModule {
+    typealias Reply = @convention(c) (UnsafeMutableRawPointer?, UInt32, UInt32, UInt32, UnsafePointer<UInt8>?, UInt32) -> Void
+    final class Instance {
+        let view = UIView()
+        let nonce: UInt32
+        let reply: Reply
+        init(_ nonce: UInt32, _ reply: @escaping Reply) { self.nonce = nonce; self.reply = reply }
+    }
+    nonisolated(unsafe) static var callback: (() -> Void)?
+    static let roster = strdup(#"{"check-snapshot":{"snapshot":true}}"#)!
+    static let table: [UInt8] = {
+        var table = [UInt8](repeating: 0, count: 104)
+        func put<T>(_ value: T, _ offset: Int) {
+            withUnsafeBytes(of: value) { for (i, byte) in $0.enumerated() { table[offset + i] = byte } }
+        }
+        let create: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafePointer<UInt8>?, UInt32,
+            UnsafeRawPointer?, Reply?, UnsafeMutableRawPointer?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> UnsafeMutableRawPointer? = {
+            _, _, _, _, _, _, reply, _, nonce, _, _ in Unmanaged.passRetained(Instance(nonce, reply!)).toOpaque()
+        }
+        let view: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = {
+            Unmanaged.passUnretained(Unmanaged<Instance>.fromOpaque($0!).takeUnretainedValue().view).toOpaque()
+        }
+        let set: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> Int32 = { _, _, _, _, _ in 0 }
+        let snapshot: @convention(c) (UnsafeMutableRawPointer?, UInt32) -> Void = { raw, token in
+            let instance = Unmanaged<Instance>.fromOpaque(raw!).takeUnretainedValue()
+            DispatchQueue.main.async {
+                callback?()
+                let data = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).pngData { _ in }
+                data.withUnsafeBytes { instance.reply(nil, instance.nonce, token, 0, $0.bindMemory(to: UInt8.self).baseAddress, UInt32($0.count)) }
+            }
+        }
+        let destroy: @convention(c) (UnsafeMutableRawPointer?) -> Void = { Unmanaged<Instance>.fromOpaque($0!).release() }
+        let none: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in }
+        put(NativeViews.tableMajor, 0); put(UInt32(104), 4); put(UnsafeRawPointer(roster), 8)
+        put(unsafeBitCast(create, to: UnsafeRawPointer.self), 16)
+        put(unsafeBitCast(view, to: UnsafeRawPointer.self), 24)
+        put(unsafeBitCast(set, to: UnsafeRawPointer.self), 32)
+        put(unsafeBitCast(snapshot, to: UnsafeRawPointer.self), 40)
+        put(unsafeBitCast(destroy, to: UnsafeRawPointer.self), 48)
+        for offset in [72, 80, 88, 96] { put(unsafeBitCast(none, to: UnsafeRawPointer.self), offset) }
+        return table
+    }()
+}
 #endif

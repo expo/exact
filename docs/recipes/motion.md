@@ -1,6 +1,6 @@
 # Recipe: motion
 
-Use `transition` for changes, `keyframes` and `animation` for entrances or loops,
+`transition` for changes; `keyframes` and `animation` for entrances or loops;
 `-exact-exit-animation` for removal, `-exact-layout-transition` for layout.
 
 ```contract
@@ -40,24 +40,26 @@ component App
             text "Remove"
 ```
 
-- **What animates:** translate, scale, rotate, opacity, colours, `box-shadow`, SVG geometry,
-  numeric `height`, `font-weight`, `font-stretch`, `font-variation-settings`. Other layout
-  properties are refused; use `-exact-layout-transition`. A native `button` animates
-  only opacity and transforms.
-- **Spring:** `-exact-spring(stiffness, damping, mass)` is transition timing with no
-  duration; `animation` refuses it.
-- **Hover/focus scale:** `:hover` and `:focus-visible` accept `scale=1.08`. Set
-  `transition="scale 150ms ease"` on the node. Paint and hits grow; layout stays fixed.
-  Leaving restores the base.
+- **Animates:** translate, scale, rotate, opacity, colours, `box-shadow`, SVG geometry,
+  numeric `height`, `font-weight`, `font-stretch`, `font-variation-settings`, `filter`
+  (transitions). Layout: `-exact-layout-transition`. Native `button`: opacity,
+  transforms.
+- **Spring:** `-exact-spring(stiffness, damping, mass)`: transition timing, no duration;
+  not `animation`.
+- **Hover scale:** `:hover`, `:focus-visible` take `scale=1.08` with
+  `transition="scale 150ms ease"`; paint and hits grow, layout stays.
 - **Keyframes:** literals or app `fn` on constants.
-- **Exit:** an `if` arm or `for` row leaves layout at once, inert; siblings use their layout
-  transitions. The exit must end. Unsupported in a screen being popped, and on Linux.
-- **Layout transition:** moves and resizes the surface; children jump, unscaled.
-  `sharedElement=` flies between boxes on iOS, macOS and web, not Linux.
-- **Expand/collapse:** keep content mounted (`Shown`) in a clipped wrapper with `height`
-  changing between `"0px"` and `"auto"`. An `if` row appears at full size; siblings slide over it.
+- **Exit:** an `if` arm or `for` row leaves layout at once, inert, and must end; siblings use
+  layout transitions. Not in a popped screen or on Linux, Windows or Android.
+- **Routes:** a route takes `::view-transition-new` and `::view-transition-old`, its
+  entrance and exit: `animation=` alone, keyframes of opacity, translate, scale, rotate.
+  `none` cuts; unset is the platform's. Not on a sheet or zoom route.
+- **Layout:** moves/resizes the surface; children jump, unscaled.
+  `sharedElement=` flies, not on Linux or Windows.
+  Android: in-page only; no native dialogs or zooms.
+- **Expand/collapse:** as above; an `if` row appears full size, siblings slide over.
 - **JS target:** bound exit/layout values must be binding literals.
-- **Stagger:** use delays, as above. State changes after motion use a gated `after(ms, action)`.
+- **Stagger:** delays; after motion, a gated `after(ms, action)`.
 - **Reduced motion:** gate on `exactViewport()`; drive `prefer prefers-reduced-motion reduce`.
-  Apple shared-element flights land at once.
-- **Check:** `clock settle` ends motion; `screenshot .exact/m.png over 600 every 50` films it.
+  Native flights land; route parts cut.
+- **Check:** `clock settle` ends it; `screenshot .exact/m.png over 600 every 50` films it.

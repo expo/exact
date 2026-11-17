@@ -707,6 +707,7 @@ impl Feed {
             // gameplay-only rows. Rebuild draw records only if their effective
             // membership changed, or a draw's own mesh/LOD/assets changed.
             self.visibility.begin(w);
+            let materials = w.components::<Material>();
             let entities: Vec<_> = w
                 .query::<(&Mesh, &Transform)>()
                 .iter()
@@ -714,7 +715,8 @@ impl Feed {
                     (
                         entity,
                         self.visibility.get(w, entity),
-                        w.get::<Material>(entity)
+                        materials
+                            .get(entity)
                             .is_some_and(|m| (0.0..1.0).contains(&m.color[3])),
                     )
                 })
@@ -762,13 +764,13 @@ impl Feed {
             // A scene without offsets already has exact propagated globals.
             // Check once per feed, not once per entity's entire parent chain.
             let has_offsets = w.query::<&exact_game::Offset>().iter().next().is_some();
-            let globals = w.globals();
+            let poses = scene::PoseRows::new(w);
             let world_pose = |e| {
-                scene::primitive_endpoint(w, e, || {
+                poses.primitive_endpoint(e, || {
                     if has_offsets {
-                        scene::drawn(w, e)
+                        poses.drawn(e)
                     } else {
-                        globals.get(e)
+                        poses.global(e)
                     }
                 })
             };
@@ -933,7 +935,7 @@ impl Feed {
             }
             if !initial {
                 for &e in w.fresh() {
-                    if let Some(t) = scene::interpolation_origin(w, e).or_else(|| world_pose(e)) {
+                    if let Some(t) = poses.interpolation_origin(e).or_else(|| world_pose(e)) {
                         self.previous.push((e.index(), floats(t)));
                         self.transforms[1 - self.current].invalidate(e.index() as usize / PAGE);
                     }
@@ -952,17 +954,17 @@ impl Feed {
                         && if parent_changed {
                             self.parent_changes.get(w, e)
                         } else {
-                            scene::snap(w, e, false)
+                            poses.snap(e, false)
                         }
                     {
-                        let previous = scene::interpolation_origin(w, e).map(floats).unwrap_or(t);
+                        let previous = poses.interpolation_origin(e).map(floats).unwrap_or(t);
                         self.previous.push((e.index(), previous));
                         self.transforms[1 - self.current].invalidate(e.index() as usize / PAGE);
                     }
                 }
                 if parent_changed {
                     for &e in &self.parents {
-                        if !w.has::<Parent>(e) && self.parent_changes.get(w, e) {
+                        if !poses.has_parent(e) && self.parent_changes.get(w, e) {
                             if let Some(t) = world_pose(e) {
                                 self.previous.push((e.index(), floats(t)));
                                 self.transforms[1 - self.current]
@@ -1004,6 +1006,7 @@ impl Feed {
             for group in &mut self.groups {
                 group.slots.clear();
             }
+            let viewmodels = w.components::<ViewModel>();
             for ((e, (mesh, _)), &(expected, visible, translucent)) in
                 w.query::<(&Mesh, &Transform)>().iter().zip(drawn)
             {
@@ -1021,7 +1024,7 @@ impl Feed {
                 if !visible || translucent {
                     continue;
                 }
-                let viewmodel = w.has::<ViewModel>(e);
+                let viewmodel = viewmodels.has(e);
                 let group = *self.shapes.entry((shape, viewmodel)).or_insert_with(|| {
                     let (v, i) = shape.geometry();
                     let index = self.groups.len();
@@ -1106,7 +1109,9 @@ impl Feed {
                 let len = page_len(first, r.max_slots());
                 let default = material_floats(Material::default());
                 for (i, out) in self.page_scratch[..len * 12]
-                    .chunks_exact_mut(12)
+                    .as_chunks_mut::<12>()
+                    .0
+                    .iter_mut()
                     .enumerate()
                 {
                     if let Some(p) = page
@@ -1198,10 +1203,13 @@ impl Feed {
         );
         if material {
             self.glows.clear();
+            let materials = w.components::<Material>();
+            let tints = w.components::<exact_game::Tint>();
+            let meshes = w.components::<Mesh>();
             for (entity, glow) in w.query::<&exact_game::Glow>().iter() {
                 let mut values =
-                    material_floats(w.get::<Material>(entity).map(|m| *m).unwrap_or_default());
-                if let Some(t) = w.get::<exact_game::Tint>(entity) {
+                    material_floats(materials.get(entity).map(|m| *m).unwrap_or_default());
+                if let Some(t) = tints.get(entity) {
                     tinted(&mut values, &t);
                 }
                 values[9..12].copy_from_slice(
@@ -1214,8 +1222,8 @@ impl Feed {
                     material: values,
                     tween: glow.0.clone(),
                     hz: w.hz(),
-                    model: w
-                        .get::<Mesh>(entity)
+                    model: meshes
+                        .get(entity)
                         .is_some_and(|m| matches!(*m, Mesh::Asset(_))),
                 });
             }

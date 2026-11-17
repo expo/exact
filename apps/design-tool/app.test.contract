@@ -1,9 +1,9 @@
-// The design tool against a stand-in Tamber server (stub/tamber-stub.ts, run
+// The design tool against a stand-in Forma server (stub/forma-stub.ts, run
 // by `test` and `verify`): its hello and long poll, the canvas, builds and
 // pins, pairing, review, commit and history, and the grid of live copies.
 // editing.test.contract holds the panels' edits and scrubs, and
 // inspector.test.contract the inspector; `bun exact.mjs test` runs all three,
-// `verify` this file alone. Its drives against a real `tamber serve` are in
+// `verify` this file alone. Its drives against a real `forma serve` are in
 // scripts/design-tool.test.mjs and its -ops, -canvas and -scrub files (and
 // stage 11's base scale and package rows in scripts/design-tool-scale.test.mjs).
 
@@ -15,13 +15,13 @@ test "it asks for the person's name once, then shows the server's hello"
   clock data
   expect text "person" == "design-tool:Ada"
   expect text "app" == "/stub/theme-fixture"
-  expect text "protocol" == "tamber/1.13 · IR format 1"
+  expect text "protocol" == "forma/1.13 · IR format 1"
   // The files folded behind one line (below the canvas and the tokens), opened on asking.
-  expect tree missing "file-app.tamber"
+  expect tree missing "file-app.forma"
   expect text "toggle-files" == "Files (2)"
   tap "toggle-files"
-  expect tree has "file-app.tamber"
-  expect tree has "file-brand.tamber"
+  expect tree has "file-app.forma"
+  expect tree has "file-brand.forma"
   expect text "toggle-files" == "Hide files"
   reload
   expect text "person" == "design-tool:Ada"
@@ -32,7 +32,7 @@ test "a dev loop whose page won't let this tool frame it is said above the canva
   clock data
   expect tree missing "canvas-refused"
   request POST "/__stub/canvas-check" {"via": "http://127.0.0.1:5173", "allowed": false, "origins": ["http://localhost:5173", "http://127.0.0.1:9999"], "portFixes": true} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -40,7 +40,7 @@ test "a dev loop whose page won't let this tool frame it is said above the canva
   expect text "canvas-refused" == "The dev loop at http://127.0.0.1:5173 lets only http://localhost:5173 http://127.0.0.1:9999 frame its page, not this tool, so the canvas stays empty: start the loop with EXACT_TOOL_PORT=7740."
   // The loop started again with the tool's port: asked again with hello, the line goes.
   request POST "/__stub/canvas-check" {"via": "http://127.0.0.1:5173", "allowed": true, "origins": []} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -54,7 +54,7 @@ test "no server: a clear way to start one, and Try Again"
   tap "save-name"
   clock data
   expect tree has "no-server"
-  expect text "no-server-message" == "No design server answers at http://127.0.0.1:7740. Start one for your app with `bun exact.mjs tamber tool <app>`, then try again."
+  expect text "no-server-message" == "No design server answers at http://127.0.0.1:7740. Start one for your app with `bun exact.mjs forma tool <app>`, then try again."
   pass fetch "http://127.0.0.1:7740"
   tap "reconnect"
   clock data
@@ -65,18 +65,18 @@ test "another client's write arrives on the long poll, attributed"
   tap "save-name"
   clock data
   tap "toggle-files"
-  expect text "digest-app.tamber" == "aaaaaaaaaaaa"
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}], "files": {"app.tamber": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}} as ada
+  expect text "digest-app.forma" == "aaaaaaaaaaaa"
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}], "files": {"app.forma": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}} as ada
   clock +1
   clock data
   clock +1
   clock data
-  expect text "change-1" == "app.tamber · agent:codex"
-  expect text "digest-app.tamber" == "cccccccccccc"
-  request POST "/__stub/event" {"client": null, "edited": ["brand.tamber"]} as ada
+  expect text "change-1" == "app.forma · agent:codex"
+  expect text "digest-app.forma" == "cccccccccccc"
+  request POST "/__stub/event" {"client": null, "edited": ["brand.forma"]} as ada
   clock +1
   clock data
-  expect text "change-2" == "brand.tamber · changed on disk"
+  expect text "change-2" == "brand.forma · changed on disk"
 
 test "a restarted server starts the list again"
   request POST "/__stub/restart" {} as ada
@@ -85,28 +85,28 @@ test "a restarted server starts the list again"
   clock data
   clock +1
   clock data
-  request POST "/__stub/event" {"client": "agent:before", "edited": ["app.tamber"]} as ada
+  request POST "/__stub/event" {"client": "agent:before", "edited": ["app.forma"]} as ada
   clock +1
   clock data
-  expect text "change-1" == "app.tamber · agent:before"
+  expect text "change-1" == "app.forma · agent:before"
   request POST "/__stub/restart" {} as ada
   clock +1
   clock data
   expect tree missing "change-1"
-  request POST "/__stub/event" {"client": "design-tool:Grace", "edited": ["brand.tamber"]} as ada
+  request POST "/__stub/event" {"client": "design-tool:Grace", "edited": ["brand.forma"]} as ada
   clock +1
   clock data
   clock +1
   clock data
-  expect text "change-1" == "brand.tamber · design-tool:Grace"
+  expect text "change-1" == "brand.forma · design-tool:Grace"
 
 test "another design file is read when chosen, and a refused one shows its error and a retry"
   type "name" "Ada"
   tap "save-name"
   clock data
-  type "file" "brand.tamber"
+  type "file" "brand.forma"
   clock data
-  expect text "design-error" == "the stub has no design in brand.tamber"
+  expect text "design-error" == "the stub has no design in brand.forma"
   expect tree has "reload-design"
   expect tree missing "no-dials"
   expect tree missing "dials"
@@ -121,7 +121,7 @@ test "a commit's dry run is read again only when what a commit could take moves:
   tap "save-name"
   clock data
   request POST "/__stub/refuse-commit" {"nothing": true} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -145,7 +145,7 @@ test "a commit's dry run is read again only when what a commit could take moves:
   clock data
   expect disabled "commit"
   // A file's change reads it again.
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -159,7 +159,7 @@ test "nothing is read for no one before the name; the dry commit is asked only o
   clock data
   clock +1
   clock data
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +3000
   clock data
   request POST "/__stub/asked" {"dry": false, "nameless": false} as ada
@@ -171,14 +171,14 @@ test "nothing is read for no one before the name; the dry commit is asked only o
   expect enabled "commit"
   request POST "/__stub/asked" {"dry": true} as ada
   // Committed (by anyone): nothing is asked again until the next write, though a dry run would find an edit here.
-  request POST "/__stub/event" {"event": "committed", "client": "agent:codex", "commit": "c0ffee0123456789abcdef0123456789abcdef01", "files": ["app.tamber"], "edits": []} as ada
+  request POST "/__stub/event" {"event": "committed", "client": "agent:codex", "commit": "c0ffee0123456789abcdef0123456789abcdef01", "files": ["app.forma"], "edits": []} as ada
   clock +1
   clock data
   clock +1
   clock data
   expect disabled "commit"
   request POST "/__stub/asked" {"dry": false} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -204,7 +204,7 @@ test "a name ending in a colon is a client like any other: its dry run is read a
   tap "save-name"
   clock data
   expect text "person" == "design-tool:Ada:"
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": []} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": []} as ada
   clock +1
   clock data
   clock +1
@@ -217,22 +217,22 @@ test "the changeset lists each write since the tool opened, and commit reports w
   tap "save-name"
   clock data
   expect tree has "no-changes"
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}]} as ada
   clock +1
   clock data
   clock +1
   clock data
-  expect text "entry-text-1" == "app.tamber: surface.card · agent:codex"
+  expect text "entry-text-1" == "app.forma: surface.card · agent:codex"
   request POST "/__stub/refuse-commit" {"why": "it differed from HEAD when the session first wrote it"} as ada
   tap "commit"
   clock data
-  expect text "refused-app.tamber" == "app.tamber: it differed from HEAD when the session first wrote it"
+  expect text "refused-app.forma" == "app.forma: it differed from HEAD when the session first wrote it"
   request POST "/__stub/refuse-commit" {"why": ""} as ada
   tap "commit"
   clock data
-  expect text "committed-summary" == "Committed c0ffee012345: app.tamber"
+  expect text "committed-summary" == "Committed c0ffee012345: app.forma"
 
-test "the changes' long poll by cursor (tamber/1.17): a reply folds as it comes and asks nothing again; one that names a cursor the tool never had is read again once by POST; another run starts again"
+test "the changes' long poll by cursor (forma/1.17): a reply folds as it comes and asks nothing again; one that names a cursor the tool never had is read again once by POST; another run starts again"
   // (A new run first: its changes numbered from 1.)
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
@@ -245,47 +245,47 @@ test "the changes' long poll by cursor (tamber/1.17): a reply folds as it comes 
   clock data
   // Hello says 1.17: the poll is the GET by cursor, held by the stub until there is news.
   expect tree has "no-changes"
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}]} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == true
-  expect text "entry-text-1" == "app.tamber: surface.card · agent:codex"
+  expect text "entry-text-1" == "app.forma: surface.card · agent:codex"
   // The next reply comes on the same poll, asked again by the host, not the tool.
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.page"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.page"}]} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == true
-  expect text "entry-text-1" == "app.tamber: surface.card · agent:codex"
-  expect text "entry-text-2" == "app.tamber: surface.page · agent:codex"
+  expect text "entry-text-1" == "app.forma: surface.card · agent:codex"
+  expect text "entry-text-2" == "app.forma: surface.page · agent:codex"
   // A reply that names a cursor the tool never had (one coalesced away): not folded, but read again once by POST,
   // which folds what it missed, then the poll goes on.
   request POST "/__stub/skip-cursor" {} as ada
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "text.primary"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "text.primary"}]} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == false
   clock +1
   clock data
-  expect text "entry-text-3" == "app.tamber: text.primary · agent:codex"
-  expect text "entry-text-2" == "app.tamber: surface.page · agent:codex"
+  expect text "entry-text-3" == "app.forma: text.primary · agent:codex"
+  expect text "entry-text-2" == "app.forma: surface.page · agent:codex"
   clock +1
   clock data
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "text.label"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "text.label"}]} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == true
-  expect text "entry-text-4" == "app.tamber: text.label · agent:codex"
+  expect text "entry-text-4" == "app.forma: text.label · agent:codex"
   // A reply larger than a stream's default ceiling (1 MiB) comes on it as a read's would.
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "text.secondary"}], "pad": 1500000} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "text.secondary"}], "pad": 1500000} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == true
-  expect text "entry-text-5" == "app.tamber: text.secondary · agent:codex"
+  expect text "entry-text-5" == "app.forma: text.secondary · agent:codex"
   // Another run of the server: the poll held there answers that, which is read again by POST (it starts again), and
   // a new poll goes on in the new run.
   request POST "/__stub/restart" {} as ada
@@ -302,12 +302,12 @@ test "the changes' long poll by cursor (tamber/1.17): a reply folds as it comes 
   clock data
   // (The new poll's opening reply in, alone, before the next event: every clock waits for a long poll's first reply.)
   expect state changes.stream == true
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "text.label"}]} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "text.label"}]} as ada
   clock held changes
   clock +1
   clock data
   expect state changes.stream == true
-  expect text "entry-text-1" == "app.tamber: text.label · agent:codex"
+  expect text "entry-text-1" == "app.forma: text.label · agent:codex"
   // Nothing new a while: the stub's heartbeat (a 204, here after 300 ms) is a reply `clock held` returns on, and
   // nothing comes of it: the poll goes on, asked again by the host.
   request POST "/__stub/long-poll" {"heartbeat": 300} as ada
@@ -357,7 +357,7 @@ test "a restarted server starts the changeset again"
   clock data
   clock +1
   clock data
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}], "files": {"app.tamber": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}], "files": {"app.forma": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}} as ada
   clock +1
   clock data
   clock +1
@@ -376,7 +376,7 @@ test "a restarted server starts the changeset again"
   expect tree has "no-changes"
   // A new run's first change is highlighted, though its number is one an
   // earlier run's faded highlight had passed.
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}], "files": {"app.tamber": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}], "files": {"app.forma": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}} as ada
   clock +1
   clock data
   clock +1
@@ -389,21 +389,21 @@ test "a held proposal's title names what it edits, then what reads it, a param b
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/hold" {"proposal": "p9", "client": "agent:d4", "diff": "", "changed": [{"file": "app.tamber", "token": "cards.avatar-default"}, {"file": "app.tamber", "token": "cards.banner"}, {"file": "app.tamber", "token": "@exact/cards/profile-header.contract#ProfileHeader.banner"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "cards.avatar-default", "value": "#aa00aa"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p9", "client": "agent:d4", "diff": "", "changed": [{"file": "app.forma", "token": "cards.avatar-default"}, {"file": "app.forma", "token": "cards.banner"}, {"file": "app.forma", "token": "@exact/cards/profile-header.contract#ProfileHeader.banner"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "cards.avatar-default", "value": "#aa00aa"}}]} as ada
   clock +1
   clock data
   expect text "held-title-p9" == "agent:d4 proposes cards.avatar-default (and 2 that read it: cards.banner, ProfileHeader.banner)"
   // A rename edits both its names; a param's add names its component.
-  request POST "/__stub/hold" {"proposal": "p10", "client": "agent:d4", "diff": "", "changed": [{"file": "app.tamber", "token": "surface.card"}, {"file": "app.tamber", "token": "surface.panel"}, {"file": "app.tamber", "token": "ink.on-card"}], "ops": [{"index": 0, "op": {"op": "rename-token", "from": "surface.card", "to": "surface.panel"}}]} as ada
-  request POST "/__stub/hold" {"proposal": "p11", "client": "agent:d4", "diff": "", "changed": [{"file": "app.tamber", "token": "@app/app.contract#Card.fill"}], "ops": [{"index": 0, "op": {"op": "add-param", "component": "Card", "name": "fill", "value": "surface.card"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p10", "client": "agent:d4", "diff": "", "changed": [{"file": "app.forma", "token": "surface.card"}, {"file": "app.forma", "token": "surface.panel"}, {"file": "app.forma", "token": "ink.on-card"}], "ops": [{"index": 0, "op": {"op": "rename-token", "from": "surface.card", "to": "surface.panel"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p11", "client": "agent:d4", "diff": "", "changed": [{"file": "app.forma", "token": "@app/app.contract#Card.fill"}], "ops": [{"index": 0, "op": {"op": "add-param", "component": "Card", "name": "fill", "value": "surface.card"}}]} as ada
   clock +1
   clock data
   expect text "held-title-p10" == "agent:d4 proposes surface.card, surface.panel (and 1 that read them: ink.on-card)"
   expect text "held-title-p11" == "agent:d4 proposes Card.fill"
   // An operation naming no file edits the app's design, so a same-named reader elsewhere is still a reader; a declaring
   // path is matched whole, so another component's param of the same short name is one too.
-  request POST "/__stub/hold" {"proposal": "p12", "client": "agent:d4", "diff": "", "changed": [{"file": "app.tamber", "token": "surface.card"}, {"file": "brand.tamber", "token": "surface.card"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "surface.card", "value": "#eeeeee"}}]} as ada
-  request POST "/__stub/hold" {"proposal": "p13", "client": "agent:d4", "diff": "", "changed": [{"file": "app.tamber", "token": "@a/a.contract#Card.fill"}, {"file": "app.tamber", "token": "@b/b.contract#Card.fill"}], "ops": [{"index": 0, "op": {"op": "set-param", "name": "@a/a.contract#Card.fill", "value": "surface.card"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p12", "client": "agent:d4", "diff": "", "changed": [{"file": "app.forma", "token": "surface.card"}, {"file": "brand.forma", "token": "surface.card"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "surface.card", "value": "#eeeeee"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p13", "client": "agent:d4", "diff": "", "changed": [{"file": "app.forma", "token": "@a/a.contract#Card.fill"}, {"file": "app.forma", "token": "@b/b.contract#Card.fill"}], "ops": [{"index": 0, "op": {"op": "set-param", "name": "@a/a.contract#Card.fill", "value": "surface.card"}}]} as ada
   clock +1
   clock data
   expect text "held-title-p12" == "agent:d4 proposes surface.card (and 1 that read it: surface.card)"
@@ -415,7 +415,7 @@ test "held proposals: each with its proposer, diff and items; accepted in part, 
   tap "save-name"
   clock data
   expect tree has "no-proposals"
-  request POST "/__stub/hold" {"proposal": "p1", "client": "agent:codex", "diff": "--- app.tamber\n+++ app.tamber\n+  surface.card = #eeeeee\n", "changed": [{"file": "app.tamber", "token": "surface.card"}, {"file": "app.tamber", "token": "ink.on-brand"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "surface.card", "value": "#eeeeee"}}, {"index": 1, "op": {"op": "set-token", "name": "ink.on-brand", "value": "#fefefe"}}]} as ada
+  request POST "/__stub/hold" {"proposal": "p1", "client": "agent:codex", "diff": "--- app.forma\n+++ app.forma\n+  surface.card = #eeeeee\n", "changed": [{"file": "app.forma", "token": "surface.card"}, {"file": "app.forma", "token": "ink.on-brand"}], "ops": [{"index": 0, "op": {"op": "set-token", "name": "surface.card", "value": "#eeeeee"}}, {"index": 1, "op": {"op": "set-token", "name": "ink.on-brand", "value": "#fefefe"}}]} as ada
   request POST "/__stub/hold" {"proposal": "p2", "client": "agent:claude", "diff": "", "changed": [], "ops": [{"index": 0, "op": {"op": "remove-token", "name": "tone.deep"}}]} as ada
   clock +1
   clock data
@@ -431,7 +431,7 @@ test "held proposals: each with its proposer, diff and items; accepted in part, 
   expect tree missing "held-p1"
   expect text "held-replaces-p1-r" == "Recomputed from p1 on the files as they are now: review it again."
   expect text "held-title-p1-r" == "agent:codex proposes surface.card"
-  expect text "held-diff-p1-r" == "--- app.tamber\n+++ app.tamber\n+  surface.card (kept)\n"
+  expect text "held-diff-p1-r" == "--- app.forma\n+++ app.forma\n+  surface.card (kept)\n"
   tap "accept-p1-r"
   clock data
   expect text "write-note" == "Accepted p1-r."
@@ -447,7 +447,7 @@ test "an import's review: tokens in, overrides off until ticked with their notes
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/hold" {"proposal": "imp", "client": "design-tool:Ada", "diff": "", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "light-dark(#ffffff, #222222)"}}, {"index": 1, "op": {"op": "set-token", "name": "AccentColor", "value": "shadcn.primary"}}], "review": {"importer": "shadcn", "counted": {"source": 3, "mapped": 2, "reported": 1}, "tokens": 1, "unmapped": [{"block": ":root", "name": "--radius", "value": "0.5rem", "why": "kind pending (stage 6): length"}], "offers": [{"role": "AccentColor", "token": "shadcn.primary", "items": [1], "note": null}, {"role": "-exact-label", "token": "shadcn.foreground", "items": [], "note": "tamber-role-axis: it would vary by dark-style"}]}} as ada
+  request POST "/__stub/hold" {"proposal": "imp", "client": "design-tool:Ada", "diff": "", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "light-dark(#ffffff, #222222)"}}, {"index": 1, "op": {"op": "set-token", "name": "AccentColor", "value": "shadcn.primary"}}], "review": {"importer": "shadcn", "counted": {"source": 3, "mapped": 2, "reported": 1}, "tokens": 1, "unmapped": [{"block": ":root", "name": "--radius", "value": "0.5rem", "why": "kind pending (stage 6): length"}], "offers": [{"role": "AccentColor", "token": "shadcn.primary", "items": [1], "note": null}, {"role": "-exact-label", "token": "shadcn.foreground", "items": [], "note": "forma-role-axis: it would vary by dark-style"}]}} as ada
   clock +1
   clock data
   clock +1
@@ -457,7 +457,7 @@ test "an import's review: tokens in, overrides off until ticked with their notes
   expect tree has "take-imp-0"
   expect tree has "override-imp-AccentColor"
   expect text "unmapped-imp-0" == "--radius = 0.5rem (:root): kind pending (stage 6): length"
-  expect text "offer-note-imp--exact-label" == "tamber-role-axis: it would vary by dark-style"
+  expect text "offer-note-imp--exact-label" == "forma-role-axis: it would vary by dark-style"
   expect tree missing "override-imp--exact-label"
   expect state picked == []
   type "mapped-value-imp-0-0" "light-dark(#fafafa, #222222)"
@@ -476,7 +476,7 @@ test "a 1.17 server edits a held import's value in place (edit-held): no ops sen
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/hold" {"proposal": "imp", "client": "agent:codex", "diff": "", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "light-dark(#ffffff, #222222)"}}, {"index": 1, "op": {"op": "set-token", "name": "AccentColor", "value": "shadcn.primary"}}], "review": {"importer": "shadcn", "counted": {"source": 3, "mapped": 2, "reported": 1}, "tokens": 1, "unmapped": [{"block": ":root", "name": "--radius", "value": "0.5rem", "why": "kind pending (stage 6): length"}], "offers": [{"role": "AccentColor", "token": "shadcn.primary", "items": [1], "note": null}, {"role": "-exact-label", "token": "shadcn.foreground", "items": [], "note": "tamber-role-axis: it would vary by dark-style"}]}} as ada
+  request POST "/__stub/hold" {"proposal": "imp", "client": "agent:codex", "diff": "", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "light-dark(#ffffff, #222222)"}}, {"index": 1, "op": {"op": "set-token", "name": "AccentColor", "value": "shadcn.primary"}}], "review": {"importer": "shadcn", "counted": {"source": 3, "mapped": 2, "reported": 1}, "tokens": 1, "unmapped": [{"block": ":root", "name": "--radius", "value": "0.5rem", "why": "kind pending (stage 6): length"}], "offers": [{"role": "AccentColor", "token": "shadcn.primary", "items": [1], "note": null}, {"role": "-exact-label", "token": "shadcn.foreground", "items": [], "note": "forma-role-axis: it would vary by dark-style"}]}} as ada
   clock +1
   clock data
   clock +1
@@ -487,7 +487,7 @@ test "a 1.17 server edits a held import's value in place (edit-held): no ops sen
   expect tree has "take-imp-0"
   expect tree has "override-imp-AccentColor"
   expect text "unmapped-imp-0" == "--radius = 0.5rem (:root): kind pending (stage 6): length"
-  expect text "offer-note-imp--exact-label" == "tamber-role-axis: it would vary by dark-style"
+  expect text "offer-note-imp--exact-label" == "forma-role-axis: it would vary by dark-style"
   expect tree missing "override-imp--exact-label"
   expect state picked == []
   type "mapped-value-imp-0-0" "light-dark(#fafafa, #222222)"
@@ -582,10 +582,10 @@ test "a value edited with a role override left unticked (third pass #6): it stay
   clock data
   expect text "write-note" == "edited-1 was recomputed on the files as they are now, as edited-1-r: review its diff and accept it again."
 
-test "against a 1.17 server the tool never sends choose (tamber/1.18): a tick stays the page's, carried by its flips through an edit, as before"
+test "against a 1.17 server the tool never sends choose (forma/1.18): a tick stays the page's, carried by its flips through an edit, as before"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
-  request POST "/__stub/protocol" {"protocol": "tamber/1.17"} as ada
+  request POST "/__stub/protocol" {"protocol": "forma/1.17"} as ada
   type "name" "Ada"
   tap "save-name"
   clock data
@@ -610,7 +610,7 @@ test "against a 1.17 server the tool never sends choose (tamber/1.18): a tick st
   clock data
   expect text "write-note" == "Accepted edited-1."
 
-test "a tick sent as the proposal's choice (tamber/1.18 choose): accepting right after takes the choice the page itself sent, never stale"
+test "a tick sent as the proposal's choice (forma/1.18 choose): accepting right after takes the choice the page itself sent, never stale"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
   type "name" "Ada"
@@ -630,7 +630,7 @@ test "a tick sent as the proposal's choice (tamber/1.18 choose): accepting right
   clock data
   expect text "write-note" == "Accepted imp."
 
-test "another client's choice since the page saw one (tamber/1.18): the card takes it as it comes, its own flips dropped, and accepting takes theirs, never the mix"
+test "another client's choice since the page saw one (forma/1.18): the card takes it as it comes, its own flips dropped, and accepting takes theirs, never the mix"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
   type "name" "Ada"
@@ -664,15 +664,15 @@ test "a recomputed import's diff follows its card's choice at once: the plan of 
   type "name" "Ada"
   tap "save-name"
   clock data
-  request POST "/__stub/hold" {"proposal": "imp-r", "replaces": "imp", "client": "design-tool:Ada", "diff": "--- app.tamber\n+++ app.tamber\n+  every operation\n", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "#ffffff"}}, {"index": 1, "op": {"op": "add-token", "name": "shadcn.ring", "value": "#000000"}}], "review": {"importer": "shadcn", "counted": {"source": 2, "mapped": 2, "reported": 0}, "tokens": 2, "unmapped": [], "offers": []}} as ada
+  request POST "/__stub/hold" {"proposal": "imp-r", "replaces": "imp", "client": "design-tool:Ada", "diff": "--- app.forma\n+++ app.forma\n+  every operation\n", "changed": [], "ops": [{"index": 0, "op": {"op": "add-token", "name": "shadcn.card", "value": "#ffffff"}}, {"index": 1, "op": {"op": "add-token", "name": "shadcn.ring", "value": "#000000"}}], "review": {"importer": "shadcn", "counted": {"source": 2, "mapped": 2, "reported": 0}, "tokens": 2, "unmapped": [], "offers": []}} as ada
   clock +1
   clock data
   clock +1
   clock data
-  expect text "held-diff-imp-r" == "--- app.tamber\n+++ app.tamber\n+  every operation\n"
+  expect text "held-diff-imp-r" == "--- app.forma\n+++ app.forma\n+  every operation\n"
   tap "take-imp-r-1"
   clock data
-  expect text "held-diff-imp-r" == "--- app.tamber\n+++ app.tamber\n+  {\"op\":\"add-token\",\"name\":\"shadcn.card\",\"value\":\"#ffffff\"}\n"
+  expect text "held-diff-imp-r" == "--- app.forma\n+++ app.forma\n+  {\"op\":\"add-token\",\"name\":\"shadcn.card\",\"value\":\"#ffffff\"}\n"
   tap "take-imp-r-0"
   clock data
   expect text "held-diff-imp-r" == ""
@@ -680,10 +680,10 @@ test "a recomputed import's diff follows its card's choice at once: the plan of 
   tap "take-imp-r-0"
   tap "take-imp-r-1"
   clock data
-  expect text "held-diff-imp-r" == "--- app.tamber\n+++ app.tamber\n+  every operation\n"
+  expect text "held-diff-imp-r" == "--- app.forma\n+++ app.forma\n+  every operation\n"
   expect tree missing "held-diff-note-imp-r"
 
-test "H1: accepting right after a tick whose choose answer was lost records what it accepts first (tamber/1.18), never refused as another client's change"
+test "H1: accepting right after a tick whose choose answer was lost records what it accepts first (forma/1.18), never refused as another client's change"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
   type "name" "Ada"
@@ -701,7 +701,7 @@ test "H1: accepting right after a tick whose choose answer was lost records what
   clock data
   expect text "write-note" == "Accepted imp."
 
-test "H2: the page's own choose whose answer was lost comes back as its own (tamber/1.18): its tick shows, and accepting takes it"
+test "H2: the page's own choose whose answer was lost comes back as its own (forma/1.18): its tick shows, and accepting takes it"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
   type "name" "Ada"
@@ -724,7 +724,7 @@ test "H2: the page's own choose whose answer was lost comes back as its own (tam
   clock data
   expect text "write-note" == "Accepted imp."
 
-test "H3: a tick made after another client's choice rebased the card counts (tamber/1.18): only the flip the page had then is dropped"
+test "H3: a tick made after another client's choice rebased the card counts (forma/1.18): only the flip the page had then is dropped"
   request POST "/__stub/restart" {} as ada
   request POST "/__stub/long-poll" {} as ada
   type "name" "Ada"
@@ -772,7 +772,7 @@ test "a gap in the long poll is said in Changes"
   clock data
   clock +1
   clock data
-  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.tamber"], "changed": [{"file": "app.tamber", "token": "surface.card"}], "files": {"app.tamber": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}} as ada
+  request POST "/__stub/event" {"client": "agent:codex", "edited": ["app.forma"], "changed": [{"file": "app.forma", "token": "surface.card"}], "files": {"app.forma": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}} as ada
   request POST "/__stub/miss" {} as ada
   clock +1
   clock data
@@ -786,7 +786,7 @@ test "the canvas frames the dev loop's page at the size chosen, and says how to 
   tap "save-name"
   clock data
   expect tree has "no-app"
-  expect text "no-app-how" == "The canvas shows the app from its dev loop. Start one (bun exact.mjs web, in the app's directory), then open the tool through it: bun exact.mjs tamber tool --via <its URL>. Stop this tool first: it holds the design server, and --via refuses while it runs."
+  expect text "no-app-how" == "The canvas shows the app from its dev loop. Start one (bun exact.mjs web, in the app's directory), then open the tool through it: bun exact.mjs forma tool --via <its URL>. Stop this tool first: it holds the design server, and --via refuses while it runs."
   expect tree missing "canvas-frame"
   expect tree missing "canvas-open"
   request POST "/__stub/page" {"page": "http://127.0.0.1:8765"} as ada
@@ -984,7 +984,7 @@ test "the pin form offers the app's own axes whichever file is open, and retypin
   clock data
   clock +1
   expect tree has "pin-mode-dark-style"
-  type "file" "brand.tamber"
+  type "file" "brand.forma"
   clock data
   expect tree has "pin-mode-dark-style"
   tap "person"
@@ -1010,7 +1010,7 @@ test "pairing: a code at the scope chosen, with each remote door's fingerprint t
   expect text "pair-code-text" == "7Q2KD-M4X01"
   expect text "pair-fingerprint-https://192.168.1.20:7743" == "AB:CD:EF:01"
   expect text "pair-door-http://127.0.0.1:7744" == "Through the tunnel you trusted, at http://127.0.0.1:7744"
-  request POST "/__tamber/pair" {"code": "7Q2KD-M4X01", "name": "laptop"} as ada
+  request POST "/__forma/pair" {"code": "7Q2KD-M4X01", "name": "laptop"} as ada
   clock +1
   clock data
   clock +1
@@ -1047,13 +1047,13 @@ test "pairing with no remote door open says how to open one"
   tap "pair-mint"
   clock data
   expect text "pair-code-text" == "7Q2KD-M4X01"
-  expect text "pair-no-door" == "No remote door is open: start the dev loop or tamber serve with --remote <host:port> for a client on another machine."
+  expect text "pair-no-door" == "No remote door is open: start the dev loop or forma serve with --remote <host:port> for a client on another machine."
   request POST "/__stub/restart" {} as ada
 
 test "remote mode: the tool pairs with another machine's server by its address and code, only over an https door or a tunnel to loopback; at propose an edit is held for review and what writes is greyed and never sent; a revoke ends it and says so"
   // No server on this machine: the browser is the other machine's (the stub stands in for that
   // machine's server, through a tunnel to loopback, so only this machine's token is refused).
-  fail fetch "http://127.0.0.1:7740/__tamber/token"
+  fail fetch "http://127.0.0.1:7740/__forma/token"
   request POST "/__stub/restart" {} as ada
   type "name" "Ada"
   tap "save-name"
@@ -1108,7 +1108,7 @@ test "remote mode: the tool pairs with another machine's server by its address a
   request POST "/__stub/restart" {} as ada
 
 test "a paired tool frames no page of this machine, whatever the server's hello says"
-  fail fetch "http://127.0.0.1:7740/__tamber/token"
+  fail fetch "http://127.0.0.1:7740/__forma/token"
   request POST "/__stub/restart" {} as ada
   type "name" "Ada"
   tap "save-name"

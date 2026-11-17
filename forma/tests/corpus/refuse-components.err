@@ -1,0 +1,9 @@
+3:1: forma-syntax: a component is `component Name`, its `params` under it
+8:3: forma-component: `component Card` holds one `params` block
+13:5: forma-component: a second param `a` in `component Card2`
+14:5: forma-syntax: a param is `name: kind = value [in low..high] [meta=…]`
+16:7: forma-component: a param's default has no `when`: the app's design sets it per mode, by name
+17:3: forma-component: `params`: `component Card2` holds one `params` block
+20:1: forma-component: a second `component Card2`: a design declares a component once
+25:3: forma-component: `component Empty` declares no params
+29:5: forma-syntax: `pin` has no kind: a param is `name: kind = value [in low..high] [meta=…]`

@@ -16,7 +16,7 @@ extension NodeView {
     /// anchor), else nil and the 2D path applies. `shift` is what a lifted
     /// Arrange row already moved by its frame (macOS).
     func spaceTransform(origin d: CGPoint, scale s: CGFloat, shift: CGPoint = .zero) -> CATransform3D? {
-        let axis = style["rotate_axis"]?.numbers ?? [0, 0, 1]
+        let axis = rotationAxis == [0, 0, 0] ? (style["rotate_axis"]?.numbers ?? [0, 0, 1]) : rotationAxis
         let z = number("translate_z")
         guard axis.count == 3, (axis[0] != 0 || axis[1] != 0 || z != 0) else { return nil }
         var t = CATransform3DMakeTranslation(translate.x - shift.x + d.x, translate.y - shift.y + d.y, z)
@@ -29,7 +29,7 @@ extension NodeView {
     /// moved along z. Only such a box is drawn off its frame in a way the
     /// platform's own hit test cannot see.
     var standsInSpace: Bool {
-        let axis = style["rotate_axis"]?.numbers ?? [0, 0, 1]
+        let axis = rotationAxis == [0, 0, 0] ? (style["rotate_axis"]?.numbers ?? [0, 0, 1]) : rotationAxis
         return (axis.count == 3 && (axis[0] != 0 || axis[1] != 0)) || number("translate_z") != 0
     }
 

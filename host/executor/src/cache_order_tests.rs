@@ -1,5 +1,119 @@
 use super::*;
 
+#[test]
+fn a_prefetch_uses_a_fresh_entry_or_force_caches_a_stale_one_without_a_hold() {
+    for asynchronous in [false, true] {
+        for mode in [
+            CacheMode::Default,
+            CacheMode::ForceCache,
+            CacheMode::OnlyIfCached,
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            let headers = if mode == CacheMode::Default {
+                FRESH
+            } else {
+                &[("Cache-Control", "no-cache"), ("ETag", "old")]
+            };
+            server.plan("/next", Plan::new(200, headers, b"stored"));
+            assert!(!read(&core, &woke, &server, 1, "/next").1);
+            server.plan("/next", Plan::new(200, &[], b"speculative"));
+            let (reply, cached) = ask(
+                &core,
+                &woke,
+                job(2, server.request("/next").prefetch().cache(mode)),
+            );
+            assert_eq!(reply.body, b"stored");
+            assert!(cached);
+            assert_eq!(server.count(), 1);
+            assert!(core.preloads.lock().unwrap().is_none());
+            assert!(core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_prefetch_revalidates_a_stale_entry_with_the_callers_conditional_exchange() {
+    for asynchronous in [false, true] {
+        for (validator, condition, value) in [
+            ("ETag", "if-none-match", "old"),
+            (
+                "Last-Modified",
+                "if-modified-since",
+                "Sun, 06 Nov 1994 08:49:37 GMT",
+            ),
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            server.plan(
+                "/next",
+                Plan::new(
+                    200,
+                    &[("Cache-Control", "no-cache"), (validator, value)],
+                    b"stored",
+                ),
+            );
+            read(&core, &woke, &server, 1, "/next");
+            server.plan("/next", Plan::new(304, FRESH, b""));
+            let (reply, cached) = ask(&core, &woke, job(2, server.request("/next").prefetch()));
+            assert_eq!(first(&server.headers(1), condition), Some(value));
+            assert_eq!(reply.body, b"stored");
+            assert!(cached);
+            assert_eq!(server.count(), 2);
+            assert!(core.preloads.lock().unwrap().is_none());
+            assert!(core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .preloads
+                .is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_caller_conditional_prefetch_starts_only_the_callers_exchange() {
+    for asynchronous in [false, true] {
+        for method in ["GET", "POST"] {
+            for condition in [
+                "If-None-Match",
+                "If-Modified-Since",
+                "If-Match",
+                "If-Unmodified-Since",
+                "If-Range",
+            ] {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                server.plan("/next", Plan::new(200, &[], b"caller"));
+                let mut request = server
+                    .request("/next")
+                    .prefetch()
+                    .header(condition, "value");
+                request.method = method.into();
+                let (reply, cached) = ask(&core, &woke, job(1, request));
+                assert_eq!(reply.body, b"caller");
+                assert_eq!(first(&server.headers(0), condition), Some("value"));
+                assert!(!cached);
+                assert_eq!(server.count(), 1);
+                assert!(core.preloads.lock().unwrap().is_none());
+            }
+        }
+    }
+}
+
 fn wait_for_reply(core: &Core, ticket: u64) {
     let end = Instant::now() + HANG;
     let mut state = core.shared.state.lock().unwrap();
@@ -410,6 +524,7 @@ fn queued(ticket: u64, request: Request, forced: bool) -> Job {
         forced,
         work: None,
         waiting_charge: charge,
+        waited_for_preload: false,
         charge,
         limit,
         forgotten: false,
@@ -545,67 +660,44 @@ fn a_later_read_uses_the_network_beside_a_refresh_and_never_returns_the_old_hit(
 }
 
 #[test]
-fn prefetch_is_answered_as_a_plain_read_and_equal_reads_have_their_own_exchanges() {
+fn equal_uncacheable_reads_have_their_own_exchanges_even_for_posts_and_errors() {
     for asynchronous in [false, true] {
-        for prefetch in [false, true] {
-            for method in ["GET", "POST"] {
-                for inflight in [false, true] {
-                    let server = Server::new();
-                    let (core, woke) = server.core(asynchronous, true);
-                    let (release, held) = channel();
-                    let mut first = Plan::new(503, &[], b"first");
-                    first.held = Some(held);
-                    server.plan("/next", first);
-                    server.plan("/next", Plan::new(200, &[], b"second"));
-                    let mut request = server.request("/next");
-                    request.method = method.into();
-                    let mut ahead = request.clone();
-                    ahead.prefetch = prefetch;
-                    core.run(job(1, ahead), None).unwrap();
-                    server.seen(1);
-                    if inflight {
-                        core.run(job(2, request.clone()), None).unwrap();
-                        server.seen(2);
-                    }
-                    release.send(()).unwrap();
-                    let (ticket, outcome, timing) = collect(&core, &woke);
-                    assert_eq!(ticket, 1);
-                    assert!(!timing.cached);
-                    assert!(
-                        matches!(outcome, Outcome::Response(r) if r.status == 503 && r.body == b"first")
-                    );
-                    if !inflight {
-                        core.run(job(2, request), None).unwrap();
-                        server.seen(2);
-                    }
-                    let (ticket, outcome, timing) = collect(&core, &woke);
-                    assert_eq!(ticket, 2);
-                    assert!(!timing.cached);
-                    assert!(
-                        matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
-                    );
-                    assert_eq!(server.count(), 2);
+        for method in ["GET", "POST"] {
+            for inflight in [false, true] {
+                let server = Server::new();
+                let (core, woke) = server.core(asynchronous, true);
+                let (release, held) = channel();
+                let mut first = Plan::new(503, &[], b"first");
+                first.held = Some(held);
+                server.plan("/next", first);
+                server.plan("/next", Plan::new(200, &[], b"second"));
+                let mut request = server.request("/next");
+                request.method = method.into();
+                core.run(job(1, request.clone()), None).unwrap();
+                server.seen(1);
+                if inflight {
+                    core.run(job(2, request.clone()), None).unwrap();
+                    server.seen(2);
                 }
+                release.send(()).unwrap();
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 1);
+                assert!(!timing.cached);
+                assert!(
+                    matches!(outcome, Outcome::Response(r) if r.status == 503 && r.body == b"first")
+                );
+                if !inflight {
+                    core.run(job(2, request), None).unwrap();
+                    server.seen(2);
+                }
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(!timing.cached);
+                assert!(
+                    matches!(outcome, Outcome::Response(r) if r.status == 200 && r.body == b"second")
+                );
+                assert_eq!(server.count(), 2);
             }
-        }
-    }
-}
-
-#[test]
-fn prefetch_uses_the_plain_reads_http_cache_rules() {
-    for asynchronous in [false, true] {
-        for prefetch in [false, true] {
-            let server = Server::new();
-            let (core, woke) = server.core(asynchronous, true);
-            server.plan("/next", Plan::new(200, FRESH, b"fresh"));
-            let mut request = server.request("/next");
-            request.prefetch = prefetch;
-            assert!(!ask(&core, &woke, job(1, request.clone())).1);
-            assert!(ask(&core, &woke, job(2, request)).1);
-            let (reply, cached) = read(&core, &woke, &server, 3, "/next");
-            assert!(cached);
-            assert_eq!(reply.body, b"fresh");
-            assert_eq!(server.count(), 1);
         }
     }
 }

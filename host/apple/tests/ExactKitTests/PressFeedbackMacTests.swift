@@ -231,7 +231,11 @@ final class PressFeedbackMacTests: XCTestCase {
         XCTAssertFalse(v.platformPressTints)
         // An item of a list that scrolls sideways is a carousel's card, not a row (as on the web host).
         list.container.addSubview(v)
-        let sideways = try XCTUnwrap(CollectionSnapshot(["view": 2, "revision": 1, "scrollSequence": 1, "totalExtent": 600.0, "axis": "x", "rows": [[String: Any]]()]))
+        let snapshots = wireBatch([
+            ["op": "collections", "items": [["view": 2, "revision": 1, "scrollSequence": 1,
+                                             "totalExtent": 600.0, "axis": "x", "rows": [[String: Any]]()]]],
+        ]).ops.first?.collections
+        let sideways = try XCTUnwrap(snapshots?.first)
         p.collections.entries[2] = CollectionHost.Entry(sideways)
         XCTAssertFalse(v.isListRow)
         XCTAssertTrue(v.platformPressTints, "a carousel's card shows the press")

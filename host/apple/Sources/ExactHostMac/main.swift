@@ -17,6 +17,8 @@ import AppKit
 import ExactKit
 import ExactComposition
 
+AgentLink.install()
+
 let app = NSApplication.shared
 app.setActivationPolicy(ExactEnv.agentMode ? .accessory : .regular)
 setvbuf(stdout, nil, _IOLBF, 0)
@@ -59,7 +61,7 @@ var views: [String: ExactView] = ["a": viewA, "b": viewB]
 /// screen can replace the Exact view inside it (a push) and give it back (a pop).
 var panes: [String: NSView] = [:]
 
-let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+let window = ExactDrivenWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 720), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
 window.title = "Host (not Exact)"
 let split = NSSplitView(frame: window.contentView!.bounds)
 split.isVertical = true
@@ -235,6 +237,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidChangeOcclusionState(_ notification: Notification) { for (_, s) in sessions { s.occlusionChanged() } }
 }
 let appDelegate = Delegate()
+exact.installHostEvents(applicationDelegate: Delegate.self, sceneDelegate: nil)
 app.delegate = appDelegate
 window.delegate = appDelegate
 
@@ -256,13 +259,13 @@ func finishLaunching() {
     }
     window.initialFirstResponder = viewA
     launched = true
-    if Agent.windowsBehind {
+    if AgentLink.windowsBehind {
         // Below the normal level, which alone would make it float across Spaces, out of ⌘`'s cycle.
         window.level = .agentBehind
         window.collectionBehavior.formUnion([.managed, .participatesInCycle])
     }
     window.makeKeyAndOrderFront(nil)
-    if Agent.windowsBehind {} else if ExactEnv.agentMode { window.orderFrontRegardless() } else { app.activate(ignoringOtherApps: true) }
+    if AgentLink.windowsBehind {} else if ExactEnv.agentMode { window.orderFrontRegardless() } else { app.activate(ignoringOtherApps: true) }
     agentReady()
 }
 
@@ -271,8 +274,8 @@ func agentReady() {
     guard ExactEnv.agentMode, launched, !readySent else { return }
     readySent = true
     let error: Any = (a.bootError ?? b.bootError).map { $0 as Any } ?? NSNull()
-    Agent.reply(["ready": true, "boot": max(a.bootMs, b.bootMs), "views": a.viewCount + b.viewCount, "sessions": sessions.map(\.0), "error": error])
-    Agent.startStdio(sessions: sessions)
+    AgentLink.reply(["ready": true, "boot": max(a.bootMs, b.bootMs), "views": a.viewCount + b.viewCount, "sessions": sessions.map(\.0), "error": error])
+    AgentLink.startStdio(sessions: sessions)
 }
 if ExactEnv.agentMode { DispatchQueue.main.async { agentReady() } }
 app.run()

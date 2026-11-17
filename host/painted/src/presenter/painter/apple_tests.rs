@@ -3,6 +3,23 @@ use exact_ink::device::apple::Startup;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
+#[test]
+fn an_apple_repeat_without_a_compose_target_requests_a_repaint() {
+    let plan = crate::test_plan("component App\n  view\n    box\n");
+    let (mut presenter, warning) =
+        Presenter::boot_with(&plan, (), (8., 8.), 1., ".".into(), PainterChoice::Cpu).unwrap();
+    assert!(warning.is_none(), "{warning:?}");
+    presenter.frame();
+    assert!(!presenter.dirty());
+    presenter
+        .brush
+        .replace_backend(Box::new(crate::ink::Ink::new().unwrap()));
+    assert!(!presenter
+        .repeat_apple_frame(&SubmittedAppleFrame(None))
+        .unwrap());
+    assert!(presenter.dirty(), "a missing frame must be painted again");
+}
+
 struct Directory(std::path::PathBuf);
 impl Directory {
     fn new() -> Self {
@@ -123,8 +140,10 @@ fn archive_miss_starts_with_cpu_pixels_then_replaces_the_whole_frame_with_ink() 
     assert_eq!(presenter.painter_state()["name"], "ink");
     let errors: Vec<_> = first
         .data()
-        .chunks_exact(4)
-        .zip(later.data().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(later.data().as_chunks::<4>().0)
         .map(|(a, b)| {
             a.iter()
                 .zip(b)

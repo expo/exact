@@ -128,6 +128,30 @@ final class ModalStackIOSTests: XCTestCase {
         XCTAssertEqual(p.navigation.observation()["nativeBack"] as? String, backgroundBack)
     }
 
+    /// A sheet dismissed while a route is pushed inside it goes whole, back to
+    /// the route beneath it, as its swipe down and a tap behind it do.
+    func testDismissingASheetFromARoutePushedInsideItLeavesTheWholeSheet() throws {
+        guard UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) else {
+            throw missing("scene", "the secondary navigation stack uses UIKit's presented sheet")
+        }
+        let session = try fixture("pushed-inside-dismissal", plan: "EXACT_PUSHED_TITLE_PLAN", fullScreen: true)
+        let p = session.presenter, agent = Agent(session: session)
+        try press(session, "home-open-inline")
+        until("the background stack settles") { !agent.nativeInFlight() }
+        let primary = try XCTUnwrap(p.navigation.primaryNavigation)
+        let background = primary.viewControllers
+        let inlineKey = try XCTUnwrap((primary.topViewController as? RouteController)?.key)
+        try press(session, "inline-open-sheet")
+        until("the sheet's own navigation settles") { p.navigation.modalNavigation != nil && !agent.nativeInFlight() }
+        let secondary = try XCTUnwrap(p.navigation.modalNavigation)
+        try press(session, "sheet-open-long")
+        until("the push inside the sheet settles") { secondary.viewControllers.count == 2 && !agent.nativeInFlight() }
+        XCTAssertEqual(p.modals.agentDismiss(), "", "the sheet is dismissed from the route pushed inside it")
+        until("the sheet dismisses") { p.navigation.modalNavigation == nil && !agent.nativeInFlight() }
+        XCTAssertEqual(p.navigation.selectedKey, inlineKey)
+        XCTAssertEqual(primary.viewControllers, background)
+    }
+
     func testBackHistoryUsesTheChosenDestinationInThePrimaryStack() throws {
         guard UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) else {
             throw missing("scene", "native Back history uses UIKit's completed transition")

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { pathFrom } from '../scripts/app.mjs';
 
@@ -47,6 +47,17 @@ function replaceSpans(text, edits) {
   return text;
 }
 
+/** Whether a path dependency on another of the checkout's crates (the build script's `contract`, say) points into a
+ * checkout: it ends in that crate's place in this one, and what precedes that is gone or is an exact2 checkout (its
+ * scripts/app-cli.mjs), so an app's own crate of the same name, even at the same place under the app, stays. A path
+ * that holds `<exact2>` is `exact2Placeholders`' to resolve or name as unresolved. */
+function intoCheckout(path, from, dir) {
+  const at = relative(ROOT, dir).split(sep).join('/'), p = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (path.includes('<exact2>') || at.startsWith('..') || isAbsolute(at) || !(p + '/').endsWith(`/${at}/`)) return false;
+  const old = resolve(from, p.slice(0, p.length - at.length) || '.');
+  return !existsSync(old) || existsSync(resolve(old, 'scripts/app-cli.mjs'));
+}
+
 /** Mark candidate strings, then let TOML resolve their locations. This covers dotted keys, child tables and inline
  * parents without treating comments, quoted keys or unrelated strings as dependency declarations. */
 function relocate(text, expected, from, crates, advice) {
@@ -54,7 +65,7 @@ function relocate(text, expected, from, crates, advice) {
   for (const [keys, table] of dependencyTables(expected, ['dependencies', 'build-dependencies', 'dev-dependencies'])) {
     for (const [name, dep] of Object.entries(table)) {
       const crate = dep?.package ?? name;
-      if (typeof dep?.path !== 'string' || !(crate.startsWith('exact-') || crate === 'ibex2-sqlite') || !crates.has(crate)) continue;
+      if (typeof dep?.path !== 'string' || !crates.has(crate) || !(crate.startsWith('exact-') || crate === 'ibex2-sqlite' || intoCheckout(dep.path, from, crates.get(crate)))) continue;
       const path = pathFrom(from, crates.get(crate));
       if (dep.path !== path) paths.push({ keys: [...keys, name], old: dep.path, path });
     }

@@ -565,10 +565,23 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                     w.string(name);
                     bytes(w, payload);
                 }
-                SurfaceRequest::Canvas { name, path, .. } => {
-                    w.u8(16);
+                // A type or quality asked for is additive tag 17, which an
+                // older host refuses; the default PNG stays tag 16.
+                SurfaceRequest::Canvas {
+                    name,
+                    path,
+                    encoding,
+                    ..
+                } => {
+                    let png = *encoding == exact_runner::canvas_capture::Encoding::default();
+                    w.u8(if png { 16 } else { 17 });
                     w.string(name);
                     w.string(path);
+                    if !png {
+                        w.string(&encoding.media_type);
+                        w.u8(u8::from(encoding.quality.is_some()));
+                        w.f64(encoding.quality.unwrap_or(0.0));
+                    }
                 }
             }
             w.u8(u8::from(r.grants.is_some()));
@@ -727,12 +740,24 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             };
             Ok(Answer::Later(request))
         }
-        tag @ (7 | 8 | 16) => {
+        tag @ (7 | 8 | 16 | 17) => {
             let name = r.string().map_err(error)?;
-            let path = if tag == 16 {
+            let path = if tag >= 16 {
                 Some(r.string().map_err(error)?)
             } else {
                 None
+            };
+            let (media_type, quality) = if tag == 17 {
+                let media_type = r.string().map_err(error)?;
+                let present = r.u8().map_err(error)?;
+                let quality = r.f64().map_err(error)?;
+                match present {
+                    0 => (media_type, None),
+                    1 => (media_type, Some(quality)),
+                    _ => return Err("invalid canvas quality tag".into()),
+                }
+            } else {
+                (String::new(), None)
             };
             let payload = if tag == 8 {
                 Some(read_bytes(r)?.to_vec())
@@ -743,7 +768,7 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             let scope = r.string().map_err(error)?;
             let mut request = match (payload, path) {
                 (Some(bytes), _) => Request::restore_surface(name, bytes),
-                (None, Some(path)) => Request::capture_canvas(name, path),
+                (None, Some(path)) => Request::capture_canvas_as(name, path, &media_type, quality),
                 (None, None) => Request::capture_surface(name),
             };
             request.grants = match present {

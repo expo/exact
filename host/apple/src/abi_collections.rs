@@ -3,6 +3,29 @@ use super::*;
 use crate::host::Restyle;
 
 impl<D: DataSource> Bridge<D> {
+    /// Fixed sibling extents from the laid-out formatting context. The
+    /// snapshot supplies the counts; spacers and row wrappers lie between.
+    pub fn collection_fixed_size(&self, view: u32, lead: u32, trail: u32, side: u32) -> f64 {
+        let measured = (|| {
+            let kernel = self.host.as_ref()?.runner().kernel();
+            let node = kernel.node(view)?;
+            let children = node.children();
+            let (lead, trail) = (lead as usize, trail as usize);
+            if lead.checked_add(trail)? > children.len() {
+                return None;
+            }
+            kernel
+                .collection_fixed_sizes(
+                    view,
+                    &children[..lead],
+                    &children[children.len() - trail..],
+                )?
+                .get(side as usize)
+                .copied()
+        })();
+        measured.unwrap_or(f64::NAN)
+    }
+
     /// A collection's nearest logical row snap position; NaN when absent
     /// (`Runner::collection_snap`).
     pub fn collection_snap(&self, view: u32, geometry: [f64; 5]) -> f64 {
@@ -181,6 +204,15 @@ impl<D: DataSource> Bridge<D> {
             .unwrap_or_else(not_booted);
         self.emit(text)
     }
+    /// Return a current incomplete flow to native layout.
+    pub fn region_fallback(&mut self, id: u64) -> u32 {
+        let text = self
+            .host
+            .as_mut()
+            .map(|h| h.fallback_region_text(id))
+            .unwrap_or_else(not_booted);
+        self.emit(text)
+    }
     /// Deliver one native retained artifact; even stale/not-booted takes ownership.
     pub fn region_complete(
         &mut self,
@@ -197,6 +229,7 @@ impl<D: DataSource> Bridge<D> {
                     exact_kernel::TextMetrics {
                         width: metrics.width,
                         height: metrics.height,
+                        pending: false,
                         first_baseline: (metrics.baseline >= 0. || !metrics.baseline.is_finite())
                             .then_some(metrics.baseline),
                     },
@@ -217,7 +250,7 @@ impl<D: DataSource> Bridge<D> {
             .unwrap_or(u32::MAX)
     }
 
-    /// Logical text for all rows (empty keys), or two UTF-16 endpoints.
+    /// Logical text for all rows, or two keyed/fixed UTF-16 endpoints.
     #[allow(clippy::too_many_arguments)]
     pub fn list_text(
         &mut self,
@@ -228,6 +261,8 @@ impl<D: DataSource> Bridge<D> {
         first_offset: usize,
         last_paragraph: usize,
         last_offset: usize,
+        first_fixed: u32,
+        last_fixed: u32,
     ) -> u32 {
         let bytes = &self.input[..len.min(self.input.len())];
         if first_len > bytes.len() {
@@ -235,13 +270,15 @@ impl<D: DataSource> Bridge<D> {
         }
         let first = String::from_utf8_lossy(&bytes[..first_len]);
         let last = String::from_utf8_lossy(&bytes[first_len..]);
-        let range = (first_len != 0).then_some((
+        let range = (first_len != 0 || first_fixed <= 1).then_some((
             exact_runner::ListTextPosition {
+                fixed: (first_fixed <= 1).then_some(first_fixed == 1),
                 key: &first,
                 paragraph: first_paragraph,
                 offset: first_offset,
             },
             exact_runner::ListTextPosition {
+                fixed: (last_fixed <= 1).then_some(last_fixed == 1),
                 key: &last,
                 paragraph: last_paragraph,
                 offset: last_offset,

@@ -1,8 +1,9 @@
 //! The portable transports' TLS trust refuses the emSign keys Mozilla distrusted
 //! (Mozilla bug 2083449; RUSTSEC-2026-0381 for `webpki-roots`, RUSTSEC-2026-0382
-//! for `rustls-webpki`). Both transports verify with rustls's WebPKI verifier over
-//! either the system's roots or, when it has none, `webpki_roots::TLS_SERVER_ROOTS`
-//! (`rustls_http::tls_config_from`, ureq's `RootCerts::WebPki`, `websocket::tls_config`).
+//! for `rustls-webpki`). Off Android, both transports use rustls's WebPKI verifier
+//! over the system's roots or, when it has none, `webpki_roots::TLS_SERVER_ROOTS`
+//! (`tls::tls_config_from`, ureq's `RootCerts::WebPki`, `tls::socket_config`).
+//! Android delegates certificate verification to its trust manager.
 //!
 //! The fixtures were made with OpenSSL's `x509 -force_pubkey`: a test root signs
 //! a leaf carrying the distrusted public key of eMudhra's `EMOVTLSCAG3B`
@@ -19,6 +20,8 @@ use rustls::client::danger::ServerCertVerifier;
 use rustls::client::WebPkiServerVerifier;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::RootCertStore;
+
+use super::tls::{tls_config_from, Roots};
 
 const ROOT: &[u8] = include_bytes!("testdata/distrusted/root.der");
 const TRUSTED_LEAF: &[u8] = include_bytes!("testdata/distrusted/trusted-leaf.der");
@@ -108,4 +111,14 @@ fn a_path_through_a_distrusted_emsign_key_is_refused_by_either_store() {
             );
         }
     }
+}
+
+#[test]
+fn android_without_a_ca_bundle_uses_its_trust_manager() {
+    let (tls, roots) = tls_config_from(true, || panic!("Android must not probe certificate files"));
+    assert_eq!(roots, Roots::PlatformVerifier);
+    assert!(matches!(
+        tls.root_certs(),
+        ureq::tls::RootCerts::PlatformVerifier
+    ));
 }

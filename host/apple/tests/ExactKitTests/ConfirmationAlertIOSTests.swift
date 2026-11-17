@@ -241,6 +241,41 @@ final class ConfirmationAlertIOSTests: XCTestCase {
         XCTAssertFalse(p.menus.isOpen(pop))
     }
 
+    /// HTML's close request (the agent's `back`, as Escape) fires `cancel` at
+    /// a modal dialog, then `close`. Its Cancel is its `command="close"`, as
+    /// are its actions and the page's `close(id)`: `close` alone.
+    func testACloseRequestFiresCancelBeforeCloseAndTheCancelButtonCloseAlone() throws {
+        let (p, controller, scene) = confirmation(label: "Keep?", texts: ["A message."], actions: ["Keep"], cancel: true)
+        defer { dismiss(p, controller) }
+        guard scene else { throw missing("scene", "a presentation completes only in a scene's window") }
+        let pop = try XCTUnwrap(p.views[2])
+        pop.props["semanticTag"] = "dialog"
+        pop.handlers.formUnion(["close", "cancel"])
+        for id: UInt32 in [3, 9] {
+            let row = try XCTUnwrap(p.views[id])
+            row.props["popovertarget"] = nil; row.props["popovertargetaction"] = nil
+            row.props["commandfor"] = "confirm"; row.props["command"] = "close"
+        }
+        var events: [String] = []
+        p.onCancel = { events.append("cancel \($0)") }
+        p.onClose = { events.append("close \($0)") }
+        p.onPress = { events.append("press \($0)") }
+        func run(_ end: (UIAlertController) throws -> Void) throws -> [String] {
+            events = []
+            p.dialogCommand("showModal", "confirm")
+            spin(5) { !p.menus.inTransition && controller.presentedViewController is UIAlertController }
+            try end(try XCTUnwrap(controller.presentedViewController as? UIAlertController))
+            spin(5) { !p.menus.inTransition && controller.presentedViewController == nil && events.contains { $0.hasPrefix("close") } }
+            spin(0.1) { false }
+            return events
+        }
+        XCTAssertEqual(try run { _ in XCTAssertEqual(p.menus.agentCancel(), true) }, ["cancel 2", "close 2"], "the agent's back")
+        XCTAssertEqual(try run { try choose(try XCTUnwrap($0.actions.last)) }, ["close 2"], "UIKit's Cancel")
+        XCTAssertEqual(try run { _ in XCTAssertEqual(p.menus.activate(try XCTUnwrap(p.views[9])), true) }, ["close 2"], "the agent's tap of Cancel")
+        XCTAssertEqual(try run { _ in p.dialogCommand("close", "confirm") }, ["close 2"], "the page's close(id)")
+        XCTAssertEqual(try run { try choose($0.actions[0]) }, ["press 3", "close 2"], "an action")
+    }
+
     /// "Remove book?" — the shape of React Native's `Alert.alert`: a
     /// centred alert, titled by the label, its text the message, the
     /// destructive action and the Cancel both drawn.
@@ -305,10 +340,10 @@ final class ConfirmationAlertIOSTests: XCTestCase {
         let (p, controller, _) = confirmation(label: "Keep?", texts: ["A message."], actions: ["Keep"], cancel: true, bareLead: ["text_color": tint, "written": ["text_color"]])
         defer {
             dismiss(p, controller)
-            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]), root: p.root)
+            _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": [String: Any]()]]).ops[0], root: p.root)
             p.applyThemeTint()
         }
-        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 200, 0, 255]]]]), root: p.root)
+        _ = ThemeRoles.apply(wireBatch([["op": "roles", "roles": ["AccentColor": [0, 200, 0, 255]]]]).ops[0], root: p.root)
         p.applyThemeTint()
         XCTAssertEqual(p.menus.activate(try XCTUnwrap(p.views[1])), true)
         let alert = try XCTUnwrap(controller.presentedViewController as? UIAlertController)

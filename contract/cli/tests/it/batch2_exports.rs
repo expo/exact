@@ -8,6 +8,7 @@
 //! declaring identity.
 #![cfg(unix)]
 
+use crate::scratch::Scratch;
 use std::path::{Path, PathBuf};
 
 fn repo() -> PathBuf {
@@ -45,7 +46,9 @@ component App
 
 #[test]
 fn a_consumer_uses_empty_state_and_the_menu_from_the_packages_and_its_plan_holds_them() {
-    let dir = std::env::temp_dir().join(format!("exact2-batch2-exports-{}", std::process::id()));
+    let dir = Scratch::adopt(
+        std::env::temp_dir().join(format!("exact2-batch2-exports-{}", std::process::id())),
+    );
     let _ = std::fs::remove_dir_all(&dir);
     for pkg in ["cards", "lists"] {
         copy(
@@ -55,8 +58,8 @@ fn a_consumer_uses_empty_state_and_the_menu_from_the_packages_and_its_plan_holds
     }
     std::fs::write(dir.join("app.contract"), CONSUMER).unwrap();
     std::fs::write(
-        dir.join("app.tamber"),
-        "tamber consumer\n\ntheme\n  ink = #111111\n",
+        dir.join("app.forma"),
+        "forma consumer\n\ntheme\n  ink = #111111\n",
     )
     .unwrap();
     std::fs::write(

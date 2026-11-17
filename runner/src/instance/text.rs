@@ -13,7 +13,7 @@ pub(super) fn list_region<'a>(
     view: ViewId,
     frames: &mut Vec<Frame>,
     policy: ListTextPolicy,
-) -> Option<(&'a collection::Collection, Selection)> {
+) -> Option<(&'a collection::Collection, Selection, &'a [Child])> {
     fn walk<'a>(
         plan: Option<(&Plan, &SiteIndex)>,
         children: &'a [Child],
@@ -21,13 +21,15 @@ pub(super) fn list_region<'a>(
         frames: &mut Vec<Frame>,
         selectable: Selection,
         policy: ListTextPolicy,
-    ) -> Option<(&'a collection::Collection, Selection)> {
+    ) -> Option<(&'a collection::Collection, Selection, &'a [Child])> {
         for child in children {
             match child {
                 Child::Node(n) => {
                     let selectable = plan.map_or(selectable, |p| selectable.at(n, p, policy));
                     if n.view == view {
-                        return n.collection().map(|c| (c, selectable));
+                        return n
+                            .collection()
+                            .map(|c| (c, selectable, n.children.as_slice()));
                     }
                     // A nested list lives in a mounted row (LLP 1070 §4.7).
                     if let Some(c) = n.collection() {
@@ -183,7 +185,7 @@ fn collect(
 ) -> Result<(), InstanceError> {
     for child in children {
         match child {
-            Child::Node(n) if !hidden(n, u.env.plan, u.sites) => {
+            Child::Node(n) if n.collection().is_none() && !hidden(n, u.env.plan, u.sites) => {
                 let selectable = selectable.at(n, (u.env.plan, u.sites), policy);
                 if policy == ListTextPolicy::MacOS
                     && u.env.plan.node(n.node).node_type == NodeType::Control as u8
@@ -272,7 +274,7 @@ impl Tree {
         policy: ListTextPolicy,
     ) -> Result<String, InstanceError> {
         let mut frames = Vec::new();
-        let (list, selectable) = list_region(
+        let (list, selectable, fixed) = list_region(
             Some((u.env.plan, u.sites)),
             &self.children,
             view,
@@ -281,12 +283,18 @@ impl Tree {
         )
         .ok_or(InstanceError::List("unknown list"))?;
         let mut start = (0, 0, 0);
-        let mut end = (list.logical_len().saturating_sub(1), usize::MAX, usize::MAX);
+        let mut end = (list.logical_len() + 1, usize::MAX, usize::MAX);
         if let Some((a, b)) = range {
             let position = |p: ListTextPosition<'_>| {
-                list.logical_index(p.key)
-                    .map(|i| (i, p.paragraph, p.offset))
-                    .ok_or(InstanceError::List("selection row no longer exists"))
+                let row = match p.fixed {
+                    Some(false) => 0,
+                    Some(true) => list.logical_len() + 1,
+                    None => list
+                        .logical_index(p.key)
+                        .map(|i| i + 1)
+                        .ok_or(InstanceError::List("selection row no longer exists"))?,
+                };
+                Ok::<_, InstanceError>((row, p.paragraph, p.offset))
             };
             start = position(a)?;
             end = position(b)?;
@@ -296,37 +304,50 @@ impl Tree {
         }
         let mounted: exact_kernel::SortedMap<usize, &Row> = list.mounted_rows().collect();
         let mut result = String::new();
-        for i in start.0..list.logical_len().min(end.0.saturating_add(1)) {
-            let temporary;
-            let row = if let Some(row) = mounted.get(&i) {
-                *row
-            } else {
-                temporary = list.logical_row(u, i, &frames)?;
-                &temporary
-            };
-            let mut inner = frames.clone();
-            inner.push(row.frame.clone());
+        for row in start.0..=end.0 {
             let mut paragraphs = Vec::new();
-            collect(
-                u,
-                &row.roots,
-                &inner,
-                false,
-                selectable,
-                policy,
-                &mut paragraphs,
-            )?;
+            if row == 0 || row == list.logical_len() + 1 {
+                collect(
+                    u,
+                    list.logical_fixed(fixed, row != 0),
+                    &frames,
+                    false,
+                    selectable,
+                    policy,
+                    &mut paragraphs,
+                )?;
+            } else {
+                let i = row - 1;
+                let temporary;
+                let item = if let Some(item) = mounted.get(&i) {
+                    *item
+                } else {
+                    temporary = list.logical_row(u, i, &frames)?;
+                    &temporary
+                };
+                let mut inner = frames.clone();
+                inner.push(item.frame.clone());
+                collect(
+                    u,
+                    &item.roots,
+                    &inner,
+                    false,
+                    selectable,
+                    policy,
+                    &mut paragraphs,
+                )?;
+            }
             for (p, (text, selectable)) in paragraphs.into_iter().enumerate() {
-                if !selectable || (i, p) < (start.0, start.1) || (i, p) > (end.0, end.1) {
+                if !selectable || (row, p) < (start.0, start.1) || (row, p) > (end.0, end.1) {
                     continue;
                 }
                 let units: Vec<_> = text.encode_utf16().collect();
-                let lo = if (i, p) == (start.0, start.1) {
+                let lo = if (row, p) == (start.0, start.1) {
                     start.2.min(units.len())
                 } else {
                     0
                 };
-                let hi = if (i, p) == (end.0, end.1) {
+                let hi = if (row, p) == (end.0, end.1) {
                     end.2.min(units.len())
                 } else {
                     units.len()

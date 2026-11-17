@@ -14,6 +14,7 @@
 
 #[cfg(test)]
 mod a2_tests;
+pub mod accounting;
 pub mod arith;
 mod census;
 pub mod expansion;

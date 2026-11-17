@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The configuration activity every kind shares (LLP 1126.003 D7), in the widgets' own process (D5). Each kind's
+     provider is the app's (app/build.gradle.kts), since Android names a provider by its class. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name="dev.exact.widgets.Configure"
+            android:exported="true"
+            android:process=":widgets"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.DeviceDefault.DayNight">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

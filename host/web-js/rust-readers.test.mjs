@@ -1,6 +1,6 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // Store readers at Rust-module startup and across the adapter's calls (LLP 1027 D4, LLP 1146 §2.3).
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,10 @@ import { createGrantSet, createRequestExecutor } from './admission.js';
 import { appDigest, suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 const ROOT = resolve(import.meta.dir, '../..');
+// A fixture's setup can throw before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(resolve(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 
 test('a store reader shows its declared placeholder until its Rust source is ready when launch secrets were present', async () => {
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
@@ -93,10 +97,9 @@ test('a built store reader replaces its placeholder when the delayed Rust module
   const write = (path, content) => writeFileSync(resolve(dir, path), content);
   let browser, server, release;
   try {
-    for (const path of ['data/src', 'bake/src', 'web']) mkdirSync(resolve(dir, path), { recursive: true });
-    write('app.json', JSON.stringify({ name: 'Reader', app: { id: 'test.reader', name: 'Reader' }, host: { web: {} } }));
+    for (const path of ['data/src', 'bake/src']) mkdirSync(resolve(dir, path), { recursive: true });
+    write('app.json', JSON.stringify({ name: 'Reader', app: { id: 'test.reader', name: 'Reader' }, host: { web: {} }, rust: { data: { crate: 'startup-data', type: 'startup_data::Reader', source: 'startup_data::Reader' } } }));
     write('app.contract', 'component App\n  resource session = session() as shape string else preview()\n  action export\n    saveFile("export", "app:/data/note.txt", "note.txt")\n  view\n    column\n      text session testId="session"\n      button "Export" id="export" testId="export" press=export\n');
-    write('web/build.rs', 'fn main() { contract::bake(plan, startup_data::Reader); }');
     write('Cargo.toml', `[workspace]\nmembers = ["data", "bake"]\nresolver = "2"\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
     cpSync(resolve(ROOT, 'Cargo.lock'), resolve(dir, 'Cargo.lock'));
     write('data/Cargo.toml', `[package]\nname = "startup-data"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nexact-runner = { path = "${ROOT}/runner" }\n`);
@@ -162,11 +165,11 @@ impl DataSource for Reader {
 // `spec` as the web's grant set, by the grammar's own normalizer (`exact-web-js normalize-grants`), the compiler the
 // lane built.
 function normalized(spec) {
-  const { cmd, pre } = webCompiler();
+  const { cmd, pre, env: toolEnv } = webCompiler();
   if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-grants-')), input = resolve(scratch, 'grants.txt');
   writeFileSync(input, spec);
-  const run = spawnSync(cmd, [...pre, 'normalize-grants', input], { cwd: ROOT, encoding: 'utf8' });
+  const run = spawnSync(cmd, [...pre, 'normalize-grants', input], { env: toolEnv, cwd: ROOT, encoding: 'utf8' });
   rmSync(scratch, { recursive: true });
   if (run.status !== 0) throw new Error(run.stderr || 'the grant normalizer failed');
   return JSON.parse(run.stdout);
@@ -190,7 +193,7 @@ test('a render refuses a Rust storage request after validating its scope', async
 // answers, and through `data.threwRead` when it fails, an answer's or a parse's, so the resource is a store reader
 // either way, as natively.
 test("a Rust source's store read reaches rt.js whether its call answers or fails", async () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-readers-'));
+  const dir = scratch('exact-rust-readers-');
   const set = normalized('secret.keep k');
   for (const name of ['rust-data.js', 'admission.js', 'held.js', 'rt-link.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
@@ -403,7 +406,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
 
 // A Rust long poll's reply that is no event (LLP 1016.000 D8): the reader counts it, and rust-data.js lands nothing of it.
 test("a Rust long poll's reply that is no event reaches no message", async () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-poll-'));
+  const dir = scratch('exact-rust-poll-');
   for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
     writeFileSync(resolve(dir, name), source);
@@ -548,7 +551,7 @@ test('web dispatch refuses a Rust prefetch on a send and sends a resource prefet
 // A Rust call that fails may have changed the module's own state before it failed: refused after its answer ran, or
 // trapped. The next call runs in a fresh instance, activated again, as natively (logic/src/lib.rs `run`).
 test('a Rust call after a refused or trapped one runs in a fresh instance', async () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-rust-fresh-'));
+  const dir = scratch('exact-rust-fresh-');
   for (const name of ['rust-data.js', 'admission.js', 'held.js']) {
     const source = readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'");
     writeFileSync(resolve(dir, name), source);

@@ -11,6 +11,9 @@ use exact_runner::{
 /// A source that fetches its URL and lands the body, or `error: <message>`.
 struct Recipes;
 impl DataSource for Recipes {
+    fn grants(&self) -> &str {
+        "net.fetch https://api.test"
+    }
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::Unavailable("answers with a request".into()))
     }
@@ -35,6 +38,65 @@ impl DataSource for Recipes {
 }
 
 const APP: &str = "shape Line\n  text: string\ncomponent App\n  resource a = recipes(\"https://api.test/recipes/1\") as shape Line\n  resource b = recipes(\"https://api.test/users/1\") as shape Line\n  view\n    column\n      text a.text testId=\"a\"\n      text b.text testId=\"b\"\n";
+
+#[test]
+fn an_http_fixture_runs_the_source_parser_and_survives_replacement() {
+    let mut r = Runner::boot(
+        contract::compile(APP).unwrap(),
+        Recipes,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let reply = agent::handle(
+        &r,
+        r#"{"op":"prefer","faults":{"answer":"https://api.test/recipes","response":{"status":201,"headers":{"content-type":"application/json"},"body":"Stubbed greeting"}}}"#,
+    );
+    assert!(!reply.contains("error"), "{reply}");
+    let out = r
+        .take_requests()
+        .into_iter()
+        .find(|r| r.target == "a")
+        .unwrap();
+    let Some(Dispatch::Run(Work::HttpResponse(work))) = r.fault_dispatch(&out) else {
+        panic!("fixture must replace the transport")
+    };
+    let outcome = work();
+    let Outcome::Response(response) = &outcome else {
+        panic!("{outcome:?}")
+    };
+    assert_eq!(response.status, 201);
+    assert_eq!(
+        response.headers,
+        vec![("content-type".into(), "application/json".into())]
+    );
+    r.fulfill(out.ticket, outcome).unwrap();
+    assert_eq!(text(&r, "a"), "Stubbed greeting");
+    let carried = r.carry();
+    let next = Runner::boot_carrying(
+        contract::compile(APP).unwrap(),
+        Recipes,
+        Kernel::with_monospace(),
+        &carried,
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(next.faults().json(), r.faults().json());
+    assert!(
+        next.fetch_fault()("https://api.test/recipes").is_none(),
+        "long polls do not consume response fixtures"
+    );
+    let mut denied = out.clone();
+    denied.request.grants = Some(String::new());
+    assert!(
+        r.fault_dispatch(&denied).is_none(),
+        "an ungranted fixture reaches the executor's refusal"
+    );
+    r.faults().pass("https://api.test/recipes");
+    assert!(r.fault_dispatch(&out).is_none());
+}
 
 fn text(r: &Runner<Recipes>, id: &str) -> String {
     let key = r.kernel().find_by_test_id(id)[0];
@@ -95,9 +157,10 @@ fn a_fault_fails_the_fetches_its_prefix_matches_as_a_network_failure() {
         "{logs}"
     );
     let state = agent::handle(&r, r#"{"op":"state"}"#);
-    assert!(
-        state.contains("\"faults\":[{\"prefix\":\"https://api.test/recipes\",\"times\":1,\"left\":0,\"hits\":1,\"armed\":true}]"),
-        "{state}"
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&state).unwrap()["faults"],
+        serde_json::json!([{"prefix": "https://api.test/recipes", "times": 1,
+            "left": 0, "hits": 1, "armed": true, "failureHits": 1}])
     );
     // Spent: a refresh goes out.
     let spent = agent::handle(
@@ -127,6 +190,7 @@ fn a_stream_is_not_matched() {
     r.faults().arm("https://api.test/", None).unwrap();
     let mut r = r;
     let out = exact_runner::RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket: 99,
         target: "a".into(),
@@ -138,6 +202,7 @@ fn a_stream_is_not_matched() {
         "streams are deferred (D5)"
     );
     let plain = exact_runner::RequestOut {
+        completion: None,
         class: exact_runner::RequestClass::Ordered,
         request: Request::get("https://api.test/recipes/2"),
         ..out

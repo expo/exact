@@ -136,7 +136,7 @@ fn blend(bytes: &mut [u8], rgba: [u16; 4]) {
         }
         offset
     };
-    for pixel in bytes[offset..].chunks_exact_mut(4) {
+    for pixel in bytes[offset..].as_chunks_mut::<4>().0 {
         for i in 0..4 {
             // tiny-skia lowp source-over uses ceil(product / 256), not / 255.
             pixel[i] = (rgba[i] + ((pixel[i] as u16 * inverse + 255) >> 8)) as u8;

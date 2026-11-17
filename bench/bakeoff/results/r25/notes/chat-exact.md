@@ -40,7 +40,7 @@ nothing spills at the largest text size, and scrolling is "like UIKit". The app 
 - **Fixes from verify.** `overflow-wrap="anywhere"` (from the chat recipe) was flagged for breaking inside
   words. `white-space="pre-wrap"` made text 6 px wider than its bubble at the largest size; `pre-line`
   fixed it. The composer field needed a 44 pt minimum height. `rem` is refused inside `min()`.
-- **The chevron icon.** It needed an `app.tamber` icon token with an SVG, because `sf/` symbols are
+- **The chevron icon.** It needed an `app.forma` icon token with an SVG, because `sf/` symbols are
   blank on web and Linux.
 - **Guesses.** The canned replies, the 1200 px "far up" threshold, and showing a date heading with a
   time (iMessage style). I did not add a confirmation before Delete; it deletes straight away, as the

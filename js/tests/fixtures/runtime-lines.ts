@@ -18,7 +18,7 @@ function answer(source: string): unknown {
   } else if (source === "rejection") {
     Promise.reject(new Error("lost"));
   } else if (source === "handoffs") {
-    return JSON.stringify(["__exact_runtime_line", "reportError", "__exact_log"].filter((name) => name in globalThis));
+    return JSON.stringify(["__exact_runtime_line", "__exact_log"].filter((name) => name in globalThis));
   } else {
     throw new Error("unknown source " + source);
   }

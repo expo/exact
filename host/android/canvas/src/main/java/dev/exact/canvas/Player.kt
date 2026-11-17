@@ -63,6 +63,7 @@ internal fun makePicture(id: Int, w: Int, h: Int, hwbuf: Boolean): Bitmap {
  * Player a thread. [image] and [row] resolve ids; [group] gives a scroller's node (main thread only).
  */
 internal class Player(private val fonts: Map<Int, Font>) {
+    var origins: PaintedOrigins? = null
     var image: (Int) -> Bitmap? = { null }
     /** A platform element's node (op 28, [Natives]). */
     var native: (Int) -> android.graphics.RenderNode? = { null }
@@ -73,6 +74,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
     var slot: (Int) -> android.graphics.RenderNode? = { null }
     /** A node exact2's reader animates (op 29, [Layers]). */
     var layer: (Int) -> android.graphics.RenderNode? = { null }
+    var shared: (Long) -> android.graphics.RenderNode? = { null }
     var group: ((Int) -> android.graphics.RenderNode)? = null
     /** What is drawn in place of a scroller's own node, for one whose edge the reader stretches ([Scrolling]). */
     var holder: ((Int) -> android.graphics.RenderNode?)? = null
@@ -249,7 +251,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + l; shiftY = sy + t
         val inner = node.beginRecording()
-        replay(inner, b, from, at, reuseGroups = true)
+        replay(inner, b, from, at, reuseGroups = true, into = node)
         node.endRecording()
         shiftX = sx; shiftY = sy
         current.set(here)
@@ -317,10 +319,10 @@ internal class Player(private val fonts: Map<Int, Font>) {
     }
 
     /** [replay] into a node whose origin is at ([dx], [dy]) in the stream's pixels. */
-    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float) {
+    fun replayAt(canvas: Canvas, b: IntBuffer, from: Int, n: Int, dx: Float, dy: Float, into: android.graphics.RenderNode? = null) {
         val sx = shiftX; val sy = shiftY
         shiftX = sx + dx; shiftY = sy + dy
-        try { replay(canvas, b, from, n) } finally { shiftX = sx; shiftY = sy }
+        try { replay(canvas, b, from, n, into = into) } finally { shiftX = sx; shiftY = sy }
     }
 
     private fun f(b: IntBuffer, i: Int) = java.lang.Float.intBitsToFloat(b.get(i))
@@ -750,7 +752,9 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
     }
 
-    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false) {
+    fun replay(canvas: Canvas, b: IntBuffer, from: Int, n: Int, reuseGroups: Boolean = false, into: android.graphics.RenderNode? = null) {
+        val placements = origins?.let { ArrayList<PaintedOrigins.Placement>() }
+        var children = placements
         tint = 1f; tintEnd = -1
         imageTint = null
         imageRendering = 0
@@ -792,6 +796,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         if (square) c.clipRect(rect) else { path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipPath(path) }
                         current.mapRect(backdropBounds, rect)
                         val m = Matrix(); m.setTranslate(Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat())
+                        children?.add(PaintedOrigins.Placement(node, Math.round(backdropBounds.left).toFloat(), Math.round(backdropBounds.top).toFloat()))
                         c.setMatrix(m)
                         c.drawRenderNode(node)
                         c.restore()
@@ -970,6 +975,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         c.save()
                         matrix.setTranslate(f(b, i + 2) - shiftX, f(b, i + 3) - shiftY)
                         c.setMatrix(matrix)
+                        children?.add(PaintedOrigins.Placement(r, f(b, i + 2) - shiftX, f(b, i + 3) - shiftY))
                         c.drawRenderNode(r)
                         c.restore()
                     }
@@ -985,12 +991,20 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 24 -> i += 3 + b.get(i + 2)
                 29 -> {
                     // A layer the reader moves and fades: drawn in the stream's coordinates, as a slot is.
-                    layer(b.get(i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    layer(b.get(i + 1))?.let { s ->
+                        children?.add(PaintedOrigins.Placement(s, -shiftX, -shiftY))
+                        c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore()
+                    }
                     i += 2
                 }
                 30, 31 -> i += 3 + b.get(i + 2)
                 32 -> i += 2
                 33 -> i += 3
+                50, 51 -> i += 2 + b.get(i + 1)
+                52 -> {
+                    shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    i += 3
+                }
                 20 -> {
                     // A scroller's rows: their own node, so a move only translates it.
                     val g = group!!(b.get(i + 1))
@@ -1005,6 +1019,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                         outer = c
                         saveMatrix()
                         c = g.beginRecording()
+                        children = origins?.let { ArrayList<PaintedOrigins.Placement>() }
                         current.reset(); c.setMatrix(current)
                     }
                 }
@@ -1012,9 +1027,12 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     node?.let { g ->
                         if (!reuseGroups) {
                             g.endRecording()
+                            children?.let { origins?.record(g, it) }
+                            children = placements
                             c = outer!!
                             restoreMatrix()
                         }
+                        children?.add(PaintedOrigins.Placement(g, -shiftX, -shiftY))
                         c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(holder?.invoke(grouped) ?: g); c.restore()
                     }
                     node = null
@@ -1032,6 +1050,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         }
         canvas.restoreToCount(base)
         matrixDepth = matrixBase
+        placements?.let { origins?.record(into, it) }
     }
 
     private companion object {

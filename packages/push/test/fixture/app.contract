@@ -30,8 +30,14 @@ component App
                 text testId="token" a.deviceToken
               case none
                 text testId="token" "none"
+            match s.android
+              case some(a)
+                text testId="androidInstallationId" a.installationId
+              case none
+                text testId="androidInstallationId" "none"
           case none
             text testId="token" "none"
+            text testId="androidInstallationId" "none"
         match subscribed
           case some(s)
             text testId="subscribed" "answered"

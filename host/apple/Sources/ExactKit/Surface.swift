@@ -29,6 +29,7 @@ final class SurfaceLayer: CALayer {
     /// The children's clip at the shown size, and the layer it masks.
     let clip = CAShapeLayer()
     let ownClip = CAShapeLayer()
+    var authoredMask: CALayer?
     weak var clipped: CALayer?
     /// The node's own clip, turned off while this one stands in for it.
     var clippedSelf = false
@@ -72,8 +73,17 @@ extension NodeView {
         #else
         s.contentsScale = pixelScale ?? 2
         #endif
+        clipPath = ClipPath.path(style["clip_path"], size: box.size)
         paintSurface(s, box)
         clipSurface(s, box)
+        if (clipPath != nil || s.authoredMask != nil), !hasBoxFilter {
+            let outline = host.boxMask === s.ownClip ? s.ownClip : (host.boxMask === s.clip ? s.clip : nil)
+            s.authoredMask = composedMask(shaped: outline)
+            host.mask = s.authoredMask
+        }
+        #if os(iOS) || os(tvOS)
+        sizeMaterial()
+        #endif
         if started { surfaceChanged() }
     }
 
@@ -81,6 +91,8 @@ extension NodeView {
     func endSurface() {
         guard let s = surface else { return }
         surface = nil
+        // The mask cache may already hold the final bounds, especially for a filtered box.
+        clipPath = ClipPath.path(style["clip_path"], size: bounds.size)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
         if hostLayer?.boxMask === s.ownClip { hostLayer?.mask = nil }
@@ -89,10 +101,40 @@ extension NodeView {
         if s.clippedSelf { clipsToBounds = overflowClips && clipBox == nil }
         s.removeFromSuperlayer()
         CATransaction.commit()
+        #if os(iOS) || os(tvOS)
+        sizeMaterial()
+        #endif
         surfaceChanged()
     }
 
+    #if os(iOS) || os(tvOS)
+    /// The box a material (glass or a blur) fills: the surface's shown box
+    /// while a layout transition resizes it, else `bounds`. Its corners and
+    /// clip are resolved at this size (`applyMaterialRadius`).
+    var materialBox: CGRect { surface.map { CGRect(origin: .zero, size: $0.frame.size) } ?? bounds }
+
+    /// The material's frame in what holds it: its glass slot's content view,
+    /// or the node.
+    var materialFrame: CGRect { glassSlot.map { CGRect(origin: .zero, size: $0.bounds.size) } ?? materialBox }
+
+    /// A material is a view the node holds, not paint, so it takes the
+    /// surface's size too, from the same corner: a glass in a glass group then
+    /// morphs with its neighbours as the box resizes. A glass slot takes the
+    /// box and the material fills the slot; with no surface both fill
+    /// `bounds` again.
+    func sizeMaterial() {
+        guard glassSlot != nil || materialView != nil else { return }
+        let box = materialBox
+        UIView.performWithoutAnimation {
+            if let slot = glassSlot, slot.frame != box { slot.frame = box }
+            if let material = materialView, material.frame != materialFrame { material.frame = materialFrame }
+        }
+        applyMaterialRadius()
+    }
+    #endif
+
     private func surfaceChanged() {
+        if surface == nil { applyBoxMask() }
         applyShadow(outline: roundedPath(in: bounds).cgPath)
         #if os(iOS) || os(tvOS)
         applyBoxLayer()
@@ -189,7 +231,7 @@ extension NodeView {
         // A padding-edge mask must exclude the surface itself, or it cuts
         // away the border it is meant to protect from the children.
         if clipBox == nil, scroll == nil, clipsToBounds, widths.contains(where: { $0 > 0 }),
-           clipPath == nil, boxFilter == nil, style["mask_image"] == nil {
+           boxFilter == nil, style["mask_image"] == nil {
             s.madeClipBox = true
             syncClipBox(true)
             clipsToBounds = false
@@ -204,11 +246,11 @@ extension NodeView {
         let target: CALayer?
         if let clipped = clipBox?.layer { target = clipped }
         else if let scroller { target = scroller }
-        else if clipsToBounds, (clipPath == nil && boxFilter == nil && style["mask_image"] == nil) || hostLayer?.boxMask === s.clip {
+        else if clipsToBounds, (boxFilter == nil && style["mask_image"] == nil) || hostLayer?.boxMask === s.clip {
             clipsToBounds = false
             s.clippedSelf = true
             target = hostLayer
-        } else if overflowClips, hostLayer?.boxMask === s.clip { target = hostLayer } else { target = nil }
+        } else if overflowClips, s.clipped === hostLayer { target = hostLayer } else { target = nil }
         if s.clipped !== target {
             if s.clipped?.boxMask === s.clip { s.clipped?.mask = nil }
             s.clipped?.masksToBounds = s.clippedToBounds

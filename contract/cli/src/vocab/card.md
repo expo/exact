@@ -24,11 +24,11 @@ concat: xs.concat(ys) -> T[]
 filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
-formatDate: formatDate(msOrDayKey, offsetMinutes, "medium"|"month-year"|"iso") -> string
-formatDay: formatDay(then, now, offsetMinutes, "day"|"day-time"|"list"|"section") -> string  (Today)
+formatDate: formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
+formatDay: formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
 formatDecimal: (cents to "12.34"; literal digits)
-formatNumber: formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
-formatTime: ("2:13 PM"; minutes east of UTC)
+formatNumber: formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD"|digits) -> string  (1,234.5; 26%)
+formatTime: formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
 frame: (action)
 includes: s.includes(x) -> bool  (text or list)
 indexOf: s.indexOf(x) -> number  (-1 for none)
@@ -60,11 +60,11 @@ option | value
 time | datetime format
 progress | value max start end
 list | listStyle appearance virtualized refreshing scroll-start | reachstart reachend refresh
-scroll | scrollTop navigationScroll keyboardDismissMode | scroll scrollend
+scroll | scrollTop scrollZoom navigationScroll keyboardDismissMode | scroll scrollend
 dialog | closedby | cancel close
 
 ## rules
-- An event hands its action its payload after the captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; nothing for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App
@@ -82,11 +82,11 @@ component App
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
 - Symbols: `"symbol:<role>"` (below); `symbol:sf/<name>` is Apple-only.
-- Not in Contract (`vocab <name>` says what instead): abs pow sqrt sort reduce find some every contains padStart parseInt.
+- Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
 
 ## how
 ### a second screen, a sheet
-A screen is a route, not an `if`; a sheet's root adds `navigationPresentation="modal"`, its Cancel the `id` `navigationBack` names (`pattern list-detail`).
+Use a route for a screen. A sheet has `navigationPresentation="modal"`; Cancel has the `navigationBack` id (`pattern list-detail`).
 ```contract
 routes nav
   home "/"
@@ -115,7 +115,7 @@ main navigationKey=`${top(nav).id}` navigationBack="back"
             image "symbol:checkmark"
 ```
 ### a confirmation
-What can't be undone (Delete) asks first. `aria-label` is the question; actions run their `press` and close (`command="close"`); Cancel has no `press`. Open it with `command="show-modal"` or `showModal(id)`.
+Confirm irreversible actions: `aria-label` asks; `press` acts; `command="close"` closes. Cancel has no `press`. Open: `command="show-modal"` or `showModal(id)`.
 ```contract
 state n = 1
 action remove
@@ -129,7 +129,7 @@ dialog id="remove" role="alertdialog" aria-label="Delete it?"
     text "Cancel"
 ```
 ### a timer
-`every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. See `contract vocab timers`.
+`every(ms, action)` repeats; `after(ms, action)` runs once. Options: `wait=frame|update|scrollend|idle`, `max=ms`, `tolerance=ms`. More: `vocab timers`.
 ```contract
 state now = 0
 task tick mount
@@ -139,12 +139,12 @@ action step
 text `${now}`
 ```
 ### keeping a value
-Root `state` only: a number, string or bool (or an option or list of one) up to 16 KB. Records belong in a source (`files-and-grants`).
+Root `state` only: a number, string or bool (or an option or list of one) up to 16 KB. Records go in a source (`files-and-grants`).
 ```contract
 state units = "C" persist
 ```
 ### colour
-Leave the accent unsaid (a brand is an app.tamber) and controls unpainted; elsewhere a role (follows the scheme): text `label`, `secondary-label`; a card `secondary-background`; a fill `secondary-fill`; a hue `system-red`…. No hex.
+Leave the accent unsaid (a brand is an app.forma) and controls unpainted; elsewhere a role (follows the scheme): text `label`, `secondary-label`; a card `secondary-background`; a fill `secondary-fill`; a hue `system-red`…. No hex.
 ```contract
 main
   text "Total" color="-exact-secondary-label"
@@ -163,7 +163,7 @@ action add
 text items.join(", ")
 ```
 ### a dated record
-The write reads the clock, not a ticked `now`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
+The write reads the clock, not a ticked `now`; `performanceNow()` alone restarts at 0. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
 ```contract
 shape Time
   epochAtZero: number
@@ -175,7 +175,7 @@ action log
   days = days.concat([formatDate(at, time.utcOffset, "iso")])
 ```
 ### a test, and verify
-Tests start with empty storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps screenshots.
+Tests start with no storage. `clock data` lands replies, `clock settle` ends transitions, `clock held` lands held replies; `reload` keeps storage. `bun exact.mjs verify` tests, checks end screens, relaunches; `verify ios` last; `--shots <dir>` keeps shots.
 It runs `contract verify`; keep its receipt.
 ```contract-test
 test "a pick survives a relaunch"

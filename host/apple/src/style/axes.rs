@@ -3,7 +3,7 @@
 use exact_kernel::style::{FontFeatures, FontVariations};
 
 /// Writes the row's value; `false` (nothing written) for `normal`.
-pub(super) fn font_axes_json(out: &mut String, v: &FontVariations) -> bool {
+pub(crate) fn font_axes_json(out: &mut String, v: &FontVariations) -> bool {
     if v.is_empty() {
         return false;
     }
@@ -22,7 +22,7 @@ pub(super) fn font_axes_json(out: &mut String, v: &FontVariations) -> bool {
 
 /// CSS `font-feature-settings` as a style row: `[["cv05",1],…]`, the
 /// features in order (FontAxes.swift reads it); `false` for `normal`.
-pub(super) fn font_features_json(out: &mut String, f: &FontFeatures) -> bool {
+pub(crate) fn font_features_json(out: &mut String, f: &FontFeatures) -> bool {
     if f.is_empty() {
         return false;
     }

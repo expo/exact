@@ -3,7 +3,7 @@ use super::*;
 use exact_runner::Value;
 
 fn boot(source: &str) -> Presenter<()> {
-    let (mut p, error) = Presenter::boot_with(
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &crate::test_plan(source),
         (),
         (480., 400.),
@@ -167,4 +167,126 @@ fn a_tablist_in_a_page_menu_moves_by_its_own_arrows() {
     assert!(p.set_focus(Some(id(&p, "three")), 0.).is_none());
     key(&mut p, "ArrowDown", "one");
     assert_eq!(p.host.runner().slot("n"), Some(&Value::Number(0.)));
+}
+
+const INLINE: &str = r#"component App
+  view
+    column width=480 height=400
+      button "Before" testId="before"
+      column role="menu"
+        button "Cut" testId="cut"
+        text testId="note"
+          text "Read the "
+          text "docs" href="/docs" testId="docs"
+        button "Paste" testId="paste"
+      text testId="line"
+        text "See "
+        text "the guide" href="https://example.com/guide" testId="guide"
+      button "After" testId="after"
+"#;
+
+/// A link in a line of text, with no `press` or `tabindex`, takes the focus
+/// as the web's `a[href]` does: a menu's arrows reach it and Tab stops on
+/// it, and Enter follows it.
+#[test]
+fn a_link_in_a_line_of_text_is_focusable_a_menu_member_and_a_tab_stop() {
+    let mut p = boot(INLINE);
+    assert!(p.focusable(id(&p, "docs")));
+    assert!(!p.focusable(id(&p, "note")));
+    assert!(p.set_focus(Some(id(&p, "cut")), 0.).is_none());
+    for (name, next) in [
+        ("ArrowDown", "docs"),
+        ("ArrowDown", "paste"),
+        ("ArrowUp", "docs"),
+        ("ArrowUp", "cut"),
+    ] {
+        key(&mut p, name, next);
+    }
+    assert!(p.set_focus(Some(id(&p, "before")), 0.).is_none());
+    for next in ["cut", "docs", "paste", "guide", "after"] {
+        key(&mut p, "Tab", next);
+    }
+    assert!(p.set_focus(Some(id(&p, "guide")), 0.).is_none());
+    p.key_down("Enter", 0.);
+    p.run_commands(|| ());
+    assert!(p
+        .host
+        .runner()
+        .journal()
+        .any(|line| line.contains("openURL https://example.com/guide")));
+}
+
+/// Enter on a focused `link href` with no `press` follows it, as on the web.
+#[test]
+fn enter_follows_a_focused_link() {
+    let mut p = boot(
+        r#"component App
+  view
+    column width=480 height=400
+      link href="https://example.com/block" testId="block"
+        text "Block"
+"#,
+    );
+    assert!(p.set_focus(Some(id(&p, "block")), 0.).is_none());
+    p.key_down("Enter", 0.);
+    p.run_commands(|| ());
+    let journal: Vec<_> = p.host.runner().journal().map(|l| l.to_string()).collect();
+    assert!(
+        journal
+            .iter()
+            .any(|line| line.contains("openURL https://example.com/block")),
+        "{journal:?}"
+    );
+    // It has no `press` to refuse.
+    assert!(
+        !journal.iter().any(|line| line.contains("NoHandler")),
+        "{journal:?}"
+    );
+}
+
+const BOTS: &str = r#"component App
+  state n = 0
+  action bump()
+    n = n + 1
+  view
+    column role="menu" width=480 height=400
+      button "Ada" role="menuitem" press=bump() testId="Ada"
+      button "Bishop" role="menuitem" press=bump() testId="Bishop"
+      button "Cortana" role="menuitem" press=bump() testId="Cortana"
+      button "Dax" role="menuitem" disabled=true press=bump() testId="Dax"
+      button "Data" role="menuitem" press=bump() testId="Data"
+      button "Dora" role="menuitem" press=bump() testId="Dora"
+      button "Eve" role="menuitem" press=bump() testId="Eve"
+"#;
+
+/// #550 on the painted hosts, as `host/web/tests/role-keys.test.mjs` has the web's: a letter moves
+/// the focus to the next item it starts, the same letter again to the one after, wrapping, past a
+/// disabled item; more letters refine the match. A letter no item starts is left to the page, and
+/// Space with no search under way presses.
+#[test]
+fn a_letter_in_a_page_menu_moves_the_focus_to_the_item_it_starts() {
+    let mut p = boot(BOTS);
+    assert!(p.set_focus(Some(id(&p, "Cortana")), 0.).is_none());
+    for (name, at, next) in [
+        ("d", 0., "Data"),
+        ("d", 100., "Dora"),
+        ("d", 200., "Data"),
+        ("a", 800., "Ada"),
+        ("D", 1400., "Data"),
+        ("o", 1500., "Dora"),
+        ("z", 2100., "Dora"),
+    ] {
+        p.key_down(name, at);
+        p.run_commands(|| ());
+        assert_eq!(p.focus, Some(id(&p, next)), "{name} at {at}");
+    }
+    assert_eq!(p.host.runner().slot("n"), Some(&Value::Number(0.)));
+    p.key_down(" ", 2700.);
+    p.key_up(" ", "", 2700.);
+    p.run_commands(|| ());
+    assert_eq!(
+        p.host.runner().slot("n"),
+        Some(&Value::Number(1.)),
+        "Space presses"
+    );
 }

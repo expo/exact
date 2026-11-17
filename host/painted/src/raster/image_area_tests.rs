@@ -310,7 +310,13 @@ fn reference(
         })
         .collect();
     let stride = target.width() as usize;
-    for (i, out) in target.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, out) in target
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         if edges.data()[i] == 0 {
             continue;
         }
@@ -420,7 +426,9 @@ fn minified_images_average_area_with_fractional_edges_masks_tint_and_parent_clip
                         }
                         assert!(actual
                             .data()
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .all(|p| p[..3].iter().all(|c| *c <= p[3])));
                     }
                 }
@@ -601,7 +609,7 @@ fn long_constant_sources_preserve_colour_and_filter_each_source_row_once() {
     ] {
         let mut source = Pixmap::new(w, h).unwrap();
         for rgba in [[255, 0, 0, 255], [71, 29, 13, 127]] {
-            for pixel in source.data_mut().chunks_exact_mut(4) {
+            for pixel in source.data_mut().as_chunks_mut::<4>().0 {
                 pixel.copy_from_slice(&rgba);
             }
             let transform = Transform::from_scale(dw as f32 / w as f32, dh as f32 / h as f32);
@@ -626,7 +634,12 @@ fn long_constant_sources_preserve_colour_and_filter_each_source_row_once() {
                     rgba
                 };
                 assert!(
-                    target.data().chunks_exact(4).all(|pixel| pixel == expected),
+                    target
+                        .data()
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .all(|pixel| *pixel == expected),
                     "{w}x{h} {rgba:?}"
                 );
                 assert_eq!(scratch.rows_filtered, h as usize);
@@ -658,9 +671,9 @@ fn masks_bound_filtering_and_skip_empty_rows() {
         ));
         assert_eq!(scratch.rows_filtered, rows.len() * 4);
         assert_eq!(scratch.pixels_filtered, rows.len() * 32);
-        for (pixel, cover) in target.data().chunks_exact(4).zip(mask.data()) {
+        for (pixel, cover) in target.data().as_chunks::<4>().0.iter().zip(mask.data()) {
             assert_eq!(
-                pixel,
+                *pixel,
                 if *cover == 0 {
                     [0; 4]
                 } else {
@@ -688,8 +701,8 @@ fn vertical_reduction_reads_only_columns_needed_by_horizontal_taps() {
     ));
     assert_eq!(scratch.rows_filtered, 4);
     assert_eq!(scratch.pixels_filtered, 8);
-    for (pixel, cover) in target.data().chunks_exact(4).zip(mask.data()) {
-        assert_eq!(pixel, [*cover; 4]);
+    for (pixel, cover) in target.data().as_chunks::<4>().0.iter().zip(mask.data()) {
+        assert_eq!(*pixel, [*cover; 4]);
     }
 }
 

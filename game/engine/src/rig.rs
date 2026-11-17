@@ -525,7 +525,7 @@ impl Rig {
         assert!(!m.indices.is_empty(), "rig: no bone has a radius");
         let mut lo = [f32::INFINITY; 3];
         let mut hi = [f32::NEG_INFINITY; 3];
-        for p in m.positions.chunks_exact(3) {
+        for p in m.positions.as_chunks::<3>().0 {
             for a in 0..3 {
                 lo[a] = lo[a].min(p[a]);
                 hi[a] = hi[a].max(p[a]);

@@ -42,8 +42,10 @@ function under(path, name = '') {
   if (!stat.isDirectory()) return [[name, stat, path]];
   return readdirSync(path).sort().flatMap(child => under(resolve(path, child), `${name}/${child}`) ?? []);
 }
-const digest = (path) => { const all = under(path); return all && sha(all.map(([name, , file]) => `${name}\0${sha(readFileSync(file))}`).join('\n')); };
-const seen = (path) => under(path)?.map(([name, s]) => `${name}:${s.mtimeMs}:${s.size}`).join('\n') ?? null;
+/** A file's or a directory's bytes, a directory's as the names and bytes of every file under it; null when absent. */
+export const digest = (path) => { const all = under(path); return all && sha(all.map(([name, , file]) => `${name}\0${sha(readFileSync(file))}`).join('\n')); };
+/** What a glance sees of a file or directory: each file's name, modification time and size. */
+export const seen = (path) => under(path)?.map(([name, s]) => `${name}:${s.mtimeMs}:${s.size}`).join('\n') ?? null;
 
 /** A dep-info entry `file` (absolute) of a kept product: its path relative
  * to the checkout `root`; `undefined` under a `skip` directory, which is no
@@ -52,6 +54,24 @@ const seen = (path) => under(path)?.map(([name, s]) => `${name}:${s.mtimeMs}:${s
 export function keptInput(file, root, skip = [], path = nodePath) {
   if (skip.some(dir => within(dir, file, path))) return undefined;
   return within(root, file, path) ? path.relative(root, file) : null;
+}
+
+/** `crate`'s packages in `root`'s `Cargo.lock`, each with what pins its bytes. */
+export function lockClosure(root, crate) {
+  const packages = Bun.TOML.parse(readFileSync(resolve(root, 'Cargo.lock'), 'utf8')).package ?? [], pinned = new Set(), walk = [crate];
+  while (walk.length) {
+    const [name, version] = walk.pop().split(' '), pkg = packages.find(p => p.name === name && (!version || p.version === version));
+    if (!pkg) throw new Error(`Cargo.lock has no ${name}`);
+    const id = `${pkg.name} ${pkg.version} ${pkg.checksum ?? pkg.source ?? 'path'}`;
+    if (!pinned.has(id)) { pinned.add(id); walk.push(...(pkg.dependencies ?? [])); }
+  }
+  return [...pinned].sort();
+}
+/** `root`'s workspace manifest without its member lists, which name crates and decide no product's bytes. */
+export function workspaceManifest(root) {
+  const workspace = Bun.TOML.parse(readFileSync(resolve(root, 'Cargo.toml'), 'utf8'));
+  for (const members of ['members', 'exclude', 'default-members']) delete workspace.workspace?.[members];
+  return workspace;
 }
 
 /**
@@ -84,23 +104,11 @@ export function keptProducts({ root, cache: name, env, tools = [], skip = [], la
   const ancestors = []; for (let dir = root; ; dir = dirname(dir)) { ancestors.push(dir); if (dirname(dir) === dir) break; }
   const configs = [...ancestors.map(dir => resolve(dir, '.cargo')), env.CARGO_HOME ?? resolve(homedir(), '.cargo')].flatMap(dir => [resolve(dir, 'config'), resolve(dir, 'config.toml')]);
   const rustcs = new Map();
-  /** The crate's packages in `Cargo.lock`, each with what pins its bytes. */
-  const closure = (crate) => {
-    const packages = Bun.TOML.parse(readFileSync(resolve(root, 'Cargo.lock'), 'utf8')).package ?? [], pinned = new Set(), walk = [crate];
-    while (walk.length) {
-      const [name, version] = walk.pop().split(' '), pkg = packages.find(p => p.name === name && (!version || p.version === version));
-      if (!pkg) throw new Error(`Cargo.lock has no ${name}`);
-      const id = `${pkg.name} ${pkg.version} ${pkg.checksum ?? pkg.source ?? 'path'}`;
-      if (!pinned.has(id)) { pinned.add(id); walk.push(...(pkg.dependencies ?? [])); }
-    }
-    return [...pinned].sort();
-  };
+  const closure = (crate) => lockClosure(root, crate);
   const group = (spec) => {
     const toolchain = spec.toolchain ? [`+${spec.toolchain}`] : [];
     if (!rustcs.has(spec.toolchain)) rustcs.set(spec.toolchain, spawnSync('rustc', [...toolchain, '-vV'], { cwd: root, env, encoding: 'utf8' }).stdout);
-    const workspace = Bun.TOML.parse(readFileSync(resolve(root, 'Cargo.toml'), 'utf8'));
-    for (const members of ['members', 'exclude', 'default-members']) delete workspace.workspace?.[members];
-    return sha(JSON.stringify([1, spec.crate, ...(spec.group ?? []), rustcs.get(spec.toolchain), closure(spec.crate), workspace, configs.map(text), reads(), tools])).slice(0, 24);
+    return sha(JSON.stringify([1, spec.crate, ...(spec.group ?? []), rustcs.get(spec.toolchain), closure(spec.crate), workspaceManifest(root), configs.map(text), reads(), tools])).slice(0, 24);
   };
   /** What a checkout that took an entry saw of its inputs: while that is unchanged, the search is not repeated. */
   const glance = (kept, spec) => sha(JSON.stringify([[spec.crate, spec.group ?? [], spec.toolchain ?? null], kept.files.map(([file]) => seen(resolve(root, file))), kept.env.map(([k]) => env[k] ?? null),

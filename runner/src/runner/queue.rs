@@ -105,6 +105,25 @@ impl Queues {
         self.concluded = s.concluded;
     }
 
+    /// Room for `n` mutation rows (LLP 1035.005.004 D6: a child's sends
+    /// have rows after the declared ones).
+    pub(super) fn grow(&mut self, n: usize) {
+        self.waiting
+            .resize(n.max(self.waiting.len()), VecDeque::new());
+        self.next_due
+            .resize(n.max(self.next_due.len()), f64::INFINITY);
+        self.stalled.resize(n.max(self.stalled.len()), None);
+        self.concluded.resize(n.max(self.concluded.len()), 0);
+    }
+
+    /// Row `m` as a new instance's first send finds it: nothing waits.
+    pub(super) fn reset(&mut self, m: usize) {
+        self.waiting[m].clear();
+        self.next_due[m] = f64::INFINITY;
+        self.stalled[m] = None;
+        self.concluded[m] = 0;
+    }
+
     /// Whether a send of `m` waits.
     pub(super) fn waits(&self, m: usize) -> bool {
         self.waiting.get(m).is_some_and(|w| !w.is_empty())
@@ -139,7 +158,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<(), RunnerError> {
         if self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
-                mutation: self.plan.str(self.plan.mutations[m].name).to_string(),
+                mutation: self.mutation_name(m).to_string(),
             });
         }
         let (origin, id) = (self.call_origin(), self.invocation_id());
@@ -227,7 +246,7 @@ impl<D: DataSource> Runner<D> {
     /// and stalls `m` until a standing commit changes the state.
     pub(super) fn run_next(&mut self, m: usize) -> Result<CommitReceipt, RunnerError> {
         self.queues.next_due[m] = f64::INFINITY;
-        let name = self.plan.str(self.plan.mutations[m].name).to_string();
+        let name = self.mutation_name(m).to_string();
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
         let (origin, id, causes) = self.queues.waiting[m]
@@ -296,7 +315,7 @@ impl<D: DataSource> Runner<D> {
         self.failed_mut[m] = None;
         let later = match self.ask_send(Target::Mutation(m), &head.source, &head.args, head.write) {
             Ok(Asked::Now(slot, value)) => {
-                self.slots[slot] = value;
+                self.land_send(m, slot, value);
                 self.landed.push(m);
                 None
             }
@@ -372,12 +391,28 @@ impl<D: DataSource> Runner<D> {
             self.queues.waiting[m] = kept;
             if n > 0 {
                 dropped = true;
-                let name = self.plan.str(self.plan.mutations[m].name).to_string();
+                let name = self.mutation_name(m).to_string();
                 self.log(super::lines::forgot_waiting(n, &name));
             }
         }
         self.sync_pending_flags();
         dropped
+    }
+
+    /// Drop `m`'s waiting sends and their writes: its instance is gone
+    /// (LLP 1035.005.004 D4).
+    pub(super) fn drop_waiting(&mut self, m: usize) {
+        let waiting = std::mem::take(&mut self.queues.waiting[m]);
+        let n = waiting.len();
+        for send in waiting {
+            self.end_waiting(m, send);
+        }
+        self.queues.next_due[m] = f64::INFINITY;
+        self.queues.stalled[m] = None;
+        if n > 0 {
+            let name = self.mutation_name(m).to_string();
+            self.log(super::lines::forgot_waiting(n, &name));
+        }
     }
 
     /// Drop every waiting send — poison, or a reload that does not carry
@@ -393,7 +428,7 @@ impl<D: DataSource> Runner<D> {
             self.queues.next_due[m] = f64::INFINITY;
             self.queues.stalled[m] = None;
             if n > 0 {
-                let name = self.plan.str(self.plan.mutations[m].name).to_string();
+                let name = self.mutation_name(m).to_string();
                 self.log(super::lines::forgot_waiting(n, &name));
             }
         }
@@ -407,12 +442,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(_, w)| !w.is_empty())
-            .map(|(m, w)| {
-                (
-                    self.plan.str(self.plan.mutations[m].name).to_string(),
-                    w.len(),
-                )
-            })
+            .map(|(m, w)| (self.mutation_name(m).to_string(), w.len()))
             .collect()
     }
 }
@@ -441,8 +471,9 @@ impl<D: DataSource> Runner<D> {
         let m = target
             .mutation()
             .expect("a send's target names its mutation");
-        let ty = self.plan.mutations[m].ty;
-        let name = |plan: &Plan| plan.str(plan.mutations[m].name).to_string();
+        let ty = self.mutation_row(m).ty;
+        let name = self.mutation_name(m).to_string();
+        let name = |_: &Plan| name.clone();
         self.check_send_arguments(m, args)?;
         self.snapshot_sockets();
         self.store.set_clock_ms(self.now_ms);

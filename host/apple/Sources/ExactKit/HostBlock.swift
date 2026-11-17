@@ -64,7 +64,7 @@ extension Runtime {
         return self.blocks(bytes)
     }
 
-    func blocks(_ records: Data) -> Batch { on { read(exact_host_covers(rt, write(records))) } }
+    func blocks(_ records: Data) -> Batch { on(layout: true) { read(exact_host_covers(rt, write(records))) } }
 
     static func blockRecords(_ blocks: [(UInt32, HostBlock?)], placements: [(UInt32, BlockPlacement?)] = [], shows: [(UInt32, Bool)] = []) -> Data {
         var bytes = Data(capacity: (blocks.count + placements.count + shows.count) * 36)

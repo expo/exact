@@ -72,7 +72,7 @@ final class FrameHealthOverlayMac: NSView {
     /// Shown, fitting, and in a window that is on screen and not covered, with no hidden ancestor.
     private var canBeSeen: Bool {
         guard desiredVisible, !card.isHidden, !card.isHiddenOrHasHiddenAncestor, let window else { return false }
-        return window.isVisible && window.occlusionState.contains(.visible)
+        return window.isVisible && window.screenOcclusionState.contains(.visible)
     }
     private var occlusion: NSObjectProtocol?
 

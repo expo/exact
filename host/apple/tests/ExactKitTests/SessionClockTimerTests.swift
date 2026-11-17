@@ -61,6 +61,16 @@ final class SessionClockTimerTests: XCTestCase {
         XCTAssertEqual(session.launchPlace, launch)
     }
 
+    /// The table is chosen for the first preferred language a strings table serves, as the system chooses the
+    /// bundle's localization, so their directions agree (#486).
+    func testTheViewerLocaleIsTheFirstPreferredLanguageATableServes() {
+        XCTAssertEqual(SessionFacts.viewerLocale(preferred: ["fr-FR", "ar-MA"], localizations: ["en", "ar"]), "ar-MA")
+        XCTAssertEqual(SessionFacts.viewerLocale(preferred: ["zh-Hant-TW", "en"], localizations: ["en", "zh-hant"]), "zh-Hant-TW")
+        XCTAssertEqual(SessionFacts.viewerLocale(preferred: ["en-GB", "ar"], localizations: ["en", "ar"]), "en-GB")
+        XCTAssertEqual(SessionFacts.viewerLocale(preferred: ["fr-FR", "de"], localizations: ["en", "ar"]), "fr-FR", "none served: the runner takes the base")
+        XCTAssertEqual(SessionFacts.viewerLocale(preferred: ["fr-FR"], localizations: []), "fr-FR")
+    }
+
     /// The hour cycle the user forces is the format locale's `hc` keyword,
     /// read from the locale's preferred hour, and told again when Foundation
     /// says the locale changed. `hourPatternOverride` stands in for the
@@ -141,6 +151,50 @@ final class SessionClockTimerTests: XCTestCase {
         ExactSession.machineDate = { Date(timeIntervalSinceNow: 10800.5) }
         session.followOffset()
         XCTAssertEqual(try XCTUnwrap(epoch()), start + 10_800_000, accuracy: 1000)
+        #endif
+    }
+
+    /// A press right after a sleep, before any frame or notice checks the
+    /// date, reads the date now: the input checks it first. A check the
+    /// runtime refuses (here held, as over a restart's reset) tells nothing,
+    /// so the next check tells the date though it has not moved since.
+    func testAPressAfterASleepReadsTheDateNowAndARefusedTellIsToldAgain() throws {
+        #if os(macOS)
+        defer { ExactSession.machineDate = Date.init }
+        let source = """
+        shape Time
+          epochAtZero: number
+        component App
+          resource time = exactTime() as shape Time
+          state pressedAt = 0
+          action stamp
+            pressedAt = time.epochAtZero
+          view
+            column
+              button press=stamp testId="stamp"
+                text "Stamp"
+              text `${pressedAt}` testId="stamped"
+              text `${time.epochAtZero}` testId="epoch"
+        """
+        let session = ExactSession(app: ExactApp.shared, label: "slept-press", launchPlace: LaunchPlace(environment: [:]))
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try TableFixture.plan(source + "\n"), size: CGSize(width: 390, height: 844)).error)
+        func node(_ testId: String) -> UInt32? { session.presenter.views.values.first { $0.props["testId"] as? String == testId }?.id }
+        func number(_ testId: String) -> Double? { node(testId).flatMap { session.presenter.views[$0]?.props["text"] as? String }.flatMap(Double.init) }
+        waitFor("the date") { (number("epoch") ?? 0) > 0 }
+        let start = try XCTUnwrap(number("epoch"))
+        let stamp = try XCTUnwrap(node("stamp"))
+        ExactSession.machineDate = { Date(timeIntervalSinceNow: 3600) }
+        session.presenter.onPress?(stamp) // in this turn: no frame or notice runs first
+        XCTAssertEqual(try XCTUnwrap(number("stamped")), start + 3_600_000, accuracy: 1000, "the press read the date after the sleep")
+
+        ExactSession.machineDate = { Date(timeIntervalSinceNow: 7200) }
+        session.runtime.held = true
+        session.followOffset()
+        session.runtime.held = false
+        _ = session.runtime.takeHeldCalls()
+        session.followOffset()
+        waitFor("the refused date, told at the next check") { number("epoch").map { abs($0 - (start + 7_200_000)) < 1000 } ?? false }
         #endif
     }
 

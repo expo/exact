@@ -5,6 +5,7 @@ use std::ops::Range;
 struct InlineRun {
     runs: Range<usize>,
     metrics: (f32, f32),
+    reach: crate::text::BoxReach,
 }
 
 pub(super) struct Captured {
@@ -32,9 +33,15 @@ impl Captured {
                         let style = node.computed_style(StyleMask::INHERITED);
                         let style =
                             exact_kernel::TextStyle::from_style(&style).scaled(owner.fit_scale());
+                        let (above, below) = node.inline_background_block_reach();
                         InlineRun {
                             runs: i..i + 1,
                             metrics: paragraph.inline_metrics(style),
+                            reach: crate::text::BoxReach {
+                                sides: node.inline_background_reach(),
+                                above,
+                                below,
+                            },
                         }
                     });
                 let Some(parent) = node.parent else { break };
@@ -114,10 +121,10 @@ impl PaintedInline {
 
     fn bounds(&self, view: ViewId, transform: Transform) -> Option<Rect4> {
         let run = self.captured.runs.get(&view)?;
-        let fragments = self
-            .captured
-            .paragraph
-            .inline_rects(run.runs.clone(), run.metrics);
+        let fragments =
+            self.captured
+                .paragraph
+                .inline_rects(run.runs.clone(), run.metrics, run.reach);
         let mut first = None;
         let mut bound: Option<Rect4> = None;
         for (line, rect) in fragments {

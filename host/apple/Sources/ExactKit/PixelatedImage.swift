@@ -148,6 +148,7 @@ extension NodeView {
 
     /// This view's own and its descendants' pixelated tiles, after its transform changed.
     func refreshPixelatedImages() {
+        guard PixelatedImages.nodes.count > 0 else { return }
         for node in PixelatedImages.nodes.allObjects where node === self || node.isDescendant(of: self) { node.applyImageLayer() }
     }
 }
@@ -155,6 +156,7 @@ extension NodeView {
 extension Presenter {
     /// Every pixelated image's tiles, after a batch or a scroll moved or resized what clips it.
     func refreshPixelatedImages() {
+        guard PixelatedImages.nodes.count > 0 else { return }
         for node in PixelatedImages.nodes.allObjects where node.presenter === self { node.applyImageLayer() }
     }
 }

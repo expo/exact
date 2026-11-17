@@ -17,7 +17,7 @@
 
 ## How to reproduce
 
-A component that passes both `color` and `colorActive`, and uses only `colorActive` in text, a condition, or a state. `tamber-param-scope` fails against `color`. Editing `color` leaves the failure, because `colorActive`'s token still contains `color`'s.
+A component that passes both `color` and `colorActive`, and uses only `colorActive` in text, a condition, or a state. `forma-param-scope` fails against `color`. Editing `color` leaves the failure, because `colorActive`'s token still contains `color`'s.
 
 ## Direction
 

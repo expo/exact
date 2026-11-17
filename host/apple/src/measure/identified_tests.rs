@@ -331,6 +331,7 @@ fn malformed_raw_results_are_returned_sanitized_but_never_memoized() {
             TextMetrics {
                 width: 73.0,
                 height: 17.0,
+                pending: false,
                 first_baseline: Some(12.0)
             }
         );
@@ -371,7 +372,9 @@ fn pending_owner_keeps_accepted_extent_when_reversing_to_an_old_width() {
         (80.0, 90.0),
     ] {
         let req = request(&runs, AxisOffer::Definite(width), AxisOffer::MaxContent);
-        assert_eq!(m.measure_identified(&stamp(&k), &req).height, height);
+        let metrics = m.measure_identified(&stamp(&k), &req);
+        assert_eq!(metrics.height, height);
+        assert_eq!(metrics.pending, matches!(state.borrow().calls, 1 | 3 | 5));
     }
     assert_eq!(state.borrow().calls, 6);
     assert_eq!(
@@ -417,6 +420,7 @@ fn legitimate_zero_and_unknown_baseline_are_cacheable() {
     let expected = TextMetrics {
         width: 0.0,
         height: 0.0,
+        pending: false,
         first_baseline: None,
     };
     assert_eq!(m.measure_identified(&stamp(&k), &req), expected);

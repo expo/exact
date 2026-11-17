@@ -5,14 +5,15 @@
 // `router()` and the wasm host's input-glue.js say (Astra's batch 2
 // review). rt.js (with the roster and router it re-exports) runs beside
 // stand-ins for the modules it imports.
-import { test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { afterAll, test, expect } from 'bun:test';
+import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(resolve(tmpdir(), 'exact-js-press-'));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js'];
 for (const f of REAL) copyFileSync(resolve(fileURLToPath(new URL(`../../web-js/${f}`, import.meta.url))), resolve(dir, f));
 for (const [file, source] of standIns(REAL)) writeFileSync(resolve(dir, file), source);

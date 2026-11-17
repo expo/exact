@@ -60,8 +60,8 @@ bun scripts/exact.mjs new ../hello
 ```
 
 The new app has `app.contract` (its interface), `app.ts` (its data module),
-`app.json` (its manifest), `app.test.contract`, `web/` and `apple/` crates, and its
-own Cargo workspace; it consumes this checkout by path. Its generated `exact.mjs`
+`app.json` (its manifest) and `app.test.contract`; a native verb generates its host
+crates under `.exact/`. It consumes this checkout by path. Its generated `exact.mjs`
 runs the web and native commands (`bun exact.mjs test`, for example; `bun exact.mjs
 test web tests/*.test.contract` runs the files named, from the current directory,
 in turn); run it with no verb to list them, and see the [tooling reference](reference.md).
@@ -453,13 +453,24 @@ empty state), and `appearance="none"` on the list keeps rows that are yours, a
 transcript or a feed of cards. A list laid out sideways is a carousel and gets
 none of it.
 
-A virtualized list has exactly one direct `for`, whose body has one flow root.
+A virtualized list has one direct keyed `for`, whose body has one flow root.
+A vertical list with `appearance="none"` can hold fixed content before and after
+it. Put a second `for` inside an element (all its rows mount); fixed content
+cannot hold a virtualized list. Fixed roots require nonnegative margin lengths, including percentages and
+font-relative units, and static or relative positioning without vertical offsets
+(`lower-collection-fixed-flow`).
+Fixed children keep their authored sibling layout and stay mounted, including
+when the `for` is empty. They have no data-row key or cell styling; give one an
+`id` to reach it with element `scrollIntoView(id)`. The list's end, including
+`scroll-start="end"`, `scrollFollowEnd` and `reachend`, includes the trail.
+An eager `for` inside a fixed element still receives the development long-list
+notice at 200 rows.
 A vertical list needs a real height bound (`height`, `max-height`, or growing
 `flex` in a bounded parent). A horizontal one needs a literal `display="flex"` and
 a positive `height` in points, literal or computed, takes `estimated-item-width`
 (literal or computed) and CSS's `gap` between its cards, and refuses
 `justify-content` other than `flex-start`. Padding along the list's
-axis is room before the first row and after the last, as in CSS: a length or an
+axis is room before the first child and after the last, as in CSS: a length or an
 `env()` inset, not a percentage. On iOS a list's pull-to-refresh spinner draws
 below its `padding-top`, so a header laid over that padding does not hide it. A
 virtualized list's `scroll-padding` insets where `scrollIntoView` aligns a row,
@@ -715,7 +726,8 @@ changed. During a live replacement request, the prior displayed value may remain
 visible even when call arguments changed, so private-data views must gate it by
 owner and authorization. Neither call arguments nor `with` make a resource wait
 for an upstream request to succeed. The default web JS target keeps no persisted
-resource answers (LLP 1027.005 D5).
+resource answers (LLP 1027.005 D5). Kept-answer diagnostics name a differing
+argument and the state or resource it reads, never an identifying value.
 The minute must already contain the current sample for the first ask; a timer
 can update it thereafter. Use `refresh` or `refreshes` for values whose only job
 is forcing another ask. Await true asynchronous prerequisites, such as a valid
@@ -1107,8 +1119,15 @@ and 100 where a bound is unsaid, and none for a `spinbutton`) and
 `aria-valuetext`: it is one element, its children unread, and its value is the
 platform's (UIKit's `accessibilityValue` as a percentage, "30%", a
 `spinbutton`'s as its number, "3", or the text; AppKit's value, minimum and
-maximum, the text its description). A `progress` or `input type="range"` says
-its own value.
+maximum, the text its description). A `slider` or `spinbutton` is adjusted
+by its own keys: give it `tabindex=0` and a `key` handler for the arrows.
+A screen reader's increment and decrement (VoiceOver's swipe up and down,
+TalkBack's and Windows' adjust) are then a keydown and a keyup at it, as
+Safari sends them to an ARIA slider: ArrowUp and ArrowDown for a spin
+button or an `aria-orientation="vertical"` slider, else ArrowRight and
+ArrowLeft, swapped where the slider's `direction` is `rtl` (the
+document's, unless the slider says its own). A `progress` or
+`input type="range"` says its own value.
 Leave font sizes, colours and control metrics unsaid and the platform supplies them;
 what you set on a node wins.
 
@@ -1474,9 +1493,9 @@ A route pushed while a sheet is on top is shown inside that sheet, which keeps t
 detents of the route that opened it, and Back returns to the route before it in
 the sheet. iOS and macOS show it in the sheet's own navigation stack, the web and
 Android lay it out in the sheet's box, and desktop Linux in the box the sheet's
-own route was laid out in. On Android a drag down or a tap on the scrim closes the
-sheet with what was pushed inside it. A route pushed over a `fullscreen` route is
-a page of its own.
+own route was laid out in. On iOS and Android a drag down, or a tap behind a sheet
+with `closedby="any"`, closes the sheet with what was pushed inside it. A route
+pushed over a `fullscreen` route is a page of its own.
 
 `path("item", value)` checks the route and encodes its parameters. Always build
 locations with it: a template literal as a location is refused and a string
@@ -1779,12 +1798,15 @@ If a resource fails, check the source implementation, its generated types and
 grants, and its bake behavior. If an event fails, check the captured arguments,
 payload type, current action binding, and whether the node exists.
 
-`app.json` also controls delivery policy. `bun scripts/deploy.mjs <app>` is a
+`app.json` also controls delivery policy. From the app, `bun exact.mjs deploy` is a
 dry run, which expects a committed tree (or `--dirty`); publication uses `--yes`,
 an origin, a signing key, and the configured signed streams. Before
 changing trust or publishing, read [the reference](reference.md) on
 `EXACT_UPDATE_TRUST` (LLP 1030.000). Writing Contract does not require inventing a deployment
-service. To put an iOS app on someone's iPhone, run `bun exact.mjs share`: it
+service. `bun exact.mjs push` publishes a working-tree edit to installed release binaries
+immediately; `--watch` repeats it on save. It needs a production build receipt or
+existing stream and the signing key. It has no dry run and publishes no web root.
+To put an iOS app on someone's iPhone, run `bun exact.mjs share`: it
 builds the app and prints an AppDrop link that installs it with their own Apple ID.
 
 ## Where to go next

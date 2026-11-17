@@ -2,6 +2,7 @@
 //! looks reach the kernel resolved, as a static row is, and a token's live
 //! edit resolves them again; `:active` is the node's press paint.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, LOOK_HOVER};
 use exact_plan::{Plan, Value};
 use exact_runner::{DataError, DataSource, Runner};
@@ -13,16 +14,13 @@ impl DataSource for NoData {
         Err(DataError::UnknownSource(source.into()))
     }
 }
-use std::path::PathBuf;
 
-fn app(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("exact2-looks-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn app(name: &str, files: &[(&str, &str)]) -> Scratch {
+    let dir = Scratch::new(format!("exact2-looks-{name}-{}", std::process::id()));
     for (file, text) in files {
         std::fs::write(dir.join(file), text).unwrap();
     }
-    dir.join("app.contract")
+    dir.at("app.contract")
 }
 
 fn booted(plan: Plan) -> Runner<NoData> {
@@ -38,7 +36,7 @@ fn booted(plan: Plan) -> Runner<NoData> {
 }
 
 const DESIGN: &str =
-    "tamber t\n\ntheme\n  accent.soft = #eeeeee\n  ink = #111111\n  page = #ffffff\n";
+    "forma t\n\ntheme\n  accent.soft = #eeeeee\n  ink = #111111\n  page = #ffffff\n";
 
 const VIEW: &str = "component App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    column testId=\"card\" press=go background-color=\"page\"\n      :active\n        background-color = \"accent.soft\"\n        opacity = 0.9\n      :hover\n        border-color = \"ink\"\n      text \"c\"\n";
 
@@ -56,7 +54,7 @@ fn looks(r: &Runner<NoData>) -> String {
 
 #[test]
 fn a_nodes_looks_reach_the_kernel_resolved_and_follow_a_live_token() {
-    let path = app("looks", &[("app.tamber", DESIGN), ("app.contract", VIEW)]);
+    let path = app("looks", &[("app.forma", DESIGN), ("app.contract", VIEW)]);
     let r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
@@ -159,10 +157,10 @@ fn a_looks_unset_crosses_written_with_no_value() {
 /// (theme2's 06:14 condition): `uses` names its `:active` line and state.
 #[test]
 fn uses_names_an_active_rows_own_line() {
-    let path = app("uses", &[("app.tamber", DESIGN), ("app.contract", VIEW)]);
+    let path = app("uses", &[("app.forma", DESIGN), ("app.contract", VIEW)]);
     let (plan, map) = contract::compile_path_mapped(&path).unwrap();
     let map: serde_json::Value = serde_json::from_str(&map.json(&plan.encode())).unwrap();
-    let sites = contract::tamber_uses::sites(&plan, &map, "accent.soft", &Default::default(), &[]);
+    let sites = contract::forma_uses::sites(&plan, &map, "accent.soft", &Default::default(), &[]);
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert_eq!(sites[0]["row"], "press_background_color", "{sites:?}");
     assert_eq!(sites[0]["state"], "active");
@@ -176,11 +174,11 @@ fn uses_names_an_active_rows_own_line() {
 fn uses_finds_a_hover_looks_token() {
     let path = app(
         "uses-hover",
-        &[("app.tamber", DESIGN), ("app.contract", VIEW)],
+        &[("app.forma", DESIGN), ("app.contract", VIEW)],
     );
     let (plan, map) = contract::compile_path_mapped(&path).unwrap();
     let map: serde_json::Value = serde_json::from_str(&map.json(&plan.encode())).unwrap();
-    let sites = contract::tamber_uses::sites(&plan, &map, "ink", &Default::default(), &[]);
+    let sites = contract::forma_uses::sites(&plan, &map, "ink", &Default::default(), &[]);
     assert_eq!(sites.len(), 4, "a border colour's four sides: {sites:?}");
     assert!(sites.iter().all(|s| s["state"] == "hover"), "{sites:?}");
     assert!(
@@ -200,7 +198,7 @@ fn a_nodes_layout_says_its_looks_rows_and_their_tokens() {
     );
     let path = app(
         "looks-layout",
-        &[("app.tamber", DESIGN), ("app.contract", &view)],
+        &[("app.forma", DESIGN), ("app.contract", &view)],
     );
     let r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
     let k = r.kernel();
@@ -229,7 +227,7 @@ fn a_nodes_layout_says_its_looks_rows_and_their_tokens() {
     );
     let path = app(
         "looks-unset",
-        &[("app.tamber", DESIGN), ("app.contract", &cleared)],
+        &[("app.forma", DESIGN), ("app.contract", &cleared)],
     );
     let r2 = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
     let k2 = r2.kernel();
@@ -256,11 +254,11 @@ fn uses_keeps_a_conditional_active_parts_state_at_its_node() {
     let view = "style A\n  :active\n    background-color = \"accent.soft\"\n\nstyle B\n  :active\n    background-color = \"accent.soft\"\n\ncomponent App\n  state n = 0\n  state flag = true\n  action go\n    n = n + 1\n  view\n    column class=(flag ? A : B) press=go testId=\"card\"\n      text \"c\"\n";
     let path = app(
         "uses-either",
-        &[("app.tamber", DESIGN), ("app.contract", view)],
+        &[("app.forma", DESIGN), ("app.contract", view)],
     );
     let (plan, map) = contract::compile_path_mapped(&path).unwrap();
     let map: serde_json::Value = serde_json::from_str(&map.json(&plan.encode())).unwrap();
-    let sites = contract::tamber_uses::sites(&plan, &map, "accent.soft", &Default::default(), &[]);
+    let sites = contract::forma_uses::sites(&plan, &map, "accent.soft", &Default::default(), &[]);
     assert_eq!(sites.len(), 1, "{sites:?}");
     assert_eq!(sites[0]["state"], "active", "{sites:?}");
     assert_eq!(sites[0]["line"], 15, "the node's line: {sites:?}");
@@ -272,11 +270,11 @@ fn uses_keeps_a_conditional_active_parts_state_at_its_node() {
 #[test]
 fn a_look_follows_a_base_its_shadows_new_value_reads() {
     let design =
-        "tamber t\n\ntheme\n  space.md = 10px\n  card.shadow: box-shadow = 0 2px 4px #000\n";
+        "forma t\n\ntheme\n  space.md = 10px\n  card.shadow: box-shadow = 0 2px 4px #000\n";
     let view = "component App\n  view\n    column testId=\"card\" padding=\"space.md\"\n      :hover\n        box-shadow = \"card.shadow\"\n      text \"c\"\n";
     let path = app(
         "look-base",
-        &[("app.tamber", design), ("app.contract", view)],
+        &[("app.forma", design), ("app.contract", view)],
     );
     let mut r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
     let shadow = |r: &Runner<NoData>| {
@@ -303,9 +301,9 @@ fn a_look_follows_a_base_its_shadows_new_value_reads() {
 /// `light-dark()` token resolved as a static row is: each scheme its own.
 #[test]
 fn a_looks_color_is_a_token_in_both_schemes() {
-    let design = "tamber t\n\ntheme\n  ink = light-dark(#222222, #e2e2e2)\n  ink.nav = light-dark(#666666, #ffffff)\n";
+    let design = "forma t\n\ntheme\n  ink = light-dark(#222222, #e2e2e2)\n  ink.nav = light-dark(#666666, #ffffff)\n";
     let view = "component App\n  view\n    link href=\"/a\" testId=\"card\" color=\"ink.nav\"\n      :hover\n        color = \"ink\"\n      :focus-visible\n        color = \"#123456\"\n      text \"a\"\n";
-    let path = app("color", &[("app.tamber", design), ("app.contract", view)]);
+    let path = app("color", &[("app.forma", design), ("app.contract", view)]);
     let r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();

@@ -1043,7 +1043,13 @@ fn pixelated_enlargement_decodes_and_repeats_original_samples() {
     use crate::paint::Backend;
     use exact_kernel::{ImageRendering, ObjectFit, StyleId, StyleProps};
     let mut stripe = tiny_skia::Pixmap::new(4096, 1).unwrap();
-    for (i, pixel) in stripe.data_mut().chunks_exact_mut(4).enumerate() {
+    for (i, pixel) in stripe
+        .data_mut()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let value = if i.is_multiple_of(2) { 0 } else { 255 };
         pixel.copy_from_slice(&[value, value, value, 255]);
     }

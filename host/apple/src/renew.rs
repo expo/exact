@@ -44,12 +44,7 @@ impl<D: DataSource> Host<D> {
             if !self.mirror.contains_key(&id) {
                 continue;
             }
-            if self
-                .shown_paint(motion_node(*key))
-                .0
-                .iter()
-                .any(Option::is_some)
-            {
+            if self.shown_paint(motion_node(*key)).moving() {
                 painted.push(id);
             }
             batch.renew(id);

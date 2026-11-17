@@ -230,7 +230,7 @@ impl Lowerer<'_> {
             return Ok(value.clone());
         }
         let mut folded = value.clone();
-        fold_constant_families(&mut folded);
+        fold_constant_families(&mut folded, true);
         let mut bundled = None;
         family_arms(&folded, &mut |name, span| {
             if self
@@ -241,18 +241,28 @@ impl Lowerer<'_> {
                 bundled = Some(span);
             }
         })?;
-        if !Self::literal_arms(&folded) {
-            if let Some(span) = bundled {
+        // Admission folds shared literals; emission keeps the baseline folds
+        // and classification for runtime expressions (LLP 1172.013 step 4).
+        let mut emission = value.clone();
+        fold_constant_families(&mut emission, false);
+        let stacks = if Self::literal_arms(&emission) {
+            emission
+        } else if matches!(emission, Expr::Typed(..)) && Self::literal_family_arms(&folded) {
+            folded
+        } else {
+            let Some(span) = bundled else {
+                return Ok(emission);
+            };
+            if !Self::literal_family_arms(&folded) {
                 return err(
                     "lower-font-runtime-bundled",
                     "a runtime `font-family` string may name installed or generic families only; use a literal choice for a bundled font",
                     span,
                 );
             }
-            return Ok(folded);
-        }
-        self.replace_arms(&mut folded)?;
-        Ok(folded)
+            folded
+        };
+        self.replace_arms(stacks, &mut Vec::new())
     }
 
     pub(super) fn literal_arms(e: &Expr) -> bool {
@@ -267,28 +277,34 @@ impl Lowerer<'_> {
 
     pub(super) fn literal_family_arms(e: &Expr) -> bool {
         let mut folded = e.clone();
-        fold_constant_families(&mut folded);
-        Self::literal_arms(&folded)
+        fold_constant_families(&mut folded, true);
+        let mut leaves = contract_checking::value_leaves(&folded);
+        leaves.all(|leaf| matches!(leaf, Expr::Str(..)))
     }
 
     /// A literal family's stack, declared as `font-family`'s are: `e`, a
     /// string, becomes the stack's number (stage 6 C's type and family
     /// tokens).
     pub(super) fn replace_family(&mut self, e: &mut Expr) -> Result<(), LowerError> {
-        self.replace_arms(e)
+        *e = self.replace_arms(e.clone(), &mut Vec::new())?;
+        Ok(())
     }
 
-    fn replace_arms(&mut self, e: &mut Expr) -> Result<(), LowerError> {
-        match e {
+    fn replace_arms(
+        &mut self,
+        e: Expr,
+        locals: &mut Vec<(String, bool)>,
+    ) -> Result<Expr, LowerError> {
+        Ok(match e {
             // A clear stays a string so the runner retains its written bit.
-            Expr::Str(name, _) if name.trim().is_empty() || family_clear(name) => {}
+            Expr::Str(ref name, _) if name.trim().is_empty() || family_clear(name) => e,
             Expr::Str(name, span) => {
                 // A quoted comma belongs to one family, not a cached list.
                 let cache_key = format!("\0{name}");
                 let stack = if let Some(stack) = self.font_stacks.get(&cache_key) {
                     *stack
                 } else {
-                    let names = family_names(name, *span)?;
+                    let names = family_names(&name, span)?;
                     let mut members = Vec::new();
                     let mut single_stack = None;
                     for name in names {
@@ -320,20 +336,73 @@ impl Lowerer<'_> {
                     self.font_stacks.insert(cache_key, stack);
                     stack
                 };
-                *e = Expr::Number(stack.0 as f64, *span);
+                Expr::Number(stack.0 as f64, span)
             }
-            Expr::Ternary(_, yes, no, _) => {
-                self.replace_arms(yes)?;
-                self.replace_arms(no)?;
+            Expr::Ternary(cond, yes, no, span) => Expr::Ternary(
+                cond,
+                Box::new(self.replace_arms(*yes, locals)?),
+                Box::new(self.replace_arms(*no, locals)?),
+                span,
+            ),
+            Expr::Match {
+                subject,
+                var,
+                some,
+                none,
+                span,
+            } => Expr::Match {
+                subject,
+                var,
+                some: Box::new(self.replace_arms(*some, locals)?),
+                none: Box::new(self.replace_arms(*none, locals)?),
+                span,
+            },
+            // The original family passed its ascription before stack lowering.
+            Expr::Typed(value, ..) => self.replace_arms(*value, locals)?,
+            Expr::Let {
+                name,
+                value,
+                body,
+                span,
+            } => {
+                locals.push((name.clone(), false));
+                let body = self.replace_arms(*body, locals)?;
+                let (_, used) = locals.pop().unwrap();
+                let stack_value = if used {
+                    Some(self.replace_arms((*value).clone(), locals)?)
+                } else {
+                    None
+                };
+                let body = Expr::Let {
+                    name: name.clone(),
+                    value,
+                    body: Box::new(body),
+                    span,
+                };
+                if let Some(value) = stack_value {
+                    // The string local still serves conditions and subjects.
+                    // Its result uses share a separate stack-valued local.
+                    Expr::Let {
+                        name: format!("{name}@font-stack"),
+                        value: Box::new(value),
+                        body: Box::new(body),
+                        span,
+                    }
+                } else {
+                    body
+                }
             }
-            Expr::Match { some, none, .. } => {
-                self.replace_arms(some)?;
-                self.replace_arms(none)?;
+            Expr::Ident(name, span) => {
+                let (_, used) = locals
+                    .iter_mut()
+                    .rev()
+                    .find(|(local, _)| *local == name)
+                    .expect("literal family result resolves to a let");
+                *used = true;
+                Expr::Ident(format!("{name}@font-stack"), span)
             }
-            Expr::Let { body, .. } => self.replace_arms(body)?,
             _ => unreachable!("family_arms admitted only these"),
-        }
-        Ok(())
+        })
     }
 }
 
@@ -362,7 +431,7 @@ pub(crate) fn font_use(
         .collect();
     if tokens.is_empty() {
         let mut folded = family.value.clone();
-        fold_constant_families(&mut folded);
+        fold_constant_families(&mut folded, true);
         family_arms(&folded, &mut |name, _| names.push(name.to_string()))?;
     }
     for stack in tokens.iter().flatten() {
@@ -402,28 +471,20 @@ fn family_clear(s: &str) -> bool {
 /// Visit the literal family names for validation, including ones beside
 /// runtime arms; the remaining string is resolved when it changes.
 fn family_arms(e: &Expr, visit: &mut dyn FnMut(&str, Span)) -> Result<(), LowerError> {
-    match e {
-        Expr::Str(name, _) if name.trim().is_empty() || family_clear(name) => Ok(()),
-        Expr::Str(name, span) => {
+    for leaf in contract_checking::value_leaves(e) {
+        if let Expr::Str(name, span) = leaf {
+            if name.trim().is_empty() || family_clear(name) {
+                continue;
+            }
             for member in family_names(name, *span)? {
                 visit(&member, *span);
             }
-            Ok(())
         }
-        Expr::Ternary(_, yes, no, _) => {
-            family_arms(yes, visit)?;
-            family_arms(no, visit)
-        }
-        Expr::Match { some, none, .. } => {
-            family_arms(some, visit)?;
-            family_arms(none, visit)
-        }
-        Expr::Let { body, .. } => family_arms(body, visit),
-        _ => Ok(()),
     }
+    Ok(())
 }
 
-fn fold_constant_families(value: &mut Expr) {
+fn fold_constant_families(value: &mut Expr, normalized: bool) {
     match value {
         Expr::Template(parts, span)
             if parts.iter().all(|part| {
@@ -445,20 +506,26 @@ fn fold_constant_families(value: &mut Expr) {
             *value = Expr::Str(text, *span);
         }
         Expr::Ternary(_, yes, no, _) => {
-            fold_constant_families(yes);
-            fold_constant_families(no);
+            fold_constant_families(yes, normalized);
+            fold_constant_families(no, normalized);
         }
         Expr::Match { some, none, .. } => {
-            fold_constant_families(some);
-            fold_constant_families(none);
+            fold_constant_families(some, normalized);
+            fold_constant_families(none, normalized);
         }
-        Expr::Let { body, .. } => fold_constant_families(body),
+        Expr::Let { value, body, .. } => {
+            if normalized {
+                fold_constant_families(value, normalized);
+            }
+            fold_constant_families(body, normalized);
+        }
+        Expr::Typed(value, ..) if normalized => fold_constant_families(value, normalized),
         _ => {}
     }
 }
 
 fn family_names(value: &str, span: Span) -> Result<Vec<String>, LowerError> {
-    exact_tamber::family_names(value).map_err(|e| LowerError {
+    exact_forma::family_names(value).map_err(|e| LowerError {
         id: e.id,
         message: e.message,
         span,

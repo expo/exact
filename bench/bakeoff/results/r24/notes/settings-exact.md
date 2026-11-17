@@ -1,6 +1,6 @@
 # Paperback Settings — build notes
 
-Built with Exact (`app.contract`, `app.tamber`, `app.test.contract`). It's installed on simulator
+Built with Exact (`app.contract`, `app.forma`, `app.test.contract`). It's installed on simulator
 `CEDFB9C9-…` as `dev.bakeoff.settings.bf96bb6` ("Settings"). `verify` (web) and `verify ios`
 both come back clean: 8 tests pass, light and dark, the largest text size, a relaunch and
 UIKit-like scrolling.
@@ -19,7 +19,7 @@ UIKit-like scrolling.
 - **Appearance:** Theme is a pushed checkmark list: System, Light, Dark or Sepia.
   - System, Light and Dark set the app's own scheme with `setScheme`, which is re-applied by a
     mount task at launch.
-  - Sepia uses the light scheme and draws the preview in paper and ink colours from `app.tamber`.
+  - Sepia uses the light scheme and draws the preview in paper and ink colours from `app.forma`.
 - **Library:** Sort Order is a pushed list, plus two switches.
 - **Notifications:** a master switch. When it's on, it reveals the Daily Reminder time (the iOS
   compact time picker) and three more switches.

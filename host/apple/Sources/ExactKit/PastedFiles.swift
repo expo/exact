@@ -106,6 +106,7 @@ enum PastedImages {
     }
 }
 
+#if EXACT_AGENT
 extension Agent {
     /// The driver's paste of files (`type <id> paste --file <path…>`, or
     /// `--image <path>`: an image's data with no file) on a pasteboard of its
@@ -136,3 +137,4 @@ extension Agent {
         #endif
     }
 }
+#endif

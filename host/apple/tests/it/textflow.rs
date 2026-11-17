@@ -66,8 +66,37 @@ fn unchanged_frame_gets_flow_and_leaving_shape_gets_empty_clear() {
     );
 }
 #[test]
-fn raster_region_retires_before_flowed_native_ink() {
-    let plan = contract::compile(SOURCE).unwrap().encode();
+fn raster_region_keeps_flowed_publications_and_rejects_superseded_geometry() {
+    for padded in [false, true] {
+        region_flow(padded);
+    }
+}
+#[test]
+fn painted_exclusions_keep_native_presentation() {
+    let box_line = SOURCE
+        .lines()
+        .find(|line| line.contains("box position="))
+        .unwrap();
+    let shell = SOURCE
+        .replace(box_line, "")
+        .replace(
+            "      button testId=\"move\"",
+            &format!(
+                "{}\n      button testId=\"move\"",
+                box_line.replacen("          ", "      ", 1)
+            ),
+        )
+        .replace("column width=", "column position=\"relative\" width=");
+    for source in [SOURCE, &shell] {
+        painted_exclusion(source);
+    }
+}
+fn painted_exclusion(source: &str) {
+    let source = source.replace(
+        "wrap-flow=\"both\"",
+        "background-color=\"red\" wrap-flow=\"both\"",
+    );
+    let plan = contract::compile(&source).unwrap().encode();
     let (mut h, mut batch) = Host::boot_region(
         &plan,
         Data,
@@ -91,17 +120,358 @@ fn raster_region_retires_before_flowed_native_ink() {
         batch = h.complete_region_text(id, metrics, std::rc::Rc::new(()));
     }
     assert!(
-        batch.contains("\"disabled\":\"flowed text uses native fragments\""),
-        "{batch}"
+        batch.contains("\"disabled\":"),
+        "an opaque text raster hides the red exclusion: {batch}"
     );
+    assert!(h.region_publication_id().is_none());
+    assert!(h.pending_region_request().is_none());
+    let moved = h.dispatch_at(id(&h, "move"), Event::Press, 16.);
+    assert!(!moved.contains("\"op\":\"region\""));
+    assert!(!h
+        .runner()
+        .kernel()
+        .node(id(&h, "prose"))
+        .unwrap()
+        .flow_shapes()
+        .is_empty());
+}
+
+#[test]
+fn unsupported_content_paint_keeps_native_presentation() {
+    for (target, paint) in [
+        ("testId=\"prose\"", "background-color=\"red\""),
+        ("id=\"content\"", "background-color=\"red\""),
+        ("id=\"owner\"", "box-shadow=\"2px 2px 3px red\""),
+        ("testId=\"prose\"", "border-width=2 border-style=\"solid\""),
+        ("testId=\"prose\"", "box-shadow=\"2px 2px 3px red\""),
+        ("testId=\"prose\"", "opacity=0.5"),
+        ("testId=\"prose\"", "-webkit-text-stroke=\"2px red\""),
+        ("id=\"content\"", "-webkit-text-stroke=\"2px red\""),
+        (
+            "testId=\"prose\" width=400 height=300",
+            "overflow-x=\"hidden\" overflow-y=\"hidden\"",
+        ),
+    ] {
+        let source = SOURCE.replace(target, &format!("{target} {paint}"));
+        let source = source.replace(
+            "testId=\"prose\" width=400 height=300 overflow",
+            "testId=\"prose\" width=400 height=60 overflow",
+        );
+        // Long enough to overflow the clipped box beside the exclusion.
+        let source = source.replace(
+            "beyond the trees.\" testId=\"prose\" width=400 height=60",
+            "beyond the trees, past the mill, under the bridge and out to the wide grey sea.\" testId=\"prose\" width=400 height=60",
+        );
+        let plan = contract::compile(&source).unwrap().encode();
+        let (mut h, mut batch) = Host::boot_region(
+            &plan,
+            Data,
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            500.,
+            ContentRegionRegistration {
+                activate: None,
+                owner: "owner",
+                content: "content",
+                pending: "pending",
+            },
+            exact_runner::time::Launch::NONE,
+        )
+        .unwrap();
+        for _ in 0..20 {
+            let Some((id, request)) = h.pending_region_request() else {
+                break;
+            };
+            let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+            batch.push_str(&h.complete_region_text(id, metrics, std::rc::Rc::new(())));
+        }
+        assert!(batch.contains("\"disabled\":"), "{paint}: {batch}");
+        assert!(h.region_publication_id().is_none(), "{paint}");
+        assert!(h.pending_region_request().is_none(), "{paint}");
+        let moved = h.dispatch_at(id(&h, "move"), Event::Press, 16.);
+        assert!(!moved.contains("\"op\":\"region\""), "{moved}");
+    }
+}
+
+#[test]
+fn native_projections_return_flow_to_ordinary_views() {
+    for initially_flowed in [true, false] {
+        let source = SOURCE
+            .replace(
+                "state x = 80",
+                if initially_flowed {
+                    "state x = 80\n  state margin = 0"
+                } else {
+                    "state x = 420\n  state margin = 0"
+                },
+            )
+            .replace("x = x + 20", "margin = 80")
+            .replace(
+                "wrap-flow=\"both\"",
+                "wrap-flow=\"both\" shape-margin=margin",
+            );
+        let plan = contract::compile(&source).unwrap().encode();
+        let (mut h, mut history) = Host::boot_native_region(
+            &plan,
+            Data,
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            500.,
+            ContentRegionRegistration {
+                activate: None,
+                owner: "owner",
+                content: "content",
+                pending: "pending",
+            },
+            exact_apple::content_region::NativeProjectionLimits::default(),
+            exact_runner::time::Launch::NONE,
+        )
+        .unwrap();
+        for _ in 0..20 {
+            let Some((id, request)) = h.pending_region_request() else {
+                break;
+            };
+            let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+            history.push_str(&h.complete_region_text(id, metrics, std::rc::Rc::new(())));
+        }
+        if !initially_flowed {
+            assert!(
+                h.region_publication_id().is_some(),
+                "unflowed A is selected"
+            );
+            history.push_str(&h.dispatch_at(id(&h, "move"), Event::Press, 16.));
+        }
+        assert!(history.contains("\"disabled\":"), "{history}");
+        assert!(h.region_publication_id().is_none());
+        assert!(h.pending_region_request().is_none());
+        let prose = id(&h, "prose");
+        assert!(
+            history.contains(&format!("\"op\":\"create\",\"id\":{prose},")),
+            "{history}"
+        );
+        assert!(
+            history.contains(&format!("\"op\":\"frame\",\"id\":{prose},")),
+            "{history}"
+        );
+        assert!(!h
+            .runner()
+            .kernel()
+            .node(prose)
+            .unwrap()
+            .flow_shapes()
+            .is_empty());
+        let cleared = h.dispatch_at(id(&h, "leave"), Event::Press, 32.);
+        assert!(
+            cleared.contains(&format!("\"op\":\"flow\",\"id\":{prose},\"shapes\":[]")),
+            "{cleared}"
+        );
+    }
+}
+
+#[test]
+fn region_wire_carries_every_font_metric() {
+    let source = SOURCE.replace("testId=\"prose\"", r#"testId="prose" font-stretch="50%" font-variant-numeric="tabular-nums" font-variant-ligatures="no-common-ligatures" font-variation-settings="\"wght\" 650" font-feature-settings="\"liga\" 1" font-optical-sizing="none""#);
+    let plan = contract::compile(&source).unwrap().encode();
+    let (h, _) = Host::boot_region(
+        &plan,
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        500.,
+        ContentRegionRegistration {
+            activate: None,
+            owner: "owner",
+            content: "content",
+            pending: "pending",
+        },
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    let request = h.pending_region_request().unwrap().0;
+    let wire: serde_json::Value =
+        serde_json::from_str(&h.region_request_json(request).unwrap()).unwrap();
+    for row in [&wire["strut"], &wire["runs"][0]] {
+        assert_eq!(row["stretch"], 50.);
+        assert_eq!(row["numeric"], 1);
+        assert_eq!(row["ligatures"], 2);
+        assert_eq!(row["variations"], serde_json::json!([["wght", 650]]));
+        assert_eq!(row["features"], serde_json::json!([["liga", 1]]));
+        assert_eq!(row["opticalSizing"], "none");
+    }
+}
+
+#[test]
+fn only_a_current_incomplete_flow_returns_the_registration_to_native_views() {
+    let plan = contract::compile(SOURCE).unwrap().encode();
+    let (mut h, _) = Host::boot_region(
+        &plan,
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        500.,
+        ContentRegionRegistration {
+            activate: None,
+            owner: "owner",
+            content: "content",
+            pending: "pending",
+        },
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    for _ in 0..20 {
+        let (id, request) = h.pending_region_request().expect("flow request");
+        if !request.exclusions().is_empty() {
+            break;
+        }
+        let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+        h.complete_region_text(id, metrics, std::rc::Rc::new(()));
+    }
+    let (old, request) = h.pending_region_request().unwrap();
+    assert!(!request.exclusions().is_empty());
+    let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+    h.dispatch_at(id(&h, "move"), Event::Press, 16.);
+    let current = h.pending_region_request().unwrap().0;
+    assert_ne!(old, current);
+    let stale = h.fallback_region_text(old);
+    assert!(!stale.contains("\"disabled\":"));
+    assert_eq!(h.pending_region_request().unwrap().0, current);
+    let fallback = h.fallback_region_text(current);
+    assert!(fallback.contains("\"disabled\":"), "{fallback}");
+    assert!(fallback.contains("\"error\":null"), "{fallback}");
     assert!(h.pending_region_request().is_none());
     assert!(h.region_publication_id().is_none());
+    assert!(!h
+        .complete_region_text(old, metrics, std::rc::Rc::new(()))
+        .contains("\"op\":\"region\""));
+    h.dispatch_at(id(&h, "leave"), Event::Press, 32.);
+    assert!(h
+        .runner()
+        .kernel()
+        .node(id(&h, "prose"))
+        .unwrap()
+        .flow_shapes()
+        .is_empty());
+    assert!(h.pending_region_request().is_none());
+}
+fn region_flow(padded: bool) {
+    let source = SOURCE
+        .replace("id=\"owner\"", "id=\"owner\" background-color=\"red\"")
+        .replace(
+            "testId=\"prose\" width=400 height=300",
+            if padded {
+                "testId=\"prose\" width=400 height=300 padding-left=10 padding-top=12"
+            } else {
+                "testId=\"prose\" width=400 height=300"
+            },
+        );
+    let plan = contract::compile(&source).unwrap().encode();
+    let (mut h, mut batch) = Host::boot_region(
+        &plan,
+        Data,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        500.,
+        ContentRegionRegistration {
+            activate: None,
+            owner: "owner",
+            content: "content",
+            pending: "pending",
+        },
+        exact_runner::time::Launch::NONE,
+    )
+    .unwrap();
+    let mut flowed_source = None;
+    for _ in 0..20 {
+        let Some((id, request)) = h.pending_region_request() else {
+            break;
+        };
+        if !request.exclusions().is_empty() {
+            let wire: serde_json::Value =
+                serde_json::from_str(&h.region_request_json(id).unwrap()).unwrap();
+            assert_eq!(wire["exclusions"][0]["kind"], "Circle");
+            assert_eq!(
+                wire["exclusions"][0]["cx"],
+                if padded { 100. } else { 110. }
+            );
+            assert_eq!(wire["exclusions"][0]["cy"], if padded { 58. } else { 70. });
+            flowed_source = Some(wire["source"].clone());
+        }
+        let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+        batch = h.complete_region_text(id, metrics, std::rc::Rc::new(()));
+    }
+    assert!(!batch.contains("\"disabled\":"), "{batch}");
+    assert!(h.pending_region_request().is_none());
+    assert!(h.region_publication_id().is_some());
+    assert!(flowed_source.is_some(), "no flowed worker request");
     let prose = id(&h, "prose");
+    let wire: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    let region = wire["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "region")
+        .unwrap();
+    let frame = region["frames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == prose)
+        .unwrap();
+    assert_eq!(frame["box"][2], 400.);
+    assert_eq!(frame["box"][0], if padded { 10. } else { 0. });
+    assert_eq!(frame["box"][1], if padded { 12. } else { 0. });
     assert!(
         batch.contains(&format!("\"op\":\"flow\",\"id\":{prose}")),
         "{batch}"
     );
     assert!(!h
+        .runner()
+        .kernel()
+        .node(prose)
+        .unwrap()
+        .flow_shapes()
+        .is_empty());
+    let accepted = h.region_publication_id();
+    let move_id = id(&h, "move");
+    let moved = h.dispatch_at(move_id, Event::Press, 16.);
+    assert!(!moved.contains("\"disabled\":"), "{moved}");
+    let (stale_id, stale) = h.pending_region_request().unwrap();
+    let metrics = stale.with_request(|r| MonospaceMeasurer::default().measure(r));
+    let wire: serde_json::Value =
+        serde_json::from_str(&h.region_request_json(stale_id).unwrap()).unwrap();
+    assert_eq!(wire["source"], flowed_source.unwrap());
+    assert_eq!(
+        wire["exclusions"][0]["cx"],
+        if padded { 120. } else { 130. }
+    );
+    assert_eq!(h.region_publication_id(), accepted);
+    h.dispatch_at(move_id, Event::Press, 32.);
+    let current = h.pending_region_request().unwrap().0;
+    assert_ne!(current, stale_id);
+    h.complete_region_text(stale_id, metrics, std::rc::Rc::new(()));
+    assert_eq!(h.pending_region_request().unwrap().0, current);
+    assert_eq!(h.region_publication_id(), accepted);
+    for _ in 0..20 {
+        let Some((id, request)) = h.pending_region_request() else {
+            break;
+        };
+        let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+        h.complete_region_text(id, metrics, std::rc::Rc::new(()));
+    }
+    assert!(h.pending_region_request().is_none());
+    assert_ne!(h.region_publication_id(), accepted);
+    let leave = id(&h, "leave");
+    h.dispatch_at(leave, Event::Press, 48.);
+    for _ in 0..20 {
+        let Some((id, request)) = h.pending_region_request() else {
+            break;
+        };
+        let metrics = request.with_request(|r| MonospaceMeasurer::default().measure(r));
+        h.complete_region_text(id, metrics, std::rc::Rc::new(()));
+    }
+    assert!(h.pending_region_request().is_none());
+    assert!(h.region_publication_id().is_some());
+    assert!(h
         .runner()
         .kernel()
         .node(prose)

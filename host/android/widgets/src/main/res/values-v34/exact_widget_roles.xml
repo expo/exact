@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 14: the platform's own role colours, light. Index i is exact2's Material role i (host/painted/src/presenter/palette.rs `Material`), the index a
+     snapshot tree names a role colour by (LLP 1126.003 D2). The launcher resolves these ids itself, so a new wallpaper or
+     the night mode recolours a widget with no code running. -->
+<resources>
+    <color name="exact_widget_role_0">@android:color/system_primary_light</color>
+    <color name="exact_widget_role_1">@android:color/system_on_primary_light</color>
+    <color name="exact_widget_role_2">@android:color/system_secondary_container_light</color>
+    <color name="exact_widget_role_3">@android:color/system_surface_light</color>
+    <color name="exact_widget_role_4">@android:color/system_on_surface_light</color>
+    <color name="exact_widget_role_5">@android:color/system_on_surface_variant_light</color>
+    <color name="exact_widget_role_6">@android:color/system_surface_container_low_light</color>
+    <color name="exact_widget_role_7">@android:color/system_surface_container_light</color>
+    <color name="exact_widget_role_8">@android:color/system_surface_container_high_light</color>
+    <color name="exact_widget_role_9">@android:color/system_surface_container_highest_light</color>
+    <color name="exact_widget_role_10">@android:color/system_outline_variant_light</color>
+    <color name="exact_widget_role_11">@android:color/system_error_light</color>
+    <color name="exact_widget_role_12">@android:color/system_primary_container_light</color>
+    <color name="exact_widget_role_13">@android:color/system_on_primary_container_light</color>
+    <color name="exact_widget_role_14">@android:color/system_inverse_primary_light</color>
+    <color name="exact_widget_role_15">@android:color/system_secondary_light</color>
+    <color name="exact_widget_role_16">@android:color/system_on_secondary_light</color>
+    <color name="exact_widget_role_17">@android:color/system_on_secondary_container_light</color>
+    <color name="exact_widget_role_18">@android:color/system_tertiary_light</color>
+    <color name="exact_widget_role_19">@android:color/system_on_tertiary_light</color>
+    <color name="exact_widget_role_20">@android:color/system_tertiary_container_light</color>
+    <color name="exact_widget_role_21">@android:color/system_on_tertiary_container_light</color>
+    <color name="exact_widget_role_22">@android:color/system_background_light</color>
+    <color name="exact_widget_role_23">@android:color/system_on_background_light</color>
+    <color name="exact_widget_role_24">@android:color/system_surface_variant_light</color>
+    <color name="exact_widget_role_25">@android:color/system_primary_light</color>
+    <color name="exact_widget_role_26">@android:color/system_inverse_surface_light</color>
+    <color name="exact_widget_role_27">@android:color/system_inverse_on_surface_light</color>
+    <color name="exact_widget_role_28">@android:color/system_on_error_light</color>
+    <color name="exact_widget_role_29">@android:color/system_error_container_light</color>
+    <color name="exact_widget_role_30">@android:color/system_on_error_container_light</color>
+    <color name="exact_widget_role_31">@android:color/system_outline_light</color>
+    <color name="exact_widget_role_32">#FF000000</color>
+    <color name="exact_widget_role_33">@android:color/system_surface_bright_light</color>
+    <color name="exact_widget_role_34">@android:color/system_surface_dim_light</color>
+    <color name="exact_widget_role_35">@android:color/system_surface_container_lowest_light</color>
+</resources>

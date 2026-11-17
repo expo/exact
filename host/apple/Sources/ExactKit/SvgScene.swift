@@ -214,6 +214,22 @@ private func affine(_ v: Any?) -> CGAffineTransform? {
 /// anchor is its bounds' origin, so a sublayer transform applies from there.
 final class SvgScene {
     let root = still(CALayer())
+    #if os(macOS)
+    // The flipped bounds and scene transform belong to the layer rendered
+    // by an offscreen island, as they do on the displayed SVG.
+    private var content: CALayer { root }
+    #else
+    private let content = still(CALayer())
+    #endif
+    #if os(iOS) || os(tvOS)
+    private let blended = still(CALayer())
+    private var blendKey: Int?
+    private var unownedBlendMotion = false
+    let blends = SvgBlend()
+    private var synchronousFilters = false
+    #endif
+    /// An island caller renders the layers itself, without a second bitmap.
+    var rasterizing = false
     private var layers: [Int: CALayer] = [:]
     /// The transform pair around an element, by id.
     private var wrappers: [Int: (outer: CALayer, inner: CALayer)] = [:]
@@ -257,7 +273,28 @@ final class SvgScene {
     /// from, so each draws exactly where it is held (LLP 1003.001 D4).
     var offscreen: CFTimeInterval?
 
-    init() { root.masksToBounds = false; root.anchorPoint = .zero }
+    init() {
+        root.masksToBounds = false; root.anchorPoint = .zero
+        #if !os(macOS)
+        content.anchorPoint = .zero
+        root.addSublayer(content)
+        #endif
+        #if os(iOS) || os(tvOS)
+        blended.anchorPoint = .zero
+        #endif
+    }
+
+    func render(in ctx: CGContext) -> Bool {
+        #if os(iOS) || os(tvOS)
+        if blends.contains(content) { return !unownedBlendMotion && blends.canCapture(content) && blends.draw(content, in: ctx) }
+        #endif
+        renderUnblended(in: ctx)
+        return true
+    }
+
+    func renderUnblended(in ctx: CGContext) {
+        content.render(in: ctx)
+    }
 
     #if os(iOS) || os(tvOS)
     /// Filtered pictures that follow a changing input on the GPU, by element.
@@ -269,6 +306,7 @@ final class SvgScene {
     /// first picture, or a chain or host the GPU path does not take.
     private func follow(_ id: Int, _ fl: [String: Any], k: CGFloat, dark: Bool, clock: Double?) -> CALayer? {
         #if os(iOS) || os(tvOS)
+        guard !synchronousFilters else { forget(id); return nil }
         // A picture whose content animates follows it from its first frame:
         // its animations play in its sub-scene (`svg_lower::in_picture`).
         let animated = SvgFilterLive.animated(fl["c"] as Any)
@@ -355,9 +393,15 @@ final class SvgScene {
         clipped = scene["clip"] != nil && box.count == 4 ? CGRect(x: 0, y: 0, width: box[2], height: box[3]) : nil
         let t = nums(scene["t"])
         root.isHidden = t.count != 6
-        if t.count == 6 { root.sublayerTransform = CATransform3DMakeAffineTransform(CGAffineTransform(a: t[0], b: t[1], c: t[2], d: t[3], tx: t[4], ty: t[5])) }
+        if t.count == 6 { content.sublayerTransform = CATransform3DMakeAffineTransform(CGAffineTransform(a: t[0], b: t[1], c: t[2], d: t[3], tx: t[4], ty: t[5])) }
+        #if os(iOS) || os(tvOS)
+        content.opacity = 1
+        unownedBlendMotion = SvgFilterLive.animated(scene)
+        synchronousFilters = rasterizing || (SvgBlend.requested(scene) && !unownedBlendMotion)
+        blends.styles = [:]
+        #endif
         var alive: Set<Int> = []
-        attach(scene["els"] as? [Any] ?? [], to: root, dark: dark, clock: clock, alive: &alive)
+        attach(scene["els"] as? [Any] ?? [], to: content, dark: dark, clock: clock, alive: &alive)
         for (id, layer) in layers where !alive.contains(id) {
             layer.removeAllAnimations(); layer.removeFromSuperlayer()
             layers.removeValue(forKey: id); installed.removeValue(forKey: id); specs.removeValue(forKey: id); islands.removeValue(forKey: id); pictures.removeValue(forKey: id); forget(id); drawn.removeValue(forKey: id)
@@ -369,6 +413,30 @@ final class SvgScene {
             painted.removeValue(forKey: id)
             filterShapes.removeValue(forKey: id)?.removeFromSuperlayer()
         }
+        #if os(iOS) || os(tvOS)
+        if !rasterizing, blends.contains(content) {
+            var h = Hasher()
+            CssAnimations.digest(scene, into: &h)
+            h.combine(scale); h.combine(dark); h.combine(tint.map { "\($0)" })
+            let key = h.finalize()
+            if blendKey != key {
+                blended.contents = nil; blendKey = nil
+                let area = clipped ?? blends.bounds(content).integral
+                if !unownedBlendMotion, blends.canCapture(content),
+                   let e = SvgIsland.extent(area, k: scale, seen: clipped),
+                   let image = blends.bitmap(content, rect: e.rect, w: e.w, h: e.h)?.makeImage() {
+                    blended.bounds = CGRect(origin: .zero, size: e.rect.size)
+                    blended.position = e.rect.origin
+                    blended.contents = image; blendKey = key
+                }
+            }
+            if blended.superlayer !== root { root.addSublayer(blended) }
+            if blended.contents != nil { content.opacity = 0 } // Keep hit geometry.
+            else { SvgBlend.unavailable() }
+        } else {
+            blended.removeFromSuperlayer(); blended.contents = nil; blendKey = nil
+        }
+        #endif
     }
 
     /// The node a press at `point` (the host view's coordinates) goes to:
@@ -449,7 +517,10 @@ final class SvgScene {
     /// Everything off (the view is destroyed or parked).
     func reset() {
         for layer in layers.values { layer.removeAllAnimations() }
-        root.sublayers?.forEach { $0.removeFromSuperlayer() }
+        content.sublayers?.forEach { $0.removeFromSuperlayer() }
+        #if os(iOS) || os(tvOS)
+        blended.removeFromSuperlayer(); blended.contents = nil; blendKey = nil; blends.styles = [:]
+        #endif
         for pair in wrappers.values { pair.outer.removeAllAnimations() }
         layers = [:]; installed = [:]; specs = [:]; wrappers = [:]; wrapSpecs = [:]; wrapInstalled = [:]; islands = [:]; pictures = [:]; drawn = [:]; shadows = [:]
         #if os(iOS) || os(tvOS)
@@ -541,12 +612,19 @@ final class SvgScene {
                     pair.cast.shadowOpacity = drop.opacity
                     pair.cast.shadowRadius = drop.sigma
                     pair.cast.shadowOffset = drop.offset
+                    #if os(iOS) || os(tvOS)
+                    // A filter isolates its source even when its shadow is transparent.
+                    blends.styles[ObjectIdentifier(pair.cast)] = SvgBlend.Style(mode: 0, isolate: true)
+                    #endif
                     attach(fl["c"] as? [Any] ?? [], to: pair.cast, dark: dark, clock: clock, alive: &alive, owner: id)
                     if pair.clip.superlayer !== layer { layer.addSublayer(pair.clip) }
                 } else if !hitOnly, let fl = filter {
                     if let pair = shadows.removeValue(forKey: id) { pair.clip.removeFromSuperlayer() }
                     var h = Hasher()
                     CssAnimations.digest(fl, into: &h)
+                    #if os(iOS) || os(tvOS)
+                    h.combine(synchronousFilters)
+                    #endif
                     h.combine(scale); h.combine(dark)
                     let key = h.finalize()
                     let k = CGFloat(num(fl["k"])) * scale
@@ -624,7 +702,11 @@ final class SvgScene {
             specs[id] = list
             CssAnimations.apply(list, to: layer, clock: clock, installed: &installed[id, default: [:]], offscreen: offscreen)
             let placed = wrap(id, layer, e["tf"] as? [String: Any], clock: clock)
+            #if os(macOS)
             SvgIsland.blend(placed, mode: Int(num(e["bl"])), isolate: e["iso"] != nil, scale: scale)
+            #else
+            blends.styles[ObjectIdentifier(placed)] = SvgBlend.Style(mode: Int(num(e["bl"])), isolate: e["iso"] != nil)
+            #endif
             order.append(placed)
         }
         // Paint order is document order.

@@ -161,3 +161,25 @@ check('each Tab-stop case stops where the kernel answers', () => inChrome(async 
   }
   expect(differ).toEqual([]);
 }), 120000);
+
+// #550: a letter in a menu moves the focus to the next item whose label starts with what was typed in the last half
+// second, as the WAI-ARIA menu pattern's type-ahead does: the same letter again goes on, wrapping, past a disabled item,
+// and more letters refine the match. A letter no item starts is left to the page, and Space presses as before.
+check('a letter in a menu moves the focus to the item it starts', () => inChrome(async (evaluate, key) => {
+  const item = (id, attrs) => ({ id, tag: 'button', role: 'menuitem', ...(attrs ? { attrs } : {}) });
+  await evaluate(`mount(${JSON.stringify({ id: 'bots', role: 'menu', children: [item('Ada'), item('Bishop'), item('Cortana'), item('Dax', { disabled: true }), item('Data'), item('Dora'), item('Eve')] })}, false); document.getElementById('Cortana').focus()`);
+  const typed = async (name, wait = 0) => {
+    if (wait) await Bun.sleep(wait);
+    await evaluate('window.consumed = null');
+    await key(name);
+    return evaluate('[document.activeElement.id, consumed, pressed.splice(0).length]');
+  };
+  expect(await typed('d')).toEqual(['Data', true, 0]);
+  expect(await typed('d')).toEqual(['Dora', true, 0]);
+  expect(await typed('d')).toEqual(['Data', true, 0]);
+  expect(await typed('a', 600)).toEqual(['Ada', true, 0]);
+  expect(await typed('D', 600)).toEqual(['Data', true, 0]);
+  expect(await typed('o')).toEqual(['Dora', true, 0]);
+  expect(await typed('z', 600)).toEqual(['Dora', false, 0]);
+  expect(await typed(' ', 600)).toEqual(['Dora', false, 1]);
+}), 60000);

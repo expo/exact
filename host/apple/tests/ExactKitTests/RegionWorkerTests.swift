@@ -2,9 +2,130 @@ import Foundation
 // Actual ordinary TextEngine is the independent geometry oracle.
 import XCTest
 import CoreText
+import CExact
 @testable import ExactKit
 
 @MainActor final class RegionWorkerTests: XCTestCase {
+    func testFreedFlowPreparationReturnsNativeFallback() {
+        let run = Run(text: "A quiet river", size: 16, weight: 400, family: 0,
+            italic: false, lineHeight: 24, letterSpacing: 0)
+        let source = RegionTextSource.capture(Spec(runs: [run], align: 0, lineClamp: 0,
+            color: [0,0,0,255], strut: run), engine: TextEngine(resolve: { _ in nil }))
+        let box = RegionTestBox(), done = DispatchSemaphore(value: 0)
+        DispatchQueue(label: "region-freed-flow").async {
+            defer { done.signal() }
+            let preparation = RegionPreparedSource(source, allowEmergency: false)
+            exact_textflow_free(preparation.flow.handle)
+            do {
+                _ = try RegionWorkerLayout.shapeFlow(source, width: 360,
+                    exclusions: [TextFlowShape(kind: 0, x: 180, y: 60, a: 20)], preparation: preparation)
+                box.error = "accepted a freed preparation"
+            } catch RegionFlowFallback.incomplete {} catch { box.error = String(describing: error) }
+        }
+        done.wait()
+        XCTAssertEqual(box.error, "")
+    }
+    func testFlowedWorkerInkBandsHitsAndSourceMatchDirectParagraphs() throws {
+        let engine = TextEngine(resolve: { _ in nil })
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../")
+        let data = try Data(contentsOf: root.appendingPathComponent("host/painted/tests/fonts/RobotoFlex-subset.ttf").standardized)
+        let descriptor = (CTFontManagerCreateFontDescriptorsFromData(data as CFData) as! [CTFontDescriptor])[0]
+        engine.catalog[8] = [RegisteredFace(family: "Flex", generic: nil, weights: 100...1000,
+            stretches: 25...151, italic: false, descriptor: descriptor)]
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let profile = NativeProfile.capture(original: space, data: space.copyICCData(), account: NativeProfileAccount()).owner!
+        for direction in [0, 1] { for align in [0, 1, 2, 3] { for clamp in [0, 3] {
+            for preserving in [false, true] {
+                let a = Run(text: "River   ffi office 012345 אבג e\u{301} 👩🏽‍🚀\n\n", size: 16, weight: 400, family: 8,
+                    italic: true, lineHeight: 24.25, letterSpacing: 0, numeric: 1, ligatures: 2, stretch: 50,
+                    variations: [.ownOpticalSize, FontAxis(tag: 0x77676874, value: 650)],
+                    features: [FontFeature(tag: "liga", value: 1)], color: [30, 60, 90, 255],
+                    decoration: "underline", href: "https://example.com/river")
+                let b = Run(text: String(repeating: "soft\u{ad}hyphen ffi office through the garden. ", count: 4),
+                    size: 20, weight: 600, family: 0, italic: false, lineHeight: 30.25, letterSpacing: 0,
+                    numeric: 1, ligatures: 2, features: [FontFeature(tag: "liga", value: 0)],
+                    color: [120, 30, 50, 255], decoration: "line-through")
+                var spec = Spec(runs: [a, b], align: align, lineClamp: clamp, color: [0,0,0,255],
+                    overflowWrap: 1, direction: direction, whiteSpace: preserving ? 1 : 0, strut: a)
+                spec.textBoxTrim = preserving ? 3 : 0
+                spec.textBoxOver = 1; spec.textBoxUnder = 1
+                let rows: [[String: Any]] = spec.runs.map { run in
+                    ["text": run.text, "size": Double(run.size), "weight": run.weight, "family": run.family,
+                     "italic": run.italic, "lineHeight": Double(run.lineHeight!), "spacing": Double(run.letterSpacing),
+                     "numeric": run.numeric, "ligatures": run.ligatures, "stretch": Double(run.stretch),
+                     "opticalSizing": run.variations.first == .ownOpticalSize ? "none" : "auto",
+                     "variations": run.variations.filter { $0 != .ownOpticalSize }.map { [String(decoding: withUnsafeBytes(of: $0.tag.bigEndian) { Array($0) }, as: UTF8.self), Double($0.value)] as [Any] },
+                     "features": run.features.map { [$0.tag, $0.value] as [Any] },
+                     "color": run.color!, "decoration": run.decoration, "href": run.href]
+                }
+                let wire: [String: Any] = ["runs": rows, "strut": rows[0], "align": align, "lineClamp": clamp,
+                    "overflowWrap": 1, "direction": direction, "whiteSpace": preserving ? 1 : 0,
+                    "textBoxTrim": spec.textBoxTrim, "textBoxOver": 1, "textBoxUnder": 1]
+                let source = try XCTUnwrap(RegionTextSource.capture(wire: wire, engine: engine, dark: false))
+                for cx: Float in [130, 200] {
+                    let exclusions = [TextFlowShape(kind: 0, x: cx, y: 55, a: 36)]
+                    let direct = engine.paragraph(spec, width: 360, flow: exclusions)
+                    XCTAssertFalse(direct.flowIncomplete)
+                    XCTAssertFalse(direct.fragments.isEmpty)
+                    let bounds = CGRect(x: 0, y: 0, width: 360, height: direct.height)
+                    let points = direct.lines.indices.flatMap { i in
+                        [CGFloat(10), direct.origins[i] + 5, CGFloat(cx), CGFloat(350)].map {
+                            CGPoint(x: $0, y: direct.baselines[i])
+                        }
+                    }.filter { $0.y >= 0 && $0.y < 200 }
+                    let expectedIndices = points.map { point -> Int in
+                        let i = direct.lineIndex(at: point, align: align, width: 360)!
+                        return spec.source.source(direct.stringIndex(in: i, at: point.x - direct.origins[i]))
+                    }
+                    let context = CGContext(data: nil, width: 360, height: 200, bitsPerComponent: 8,
+                        bytesPerRow: 360 * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                    context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+                    context.fill(CGRect(x: 0, y: 0, width: 360, height: 200))
+                    context.translateBy(x: 0, y: 200); context.scaleBy(x: 1, y: -1)
+                    TextEngine.draw(direct, spec: spec, in: bounds, context: context)
+                    context.flush()
+                    let expected = Data(bytes: context.data!, count: 360 * 200 * 4)
+                    let request = RegionRasterRequest(serial: 1, publication: 1, generation: 1,
+                        rows: [RegionPaintRow(artifact: 7, box: bounds)], scroll: .zero, size: CGSize(width: 360, height: 200),
+                        scale: 1, profile: profile, format: CGImageAlphaInfo.premultipliedLast.rawValue,
+                        background: [1,1,1,1], selectionColor: [0.2,0.4,0.8,0.45])
+                    let box = RegionTestBox(), done = DispatchSemaphore(value: 0)
+                    DispatchQueue(label: "region-flow-parity").async {
+                        defer { done.signal() }
+                        do {
+                            let layout = try RegionWorkerLayout.shapeFlow(source, width: 360, exclusions: exclusions)
+                            box.value = denseRegionReference(layout)
+                            box.glyphs = layout.lines.map(RegionGlyphEvidence.init)
+                            let paint = try RegionPaintIndex(request: request, lookup: { $0 == 7 ? layout : nil }, account: InkAccount())
+                            box.raster = try paint.render(request, account: RegionPixelAccount(), hits: RegionHitAccount())
+                            box.indices = points.map { layout.exactIndex(at: $0, in: bounds) }
+                            box.cachedIndices = points.map { layout.metadata.cachedIndex(at: $0, in: bounds, artifact: 7, hits: box.raster!.hits) }
+                            box.rects = layout.selectionRects(NSRange(location: 0, length: source.utf16Count), in: bounds)
+                        } catch { box.error = String(describing: error) }
+                    }
+                    done.wait()
+                    XCTAssertEqual(box.error, "")
+                    let result = try XCTUnwrap(box.value)
+                    XCTAssertEqual(result.exclusions, exclusions)
+                    XCTAssertEqual(result.fragments.map(\.end), direct.fragments.map(\.end))
+                    XCTAssertEqual(result.fragments.map(\.line), direct.fragments.map(\.line))
+                    XCTAssertEqual(result.fragments.map(\.y), direct.fragments.map(\.y))
+                    XCTAssertEqual(result.flowLineHeight, direct.flowLineHeight)
+                    XCTAssertEqual(result.lines.map(\.flushOffset), direct.origins)
+                    XCTAssertEqual(result.baselines, direct.baselines)
+                    XCTAssertEqual(result.lineBottoms, direct.lineBottoms)
+                    XCTAssertEqual(result.width, direct.width); XCTAssertEqual(result.height, direct.height)
+                    XCTAssertEqual(box.glyphs, direct.lines.map(RegionGlyphEvidence.init))
+                    XCTAssertEqual(box.indices, expectedIndices)
+                    XCTAssertEqual(box.cachedIndices, expectedIndices.map(Optional.some))
+                    XCTAssertEqual(box.rects, direct.selectionRects(NSRange(location: 0, length: source.utf16Count), align: align, in: bounds, dirty: .infinite))
+                    XCTAssertEqual(result.copy(NSRange(location: 0, length: source.utf16Count)), source.text)
+                    XCTAssertEqual(result.source.link(at: 0), a.href)
+                    XCTAssertEqual(try XCTUnwrap(box.raster?.image()?.dataProvider?.data as Data?), expected)
+                }
+            }
+        } } }
+    }
     func testRegionIndentAndHyphenationMatchOrdinaryParagraphGeometry() throws {
         let engine = TextEngine(resolve: { _ in nil })
         let cases = [(0, "en", 0, 0, false), (1, "en", 0, 0, false), (2, "en", 0, 0, false),
@@ -885,7 +1006,9 @@ private final class RegionTestGate: @unchecked Sendable {
 private func denseRegionReference(_ layout: RegionWorkerLayout) -> RegionParagraph {
     let p = layout.metadata
     return RegionParagraph(source: p.source,sourceSHA256: p.sourceSHA256,lines: (0..<layout.lineCount).map { layout.line(at: $0) },baselines: p.baselines,
-        width: p.width,height: p.height,lineBottoms: p.lineBottoms,offeredWidth: p.offeredWidth,attributed: layout.preparation.attributed, inserted: layout.preparation.sourceMap.inserted)
+        width: p.width,height: p.height,lineBottoms: p.lineBottoms,offeredWidth: p.offeredWidth,attributed: layout.preparation.attributed,
+        inserted: layout.preparation.sourceMap.inserted, origins: p.lines.map(\.flushOffset), exclusions: p.exclusions,
+        fragments: p.fragments, flowLineHeight: p.flowLineHeight, metadataCheckpoint: {})
 }
 
 // All CTLine and index introspection stays on the worker. Only numeric evidence

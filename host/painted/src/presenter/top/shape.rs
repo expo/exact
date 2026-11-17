@@ -26,7 +26,9 @@
 //! lowering implies for the shape, leaves Back and Escape alone to cancel
 //! it; `none` refuses those too.
 pub use exact_kernel::confirmation::{alert_text, is_alert};
-use exact_kernel::{ControlKind, Invocation, Kernel, NodeKey, NodeRef, NodeType, PropId, ViewId};
+use exact_kernel::{
+    ControlKind, Direction, Invocation, Kernel, NodeKey, NodeRef, NodeType, PropId, StyleId, ViewId,
+};
 
 /// One row a person can choose: an alert's button or a menu's item.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +37,8 @@ pub struct Row {
     pub node: ViewId,
     /// What it says.
     pub title: String,
+    /// The title's computed direction, from its text node or the button's label.
+    pub direction: Direction,
     /// Its symbol role (`delete`), for a menu's leading symbol.
     pub symbol: Option<String>,
     /// `destructive`.
@@ -56,8 +60,12 @@ pub enum Plan {
     Alert {
         /// The headline.
         title: Option<String>,
+        /// The title's computed direction, from its text node or the dialog's label.
+        title_direction: Direction,
         /// The supporting text.
         message: Option<String>,
+        /// Each message line's computed direction, in the order it is joined.
+        message_directions: Vec<Direction>,
         /// The buttons as presented: the cancel, then the actions in the
         /// order the author wrote them.
         rows: Vec<Row>,
@@ -78,8 +86,8 @@ pub enum Entry {
     /// A line where the author wrote a separator, or around a section.
     Separator,
     /// A section's title (a `role="group"` row's `aria-label`), and the
-    /// group's node.
-    Header(String, ViewId),
+    /// group's node and computed direction.
+    Header(String, ViewId, Direction),
 }
 
 impl Plan {
@@ -163,9 +171,19 @@ fn confirmation_rows<'k>(kernel: &'k Kernel, pop: &NodeRef<'k>) -> Vec<NodeRef<'
         .collect()
 }
 
+pub(in crate::presenter) fn direction(node: &NodeRef<'_>) -> Direction {
+    node.computed_row(StyleId::Direction, |s| s.direction)
+}
+
 /// A button's row: its face's title, else its label, else its text.
 pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: bool) -> Row {
     let face = kernel.press_face(node.id).unwrap_or_default();
+    let title_node = face.title.as_ref().and_then(|_| {
+        node.children()
+            .into_iter()
+            .filter_map(|id| kernel.node(id))
+            .find(|child| child.node_type == NodeType::Text)
+    });
     let title = face
         .title
         .or(face.label)
@@ -173,6 +191,9 @@ pub(in crate::presenter) fn row(kernel: &Kernel, node: &NodeRef<'_>, cancel: boo
     Row {
         node: node.id,
         title,
+        direction: title_node
+            .as_ref()
+            .map_or_else(|| direction(node), direction),
         symbol: face.symbol,
         destructive: node.props.bool(PropId::Destructive) == Some(true),
         enabled: node.props.bool(PropId::Disabled) != Some(true),
@@ -218,18 +239,31 @@ pub fn alert(
     {
         return None;
     }
-    let lines: Vec<String> = (texts.iter().map(|n| text_of(kernel, n)))
-        .filter(|line| !line.is_empty())
-        .collect();
+    let (lines, mut message_directions): (Vec<_>, Vec<_>) = texts
+        .iter()
+        .map(|n| (text_of(kernel, n), direction(n)))
+        .filter(|(line, _)| !line.is_empty())
+        .unzip();
     if !is_alert(lines.len(), actions.len(), cancels.len()) {
         return None;
     }
-    let (title, message) = alert_text(pop.props.str(PropId::AccessibilityLabel), &lines);
+    let label = pop
+        .props
+        .str(PropId::AccessibilityLabel)
+        .filter(|l| !l.is_empty());
+    let (title, message) = alert_text(label, &lines);
+    let title_direction = if label.is_some() {
+        direction(&pop)
+    } else {
+        message_directions.remove(0)
+    };
     let mut rows = vec![row(kernel, cancels[0], true)];
     rows.extend(actions.iter().map(|n| row(kernel, n, false)));
     Some(Plan::Alert {
         title,
+        title_direction,
         message,
+        message_directions,
         rows,
         cancellable: pop.props.str(PropId::Closedby) != Some("none"),
         outside: pop.props.str(PropId::Closedby) == Some("any"),
@@ -299,7 +333,7 @@ pub fn menu(kernel: &Kernel, pop: ViewId, pressed: &dyn Fn(ViewId) -> bool) -> O
             }
             rule(&mut entries);
             if let Some(title) = section_title(kernel, &node) {
-                entries.push(Entry::Header(title, node.id));
+                entries.push(Entry::Header(title, node.id, direction(&node)));
             }
             entries.extend(items);
             entries.push(Entry::Separator);

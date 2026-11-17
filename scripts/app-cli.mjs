@@ -66,10 +66,14 @@ export function compilerWarnings(text, cwd = process.cwd()) {
   return [...lines];
 }
 
+/** Whether `line` begins one of the compiler's errors as `contract build` prints it, `file:line:col [id] text`: a
+ * surface that shows part of a failed build's output starts at the first, the cause the later ones may follow from. */
+export const compilerError = (line) => /^.+:\d+:\d+ \[[\w-]+\] /.test(line);
+
 /** What a failed JS-target web build (`host/web-js/build.mjs`) said that is the app's to act on, from its stderr: the
- * types app.ts imports when rewritten, warnings, the diagnostics, then the compiler's warnings. Cargo's progress, a
- * rustc warning's excerpt and Bun's trace (a frame and its version line) are left out; with no diagnostic, the last
- * three lines stand for one. */
+ * types app.ts imports when rewritten, warnings, the diagnostics, then the compiler's warnings. Every compiler error is
+ * kept with its quoted line and caret, as `contract build` prints them. Cargo's progress, a rustc warning's excerpt and
+ * Bun's trace (a frame and its version line) are left out; with no diagnostic, the last three lines stand for one. */
 export function webBuildFailure(stderr) {
   const ambientDiagnostic = (l) => /^.+:\d+:\d+: .+ is unavailable in data sources[;:]/.test(l);
   const all = (stderr ?? '').trim().split('\n').filter((l) => ambientDiagnostic(l) || !/^\s*(Compiling|Finished|Running)/.test(l) && !compilerWarnings(l).length);
@@ -79,11 +83,16 @@ export function webBuildFailure(stderr) {
   // refusals of package code (js/bake/src/typescript.mjs `capturedSources`).
   const packageRefusal = (l) => / (?:requires peer|imports Node's built-in|uses the DOM's|uses Node's|loads a module by a computed name|loads code from a string|uses the page's)|, (?:which is not installed|a native addon|which the checked capture did not resolve)|: not an npm package name and version| must be a constant the build reads without running|^(?:Error: )?(?:package declarations: )?two copies of |^(?:Error: )?package (?:declarations exceed|code exceeds) 64 MiB/.test(l);
   const marker = /^(error|[A-Z]\w*Error|E[A-Z]+)\b:?/;
-  const kept = (l) => marker.test(l.trim()) || /\): error TS\d+:|^(?:Error: )?(?:tsconfig: |module outside captured app: |source links are not captured: )|^note: /.test(l) || ambientDiagnostic(l) || packageRefusal(l) || /\bunoptimized$|\bnot on PATH\b|import\.meta\.env/.test(l);
+  const kept = (l) => marker.test(l.trim()) || /\): error TS\d+:|^(?:Error: )?(?:tsconfig: |module outside captured app: |source links are not captured: )|^note: /.test(l) || ambientDiagnostic(l) || compilerError(l) || packageRefusal(l) || /\bunoptimized$|\bnot on PATH\b|import\.meta\.env/.test(l);
   const message = [];
   for (let i = 0; i < lines.length; i++) {
     if (!kept(lines[i])) continue;
     message.push(lines[i]);
+    // Its excerpt (contract/cli/src/excerpt.rs): the source line, then the caret under it.
+    if (compilerError(lines[i])) {
+      if (/^ \d+ \| /.test(lines[i + 1] ?? '')) message.push(...lines.slice(i + 1, i + 3)), i += 2;
+      continue;
+    }
     // A marker with nothing after it says its message below, to the next diagnostic or Bun's trace: wasm-bindgen's
     // schema mismatch is `error: `, a blank line, then paragraphs.
     if (!/^\s*(error|[A-Z]\w*Error|E[A-Z]+)\b:\s*$/.test(lines[i])) continue;
@@ -124,10 +133,10 @@ export function warningLines(dir, host, warnings) {
   return [...said, ...group, `${count}${fresh.length < warnings.length ? `, ${fresh.length} new (above)` : ''}; ${where} lists them all`];
 }
 
-/** A compiler warning that is information, not a problem: `tamber-unreachable` names a control whose host draws the
+/** A compiler warning that is information, not a problem: `forma-unreachable` names a control whose host draws the
  *  platform's own look, which the author should know of and cannot change (LLP 1121 D9, amended 2026-10-30). A drive
  *  and verify say it but do not count it. contract's `warning_rank::information` is the same test. */
-export const information = (w) => / warning \[(tamber-unreachable|style-undrawn)\] /.test(w);
+export const information = (w) => / warning \[(forma-unreachable|style-undrawn)\] /.test(w);
 
 /** The colours that stay one in dark mode (`lower-colour-one-scheme`), past one, as one line: their closing line with
  *  the first three sites' `file:line`, theme tokens included, at the first's place (LLP 1168.000 D7.2: a chat app said
@@ -175,11 +184,12 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
     windows: ['host/windows/build.mjs', name],
     // The APK on the Canvas reader, installed (LLP 1107 D1); `--headless` the Linux host for Android instead.
     android: ['scripts/agent-android.mjs', 'build', name, '--apk', '--install'],
+    ...game ? {} : { deploy: ['scripts/deploy.mjs', dir], push: ['scripts/push.mjs', name] },
     update: ['scripts/exact.mjs', 'new', dir, '--update'],
     lock: ['scripts/app-cli.mjs', '--lock', dir],
     add: ['scripts/exact.mjs', 'add'],
     contract: ['scripts/exact.mjs', 'contract'],
-    tamber: ['scripts/exact.mjs', 'tamber'],
+    forma: ['scripts/exact.mjs', 'forma'],
     hatch: ['scripts/exact.mjs', 'hatch'],
     snapback: ['scripts/exact.mjs', 'snapback', dir],
     backend: ['scripts/exact.mjs', 'backend', dir],
@@ -206,16 +216,16 @@ export function appVerbs(name, dir, { host = 'web', game = false, os = process.p
 export const beforeBuild = {
   status: false, web: true, 'web-build': true, serve: true, test: false, agent: false, verify: true, ios: true, mac: true, share: true,
   linux: true, windows: true, android: true, update: false, lock: false, hatch: false, snapback: true, backend: false, docs: false,
-  feedback: false, add: false,
+  feedback: false, add: false, deploy: true, push: true,
   contract: ([command, ...rest]) => ['build', 'types', 'rust', 'verify', 'test', 'lean', 'symbols', 'gallery'].includes(command)
-    || command === 'tamber' && checksDesign(rest),
-  tamber: (rest) => checksDesign(rest),
+    || command === 'forma' && checksDesign(rest),
+  forma: (rest) => checksDesign(rest),
   pattern: (rest) => rest.some((arg) => !arg.startsWith('-')),
   // A game's own: its compile, Rust tests and proof prepare; `shells` writes .shells/ without a build
   check: true, game: false, 'test-rust': true, shells: false, prove: true,
 };
 
-/** The Tamber commands that compile the app's design: its check, evaluation, IR and generated code, the tokens it
+/** The Forma commands that compile the app's design: its check, evaluation, IR and generated code, the tokens it
  * imports from CSS, which it checks, and the design it serves (`tool` without `--via`, which reaches the app's dev loop
  * instead). */
 const checksDesign = ([command, ...rest]) => ['check', 'eval', 'ir', 'gen', 'serve'].includes(command)
@@ -242,19 +252,27 @@ export async function run(options) {
 }
 
 async function verbRun({ dir, name, game = false, exact2, args }, reply) {
+  if (args[0] === 'tamber') { console.error('exact: rename the tamber verb to forma: use `bun exact.mjs forma`'); return 2; }
   // Before any process starts: which settings Bun loaded from this directory's `.env` files (LLP 1153 D4).
   noteBunLoaded();
   // The design tool's tests, drives and verify run on this checkout's own port (port-lock.mjs `checkoutPort`, unless
-  // EXACT_TOOL_PORT names one), from a copy staged with that origin and its stub (tamber-tool-port.mjs
+  // EXACT_TOOL_PORT names one), from a copy staged with that origin and its stub (forma-tool-port.mjs
   // `stageToolTests`), so its stub never binds the 7740 a person's tool holds; EXACT_TOOL_PORT=7740 runs them in place.
   if (['test', 'agent', 'verify'].includes(args[0]) && !args.includes('--help') && !args.includes('-h') && existsSync(resolve(exact2, 'apps/design-tool')) && realpathSync(dir) === realpathSync(resolve(exact2, 'apps/design-tool'))) {
     process.env.EXACT_TOOL_PORT ??= String((await import(resolve(exact2, 'scripts/port-lock.mjs'))).checkoutPort(resolve(exact2)));
-    const tool = await import(resolve(exact2, 'scripts/tamber-tool-port.mjs')), rest = args.slice(1);
+    const tool = await import(resolve(exact2, 'scripts/forma-tool-port.mjs')), rest = args.slice(1);
     const tested = tool.testFiles(args[0], rest, (await import(resolve(exact2, 'scripts/help.mjs'))).knownFlags(args[0]));
     const staged = tool.stageToolTests(dir, rest, i => tested.has(i));
     if (staged) { dir = staged.dir; args = [args[0], ...staged.args]; }
   }
   const [verb, ...rest] = args;
+  // `--variant <name>` selects one of app.json's variants for every process below (LLP 1030.008 D3): taken out here,
+  // the one place every verb passes, so no child sees the flag.
+  if (rest.includes('--variant')) {
+    const { takeVariant } = await import(resolve(exact2, 'scripts/help.mjs'));
+    try { takeVariant(rest); } catch (error) { console.error(`exact ${verb}: ${error.message}`); return 2; }
+  }
+  if (process.env.EXACT_VARIANT) process.env.EXACT_VARIANT_APP ??= realpathSync(dir); // variants.mjs `claimVariant`
   // The app's own verbs (paint, minesweeper, ledger: a regenerated file dropped the ones added to it): app.json's
   // `commands`, each a command as argv (`"seed": ["bun", "seed.mjs"]`), run in the app's directory with the
   // arguments after the verb. A game's app.json is optional.
@@ -515,6 +533,14 @@ if (verb === 'contract') {
     if (!found.length) { console.error(`no test file matches ${named}`); return log(2); }
     tests.push(...found);
   }
+  if (drivesWeb || drivesNative || verb === 'verify' && ['web', 'ios', 'windows'].includes(host)) {
+    const { resolveApp } = await import(resolve(exact2, 'scripts/app.mjs'));
+    const { privateWebBuild, privateNativeBuild } = await import(resolve(exact2, 'scripts/web-build.mjs'));
+    const build = (host === 'web' ? privateWebBuild : privateNativeBuild)(resolveApp(dir), verb);
+    Object.assign(process.env, build.env);
+    if (host !== 'web') await build.seed(host);
+    process.once('exit', build.close);
+  }
   if (drivesWeb || drivesNative) {
     // A flag the drive does not take is refused before the build, not after it (scripts/help.mjs).
     // Its refusal ends here, so the command is logged like any other.
@@ -539,7 +565,7 @@ if (verb === 'contract') {
   const prepares = beforeBuild[verb];
   if (declared.before_build !== undefined && !own[verb] && (typeof prepares === 'function' ? prepares(rest) : prepares)) {
     // The verbs whose scripts refuse a flag they do not take (`guardFlags`)
-    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share'].includes(verb)) {
+    if (['web', 'web-build', 'serve', 'verify', 'ios', 'mac', 'linux', 'android', 'snapback', 'pattern', 'share', 'deploy', 'push'].includes(verb)) {
       const refused = await refusedFlag();
       if (refused != null) return log(refused);
     }
@@ -652,7 +678,7 @@ function bindgenFinding(dir, workspace, options) {
   const { held, requiring } = gpuBindgen(JSON.parse(wasm.stdout), [`${app}-gpu`, ...modules.map((m) => `${app}-gpu-${m}`)]);
   if (!held.length || held.every((version) => version === pin)) return null;
   // Paths as the recipe writes them, with `/` on every host.
-  const shown = (path) => relative(workspace, path).split(sep).join('/');
+  const shown = (path) => relative(dir, path).split(sep).join('/');
   const blocking = requiring.filter((r) => !Bun.semver.satisfies(pin, r.req)), own = shown(resolve(dir, 'gpu/Cargo.toml'));
   return `The GPU module's wasm build links wasm-bindgen ${held.join(', ')} (${requiring.map((r) => `${r.name} requires ${r.req}`).join(', ')}), and the web build's wasm-bindgen CLI is ${pin}, which refuses any other: the web build will fail. `
     + (blocking.length
@@ -660,15 +686,23 @@ function bindgenFinding(dir, workspace, options) {
       : `Require wasm-bindgen = "=${pin}" in ${own}'s wasm32 dependencies, then run bun exact.mjs lock again: Cargo moves wasm-bindgen and the crates that name its version with it.`);
 }
 
-/** Explicit app lock repair: preserve selected versions and resolve only manifest drift. */
+/** Explicit app lock repair: preserve selected versions and resolve only manifest drift. An app without a workspace of
+ * its own resolves its generated one (LLP 1153.003 D1.4), capturing a lock only when its crates leave exact2's. */
 export async function lockApp(dir) {
   const { cargoEnvironment } = await import('./app.mjs');
-  const { authoredWorkspace, shellsDir } = await import('./cargo-check.mjs');
+  const { appCrates, authoredWorkspace, shellsDir } = await import('./cargo-check.mjs');
+  const { GPU_LOCK, ensureGpuShells, ensureShells, lockShells, lockChanges } = await import('./app-shells.mjs');
   const options = { cwd: dir, env: cargoEnvironment(), encoding: 'utf8', maxBuffer: 1 << 26 };
-  // An app that authored no workspace has the generated one once a native verb wrote it (LLP 1153 D1.3), else no Rust.
-  const workspace = authoredWorkspace(dir) ?? (existsSync(resolve(shellsDir(dir), 'Cargo.toml')) ? shellsDir(dir) : null);
-  if (!workspace) return `${dir}: no Rust here yet; a native verb (bun exact.mjs ios, mac, linux, android, windows) brings it`;
-  const lock = resolve(workspace, 'Cargo.lock');
+  const authored = authoredWorkspace(dir);
+  if (!authored) {
+    if (!appCrates(dir).length && !existsSync(resolve(shellsDir(dir), 'Cargo.toml'))) return `${dir}: no Rust here yet; a native verb (bun exact.mjs ios, mac, linux, android, windows) brings it`;
+    const { workspace } = ensureShells(dir);
+    // The GPU crates' lock is their own (LLP 1153.003 D5.1): Cargo.gpu.lock, captured by the same rule.
+    const gpu = ensureGpuShells(dir), said = [lockShells(dir, workspace), ...(gpu ? [lockShells(dir, gpu, resolve(dir, GPU_LOCK))] : [])];
+    const found = gpu && bindgenFinding(dir, gpu, options);
+    return [...said, ...(found ? [found] : [])].join('\n');
+  }
+  const workspace = authored, lock = resolve(workspace, 'Cargo.lock');
   const before = existsSync(lock) ? readFileSync(lock, 'utf8') : '';
   let result = spawnSync('cargo', ['metadata', '--offline', '--format-version', '1'], { ...options, cwd: workspace });
   if (result.status !== 0 && /no matching package named|--offline was specified|attempting to make an HTTP request|in the offline mode|offline mode \(via `--offline`\)/.test(result.stderr ?? '')) {
@@ -676,7 +710,6 @@ export async function lockApp(dir) {
     result = spawnSync('cargo', ['metadata', '--format-version', '1'], { ...options, cwd: workspace });
   }
   if (result.status !== 0) throw new Error(`could not resolve ${lock}: ${result.stderr || result.error?.message}`);
-  const { lockChanges } = await import('../game/app/shells.mjs');
   const changes = lockChanges(before, readFileSync(lock, 'utf8'));
   const said = `${lock}: ${changes.length ? `resolved\n${changes.join('\n')}` : 'current; no changes'}`;
   const found = bindgenFinding(dir, workspace, options);

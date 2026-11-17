@@ -82,7 +82,7 @@ impl Ink {
                     );
                     i.param = [0., 0., tile.width() as f32, tile.height() as f32];
                     i.color = [*opacity; 4];
-                    b.image = self.images.pixmap(&mut self.device, tile)?;
+                    b.image = self.images.pixmap(&mut self.device, tile, true)?;
                     b.repeat = true;
                     if from_affine(i.xform).is_translate() || from_affine(i.xform).is_identity() {
                         i.flags |= flags::NEAREST;

@@ -28,3 +28,21 @@ test("a reason is cut between code points, and counted in them", () => {
   expect(() => mount(() => { throw new Refusal(astral); }))
     .toThrow(`boot refused while building the view: ${"😀".repeat(300)}… (100 more characters in the journal)`);
 });
+
+test('observation commands keep launch handlers and otherwise write the journal', async () => {
+  const { Hosts, useCommands } = await import('./rt.js');
+  const { observe, observeAttributes, observeError } = await import('./commands.js');
+  const commands = { observe, observeAttributes, observeError }, seen = [];
+  try {
+    for (const name in commands) Hosts[name] = value => seen.push([name, value]);
+    useCommands(commands);
+    Hosts.observe('launch'); Hosts.observeAttributes('attributes'); Hosts.observeError('error');
+    expect(seen).toEqual([['observe', 'launch'], ['observeAttributes', 'attributes'], ['observeError', 'error']]);
+    for (const name in commands) delete Hosts[name];
+    useCommands(commands);
+    Hosts.observe('local'); Hosts.observeAttributes('ignored'); Hosts.observeError('local error');
+    expect(journal.slice(-2).map(line => line.slice(line.indexOf(' ') + 1))).toEqual(['observe local', 'observeError local error']);
+  } finally {
+    for (const name in commands) delete Hosts[name];
+  }
+});

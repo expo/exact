@@ -6,8 +6,8 @@
 // bar's scroller too, by one rule, LLP 1115.000 D11.1), else, with no routes,
 // the viewport when it scrolls, else the first vertical scroller on the
 // page. A grouped list answers with the collection view that shows, never
-// the hidden scroll beneath it. Run after every batch and every finished
-// navigation.
+// the hidden scroll beneath it. Run after batches that can change the
+// scroller selection and every finished navigation.
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -56,8 +56,9 @@ extension NodeView {
     /// the list (`CollectionHost.readerMoves`).
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
         presenter?.elementScrolls.userScrolled(scrollView)
-        guard scrollView === self.scrollView, let collections = presenter?.collections,
-              let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
+        guard scrollView === self.scrollView else { return true }
+        dropCarriedScroll()
+        guard let collections = presenter?.collections, let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
         collections.readerMoves(id)
         let top = -scrollView.adjustedContentInset.top, glide = scrollView.bounds.height * 2
         guard scrollView.contentOffset.y - top > glide * 1.5 else { return true }

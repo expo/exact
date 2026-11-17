@@ -2,9 +2,11 @@
 //! `header` read as the iOS navigation bar reads it (LLP 1075.003 §9.10,
 //! LLP 1116 D6).
 
-use super::{computed, has, kids, literal, nested_header, title, BOXES};
+use super::{computed, has, literal, nested_header, title, BOXES};
 use crate::LowerError;
-use contract_syntax::{Attr, Expr, Node, Span};
+use contract_checking::{Site, Structure, Visit};
+use contract_syntax::{Attr, Expr, Span};
+use std::rc::Rc;
 
 /// What the iOS bar makes of one node in a route's header.
 enum Part {
@@ -33,8 +35,8 @@ enum Part {
     Other,
 }
 
-fn part(node: &Node) -> Part {
-    let Node::Element { tag, attrs, .. } = node else {
+fn part(node: Visit<'_>) -> Part {
+    let Some((tag, _, attrs)) = node.element() else {
         return Part::Doubt;
     };
     // A popover or dialog shows over the page when opened, not in the bar.
@@ -71,7 +73,7 @@ fn part(node: &Node) -> Part {
     if role == Some("status") && tag != "header" {
         return Part::Status;
     }
-    match tag.as_str() {
+    match tag {
         "text" => Part::Text,
         "input" if computed(attrs, "type") => Part::Doubt,
         "input" if literal(attrs, "type") == Some("search") => Part::Search,
@@ -82,30 +84,38 @@ fn part(node: &Node) -> Part {
 
 /// Whether the subtree holds something the bar places or the compiler
 /// cannot see through: then a box around it is walked, not dropped whole.
-fn holds_placed(node: &Node) -> bool {
-    kids(node).iter().any(|k| match part(k) {
-        Part::Doubt
-        | Part::Heading
-        | Part::Search
-        | Part::Tablist
-        | Part::Pressable
-        | Part::Status => true,
-        Part::Box => holds_placed(k),
-        Part::Hidden | Part::Text | Part::Other => false,
-    })
+fn holds_placed(node: Visit<'_>) -> bool {
+    node.regions()[0]
+        .walk_regions_with((), |k, _| {
+            [matches!(part(k), Part::Box).then_some(()), None]
+        })
+        .any(|(k, ())| {
+            matches!(
+                part(k),
+                Part::Doubt
+                    | Part::Heading
+                    | Part::Search
+                    | Part::Tablist
+                    | Part::Pressable
+                    | Part::Status
+            )
+        })
 }
 
-fn holds_heading(node: &Node) -> bool {
-    kids(node).iter().any(|k| match part(k) {
-        Part::Heading => true,
-        Part::Box | Part::Pressable | Part::Status => holds_heading(k),
-        _ => false,
-    })
+fn holds_heading(node: Visit<'_>) -> bool {
+    node.regions()[0]
+        .walk_regions_with((), |k, _| {
+            [
+                matches!(part(k), Part::Box | Part::Pressable | Part::Status).then_some(()),
+                None,
+            ]
+        })
+        .any(|(k, ())| matches!(part(k), Part::Heading))
 }
 
 /// A box with a literal fill: before the heading, the title's avatar.
-fn filled(node: &Node) -> bool {
-    let Node::Element { attrs, .. } = node else {
+fn filled(node: Visit<'_>) -> bool {
+    let Some((_, _, attrs)) = node.element() else {
         return false;
     };
     has(attrs, "background-color") || has(attrs, "background")
@@ -113,9 +123,9 @@ fn filled(node: &Node) -> bool {
 
 /// A passive box of texts and symbol images, one of each at least: a
 /// subtitle's line of glyphs (Signal's "🔕 Muted ⏱ 1w").
-fn glyph_line(node: &Node) -> bool {
+fn glyph_line(node: Visit<'_>) -> bool {
     let (mut symbols, mut text) = (false, false);
-    for k in kids(node) {
+    for k in node.children() {
         match part(k) {
             Part::Text => text = true,
             Part::Other if symbol(k) => symbols = true,
@@ -127,11 +137,8 @@ fn glyph_line(node: &Node) -> bool {
 }
 
 /// An image whose source is a symbol; a computed source may be one: the benefit.
-fn symbol(node: &Node) -> bool {
-    let Node::Element {
-        tag, positional, ..
-    } = node
-    else {
+fn symbol(node: Visit<'_>) -> bool {
+    let Some((tag, positional, _)) = node.element() else {
         return false;
     };
     tag == "image"
@@ -146,14 +153,8 @@ fn symbol(node: &Node) -> bool {
 /// iOS title draws beside its text (`HeaderTitle`,
 /// NavigationTitleIOS.swift): a flex row holding the heading, each other
 /// child shown there a bar item or such an image.
-fn title_row(row: &Node) -> bool {
-    let Node::Element {
-        tag,
-        attrs,
-        children,
-        ..
-    } = row
-    else {
+fn title_row(row: Visit<'_>) -> bool {
+    let Some((tag, _, attrs)) = row.element() else {
         return false;
     };
     let flex = match literal(attrs, "display") {
@@ -164,7 +165,7 @@ fn title_row(row: &Node) -> bool {
         return false;
     }
     let mut heading = false;
-    for k in children {
+    for k in row.children() {
         match part(k) {
             Part::Heading => heading = true,
             Part::Hidden
@@ -185,7 +186,7 @@ fn title_row(row: &Node) -> bool {
 struct Bar<'a> {
     headings: usize,
     /// The last heading counted: the bar's title when it is the one.
-    title: Option<&'a Node>,
+    title: Option<Visit<'a>>,
     /// An `if`, `for`, `match`, use or slot, or a computed role: the
     /// headings counted may not be all.
     doubt: bool,
@@ -220,26 +221,40 @@ pub(super) const OR_NO_BAR: &str = "; or, for a site's header, say `appearance=\
 /// bar has no title and takes the header only when it places all of it
 /// (`exact_kernel::bars`, issue #364).
 /// An `if` or a `match` first among the route's children is read branch by branch: a
-/// branch's first node is the route's first child while it is taken, and `after` the
-/// route's nodes past that choice.
-pub(super) fn route_header<'a>(
-    children: &'a [Node],
-    after: &[&'a Node],
-    out: &mut Vec<LowerError>,
-) {
-    if let Some(choice @ (Node::When { .. } | Node::Match { .. })) = children.first() {
-        let rest: Vec<&Node> = children[1..].iter().chain(after.iter().copied()).collect();
-        for branch in choice.child_lists() {
-            route_header(branch, &rest, out);
+/// branch's first node is the route's first child while it is taken. Content after
+/// the choice follows each branch's own content.
+pub(super) fn route_header(children: Structure<'_>, out: &mut Vec<LowerError>) {
+    fn first<'a>(region: Structure<'a>, after: &[Visit<'a>]) -> (Option<Site>, Rc<[Visit<'a>]>) {
+        let head = region.roots().next().map(Visit::site);
+        let rest = region
+            .roots()
+            .skip(1)
+            .chain(after.iter().copied())
+            .collect::<Vec<_>>();
+        (head, rest.into())
+    }
+    for (header, (head, content)) in
+        children.walk_regions_with(first(children, &[]), |node, (head, after)| {
+            if Some(node.site()) != *head || !node.is_choice() {
+                return [None, None];
+            }
+            node.regions().map(|region| Some(first(region, after)))
+        })
+    {
+        if Some(header.site()) != head {
+            continue;
         }
-        return;
+        let Some(("header", _, attrs)) = header.element() else {
+            continue;
+        };
+        if nested_header::no_bar(attrs) {
+            continue;
+        }
+        check_header(header, &content, out);
     }
-    let Some(header @ Node::Element { tag, attrs, .. }) = children.first() else {
-        return;
-    };
-    if tag != "header" || nested_header::no_bar(attrs) {
-        return;
-    }
+}
+
+fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerError>) {
     let mut bar = Bar::default();
     walk(header, &mut bar);
     // No heading, and nothing the bar has no place for: the bar with no title.
@@ -265,8 +280,7 @@ pub(super) fn route_header<'a>(
         return;
     }
     if let Some(title) = bar.title {
-        let content: Vec<&Node> = children[1..].iter().chain(after.iter().copied()).collect();
-        title::title_twice(title, &content, out);
+        title::title_twice(title, content, out);
     }
     for (span, what) in bar.unplaced {
         out.push(LowerError {
@@ -280,9 +294,16 @@ pub(super) fn route_header<'a>(
 }
 
 /// The children of `parent`, a header or a box in it, into `bar`.
-fn walk<'a>(parent: &'a Node, bar: &mut Bar<'a>) {
-    let glyphs = title_row(parent);
-    for node in kids(parent) {
+fn walk<'a>(parent: Visit<'a>, bar: &mut Bar<'a>) {
+    for _ in parent.regions()[0].walk_regions_with(title_row(parent), |node, &glyphs| {
+        let descend = bar.visit(node, glyphs);
+        [descend.then(|| title_row(node)), None]
+    }) {}
+}
+
+impl<'a> Bar<'a> {
+    fn visit(&mut self, node: Visit<'a>, glyphs: bool) -> bool {
+        let bar = self;
         let span = node.span();
         match part(node) {
             Part::Doubt => bar.doubt = true,
@@ -303,11 +324,11 @@ fn walk<'a>(parent: &'a Node, bar: &mut Bar<'a>) {
             // A pressable box around the heading is the title, tapped.
             Part::Pressable if !bar.tap && has_press(node) && holds_heading(node) => {
                 bar.tap = true;
-                walk(node, bar);
+                return true;
             }
             Part::Pressable => bar.placed = true,
             // A status around the heading is no readout: walked for it.
-            Part::Status if holds_heading(node) => walk(node, bar),
+            Part::Status if holds_heading(node) => return true,
             Part::Status => bar.placed = true,
             Part::Text if bar.passed && !bar.subtitle => bar.subtitle = true,
             Part::Text => bar.unplaced.push((
@@ -322,26 +343,26 @@ fn walk<'a>(parent: &'a Node, bar: &mut Bar<'a>) {
             Part::Box if !bar.passed && !bar.avatar && filled(node) && !holds_heading(node) => {
                 bar.avatar = true;
             }
-            Part::Box if holds_placed(node) => walk(node, bar),
+            Part::Box if holds_placed(node) => return true,
             // A box with nothing in it lays the bar's items out (a spacer).
-            Part::Box if kids(node).is_empty() => {}
+            Part::Box if node.children().next().is_none() => {}
             Part::Box => bar.unplaced.push((span, "this box".into())),
             // Drawn in the title, before or after its text.
             Part::Other if glyphs && symbol(node) && !filled(node) => {}
             Part::Other => {
-                let what = match node {
-                    Node::Element { tag, .. } if tag == "button" => {
-                        "a `button` that presses nothing".into()
-                    }
-                    Node::Element { tag, .. } => format!("this `{tag}`"),
+                let what = match node.element() {
+                    Some(("button", _, _)) => "a `button` that presses nothing".into(),
+                    Some((tag, _, _)) => format!("this `{tag}`"),
                     _ => "this node".into(),
                 };
                 bar.unplaced.push((span, what));
             }
         }
+        false
     }
 }
 
-fn has_press(node: &Node) -> bool {
-    matches!(node, Node::Element { attrs, .. } if has(attrs, "press"))
+fn has_press(node: Visit<'_>) -> bool {
+    node.element()
+        .is_some_and(|(_, _, attrs)| has(attrs, "press"))
 }

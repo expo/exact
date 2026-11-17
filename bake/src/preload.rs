@@ -99,12 +99,16 @@ impl<'de> Deserialize<'de> for Entry {
 struct ManifestEntries {
     #[serde(default)]
     preload: Entries,
+    #[serde(default)]
+    env: Vec<Value>,
 }
 
 pub(crate) fn checked(
     app: &Path,
     manifest: &contract::Manifest,
     grants: Option<&str>,
+    settings: &Value,
+    launches: bool,
 ) -> Result<Value, String> {
     if manifest.json.get("preload").is_none() {
         return Ok(Value::Null);
@@ -116,10 +120,15 @@ pub(crate) fn checked(
     };
     let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let entries: ManifestEntries = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    check(entries.preload.0, grants)
+    check(entries.preload.0, grants, &entries.env, settings, launches)
 }
 
-fn parts(text: &str) -> Result<Vec<Value>, String> {
+fn parts(
+    text: &str,
+    env: &[Value],
+    settings: &Value,
+    launches: bool,
+) -> Result<Vec<Value>, String> {
     let mut parts = Vec::new();
     let mut literal = String::new();
     let mut rest = text;
@@ -131,18 +140,42 @@ fn parts(text: &str) -> Result<Vec<Value>, String> {
             rest = tail;
             continue;
         }
-        let reference = rest
-            .strip_prefix("secret:")
-            .ok_or("write a literal { as {{")?;
-        let end = reference.find('}').ok_or("unterminated secret reference")?;
+        let (kind, reference) = if let Some(reference) = rest.strip_prefix("secret:") {
+            ("secret", reference)
+        } else if let Some(reference) = rest.strip_prefix("env:") {
+            ("env", reference)
+        } else {
+            return Err("write a literal { as {{".into());
+        };
+        let end = reference
+            .find('}')
+            .ok_or_else(|| format!("unterminated {kind} reference"))?;
         let name = &reference[..end];
         if name.is_empty() || name.contains('{') {
-            return Err("empty or invalid secret reference".into());
+            return Err(format!("empty or invalid {kind} reference"));
         }
-        if !literal.is_empty() {
-            parts.push(json!(["literal", std::mem::take(&mut literal)]));
+        if kind == "env" {
+            let declared = env
+                .iter()
+                .find(|entry| entry.as_str().or_else(|| entry["name"].as_str()) == Some(name))
+                .ok_or_else(|| format!("setting {name} is not declared in app.json's env"))?;
+            let value = settings[name]["value"]
+                .as_str()
+                .ok_or_else(|| format!("setting {name} has no build value or ?? default"))?;
+            if launches && declared["launch"] == true {
+                if !literal.is_empty() {
+                    parts.push(json!(["literal", std::mem::take(&mut literal)]));
+                }
+                parts.push(json!(["env", name, value]));
+            } else {
+                literal.push_str(value);
+            }
+        } else {
+            if !literal.is_empty() {
+                parts.push(json!(["literal", std::mem::take(&mut literal)]));
+            }
+            parts.push(json!(["secret", name]));
         }
-        parts.push(json!(["secret", name]));
         rest = &reference[end + 1..];
     }
     literal.push_str(rest);
@@ -158,6 +191,8 @@ fn placeholder(parts: &[Value]) -> String {
         .map(|p| {
             if p[0] == "literal" {
                 p[1].as_str().unwrap()
+            } else if p[0] == "env" {
+                p[2].as_str().unwrap()
             } else {
                 "secret"
             }
@@ -165,7 +200,13 @@ fn placeholder(parts: &[Value]) -> String {
         .collect()
 }
 
-fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, String> {
+fn check(
+    entries: Vec<(String, Value)>,
+    grants: Option<&str>,
+    env: &[Value],
+    settings: &Value,
+    launches: bool,
+) -> Result<Value, String> {
     let grants = grants
         .map(|spec| GrantSet::parse(&exact_runner::io_grants(spec)))
         .transpose()
@@ -201,7 +242,7 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
         };
         let mut secrets = BTreeSet::new();
         let mut template = |field: &str, text: &str| -> Result<Vec<Value>, String> {
-            let parts = parts(text).map_err(|e| fail(field, &e))?;
+            let parts = parts(text, env, settings, launches).map_err(|e| fail(field, &e))?;
             for part in parts.iter().filter(|p| p[0] == "secret") {
                 let secret = part[1].as_str().unwrap();
                 if grants.as_ref().is_some_and(|grants| {
@@ -224,23 +265,20 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
         )?;
         let target = placeholder(&url);
         if let Some(first) = url.iter().position(|part| part[0] == "secret") {
-            let clean = |text: &str| -> String {
-                text.chars()
-                    .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-                    .collect()
-            };
-            let cleaned = clean(&target);
-            let cleaned = cleaned.trim_start_matches(|c| c <= ' ');
-            let prefix = clean(&placeholder(&url[..first]));
-            let prefix = prefix.trim_start_matches(|c| c <= ' ');
-            let authority_end = cleaned.split_once(':').map_or(cleaned.len(), |(_, tail)| {
-                let authority = tail.trim_start_matches(['/', '\\']);
-                cleaned.len() - authority.len()
-                    + authority
-                        .find(['/', '\\', '?', '#'])
-                        .unwrap_or(authority.len())
-            });
-            if prefix.len() < authority_end {
+            if exact_runner::request::secret_in_origin(
+                &target,
+                &placeholder(&url[..first]),
+                |target| {
+                    url::parse(target, None).ok().map(|parsed| {
+                        (
+                            parsed.protocol,
+                            parsed.username,
+                            parsed.password,
+                            parsed.host,
+                        )
+                    })
+                },
+            ) {
                 return Err(fail(
                     "url",
                     "secret references are allowed only in the URL path or query",
@@ -284,10 +322,11 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
                 if ["GET", "HEAD"].contains(&method.as_str()) {
                     return Err(fail("body", "GET and HEAD cannot have a body"));
                 }
-                if text.len() > 64 * 1024 {
+                let parts = template("body", text)?;
+                if text.len() > 64 * 1024 || placeholder(&parts).len() > 64 * 1024 {
                     return Err(fail("body", "larger than 64 KiB"));
                 }
-                template("body", text)
+                Ok(parts)
             })
             .transpose()?;
         let timeout = object
@@ -334,10 +373,16 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
                 let value = value
                     .as_str()
                     .ok_or_else(|| fail(&field, "expected a string"))?;
-                if !fetch::is_valid_value(value) || fetch::normalize_value(value) != value {
+                let mut parts = template(&field, value)?;
+                let filled = placeholder(&parts);
+                let normalised = fetch::normalize_value(&filled);
+                if !fetch::is_valid_value(normalised) {
                     return Err(fail(&field, "expected a Fetch field value"));
                 }
-                headers.push(json!([key, template(&field, value)?]));
+                if parts.iter().all(|p| p[0] == "literal") {
+                    parts = vec![json!(["literal", normalised])];
+                }
+                headers.push(json!([key, parts]));
             }
         }
         result.push(json!({"name":name,"method":method,"url":url,"headers":headers,"body":body,"timeoutMs":timeout,"when":when,"secrets":secrets}));

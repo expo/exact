@@ -1,4 +1,5 @@
-// The system camera UI's answer on iOS (`takePhotoWithCameraApp`): compiled
+// The system camera UI's answer on iOS (`takePhotoWithCameraApp`,
+// `recordVideoWithCameraApp`): compiled
 // with @exact/camera's Apple sources for the iOS simulator by apple.mjs and run
 // there with `simctl spawn`, since the simulator has no camera to show the UI
 // with. The picker's `info` for a photo taken with the phone held upright (the
@@ -6,7 +7,9 @@
 // is portrait; `info` with no image is `UnknownError`. With a camera and its
 // permission stood in for (`CameraModule.cameraAppPlatform`), a call let go
 // or a session ended while the permission is asked shows and answers nothing
-// when the answer comes, and keeps no module alive.
+// when the answer comes, and keeps no module alive. A video needs a camera that
+// records movies and both usage keys, refused before any UI otherwise; the
+// package's clip reads as a `Video` (LLP 1133.008.000 D2, D5).
 import ExactPackage
 import Foundation
 import ImageIO
@@ -40,7 +43,7 @@ struct CameraAppTest {
         if case .failure(let f) = CameraAppDelegate.kept([:]) { check("no image is UnknownError", f.code == "UnknownError", f.code) } else { check("no image is UnknownError", false, "an image") }
 
         var answers: [String] = []
-        let delegate = CameraAppDelegate { result in
+        let delegate = CameraAppDelegate(.photo) { result in
             if case .failure(let f) = result { answers.append(f.code) } else { answers.append("photo") }
         }
         delegate.finish(.failure(PhotoFailure("AbortError")))
@@ -50,7 +53,7 @@ struct CameraAppTest {
         // A call let go, or a session ended, while the camera's permission is asked: its late answer shows nothing
         // and answers nothing, the module is not kept alive by it, and the next call asks again.
         var asked: [(Bool) -> Void] = []
-        CameraModule.cameraAppPlatform = CameraAppPlatform(available: { true }, described: { true }, status: { .notDetermined }, ask: { asked.append($0) })
+        CameraModule.cameraAppPlatform = CameraAppPlatform(available: { true }, described: { _ in true }, status: { .notDetermined }, ask: { asked.append($0) })
         var replies: [[String: Any]] = []
         weak var released: CameraModule?
         do {
@@ -71,6 +74,38 @@ struct CameraAppTest {
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         check("a permission answered after the call was let go shows nothing and answers nothing", replies.isEmpty, "\(replies)")
         check("and keeps no module alive", released == nil, "the module is retained")
+
+        // A video: refused before any UI without a camera that records movies, or without either usage key.
+        func record(_ platform: CameraAppPlatform) -> [String: Any] {
+            CameraModule.cameraAppPlatform = platform
+            let context = ExactPackageContext(agent: false, session: "s", changed: { _ in }, log: { _ in }, now: { 0 }, tracks: ExactTracks())
+            var answer: [String: Any] = [:]
+            CameraModule(context: context).later("recordVideoWithCameraApp", ["maxDuration": 30.0], preferred: nil) { answer = $0 }
+            return answer
+        }
+        var keys: [String] = []
+        let noMicrophone = record(CameraAppPlatform(available: { true }, described: { keys.append($0); return $0 == "NSCameraUsageDescription" }, movies: { true }, status: { .authorized }, ask: { _ in }))
+        check("a video without the microphone's key is NotAllowedError naming its line",
+              noMicrophone["error"] as? String == "NotAllowedError" && (noMicrophone["message"] as? String)?.contains("device.microphone") == true
+                && keys == ["NSCameraUsageDescription", "NSMicrophoneUsageDescription"], "\(noMicrophone) \(keys)")
+        let noCameraKey = record(CameraAppPlatform(available: { true }, described: { $0 != "NSCameraUsageDescription" }, movies: { true }, status: { .authorized }, ask: { _ in }))
+        check("a video without the camera's key is NotAllowedError naming its line",
+              noCameraKey["error"] as? String == "NotAllowedError" && (noCameraKey["message"] as? String)?.contains("device.camera") == true, "\(noCameraKey)")
+        let noMovies = record(CameraAppPlatform(available: { true }, described: { _ in true }, movies: { false }, status: { .authorized }, ask: { _ in }))
+        check("a camera that records no video is NotSupportedError", noMovies["error"] as? String == "NotSupportedError", "\(noMovies)")
+        let noCamera = record(CameraAppPlatform(available: { false }, described: { _ in true }, movies: { true }, status: { .authorized }, ask: { _ in }))
+        check("no camera is NotFoundError", noCamera["error"] as? String == "NotFoundError", "\(noCamera)")
+        check("apple.videoQuality's words are the picker's", CameraModule.videoQuality("typeIFrame960x540") == .typeIFrame960x540
+              && CameraModule.videoQuality("typeHigh") == .typeHigh && CameraModule.videoQuality("best") == nil, "")
+
+        // The package's clip, as the agent's `take` answers it: its facts read with AVURLAsset.
+        var facts: [String: Any]?
+        CameraModule.video(path: "app:/tmp/camera/1.mp4", url: CameraModule.clip) { facts = $0 }
+        let until = Date().addingTimeInterval(10)
+        while facts == nil && Date() < until { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        check("the clip is a one-second 160x120 MP4 of 1209 bytes",
+              facts?["type"] as? String == "video/mp4" && facts?["size"] as? Int == 1209 && (facts?["duration"] as? Double).map { abs($0 - 1) < 0.01 } == true
+                && facts?["width"] as? Double == 160 && facts?["height"] as? Double == 120, "\(String(describing: facts))")
         exit(failed ? 1 : 0)
     }
 }

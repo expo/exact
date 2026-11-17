@@ -50,7 +50,7 @@ pub(crate) fn matrix(p: &[f32]) -> Mat4 {
 }
 pub fn bind_pose(model: &Model) -> Vec<f32> {
     let mut out = vec![0.; model.nodes.len() * 10];
-    for (n, p) in model.nodes.iter().zip(out.chunks_exact_mut(10)) {
+    for (n, p) in model.nodes.iter().zip(out.as_chunks_mut::<10>().0) {
         let (scale, rotation, position) =
             Mat4::from_cols_array(&n.transform).to_scale_rotation_translation();
         put(
@@ -98,7 +98,7 @@ pub fn animated_bounds(model: &Model) -> [f32; 6] {
     let rest = bind_pose(model);
     let mut lengths = vec![0.; model.nodes.len()];
     let mut scales = vec![1.; model.nodes.len()];
-    for (i, p) in rest.chunks_exact(10).enumerate() {
+    for (i, p) in rest.as_chunks::<10>().0.iter().enumerate() {
         lengths[i] = Vec3::from_slice(p).length();
         scales[i] = Vec3::from_slice(&p[7..]).abs().max_element();
     }
@@ -108,7 +108,9 @@ pub fn animated_bounds(model: &Model) -> [f32; 6] {
                 // Cubic tangents can overshoot; include one duration times both tangents.
                 let bound = t
                     .values
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|p| Vec3::from_slice(p).length())
                     .fold(0., f32::max)
                     * if matches!(t.interpolation, Interpolation::CubicSpline) {
@@ -140,7 +142,7 @@ pub fn animated_bounds(model: &Model) -> [f32; 6] {
         if let (Some(mesh), Some(skin)) = (node.mesh, node.skin) {
             let mesh = &model.meshes[mesh as usize];
             let skin = &model.skins[skin as usize];
-            for (v, position) in mesh.positions.chunks_exact(3).enumerate() {
+            for (v, position) in mesh.positions.as_chunks::<3>().0.iter().enumerate() {
                 for influence in 0..4 {
                     let j = mesh.joints[v * 4 + influence] as usize;
                     let node = skin.joints[j] as usize;
@@ -155,7 +157,7 @@ pub fn animated_bounds(model: &Model) -> [f32; 6] {
                 }
             }
         } else if let Some(mesh) = node.mesh {
-            for position in model.meshes[mesh as usize].positions.chunks_exact(3) {
+            for position in model.meshes[mesh as usize].positions.as_chunks::<3>().0 {
                 radius = radius
                     .max(reach[index] + global_scale[index] * Vec3::from_slice(position).length());
             }

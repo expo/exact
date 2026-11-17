@@ -1,6 +1,7 @@
 #if os(iOS)
 import UIKit
 import XCTest
+import ExactCore
 @testable import ExactKit
 
 /// LLP 1034 §8: `color-scheme` on a subtree is the view's own appearance,
@@ -8,6 +9,56 @@ import XCTest
 /// material view's traits, resolve in it; leaving it off restores.
 final class ColorSchemeIOSTests: XCTestCase {
     private let pair: BatchValue = .array([.array([255, 255, 255, 255]), .array([0, 0, 0, 255])])
+
+    @MainActor
+    func testABackgroundBootKeepsItsSchemeUntilAWindowAttaches() throws {
+        final class Adapter: ExactSessionDelegate {
+            let scheme = ExactWindowScheme()
+            func exactSession(_ session: ExactSession, command name: String, args: [Any]) {
+                if name == "setScheme" { scheme.set(args.first as? String) }
+            }
+        }
+        let receipt = try XCTUnwrap(try JSONSerialization.jsonObject(with: Runtime.bakedCompat()) as? [String: Any])
+        let appID = try XCTUnwrap((receipt["inputs"] as? [String: Any])?["app"] as? String)
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: appID)), key = "exact.state.#scheme"
+        let previous = defaults.object(forKey: key)
+        let variables = ["EXACT_AGENT", "EXACT_STORE", "EXACT_APP_GROUP_ROOT", "EXACT_APP_GROUP_APP"]
+        let environment = variables.map { ($0, getenv($0).map { String(cString: $0) }) }
+        for key in variables { unsetenv(key) }
+        setenv("EXACT_STORE", "real", 1)
+        defer {
+            defaults.set(previous, forKey: key)
+            defaults.synchronize()
+            for (key, value) in environment { if let value { setenv(key, value, 1) } else { unsetenv(key) } }
+        }
+        defaults.set("\"dark\"", forKey: key)
+        XCTAssertTrue(defaults.synchronize())
+        let adapter = Adapter(), session = ExactApp.shared.makeSession(label: "background-scheme")
+        defer { session.destroy() }
+        session.delegate = adapter
+        XCTAssertNil(session.boot(plan: try fixturePlan("SAVED_SCHEME"), size: CGSize(width: 390, height: 844)).error)
+        XCTAssertNil(adapter.scheme.window)
+        XCTAssertNil(session.view, "the background session has no scene")
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        adapter.scheme.window = window
+        XCTAssertTrue(window.isHidden)
+        XCTAssertEqual(window.overrideUserInterfaceStyle, .dark, "restored before presentation")
+        let view = ExactView(session: session)
+        window.addSubview(view)
+        view.frame = window.bounds
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        window.updateTraitsIfNeeded()
+        XCTAssertEqual(view.traitCollection.userInterfaceStyle, .dark)
+        adapter.scheme.set("light")
+        XCTAssertEqual(window.overrideUserInterfaceStyle, .light)
+        adapter.scheme.window = nil
+        adapter.scheme.set("system")
+        let next = UIWindow(frame: window.bounds)
+        next.overrideUserInterfaceStyle = .dark
+        adapter.scheme.window = next
+        XCTAssertEqual(next.overrideUserInterfaceStyle, .unspecified, "system also survives reattachment")
+    }
 
     func testASubtreeResolvesInItsColorScheme() throws {
         let p = Presenter()

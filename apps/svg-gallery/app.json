@@ -37,5 +37,6 @@
       "ios": "0",
       "linux": "0"
     }
-  }
+  },
+  "rust": { "data": { "crate": "svg-gallery-data", "type": "svg_gallery_data::Gallery", "source": "svg_gallery_data::Gallery" } }
 }

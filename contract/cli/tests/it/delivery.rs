@@ -4,6 +4,7 @@
 //! the agent's mirror, the commands reaching `take_commands` by name, and
 //! the bake refusing a field the runner cannot fill.
 
+use crate::scratch::Scratch;
 use exact_kernel::{Kernel, PropId};
 use exact_runner::{agent, DataError, DataSource, Delivery, Runner, Value};
 use std::path::Path;
@@ -68,6 +69,21 @@ fn the_binary_version_reaches_the_view_and_delivery_mirror() {
 }
 
 #[test]
+fn a_production_binary_hides_what_only_a_development_build_shows() {
+    let mut r = boot("shape Build\n  production: bool\ncomponent App\n  resource build = exactDelivery() as shape Build\n  view\n    column\n      if build.production\n        text \"release\" testId=\"kind\"\n      else\n        text \"developer menu\" testId=\"kind\"\n");
+    // Until a host hands over its compat.json, and in a development build, the answer is false.
+    assert_eq!(text_of(&r, "kind").as_deref(), Some("developer menu"));
+    assert_eq!(mirror(&r)["production"], false);
+    r.set_delivery_from_compat(r#"{"embedded":{"trust":"development"}}"#)
+        .unwrap();
+    assert_eq!(text_of(&r, "kind").as_deref(), Some("developer menu"));
+    r.set_delivery_from_compat(r#"{"inputs":{"trust":null},"embedded":{"trust":"production"}}"#)
+        .unwrap();
+    assert_eq!(text_of(&r, "kind").as_deref(), Some("release"));
+    assert_eq!(mirror(&r)["production"], true);
+}
+
+#[test]
 fn a_baked_plan_shows_the_embedded_answer_with_no_host_in_sight() {
     let r = boot(&corpus());
     assert_eq!(text_of(&r, "delivery-stream").as_deref(), Some("embedded"));
@@ -78,7 +94,7 @@ fn a_baked_plan_shows_the_embedded_answer_with_no_host_in_sight() {
         mirror(&r),
         serde_json::from_str::<serde_json::Value>(
             "{\"stream\":\"embedded\",\"seq\":0,\"embeddedSeq\":0,\"staged\":false,\
-         \"sunset\":\"\",\"interpreted\":[],\"compatibilityId\":\"\",\"version\":\"\",\"buildNumber\":\"\",\"L\":\"A\",\
+         \"sunset\":\"\",\"interpreted\":[],\"compatibilityId\":\"\",\"version\":\"\",\"buildNumber\":\"\",\"production\":false,\"L\":\"A\",\
          \"E\":[\"native\"]}"
         )
         .unwrap()
@@ -117,7 +133,7 @@ fn a_hosts_facts_re_answer_the_resource_in_one_commit_and_the_agent_sees_them() 
         serde_json::from_str::<serde_json::Value>(
             "{\"stream\":\"prod/abc\",\"seq\":44,\"embeddedSeq\":7,\"staged\":true,\
          \"sunset\":\"This build stops receiving updates in March\",\
-         \"interpreted\":[\"profile\"],\"compatibilityId\":\"9f1c0a2b\",\"version\":\"\",\"buildNumber\":\"\",\"L\":\"A\",\
+         \"interpreted\":[\"profile\"],\"compatibilityId\":\"9f1c0a2b\",\"version\":\"\",\"buildNumber\":\"\",\"production\":false,\"L\":\"A\",\
          \"E\":[\"hermes\",\"native\"]}"
         )
         .unwrap()
@@ -188,9 +204,7 @@ fn a_field_the_runner_cannot_fill_is_refused_at_bake_by_name() {
 
 #[test]
 fn manifest_identity_survives_an_unnamed_data_standin_and_conflicts_fail() {
-    let directory =
-        std::env::temp_dir().join(format!("exact-manifest-plan-{}", std::process::id()));
-    std::fs::create_dir_all(&directory).unwrap();
+    let directory = Scratch::new(format!("exact-manifest-plan-{}", std::process::id()));
     std::fs::write(
         directory.join("app.json"),
         r#"{"app":{"id":"com.exact.standin","name":"Stand-in"}}"#,

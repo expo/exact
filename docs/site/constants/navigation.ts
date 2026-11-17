@@ -407,10 +407,10 @@ export const sections: NavSection[] = [
         description: 'Use tabs for at least two top-level sections, each with its own route stack.',
       },
       {
-        route: 'recipeTamber',
-        path: '/recipes/tamber',
-        source: 'recipes/tamber.md',
-        description: 'An app\'s own colours are its design, app.tamber beside app.contract (LLP 1121).',
+        route: 'recipeForma',
+        path: '/recipes/forma',
+        source: 'recipes/forma.md',
+        description: 'An app\'s own colours are its design, app.forma beside app.contract (LLP 1121).',
       },
       {
         route: 'recipeTests',

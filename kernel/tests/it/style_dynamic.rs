@@ -256,7 +256,8 @@ fn translate_text_is_a_narrow_css_pixel_subset_with_atomic_refusal() {
         "1px 2px 3",
         "10%% 0",
         "% 0",
-        "calc(1px + 2%) 0",
+        // A `calc()` the two rows cannot hold.
+        "calc(1rem + 2%) 0",
         "NaNpx 0",
         "infpx 0",
         "1e39px 0",
@@ -953,6 +954,7 @@ fn every_row_writes_its_own_field_and_no_other() {
         StyleValue::Text("blur(12px) saturate(1.14)".into()),
         StyleValue::Text("flip-block, flip-inline".into()),
         StyleValue::Text("\"wght\" 650".into()),
+        StyleValue::Text("--gap: 8px".into()),
     ];
     let mut unwritten = Vec::new();
     let base = StyleProps::default();

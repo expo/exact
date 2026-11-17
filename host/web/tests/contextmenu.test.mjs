@@ -7,7 +7,7 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // browser's edit menu: no handler runs and nothing prevents it (review b5-b 3). The app is compiled from Contract,
 // built for the JS target and driven by the agent, as `exact` does; the wasm host takes the same rule
 // (navigation.js `editMenu`), which conformance's `menus` plan compares with this one.
-import { test, expect } from 'bun:test';
+import { afterAll, test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -21,6 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
+// A fixture's build can fail before the `try` that removes its directory.
+const scratches = [];
+const scratch = (prefix) => { const dir = mkdtempSync(join(tmpdir(), prefix)); scratches.push(dir); return dir; };
+afterAll(() => { for (const dir of scratches) rmSync(dir, { recursive: true, force: true }); });
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -54,7 +58,7 @@ const MENUS = `component Menus
 `;
 
 check('a contextmenu from a checkbox, switch, radio, range, date or time input is its node\'s; a text field keeps the browser\'s menu', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'exact-contextmenu-')), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
+  const dir = scratch('exact-contextmenu-'), contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist');
   writeFileSync(contract, MENUS);
   const compile = spawnSync(compiler, ['build', contract, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
   expect(compile.status, compile.stderr).toBe(0);

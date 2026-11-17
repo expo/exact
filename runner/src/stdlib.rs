@@ -45,7 +45,9 @@ pub fn call(
             text,
             |name| {
                 pairs
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .find(|pair| pair[0].as_str() == Some(name))
                     .and_then(|pair| pair[1].as_str())
             },
@@ -187,7 +189,8 @@ fn call_value(
         // capability's (LLP 1054.000.003 D6).
         Stdlib::FormatTime => match (args.get(2)?.as_str()?, args.get(3)?.as_str()?) {
             ("short", "") => format_time(num(0)?, num(1)?),
-            ("short", _) => return format?(f, args, plan),
+            ("2-digit", "") => format_time_two_digit(num(0)?, num(1)?),
+            ("short" | "2-digit", _) => return format?(f, args, plan),
             _ => return None,
         },
         // @ref LLP 1054.000.003 D8 — the linked capability, or a trap.
@@ -725,6 +728,17 @@ pub(crate) fn wall_ms(epoch_ms: f64, utc_offset: f64) -> Option<f64> {
 /// fixed-offset zone, with U+0020 before the day period
 /// (@ref LLP 1054.000.003 D1, D7).
 pub fn format_time(epoch_ms: f64, utc_offset: f64) -> Value {
+    time_of(epoch_ms, utc_offset, false)
+}
+
+/// `formatTime(epochMs, utcOffset, "2-digit")`: `hh:mm AM`, as
+/// `Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" })`
+/// prints it at a fixed offset.
+pub fn format_time_two_digit(epoch_ms: f64, utc_offset: f64) -> Value {
+    time_of(epoch_ms, utc_offset, true)
+}
+
+fn time_of(epoch_ms: f64, utc_offset: f64, two_digit: bool) -> Value {
     let Some(wall) = wall_ms(epoch_ms, utc_offset) else {
         return Value::str("");
     };
@@ -737,6 +751,9 @@ pub fn format_time(epoch_ms: f64, utc_offset: f64) -> Value {
         _ => (hours - 12, " PM"),
     };
     let mut out = String::with_capacity(8);
+    if two_digit && h12 < 10 {
+        out.push('0');
+    }
     push_number(f64::from(h12), &mut out);
     out.push(':');
     out.push(char::from(b'0' + (minutes / 10) as u8));

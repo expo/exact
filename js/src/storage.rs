@@ -644,17 +644,17 @@ component App
             .expect("the write waits on the held database");
         let next = vec![Value::str("timeout-queue"), Value::str("unqueued")];
         let Answer::Later(request) = placed.answer(&mut store, "work", &next).unwrap() else {
-            panic!("a second turn queues behind the held write")
+            panic!("a second turn waits behind the held write")
         };
-        let Dispatch::Run(Work::Later(work)) =
-            placed.dispatch(request.continuation.unwrap(), &store)
-        else {
-            panic!("a second turn runs on the owner")
-        };
-        let (sent, queued_reply) = std::sync::mpsc::channel();
-        work(Reply::new(move |outcome| {
-            let _ = sent.send(outcome);
-        }));
+        // Both turns read one Store, so the second waits for the first's
+        // reply and is never handed to the owner; dropped with the worker, it
+        // never starts. (An ordered worker never has a second reply-bearing
+        // job queued behind the one running, so there is no queued job's
+        // `Aborted` reply left to check here.)
+        assert!(matches!(
+            placed.dispatch(request.continuation.unwrap(), &store),
+            Dispatch::Held
+        ));
         drop(placed);
         // Disconnection observes destruction of both the waiter and its session,
         // while the native write remains blocked by the database transaction.
@@ -666,9 +666,6 @@ component App
         reply
             .recv_timeout(Duration::from_secs(30))
             .expect("the retired turn releases its reply");
-        let queued = queued_reply
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the unstarted turn releases its reply");
         assert!(matches!(
             observed.recv_timeout(Duration::from_secs(30)),
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
@@ -704,13 +701,6 @@ component App
             !orphan && !reaction && !unqueued,
             "a retired worker issued queued storage"
         );
-        assert!(matches!(
-            queued,
-            exact_runner::Outcome::Failed {
-                kind: exact_runner::FailureKind::Aborted,
-                ..
-            }
-        ));
     }
 
     #[cfg(all(exact_js_engine, target_vendor = "apple"))]

@@ -130,9 +130,7 @@ fn expected(signal: &str, platform: &str) -> Value {
 #[test]
 fn the_linux_service_sends_wire_json_s_bodies() {
     let f = fixture();
-    let dir = std::env::temp_dir().join(format!("exact-observe-wire-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::TestDir::new("exact-observe-wire");
     std::fs::write(dir.join("eas-client-id"), f["clientId"].as_str().unwrap()).unwrap();
     let config = json!({ "environment": f["environment"] });
     let app = &f["app"];
@@ -140,7 +138,7 @@ fn the_linux_service_sends_wire_json_s_bodies() {
         config.as_object().unwrap().clone(),
         app,
         false,
-        dir.clone(),
+        dir.to_path_buf(),
         f["session"].as_str().unwrap().into(),
         f["sessionStart"].as_f64().unwrap(),
     );
@@ -148,7 +146,7 @@ fn the_linux_service_sends_wire_json_s_bodies() {
     for e in f["events"].as_array().unwrap() {
         s.event(e);
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    drop(dir);
     for (signal, rows) in [("metrics", &s.metrics), ("logs", &s.logs)] {
         assert_eq!(
             normalize(s.body(signal, rows), "linux"),

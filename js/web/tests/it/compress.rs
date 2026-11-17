@@ -157,6 +157,12 @@ fn check(engine: &str, report: &serde_json::Value) {
             "{engine} {realm}: a PNG lost its alpha"
         );
         assert_eq!(r["badType"], "TypeError", "{engine} {realm}");
+        assert_eq!(
+            r["quality"],
+            serde_json::json!({"lower": true, "capped": true, "under": true, "png": true,
+                "codes": ["TypeError", "TypeError"]}),
+            "{engine} {realm}: an explicit quality (A1.12)"
+        );
         transformed(engine, realm, &r["transform"]);
     }
     // A Rust source's transform: D14's options beside the paths, its record back.
@@ -169,6 +175,12 @@ fn check(engine: &str, report: &serde_json::Value) {
     assert_eq!(report["rustPng"], "image/png", "{engine}: {report}");
     // A null `type` is absent, as the native request reads it.
     assert_eq!(report["rustNull"], "image/jpeg", "{engine}: {report}");
+    // `quality` with a null `maxBytes` (A1.12): one encode at it.
+    assert_eq!(
+        report["rustQuality"],
+        serde_json::json!(["image/jpeg", 24]),
+        "{engine}: {report}"
+    );
     assert_eq!(
         report["rust"],
         serde_json::json!({"path":"app:/data/rust.jpg","type":"image/jpeg","width":24,"height":32,"sized":true}),
@@ -375,6 +387,17 @@ const checks = async (origin, sets, app) => {
   alpha.drawImage(await createImageBitmap(new Blob([await fs.readFile('app:/tmp/half-out.png')], { type: 'image/png' })), 0, 0);
   report.png = { type: png.type, size: [png.width, png.height], left: alpha.getImageData(0, 0, 1, 1).data[3], right: alpha.getImageData(7, 0, 1, 1).data[3] };
   report.badType = await code(fs.compressImage('app:/tmp/half.png', 'app:/tmp/x.webp', { maxDimension: 8, maxBytes: 100, type: 'image/webp' }));
+  // An explicit `quality` (A1.12): alone, one encode, lower smaller; a
+  // ceiling that fits is that encode; one that misses lands under the budget
+  // at the same size; a PNG is the same file whatever the quality.
+  const sized = async (to, options) => (await fs.compressImage('app:/tmp/noise.png', to, { maxDimension: 200, ...options })).size;
+  const low = await sized('app:/tmp/q-low.jpg', { quality: 0.2 }), high = await sized('app:/tmp/q-high.jpg', { quality: 0.9 });
+  const budget = await sized('app:/tmp/q-half.jpg', { quality: 0.5 });
+  const under = await fs.compressImage('app:/tmp/noise.png', 'app:/tmp/q-under.jpg', { maxDimension: 200, maxBytes: budget, quality: 0.9 });
+  const pngSize = async options => (await fs.compressImage('app:/tmp/half.png', 'app:/tmp/q.png', { maxDimension: 8, maxBytes: 100000, type: 'image/png', ...options })).size;
+  report.quality = { lower: low < budget && budget < high, capped: await sized('app:/tmp/q-capped.jpg', { maxBytes: high, quality: 0.9 }) === high,
+    under: under.size <= budget && under.width === 200, png: await pngSize({ quality: 0.1 }) === await pngSize({}),
+    codes: [await code(fs.compressImage('app:/tmp/in.jpg', 'app:/data/keep.jpg', { maxDimension: 10, quality: 2 })), await code(fs.compressImage('app:/tmp/in.jpg', 'app:/data/keep.jpg', { maxDimension: 10 }))] };
   // `transformImage` and `compressImage`'s edit (LLP 1133.019 §11): the
   // fixture upright is 48×64, blue on the left.
   const at = async (path, type, points) => {
@@ -435,11 +458,13 @@ const expression = `(async () => {
     const rustDenied = decode(await ask('app:/data/denied.jpg', createGrantSet(sets[keys[1]])));
     const rustPng = decode(await requests.run(JSON.stringify({ version: 1, op: 'fs.compressImage', args: { path: 'app:/tmp/in.jpg', destination: 'app:/data/rust.png', maxDimension: 32, maxBytes: 2000000, type: 'image/png' } })));
     const rustNull = decode(await requests.run(JSON.stringify({ version: 1, op: 'fs.compressImage', args: { path: 'app:/tmp/in.jpg', destination: 'app:/data/rust-null.jpg', maxDimension: 32, maxBytes: 2000000, type: null } })));
+    const rustQuality = decode(await requests.run(JSON.stringify({ version: 1, op: 'fs.compressImage', args: { path: 'app:/tmp/in.jpg', destination: 'app:/data/rust-q.jpg', maxDimension: 32, maxBytes: null, quality: 0.5 } })));
     const rustDoc = decode(await requests.run(JSON.stringify({ version: 1, op: 'fs.compressImage', args: { path: 'doc:/1/in.jpg', destination: 'app:/data/x.jpg', maxDimension: 32, maxBytes: 2000000 } })));
     const turned = decode(await requests.run(JSON.stringify({ version: 1, op: 'fs.transformImage', args: { path: 'app:/tmp/in.jpg', destination: 'app:/data/rust-turned', rotate: 90 } })));
     const { size, ...rustTransform } = turned;
     requests.dispose();
     return JSON.stringify({ page, worker: reply.ok, rust: rust.error ? rust : { path: rust.path, type: rust.type, width: rust.width, height: rust.height, sized: rust.size > 0 }, rustDenied: rustDenied.error, rustDoc: rustDoc.error, rustPng: rustPng.error ?? rustPng.type, rustNull: rustNull.error ?? rustNull.type,
+      rustQuality: rustQuality.error ?? [rustQuality.type, rustQuality.width],
       rustTransform: turned.error ? turned : { ...rustTransform, sized: size > 0 } });
   })()`;
 const reports = {};
@@ -460,7 +485,7 @@ try {
   rmSync(profile, { recursive: true, force: true });
 }
 // Firefox and WebKit, through Playwright as conform.mjs and the agent's
-// carriers launch them, when they are installed (bunx playwright@1.64.1
+// carriers launch them, when they are installed (bunx playwright@1.65.1
 // install firefox webkit); else said, not failed.
 try {
   const playwright = await import('playwright-core');

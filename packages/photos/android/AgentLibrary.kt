@@ -89,10 +89,14 @@ internal class AgentLibrary(assets: AssetManager) {
 
     fun asset(id: String): Asset? = if (id in visible) assets.firstOrNull { it.id == id } else null
 
-    /** The newest [limit] the app may read. */
-    fun newest(limit: Int): List<Asset> {
+    /** Of what the app may read, newest first with the id ordering one date, at most [limit] that sort after the key
+     * [after] (a creation date and an id), and whether more do. */
+    fun page(limit: Int, after: Pair<Double, String>?): Pair<List<Asset>, Boolean> {
         val seen = visible
-        return assets.filter { it.id in seen }.sortedByDescending { it.created }.take(limit)
+        val order = compareByDescending<Asset> { it.created }.thenByDescending { it.id }
+        var rest = assets.filter { it.id in seen }.sortedWith(order)
+        if (after != null) rest = rest.filter { it.created < after.first || (it.created == after.first && it.id < after.second) }
+        return rest.take(limit) to (rest.size > limit)
     }
 
     /** An add: [bytes], kept at the file [destination] answers for its name, join the library at the session's [now].

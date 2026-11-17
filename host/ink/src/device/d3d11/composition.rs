@@ -697,6 +697,57 @@ impl D3d11 {
     }
 }
 
+/// The swap chain's presents as DXGI reports them (LLP 1003.001 D9): the
+/// count after the latest `Present`, the latest displayed count, and how
+/// long ago, in ms, that one reached the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresentStatistics {
+    pub last: u32,
+    pub displayed: u32,
+    pub ago_ms: f64,
+}
+
+impl D3d11 {
+    /// [`PresentStatistics`] read now, without waiting; `None` where DXGI
+    /// has none (no composition window, statistics disjoint or not yet
+    /// timed).
+    pub fn present_statistics(&self) -> Option<PresentStatistics> {
+        use windows::Win32::System::Performance::{
+            QueryPerformanceCounter, QueryPerformanceFrequency,
+        };
+        let c = self.composition.as_ref()?;
+        unsafe {
+            let media: IDXGISwapChainMedia = c.swap.cast().ok()?;
+            let mut stats = DXGI_FRAME_STATISTICS_MEDIA::default();
+            media.GetFrameStatisticsMedia(&mut stats).ok()?;
+            let last = c.swap.GetLastPresentCount().ok()?;
+            let rate = c
+                .scene
+                .device
+                .GetFrameStatistics()
+                .ok()?
+                .currentCompositionRate;
+            let (mut now_qpc, mut frequency) = (0, 0);
+            QueryPerformanceCounter(&mut now_qpc).ok()?;
+            QueryPerformanceFrequency(&mut frequency).ok()?;
+            if stats.SyncQPCTime == 0 || frequency <= 0 || rate.Numerator == 0 {
+                return None;
+            }
+            // The vblank DXGI timed is the sync's; the frame showed at its own refresh.
+            let displayed_qpc = stats.SyncQPCTime as f64
+                + (f64::from(stats.PresentRefreshCount) - f64::from(stats.SyncRefreshCount))
+                    * frequency as f64
+                    * f64::from(rate.Denominator)
+                    / f64::from(rate.Numerator);
+            Some(PresentStatistics {
+                last,
+                displayed: stats.PresentCount,
+                ago_ms: (now_qpc as f64 - displayed_qpc) * 1000. / frequency as f64,
+            })
+        }
+    }
+}
+
 fn refresh_period(numerator: u32, denominator: u32) -> Option<Duration> {
     (numerator > 0 && denominator > 0)
         .then(|| Duration::from_secs_f64(f64::from(denominator) / f64::from(numerator)))

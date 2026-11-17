@@ -633,9 +633,17 @@ fn own_transform(s: &exact_kernel::StyleProps, at: Frame) -> Affine {
     let (w, h) = (f64::from(at.width), f64::from(at.height));
     let (ox, oy) = s.transform_origin.resolve(at.width, at.height);
     let (ox, oy) = (f64::from(ox), f64::from(oy));
-    let turn = if s.rotate_axis.is_3d() { 0.0 } else { s.rotate };
+    let turn = if s.rotate_axis.is_3d() {
+        0.0
+    } else {
+        exact_motion::rotation::presented(exact_motion::rotation::value(
+            f64::from(s.rotate),
+            s.rotate_axis.0.map(f64::from),
+        ))
+        .x
+    };
     let k = f64::from(s.scale);
-    let (sin, cos) = f64::from(turn).to_radians().sin_cos();
+    let (sin, cos) = turn.to_radians().sin_cos();
     let (tx, ty) = (
         f64::from(s.translate.x) + f64::from(s.translate_percent.x) / 100.0 * w,
         f64::from(s.translate.y) + f64::from(s.translate_percent.y) / 100.0 * h,

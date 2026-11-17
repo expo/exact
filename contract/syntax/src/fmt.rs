@@ -583,8 +583,8 @@ impl<'a> Layout<'a> {
                         .span
                         .line as usize
                         - 1;
-                    for following in line + 1..=last_line {
-                        self.indents[following] += delta;
+                    for indent in &mut self.indents[line + 1..=last_line] {
+                        *indent += delta;
                     }
                 }
             }

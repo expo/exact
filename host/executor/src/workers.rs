@@ -103,6 +103,7 @@ mod portable {
                 )
             };
             let request = || exact_runner::RequestOut {
+                completion: None,
                 class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "worker-lifecycle".into(),
