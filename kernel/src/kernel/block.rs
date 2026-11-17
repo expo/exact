@@ -391,6 +391,12 @@ impl Kernel {
         for slot in moved {
             self.restyle_block(slot);
         }
+        // Derive the raw readers again below each box that joined or left the top layer
+        for slot in std::mem::take(&mut self.arena.observations.targets.moved) {
+            if self.arena.is_live(slot) {
+                self.targets_moved(slot);
+            }
+        }
     }
 
     /// What `imply_blocks` would change: each box whose implied block is
@@ -459,6 +465,7 @@ impl Kernel {
         if before.is_some() == block.is_some() {
             return;
         }
+        self.targets_moved(slot);
         if let Some(region) = &mut self.region {
             if !self.arena.top_layer_slots.contains(slot)
                 && self.arena.is_ancestor(region.binding.content.index, slot)

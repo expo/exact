@@ -108,15 +108,17 @@ pub struct Var {
     pub fallback: Option<Box<Node>>,
 }
 
-/// An observation of the box that reads it (LLP 1123 D9, D10's leaf): how
-/// far its owner's band reaches into it on `edge`, as the solve gives it
-/// ([`Env::observation`]), else `fallback`, guaranteed-invalid without one.
-/// Its family is the safe area and its target the box itself, the leaf's
-/// first. Only the kernel builds one until D10's lowering reads
-/// `var(--exact-safe-area-inset-*)` as it, which the wire's round trip
-/// through the text refuses until then.
+/// An observation of the safe area (LLP 1123 D9, D10's leaf) on `edge`:
+/// the reading box's own, as the solve gives it, or a native target's raw
+/// insets ([`Env::observation`]); else `fallback`, guaranteed-invalid
+/// without one. Its family is the safe area. Only the kernel builds one
+/// until D10's lowering reads `var(--exact-safe-area-inset-*)` and the
+/// target names as it, which the wire's round trip through the text
+/// refuses until then.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observe {
+    /// Whose safe area: the box's own, or a native target's.
+    pub target: super::targets::Target,
     /// The edge observed.
     pub edge: Edge,
     /// What stands in where the observation is unavailable.
@@ -129,7 +131,7 @@ pub struct Observe {
 fn localize(node: &Node, env: &Env) -> Option<Node> {
     let leaves = Leaves {
         local: &|edge| env.local_inset(edge),
-        observed: &|edge| env.observation(edge),
+        observed: &|leaf| env.observation(leaf),
     };
     substitute(node, &leaves, &mut |name| env.property(name).cloned())
 }
@@ -235,7 +237,7 @@ impl Node {
                 Some(value) => value.value(env, basis)?,
                 None => v.fallback.as_ref()?.value(env, basis)?,
             },
-            Node::Observe(o) => match env.observation(o.edge) {
+            Node::Observe(o) => match env.observation(o) {
                 Some(points) => f64::from(points),
                 None => o.fallback.as_ref()?.value(env, basis)?,
             },
@@ -401,7 +403,7 @@ pub(crate) fn undefined_in(node: &Node, env: &Env) -> bool {
             (None, Some(fallback)) => undefined_in(fallback, env),
             (None, None) => true,
         },
-        Node::Observe(o) => match (env.observation(o.edge), &o.fallback) {
+        Node::Observe(o) => match (env.observation(o), &o.fallback) {
             (Some(_), _) => false,
             (None, Some(fallback)) => undefined_in(fallback, env),
             (None, None) => true,
@@ -439,7 +441,7 @@ pub(crate) fn length_css(d: &Dimension, out: &mut String) {
 /// observations, `None` where one is unavailable (LLP 1123 D9).
 pub(crate) struct Leaves<'a> {
     pub(crate) local: &'a dyn Fn(Edge) -> f32,
-    pub(crate) observed: &'a dyn Fn(Edge) -> Option<f32>,
+    pub(crate) observed: &'a dyn Fn(&Observe) -> Option<f32>,
 }
 
 /// `node` with each local inset and observation as `leaves` gives it and
@@ -461,7 +463,7 @@ pub(crate) fn substitute(
             Some(value) => value,
             None => substitute(v.fallback.as_ref()?, leaves, property)?,
         },
-        Node::Observe(o) => match (leaves.observed)(o.edge) {
+        Node::Observe(o) => match (leaves.observed)(o) {
             Some(points) => Node::Value(f64::from(points), Unit::Px),
             None => substitute(o.fallback.as_ref()?, leaves, property)?,
         },
@@ -715,24 +717,47 @@ impl Comparison {
         })
     }
 
-    /// Whether it reads an observation of its box's safe area (LLP 1123 D9).
+    /// Whether it reads an observation of the safe area, its box's own or a
+    /// native target's (LLP 1123 D9).
     pub(crate) fn reads_observed(&self) -> bool {
-        self.observed_edges() != 0
+        self.tree(|t| t.any(&|n| matches!(n, Node::Observe(_))))
+            .unwrap_or(false)
     }
 
-    /// The edges whose observations it reads, fallbacks included: a bit per
-    /// edge, as [`Edge`] numbers them.
+    /// The edges of its box's own safe area it reads, fallbacks included: a
+    /// bit per edge, as [`Edge`] numbers them.
     pub(crate) fn observed_edges(&self) -> u8 {
         let edges = std::cell::Cell::new(0u8);
         self.tree(|t| {
             t.any(&|n| {
                 if let Node::Observe(o) = n {
-                    edges.set(edges.get() | 1 << o.edge as u8);
+                    if o.target == super::targets::Target::Box {
+                        edges.set(edges.get() | 1 << o.edge as u8);
+                    }
                 }
                 false
             })
         });
         edges.get()
+    }
+
+    /// The native targets it reads raw insets from, fallbacks included, each
+    /// with the edge it reads as a bit, as [`Edge`] numbers them, once per
+    /// leaf (LLP 1123 D9, "The native chain").
+    pub(crate) fn targets_read(&self) -> Vec<(super::targets::Target, u8)> {
+        let targets = std::cell::RefCell::new(Vec::new());
+        self.tree(|t| {
+            t.any(&|n| {
+                if let Node::Observe(o) = n {
+                    if o.target != super::targets::Target::Box {
+                        let edge = 1 << o.edge as u8;
+                        targets.borrow_mut().push((o.target.clone(), edge));
+                    }
+                }
+                false
+            })
+        });
+        targets.into_inner()
     }
 
     /// Whether it reads an author's custom property (LLP 1123 D5), which

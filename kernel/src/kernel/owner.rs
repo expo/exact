@@ -268,6 +268,7 @@ pub(crate) fn env_at(arena: &NodeArena, slot: u32) -> Cow<'_, Env> {
     env.local = Some(local_at(arena, slot));
     env.properties = Some(properties_at(arena, slot, &arena.effective_style(slot)));
     env.observed = Some(arena.observations.input(slot));
+    env.targets = arena.observations.targets.scope(arena, slot);
     Cow::Owned(env)
 }
 
@@ -726,14 +727,17 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
     let local = differ && !readers.local.is_empty();
     // With nothing declared, a property reader takes its fallback anywhere
     let properties = !readers.properties.is_empty() && readers.declares();
-    if !local && !properties {
+    // With no owner's or session's targets, a raw reader reads none anywhere
+    let targets = !readers.targets.is_empty() && arena.observations.targets.placed_any();
+    if !local && !properties && !targets {
         return false;
     }
     let mut receipt = crate::CommitReceipt::default();
     let mut any = false;
     for s in arena.subtree(slot) {
         let reads = local && arena.readers.local.contains(s)
-            || properties && arena.readers.properties.contains(s);
+            || properties && arena.readers.properties.contains(s)
+            || targets && arena.readers.targets.contains_key(&s);
         if reads {
             rederive(arena, layout, s, false, &mut receipt);
             any = true;

@@ -33,6 +33,7 @@ mod intrinsic;
 pub(crate) mod observe;
 pub(crate) mod owner;
 pub(crate) mod readers;
+pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod sticky;

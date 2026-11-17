@@ -4,13 +4,20 @@ use super::*;
 use crate::generated::StyleProps;
 use crate::kernel::{BlockAxis, HostBlock};
 use crate::style::calc::{self, Node, Observe, Unit};
+use crate::style::targets::Target;
 use crate::wire::Op;
 use crate::{NodeType, StyleId, StyleValue};
 
 /// The observation of the box's own safe area on `edge`, `fallback` where
 /// it is unavailable.
 fn observed(edge: Edge, fallback: Option<f64>) -> Node {
+    observe(Target::Box, edge, fallback)
+}
+
+/// `target`'s observation on `edge`, `fallback` where it is unavailable.
+fn observe(target: Target, edge: Edge, fallback: Option<f64>) -> Node {
     Node::Observe(Observe {
+        target,
         edge,
         fallback: fallback.map(|px| Box::new(Node::Value(px, Unit::Px))),
     })
@@ -471,15 +478,17 @@ fn an_unavailable_band_makes_the_fallback_apply() {
 
 #[test]
 fn the_wire_refuses_the_leaf_until_the_parser_reads_it() {
-    let c = crate::style::calc::Comparison::intern(observed(Edge::Top, Some(3.0)));
-    let mut w = crate::wire::codec::Writer::new();
-    c.encode(&mut w);
-    let bytes = w.into_vec();
-    let mut r = crate::wire::codec::Reader::new(&bytes);
-    assert!(
-        crate::style::calc::Comparison::decode(&mut r, StyleId::PaddingTop).is_err(),
-        "its text, var(--exact-safe-area-inset-top, 3px), parses to the local inset"
-    );
+    // Its text, `var(--exact-safe-area-inset-top, 3px)`, parses to the local
+    // inset, and a target's to a custom property
+    for target in [Target::Box, Target::Chain(2)] {
+        let leaf = observe(target, Edge::Top, Some(3.0));
+        let c = crate::style::calc::Comparison::intern(leaf);
+        let mut w = crate::wire::codec::Writer::new();
+        c.encode(&mut w);
+        let bytes = w.into_vec();
+        let mut r = crate::wire::codec::Reader::new(&bytes);
+        assert!(crate::style::calc::Comparison::decode(&mut r, StyleId::PaddingTop).is_err());
+    }
 }
 
 #[test]
@@ -1105,6 +1114,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     // A fallback that is a calculation, folded where it is simplified
     let fallback = Node::Sum(vec![px(2.0), px(3.0)]);
     let leaf = Node::Observe(Observe {
+        target: Target::Box,
         edge: Edge::Top,
         fallback: Some(Box::new(fallback)),
     });
@@ -1115,6 +1125,7 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
     ));
     // A fallback that reads another edge, unavailable too
     let nested = Node::Observe(Observe {
+        target: Target::Box,
         edge: Edge::Top,
         fallback: Some(Box::new(observed(Edge::Left, Some(6.0)))),
     });
@@ -1138,3 +1149,6 @@ fn the_leaf_takes_its_fallback_and_reads_as_written() {
 
 #[path = "observe_cost_tests.rs"]
 mod cost;
+
+#[path = "targets_tests.rs"]
+mod targets;

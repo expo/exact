@@ -57,6 +57,8 @@ pub(crate) struct Observations {
     tolerance: f32,
     /// The roots of the subtrees moved since the last solve.
     moved: Vec<u32>,
+    /// The native targets owners and the session report.
+    pub(crate) targets: super::targets::Targets,
 }
 
 impl Observations {
@@ -106,6 +108,7 @@ impl Observations {
     }
 
     pub(crate) fn forget(&mut self, slot: u32) {
+        self.targets.forget(slot);
         self.bands.remove(&slot);
         self.spaces.remove(&slot);
         self.stopped_reading(slot);
@@ -548,10 +551,8 @@ fn band_at(kernel: &Kernel, slot: u32) -> Space {
         size: viewport,
         origin,
     };
-    let mut at = Some(slot);
-    while let Some(s) = at {
-        // A document top-layer box is no owner, whatever block it has (D2)
-        if arena.top_layer_slots.contains(s) && arena.blocks.holds(s) {
+    match holder(arena, slot) {
+        Holder::TopLayer(s) => {
             let origin = kernel.top_layer_origin(arena.local_id(s), viewport);
             let Some((x, y)) = origin else {
                 return Space {
@@ -560,20 +561,49 @@ fn band_at(kernel: &Kernel, slot: u32) -> Space {
                 };
             };
             let f = arena.frame(s);
-            return session(Some(s), (x - f.x, y - f.y));
+            session(Some(s), (x - f.x, y - f.y))
         }
-        if arena.blocks.given(s).is_some() {
-            return Space {
-                owner: Some(s),
-                root: Some(s),
-                band: arena.observations.band(s),
-                size: kernel.used_size(s),
-                origin: (0.0, 0.0),
-            };
+        Holder::Owner(s) => Space {
+            owner: Some(s),
+            root: Some(s),
+            band: arena.observations.band(s),
+            size: kernel.used_size(s),
+            origin: (0.0, 0.0),
+        },
+        Holder::Session => session(None, (0.0, 0.0)),
+    }
+}
+
+/// What holds a box for its safe area (D2): the owner whose block it is in,
+/// a document top-layer box, or the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Holder {
+    Owner(u32),
+    TopLayer(u32),
+    Session,
+}
+
+/// What holds `slot`: its nearest ancestor that holds its own ([`holds`]),
+/// or the session.
+pub(crate) fn holder(arena: &NodeArena, slot: u32) -> Holder {
+    let mut at = Some(slot);
+    while let Some(s) = at {
+        if let Some(h) = holds(arena, s) {
+            return h;
         }
         at = arena.parent(s);
     }
-    session(None, (0.0, 0.0))
+    Holder::Session
+}
+
+/// What `slot` holds its own subtree as, if it does: a document top-layer
+/// box laid out on its own, or a box its host gave a block.
+pub(crate) fn holds(arena: &NodeArena, slot: u32) -> Option<Holder> {
+    // Check for a top-layer box first: it is no owner, whatever block it has (D2)
+    if arena.top_layer_slots.contains(slot) && arena.blocks.holds(slot) {
+        return Some(Holder::TopLayer(slot));
+    }
+    (arena.blocks.given(slot).is_some()).then_some(Holder::Owner(slot))
 }
 
 /// Whether a box between `slot` and its layout's root `root`, or that root

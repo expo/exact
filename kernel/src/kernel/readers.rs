@@ -41,6 +41,10 @@ pub(crate) struct Readers {
     /// The edges each observer reads, as
     /// [`calc::Comparison::observed_edges`] gives them.
     pub(crate) observed_edges: crate::id::IdMap<u32, u8>,
+    /// Nodes with a length that reads a native target's raw insets, and
+    /// the targets each reads, each with the edges it reads as bits (LLP
+    /// 1123 D9, "The native chain").
+    pub(crate) targets: crate::id::IdMap<u32, Vec<(crate::style::targets::Target, u8)>>,
     /// Nodes that declare a custom property.
     declaring: SlotSet,
     /// Nodes that declare one whose value reads a local inset: captures.
@@ -64,6 +68,7 @@ impl Readers {
             self.invalidate();
         }
         let (mut local, mut properties, mut observes) = (false, false, 0);
+        let mut targets = Vec::new();
         for id in style.mask.iter() {
             // Skip the inset overrides: `local_at` resolves them for the subtree,
             // whose readers are indexed
@@ -74,6 +79,7 @@ impl Readers {
                 local |= c.reads_local();
                 properties |= c.reads_custom();
                 observes |= c.observed_edges();
+                targets.extend(c.targets_read());
             }
         }
         let own = owner::declarations(style);
@@ -84,6 +90,10 @@ impl Readers {
         match observes {
             0 => self.observed_edges.remove(&slot),
             edges => self.observed_edges.insert(slot, edges),
+        };
+        match targets.is_empty() {
+            true => self.targets.remove(&slot),
+            false => self.targets.insert(slot, merged(targets)),
         };
         put(&mut self.declaring, slot, own.iter().next().is_some());
         put(&mut self.captures, slot, captures);
@@ -103,6 +113,7 @@ impl Readers {
             set.remove(slot);
         }
         self.observed_edges.remove(&slot);
+        self.targets.remove(&slot);
     }
 
     pub(crate) fn clear(&mut self) {
@@ -162,6 +173,21 @@ fn reads_local(value: &Dimension) -> bool {
         other => calc::tree_of(other)
             .is_some_and(|t| t.any(&|n| matches!(n, Node::Env(EnvTerm::Local(_))))),
     }
+}
+
+/// `read`, each target once, its edges merged.
+fn merged(
+    mut read: Vec<(crate::style::targets::Target, u8)>,
+) -> Vec<(crate::style::targets::Target, u8)> {
+    read.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    let mut out: Vec<(crate::style::targets::Target, u8)> = Vec::with_capacity(read.len());
+    for (target, edges) in read {
+        match out.last_mut() {
+            Some((last, merged)) if *last == target => *merged |= edges,
+            _ => out.push((target, edges)),
+        }
+    }
+    out
 }
 
 /// What a change of the local insets at `top` can reach, taken before it:
@@ -344,7 +370,7 @@ fn region_within(arena: &NodeArena, top: u32, budget: usize) -> (Vec<u32>, Vec<u
 
 /// The nodes of `top`'s subtree, `top` first, that `enter` lets the walk
 /// into; `None` past `budget` nodes.
-fn walk_down(
+pub(crate) fn walk_down(
     arena: &NodeArena,
     top: u32,
     mut budget: usize,

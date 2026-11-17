@@ -4,6 +4,7 @@
 //! the text and the parser hold one form of every value.
 
 use super::super::env::{Edge, Region, SegmentVar, TitleBarVar};
+use super::super::targets::{self, Kind, Relation, Target};
 use super::super::ViewportUnit;
 use super::{Comparison, Entry, EnvTerm, Node, Unit};
 use crate::error::DecodeError;
@@ -27,8 +28,11 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// a list's `u8` count; clamp's three presence bytes, each before its
 /// argument; 10 an author's custom property (LLP 1123 D5), its name as the
 /// codec's string, then its fallback's presence byte and the fallback; 11
-/// an observation of the box's safe area (LLP 1123 D10's leaf), its edge,
-/// then its fallback's presence byte and the fallback, which the round trip
+/// an observation of the safe area (LLP 1123 D10's leaf): its target (0 the
+/// box itself; 1 a chain entry, then its number from 1; 2 a chain kind and
+/// 3 a relation, then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a
+/// registered target, then its name as the codec's string), its edge, then
+/// its fallback's presence byte and the fallback, which the round trip
 /// through the text refuses until the parser reads the leaf.
 pub(super) fn encode(entry: &Entry, w: &mut Writer) {
     match entry {
@@ -98,6 +102,7 @@ fn node_out(n: &Node, w: &mut Writer) {
         }
         Node::Observe(o) => {
             w.u8(11);
+            target_out(&o.target, w);
             w.u8(o.edge as u8);
             optional(o.fallback.as_deref(), w);
         }
@@ -235,9 +240,105 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
             })
         }
         11 => Node::Observe(super::Observe {
+            target: target(r)?,
             edge: Edge::from_index(r.u8().ok()?)?,
             fallback: optional(r, nodes)?.map(Box::new),
         }),
         _ => return None,
     })
+}
+
+fn target_out(target: &Target, w: &mut Writer) {
+    match target {
+        Target::Box => w.u8(0),
+        Target::Chain(n) => {
+            w.u8(1);
+            w.u8(*n);
+        }
+        Target::Kind(kind) => {
+            w.u8(2);
+            w.u8(Kind::ALL.iter().position(|k| k == kind).unwrap_or(0) as u8);
+        }
+        Target::Relation(relation) => {
+            w.u8(3);
+            w.u8(Relation::ALL
+                .iter()
+                .position(|r| r == relation)
+                .unwrap_or(0) as u8);
+        }
+        Target::Registered(name) => {
+            w.u8(4);
+            w.string(name);
+        }
+    }
+}
+
+/// A leaf's target; `None` for an unknown tag, a chain number of 0, an
+/// index past its list, or a name no target can have.
+fn target(r: &mut Reader<'_>) -> Option<Target> {
+    Some(match r.u8().ok()? {
+        0 => Target::Box,
+        1 => Target::Chain(r.u8().ok().filter(|n| *n > 0)?),
+        2 => Target::Kind(*Kind::ALL.get(usize::from(r.u8().ok()?))?),
+        3 => Target::Relation(*Relation::ALL.get(usize::from(r.u8().ok()?))?),
+        4 => {
+            let name = r.string().ok()?;
+            Target::Registered(targets::valid_name(name).then(|| name.into())?)
+        }
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_leaf_carries_its_target_on_the_wire() {
+        let targets = [
+            Target::Box,
+            Target::Chain(3),
+            Target::Kind(Kind::Column),
+            Target::Relation(Relation::Screen),
+            Target::Registered("map".into()),
+        ];
+        for target in targets {
+            let leaf = Node::Observe(super::super::Observe {
+                target,
+                edge: Edge::Left,
+                fallback: Some(Box::new(Node::Value(7.0, Unit::Px))),
+            });
+            let mut w = Writer::new();
+            node_out(&leaf, &mut w);
+            let bytes = w.into_vec();
+            assert_eq!(node(&mut Reader::new(&bytes), 0, &mut 0), Some(leaf));
+        }
+        // A chain entry 0, an index past its list, a name no target has, an unknown target
+        let refused = |write: &dyn Fn(&mut Writer)| {
+            let mut w = Writer::new();
+            w.u8(11);
+            write(&mut w);
+            w.u8(Edge::Top as u8);
+            w.u8(0);
+            let bytes = w.into_vec();
+            node(&mut Reader::new(&bytes), 0, &mut 0).is_none()
+        };
+        assert!(refused(&|w| {
+            w.u8(1);
+            w.u8(0);
+        }));
+        assert!(refused(&|w| {
+            w.u8(2);
+            w.u8(Kind::ALL.len() as u8);
+        }));
+        assert!(refused(&|w| {
+            w.u8(3);
+            w.u8(Relation::ALL.len() as u8);
+        }));
+        assert!(refused(&|w| {
+            w.u8(4);
+            w.string("Map");
+        }));
+        assert!(refused(&|w| w.u8(5)));
+    }
 }

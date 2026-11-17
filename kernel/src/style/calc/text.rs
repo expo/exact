@@ -91,7 +91,7 @@ fn tree(n: &Node, out: &mut String) {
         }
         Node::Observe(o) => {
             out.push_str("var(");
-            out.push_str(crate::style::env::LOCAL_PREFIX);
+            o.target.prefix(out);
             out.push_str(o.edge.name());
             if let Some(fallback) = &o.fallback {
                 out.push_str(", ");

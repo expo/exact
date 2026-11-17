@@ -116,28 +116,46 @@ fn observation_cost() {
 }
 
 /// One owner's band changing among 1, 10 or 100 owners side by side, each
-/// with ten rows that pad by their left observation, or, as main's model,
-/// by their owner's local left inset; and a box that holds no reader moving
-/// between two others. Ignored, since it times; run it with
+/// with ten rows that pad by their left observation; the same with rows
+/// that pad by their owner's controller's raw left inset, as its report
+/// changes; or, as main's model, by their owner's local left inset; the
+/// same change to the right edge, which no row reads; and a box that holds
+/// no reader moving between two others. Ignored, since it times; run it with
 /// `cargo test --release -p exact-kernel --lib observation_cost_of_many_owners -- --ignored --nocapture`.
 #[test]
 #[ignore = "times; run with --release --ignored --nocapture"]
 fn observation_cost_of_many_owners() {
+    use crate::style::targets::{ChainEntry, Kind, NativeTarget, NativeTargets};
     use std::time::Instant;
-    for (model, owners) in [false, true]
+    let models = ["observers", "raw readers", "local-inset readers"];
+    for (name, owners) in models
         .into_iter()
         .flat_map(|m| [1u32, 10, 100].map(|o| (m, o)))
     {
-        let leaf = move || match model {
-            true => Node::Env(crate::style::calc::EnvTerm::Local(Edge::Left)),
-            false => observed(Edge::Left, None),
+        let leaf = move || match name {
+            "observers" => observed(Edge::Left, None),
+            "raw readers" => observe(Target::Kind(Kind::Owner), Edge::Left, None),
+            _ => Node::Env(crate::style::calc::EnvTerm::Local(Edge::Left)),
         };
-        let set = move |k: &mut Kernel, root: u32, left: f32| match model {
-            true => k
-                .set_local_insets(root, Some([0.0, 0.0, 0.0, left]))
+        let set = move |k: &mut Kernel, root: u32, left: f32, right: f32| match name {
+            "observers" => k
+                .set_owner_band(root, Some([0.0, right, 0.0, left]))
                 .map(drop),
-            false => k
-                .set_owner_band(root, Some([0.0, 0.0, 0.0, left]))
+            "raw readers" => {
+                let target = NativeTarget {
+                    id: u64::from(root),
+                    generation: 1,
+                    insets: Some([0.0, right, 0.0, left]),
+                };
+                let chain = vec![ChainEntry { target, kind: None }];
+                let report = NativeTargets {
+                    chain,
+                    relations: Vec::new(),
+                };
+                k.set_owner_targets(root, report).map(drop)
+            }
+            _ => k
+                .set_local_insets(root, Some([0.0, right, 0.0, left]))
                 .map(drop),
         };
         let mut k = Kernel::with_monospace();
@@ -163,7 +181,7 @@ fn observation_cost_of_many_owners() {
         let block = block(BlockAxis::Is(390.0), BlockAxis::Is(844.0));
         for &root in &roots {
             k.set_host_block(root, Some(block)).unwrap();
-            set(&mut k, root, 8.0).unwrap();
+            set(&mut k, root, 8.0, 0.0).unwrap();
         }
         lay_out(&mut k);
         let mut moves: Vec<_> = (0..21u32)
@@ -180,22 +198,28 @@ fn observation_cost_of_many_owners() {
         let mut all: Vec<_> = (0..21)
             .map(|run| {
                 let t = Instant::now();
-                set(&mut k, roots[0], 9.0 + (run % 2) as f32).unwrap();
+                set(&mut k, roots[0], 9.0 + (run % 2) as f32, 0.0).unwrap();
                 lay_out(&mut k);
                 t.elapsed()
             })
             .collect();
         all.sort();
         let rounds = k.arena.observations.rounds;
-        let name = if model {
-            "local-inset readers"
-        } else {
-            "observers"
-        };
+        // The right edge, which no row reads
+        let mut unread: Vec<_> = (0..21)
+            .map(|run| {
+                let t = Instant::now();
+                set(&mut k, roots[0], 9.0, (run % 2) as f32 * 5.0).unwrap();
+                lay_out(&mut k);
+                t.elapsed()
+            })
+            .collect();
+        unread.sort();
         let readers = owners * 10;
         println!(
-            "one of {owners:>3} owners ({readers} {name}): band change+layout {:>9.2?} ({rounds} rounds added)  a move elsewhere+layout {:>9.2?}",
+            "one of {owners:>3} owners ({readers} {name}): band change+layout {:>9.2?} ({rounds} rounds added)  unread edge+layout {:>9.2?}  a move elsewhere+layout {:>9.2?}",
             all[10],
+            unread[10],
             moves[10]
         );
     }
