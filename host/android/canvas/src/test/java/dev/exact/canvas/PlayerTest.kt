@@ -122,4 +122,25 @@ class PlayerTest {
         assertEquals(0, tip(4f))
         assertEquals(Color.BLUE, tip(10f))
     }
+
+    /** A box's CSS filter (ops 53 and 54): its drawing goes into a node at the region's device bounds, which carries
+     * the chain as a RenderEffect, and the walkers step over both ops. */
+    @Test fun aFilterDrawsItsBoxIntoAnEffectNode() {
+        val unchanged = IntArray(20).also { for (k in 0 until 4) it[k * 6] = f(1) }
+        val ops = identity + intArrayOf(53, 26, f(10), f(10), f(40), f(30), 1, 1) + unchanged +
+            intArrayOf(2, Color.BLUE, f(20), f(20), f(10), f(10)) + IntArray(8) + intArrayOf(54)
+        val buffer = IntBuffer.wrap(ops)
+        var i = 0
+        val walker = Structure()
+        while (i < ops.size) i = walker.end(buffer, i)
+        assertEquals(ops.size, i)
+        val drawn = ArrayList<RenderNode>()
+        val canvas = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawRenderNode(node: RenderNode) { drawn.add(node) }
+        }
+        Player(emptyMap()).apply { width = 80; height = 80 }.replay(canvas, buffer, 0, ops.size)
+        val node = drawn.single()
+        assertEquals(listOf(10, 10, 50, 40), listOf(node.left, node.top, node.right, node.bottom))
+        assertTrue(node.hasDisplayList())
+    }
 }

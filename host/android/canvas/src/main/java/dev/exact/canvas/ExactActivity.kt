@@ -716,6 +716,9 @@ open class ExactActivity : Activity() {
         // The logcat tag of the app's `console` lines, in every build (`host/painted/src/android.rs`, `console`): the
         // package name, as Apple's subsystem is the bundle identifier. A label can be localized and hold spaces.
         android.system.Os.setenv("EXACT_PACKAGE", packageName, true)
+        // A box's filter runs as a RenderEffect (LLP 1172.023.001 D1), which Android 12 brought; before it, and with
+        // filters=0 (to compare), exact2 runs the chain on the CPU.
+        if (android.os.Build.VERSION.SDK_INT < 31 || intent.getStringExtra("filters") == "0") android.system.Os.setenv("EXACT_FILTERS", "0", true)
         if (meta?.getBoolean("dev.exact.development", false) != true) return
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)

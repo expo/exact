@@ -100,6 +100,7 @@ internal class Structure {
         46 -> i + 1
         47, 49 -> i + 2
         48 -> i + 10
+        53 -> i + 2 + b.get(i + 1); 54 -> i + 1
         50, 51 -> i + 2 + b.get(i + 1)
         52 -> i + 3
         else -> throw IllegalStateException("op ${b.get(i)} at $i")

@@ -121,6 +121,9 @@ internal class Bounds {
                 27 -> { add(out, f(b, i + 2), f(b, i + 3), f(b, i + 2) + f(b, i + 4), f(b, i + 3) + f(b, i + 5)); i += 14 }
                 42 -> { val p = i + 2 + 2 * b.get(i + 1); add(out, f(b, p), f(b, p + 1), f(b, p) + f(b, p + 2), f(b, p + 1) + f(b, p + 3)); i = p + 12 }
                 28 -> { add(out, f(b, i + 3), f(b, i + 4), f(b, i + 3) + f(b, i + 5), f(b, i + 4) + f(b, i + 6)); i += 16 + (b.get(i + 15) + 3) / 4 }
+                // A filter's region holds what it draws, blurred or shadowed.
+                53 -> { add(out, f(b, i + 2), f(b, i + 3), f(b, i + 2) + f(b, i + 4), f(b, i + 3) + f(b, i + 5)); i += 2 + b.get(i + 1) }
+                54 -> i += 1
                 40 -> {
                     val reach = 3f * f(b, i + 2) + 2f
                     add(out, f(b, i + 3) - reach, f(b, i + 4) - reach, f(b, i + 3) + f(b, i + 5) + reach, f(b, i + 4) + f(b, i + 6) + reach)

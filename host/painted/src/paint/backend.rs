@@ -246,6 +246,21 @@ pub trait Backend {
     }
     /// End the innermost accepted projective matrix.
     fn plane_end(&mut self) {}
+    /// A box's CSS `filter` run by the backend itself (LLP 1172.023.001 D1):
+    /// what the walk paints until [`Self::pop_filter`] goes through
+    /// `primitives`, a box filter's chain, over `region` in `ts`'s space.
+    /// Whether it took them; else the painter rasterizes the box and runs
+    /// the chain on the CPU.
+    fn push_filter(
+        &mut self,
+        _primitives: &[exact_kernel::svg::filter::Primitive],
+        _region: Rect4,
+        _ts: Transform,
+    ) -> bool {
+        false
+    }
+    /// End the filter [`Self::push_filter`] took.
+    fn pop_filter(&mut self) {}
     /// Composite a rendered canvas child (not a decoded image asset).
     fn surface_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4);
     /// Composite a 2D canvas's bitmap into `dst`, clipped (LLP 1056 D7).

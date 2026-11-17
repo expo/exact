@@ -91,6 +91,8 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         picture::IMAGE_TINT | picture::IMAGE_RENDERING => i + 2,
         gradient::SHADER => i + 2 + at(1)?,
         glyphs::BLUR => i + 2,
+        filter::FILTER => i + 2 + at(1)?,
+        filter::FILTER_END => i + 1,
         ANIMATED => i + 3 + words(at(2)?),
         BACKDROP => i + 14 + 2 * at(1)?,
         NATIVE => i + 16 + words(at(15)?),

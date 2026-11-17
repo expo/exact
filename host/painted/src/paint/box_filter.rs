@@ -46,12 +46,30 @@ impl Painter {
             self.content(walk, node, rect, ts, offset, clip_rect);
             return;
         };
-        // A picture is not a retained row, and damage never looks past a box.
-        self.row_refuse();
-        self.damage.unsupported = true;
+        // What the chain reads and writes: the box and what it paints past
+        // itself, grown by how far the chain spreads (its region over a box
+        // of no size), in the box's space.
         let (x, y, w, h) = rect;
         let cap = (2.0 * w.max(h).max(64.0)).max(width.max(height));
         let ((left, top, right, bottom), _) = space::reach(walk, node, rect, offset, cap);
+        let (rx, ry, rw, rh) = chain.region;
+        let region = (
+            x - left + rx,
+            y - top + ry,
+            left + w + right + rw,
+            top + h + bottom + rh,
+        );
+        // Damage never looks past a box.
+        self.damage.unsupported = true;
+        // A backend that filters on the GPU draws the box's ops through the
+        // chain, so its row stays kept (LLP 1172.023.001 D1).
+        if self.backend.push_filter(&chain.primitives, region, ts) {
+            self.content(walk, node, rect, ts, offset, clip_rect);
+            self.backend.pop_filter();
+            return;
+        }
+        // A picture is not a retained row.
+        self.row_refuse();
         let mut picture: Box<dyn Backend> = Box::new(crate::raster::Raster::transparent());
         picture.begin(width, height, self.scale);
         let frame = std::mem::replace(&mut self.backend, picture);
@@ -60,16 +78,6 @@ impl Painter {
         let Ok(source) = painted else {
             return;
         };
-        // What the chain reads and writes: the box and what it paints past
-        // itself, grown by how far the chain spreads (its region over a box
-        // of no size), in the box's space.
-        let (rx, ry, rw, rh) = chain.region;
-        let region = (
-            x - left + rx,
-            y - top + ry,
-            left + w + right + rw,
-            top + h + bottom + rh,
-        );
         let upright = ts.kx == 0.0 && ts.ky == 0.0 && ts.sx > 0.0 && ts.sy > 0.0;
         let k = (ts.sx * ts.sy - ts.kx * ts.ky).abs().sqrt();
         if !(k.is_finite() && k > 0.0) {

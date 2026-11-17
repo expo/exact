@@ -266,6 +266,96 @@ internal class Player(private val fonts: Map<Int, Font>) {
         c.restore()
     }
 
+    /** A filter open in a replay (op 53): the canvas it draws into, its node (null when it draws unfiltered), and
+     * the shift before it. */
+    private class Filtered(val outer: Canvas, val node: android.graphics.RenderNode?, val shiftX: Float, val shiftY: Float)
+    private val filters = ArrayList<Filtered>()
+
+    /**
+     * A box's CSS `filter` (op 53 at [at], LLP 1172.023.001 D1): what follows up to its op 54 is recorded into a node
+     * at the region's device bounds whose RenderEffect is the chain, as Compose's `Modifier.blur` is. HWUI runs it on
+     * the GPU and keeps the filtered layer until the node is recorded again. The canvas to draw into next.
+     */
+    private fun filterOpen(c: Canvas, b: IntBuffer, at: Int): Canvas {
+        saveMatrix()
+        // Before RenderEffect (Android 12) the box draws unfiltered; exact2 sends no filter there.
+        if (android.os.Build.VERSION.SDK_INT < 31) { filters.add(Filtered(c, null, shiftX, shiftY)); return c }
+        val effect = filterEffect(b, at + 6) ?: run { filters.add(Filtered(c, null, shiftX, shiftY)); return c }
+        rect.set(f(b, at + 2), f(b, at + 3), f(b, at + 2) + f(b, at + 4), f(b, at + 3) + f(b, at + 5))
+        current.mapRect(backdropBounds, rect)
+        val l = Math.floor(backdropBounds.left.toDouble()).toInt(); val t = Math.floor(backdropBounds.top.toDouble()).toInt()
+        val node = android.graphics.RenderNode("exact filter")
+        node.setPosition(l, t, Math.ceil(backdropBounds.right.toDouble()).toInt(), Math.ceil(backdropBounds.bottom.toDouble()).toInt())
+        node.setClipToBounds(true)
+        node.setRenderEffect(effect)
+        filters.add(Filtered(c, node, shiftX, shiftY))
+        shiftX += l; shiftY += t
+        val inner = node.beginRecording()
+        current.postTranslate(-l.toFloat(), -t.toFloat())
+        inner.setMatrix(current)
+        return inner
+    }
+
+    /** Op 54: the innermost filter's node drawn where it was opened. The canvas to draw into next. */
+    private fun filterClose(c: Canvas): Canvas {
+        val open = filters.removeAt(filters.size - 1)
+        restoreMatrix()
+        val node = open.node ?: return c.also { it.setMatrix(current) }
+        node.endRecording()
+        shiftX = open.shiftX; shiftY = open.shiftY
+        val outer = open.outer
+        // The node sits at its device bounds in the replay's own coordinates.
+        outer.save(); matrix.reset(); outer.setMatrix(matrix); outer.drawRenderNode(node); outer.restore()
+        outer.setMatrix(current)
+        return outer
+    }
+
+    /** Op 53's functions from their count at [at], each over the last's result, in this replay's device space. */
+    @android.annotation.TargetApi(31)
+    private fun filterEffect(b: IntBuffer, at: Int): android.graphics.RenderEffect? {
+        current.getValues(values)
+        val a = values[0]; val c = values[1]; val bk = values[3]; val d = values[4]
+        val sx = Math.hypot(a.toDouble(), bk.toDouble()).toFloat(); val sy = Math.hypot(c.toDouble(), d.toDouble()).toFloat()
+        var effect: android.graphics.RenderEffect? = null
+        var i = at + 1
+        repeat(b.get(at)) {
+            when (b.get(i)) {
+                0 -> { effect = blurEffect(f(b, i + 1) * sx, f(b, i + 2) * sy, effect); i += 3 }
+                1 -> {
+                    effect = colorEffect(android.graphics.ColorMatrixColorFilter(FloatArray(20) { k -> f(b, i + 1 + k) }), effect)
+                    i += 21
+                }
+                else -> {
+                    // A drop shadow: the alpha in the shadow's colour, blurred and moved, under what it shadows.
+                    val s = f(b, i + 1); val dx = f(b, i + 2); val dy = f(b, i + 3)
+                    val tint = android.graphics.PorterDuffColorFilter(b.get(i + 4), android.graphics.PorterDuff.Mode.SRC_IN)
+                    val shadow = android.graphics.RenderEffect.createOffsetEffect(
+                        a * dx + c * dy, bk * dx + d * dy, blurEffect(s * sx, s * sy, colorEffect(tint, effect))!!)
+                    val above = effect ?: android.graphics.RenderEffect.createOffsetEffect(0f, 0f)
+                    effect = android.graphics.RenderEffect.createBlendModeEffect(shadow, above, android.graphics.BlendMode.SRC_OVER)
+                    i += 5
+                }
+            }
+        }
+        return effect
+    }
+
+    @android.annotation.TargetApi(31)
+    private fun colorEffect(f: android.graphics.ColorFilter, input: android.graphics.RenderEffect?) =
+        if (input == null) android.graphics.RenderEffect.createColorFilterEffect(f)
+        else android.graphics.RenderEffect.createColorFilterEffect(f, input)
+
+    /** A Gaussian blur of these sigmas (device pixels) over [input], transparent past its edge as CSS's is. */
+    @android.annotation.TargetApi(31)
+    private fun blurEffect(sx: Float, sy: Float, input: android.graphics.RenderEffect?): android.graphics.RenderEffect? {
+        // Skia's blur takes a radius: sigma = 0.57735 r + 0.5.
+        val rx = ((sx - 0.5f) / 0.57735f).coerceAtLeast(0f); val ry = ((sy - 0.5f) / 0.57735f).coerceAtLeast(0f)
+        if (rx == 0f && ry == 0f) return input
+        val decal = android.graphics.Shader.TileMode.DECAL
+        return if (input == null) android.graphics.RenderEffect.createBlurEffect(rx, ry, decal)
+        else android.graphics.RenderEffect.createBlurEffect(rx, ry, input, decal)
+    }
+
     /** A freed picture: nothing of it is kept here. */
     fun forget(bmp: Bitmap) {}
 
@@ -760,6 +850,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         imageRendering = 0
         val base = canvas.save()
         val matrixBase = matrixDepth
+        val filterBase = filters.size
         // Each recording starts locally; stream matrices supply the device coordinates.
         current.reset(); canvas.setMatrix(current)
         var c: Canvas = canvas
@@ -788,6 +879,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 }
                 27 -> { backdrop(c, b, from, i); i += 14 }
                 42 -> { backdrop(c, b, from, i); i += 14 + 2 * b.get(i + 1) }
+                53 -> { c = filterOpen(c, b, i); i += 2 + b.get(i + 1) }
+                54 -> { c = filterClose(c); i += 1 }
                 40 -> { shadow(c, b, i); i += 27 }
                 28 -> {
                     native(b.get(i + 1))?.let { node ->
@@ -1048,6 +1141,8 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 }
             }
         }
+        // A backdrop's replay of what is under it can stop inside a filter.
+        while (filters.size > filterBase) c = filterClose(c)
         canvas.restoreToCount(base)
         matrixDepth = matrixBase
         placements?.let { origins?.record(into, it) }

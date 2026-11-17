@@ -48,6 +48,8 @@
 //!   outside the border box `b…` (`canvas/shadow.rs`)
 //! - `43 SHADER len …` — the next RRECT, PATH or STROKE paints with a gradient shader (`canvas/gradient.rs`)
 //! - `44 BLUR sigma` — the next GLYPHS draws through a blur of `sigma`, local units (`canvas/glyphs.rs`)
+//! - `53 FILTER len x y w h n (kind args…)×n` … `54 FILTER_END` — what is drawn between them goes
+//!   through a box's CSS `filter`, run by the reader over that region (`canvas/filter.rs`)
 //! - `45 CLIP_UNION len n (rule path)×n` — save and clip to the union of independently filled paths
 //! - `46 MASK_LAYER` — save a layer composited through destination-in at its RESTORE
 //! - `47 IMAGE_TINT color` — the next IMAGE or IMAGE_RRECT uses this colour through the image's alpha
@@ -218,6 +220,8 @@ pub mod legacy;
 pub mod tls;
 #[cfg(target_os = "android")]
 pub use jni_sys;
+#[path = "canvas/filter.rs"]
+mod filter;
 #[path = "canvas/picture.rs"]
 mod picture;
 #[cfg(target_os = "android")]
@@ -636,6 +640,19 @@ impl Backend for Recorder {
         ts: Transform,
     ) -> bool {
         self.shadow(shape, color, sigma, outer, ts)
+    }
+
+    fn push_filter(
+        &mut self,
+        primitives: &[exact_kernel::svg::filter::Primitive],
+        region: Rect4,
+        ts: Transform,
+    ) -> bool {
+        self.filter_open(primitives, region, ts)
+    }
+
+    fn pop_filter(&mut self) {
+        self.filter_close();
     }
 
     fn backdrop_filter(
