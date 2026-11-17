@@ -1085,6 +1085,21 @@ fn refusals_name_what_the_author_wrote_and_suggest_one_repair() {
             "a resource's `else` is a call: `else empty()` is its shape's zero (`[]` for a list, `\"\"` for text), with `field=constant` overrides for a record, or `else source(values…)`",
         ),
         (
+            app("  state c = true\n  resource todos = todosOf() as shape Todo[] else empty() when c\n", "text \"a\""),
+            "syntax-resource-clause-order",
+            "`when` is out of place: a resource's clauses come in the order `with ...`, `when ...`, `as shape ...`, `else ...`, then `transient` or `keep`",
+        ),
+        (
+            app("  resource todos = todosOf() as shape Todo[] transient else empty()\n", "text \"a\""),
+            "syntax-resource-clause-order",
+            "`else` is out of place: a resource's clauses come in the order `with ...`, `when ...`, `as shape ...`, `else ...`, then `transient` or `keep`",
+        ),
+        (
+            app("  state c = true\n  resource todos = todosOf() when c with \"x\" as shape Todo[]\n", "text \"a\""),
+            "syntax-resource-clause-order",
+            "`with` is out of place: a resource's clauses come in the order `with ...`, `when ...`, `as shape ...`, `else ...`, then `transient` or `keep`",
+        ),
+        (
             app("  resource todo = todoOf() as shape Todo else Todo(title=\"…\")\n", "text todo.title"),
             "type-placeholder-shape",
             "`todo`'s placeholder calls the shape `Todo`: write `else empty(field=…)`, the shape's zero with `field=constant` overrides",
