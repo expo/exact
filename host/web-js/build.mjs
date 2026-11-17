@@ -754,8 +754,15 @@ stageHostGlue(root, gen);
   for (const line of lines) if (!code.includes(line)) throw new Error(`host/web/input-glue.js: build.mjs replaces a line it no longer has: ${line}`);
   writeFileSync(file, lines.reduce((text, line) => text.replace(line, ''), code));
 }
-// Keep navigation one runtime module and admission a separate lazy module on the JS target.
-writeFileSync(resolve(gen, 'navigation.js'), await bundleHostModule(root, 'navigation.js', { grants: true, production }));
+// Code other than the compiled plan and Exact's own that writes inside #exact-root, where the page has any: it may
+// write any element, so the page keeps every rule of its sheet and every navigation behaviour.
+const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
+  : launchWeb.length ? `its launch service ${launchWeb[0].name}`
+  : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
+// Keep navigation one runtime module and admission a separate lazy module on the JS target, without the behaviours
+// the plan cannot use (navigation.flag; LLP 1047.002 D2.1).
+const navigationUnused = otherWriter ? [] : readFileSync(resolve(gen, 'navigation.flag'), 'utf8').split('\n').filter(Boolean);
+writeFileSync(resolve(gen, 'navigation.js'), await bundleHostModule(root, 'navigation.js', { grants: true, production, unused: navigationUnused }));
 if (siteBase !== '/') {
   const file = resolve(gen, 'navigation.js'), code = readFileSync(file, 'utf8'), boundary = 'span.href = href.trim();';
   if (!code.includes(boundary)) throw new Error('Markdown has no URL boundary to mount');
@@ -1140,13 +1147,9 @@ const exactModule = id => generatedRoots.some(root => inside(id, root) && id !==
 // attribute that neither the compiled plan nor Exact's code the page runs writes (page-style.mjs `absent`,
 // writers.mjs). That code is Exact's modules that Rolldown puts in either bundle, read as staged (the app's
 // TypeScript reaches no DOM: `scopedModule`), the files copied beside the page, and the development inspector the dev
-// loop serves beside it, read in every build. A page whose root other code writes (a page module, and the hatches
-// through it; a native module's view; a launch service) keeps every rule, and the build says so.
+// loop serves beside it, read in every build. A page with an `otherWriter` keeps every rule, and the build says so.
 const shipped = [];
 let rules = analyze(base + css), sheet = base + css, unused = new Set();
-const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
-  : launchWeb.length ? `its launch service ${launchWeb[0].name}`
-  : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
 function cutSheet(chunks) {
   if (otherWriter) console.log(`style.css keeps every rule (${(Buffer.byteLength(sheet) / 1024).toFixed(1)} KB): ${otherWriter} may write any element inside #exact-root (LLP 1047.003 D1)`);
   else {

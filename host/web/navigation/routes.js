@@ -3,8 +3,12 @@ import { fold, launched, onFold, launchLocation, launchVisits } from "./environm
 import { inertAncestor } from "./layers.js";
 import { popoverObservation } from "./popover.js";
 // @ref LLP 1038 D6/D7/D11 — host projection and the last committed URL.
-const AGENT_ADMITTED = true;
-// false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+const AGENT_ADMITTED = true; // false in a production bake: host/web/build.mjs rewrites this line (LLP 1069.007 D2)
+// @ref LLP 1047.002 D2.1 — the behaviours that act only on what a plan makes: a tablist's panels and the sidebar, a
+// split's list, a presented route (its frame, its slide down and Escape), a route's app bar, a clear bar. The JS
+// target's build writes false each one its plan cannot make (navigation.flag), and the bundler drops its code. A
+// development page that meets one left out says so once in its journal (`missing`).
+const TABS = true, SPLITS = true, SHEETS = true, BARS = true, CLEAR_BARS = true;
 let last = null, refused = new WeakMap();
 // The tabpanels each root last hid or showed (one it stops naming shows again); the keys of the stack it last showed.
 let managed = new WeakMap(), shown = new WeakMap(), placed = new WeakMap();
@@ -72,7 +76,7 @@ export function holdRoutes(beneath, arriving) {
   };
 }
 export function sheetLeaves(el) {
-  if (typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || el.getAttribute("navigationPresentation") !== "modal" || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  if (!SHEETS || typeof matchMedia !== "function" || typeof HTMLTextAreaElement !== "function" || el.nodeType !== 1 || el.getAttribute("navigationPresentation") !== "modal" || el.hasAttribute("data-exiting") || !el.isConnected || el.querySelector("audio, video, dialog[open], :popover-open") || "createValueRange" in HTMLTextAreaElement.prototype && el.querySelector("textarea[data-decorations]") || getComputedStyle(el).position !== "fixed" || matchMedia("(prefers-reduced-motion: reduce)").matches) {
     return false;
   }
   if (el.parentElement?.hasAttribute("data-exact-list-item")) {
@@ -113,6 +117,10 @@ export function sheetLeaves(el) {
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
 const tabsOf = (nav) => {
+  if (!TABS) {
+    AGENT_ADMITTED && nav?.querySelector("[role=tablist]") && missing("a tablist");
+    return [null, []];
+  }
   const all = [...nav?.getElementsByTagName("*") ?? []];
   const owns = (el) => {
     for (let p = el.parentElement; p; p = p.parentElement) {
@@ -147,13 +155,7 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
-// A sheet's frame (`sheetFrame`, below), which the projection writes once a host hands it over: the wasm host's glue
-// for every plan, the JS target's compiler only for a plan that can present a sheet (LLP 1047.002 D1). A plan that
-// cannot has no route in a sheet, so there is nothing to write.
-let framing = null;
-export const useSheets = (frame) => {
-  framing = frame;
-};
+const unlinked = new Set(), missing = (what) => unlinked.has(what) || (unlinked.add(what), log?.(`navigation: the page has ${what}, which this build left out: its plan makes none (LLP 1047.002 D2)`));
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
 // `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
 // word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
@@ -190,7 +192,11 @@ function selectedDetent(route) {
 }
 /** The frame of `routes[index]`: its own detent, or its sheet's when it was pushed inside one; written only where it
  * changed. `shownIn` is the sheet each route shows in (`sheetAt`), `inUse` the sheets something shown is in. */
-export function sheetFrame(routes, index, shownIn, inUse) {
+function sheetFrame(routes, index, shownIn, inUse) {
+  if (!SHEETS) {
+    AGENT_ADMITTED && sheet(routes[index]) && missing("a presented route");
+    return;
+  }
   const route = routes[index], at = shownIn[index], pushed = at >= 0 && at !== index;
   // A sheet nothing shown is in forgets its detent, so its next presentation chooses it again.
   if (at === index && !inUse.has(index)) {
@@ -211,6 +217,9 @@ export function sheetFrame(routes, index, shownIn, inUse) {
 // it at its height, as a UINavigationController's in a presented sheet does; -1 for none (a full-screen route or the
 // stack's root ends the search).
 const sheetAt = (routes, i) => {
+  if (!SHEETS) {
+    return -1;
+  }
   for (let j = i; j > 0; j--) {
     const p = routes[j].getAttribute("navigationPresentation");
     if (p === "modal" || p === "fullscreen") {
@@ -220,6 +229,9 @@ const sheetAt = (routes, i) => {
   return -1;
 };
 export const overPage = (route) => {
+  if (!SHEETS) {
+    return false;
+  }
   const p = route?.getAttribute("navigationPresentation");
   if (p !== "fullscreen") {
     return p === "modal";
@@ -303,7 +315,7 @@ export function pushingList(route, retained = splitLists.get(route)) {
 /** Recheck authored admission even while narrow. Projection's visibility/inert never opt a list out. */
 export function splitOf([route]) {
   // A rendered document has route and handler facts but no browser layout.
-  if (typeof globalThis.getComputedStyle !== "function" || typeof globalThis.matchMedia !== "function") {
+  if (!SPLITS || typeof globalThis.getComputedStyle !== "function" || typeof globalThis.matchMedia !== "function") {
     if (route) {
       splitLists.delete(route);
     }
@@ -364,6 +376,10 @@ function captureRow(event) {
 }
 /** Href rows restore from retained visits. Action-only rows remember a router change made inside a normal click dispatch. */
 function detailRows(routes, found) {
+  if (!SPLITS) {
+    AGENT_ADMITTED && (routes[0]?.hasAttribute("navigationSplit") || routes[0]?.querySelector("[data-exact-list]")) && missing("a list or split");
+    return;
+  }
   for (const route of routes.slice(1)) {
     const id = route.getAttribute("navigationKey"), url = visits.get(id);
     let action = actionRows.get(route);
@@ -600,20 +616,16 @@ function contentScroller(route) {
   }
   return null;
 }
-// What keeps a clear bar (`clearBar`, below), which the projection runs once a host hands it over: the wasm host's glue
-// for every plan, the JS target's compiler only for a plan whose route may say `navigationBar="transparent"` (LLP
-// 1047.002 D1).
-let clearing = null;
-export const useClearBars = (clear) => {
-  clearing = clear;
-};
 const clearInset = new WeakSet(), clearBars = new WeakMap();
 let barResized;
 /** A route that says `navigationBar="transparent"` lays its bar over its top, clear (neutral.css), as iOS gives the bar
  * a clear scroll-edge appearance and insets no content (NavigationBarIOS.swift `transparentBar`): the route's top inset,
  * `var(--exact-safe-area-inset-top)`, then includes the bar's height, and the bar is `scrolled` while content is under
  * it. A header iOS makes no bar of keeps its place. */
-export function clearBar(route) {
+function clearBar(route) {
+  if (!CLEAR_BARS) {
+    return;
+  }
   const header = headerOf(route), clear = !!header && route.getAttribute("data-navigationbar") === "transparent" && viewChildren(route)[0] === header && !asWritten(header);
   if (clearInset.has(route)) {
     clearInset.delete(route);
@@ -659,6 +671,10 @@ function watchClearBars() {
   }) : null;
 }
 function appBarBack(nav, routes, index, split, shown) {
+  if (!BARS) {
+    AGENT_ADMITTED && headerOf(routes[index]) && missing("a route's header");
+    return;
+  }
   const route = routes[index], header = headerOf(route);
   if (!header) {
     return;
@@ -958,7 +974,9 @@ export const navigation = {
       activated.add(hostRoot);
     }
     // Capture before either target's link listener commits. Early replay before connect has no action-row association.
-    document.addEventListener("click", captureRow, true);
+    if (SPLITS) {
+      document.addEventListener("click", captureRow, true);
+    }
     document.addEventListener("click", captureLink, true);
     document.addEventListener("dragstart", (event) => {
       if (root.contains(event.target) && event.target.matches?.("img[data-symbol-source], :is(button, a[href], [data-exact-on~=\"press\"]) img")) {
@@ -966,8 +984,10 @@ export const navigation = {
       }
     });
     // @ref LLP 1115.000 D4.14 — symbols and images inside pressables do not start picture drags.
-    globalThis.matchMedia?.(WIDE).addEventListener?.("change", () => navigation.project(root, log));
-    onFold(() => navigation.project(root, log));
+    if (TABS || SPLITS) {
+      globalThis.matchMedia?.(WIDE).addEventListener?.("change", () => navigation.project(root, log));
+      onFold(() => navigation.project(root, log));
+    }
     addEventListener("popstate", (event) => {
       if (!last) {
         return;
@@ -996,33 +1016,35 @@ export const navigation = {
       drain();
       settled();
     });
-    document.addEventListener("keydown", (event) => {
-      // An input method's Escape cancels its composition.
-      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
-        return;
-      }
-      if (!root.contains(event.target) && event.target !== document.body && event.target !== document.documentElement) {
-        return;
-      }
-      if (document.querySelector("dialog:modal") || [...document.querySelectorAll(":popover-open")].some((p) => p.popover === "auto" || p.popover === "hint")) {
-        return;
-      }
-      // The innermost shown sheet's Back: its named control, else the app bar's way, as iOS's swipe down (`goBack`).
-      // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
-      for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
-        const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
-        if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
-          continue;
+    if (SHEETS) {
+      document.addEventListener("keydown", (event) => {
+        // An input method's Escape cancels its composition.
+        if (event.key !== "Escape" || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+          return;
         }
-        event.preventDefault();
-        if (backControl(nav) || closedNone(route)) {
-          pressBack(nav);
-        } else {
-          appBack(route);
+        if (!root.contains(event.target) && event.target !== document.body && event.target !== document.documentElement) {
+          return;
         }
-        return;
-      }
-    });
+        if (document.querySelector("dialog:modal") || [...document.querySelectorAll(":popover-open")].some((p) => p.popover === "auto" || p.popover === "hint")) {
+          return;
+        }
+        // The innermost shown sheet's Back: its named control, else the app bar's way, as iOS's swipe down (`goBack`).
+        // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
+        for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
+          const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
+          if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+            continue;
+          }
+          event.preventDefault();
+          if (backControl(nav) || closedNone(route)) {
+            pressBack(nav);
+          } else {
+            appBack(route);
+          }
+          return;
+        }
+      });
+    }
   },
   /** Enable projection after a target has adopted its served DOM, then make the first projection. */
   activate(hostRoot = root, journal = log) {
@@ -1064,7 +1086,7 @@ export const navigation = {
       log(`navigation: link ${JSON.stringify(link.url)} popped the stack to a retained visit`);
     }
     visits = new Map((op.visits ?? []).map(([id, url]) => [String(id), url]));
-    pendingRow = pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
+    pendingRow = SPLITS && pressedRow && pressedRow.event.eventPhase !== 0 && op.url !== pressedRow.from ? {
       row: pressedRow.row,
       list: pressedRow.list,
       route: pressedRow.route,
@@ -1089,36 +1111,40 @@ export const navigation = {
     if (activationRequired.has(root) && !activated.has(root)) {
       return;
     }
-    for (const route of root.querySelectorAll("[navigationKey]")) {
-      markSites(route);
+    if (BARS) {
+      for (const route of root.querySelectorAll("[navigationKey]")) {
+        markSites(route);
+      }
     }
     // site headers, under a root with no `navigationBack` too
     for (const nav of root.querySelectorAll("[navigationBack]")) {
       let key = nav.getAttribute("navigationKey"), [list, panels] = tabsOf(nav);
-      // The authored placement is read with the sidebar's own rules lifted, which restyles the page (an embedded frame re-centres), so only when what places the bar may have changed: the wide breakpoint, the bar's parent or orientation, or the root's or the bar's class or inline display, flex direction, position or appearance (their class rules and inline style are what place them).
-      const isWide = wide(), said = [
-        isWide,
-        viewParent(list) === nav && list.getAttribute("aria-orientation"),
-        ...[nav, list].map((el) => el && [
-          el.className,
-          el.style.display,
-          el.style.flexDirection,
-          el.style.position,
-          el.style.appearance
-        ].join("|"))
-      ].join("/");
-      if (placed.get(nav) !== said) {
-        nav.removeAttribute("data-exact-sidebar");
-        nav.toggleAttribute("data-exact-sidebar", isWide && unsaidBar(nav, list));
-        placed.set(nav, said);
-      }
-      for (const panel of managed.get(nav) ?? []) {
-        if (!panels.includes(panel)) {
-          panel.style.visibility = "";
-          setInert(panel, !!panel.authoredInert);
+      if (TABS) {
+        // The authored placement is read with the sidebar's own rules lifted, which restyles the page (an embedded frame re-centres), so only when what places the bar may have changed: the wide breakpoint, the bar's parent or orientation, or the root's or the bar's class or inline display, flex direction, position or appearance (their class rules and inline style are what place them).
+        const isWide = wide(), said = [
+          isWide,
+          viewParent(list) === nav && list.getAttribute("aria-orientation"),
+          ...[nav, list].map((el) => el && [
+            el.className,
+            el.style.display,
+            el.style.flexDirection,
+            el.style.position,
+            el.style.appearance
+          ].join("|"))
+        ].join("/");
+        if (placed.get(nav) !== said) {
+          nav.removeAttribute("data-exact-sidebar");
+          nav.toggleAttribute("data-exact-sidebar", isWide && unsaidBar(nav, list));
+          placed.set(nav, said);
         }
+        for (const panel of managed.get(nav) ?? []) {
+          if (!panels.includes(panel)) {
+            panel.style.visibility = "";
+            setInert(panel, !!panel.authoredInert);
+          }
+        }
+        managed.set(nav, panels);
       }
-      managed.set(nav, panels);
       const stacks = panels.length ? panels.map(routesIn) : [routesIn(nav)];
       const declared = (k) => stacks.some((routes) => routes.some((route) => route.getAttribute("navigationKey") === k));
       if (!declared(key)) {
@@ -1137,13 +1163,15 @@ export const navigation = {
       }
       const at = stacks.findIndex((routes) => routes.some((route) => route.getAttribute("navigationKey") === key));
       // Every tab but the selected one stays mounted, hidden and inert.
-      for (const [index, panel] of panels.entries()) {
-        const active = index === at;
-        if (!active && panel.contains(document.activeElement)) {
-          document.activeElement.blur();
+      if (TABS) {
+        for (const [index, panel] of panels.entries()) {
+          const active = index === at;
+          if (!active && panel.contains(document.activeElement)) {
+            document.activeElement.blur();
+          }
+          panel.style.visibility = active ? "" : "hidden";
+          setInert(panel, !active || !!panel.authoredInert);
         }
-        panel.style.visibility = active ? "" : "hidden";
-        setInert(panel, !active || !!panel.authoredInert);
       }
       for (const [stack, routes] of stacks.entries()) {
         // The selected stack shows the route the root names; another keeps its top laid out.
@@ -1152,7 +1180,7 @@ export const navigation = {
           const before = shownRoutes.get(nav) ?? [], showing = routes.slice(0, selected + 1);
           shownRoutes.set(nav, showing);
           shown.set(nav, showing.map((route) => route.getAttribute("navigationKey")));
-          if (sheet(routes[selected]) && !before.includes(routes[selected])) {
+          if (SHEETS && sheet(routes[selected]) && !before.includes(routes[selected])) {
             for (const slide of leavingSheets) {
               if (viewParent(slide.effect.target) === viewParent(routes[selected])) {
                 slide.finish();
@@ -1168,7 +1196,7 @@ export const navigation = {
         // The scrim under a presented sheet is its stack's parent's (neutral.css): written once a sheet has shown, so
         // it fades out as the last one leaves.
         const scrim = routes[presented]?.getAttribute("navigationPresentation") === "modal" ? "on" : "off", parent = viewParent(routes[0]);
-        if (parent && parent.getAttribute("data-exact-scrim") !== scrim && (scrim === "on" || parent.hasAttribute("data-exact-scrim"))) {
+        if (SHEETS && parent && parent.getAttribute("data-exact-scrim") !== scrim && (scrim === "on" || parent.hasAttribute("data-exact-scrim"))) {
           parent.setAttribute("data-exact-scrim", scrim);
         }
         detailRows(routes, found);
@@ -1176,11 +1204,9 @@ export const navigation = {
           setInert(list, sheet(routes[presented]) || !!list.authoredInert);
         }
         // a sheet is modal: the root's tab bar is inert beneath it, as the route it covers is (LLP 1115.000 D4.5)
-        // A split's detail shown is the top, or the route a sheet covers; its row is the one whose press pushed it, or pushed a route beneath it in its column, else (a detail the app opened itself, at launch or after Back) the row the app says is current.
-        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r) && sheetAt(routes, i) < 0) : -1;
         // The sheet each route shows in, and the sheets something shown is in.
         const shownIn = routes.map((r, i) => sheetAt(routes, i));
-        const inUse = framing && new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
+        const inUse = SHEETS && new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
         for (const [index, route] of routes.entries()) {
           const active = index === selected || live && index === 0;
           if (!active && route.contains(document.activeElement)) {
@@ -1196,13 +1222,18 @@ export const navigation = {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
           }
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
-          framing?.(routes, index, shownIn, inUse);
+          sheetFrame(routes, index, shownIn, inUse);
           appBarBack(nav, routes, index, split > 0, active || covered);
-          clearing?.(route);
+          clearBar(route);
           if (stack === at && index === selected) {
             freshPath(route);
           }
         }
+        if (!SPLITS) {
+          continue;
+        }
+        // A split's detail shown is the top, or the route a sheet covers; its row is the one whose press pushed it, or pushed a route beneath it in its column, else (a detail the app opened itself, at launch or after Back) the row the app says is current.
+        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r) && sheetAt(routes, i) < 0) : -1;
         let row = null;
         for (let i = detail; i > 0 && !row; i--) {
           row = rowOf.get(routes[i])?.isConnected ? rowOf.get(routes[i]) : null;
