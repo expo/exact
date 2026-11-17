@@ -53,6 +53,7 @@ file may stale an iOS drive once; a service-only edit rebuilds web and stales a 
 Windows build, as any edit under `modules/` does.
 
 A tap opens only top-level `navigate` as an untrusted local location. Exact reads no
-other key. Push-to-start, data-only wake, content extensions, critical-alert or
-filtering entitlements, arrival events and Contract or TypeScript execution remain
-unavailable.
+other key. Data-only wake, content extensions, critical-alert or filtering
+entitlements, arrival events and Contract or TypeScript execution remain
+unavailable. Live Activity push-to-start is `exactActivities()`'s, not the extension's
+([contract grammar](../contract-grammar.md#live-activities-startactivity-updateactivity-endactivity)).

@@ -130,7 +130,7 @@ export const timeFields = (name, facts) => byName(timeReaders, name, facts);
 /** Each reader's second entry: the value the build baked, if it baked one
  * (a plan built from source did not): the embedded answer. */
 export function activities(readers) {
-  (data.reserved ??= {}).exactActivities = (_, a, name) => byName(readers, name, { activities: [], frequentPushesEnabled: false, linked: false });
+  (data.reserved ??= {}).exactActivities = (_, a, name) => byName(readers, name, { activities: [], frequentPushesEnabled: false, linked: false, pushToStartToken: null, pushToStartActivities: [] });
 }
 
 // Replaced with string literals by build.mjs for both the page and its renderer.

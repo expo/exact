@@ -344,8 +344,8 @@ change the native state inside that pair, then wait for the runner to apply it
   engineTest = await engineTests()` (`scripts/coverage.mjs`),
   `engineTest[engine](name, fn)` (or `.each`) runs the test or, when that
   browser is not installed or does not launch, skips it. Bun prints only a
-  count of skips, so the first skip of a kind prints why, once, with who can
-  fix it and how (`SKIP: missing firefox, so the tests that need it are
+  count of skips, so the first skip of a kind in a process prints why, with
+  who can fix it and how (`SKIP: missing firefox, so the tests that need it are
   skipped, …`), and each skipped test then prints `SKIP: <name> — missing
   firefox`. Under `EXACT_REQUIRED=1`, as
   the hourly lane runs, it fails instead. Finding out launches Firefox and

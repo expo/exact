@@ -882,7 +882,8 @@ names no take; `:focus-within` remains out.
   runs when an update arrives (the system replaces the activity's state and
   the extension redraws it). Consumer: Interview's AI answer being written,
   which only its server can advance. Unblocks a Live Activity that stays true
-  while its app is suspended. Still refused: push-to-start, remote
+  while its app is suspended. Still refused: push-to-start (admitted
+  2026-11-17, below), remote
   notifications (a visible push admitted 2026-11-11, and a data-only push as a
   wake's trigger 2026-11-14, both below), and everything the click ruling left refused. Take: none
   named; the ruling stands as its own waiver.
@@ -928,7 +929,8 @@ names no take; `:focus-within` remains out.
   Notifications, and a production build (`packages/push/test/checklist.md`);
   nothing is claimed for a device until that run. Not built: push on macOS (the
   row is omitted there) and on the web
-  (Declarative Web Push or a host worker). Still refused: push-to-start; a
+  (Declarative Web Push or a host worker). Still refused: push-to-start
+  (admitted 2026-11-17, below); a
   notification service extension except for the app-owned Swift form admitted
   below; an event raised by a push, except Android data-only pushes and a declared
   action the person chose (below).
@@ -981,10 +983,24 @@ names no take; `:focus-within` remains out.
   event. Consumer: the builder whose ordinary build replaced the extension.
   Unblocks decryption, downloaded media and rewritten alert text without a
   post-build patch. Take: waived under the delegation. Still refused:
-  push-to-start; an event raised by a visible push except for the person's
+  push-to-start (admitted 2026-11-17, below); an event raised by a visible push except for the person's
   declared action above; a notification content extension; Contract or
   TypeScript on a visible-alert arrival; filtering and critical-alert
   entitlements; and payload keys Exact reads beyond `navigate`.
+  **Expanded (Charlie, 2026-11-17, "Admit; we rewrite", on expo/exact#742;
+  LLP 1126 D9 and LLP 1133.004 §9 P8, amended):** ActivityKit push-to-start
+  for an app's own Live Activities on iOS 17.2 and later. `exactActivities()`
+  answers the push-to-start token, read only when an entry declares
+  `push: true`, and the entries a server may start, each with the generation
+  the app runs and its shape digest; the app gives them to its own backend,
+  which sends the start to APNs, and exact2 sends nothing and relays nothing
+  (LLP 1030.000 D6). No app code runs when a start arrives, and the host boots
+  no session for the launch iOS may make for it: the activity and its update
+  token reach the app at its next read of the source. Consumer: expo/exact#742's
+  author, whose backend starts an activity the app did not. Unblocks a Live
+  Activity that begins while its app is not running. Take: none named; the
+  ruling stands as its own waiver. Built; owed on a device: a start delivered
+  through APNs. Still refused: a session booted for a push-to-start's launch.
 
 **Components** — roughly 15 built-in tags, not 40; roughly 12 Facet components, not 47.
 

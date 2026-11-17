@@ -471,7 +471,7 @@ const sharedBrowsers = new Map();
 export async function suiteBrowser(engine = 'chromium', { needs = [], timeout, ...launch } = {}) {
   const playwright = await import('playwright-core');
   const { executable, unavailable } = engine === 'chromium' && !launch.executablePath ? chromium({ needs }) : {};
-  if (unavailable) throw new Error(`missing chrome: ${unavailable}`); // not Playwright's advice, to run npx playwright install
+  if (unavailable) throw new Error(`missing chrome: ${unavailable}`); // rather than Playwright's advice to run npx playwright install
   const options = { headless: true, ...(executable ? { executablePath: executable } : {}), ...launch };
   // A launch timeout is not part of the key: it launches the same browser.
   const key = JSON.stringify([engine, options]);

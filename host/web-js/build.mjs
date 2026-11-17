@@ -744,8 +744,15 @@ const checkpointFaultImport = "import { checkpointFaults } from '../web/faults.j
 if (!mountSource.includes(checkpointFaultImport)) throw new Error('mount.js no longer imports checkpointFaults');
 writeFileSync(resolve(gen, 'mount.js'), localImports(production
   ? mountSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : mountSource));
+// Code other than the compiled plan and Exact's own that writes inside #exact-root, where the page has any: it may
+// write any element, so the page keeps all that the plan alone would leave out.
+const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
+  : launchWeb.length ? `its launch service ${launchWeb[0].name}`
+  : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
+// The behaviours a flag says the plan cannot use (input.flag, navigation.flag; LLP 1047.002 D2.1, D4.2).
+const unusedOf = flag => otherWriter ? [] : readFileSync(resolve(gen, flag), 'utf8').split('\n').filter(Boolean);
 // The web host's own pieces the runtime loads (glue.mjs).
-stageHostGlue(root, gen);
+stageHostGlue(root, gen, unusedOf('input.flag'));
 // The input piece imports the dialog glue for the wasm host; this page imports it where the plan has a dialog (main.js,
 // above).
 {
@@ -754,15 +761,8 @@ stageHostGlue(root, gen);
   for (const line of lines) if (!code.includes(line)) throw new Error(`host/web/input-glue.js: build.mjs replaces a line it no longer has: ${line}`);
   writeFileSync(file, lines.reduce((text, line) => text.replace(line, ''), code));
 }
-// Code other than the compiled plan and Exact's own that writes inside #exact-root, where the page has any: it may
-// write any element, so the page keeps every rule of its sheet and every navigation behaviour.
-const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
-  : launchWeb.length ? `its launch service ${launchWeb[0].name}`
-  : Object.keys(moduleFlag.extensions).length ? `its native module ${Object.keys(moduleFlag.extensions)[0]}'s view` : null;
-// Keep navigation one runtime module and admission a separate lazy module on the JS target, without the behaviours
-// the plan cannot use (navigation.flag; LLP 1047.002 D2.1).
-const navigationUnused = otherWriter ? [] : readFileSync(resolve(gen, 'navigation.flag'), 'utf8').split('\n').filter(Boolean);
-writeFileSync(resolve(gen, 'navigation.js'), await bundleHostModule(root, 'navigation.js', { grants: true, production, unused: navigationUnused }));
+// Keep navigation one runtime module and admission a separate lazy module on the JS target.
+writeFileSync(resolve(gen, 'navigation.js'), await bundleHostModule(root, 'navigation.js', { grants: true, production, unused: unusedOf('navigation.flag') }));
 if (siteBase !== '/') {
   const file = resolve(gen, 'navigation.js'), code = readFileSync(file, 'utf8'), boundary = 'span.href = href.trim();';
   if (!code.includes(boundary)) throw new Error('Markdown has no URL boundary to mount');

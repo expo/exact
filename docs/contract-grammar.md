@@ -511,18 +511,45 @@ new shape cannot update or end an older instance with incompatible state. A
 compatibility-changing binary update follows LLP 1126.001 §5 Q6’s device gate.
 
 `resource activities = exactActivities() as shape Activities` reads a record
-whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool` and
-`linked: bool` (the host packaged its arm).
+whose fields are `activities: Activity[]`, `frequentPushesEnabled: bool`,
+`linked: bool` (the host packaged its arm), `pushToStartToken:
+option<string>` and `pushToStartActivities: PushStartActivity[]`.
 An activity has `id`, `kind`, `state` (a JSON string), `activityState`
 (`pending`, `active`, `stale`, `ended`, `dismissed`) and `token: option<string>`.
-Readers may name only the fields they need. Off iOS the list is empty and
-frequent pushes are false. A first demand enumerates existing activities,
-including after a relaunch without a send; later token, state and content
-updates re-answer the source. A token is absent until ActivityKit supplies
-it, and exists only for an entry declaring `push: true`. The data module
-sends it to its own backend. Push-to-start and the `remote-notification`
-background mode stay refused; an app with activities registers for remote
-notifications only when it grants `device.push`.
+A push-start activity has `kind`, `generation` and `shape`, all strings.
+Readers may name only the fields they need. Off iOS the lists are empty, the
+push-to-start token is absent and frequent pushes are false. A first demand
+enumerates existing activities, including after a relaunch without a send;
+later token, state and content updates re-answer the source. A token is absent
+until ActivityKit supplies it, and exists only for an entry declaring
+`push: true`. The data module sends it to its own backend. The
+`remote-notification` background mode stays refused; an app with activities
+registers for remote notifications only when it grants `device.push`.
+
+Push-to-start (iOS 17.2 and later) lets the app's backend start an activity
+while the app is not running (LLP 1126 D9). `pushToStartToken` is
+ActivityKit's push-to-start token, read only when an entry declares
+`push: true`; it is absent until ActivityKit supplies one, which it does
+once Live Activities are allowed, and the source answers again when it
+rotates. `pushToStartActivities` lists the entries declaring `push: true`, each
+with the `generation` the app runs and its state `shape` digest; it is empty
+until the app has published that generation, just after it starts. The backend
+sends APNs a `start` event with `attributes-type` `ExactActivityAttributes`,
+`attributes` `{"kind", "generation", "shape"}` from that list, and
+`content-state` `{"shape", "state"}`, the same shape digest and a state in
+the entry's declared shape
+([Apple: starting a Live Activity with a push](https://developer.apple.com/documentation/activitykit/starting-and-updating-live-activities-with-activitykit-push-notifications)).
+It sends the values the app last reported, since a delivered update changes
+the generation; a generation from before a compatibility-changing binary
+update no longer renders.
+
+No app code runs when the start arrives. iOS may launch the app in the
+background for it, and the host boots no session for that launch. The started
+activity, with its update `token`, appears in `activities` the next time a
+session reads `exactActivities()`: at once in a session already reading it,
+otherwise at the app's next launch. Until then the backend has no update token
+for the activity, so it cannot update or end it. The app can update and end
+it as it does an activity it started.
 
 ### MIDI: `exactMIDI`, `sendMIDI`, `midimessage`
 

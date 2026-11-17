@@ -34,11 +34,12 @@ function writeFalse(code, file, names) {
 }
 
 /** Copy the host/web glue from the repository at `root` into `dir`, the input piece without the wasm host's paths
- * (input-glue.js `WASM_HOST`, LLP 1047.002 D4.1): this runtime hears its own pointers and routes its own links. */
-export function stageHostGlue(root, dir) {
+ * (input-glue.js `WASM_HOST`, LLP 1047.002 D4.1): this runtime hears its own pointers and routes its own links. Nor
+ * has it the behaviours `unused` names (input.flag, LLP 1047.002 D4.2). */
+export function stageHostGlue(root, dir, unused = []) {
   for (const f of HOST_WEB_GLUE) cpSync(resolve(root, 'host/web', f), resolve(dir, f));
   const piece = resolve(dir, 'input-glue.js');
-  writeFileSync(piece, writeFalse(readFileSync(piece, 'utf8'), 'host/web/input-glue.js', ['WASM_HOST']));
+  writeFileSync(piece, writeFalse(readFileSync(piece, 'utf8'), 'host/web/input-glue.js', ['WASM_HOST', ...unused]));
 }
 
 /**
