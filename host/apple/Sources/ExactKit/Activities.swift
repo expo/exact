@@ -51,6 +51,9 @@ final class ActivityOutput {
     private var context: UInt = 0
     private var library: ActivityLibrary?
     private var snapshot: String?
+    /// `pushToStartActivities` for the generation the session runs, by its publication.
+    private var pushStarts: (publication: String, entries: [[String: String]])?
+    private var resolvingPushStarts: String?
     private var sends: [UInt64: (UInt64, Int)] = [:]
     private static var nextSend: UInt64 = 0
     private var queued: [([String: Any], Int)] = []
@@ -136,9 +139,35 @@ final class ActivityOutput {
             value["ticket"] = ticket
             guard let translated = try? JSONSerialization.data(withJSONObject: value) else { return }
             session.apply(session.runtime.activities(String(decoding: translated, as: UTF8.self)))
+        } else if value["activities"] != nil {
+            snapshot = json
+            value["pushToStartActivities"] = pushStartEntries(session)
+            guard let merged = try? JSONSerialization.data(withJSONObject: value) else { return }
+            session.apply(session.runtime.activities(String(decoding: merged, as: UTF8.self)))
         } else {
-            if value["activities"] != nil { snapshot = json }
             session.apply(session.runtime.activities(json))
         }
+    }
+    /// The arm reports ActivityKit's facts for the process; the entries a
+    /// server may start are this session's generation's, which only the
+    /// session knows. Empty until that generation is published, then the
+    /// snapshot is reported again with them.
+    private func pushStartEntries(_ session: ExactSession) -> [[String: String]] {
+        guard let assets = session.app.resolver else { return [] }
+        if let pushStarts, pushStarts.publication == assets.publicationID { return pushStarts.entries }
+        guard resolvingPushStarts != assets.publicationID else { return [] }
+        resolvingPushStarts = assets.publicationID
+        WidgetContainer.pushStarts(assets) { [weak self] result in
+            guard let self, self.resolvingPushStarts == assets.publicationID else { return }
+            self.resolvingPushStarts = nil
+            switch result {
+            case .success(let entries):
+                self.pushStarts = (assets.publicationID, entries)
+                if !entries.isEmpty, let snapshot = self.snapshot { self.report(snapshot) }
+            case .failure(let error):
+                FileHandle.standardError.write(Data("ActivityKit arm: push-to-start entries: \(error)\n".utf8))
+            }
+        }
+        return []
     }
 }

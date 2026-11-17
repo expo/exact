@@ -944,7 +944,7 @@ test('activity refusals allow native APNs without activities and still scan ever
           // With `device.push`, the app registers beside its activities.
           assert.equal(assertActivityRefusals(dir, runApple, activity, granted), binaries.length);
         } else {
-          // ActivityKit push-to-start token observation is admitted.
+          // Push-to-start is admitted (LLP 1126 D9, amended 2026-11-17).
           assert.equal(assertActivityRefusals(dir, runApple, activity), binaries.length);
           assert.equal(assertActivityRefusals(dir, runApple, activity, granted), binaries.length);
         }

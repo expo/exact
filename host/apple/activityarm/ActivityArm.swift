@@ -15,17 +15,14 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
     private var processTasks: [Task<Void, Never>] = []
     private var tokens: [String: String] = [:]
     private var pushToStartToken: String?
-    private var pushToStartActivities: [[String: Any]] = []
-
     func join(_ context: UnsafeMutableRawPointer?, _ report: @escaping ActivityReport) -> UInt {
         next += 1
         listeners[next] = (context, report)
         if processTasks.isEmpty {
-            loadPushToStartActivities()
             // Subscribe before enumerating, so an activity arriving during recovery is seen.
             processTasks = [Task { for await activity in Live.activityUpdates { observe(activity); publish() } },
                             Task { for await _ in authorization.frequentPushEnablementUpdates { publish() } }]
-            if #available(iOS 17.2, *) {
+            if #available(iOS 17.2, *), Self.pushes {
                 if let token = Live.pushToStartToken { pushToStartToken = hex(token) }
                 processTasks.append(Task {
                     for await token in Live.pushToStartTokenUpdates {
@@ -39,23 +36,14 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
         publish()
         return next
     }
-    /// The backend needs the exact attributes envelope for a push-to-start.
-    /// The registry and generation are embedded in the app bundle, so this
-    /// stays correct across builds and does not make the app duplicate digests.
-    private func loadPushToStartActivities() {
-        let embedded = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetGeneration") as? String ?? ""
-        let compatibility = Bundle.main.object(forInfoDictionaryKey: "ExactWidgetCompatibility") as? String ?? ""
-        let generation = embedded.isEmpty || compatibility.isEmpty ? "" : ExactActivityGeneration.embedded(compatibility: compatibility, generation: embedded)
-        let path = Bundle.main.bundleURL.appendingPathComponent("plans/activities.json")
-        guard let data = try? Data(contentsOf: path),
-              let registry = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
-        pushToStartActivities = registry.compactMap { entry in
-            guard entry["push"] as? Bool == true,
-                  let kind = entry["kind"] as? String,
-                  let shape = entry["shape"] as? String,
-                  !generation.isEmpty else { return nil }
-            return ["kind": kind, "generation": generation, "shape": shape]
-        }
+    /// Whether the binary declares an activity that takes pushes: only then is
+    /// it signed with `aps-environment` (`build.mjs`), which push-to-start needs.
+    /// The entitlement is the binary's, so its embedded registry decides, never
+    /// a delivered generation's.
+    private static var pushes: Bool {
+        guard let data = try? Data(contentsOf: Bundle.main.bundleURL.appendingPathComponent("plans/activities.json")),
+              let registry = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return false }
+        return registry.contains { $0["push"] as? Bool == true }
     }
     func leave(_ id: UInt) { listeners.removeValue(forKey: id) }
     private func emit(_ value: [String: Any], to listener: (UnsafeMutableRawPointer?, ActivityReport)) {
@@ -93,8 +81,7 @@ public typealias ActivityReport = @convention(c) (UnsafeMutableRawPointer?, Unsa
         }
         for listener in listeners.values {
             emit(["activities": entries, "frequentPushesEnabled": authorization.frequentPushesEnabled,
-                  "pushToStartToken": pushToStartToken.map { $0 as Any } ?? NSNull(),
-                  "pushToStartActivities": pushToStartActivities], to: listener)
+                  "pushToStartToken": pushToStartToken.map { $0 as Any } ?? NSNull()], to: listener)
         }
         // The final report includes the terminal state. ActivityKit no longer enumerates dismissed instances.
         let dismissed = live.values.filter { $0.activityState == .dismissed }

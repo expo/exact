@@ -93,6 +93,33 @@ public enum WidgetContainer {
         }
         return directory
     }
+    /// The activity entries a server may start by push-to-start, each with the
+    /// generation and shape digests its `ExactActivityAttributes` must carry
+    /// (LLP 1126 D9, amended 2026-11-17). The generation is the one `assets`
+    /// is, the one the app runs and names when it starts an activity itself,
+    /// published first: the extension renders a push-started activity from that
+    /// folder, and the app's update and end validate against it.
+    package static func pushStarts(_ assets: AssetResolver, root: URL, kinds: [String], compatibility: String, typescript: Bool = false, embedded: String? = nil) throws -> [[String: String]] {
+        _ = try publish(assets, root: root, kinds: kinds, compatibility: compatibility, typescript: typescript, embedded: embedded)
+        let directory = try pinCurrent(assets, root: root, compatibility: compatibility)
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent("plans/activities.json")) else { return [] }
+        let registry = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+        return registry.compactMap { entry in
+            guard entry["push"] as? Bool == true, let kind = entry["kind"] as? String, let shape = entry["shape"] as? String else { return nil }
+            return ["kind": kind, "generation": directory.lastPathComponent, "shape": shape]
+        }
+    }
+    /// `pushStarts` for the app's bundle and App Group, on the publisher's
+    /// queue so it follows the after-first-pixel publication; `done` runs on main.
+    package static func pushStarts(_ assets: AssetResolver, done: @escaping (Result<[[String: String]], Error>) -> Void) {
+        publisher.async {
+            let result = Result { () throws -> [[String: String]] in
+                guard let root, let kinds = entryKinds() else { throw HeadlessSession.Failure(description: "widget App Group is unavailable") }
+                return try pushStarts(assets, root: root, kinds: kinds, compatibility: compatibility, typescript: typescript, embedded: embeddedGeneration)
+            }
+            DispatchQueue.main.async { done(result) }
+        }
+    }
     private static let publisher = DispatchQueue(label: "exact.widget-generation", qos: .utility)
     private static var typescript: Bool { Bundle.main.object(forInfoDictionaryKey: "ExactWidgetTypeScript") as? Bool == true }
     private static let statusLock = NSLock()

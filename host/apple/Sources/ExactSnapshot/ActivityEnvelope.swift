@@ -1,19 +1,8 @@
 // @ref LLP 1126.001 WP8 — one Codable contract for every app and state shape.
 import Foundation
-import CryptoKit
 #if os(iOS)
 import ActivityKit
 #endif
-
-/// The generation identity used by the embedded activity plan. The app arm
-/// and widget extension both use this so a push-to-start names the plan the
-/// extension can resolve.
-public enum ExactActivityGeneration {
-    public static func embedded(compatibility: String, generation: String) -> String {
-        let stamp = Data((compatibility + "\nembedded:" + generation).utf8)
-        return SHA256.hash(data: stamp).map { String(format: "%02x", $0) }.joined()
-    }
-}
 
 public indirect enum ActivityJSON: Codable, Hashable, Sendable {
     case null, bool(Bool), number(Double), string(String)
