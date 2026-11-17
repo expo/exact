@@ -324,6 +324,11 @@ pub struct Env {
     /// each top right bottom left, from the layout viewport. `None` on a
     /// host that reports none: every region is then the safe area.
     pub regions: Option<[[f32; 4]; 5]>,
+    /// The platform's default padding, top right bottom left, which an
+    /// `auto` edge of `-exact-safe-area-padding` takes (LLP 1123 D11; on
+    /// Apple platforms what SwiftUI's `padding()` adds there). `None` on a
+    /// host that reports none: such an edge pads nothing.
+    pub default_padding: Option<[f32; 4]>,
     /// The title-bar area beside the window's controls, in the layout
     /// viewport's points (Window Controls Overlay): `None` where the window
     /// has no such area to give, where every `titlebar-area-*` is undefined
@@ -390,6 +395,7 @@ impl Env {
             button_fonts: None,
             screen: None,
             regions: None,
+            default_padding: None,
             titlebar_area: None,
             root_font_size: crate::style::relative::MEDIUM,
             root_local: None,
@@ -464,7 +470,8 @@ impl Env {
             .map_or_else(|| self.inset(edge), |r| r[region as usize][edge as usize])
     }
 
-    /// Whether every inset and every segment side is a finite number.
+    /// Whether every inset and every segment side is a finite number, and
+    /// the screen and the default padding are not negative.
     pub fn is_finite(&self) -> bool {
         self.button_fonts
             .as_ref()
@@ -482,6 +489,9 @@ impl Env {
             && self
                 .screen
                 .is_none_or(|(w, h)| w.is_finite() && h.is_finite() && w >= 0.0 && h >= 0.0)
+            && self
+                .default_padding
+                .is_none_or(|p| p.iter().all(|v| v.is_finite() && *v >= 0.0))
             && self
                 .control_text_styles
                 .as_ref()
@@ -552,6 +562,14 @@ impl Env {
     pub fn with_regions(&self, regions: Option<[[f32; 4]; 5]>) -> Env {
         Env {
             regions,
+            ..self.clone()
+        }
+    }
+
+    /// This environment with its default padding replaced (`None`: none).
+    pub fn with_default_padding(&self, default_padding: Option<[f32; 4]>) -> Env {
+        Env {
+            default_padding,
             ..self.clone()
         }
     }

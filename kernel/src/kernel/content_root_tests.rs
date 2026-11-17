@@ -16,12 +16,6 @@ fn clearing(root: &[(StyleId, &str)]) -> Kernel {
     owner(390.0, 844.0, ops)
 }
 
-/// `id`'s frame: x, y, width and height in its layout's space.
-fn frame(k: &Kernel, id: ViewId) -> (f32, f32, f32, f32) {
-    let f = k.node(id).unwrap().frame;
-    (f.x, f.y, f.width, f.height)
-}
-
 const BAND: [f32; 4] = [47.0, 10.0, 34.0, 20.0];
 
 #[test]

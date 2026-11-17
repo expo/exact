@@ -753,7 +753,7 @@ mod tests {
         // Recomputed when the schema changes; the digest test prints the value.
         // Apple JSON record and inline style declarations participate (LLP 1172.001 E4),
         // even when the EXWF codec bytes above stay unchanged.
-        assert_eq!(SCHEMA_DIGEST, 0x289fe5d5834a4ab0);
+        assert_eq!(SCHEMA_DIGEST, 0xd3d27f043a766746);
     }
 
     #[test]

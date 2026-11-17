@@ -5,24 +5,26 @@
 //! A box that reads its observation (a calculation's `Observe` leaf) is a
 //! reader, and its observation on an edge is what UIKit gives a view as
 //! its `safeAreaInsets` there: the distance from its border box's edge, as
-//! laid out with scroll offsets at zero, to its owner's band's inner side,
-//! at least 0 and at most the band's depth; and 0 inside a scroller, which
-//! takes every band it overlaps into its content inset (D14). A box outside
-//! every owner, a document top-layer box's content included, observes the
-//! session view's band on the viewport.
+//! laid out with scroll offsets at zero, to its unsafe area's inner side,
+//! at least 0 and at most the area's depth. The area is its owner's band
+//! and what its ancestors reserve (D11); inside a scroller, which takes
+//! every band it overlaps into its content inset (D14), it is only what is
+//! reserved at or below the scroller. A box outside every owner, a
+//! document top-layer box's content included, observes the session view's
+//! band on the viewport.
 //!
 //! A reader's border box depends on what it reads, so the kernel solves the
 //! readers after each layout ([`Kernel::solve_observations`]): each input
 //! comes within half a device pixel of its measurement, or the reader is
 //! left unsettled after a bounded number of rounds.
 
+use super::block::reservation;
 use super::provenance::{self, Contribution};
 use super::Kernel;
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
 use crate::id::{IdMap, IdSet, Offer, ViewId};
 use crate::layout::LayoutReceipt;
-use crate::style::Edge;
 use crate::{Overflow, StyleId};
 
 /// The rounds the solve lays its readers out in before it leaves the ones
@@ -59,6 +61,9 @@ pub(crate) struct Observations {
     tolerance: f32,
     /// The roots of the subtrees moved since the last solve.
     moved: Vec<u32>,
+    /// What each box that reserves reserved and where its edges lay when
+    /// its descendants were last measured (D11).
+    reserving: IdMap<u32, (Option<reservation::Reserved>, [f32; 4])>,
     /// The native targets owners and the session report.
     pub(crate) targets: super::targets::Targets,
 }
@@ -225,6 +230,7 @@ impl Kernel {
             }
         }
         self.check_spaces(receipt);
+        self.check_reservations();
         let unsettled = std::mem::take(&mut self.arena.observations.unsettled);
         let (mine, others): (Vec<u32>, _) =
             (unsettled.into_iter()).partition(|&s| within(&self.arena, s, slot));
@@ -238,7 +244,7 @@ impl Kernel {
             for &s in &candidates {
                 let space = band_at(self, s);
                 let readout = measure(&self.arena, s, &space);
-                let measured = readout.observed;
+                let (measured, caps) = (readout.observed, readout.depths);
                 let observations = &mut self.arena.observations;
                 if readout.top_layer {
                     observations.top_layer.insert(s);
@@ -253,7 +259,6 @@ impl Kernel {
                 if round == MAX_ROUNDS {
                     continue;
                 }
-                let caps = space.band.unwrap_or([0.0; 4]);
                 let samples = solving.entry(s).or_default();
                 let next = samples.step(input, measured, caps, tolerance, edges);
                 if next != input {
@@ -267,6 +272,7 @@ impl Kernel {
             self.restyle_readers(&moved);
             let laid = relayout(self)?;
             self.check_spaces(&laid);
+            self.check_reservations();
             let solving = solving.keys().copied();
             candidates = self.readers_due(slot, &laid, solving, skip);
             merge(receipt, laid);
@@ -417,6 +423,66 @@ impl Kernel {
             }
         }
     }
+
+    /// Measure again the readers under each box whose reservation or edges
+    /// moved since its descendants were last measured, or that stopped
+    /// reserving, which moves what they observe though their own frames
+    /// need not move (D11): a custom property or an observation a
+    /// reservation reads, or a reserving box that moves past an absolute
+    /// reader.
+    fn check_reservations(&mut self) {
+        let arena = &self.arena;
+        if arena.reserving.is_empty() && arena.observations.reserving.is_empty() {
+            return;
+        }
+        // A box that stopped reserving moved what its descendants observe
+        let held = &arena.observations.reserving;
+        let stopped = held
+            .keys()
+            .copied()
+            .filter(|&s| !arena.reserving.contains(s));
+        let mut moved: IdSet<u32> = stopped.collect();
+        let mut changed = Vec::new();
+        for s in arena.reserving.iter() {
+            let f = arena.frame(s);
+            let [left, top, right, bottom] = arena.inset(s).unwrap_or_default().border;
+            let edges = [
+                f.y + top,
+                f.x + f.width - right,
+                f.y + f.height - bottom,
+                f.x + left,
+            ];
+            let now = (reservation::reserved(arena, s), edges);
+            if held.get(&s) != Some(&now) {
+                moved.insert(s);
+                changed.push((s, now));
+            }
+        }
+        if moved.is_empty() {
+            return;
+        }
+        let readouts = &arena.observations.readouts;
+        let under = |r: u32| {
+            let mut at = arena.parent(r);
+            while let Some(a) = at {
+                if moved.contains(&a) {
+                    return true;
+                }
+                at = arena.parent(a);
+            }
+            false
+        };
+        let readers: Vec<u32> = (arena.readers.observers.iter())
+            .filter(|r| readouts.contains_key(r) && under(*r))
+            .collect();
+        let reserving = &self.arena.reserving;
+        let observations = &mut self.arena.observations;
+        observations.reserving.retain(|s, _| reserving.contains(*s));
+        observations.reserving.extend(changed);
+        for r in readers {
+            observations.readouts.remove(&r);
+        }
+    }
 }
 
 fn within(arena: &NodeArena, slot: u32, root: u32) -> bool {
@@ -447,7 +513,7 @@ impl Samples {
     /// the reader's `edges` not within `tolerance`, the secant step on the
     /// residuals of this round and the one before, else plain substitution;
     /// an edge it does not read keeps its input. A step lands within what
-    /// an observation can be, 0 to the band's depth `caps`; one whose
+    /// an observation can be, 0 to the area's depth `caps`; one whose
     /// candidate lies behind the input, against its residual, takes the end
     /// of that range the residual points to: the measurement outruns the
     /// line there, steeper than it, up to where it stops at that end.
@@ -502,6 +568,9 @@ impl Samples {
 #[derive(Debug, Clone, Copy)]
 struct Readout {
     observed: Observed,
+    /// The unsafe area's depth on each edge, past which no observation
+    /// reaches and the solve tries none (`Samples::step`).
+    depths: [f32; 4],
     /// The owner whose band it measured, `None` for the session's.
     owner: Option<u32>,
     /// Whether it is in a document top-layer box.
@@ -510,32 +579,90 @@ struct Readout {
 
 /// What `slot` observes on each edge of its `space` on the layout just
 /// made, as UIKit gives a view its `safeAreaInsets`: the distance from the
-/// box's edge to the band's inner side, at least 0 and at most the band's
-/// depth, whatever the box's own size.
+/// box's edge to the unsafe area's inner side, at least 0 and at most the
+/// area's depth, whatever the box's own size (D9).
 fn measure(arena: &NodeArena, slot: u32, space: &Space) -> Readout {
-    let observed = match space.band {
-        None => [None; 4],
-        Some(_) if inside_scroller(arena, slot, space.root) => [Some(0.0); 4],
-        Some([top, right, bottom, left]) => {
-            let (width, height) = space.size;
-            let f = arena.frame(slot);
-            let (x, y) = (f.x + space.origin.0, f.y + space.origin.1);
-            let depth = |past: f32, band: f32| past.clamp(0.0, band);
-            Edge::ALL.map(|edge| {
-                Some(match edge {
-                    Edge::Top => depth(top - y, top),
-                    Edge::Right => depth(x + f.width - (width - right), right),
-                    Edge::Bottom => depth(y + f.height - (height - bottom), bottom),
-                    Edge::Left => depth(left - x, left),
-                })
-            })
+    let (observed, depths) = match space.band {
+        None => ([None; 4], [0.0; 4]),
+        Some(band) => {
+            let sides = area(arena, slot, space, band);
+            let edges = space.edges(arena, slot);
+            let observed = std::array::from_fn(|e| Some(depth(sides[e], edges[e])));
+            (
+                observed,
+                sides.map(|[outer, inner]| (inner - outer).max(0.0)),
+            )
         }
     };
     Readout {
         observed,
+        depths,
         owner: space.owner,
         top_layer: space.root.is_some() && space.owner.is_none(),
     }
+}
+
+/// The depth an edge `at` in from the space's edge observes of an area
+/// whose sides lie `outer` and `inner` in: at least 0, at most the area's
+/// depth.
+fn depth([outer, inner]: [f32; 2], at: f32) -> f32 {
+    (inner - at).clamp(0.0, (inner - outer).max(0.0))
+}
+
+/// The unsafe area `slot` observes, on each edge how far in from the
+/// space's edge its outer and inner sides lie (D9, D11): the band, from the
+/// space's edge, or nothing below a scroller, which takes what reaches it;
+/// then, on each edge where an ancestor at or below that reserves, from its
+/// padding edge to its observation there plus its reservations, and from
+/// further out where that edge lies in the area; an owner's root from the
+/// allocation's edge, with the band as its observation. A box's own
+/// reservations are not among them.
+fn area(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [[f32; 2]; 4] {
+    let mut sides = band.map(|b| [0.0, b]);
+    if arena.reserving.is_empty() {
+        if inside_scroller(arena, slot, space.root) {
+            sides = [[0.0; 2]; 4];
+        }
+        return sides;
+    }
+    let mut reserving = Vec::new();
+    let mut above = (space.root != Some(slot))
+        .then(|| arena.parent(slot))
+        .flatten();
+    // What each box reserves this round, which `check_reservations` resolved
+    let held = &arena.observations.reserving;
+    while let Some(s) = above {
+        let r = match held.get(&s) {
+            Some((r, _)) => *r,
+            None => reservation::reserved(arena, s),
+        };
+        if let Some(r) = r {
+            reserving.push((s, r));
+        }
+        if scroll_view(arena, s) {
+            sides = [[0.0; 2]; 4];
+            break;
+        }
+        above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
+    }
+    for (s, r) in reserving.into_iter().rev() {
+        let edges = match space.owner == Some(s) {
+            true => [0.0; 4],
+            false => space.padding_edges(arena, s),
+        };
+        let observed: [f32; 4] = std::array::from_fn(|e| depth(sides[e], edges[e]));
+        let inside = r.inside(observed);
+        for e in 0..4 {
+            if r.added[e] != 0.0 || r.padding[e] != 0.0 {
+                let outer = match observed[e] > 0.0 {
+                    true => sides[e][0].min(edges[e]),
+                    false => edges[e],
+                };
+                sides[e] = [outer, edges[e] + inside[e]];
+            }
+        }
+    }
+    sides
 }
 
 /// The band a box observes and where it lies.
@@ -552,6 +679,25 @@ struct Space {
     /// What places the box's frames in that space: a top-layer box's
     /// translation into the viewport.
     origin: (f32, f32),
+}
+
+impl Space {
+    /// How far in from this space's edges each of `slot`'s edges lies, top
+    /// right bottom left.
+    fn edges(&self, arena: &NodeArena, slot: u32) -> [f32; 4] {
+        let ((width, height), f) = (self.size, arena.frame(slot));
+        let (x, y) = (f.x + self.origin.0, f.y + self.origin.1);
+        [y, width - x - f.width, height - y - f.height, x]
+    }
+
+    /// [`Self::edges`] for `slot`'s padding edges, inside its border.
+    fn padding_edges(&self, arena: &NodeArena, slot: u32) -> [f32; 4] {
+        let edges = self.edges(arena, slot);
+        // A published inset's sides are left, top, right, bottom
+        let [left, top, right, bottom] = arena.inset(slot).unwrap_or_default().border;
+        let border = [top, right, bottom, left];
+        std::array::from_fn(|e| edges[e] + border[e])
+    }
 }
 
 /// The band `slot` observes: an owner's, in its block's space; or, for a

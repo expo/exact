@@ -5,6 +5,7 @@ use crate::generated::StyleProps;
 use crate::kernel::{BlockAxis, HostBlock};
 use crate::style::calc::{self, Node, Observe, Unit};
 use crate::style::targets::Target;
+use crate::style::Edge;
 use crate::wire::Op;
 use crate::{NodeType, StyleId, StyleValue};
 
@@ -37,6 +38,7 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
     for (row, text) in texts {
         let value = match text.parse::<f64>() {
             Ok(n) => StyleValue::Number(n),
+            Err(_) if *text == "auto" => StyleValue::Auto,
             Err(_) => StyleValue::Text((*text).into()),
         };
         patch.set_dynamic(*row, &value).unwrap();
@@ -50,6 +52,8 @@ fn style(id: ViewId, trees: Vec<(StyleId, Node)>, texts: &[(StyleId, &str)]) -> 
             StyleId::MarginLeft => patch.margin_left = d,
             StyleId::Width => patch.width = d,
             StyleId::Height => patch.height = d,
+            StyleId::AdditionalSafeAreaTop => patch.rare.additional_safe_area_top = d,
+            StyleId::SafeAreaPaddingTop => patch.rare.safe_area_padding_top = d,
             other => panic!("no field for {other:?}"),
         }
         patch.mask.set(row);
@@ -141,6 +145,12 @@ fn left(k: &Kernel, id: ViewId) -> f32 {
 
 fn slot(k: &Kernel, id: ViewId) -> u32 {
     k.arena.slot_of(id).unwrap()
+}
+
+/// `id`'s frame: x, y, width and height in its layout's space.
+fn frame(k: &Kernel, id: ViewId) -> (f32, f32, f32, f32) {
+    let f = k.node(id).unwrap().frame;
+    (f.x, f.y, f.width, f.height)
 }
 
 #[test]
@@ -1324,3 +1334,6 @@ mod provenance;
 
 #[path = "content_root_tests.rs"]
 mod content_root;
+
+#[path = "reservation_tests.rs"]
+mod reservation;

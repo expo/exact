@@ -37,6 +37,9 @@ use crate::Direction;
 use taffy::style::{BoxSizing, LengthPercentageAuto as Lpa, Position};
 use taffy::util::{MaybeResolve, ResolveOrZero};
 
+#[path = "reservation.rs"]
+pub(crate) mod reservation;
+
 /// One axis of a host's containing block.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BlockAxis {
@@ -101,9 +104,10 @@ impl HostBlock {
 
 /// What the host clears of `slot`'s allocation for its content root, top
 /// right bottom left (@ref LLP 1123 D3): a content owner's incoming band,
-/// less each edge whose container region the root takes (D4). None while
-/// the band is unavailable, as UIKit gives a view outside a window zero
-/// safe-area insets, and none for a box that is no content owner.
+/// none of it on each edge whose container region the root takes (D4), and
+/// the root's reservations (D11). No band while it is unavailable, as
+/// UIKit gives a view outside a window zero safe-area insets; and nothing
+/// for a box that is no content owner.
 pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
     arena
         .blocks
@@ -113,13 +117,23 @@ pub(crate) fn clearance(arena: &NodeArena, slot: u32) -> [f32; 4] {
 
 /// [`clearance`] for `held`'s root, with no search of the blocks.
 fn cleared(arena: &NodeArena, held: &Held) -> [f32; 4] {
-    // A top-layer box is no owner, whatever block it has (D2)
-    let owner = held.given.is_some() && !arena.top_layer_slots.contains(held.slot);
-    let Some(band) = owner.then(|| arena.observations.band(held.slot)).flatten() else {
+    if !is_owner(arena, held) {
         return [0.0; 4];
-    };
+    }
+    let band = arena.observations.band(held.slot).unwrap_or([0.0; 4]);
     let taken = taken_edges(arena, held.slot, SafeAreaIgnore::Container);
-    std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] })
+    let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
+    reservation::reserved(arena, held.slot).map_or(band, |r| r.inside(band))
+}
+
+/// Whether `slot` is a content owner's root: a box its host gave a block
+/// that is no top-layer box, which is no owner whatever block it has (D2).
+pub(crate) fn owns(arena: &NodeArena, slot: u32) -> bool {
+    arena.blocks.held(slot).is_some_and(|b| is_owner(arena, b))
+}
+
+fn is_owner(arena: &NodeArena, held: &Held) -> bool {
+    held.given.is_some() && !arena.top_layer_slots.contains(held.slot)
 }
 
 /// The edges, top right bottom left, on which `slot` takes `region`'s
@@ -739,21 +753,30 @@ impl Kernel {
             .filter(|(_, b)| under(b))
             .map(|(i, b)| (i, cleared(arena, b)))
             .collect();
-        let mut out = Vec::with_capacity(clears.len());
-        for (i, clear) in clears {
-            let held = &mut self.arena.blocks.0[i];
-            let (slot, inner) = (held.slot, held.block.less(clear));
-            let was = std::mem::replace(&mut held.cleared, clear);
-            if was != clear {
-                self.restyle_block(slot);
-            }
-            if (was[0], was[3]) != (clear[0], clear[3]) {
-                self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);
-            }
-            let offer = Offer::definite(inner.width.length(), inner.height.length());
-            out.push((slot, offer));
+        let clears = clears.into_iter();
+        clears
+            .map(|(i, clear)| self.clear_block(i, clear))
+            .collect()
+    }
+
+    /// Give the `i`th block its clearance `clear`, and return its root and
+    /// offer: the block less the clearance. A clearance that changed
+    /// restyles the block, and one that moved the content root's corner
+    /// publishes it whole.
+    fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
+        let held = &mut self.arena.blocks.0[i];
+        let (slot, inner) = (held.slot, held.block.less(clear));
+        let was = std::mem::replace(&mut held.cleared, clear);
+        if was != clear {
+            self.restyle_block(slot);
         }
-        out
+        if (was[0], was[3]) != (clear[0], clear[3]) {
+            self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);
+        }
+        (
+            slot,
+            Offer::definite(inner.width.length(), inner.height.length()),
+        )
     }
 
     /// Lay `root` out under `offer`, then each subtree with a block under
@@ -914,7 +937,7 @@ impl Kernel {
             self.layout.replace(Box::new(trial)),
             self.region.take(),
         );
-        let measured = self.measure_trial(slot, node, block, clear);
+        let measured = self.measure_trial(slot, node, block);
         let trial = std::mem::replace(&mut self.arena, kept.0);
         (self.layout, self.region) = (kept.1, kept.2);
         // A measurer may hold what the trial measured under the text
@@ -931,12 +954,15 @@ impl Kernel {
         slot: u32,
         node: taffy::NodeId,
         block: HostBlock,
-        clear: [f32; 4],
     ) -> Result<BlockMeasure, KernelError> {
-        let inner = block.less(clear);
-        let offer = Offer::definite(inner.width.length(), inner.height.length());
         let key = self.arena.key(slot);
+        // Each pass clears what the root's reservations then say, which can
+        // read the observations the solve moves
         let relayout = &mut |k: &mut Kernel| -> Result<LayoutReceipt, KernelError> {
+            let i = (k.arena.blocks.0.iter()).position(|b| b.slot == slot);
+            let i = i.expect("the measured root holds its block");
+            let clear = cleared(&k.arena, &k.arena.blocks.0[i]);
+            let (_, offer) = k.clear_block(i, clear);
             let tree = engine(&mut k.layout);
             let mut receipt =
                 layout::compute(&mut k.arena, tree, k.measurer.as_mut(), slot, offer)?;
@@ -953,6 +979,7 @@ impl Kernel {
             return Ok(BlockMeasure::default());
         }
         let l = engine(&mut self.layout).layout(node);
+        let clear = self.arena.blocks.held(slot).map_or([0.0; 4], |b| b.cleared);
         Ok(BlockMeasure {
             used: used_in(block, clear, &l),
             border: (l.size.width, l.size.height),

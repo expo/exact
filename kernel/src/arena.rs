@@ -65,6 +65,9 @@ pub struct NodeArena {
     // @ref LLP 1043.000 §3 D4 — no per-node vector or allocation.
     pub(crate) flow: IdMap<u32, crate::flow::FlowState>,
     pub(crate) exclusion_slots: SlotSet,
+    /// The boxes that reserve on some edge (LLP 1123 D11): none, in most
+    /// documents, lets layout and observations skip asking each box.
+    pub(crate) reserving: SlotSet,
     /// What each node's lengths read of its own environment (LLP 1123 D9).
     pub(crate) readers: crate::kernel::readers::Readers,
     /// The owners' bands and the readers' observations (LLP 1123 D9).
@@ -189,6 +192,7 @@ impl Clone for NodeArena {
             frames: self.frames.clone(),
             flow: self.flow.clone(),
             exclusion_slots: self.exclusion_slots.clone(),
+            reserving: self.reserving.clone(),
             readers: self.readers.clone(),
             observations: self.observations.clone(),
             frag: self.frag.clone(),
@@ -285,6 +289,7 @@ impl NodeArena {
         self.fit_scales.clear();
         self.flow.clear();
         self.exclusion_slots.clear();
+        self.reserving.clear();
         self.readers.clear();
         self.observations = Default::default();
         self.frag = Default::default();
@@ -948,6 +953,7 @@ impl NodeArena {
         self.field_content.remove(&slot);
         self.mark_reports.remove(&slot);
         self.exclusion_slots.remove(slot);
+        self.reserving.remove(slot);
         self.readers.forget(slot);
         self.observations.forget(slot);
         self.frag.forget(slot);
