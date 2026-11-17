@@ -458,9 +458,9 @@ async function iosRunsFixture(body) {
   const savedPath = process.env.PATH, record = resolve(tmpdir(), `exact-touches-${udid}.runner.json`);
   let opening;
   try {
-    const pkg = resolve(root, 'package'), products = resolve(root, 'products');
+    const pkg = resolve(root, 'package'), derived = resolve(root, 'derived'), products = resolve(derived, 'Build/Products');
     mkdirSync(resolve(pkg, 'tests/ExactKitTests'), { recursive: true });
-    mkdirSync(products);
+    mkdirSync(products, { recursive: true });
     writeFileSync(resolve(pkg, 'tests/ExactKitTests/FixtureTests.swift'), `class FixtureTests: XCTestCase {
       func testHosted() { throw missing("scene", "window") }
       func testTouch() { throw missing("touch", "Back") }
@@ -472,7 +472,7 @@ async function iosRunsFixture(body) {
     for (const name of ['plutil', 'xcrun']) chmodSync(resolve(root, name), 0o755);
     process.env.PATH = `${root}:${savedPath}`;
     opening = spyOn(await import('./touches.mjs'), 'openTouches');
-    await body({ root, opening, options: { pkg, products, destination: `id=${udid}`, udid, env: {}, canvasGpu: 'gpu', hostSource: 'host.swift', triple: 'arm64-apple-ios-simulator', run: () => {} } });
+    await body({ root, opening, options: { pkg, derived, destination: `id=${udid}`, udid, env: {}, canvasGpu: 'gpu', hostSource: 'host.swift', triple: 'arm64-apple-ios-simulator', run: () => {} } });
   } finally {
     opening?.mockRestore();
     process.env.PATH = savedPath;
@@ -552,6 +552,18 @@ for (const kept of [false, true]) test(`hosted touches keep device ownership thr
   expect(locked).toBe(false);
 }));
 
+test('the iOS tests build without coverage into the derived data that every test run names', () => iosRunsFixture(async ({ opening, options }) => {
+  opening.mockImplementation(async () => ({ kept: false, pid: 123, handoff: () => ({ port: 1234, token: 'fixture-token' }), close: async () => {}, end: async () => null }));
+  const builds = [], runs = [];
+  await iosTestRuns({ ...options, runApple: (command, args) => {
+    const derived = args[args.indexOf('-derivedDataPath') + 1];
+    if (args[0] === 'build-for-testing') builds.push({ derived, coverage: args[args.indexOf('-enableCodeCoverage') + 1] });
+    else if (args[0] === 'test-without-building') runs.push(derived);
+  } });
+  expect(builds).toEqual([{ derived: options.derived, coverage: 'NO' }]);
+  expect(runs).toEqual(Array(4).fill(options.derived));
+}));
+
 for (const [phase, kept] of [['setup', false], ['handoff', false], ['test and cleanup', false], ['test and cleanup', true]]) test(`the GPU tests still run after a ${kept ? 'reused' : 'new'} touch runner's ${phase} failure`, () => iosRunsFixture(async ({ opening, options }) => {
   const failure = new Error(`touch ${phase}`), cleanupFailure = new Error('touch cleanup'), ran = [];
   let cleaned = false;
@@ -567,7 +579,7 @@ for (const [phase, kept] of [['setup', false], ['handoff', false], ['test and cl
   let reported;
   try {
     await iosTestRuns({ ...options, runApple: (command, args) => {
-      if (command !== 'xcodebuild') return;
+      if (args[0] !== 'test-without-building') return;
       const selected = args.filter(a => a.startsWith('-only-testing:'));
       const suite = selected.some(a => a.includes('Canvas2DGpuStressTests')) ? 'gpu'
         : selected.some(a => a.endsWith('/testTouch')) ? 'touch'

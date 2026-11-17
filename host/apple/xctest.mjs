@@ -299,8 +299,8 @@ export async function macTests(pkg, scratch, env, canvasGpu, only = null) {
   if (failed.length) throw new Error(`swift tests failed:\n  ${failed.join('\n  ')}`);
 }
 
-/** The iOS tests `build-for-testing` wrote in `products`, run on the simulator `udid` in separate
- *  runs that always all run; reports their failures together. Most run bare in the xctest agent.
+/** Builds the iOS tests into `derived` and runs them on the simulator `udid` in separate runs that
+ *  always all run; reports their failures together. Most run bare in the xctest agent.
  *  Those that need what only an app gives (a window scene to present in, UIKit's accessibility
  *  runtime; `hostedTests`) run hosted in an app with one scene (`hostSource`, built here) with the
  *  accessibility runtime on for that run alone. The Canvas 2D GPU module's own run apart with it
@@ -308,8 +308,13 @@ export async function macTests(pkg, scratch, env, canvasGpu, only = null) {
  *  Graphics path a runner without it draws. `runApple` and `run` are build.mjs's: they throw on
  *  failure, and `runApple` refuses a mixed deployment target. `only`, when
  *  given, names the classes to run, and a run with none of them is left out. Tests needing
- *  real touches run without simulator clones, beside the existing XCTest touch runner. */
-export async function iosTestRuns({ pkg, products, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null }) {
+ *  real touches run without simulator clones, beside the existing XCTest touch runner. Every run
+ *  writes its result bundle into `derived`, beside the build. */
+export async function iosTestRuns({ pkg, derived, destination, udid, env, canvasGpu, hostSource, triple, runApple, run, only = null }) {
+  // Build without code coverage, which the package's generated scheme turns on: instrumented tests
+  // write tens of megabytes of profiles per run, and nothing in Exact reads them
+  runApple('xcodebuild', ['build-for-testing', '-scheme', 'Exact-Package', '-destination', destination, '-derivedDataPath', derived, '-enableCodeCoverage', 'NO'], { cwd: pkg, stdio: 'inherit', env });
+  const products = resolve(derived, 'Build/Products');
   const bare = withoutPerformanceChecker(products), host = resolve(products, 'ExactTestHost.app');
   rmSync(host, { recursive: true, force: true });
   mkdirSync(host, { recursive: true });
@@ -332,7 +337,9 @@ export async function iosTestRuns({ pkg, products, destination, udid, env, canva
   // allowance, not the rest of the run
   const testRun = (xctestrun, selection, runEnv, parallel = true) => {
     try {
-      runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-destination', destination, '-collect-test-diagnostics', 'never',
+      // Name the build's derived data: without `-derivedDataPath`, xcodebuild starts a folder of its
+      // own in `~/Library/Developer/Xcode/DerivedData` for every call
+      runApple('xcodebuild', ['test-without-building', '-xctestrun', xctestrun, '-derivedDataPath', derived, '-destination', destination, '-collect-test-diagnostics', 'never',
         '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '600',
         '-parallel-testing-enabled', parallel ? 'YES' : 'NO', ...(parallel ? ['-parallel-testing-worker-count', '2'] : []), ...selection], { cwd: pkg, stdio: 'inherit', env: runEnv });
     } catch (e) { failures.push(e); }
