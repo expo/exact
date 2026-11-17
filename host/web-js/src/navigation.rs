@@ -1,6 +1,6 @@
 //! Which of navigation/routes.js's behaviours a plan can use (LLP 1047.002 D2.1).
 
-use super::answers::{may_say, property};
+use super::answers::{left_out, may_say, property, role_can};
 use super::Em;
 use exact_kernel::PropId;
 
@@ -25,7 +25,7 @@ pub(super) fn unused(em: &Em, roots: bool) -> Vec<&'static str> {
                 .is_some_and(|p| property(plan, p, PropId::NavigationKey).is_some())
     });
     let used = [
-        any(&|n| may_say(plan, n, PropId::AccessibilityRole, &["tablist"])),
+        any(&|n| role_can(plan, n, &["tablist"])),
         // A split's list is a list node's element, unless the route names the split's width.
         super::commands::lists(plan)
             || any(&|n| property(plan, n, PropId::NavigationSplit).is_some()),
@@ -40,9 +40,5 @@ pub(super) fn unused(em: &Em, roots: bool) -> Vec<&'static str> {
         bars,
         bars && any(&|n| may_say(plan, n, PropId::NavigationBar, &["transparent"])),
     ];
-    ALL.into_iter()
-        .zip(used)
-        .filter(|(_, used)| !used)
-        .map(|(name, _)| name)
-        .collect()
+    left_out(ALL, used)
 }

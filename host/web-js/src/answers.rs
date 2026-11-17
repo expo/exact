@@ -174,8 +174,20 @@ pub(super) fn may_say(plan: &Plan, node: u32, prop: PropId, words: &[&str]) -> b
             .is_none_or(|w| words.contains(&w))
 }
 
-fn role_can(plan: &Plan, node: u32, roles: &[&str]) -> bool {
+pub(super) fn role_can(plan: &Plan, node: u32, roles: &[&str]) -> bool {
     may_say(plan, node, PropId::AccessibilityRole, roles)
+}
+
+/// The names in `all` whose `used` is false: the constants a plan leaves out of a piece (navigation.rs, input.rs).
+pub(super) fn left_out<const N: usize>(
+    all: [&'static str; N],
+    used: [bool; N],
+) -> Vec<&'static str> {
+    all.into_iter()
+        .zip(used)
+        .filter(|(_, used)| !used)
+        .map(|(name, _)| name)
+        .collect()
 }
 
 fn parent_site(plan: &Plan, site: super::Site) -> Option<super::Site> {

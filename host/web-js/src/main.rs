@@ -25,6 +25,8 @@ mod emit_tests;
 mod events;
 mod faces;
 mod facts;
+#[cfg(test)]
+mod input_tests;
 mod inspect;
 #[cfg(test)]
 mod inspect_tests;
@@ -653,6 +655,8 @@ fn main() -> ExitCode {
             }
             // The navigation behaviours the page leaves out (navigation.rs).
             let _ = std::fs::write(dir.join("navigation.flag"), out_files.navigation.join("\n"));
+            // The input piece's behaviours the page leaves out (input.rs).
+            let _ = std::fs::write(dir.join("input.flag"), out_files.input.join("\n"));
             if !out_files.preloads.is_empty() {
                 let _ = std::fs::write(dir.join("preloads.html"), &out_files.preloads);
             }

@@ -22,6 +22,8 @@ mod answers;
 mod commands;
 #[path = "each.rs"]
 mod each;
+#[path = "input.rs"]
+mod input;
 #[path = "list_options.rs"]
 mod list_options;
 #[path = "list_text.rs"]
@@ -38,6 +40,8 @@ mod mutations;
 mod named_records;
 #[path = "navigation.rs"]
 mod navigation;
+#[cfg(test)]
+pub(crate) use input::ALL as INPUT;
 #[cfg(test)]
 pub(crate) use navigation::ALL as NAVIGATION;
 #[path = "pages.rs"]
@@ -76,6 +80,8 @@ pub struct Output {
     pub dialogs: bool,
     /// The navigation behaviours the plan cannot use (`navigation::unused`).
     pub navigation: Vec<&'static str>,
+    /// The input piece's behaviours the plan cannot use (`input::unused`).
+    pub input: Vec<&'static str>,
     pub paint: String,
     pub names: String,
     /// Build routes as JSON: locations (including the not-found page), or
@@ -845,6 +851,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         markdown: em.markdown,
         dialogs: em.dialogs,
         navigation: navigation::unused(&em, roots),
+        input: input::unused(&em),
         canvas2d: em.canvas2d,
         motion: em.motion,
         editor: em.editor,
@@ -962,19 +969,11 @@ impl Em<'_> {
             || presence.contains("--exact-press-background-color:")
             || presence.contains("--exact-press-color:")
             || !parts.looks.is_empty()
-            || plan
-                .node(NodesId(i))
-                .bindings
+            || answers::property(plan, i, PropId::AccessibilityKeyShortcuts).is_some()
+            || answers::role_can(plan, i, &["radiogroup", "tablist", "menu"])
+            || attrs
                 .iter()
-                .map(|b| plan.binding(b))
-                .any(|b| {
-                    b.kind == BindingKind::Prop && b.id == PropId::AccessibilityKeyShortcuts as u16
-                })
-            || attrs.iter().any(|a| {
-                a.0 == "data-button-style"
-                    || a.0 == "aria-keyshortcuts"
-                    || (a.0 == "role" && ["radiogroup", "tablist", "menu"].contains(&a.1.as_str()))
-            })
+                .any(|a| a.0 == "data-button-style" || a.0 == "aria-keyshortcuts")
         {
             let press = self.uses.rt("pressFeedback");
             let _ = write!(self.out, "{press}();");
