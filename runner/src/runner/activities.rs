@@ -490,17 +490,25 @@ component App
         .to_string()
         .contains("bake-activities-field"));
 
-        for malformed in [
+        // As with `Activity`, a reader names only the fields it needs.
+        let declared =
+            "shape PushStartActivity\n  kind: string\n  generation: string\n  shape: string";
+        for subset in [
             "shape PushStartActivity\n  kind: string\n  generation: string",
+            "shape PushStartActivity\n  shape: string",
+        ] {
+            contract::bake(
+                contract::compile(&SOURCE.replace(declared, subset)).unwrap(),
+                (),
+            )
+            .unwrap();
+        }
+        for malformed in [
             "shape PushStartActivity\n  kind: string\n  generation: string\n  shape: string\n  extra: string",
             "shape PushStartActivity\n  kind: string\n  generation: number\n  shape: string",
         ] {
             let error = contract::bake(
-                contract::compile(&SOURCE.replace(
-                    "shape PushStartActivity\n  kind: string\n  generation: string\n  shape: string",
-                    malformed,
-                ))
-                .unwrap(),
+                contract::compile(&SOURCE.replace(declared, malformed)).unwrap(),
                 (),
             )
             .unwrap_err();
