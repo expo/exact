@@ -2345,8 +2345,47 @@ fn extracted_tree(root: &Path) -> Result<ArchiveTree, String> {
     Ok(tree)
 }
 
+/// The download's agent: Mozilla's roots, or the ones `SSL_CERT_FILE` names in their place,
+/// as OpenSSL and curl read it, so a TLS-intercepting proxy's private CA can be trusted.
+/// The pinned SHA-256 still decides what is extracted.
+fn download_agent() -> Result<ureq::Agent, String> {
+    let Some(file) = env::var_os("SSL_CERT_FILE").filter(|file| !file.is_empty()) else {
+        return Ok(ureq::Agent::new_with_defaults());
+    };
+    let file = Path::new(&file);
+    let pem = fs::read(file)
+        .map_err(|error| format!("cannot read SSL_CERT_FILE {}: {error}", file.display()))?;
+    let mut roots = Vec::new();
+    for item in ureq::tls::parse_pem(&pem) {
+        match item {
+            Ok(ureq::tls::PemItem::Certificate(certificate)) => roots.push(certificate),
+            Ok(_) => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot read SSL_CERT_FILE {}: {error}",
+                    file.display()
+                ))
+            }
+        }
+    }
+    if roots.is_empty() {
+        return Err(format!(
+            "SSL_CERT_FILE {} holds no PEM certificate",
+            file.display()
+        ));
+    }
+    let tls = ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::new_with_certs(&roots))
+        .build();
+    Ok(ureq::Agent::config_builder()
+        .tls_config(tls)
+        .build()
+        .new_agent())
+}
+
 fn download_archive(url: &str, destination: &Path, expected_digest: &str) -> Result<(), String> {
-    let response = ureq::get(url)
+    let response = download_agent()?
+        .get(url)
         .call()
         .map_err(|error| format!("cannot download pinned Hermes bundle {url}: {error}"))?;
     let mut reader = response.into_body().into_reader();

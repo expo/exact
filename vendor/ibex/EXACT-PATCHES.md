@@ -1038,8 +1038,8 @@ upstream; replay on a refresh until it lands.
 ureq 3.4.0 vendored under another name (`vendor/ureq/EXACT-PATCHES.md`): the
 portable transport implements ureq's `unversioned` traits, which change
 between minor releases, and an app's own `ureq` must resolve apart from it
-(LLP 1153.003 D6.5). `hermes-lean-sys` and its installer call only `ureq::get`
-and require `"3"`. The atomics call `try_update`, Rust's current name for the
+(LLP 1153.003 D6.5). `hermes-lean-sys` and its installer use only ureq's
+stable API (an agent and its TLS roots, local patch 47) and require `"3"`. The atomics call `try_update`, Rust's current name for the
 deprecated `fetch_update`. Replay on a refresh.
 
 ## Local patch 46, a request body streamed from a file
@@ -1120,3 +1120,11 @@ this through the same endowed fetch binding as ordinary requests (LLP
 renames a completed host-owned file into it on the same filesystem. Recovery
 recognizes an already-published destination; storage errors preserve the source
 for retry. This avoids requiring another response-sized allocation at publication.
+
+## Local patch 47, the Hermes download trusts `SSL_CERT_FILE`
+
+`build_support.rs` downloads a pinned bundle with Mozilla's roots, or, when
+`SSL_CERT_FILE` names a PEM file, with that file's certificates in their place,
+as OpenSSL and curl read the variable. `exact setup` then works behind a
+TLS-intercepting proxy whose CA is private. The pinned SHA-256 still decides
+what is extracted. Replay on a refresh.
