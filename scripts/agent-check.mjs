@@ -281,7 +281,11 @@ export async function checkOp(s, args = [], { shots, accept = [] } = {}) {
   if (!['current', 'light', 'dark', 'both'].includes(word) || args.length > 1) throw new MalformedOperation('check [light|dark|both]: the presented screen, judged in text; `check dark` under prefers-color-scheme dark, `check both` under each');
   if (!['web', 'ios', 'host-ios'].includes(s.host)) throw new Error(`check: the web and iOS hosts carry it, not ${s.host}`);
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-check-'));
-  const first = await s.op({ op: 'check' });
+  // The web's wasm target answers the runner's op table, which has no `check`: name that, not the wire's reply.
+  const first = await s.op({ op: 'check' }).catch((e) => {
+    if (e?.reply?.error !== 'unknown op: check') throw e;
+    throw new Error('check: this web build is the wasm target (a game, or `--wasm`), which carries no check; the JS web target and iOS do, so run `agent ios check`');
+  });
   const asked = word === 'both' ? ['light', 'dark'] : word === 'current' ? [first.scheme] : [word];
   const runs = [], trees = [];
   let preferred = null;
